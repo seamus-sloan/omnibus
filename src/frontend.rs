@@ -3,9 +3,9 @@ use dioxus_router::prelude::Routable;
 
 #[derive(Clone, Debug, PartialEq, Eq, Routable)]
 pub enum Route {
-    #[route("/")]
+    #[route("/", LandingPage)]
     Landing {},
-    #[route("/settings")]
+    #[route("/settings", SettingsPage)]
     Settings {},
 }
 
@@ -15,8 +15,12 @@ pub struct AppProps {
     pub value: i64,
 }
 
-pub fn next_value_after_increment(_current: i64, response_value: i64) -> i64 {
-    response_value
+pub fn next_value_after_increment(current: i64, response_value: i64) -> i64 {
+    if response_value < current {
+        current
+    } else {
+        response_value
+    }
 }
 
 #[component]
@@ -37,7 +41,7 @@ pub fn App(props: AppProps) -> Element {
             }
             main {
                 match props.route {
-                    Route::Landing {} => rsx! { LandingPage { value: props.value } },
+                    Route::Landing {} => rsx! { LandingPage { value: Some(props.value) } },
                     Route::Settings {} => rsx! { SettingsPage {} },
                 }
             }
@@ -47,17 +51,8 @@ pub fn App(props: AppProps) -> Element {
 }
 
 #[component]
-fn Landing() -> Element {
-    rsx! { div {} }
-}
-
-#[component]
-fn Settings() -> Element {
-    rsx! { div {} }
-}
-
-#[component]
-fn LandingPage(value: i64) -> Element {
+fn LandingPage(value: Option<i64>) -> Element {
+    let value = value.unwrap_or_default();
     rsx! {
         section { class: "card",
             h1 { "Minimal Rust Full-Stack Counter" }
@@ -200,5 +195,10 @@ mod tests {
     #[test]
     fn uses_response_value_for_next_value() {
         assert_eq!(next_value_after_increment(41, 42), 42);
+    }
+
+    #[test]
+    fn does_not_decrease_displayed_value() {
+        assert_eq!(next_value_after_increment(42, 41), 42);
     }
 }
