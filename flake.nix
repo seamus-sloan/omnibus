@@ -2,7 +2,7 @@
   description = "Omnibus full-stack Rust app dev environment";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -13,6 +13,7 @@
       in {
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
+            git
             cargo
             rustc
             rustfmt
