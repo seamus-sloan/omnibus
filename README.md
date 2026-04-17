@@ -47,6 +47,7 @@ The app connects to `http://127.0.0.1:3000` — always start the server first.
 Requires macOS with Xcode and at least one iOS Simulator installed (add one via **Xcode → Window → Devices and Simulators**).
 
 ```bash
+xcrun simctl boot "iPhone 17" 2>/dev/null
 dx serve --platform ios --package omnibus-mobile
 ```
 
