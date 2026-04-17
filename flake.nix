@@ -51,6 +51,19 @@
             echo "Run: cargo test -p omnibus"
             echo "Run: cargo run -p omnibus"
 
+            # Nix injects xcbuild's fake xcrun and its own cc wrapper, both of which
+            # break iOS builds. Fix: prepend /usr/bin so the real Xcode xcrun and
+            # Apple clang shadow Nix's stubs. Set DEVELOPER_DIR so the real xcrun
+            # can locate all platform SDKs (including iphonesimulator). Set SDKROOT
+            # to the Xcode macOS SDK so Apple clang and xcrun agree on the sysroot.
+            # Rust (fenix) uses absolute store paths and is unaffected by PATH order.
+            if [ -d "/Applications/Xcode.app/Contents/Developer" ]; then
+              export PATH="/usr/bin:$PATH"
+              export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+              export SDKROOT="$DEVELOPER_DIR/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+              echo "DEVELOPER_DIR=$DEVELOPER_DIR"
+            fi
+
             # Auto-detect Android SDK + NDK on macOS.
             if [ -z "$ANDROID_HOME" ]; then
               for sdk_base in \
