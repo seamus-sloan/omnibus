@@ -34,7 +34,7 @@
       in {
         devShells.default = pkgs.mkShell {
           packages = [
-            pkgs.git
+            pkgs-unstable.git
             pkgs.sqlite
             pkgs.pkg-config
             pkgs.openssl
