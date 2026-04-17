@@ -18,53 +18,82 @@ nix develop                  # also works; spawns a bash subshell
 ## Common commands
 
 ```bash
-cargo run                                        # start the server at http://127.0.0.1:3000
-cargo test                                       # run all unit and integration tests
-cargo test <test_name>                           # run a single test by name (substring match)
-cargo test --features e2e -- --ignored           # run Playwright E2E tests (requires running server)
-cargo clippy                                     # lint
-cargo fmt                                        # format
+# Server
+cargo run -p omnibus                                        # start the server at http://127.0.0.1:3000
+cargo test -p omnibus                                       # run all server tests
+cargo test -p omnibus <test_name>                           # run a single test by name
+cargo test -p omnibus --features e2e -- --ignored           # run Playwright E2E tests (requires running server)
+dx serve --package omnibus                                  # run server with hot-reload via dx
+cargo clippy                                                # lint all crates
+cargo fmt                                                   # format all crates
+
+# Mobile
+cargo build -p omnibus-mobile                               # build mobile app
+dx serve --platform ios --package omnibus-mobile            # run in iOS Simulator (requires Xcode)
+dx serve --platform android --package omnibus-mobile        # run in Android Emulator (requires Android SDK)
 ```
 
 ## Architecture
 
-This is a server-side-rendered full-stack Rust app. There is **no client-side Rust/Wasm** — Dioxus is used only as a templating engine on the server, and all interactivity is plain JavaScript.
+This is a Cargo workspace with two crates:
 
-**Request flow:** Axum handler → `db/` query → Dioxus SSR component renders HTML string → `Html(...)` response. JSON API routes skip SSR and return `Json(...)` directly.
+- **`server/`** (`omnibus`) — Axum SSR server. Dioxus is used only as a templating engine; all interactivity is plain JavaScript.
+- **`mobile/`** (`omnibus-mobile`) — Dioxus Native mobile app. Communicates with the server via its JSON API.
+
+**Server request flow:** Axum handler → `db/` query → Dioxus SSR component renders HTML string → `Html(...)` response. JSON API routes skip SSR and return `Json(...)` directly.
+
+**Mobile data flow:** Dioxus signal/effect → `reqwest` call to `/api/*` → signal update → re-render.
 
 **Database:** Schema is created inline at startup in `db::initialize_schema`. There is no migrations framework yet. All tests use `sqlite::memory:` for isolation.
 
-**Frontend interactivity:** Embedded JS in `frontend/` handles DOM updates by calling the JSON API routes (`/api/*`) and patching specific element IDs.
+**Server URL (mobile):** Hardcoded to `http://127.0.0.1:3000` in `mobile/src/main.rs` via `use_context_provider`. Will become a user-configurable first-launch setup screen.
 
 ## Module structure
 
-Modules are organized as nested subdirectories, split by domain. When a file grows large, break it into a subdirectory with a `mod.rs` and focused child modules. The target structure as features are added:
+### server/src/
 
 ```
-src/
-  main.rs
-  lib.rs
-  backend/
-    mod.rs          — Axum router + AppState
-    books.rs        — book route handlers
-    libraries.rs    — library route handlers
-    auth.rs         — login/register/logout handlers
-    admin.rs        — admin-only route handlers
-  db/
-    mod.rs          — pool init, shared helpers
-    books.rs        — book queries
-    libraries.rs    — library queries
-    users.rs        — user/session queries
-  frontend/
-    mod.rs          — render_document entry point
-    pages/          — one file per page (landing, book detail, reader, etc.)
-    components/     — shared UI components (nav, rating widget, etc.)
-  scanner/
-    mod.rs          — directory walker, orchestration
-    epub.rs         — epub metadata + cover extraction
-    audiobook.rs    — m4a metadata + chapter extraction
+main.rs
+lib.rs
+backend/
+  mod.rs          — Axum router + AppState
+  books.rs        — book route handlers (future)
+  libraries.rs    — library route handlers (future)
+  auth.rs         — login/register/logout handlers (future)
+  admin.rs        — admin-only route handlers (future)
+db/
+  mod.rs          — pool init, shared helpers
+  books.rs        — book queries (future)
+  libraries.rs    — library queries (future)
+  users.rs        — user/session queries (future)
+frontend/
+  mod.rs          — Route enum, App component, render_document, styles, SSR tests
+  pages/
+    mod.rs
+    landing.rs    — LandingPage component
+    settings.rs   — SettingsPage component
+  components/
+    mod.rs
+    nav.rs        — TopNav component
+scanner/
+  mod.rs          — directory walker, orchestration (future)
+  epub.rs         — epub metadata + cover extraction (future)
+  audiobook.rs    — m4a metadata + chapter extraction (future)
 tests/
   e2e_playwright.rs — browser tests, feature-gated behind `--features e2e`
+```
+
+### mobile/src/
+
+```
+main.rs           — dioxus::launch, Route enum, App + screen components, ServerUrl context
+pages/
+  mod.rs
+  landing.rs      — LandingPage with live API calls via reqwest
+  settings.rs     — SettingsPage
+components/
+  mod.rs
+  nav.rs          — BottomNav with dioxus-router Links
 ```
 
 ## Error handling

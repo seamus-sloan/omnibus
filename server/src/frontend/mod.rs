@@ -1,5 +1,11 @@
+pub mod components;
+pub mod pages;
+
 use dioxus::prelude::*;
 use dioxus_router::Routable;
+
+use components::TopNav;
+use pages::{LandingPage, SettingsPage};
 
 #[derive(Clone, Debug, PartialEq, Eq, Routable)]
 pub enum Route {
@@ -15,14 +21,6 @@ pub struct AppProps {
     pub value: i64,
 }
 
-pub fn next_value_after_increment(current: i64, response_value: i64) -> i64 {
-    if response_value < current {
-        current
-    } else {
-        response_value
-    }
-}
-
 #[component]
 pub fn App(props: AppProps) -> Element {
     let title = match props.route {
@@ -35,10 +33,7 @@ pub fn App(props: AppProps) -> Element {
         style { {styles()} }
 
         div { class: "app-shell",
-            nav { class: "top-nav",
-                a { href: "/", "Home" }
-                a { href: "/settings", "Settings" }
-            }
+            TopNav {}
             main {
                 match props.route {
                     Route::Landing {} => rsx! { LandingPage { value: Some(props.value) } },
@@ -50,26 +45,11 @@ pub fn App(props: AppProps) -> Element {
     }
 }
 
-#[component]
-fn LandingPage(value: Option<i64>) -> Element {
-    let value = value.unwrap_or_default();
-    rsx! {
-        section { class: "card",
-            h1 { "Minimal Rust Full-Stack Counter" }
-            p { class: "subtitle", "Dioxus UI + Rust backend + SQLite persistence" }
-            p { class: "value-line", "Current value: " span { id: "current-value", "{value}" } }
-            button { id: "increment-button", class: "btn", "Increment value" }
-        }
-    }
-}
-
-#[component]
-fn SettingsPage() -> Element {
-    rsx! {
-        section { class: "card",
-            h1 { "Settings" }
-            p { class: "subtitle", "Sample settings route" }
-        }
+pub fn next_value_after_increment(current: i64, response_value: i64) -> i64 {
+    if response_value < current {
+        current
+    } else {
+        response_value
     }
 }
 

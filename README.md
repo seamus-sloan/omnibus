@@ -1,47 +1,66 @@
 # omnibus
 
-Minimal full-stack Rust app using Dioxus, Axum, and SQLite.
+Self-hosted ebook and audiobook library — the Plex/Jellyfin for your book collection. Built with Rust (Axum + Dioxus), SQLite, and a native iOS/Android app.
 
-## Development environment (Nix)
+> **Status:** early development. The current UI is a placeholder counter; see [ROADMAP.md](ROADMAP.md) for planned features.
 
-Use Nix to provide all system dependencies:
+## Prerequisites
+
+All system dependencies are provided by Nix (Rust toolchain, SQLite, Node.js, `dx` CLI, iOS/Android cross-compilation targets):
 
 ```bash
-nix develop
+nix develop          # enter the dev shell (bash)
+nix develop --command zsh   # preferred — keeps your zsh prompt
 ```
 
-If you do not use flakes:
+Everything below assumes you're inside the dev shell.
+
+## Running the server
 
 ```bash
-nix-shell
+cargo run -p omnibus
+# or with hot-reload:
+dx serve --package omnibus
 ```
 
-Then run all commands from inside the shell.
+Opens at `http://127.0.0.1:3000`. Override with env vars:
 
-## Run the app
+| Variable | Default |
+|---|---|
+| `PORT` | `3000` |
+| `DATABASE_URL` | `sqlite://omnibus.db?mode=rwc` |
+
+## Running the mobile app
+
+### iOS Simulator
+
+Requires macOS with Xcode and at least one iOS Simulator installed.
 
 ```bash
-cargo run
+dx serve --platform ios --package omnibus-mobile
 ```
 
-Server starts on `http://127.0.0.1:3000` by default.
+The app connects to `http://127.0.0.1:3000` by default — start the server first.
 
-Environment variables:
-- `PORT` (default: `3000`)
-- `DATABASE_URL` (default: `sqlite://omnibus.db?mode=rwc`)
+### Android Emulator
 
-## Test
+Requires the Android SDK and NDK. If you have Android Studio, install the NDK via **Tools → SDK Manager → SDK Tools → NDK (Side by side)**. The dev shell auto-detects `ANDROID_NDK_HOME` on entry.
 
 ```bash
-cargo test
+dx serve --platform android --package omnibus-mobile
 ```
 
-### Optional rough Playwright E2E tests (Rust)
-
-1. Start the app (`cargo run`)
-2. Install Playwright browsers for Rust Playwright setup (outside of Cargo)
-3. Run:
+## Tests
 
 ```bash
-cargo test --features e2e -- --ignored
+cargo test -p omnibus          # all server unit + integration tests
+```
+
+### E2E tests (Playwright)
+
+1. Start the server: `cargo run -p omnibus`
+2. Run:
+
+```bash
+cargo test -p omnibus --features e2e -- --ignored
 ```
