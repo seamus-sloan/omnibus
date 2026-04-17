@@ -4,12 +4,14 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     flake-utils.url = "github:numtide/flake-utils";
+    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, nixpkgs-unstable, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
+        pkgs-unstable = import nixpkgs-unstable { inherit system; };
       in {
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
@@ -21,7 +23,8 @@
             sqlite
             pkg-config
             openssl
-            nodejs_22
+            pkgs-unstable.dioxus-cli
+	    nodejs_22
           ];
 
           DATABASE_URL = "sqlite://omnibus.db?mode=rwc";
