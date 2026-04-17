@@ -4,6 +4,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use tower_http::trace::TraceLayer;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
@@ -31,6 +32,7 @@ pub fn router(state: AppState) -> Router {
         .route("/settings", get(settings_page))
         .route("/api/value", get(get_value))
         .route("/api/value/increment", post(increment_value))
+        .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
 

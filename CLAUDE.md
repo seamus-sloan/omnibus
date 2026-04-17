@@ -6,7 +6,7 @@ As preferences change, this document should be kept up-to-date.
 
 ## Development environment
 
-All system dependencies (Rust toolchain, SQLite, pkg-config, OpenSSL, Node.js) are provided by Nix. Always work inside the dev shell:
+All system dependencies (Rust toolchain, SQLite, pkg-config, OpenSSL, Node.js, Android SDK/NDK, JDK) are provided by Nix. Always work inside the dev shell:
 
 ```bash
 nix develop --command zsh   # preferred — keeps your shell prompt intact
@@ -19,11 +19,11 @@ nix develop                  # also works; spawns a bash subshell
 
 ```bash
 # Server
-cargo run -p omnibus                                        # start the server at http://127.0.0.1:3000
+cargo run -p omnibus                                        # start the server at http://0.0.0.0:3000
 cargo test -p omnibus                                       # run all server tests
 cargo test -p omnibus <test_name>                           # run a single test by name
 cargo test -p omnibus --features e2e -- --ignored           # run Playwright E2E tests (requires running server)
-dx serve --package omnibus                                  # run server with hot-reload via dx
+dx serve --port 3000 --package omnibus                      # run server with hot-reload, devserver fixed at port 3000
 cargo clippy                                                # lint all crates
 cargo fmt                                                   # format all crates
 
@@ -31,7 +31,25 @@ cargo fmt                                                   # format all crates
 cargo build -p omnibus-mobile                               # build mobile app
 dx serve --platform ios --package omnibus-mobile            # run in iOS Simulator (requires Xcode)
 dx serve --platform android --package omnibus-mobile        # run in Android Emulator (requires Android SDK)
+adb reverse tcp:3000 tcp:3000                               # forward emulator port 3000 → host port 3000 (run after emulator boots)
 ```
+
+## Running server + mobile simultaneously (with hot-reload)
+
+The mobile app is hardcoded to `http://127.0.0.1:3000`. To develop both at once:
+
+```bash
+# Terminal 1 — server with hot-reload, devserver proxy fixed at port 3000
+dx serve --port 3000 --package omnibus
+
+# Terminal 2 — mobile (Android example)
+dx serve --platform android --package omnibus-mobile
+
+# Terminal 3 — once emulator is running
+adb reverse tcp:3000 tcp:3000
+```
+
+`dx serve` picks a random port by default — `--port 3000` pins the devserver proxy, which forwards API requests to the actual server binary. Never use `dx serve` without `--port` when the mobile app needs to connect.
 
 ## Architecture
 
@@ -55,30 +73,17 @@ This is a Cargo workspace with two crates:
 ```
 main.rs
 lib.rs
-backend/
-  mod.rs          — Axum router + AppState
-  books.rs        — book route handlers (future)
-  libraries.rs    — library route handlers (future)
-  auth.rs         — login/register/logout handlers (future)
-  admin.rs        — admin-only route handlers (future)
-db/
-  mod.rs          — pool init, shared helpers
-  books.rs        — book queries (future)
-  libraries.rs    — library queries (future)
-  users.rs        — user/session queries (future)
+backend.rs          — Axum router + AppState + handlers
+db.rs               — pool init, schema, queries
 frontend/
-  mod.rs          — Route enum, App component, render_document, styles, SSR tests
+  mod.rs            — Route enum, App component, render_document, styles, SSR tests
   pages/
     mod.rs
-    landing.rs    — LandingPage component
-    settings.rs   — SettingsPage component
+    landing.rs      — LandingPage component
+    settings.rs     — SettingsPage component
   components/
     mod.rs
-    nav.rs        — TopNav component
-scanner/
-  mod.rs          — directory walker, orchestration (future)
-  epub.rs         — epub metadata + cover extraction (future)
-  audiobook.rs    — m4a metadata + chapter extraction (future)
+    nav.rs          — TopNav component
 tests/
   e2e_playwright.rs — browser tests, feature-gated behind `--features e2e`
 ```
@@ -86,7 +91,7 @@ tests/
 ### mobile/src/
 
 ```
-main.rs           — dioxus::launch, Route enum, App + screen components, ServerUrl context
+main.rs           — dioxus::launch, Route enum, App + screen components, ServerUrl context, CSS styles
 pages/
   mod.rs
   landing.rs      — LandingPage with live API calls via reqwest
@@ -126,7 +131,7 @@ async fn trigger_scan(State(s): State<AppState>) -> Result<StatusCode, anyhow::E
 Testing is a first-class requirement. Every meaningful behavior should have a test at the **lowest applicable level**:
 
 - **Unit tests:** inline `#[cfg(test)]` modules in the same file as the code under test. This is the default for all logic in `db/`, `scanner/`, and `frontend/`.
-- **Integration tests:** inline `#[cfg(test)]` in `backend/` modules, using `tower::ServiceExt::oneshot` to test full request/response cycles against an in-memory DB.
+- **Integration tests:** inline `#[cfg(test)]` in `backend.rs`, using `tower::ServiceExt::oneshot` to test full request/response cycles against an in-memory DB.
 - **E2E tests:** Playwright tests in `tests/e2e_playwright.rs`, feature-gated with `--features e2e`, for user-facing flows.
 
 Coverage expectations:

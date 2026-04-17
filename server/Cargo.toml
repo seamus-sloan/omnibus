@@ -10,6 +10,9 @@ e2e = ["dep:playwright"]
 [dependencies]
 axum = "0.7"
 dioxus = { version = "0.7", features = ["server"] }
+tower-http = { version = "0.5", features = ["trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dioxus-router = "0.7"
 dioxus-ssr = "0.7"
 playwright = { version = "0.0.20", optional = true }

@@ -46,15 +46,27 @@ pub fn LandingPage() -> Element {
 
 async fn fetch_value(server_url: &str) -> Result<i64, String> {
     let url = format!("{server_url}/api/value");
-    let response = reqwest::get(&url).await.map_err(|e| e.to_string())?;
+    eprintln!("[mobile] GET {url}");
+    let response = reqwest::get(&url).await.map_err(|e| {
+        let msg = format!("{e:#}");
+        eprintln!("[mobile] GET {url} failed: {msg}");
+        msg
+    })?;
+    eprintln!("[mobile] GET {url} -> {}", response.status());
     let payload: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
     payload["value"].as_i64().ok_or_else(|| "missing value field".into())
 }
 
 async fn post_increment(server_url: &str) -> Result<i64, String> {
     let url = format!("{server_url}/api/value/increment");
+    eprintln!("[mobile] POST {url}");
     let client = reqwest::Client::new();
-    let response = client.post(&url).send().await.map_err(|e| e.to_string())?;
+    let response = client.post(&url).send().await.map_err(|e| {
+        let msg = format!("{e:#}");
+        eprintln!("[mobile] POST {url} failed: {msg}");
+        msg
+    })?;
+    eprintln!("[mobile] POST {url} -> {}", response.status());
     let payload: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
     payload["value"].as_i64().ok_or_else(|| "missing value field".into())
 }
