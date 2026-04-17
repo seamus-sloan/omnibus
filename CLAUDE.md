@@ -29,7 +29,7 @@ cargo fmt                                                   # format all crates
 
 # Mobile
 cargo build -p omnibus-mobile                               # build mobile app
-dx serve --platform ios --package omnibus-mobile            # run in iOS Simulator (requires Xcode)
+xcrun simctl boot "iPhone 17" 2>/dev/null; dx serve --platform ios --package omnibus-mobile   # run in iOS Simulator (requires Xcode)
 dx serve --platform android --package omnibus-mobile        # run in Android Emulator (requires Android SDK)
 adb reverse tcp:3000 tcp:3000                               # forward emulator port 3000 → host port 3000 (run after emulator boots)
 ```
