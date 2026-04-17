@@ -1,5 +1,5 @@
 [application]
-name = "omnibus"
+name = "omnibus-mobile"
 
 [android]
 uses_cleartext_traffic = true
