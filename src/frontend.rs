@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use dioxus_router::prelude::Routable;
+use dioxus_router::Routable;
 
 #[derive(Clone, Debug, PartialEq, Eq, Routable)]
 pub enum Route {
