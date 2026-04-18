@@ -3685,6 +3685,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "omnibus-frontend"
+version = "0.1.0"
+dependencies = [
+ "dioxus",
+ "dioxus-router",
+ "omnibus-shared",
+ "serde",
+]
+
+[[package]]
 name = "omnibus-mobile"
 version = "0.1.0"
 dependencies = [
@@ -3692,6 +3702,13 @@ dependencies = [
  "dioxus-router",
  "reqwest",
  "serde_json",
+]
+
+[[package]]
+name = "omnibus-shared"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

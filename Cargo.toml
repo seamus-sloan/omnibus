@@ -1,3 +1,3 @@
 [workspace]
-members = ["server", "mobile"]
+members = ["server", "mobile", "shared", "frontend"]
 resolver = "2"
