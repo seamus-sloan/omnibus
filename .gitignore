@@ -27,3 +27,6 @@ ui_tests/**/test-results/
 ui_tests/**/playwright-report/
 ui_tests/**/blob-report/
 ui_tests/**/.playwright/
+
+# direnv / Nix
+.direnv/
