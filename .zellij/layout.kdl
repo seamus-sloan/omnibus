@@ -1,0 +1,32 @@
+layout {
+    default_tab_template {
+        pane size=2 borderless=true {
+            plugin location="zellij:tab-bar"
+        }
+        children
+        pane size=1 borderless=true {
+            plugin location="zellij:status-bar"
+        }
+    }
+
+    tab name="server" focus=true {
+        pane command="dx" {
+            args "serve" "--port" "3000" "--package" "omnibus"
+        }
+    }
+    tab name="android" {
+        pane command="dx" start_suspended=true {
+            args "serve" "--platform" "android" "--package" "omnibus-mobile"
+        }
+    }
+    tab name="ios" {
+        pane command="dx" start_suspended=true {
+            args "serve" "--platform" "ios" "--package" "omnibus-mobile"
+        }
+    }
+    tab name="playwright" {
+        pane cwd="ui_tests/playwright" command="npx" start_suspended=true {
+            args "playwright" "test" "--ui"
+        }
+    }
+}

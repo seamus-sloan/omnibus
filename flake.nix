@@ -43,6 +43,9 @@
             pkgs-unstable.dioxus-cli
             pkgs-unstable.nodejs_22
             pkgs-unstable.playwright-driver.browsers
+            pkgs.zellij
+            pkgs.process-compose
+            pkgs.just
           ];
 
           DATABASE_URL = "sqlite://omnibus.db?mode=rwc";

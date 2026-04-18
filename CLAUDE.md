@@ -17,6 +17,17 @@ nix develop                  # also works; spawns a bash subshell
 
 ## Common commands
 
+### Quick launch
+
+Run all dev services inside a single multiplexer session. Must be inside `nix develop`. Two flavors are provided; pick whichever you prefer:
+
+```bash
+just serve            # Zellij: 4 tabs (server, android, ios, playwright). Server auto-runs; others suspended until you press Enter in their pane.
+just serve-pc         # process-compose: TUI with logs. Server auto-runs; android/ios/playwright are disabled — select one and press F7 to start.
+```
+
+Zellij tips: `Alt+<N>` jumps to tab N, `Ctrl-q` quits. process-compose tips: `F4` attach/detach, `F7` start, `F9` stop, `F10` quit.
+
 ```bash
 # Server
 cargo run -p omnibus                                        # start the server at http://0.0.0.0:3000
