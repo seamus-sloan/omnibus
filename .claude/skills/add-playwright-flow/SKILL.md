@@ -5,7 +5,7 @@ description: Recipe for adding a new Playwright E2E spec under ui_tests/playwrig
 
 # Add a Playwright flow
 
-Full conventions live in [04-playwright.md](../rules/04-playwright.md). This is the shortened recipe.
+Full conventions live in [04-playwright.md](../../rules/04-playwright.md). This is the shortened recipe.
 
 ## 1. Create the spec file
 
@@ -75,4 +75,4 @@ npx playwright test
 
 ## 7. End-of-session
 
-Run [99-end-of-session.md](../rules/99-end-of-session.md).
+Run [99-end-of-session.md](../../rules/99-end-of-session.md).

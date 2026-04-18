@@ -6,9 +6,9 @@ When touching any of the following areas, re-read the matching skill and update 
 
 | Code area | Skill to re-check |
 |---|---|
-| `server/src/backend.rs`, `server/src/frontend/`, `server/src/db.rs` | [add-backend-route.md](../skills/add-backend-route.md) |
-| `ui_tests/playwright/tests/fixtures/`, `ui_tests/playwright/tests/utils/`, selector conventions | [add-playwright-flow.md](../skills/add-playwright-flow.md) |
-| jj workflow changes (new commands, new workspace patterns) | [jj-basics.md](../skills/jj-basics.md), [jj-workspaces.md](../skills/jj-workspaces.md), [jj-advanced.md](../skills/jj-advanced.md) |
+| `server/src/backend.rs`, `server/src/frontend/`, `server/src/db.rs` | [add-backend-route](../skills/add-backend-route/SKILL.md) |
+| `ui_tests/playwright/tests/fixtures/`, `ui_tests/playwright/tests/utils/`, selector conventions | [add-playwright-flow](../skills/add-playwright-flow/SKILL.md) |
+| jj workflow changes (new commands, new workspace patterns) | [jj-basics](../skills/jj-basics/SKILL.md), [jj-workspaces](../skills/jj-workspaces/SKILL.md), [jj-advanced](../skills/jj-advanced/SKILL.md) |
 
 If a skill no longer has a corresponding code area (the pattern was removed), delete the skill rather than leaving it outdated.
 
