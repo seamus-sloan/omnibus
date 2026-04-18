@@ -5,11 +5,10 @@
   "description": "End-to-end UI tests for the omnibus server, using Playwright.",
   "scripts": {
     "test": "playwright test",
-    "test:ui": "playwright test --ui",
-    "install-browsers": "playwright install --with-deps chromium"
+    "test:ui": "playwright test --ui"
   },
   "devDependencies": {
-    "@playwright/test": "^1.49.0",
+    "@playwright/test": "~1.58.0",
     "@types/node": "^22.10.0",
     "typescript": "^5.7.0"
   }
