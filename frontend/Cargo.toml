@@ -8,8 +8,10 @@ dioxus = "0.7"
 dioxus-router = "0.7"
 omnibus-shared = { path = "../shared" }
 serde = { version = "1", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+serde_json = { version = "1", optional = true }
 
 [features]
 default = []
 web = []
-mobile = []
+mobile = ["dep:reqwest", "dep:serde_json"]

@@ -1,3 +1,8 @@
 [workspace]
 members = ["server", "mobile", "shared", "frontend"]
+# Exclude `mobile` from default workspace-wide commands (`cargo build`,
+# `cargo clippy`, etc.) to avoid unifying the mutually exclusive
+# `omnibus-frontend` feature flags (`web` + `mobile`). Build mobile
+# explicitly with `cargo build -p omnibus-mobile`.
+default-members = ["server", "shared", "frontend"]
 resolver = "2"
