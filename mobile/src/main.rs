@@ -116,6 +116,20 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   width: 100%;
 }
 .success-msg { color: #34d399; font-size: 0.85rem; margin-top: 0.75rem; }
+.library-card { margin-top: 1rem; }
+.library-title { font-size: 1rem; font-weight: 600; margin-bottom: 0.75rem; color: #cbd5e1; }
+.library-path { font-size: 0.75rem; color: #64748b; font-family: monospace; margin-bottom: 0.4rem; }
+.library-count { font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.5rem; }
+.library-empty { color: #64748b; font-size: 0.875rem; }
+.library-file-list { display: flex; flex-direction: column; gap: 0.25rem; }
+.library-file {
+  font-size: 0.85rem;
+  font-family: monospace;
+  padding: 0.3rem 0.5rem;
+  background: rgba(30, 41, 59, 0.5);
+  border-radius: 6px;
+  color: #e2e8f0;
+}
 "#;
 
 #[component]

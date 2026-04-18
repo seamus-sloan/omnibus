@@ -161,6 +161,31 @@ body {
 }
 .settings-status.success { color: #34d399; }
 .settings-status.error   { color: #f87171; }
+.library-card { margin-top: 1.25rem; }
+.library-card h2 { font-size: 1rem; font-weight: 600; margin-bottom: 0.75rem; color: #cbd5e1; }
+.library-path { font-size: 0.8rem; color: #64748b; margin-bottom: 0.4rem; font-family: monospace; }
+.library-count { font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.5rem; }
+.library-loading { color: #64748b; font-size: 0.875rem; }
+.library-empty { color: #64748b; font-size: 0.875rem; }
+.library-error { color: #f87171; font-size: 0.875rem; }
+.library-file-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.library-file-list li {
+  font-size: 0.875rem;
+  font-family: monospace;
+  padding: 0.3rem 0.5rem;
+  background: rgba(30, 41, 59, 0.5);
+  border-radius: 6px;
+  color: #e2e8f0;
+}
 "#
 }
 
@@ -201,6 +226,7 @@ async function saveSettings(event) {
     if (response.ok) {
       status.textContent = 'Settings saved.';
       status.className = 'settings-status success';
+      loadLibrary();
     } else {
       status.textContent = 'Failed to save settings.';
       status.className = 'settings-status error';
@@ -208,6 +234,43 @@ async function saveSettings(event) {
   } catch {
     status.textContent = 'Network error.';
     status.className = 'settings-status error';
+  }
+}
+
+function renderLibrarySection(containerId, section) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  if (!section.path) {
+    container.innerHTML = '<p class="library-empty">No path configured.</p>';
+    return;
+  }
+  if (section.error) {
+    container.innerHTML = '<p class="library-error">\u26a0 ' + section.error + '</p>';
+    return;
+  }
+  if (section.files.length === 0) {
+    container.innerHTML = '<p class="library-empty">No files found in <code>' + section.path + '</code></p>';
+    return;
+  }
+  const items = section.files.map(function(f) { return '<li>' + f + '</li>'; }).join('');
+  container.innerHTML =
+    '<p class="library-path">' + section.path + '</p>' +
+    '<p class="library-count">' + section.files.length + ' file(s)</p>' +
+    '<ul class="library-file-list">' + items + '</ul>';
+}
+
+async function loadLibrary() {
+  const ebookEl = document.getElementById('ebook-library-contents');
+  const audiobookEl = document.getElementById('audiobook-library-contents');
+  if (!ebookEl && !audiobookEl) return;
+  try {
+    const response = await fetch('/api/library');
+    const data = await response.json();
+    renderLibrarySection('ebook-library-contents', data.ebooks);
+    renderLibrarySection('audiobook-library-contents', data.audiobooks);
+  } catch (e) {
+    if (ebookEl) ebookEl.innerHTML = '<p class="library-error">Failed to load library.</p>';
+    if (audiobookEl) audiobookEl.innerHTML = '<p class="library-error">Failed to load library.</p>';
   }
 }
 
@@ -221,6 +284,7 @@ window.addEventListener('DOMContentLoaded', () => {
     settingsForm.addEventListener('submit', saveSettings);
   }
   syncValue();
+  loadLibrary();
 });
 "#
 }
@@ -243,6 +307,8 @@ mod tests {
         assert!(html.contains("id=\"settings-form\""));
         assert!(html.contains("id=\"ebook-library-path\""));
         assert!(html.contains("id=\"audiobook-library-path\""));
+        assert!(html.contains("id=\"ebook-library-contents\""));
+        assert!(html.contains("id=\"audiobook-library-contents\""));
     }
 
     #[test]
