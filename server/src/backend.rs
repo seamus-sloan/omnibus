@@ -1,14 +1,19 @@
+//! Hand-written `/api/*` REST routes for the mobile client.
+//!
+//! Web uses Dioxus server functions (see `omnibus_frontend::rpc`), mounted
+//! automatically by `dioxus::server::router(App)`. These REST routes are
+//! merged alongside them in `main.rs` so mobile's existing `reqwest` paths
+//! keep working unchanged.
+
 use axum::{
     extract::State,
-    response::{Html, IntoResponse, Response},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
+use omnibus_frontend::{db, scanner};
 use omnibus_shared::{Settings, ValueResponse};
 use sqlx::SqlitePool;
-use tower_http::trace::TraceLayer;
-
-use crate::{db, frontend::Route, scanner};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -21,25 +26,14 @@ impl AppState {
     }
 }
 
-pub fn router(state: AppState) -> Router {
+pub fn rest_router(state: AppState) -> Router {
     Router::new()
-        .route("/", get(index_page))
-        .route("/settings", get(settings_page))
         .route("/api/value", get(get_value))
         .route("/api/value/increment", post(increment_value))
         .route("/api/settings", get(get_settings))
         .route("/api/settings", post(post_settings))
         .route("/api/library", get(get_library))
-        .layer(TraceLayer::new_for_http())
         .with_state(state)
-}
-
-async fn index_page() -> Response {
-    Html(crate::frontend::render_document(Route::Landing {})).into_response()
-}
-
-async fn settings_page() -> Response {
-    Html(crate::frontend::render_document(Route::Settings {})).into_response()
 }
 
 async fn get_value(State(state): State<AppState>) -> Response {
@@ -122,7 +116,7 @@ mod tests {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = router(AppState::new(pool));
+        let app = rest_router(AppState::new(pool));
 
         let response = app
             .clone()
@@ -163,7 +157,7 @@ mod tests {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = router(AppState::new(pool));
+        let app = rest_router(AppState::new(pool));
 
         let response = app
             .oneshot(
@@ -177,7 +171,7 @@ mod tests {
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let settings: db::Settings = serde_json::from_slice(&body).unwrap();
+        let settings: Settings = serde_json::from_slice(&body).unwrap();
         assert_eq!(settings.ebook_library_path, None);
         assert_eq!(settings.audiobook_library_path, None);
     }
@@ -187,7 +181,7 @@ mod tests {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = router(AppState::new(pool));
+        let app = rest_router(AppState::new(pool));
 
         let body = serde_json::json!({
             "ebook_library_path": "/books/ebooks",
@@ -207,7 +201,7 @@ mod tests {
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let settings: db::Settings = serde_json::from_slice(&bytes).unwrap();
+        let settings: Settings = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(
             settings.ebook_library_path,
             Some("/books/ebooks".to_string())
@@ -223,7 +217,7 @@ mod tests {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = router(AppState::new(pool));
+        let app = rest_router(AppState::new(pool));
 
         let body = serde_json::json!({
             "ebook_library_path": "/my/ebooks",
@@ -253,7 +247,7 @@ mod tests {
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let settings: db::Settings = serde_json::from_slice(&bytes).unwrap();
+        let settings: Settings = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(settings.ebook_library_path, Some("/my/ebooks".to_string()));
         assert_eq!(settings.audiobook_library_path, None);
     }
@@ -263,7 +257,7 @@ mod tests {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = router(AppState::new(pool));
+        let app = rest_router(AppState::new(pool));
 
         let response = app
             .oneshot(
@@ -277,7 +271,7 @@ mod tests {
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let contents: scanner::LibraryContents = serde_json::from_slice(&bytes).unwrap();
+        let contents: omnibus_shared::LibraryContents = serde_json::from_slice(&bytes).unwrap();
         assert!(contents.ebooks.path.is_none());
         assert!(contents.ebooks.files.is_empty());
         assert!(contents.audiobooks.path.is_none());
@@ -291,14 +285,14 @@ mod tests {
             .expect("db should initialize");
         db::set_settings(
             &pool,
-            &db::Settings {
+            &Settings {
                 ebook_library_path: Some("/does/not/exist/omnibus_test".to_string()),
                 audiobook_library_path: None,
             },
         )
         .await
         .expect("set should succeed");
-        let app = router(AppState::new(pool));
+        let app = rest_router(AppState::new(pool));
 
         let response = app
             .oneshot(
@@ -312,7 +306,7 @@ mod tests {
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let contents: scanner::LibraryContents = serde_json::from_slice(&bytes).unwrap();
+        let contents: omnibus_shared::LibraryContents = serde_json::from_slice(&bytes).unwrap();
         assert!(contents.ebooks.error.is_some());
         assert!(contents.audiobooks.path.is_none());
     }
