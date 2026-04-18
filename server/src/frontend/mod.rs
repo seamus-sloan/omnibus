@@ -298,6 +298,7 @@ mod tests {
         let html = render_document(Route::Landing {}, 7, Settings::default());
         assert!(html.contains("Minimal Rust Full-Stack Counter"));
         assert!(html.contains("id=\"current-value\""));
+        assert!(html.contains("data-testid=\"current-value\""));
         assert!(html.contains(">7<"));
     }
 

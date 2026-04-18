@@ -97,7 +97,10 @@ playwright/         — TypeScript Playwright E2E tests for the server UI
   package.json
   playwright.config.ts
   tsconfig.json
-  tests/            — *.spec.ts files (landing, settings, counter)
+  tests/
+    flows/          — one *.spec.ts per user flow (counter, settings, …)
+    utils/          — cross-flow helpers (nav, api mutation assertions)
+    fixtures/       — extended `test` / `expect` exports; hook point for shared state
 ```
 
 ### mobile/src/
@@ -144,8 +147,44 @@ Testing is a first-class requirement. Every meaningful behavior should have a te
 
 - **Unit tests:** inline `#[cfg(test)]` modules in the same file as the code under test. This is the default for all logic in `db/`, `scanner/`, and `frontend/`.
 - **Integration tests:** inline `#[cfg(test)]` in `backend.rs`, using `tower::ServiceExt::oneshot` to test full request/response cycles against an in-memory DB.
-- **E2E tests:** TypeScript Playwright tests in `ui_tests/playwright/`, run with `npm test` from that directory against a locally running server. Cover user-facing flows on the web UI.
+- **E2E tests:** TypeScript Playwright tests in `ui_tests/playwright/`, run with `npm test` from that directory against a locally running server. Cover user-facing flows on the web UI. Follow the conventions below.
 - **Mobile E2E:** not yet implemented. The mobile crate is Dioxus Native (not a WebView), so Playwright cannot reach it. When added, this will be a separate track under `ui_tests/` (likely Appium + WebdriverIO, or Maestro) and will require stable accessibility ids on interactive elements in `mobile/src/`.
+
+### Playwright E2E conventions
+
+These rules exist so every flow is tested the same way; don't diverge without updating this section first.
+
+**Style — functional helpers + fixtures, never page-object classes.** Import `test` and `expect` from `tests/fixtures/test.ts` (not directly from `@playwright/test`) so shared fixtures apply uniformly. Factor reusable selectors and actions into plain functions, not classes.
+
+**Structure — one file per flow under `tests/flows/`.** Each flow file contains:
+
+1. **One layout test** (`renders the <page> layout`) asserting the destination page's structure: key elements visible, shared nav present (via `expectNavVisible` from `utils/nav.ts`). No user actions in the layout test.
+2. **One or more action tests**, one per user action, covering happy path and error path. Action tests drive the UI, assert network contracts, then assert UI state.
+
+Flow-specific helpers (e.g. `fillSettingsForm`) live inside the flow's spec file. Only cross-flow helpers go to `utils/`.
+
+**Waits — `expect.poll` and Playwright auto-waiting only. No `waitForTimeout`.** If the DOM is going to change, poll for it. If a request must complete before asserting, `await` the response via `expectMutation` from `utils/api.ts`.
+
+**Network — every mutating request (POST/PUT/PATCH/DELETE) must be asserted.** Wrap the user action that triggers a mutation in `expectMutation(page, { method, url, expectedBody, expectedStatus }, action)`. It arms `waitForRequest`/`waitForResponse`, runs the action, checks the payload and status, and returns the request/response for further assertions — crucially ensuring the test waited for the response before any subsequent UI assertion. Reads (GET) are not asserted unless the assertion depends on their data.
+
+**Error paths — force failures with `page.route`.** For error-path tests, intercept the mutating route and `route.fulfill({ status: 500, ... })` before triggering the action, then still use `expectMutation` to verify the request fired with the expected payload and observed the forced status. Assert the UI surfaces the error (status text, error class, unchanged state, etc).
+
+**Example shape** (see `tests/flows/settings.spec.ts` for the full version):
+
+```ts
+test("saves library paths and shows a success status", async ({ page }) => {
+  await page.goto("/settings");
+  await page.locator("#ebook-library-path").fill(path);
+
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/settings", expectedBody: { ... }, expectedStatus: 200 },
+    async () => page.locator("#settings-form button[type=submit]").click(),
+  );
+
+  await expect(page.locator("#settings-status")).toHaveText("Settings saved.");
+});
+```
 
 Coverage expectations:
 - All `db/` functions: happy path + not-found/missing + constraint violations
