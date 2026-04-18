@@ -1,0 +1,67 @@
+name: E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [labeled, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  playwright:
+    name: playwright
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'run_ui_tests')
+    env:
+      CI: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Enable Nix store cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install Playwright npm deps
+        run: nix develop --command bash -c "cd ui_tests/playwright && npm ci"
+
+      - name: Build server
+        run: nix develop --command cargo build -p omnibus
+
+      - name: Start server
+        run: |
+          nix develop --command bash -c "cargo run -p omnibus >server.log 2>&1 &"
+          nix develop --command bash -c "npx --yes wait-on -t 60000 http://127.0.0.1:3000"
+
+      - name: Run Playwright tests
+        run: nix develop --command bash -c "cd ui_tests/playwright && npm test"
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            ui_tests/playwright/playwright-report
+            ui_tests/playwright/test-results
+          retention-days: 7
+
+      - name: Upload server log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-log
+          path: server.log
+          retention-days: 7
