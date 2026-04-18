@@ -1,0 +1,16 @@
+{
+  "name": "omnibus-ui-tests-playwright",
+  "private": true,
+  "version": "0.0.0",
+  "description": "End-to-end UI tests for the omnibus server, using Playwright.",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "install-browsers": "playwright install --with-deps chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
