@@ -34,7 +34,7 @@ test("saves library paths and shows a success status", async ({ page }) => {
     page,
     {
       method: "POST",
-      url: "/api/settings",
+      url: "/api/rpc/settings",
       expectedBody: {
         ebook_library_path: ebookPath,
         audiobook_library_path: audiobookPath,
@@ -54,7 +54,7 @@ test("shows an error status when saving settings fails", async ({ page }) => {
   await ebookInput(page).fill("/tmp/whatever");
   await audiobookInput(page).fill("/tmp/whatever-audio");
 
-  await page.route("**/api/settings", (route) => {
+  await page.route("**/api/rpc/settings", (route) => {
     if (route.request().method() === "POST") {
       return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
     }
@@ -65,7 +65,7 @@ test("shows an error status when saving settings fails", async ({ page }) => {
     page,
     {
       method: "POST",
-      url: "/api/settings",
+      url: "/api/rpc/settings",
       expectedBody: {
         ebook_library_path: "/tmp/whatever",
         audiobook_library_path: "/tmp/whatever-audio",

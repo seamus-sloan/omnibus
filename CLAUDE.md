@@ -29,30 +29,50 @@ Auto-discoverable skills in [.claude/skills/](.claude/skills/) — Claude Code l
 
 ## Architecture
 
-Cargo workspace with two crates:
+Cargo workspace with four crates:
 
-- **`server/`** (`omnibus`) — Axum SSR server. Dioxus is used only as a templating engine; interactivity is plain JavaScript.
-- **`mobile/`** (`omnibus-mobile`) — Dioxus Native mobile app. Communicates with the server via JSON API.
+- **`shared/`** (`omnibus-shared`) — serde types shared across every target (`Settings`, `ValueResponse`, `LibraryContents`, `LibrarySection`). No Dioxus / axum / sqlx deps.
+- **`frontend/`** (`omnibus-frontend`) — Dioxus UI + the DB layer + server functions. Feature-gated:
+  - `web` — WASM client build (used by `server/` when `dx serve --platform web` builds it for WASM).
+  - `mobile` — Native Dioxus build; uses `reqwest` against `/api/*` REST routes.
+  - `server` — SSR/native build; enables sqlx + tokio and compiles server-function bodies.
+- **`server/`** (`omnibus`) — **unified Dioxus fullstack binary**. Built twice by `dx serve`: once native (feature `server`) for the axum backend + SSR, once WASM (feature `web`) for the hydrated client. Hosts the hand-written `/api/*` REST router for mobile.
+- **`mobile/`** (`omnibus-mobile`) — thin Dioxus Native shell (~16 lines) that injects `ServerUrl` context and launches `omnibus_frontend::App`.
 
-**Server request flow:** Axum handler → `db/` query → Dioxus SSR component renders HTML string → `Html(...)` response. JSON API routes skip SSR and return `Json(...)` directly.
+Default `cargo build` / `clippy` covers `server`, `shared`, `frontend` only. Mobile is excluded via workspace `default-members` because its `mobile` feature is mutually exclusive with `web`; build it explicitly: `cargo build -p omnibus-mobile`.
 
-**Mobile data flow:** Dioxus signal/effect → `reqwest` call to `/api/*` → signal update → re-render.
+**Web request flow (fullstack):** browser → axum serves SSR'd HTML + WASM bundle → hydration → signal effects call Dioxus server functions (`#[get]`/`#[post]` in `frontend/src/rpc.rs`) at `/api/rpc/*` → same handlers execute server-side against the SQLite pool via an `axum::Extension<SqlitePool>` layer.
 
-**Database:** schema is created inline at startup in `db::initialize_schema`. No migrations framework yet. All tests use `sqlite::memory:` for isolation.
+**Mobile data flow:** Dioxus signal/effect → `reqwest` call to `/api/*` (hand-written handlers in `server/src/backend.rs`) → signal update → re-render. Mobile deliberately does **not** use the `/api/rpc/*` server functions.
+
+**Database:** schema is created inline at startup in `frontend::db::initialize_schema`. No migrations framework yet. All tests use `sqlite::memory:` for isolation.
 
 **Server URL (mobile):** hardcoded to `http://127.0.0.1:3000` in `mobile/src/main.rs` via `use_context_provider`. Will become a first-launch setup screen.
+
+### shared/src/
+
+```
+lib.rs              — Settings, ValueResponse, LibraryContents, LibrarySection
+```
+
+### frontend/src/
+
+```
+lib.rs              — Route, App, styles, ScreenLayout (feature-gated)
+data.rs             — Feature-gated data transport (mobile=reqwest, web/server=rpc)
+rpc.rs              — #[get]/#[post] server functions (mounted by dioxus::server::router)
+db.rs               — pool init, schema, queries (feature = "server")
+scanner.rs          — library directory scanning (feature = "server")
+pages/{landing,settings}.rs
+components/{top_nav,bottom_nav}.rs  — feature = web / mobile respectively
+```
 
 ### server/src/
 
 ```
-main.rs
-lib.rs
-backend.rs          — Axum router + AppState + handlers
-db.rs               — pool init, schema, queries
-frontend/
-  mod.rs            — Route enum, App component, render_document, styles, SSR tests
-  pages/{landing,settings}.rs
-  components/nav.rs
+main.rs             — dioxus::launch (WASM) / dioxus::serve (native)
+lib.rs              — re-exports backend under `server` feature for tests
+backend.rs          — /api/* REST router (mobile-facing) + integration tests
 ```
 
 ### ui_tests/playwright/
@@ -67,9 +87,7 @@ tests/
 ### mobile/src/
 
 ```
-main.rs             — dioxus::launch, Route enum, App, ServerUrl context, CSS
-pages/{landing,settings}.rs
-components/nav.rs
+main.rs             — dioxus::launch, ServerUrl context, wraps omnibus_frontend::App
 ```
 
 ## Quick commands
@@ -79,11 +97,14 @@ components/nav.rs
 just serve                                                  # Zellij
 just serve-pc                                               # process-compose
 
-# Server only
+# Fullstack dev (serves SSR + WASM hydration at http://localhost:8080 by default)
+dx serve --platform web -p omnibus
+
+# Server only (native backend, no WASM bundle)
 cargo run -p omnibus                                        # start at http://0.0.0.0:3000
-cargo test -p omnibus                                       # all server tests
-cargo test -p omnibus <test_name>                           # single test
-cargo clippy                                                # lint all crates
+cargo test -p omnibus                                       # /api/* REST integration tests
+cargo test -p omnibus-frontend --features server            # db + scanner tests
+cargo clippy                                                # lint default-members crates
 cargo fmt                                                   # format all crates
 
 # Playwright E2E (server must be running)
