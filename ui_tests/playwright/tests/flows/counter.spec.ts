@@ -26,7 +26,7 @@ test("clicking increment posts to the API and updates the displayed value", asyn
 
   await expectMutation(
     page,
-    { method: "POST", url: "/api/value/increment", expectedStatus: 200 },
+    { method: "POST", url: "/api/rpc/value/increment", expectedStatus: 200 },
     async () => incrementButton(page).click(),
   );
 
@@ -42,13 +42,13 @@ test("leaves the displayed value unchanged when the increment API fails", async 
   await expect(current).not.toHaveText("");
   const before = await current.innerText();
 
-  await page.route("**/api/value/increment", (route) =>
+  await page.route("**/api/rpc/value/increment", (route) =>
     route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" }),
   );
 
   await expectMutation(
     page,
-    { method: "POST", url: "/api/value/increment", expectedStatus: 500 },
+    { method: "POST", url: "/api/rpc/value/increment", expectedStatus: 500 },
     async () => incrementButton(page).click(),
   );
 
