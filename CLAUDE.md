@@ -22,10 +22,14 @@ nix develop                  # also works; spawns a bash subshell
 cargo run -p omnibus                                        # start the server at http://0.0.0.0:3000
 cargo test -p omnibus                                       # run all server tests
 cargo test -p omnibus <test_name>                           # run a single test by name
-cargo test -p omnibus --features e2e -- --ignored           # run Playwright E2E tests (requires running server)
 dx serve --port 3000 --package omnibus                      # run server with hot-reload, devserver fixed at port 3000
 cargo clippy                                                # lint all crates
 cargo fmt                                                   # format all crates
+
+# E2E UI tests (TypeScript Playwright, against a running local server)
+cd ui_tests/playwright && npm install && npx playwright install --with-deps chromium   # first-time setup
+cd ui_tests/playwright && npm test                          # run all E2E tests
+cd ui_tests/playwright && npm run test:ui                   # interactive UI mode
 
 # Mobile
 cargo build -p omnibus-mobile                               # build mobile app
@@ -84,8 +88,16 @@ frontend/
   components/
     mod.rs
     nav.rs          — TopNav component
-tests/
-  e2e_playwright.rs — browser tests, feature-gated behind `--features e2e`
+```
+
+### ui_tests/
+
+```
+playwright/         — TypeScript Playwright E2E tests for the server UI
+  package.json
+  playwright.config.ts
+  tsconfig.json
+  tests/            — *.spec.ts files (landing, settings, counter)
 ```
 
 ### mobile/src/
@@ -132,7 +144,8 @@ Testing is a first-class requirement. Every meaningful behavior should have a te
 
 - **Unit tests:** inline `#[cfg(test)]` modules in the same file as the code under test. This is the default for all logic in `db/`, `scanner/`, and `frontend/`.
 - **Integration tests:** inline `#[cfg(test)]` in `backend.rs`, using `tower::ServiceExt::oneshot` to test full request/response cycles against an in-memory DB.
-- **E2E tests:** Playwright tests in `tests/e2e_playwright.rs`, feature-gated with `--features e2e`, for user-facing flows.
+- **E2E tests:** TypeScript Playwright tests in `ui_tests/playwright/`, run with `npm test` from that directory against a locally running server. Cover user-facing flows on the web UI.
+- **Mobile E2E:** not yet implemented. The mobile crate is Dioxus Native (not a WebView), so Playwright cannot reach it. When added, this will be a separate track under `ui_tests/` (likely Appium + WebdriverIO, or Maestro) and will require stable accessibility ids on interactive elements in `mobile/src/`.
 
 Coverage expectations:
 - All `db/` functions: happy path + not-found/missing + constraint violations
