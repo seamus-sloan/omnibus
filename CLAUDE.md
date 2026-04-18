@@ -156,6 +156,16 @@ These rules exist so every flow is tested the same way; don't diverge without up
 
 **Style — functional helpers + fixtures, never page-object classes.** Import `test` and `expect` from `tests/fixtures/test.ts` (not directly from `@playwright/test`) so shared fixtures apply uniformly. Factor reusable selectors and actions into plain functions, not classes.
 
+**Selectors — semantic first, `locator()` last, never XPath.** Use this preference order:
+
+1. `page.getByRole(...)` — buttons, headings, links, form landmarks, live regions (`status`, `alert`). Also use for form labels: `getByRole("button", { name: "Save" })`.
+2. `page.getByText(...)` — visible text that isn't tied to a role.
+3. `page.getByLabel(...)` — form inputs with a `<label for=...>`. Add a proper label in the SSR markup rather than reaching for a test id.
+4. `page.getByTestId(...)` — only when no role / text / label fits. Add `"data-testid": "..."` (alongside the existing `id`) to the Dioxus rsx markup. Keep the testid name stable and meaningful — it's part of the UI contract.
+5. `page.locator(...)` — last resort, only for things nothing else can express.
+
+Never use XPath. If you find yourself wanting XPath, the SSR markup probably needs a role, label, or testid added.
+
 **Structure — one file per flow under `tests/flows/`.** Each flow file contains:
 
 1. **One layout test** (`renders the <page> layout`) asserting the destination page's structure: key elements visible, shared nav present (via `expectNavVisible` from `utils/nav.ts`). No user actions in the layout test.
