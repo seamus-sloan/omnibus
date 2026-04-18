@@ -1,4 +1,9 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../fixtures/test";
+
+test("renders the counter page layout", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("h1")).toContainText("Counter");
+});
 
 test("clicking increment updates the displayed value", async ({ page }) => {
   await page.goto("/");
