@@ -39,5 +39,19 @@ pub fn SettingsPage(settings: Option<Settings>) -> Element {
 
             p { id: "settings-status", class: "settings-status" }
         }
+
+        section { class: "card library-card",
+            h2 { "Ebook Library" }
+            div { id: "ebook-library-contents", class: "library-contents",
+                p { class: "library-loading", "Loading…" }
+            }
+        }
+
+        section { class: "card library-card",
+            h2 { "Audiobook Library" }
+            div { id: "audiobook-library-contents", class: "library-contents",
+                p { class: "library-loading", "Loading…" }
+            }
+        }
     }
 }

@@ -2,18 +2,35 @@ use dioxus::prelude::*;
 
 use crate::ServerUrl;
 
+#[derive(Clone, Debug, Default, PartialEq)]
+struct LibrarySection {
+    path: Option<String>,
+    files: Vec<String>,
+    error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct LibraryContents {
+    ebooks: LibrarySection,
+    audiobooks: LibrarySection,
+}
+
 #[component]
 pub fn SettingsPage() -> Element {
     let server_url = use_context::<ServerUrl>();
-    let server_url_for_effect = server_url.clone();
+    let server_url_for_settings = server_url.clone();
+    let server_url_for_library = server_url.clone();
 
     let mut ebook_path = use_signal(String::new);
     let mut audiobook_path = use_signal(String::new);
     let mut status = use_signal(|| None::<String>);
     let mut status_is_error = use_signal(|| false);
+    let mut library = use_signal(LibraryContents::default);
+    // Incrementing this triggers a library refresh.
+    let mut library_refresh = use_signal(|| 0u32);
 
     use_effect(move || {
-        let url = server_url_for_effect.0.clone();
+        let url = server_url_for_settings.0.clone();
         spawn(async move {
             match fetch_settings(&url).await {
                 Ok((ebook, audiobook)) => {
@@ -24,6 +41,16 @@ pub fn SettingsPage() -> Element {
                     status.set(Some(e));
                     status_is_error.set(true);
                 }
+            }
+        });
+    });
+
+    use_effect(move || {
+        let _ = library_refresh();
+        let url = server_url_for_library.0.clone();
+        spawn(async move {
+            if let Ok(contents) = fetch_library(&url).await {
+                library.set(contents);
             }
         });
     });
@@ -69,6 +96,7 @@ pub fn SettingsPage() -> Element {
                                 Ok(()) => {
                                     status.set(Some("Settings saved.".to_string()));
                                     status_is_error.set(false);
+                                    library_refresh.set(library_refresh() + 1);
                                 }
                                 Err(e) => {
                                     status.set(Some(e));
@@ -88,18 +116,50 @@ pub fn SettingsPage() -> Element {
                 }
             }
         }
+
+        LibrarySectionView {
+            title: "Ebook Library",
+            section: library().ebooks,
+        }
+        LibrarySectionView {
+            title: "Audiobook Library",
+            section: library().audiobooks,
+        }
+    }
+}
+
+#[component]
+fn LibrarySectionView(title: String, section: LibrarySection) -> Element {
+    rsx! {
+        div { class: "card library-card",
+            h2 { class: "library-title", "{title}" }
+
+            if section.path.is_none() {
+                p { class: "library-empty", "No path configured." }
+            } else if let Some(err) = &section.error {
+                p { class: "error", "⚠ {err}" }
+            } else if section.files.is_empty() {
+                p { class: "library-empty",
+                    "No files found in "
+                    span { class: "library-path", "{section.path.as_deref().unwrap_or_default()}" }
+                }
+            } else {
+                p { class: "library-path", "{section.path.as_deref().unwrap_or_default()}" }
+                p { class: "library-count", "{section.files.len()} file(s)" }
+                div { class: "library-file-list",
+                    for file in &section.files {
+                        p { class: "library-file", "{file}" }
+                    }
+                }
+            }
+        }
     }
 }
 
 async fn fetch_settings(server_url: &str) -> Result<(String, String), String> {
     let url = format!("{server_url}/api/settings");
     eprintln!("[mobile] GET {url}");
-    let response = reqwest::get(&url).await.map_err(|e| {
-        let msg = format!("{e:#}");
-        eprintln!("[mobile] GET {url} failed: {msg}");
-        msg
-    })?;
-    eprintln!("[mobile] GET {url} -> {}", response.status());
+    let response = reqwest::get(&url).await.map_err(|e| format!("{e:#}"))?;
     let payload: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
     let ebook = payload["ebook_library_path"]
         .as_str()
@@ -110,6 +170,32 @@ async fn fetch_settings(server_url: &str) -> Result<(String, String), String> {
         .unwrap_or("")
         .to_string();
     Ok((ebook, audiobook))
+}
+
+async fn fetch_library(server_url: &str) -> Result<LibraryContents, String> {
+    let url = format!("{server_url}/api/library");
+    eprintln!("[mobile] GET {url}");
+    let response = reqwest::get(&url).await.map_err(|e| format!("{e:#}"))?;
+    let payload: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    Ok(LibraryContents {
+        ebooks: parse_section(&payload["ebooks"]),
+        audiobooks: parse_section(&payload["audiobooks"]),
+    })
+}
+
+fn parse_section(v: &serde_json::Value) -> LibrarySection {
+    LibrarySection {
+        path: v["path"].as_str().map(str::to_string),
+        files: v["files"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|f| f.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        error: v["error"].as_str().map(str::to_string),
+    }
 }
 
 async fn save_settings(
@@ -129,12 +215,7 @@ async fn save_settings(
         .json(&body)
         .send()
         .await
-        .map_err(|e| {
-            let msg = format!("{e:#}");
-            eprintln!("[mobile] POST {url} failed: {msg}");
-            msg
-        })?;
-    eprintln!("[mobile] POST {url} -> {}", response.status());
+        .map_err(|e| format!("{e:#}"))?;
     if response.status().is_success() {
         Ok(())
     } else {
