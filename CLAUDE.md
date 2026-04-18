@@ -184,15 +184,15 @@ Flow-specific helpers (e.g. `fillSettingsForm`) live inside the flow's spec file
 ```ts
 test("saves library paths and shows a success status", async ({ page }) => {
   await page.goto("/settings");
-  await page.locator("#ebook-library-path").fill(path);
+  await page.getByLabel("Ebook Library Path").fill(path);
 
   await expectMutation(
     page,
     { method: "POST", url: "/api/settings", expectedBody: { ... }, expectedStatus: 200 },
-    async () => page.locator("#settings-form button[type=submit]").click(),
+    async () => page.getByRole("button", { name: "Save" }).click(),
   );
 
-  await expect(page.locator("#settings-status")).toHaveText("Settings saved.");
+  await expect(page.getByRole("status")).toHaveText("Settings saved.");
 });
 ```
 
