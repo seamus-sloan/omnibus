@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use dioxus_router::{Link, Routable};
+use dioxus_router::Link;
 
 use crate::Route;
 
