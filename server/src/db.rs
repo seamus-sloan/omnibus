@@ -77,10 +77,11 @@ pub async fn increment_value(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
 }
 
 pub async fn get_settings(pool: &SqlitePool) -> Result<Settings, sqlx::Error> {
-    let ebook_library_path =
-        sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = 'ebook_library_path'")
-            .fetch_optional(pool)
-            .await?;
+    let ebook_library_path = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM settings WHERE key = 'ebook_library_path'",
+    )
+    .fetch_optional(pool)
+    .await?;
 
     let audiobook_library_path = sqlx::query_scalar::<_, String>(
         "SELECT value FROM settings WHERE key = 'audiobook_library_path'",
@@ -113,10 +114,12 @@ pub async fn set_settings(pool: &SqlitePool, settings: &Settings) -> Result<(), 
 
     match &settings.audiobook_library_path {
         Some(path) => {
-            sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES ('audiobook_library_path', ?)")
-                .bind(path)
-                .execute(pool)
-                .await?;
+            sqlx::query(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('audiobook_library_path', ?)",
+            )
+            .bind(path)
+            .execute(pool)
+            .await?;
         }
         None => {
             sqlx::query("DELETE FROM settings WHERE key = 'audiobook_library_path'")
@@ -193,7 +196,9 @@ mod tests {
             ebook_library_path: Some("/books/ebooks".to_string()),
             audiobook_library_path: Some("/books/audio".to_string()),
         };
-        set_settings(&pool, &input).await.expect("set should succeed");
+        set_settings(&pool, &input)
+            .await
+            .expect("set should succeed");
         let result = get_settings(&pool).await.expect("get should succeed");
         assert_eq!(result, input);
     }
