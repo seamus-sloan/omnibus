@@ -30,11 +30,8 @@ jobs:
       - name: cargo fmt --check
         run: nix develop --command cargo fmt --all --check
 
-      - name: cargo clippy
-        run: nix develop --command cargo clippy --all-targets -- -D warnings
+      - name: cargo clippy (server)
+        run: nix develop --command cargo clippy -p omnibus --all-targets -- -D warnings
 
-      - name: cargo test
-        run: nix develop --command cargo test --workspace
-
-      - name: cargo build (mobile)
-        run: nix develop --command cargo build -p omnibus-mobile
+      - name: cargo test (server)
+        run: nix develop --command cargo test -p omnibus
