@@ -40,35 +40,66 @@ The foundation of the library. Omnibus scans one or more configured directories 
 
 ---
 
-### 2. Libraries
+### 2. Book Uploads
 
-**Issue Title:** `feat: configurable named libraries with metadata filter rules`
+**Issue Title:** `feat: upload epub and m4a files directly to a configured scan path via the web UI`
 
 **Description:**
-Users can create multiple named libraries (e.g. "Sci-Fi", "Fantasy Audiobooks", "Sarah's Books"), each defined by filter rules on book metadata. Libraries are the primary way users navigate their collection.
+Any authenticated user can upload epub or m4a files through the web UI. Uploaded files are written to a designated upload target — one of the configured scan paths chosen by the admin. After upload, the scanner is triggered automatically so the new book appears in the library immediately.
 
 **Implementation Plan:**
-- Add `libraries` and `library_filters` tables to SQLite
-- Filter rule schema: `{ field: "genre" | "author" | "series" | "type" | "owner", operator: "eq" | "contains", value: string }`
-- Library resolver: query books applying all active filter rules (AND logic within one library)
-- UI: library management page — create, rename, and delete libraries
-- UI: filter rule builder — add/remove rules with field/operator/value inputs
-- Route: `GET /library/:id` returns the filtered book list for that library
+- Admin settings: designate one configured scan path as the "upload target" (stored in `server_config`)
+- Route: `POST /api/books/upload` — accepts multipart form with one or more epub/m4a files; writes them to the upload target directory; triggers an incremental re-scan
+- Validate file type by extension and MIME type; reject unsupported formats with a clear error
+- UI: upload button/drop zone on the library page (or a dedicated upload page); shows per-file progress and success/error state
+- After upload completes, redirect or refresh to show the newly added book(s)
 
 **Expected Results:**
-- A library called "Fantasy Audiobooks" shows only audiobooks where genre contains "Fantasy"
-- Multiple libraries coexist and each returns the correct subset of books
+- A user uploads a file and it immediately appears in the library after the automatic re-scan
+- Invalid file types are rejected before writing to disk
 
 **Acceptance Criteria:**
-- [ ] Libraries can be created, renamed, and deleted
+- [ ] epub and m4a files can be uploaded via the web UI
+- [ ] Uploaded files are written to the admin-configured upload target scan path
+- [ ] A re-scan is triggered automatically after each upload
+- [ ] The newly uploaded book appears in the library without a manual scan
+- [ ] Files with unsupported extensions or MIME types are rejected with a clear error message
+- [ ] Upload progress is visible in the UI
+
+---
+
+### 3. Libraries
+
+**Issue Title:** `feat: configurable named libraries with metadata filter rules, creatable by any user`
+
+**Description:**
+Any authenticated user can create multiple named libraries (e.g. "Sci-Fi", "Fantasy Audiobooks", "Sarah's Books"), each defined by filter rules on book metadata. Libraries are scoped to the creating user and are the primary way users organize and navigate their collection. Admins can additionally see and manage all users' libraries.
+
+**Implementation Plan:**
+- Add `libraries` and `library_filters` tables to SQLite; `libraries` has a `user_id` foreign key (owner)
+- Filter rule schema: `{ field: "genre" | "author" | "series" | "type" | "owner", operator: "eq" | "contains", value: string }`
+- Library resolver: query books applying all active filter rules (AND logic within one library), scoped to the owning user's visible books
+- UI: per-user library management page — create, rename, and delete their own libraries
+- UI: filter rule builder — add/remove rules with field/operator/value inputs
+- Route: `GET /library/:id` returns the filtered book list; returns 403 if the requesting user does not own the library (unless admin)
+- Admin view: ability to list and manage all users' libraries
+
+**Expected Results:**
+- Any user can create a library called "Fantasy Audiobooks" that shows only audiobooks where genre contains "Fantasy"
+- Each user's libraries are independent; multiple libraries coexist and each returns the correct subset of books
+
+**Acceptance Criteria:**
+- [ ] Any authenticated user can create, rename, and delete their own libraries
 - [ ] At least 5 filterable fields: type, genre, series, author, owner
 - [ ] Filter rules within a library combine with AND logic
 - [ ] A library with no filters shows all books
 - [ ] An empty state is shown when no books match the filters
+- [ ] A user cannot view or modify another user's libraries (returns 403)
+- [ ] Admins can view and manage all users' libraries
 
 ---
 
-### 3. Library Views
+### 4. Library Views
 
 **Issue Title:** `feat: sortable table view and cover grid view for library browsing`
 
@@ -96,7 +127,7 @@ Two ways to browse a library: a sortable table for power users and a cover grid 
 
 ---
 
-### 4. Book Detail Page
+### 5. Book Detail Page
 
 **Issue Title:** `feat: book detail page with full metadata display and navigation`
 
@@ -128,7 +159,7 @@ Clicking any book in a library view opens a detail page showing all available me
 
 ---
 
-### 5. Ratings & Journaling
+### 6. Ratings & Journaling
 
 **Issue Title:** `feat: per-user star ratings and markdown journal entries on book detail page`
 
@@ -158,7 +189,7 @@ Authenticated users can rate a book (0–5 stars in 0.5 increments), write a per
 
 ---
 
-### 6. Auth & Users
+### 7. Auth & Users
 
 **Issue Title:** `feat: user authentication with account creation and session management`
 
@@ -189,7 +220,7 @@ Secure multi-user access. Users register, log in, and have all personal data (ra
 
 ---
 
-### 7. In-Browser Epub Reader
+### 8. In-Browser Epub Reader
 
 **Issue Title:** `feat: in-browser epub reader with per-user progress tracking`
 
@@ -219,7 +250,7 @@ Users read epub books directly in the browser. Reading position is saved server-
 
 ---
 
-### 8. In-Browser Audiobook Player
+### 9. In-Browser Audiobook Player
 
 **Issue Title:** `feat: in-browser audiobook player with speed control, sleep timer, and progress sync`
 
@@ -252,7 +283,7 @@ Users stream m4a audiobooks in the browser with full playback controls: variable
 
 ---
 
-### 9. Kobo Sync (OPDS)
+### 10. Kobo Sync (OPDS)
 
 **Issue Title:** `feat: OPDS 1.2 catalog server for native Kobo device sync`
 
@@ -281,7 +312,7 @@ Omnibus serves an OPDS 1.2 Atom feed so Kobo e-readers can browse and download b
 
 ---
 
-### 10. Kindle Sync
+### 11. Kindle Sync
 
 **Issue Title:** `feat: Send to Kindle delivery via SMTP with per-library auto-sync`
 
@@ -311,7 +342,7 @@ Users configure their Send to Kindle email address in account settings. They can
 
 ---
 
-### 11. Book Suggestions
+### 12. Book Suggestions & Public Ratings
 
 **Issue Title:** `feat: book suggestions on detail page via local metadata, OpenLibrary, and Hardcover`
 
@@ -340,7 +371,7 @@ The book detail page shows a "You might also like" section. Suggestions draw fro
 
 ---
 
-### 12. Admin Settings
+### 13. Admin Settings
 
 **Issue Title:** `feat: admin settings panel for server configuration and user management`
 
@@ -369,7 +400,7 @@ An admin-only panel for configuring the server: scan folder paths, SMTP for Kind
 
 ---
 
-### 13. Mobile App (Dioxus Native)
+### 14. Mobile App (Dioxus Native)
 
 **Issue Title:** `feat: native iOS and Android app using Dioxus with offline support and background audio`
 
