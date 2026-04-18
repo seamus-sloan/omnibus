@@ -2,7 +2,7 @@ version: "0.5"
 
 processes:
   server:
-    command: dx serve --port 3000 --package omnibus
+    command: dx serve --platform web --fullstack --port 3000 --package omnibus
 
   android:
     command: dx serve --platform android --package omnibus-mobile
