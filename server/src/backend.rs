@@ -34,39 +34,12 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn index_page(State(state): State<AppState>) -> Response {
-    match db::get_value(&state.pool).await {
-        Ok(value) => Html(crate::frontend::render_document(
-            Route::Landing {},
-            value,
-            Settings::default(),
-        ))
-        .into_response(),
-        Err(error) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to load value: {error}"),
-        )
-            .into_response(),
-    }
+async fn index_page() -> Response {
+    Html(crate::frontend::render_document(Route::Landing {})).into_response()
 }
 
-async fn settings_page(State(state): State<AppState>) -> Response {
-    let settings = match db::get_settings(&state.pool).await {
-        Ok(s) => s,
-        Err(error) => {
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to load settings: {error}"),
-            )
-                .into_response();
-        }
-    };
-    Html(crate::frontend::render_document(
-        Route::Settings {},
-        0,
-        settings,
-    ))
-    .into_response()
+async fn settings_page() -> Response {
+    Html(crate::frontend::render_document(Route::Settings {})).into_response()
 }
 
 async fn get_value(State(state): State<AppState>) -> Response {
@@ -102,10 +75,7 @@ async fn get_settings(State(state): State<AppState>) -> Response {
     }
 }
 
-async fn post_settings(
-    State(state): State<AppState>,
-    Json(settings): Json<Settings>,
-) -> Response {
+async fn post_settings(State(state): State<AppState>, Json(settings): Json<Settings>) -> Response {
     match db::set_settings(&state.pool, &settings).await {
         Ok(()) => match db::get_settings(&state.pool).await {
             Ok(updated) => Json(updated).into_response(),

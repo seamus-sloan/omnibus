@@ -1,5 +1,5 @@
-pub mod landing;
-pub mod settings;
+mod landing;
+mod settings;
 
 pub use landing::LandingPage;
 pub use settings::SettingsPage;

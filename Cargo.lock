@@ -3674,6 +3674,7 @@ dependencies = [
  "dioxus",
  "dioxus-router",
  "dioxus-ssr",
+ "omnibus-frontend",
  "omnibus-shared",
  "serde",
  "serde_json",
@@ -3692,7 +3693,9 @@ dependencies = [
  "dioxus",
  "dioxus-router",
  "omnibus-shared",
+ "reqwest",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3701,6 +3704,7 @@ version = "0.1.0"
 dependencies = [
  "dioxus",
  "dioxus-router",
+ "omnibus-frontend",
  "omnibus-shared",
  "reqwest",
  "serde_json",
