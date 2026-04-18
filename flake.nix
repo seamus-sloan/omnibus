@@ -27,6 +27,7 @@
           fenix.packages.${system}.latest.clippy
           fenix.packages.${system}.latest.rust-src
           fenix.packages.${system}.targets.aarch64-linux-android.latest.rust-std
+          fenix.packages.${system}.targets.wasm32-unknown-unknown.latest.rust-std
         ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
           fenix.packages.${system}.targets.aarch64-apple-ios.latest.rust-std
           fenix.packages.${system}.targets.aarch64-apple-ios-sim.latest.rust-std

@@ -1,0 +1,15 @@
+[package]
+name = "omnibus-frontend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dioxus = "0.7"
+dioxus-router = "0.7"
+omnibus-shared = { path = "../shared" }
+serde = { version = "1", features = ["derive"] }
+
+[features]
+default = []
+web = []
+mobile = []
