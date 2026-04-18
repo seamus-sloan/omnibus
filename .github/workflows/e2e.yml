@@ -34,6 +34,14 @@ jobs:
         with:
           workspaces: ". -> target"
 
+      - name: Cache Playwright node_modules
+        uses: actions/cache@v4
+        with:
+          path: ui_tests/playwright/node_modules
+          key: playwright-node-modules-${{ runner.os }}-${{ hashFiles('ui_tests/playwright/package-lock.json') }}
+          restore-keys: |
+            playwright-node-modules-${{ runner.os }}-
+
       - name: Install Playwright npm deps
         run: nix develop --command bash -c "cd ui_tests/playwright && npm ci"
 
