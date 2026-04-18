@@ -1,12 +1,12 @@
+import type { Page } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { expectNavVisible } from "../utils/nav";
 
-const incrementButton = (page: import("@playwright/test").Page) =>
+const incrementButton = (page: Page) =>
   page.getByRole("button", { name: "Increment value" });
 
-const currentValue = (page: import("@playwright/test").Page) =>
-  page.getByTestId("current-value");
+const currentValue = (page: Page) => page.getByTestId("current-value");
 
 test("renders the counter page layout", async ({ page }) => {
   await page.goto("/");

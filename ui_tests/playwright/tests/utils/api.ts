@@ -20,19 +20,28 @@ export async function expectMutation<T>(
   opts: ExpectMutationOptions,
   action: () => Promise<T>,
 ): Promise<{ result: T; request: Request; response: Response }> {
+  // RegExp.test() is stateful when the pattern has the `g` or `y` flag, which
+  // would cause intermittent misses across repeated calls. Strip those flags.
+  const urlPattern =
+    typeof opts.url === "string"
+      ? null
+      : new RegExp(opts.url.source, opts.url.flags.replace(/[gy]/g, ""));
   const matchesUrl = (candidate: string) =>
-    typeof opts.url === "string" ? candidate.includes(opts.url) : opts.url.test(candidate);
+    urlPattern === null ? candidate.includes(opts.url as string) : urlPattern.test(candidate);
 
   const requestPromise = page.waitForRequest(
     (r) => r.method() === opts.method && matchesUrl(r.url()),
   );
-  const responsePromise = page.waitForResponse(
-    (r) => r.request().method() === opts.method && matchesUrl(r.url()),
-  );
 
   const result = await action();
   const request = await requestPromise;
-  const response = await responsePromise;
+  // Pair the response to the specific request we captured — using request.response()
+  // guarantees the pairing even if concurrent mutations (retries, double-click,
+  // background autosave) produce additional matching requests.
+  const response = await request.response();
+  if (!response) {
+    throw new Error(`No response received for ${opts.method} ${request.url()}`);
+  }
 
   if (opts.expectedBody !== undefined) {
     expect(request.postDataJSON()).toEqual(opts.expectedBody);
