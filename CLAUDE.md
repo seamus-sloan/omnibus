@@ -27,7 +27,7 @@ cargo clippy                                                # lint all crates
 cargo fmt                                                   # format all crates
 
 # E2E UI tests (TypeScript Playwright, against a running local server)
-cd ui_tests/playwright && npm install && npx playwright install --with-deps chromium   # first-time setup
+cd ui_tests/playwright && npm install                       # first-time setup (Chromium comes from Nix)
 cd ui_tests/playwright && npm test                          # run all E2E tests
 cd ui_tests/playwright && npm run test:ui                   # interactive UI mode
 
@@ -153,6 +153,8 @@ Testing is a first-class requirement. Every meaningful behavior should have a te
 ### Playwright E2E conventions
 
 These rules exist so every flow is tested the same way; don't diverge without updating this section first.
+
+**Chromium comes from Nix, not npm.** The `playwright-driver.browsers` package in [flake.nix](flake.nix) provides the browser bundle, and the shellHook exports `PLAYWRIGHT_BROWSERS_PATH` into the Nix store. Do not run `npx playwright install` — it would re-download Chromium into `~/Library/Caches/ms-playwright/` and diverge from the flake. `@playwright/test` is pinned with a tilde range (`~1.58.0`) so npm stays on the same minor as nixpkgs; when bumping the version, update both together since each Playwright minor expects a specific Chromium build number.
 
 **Style — functional helpers + fixtures, never page-object classes.** Import `test` and `expect` from `tests/fixtures/test.ts` (not directly from `@playwright/test`) so shared fixtures apply uniformly. Factor reusable selectors and actions into plain functions, not classes.
 

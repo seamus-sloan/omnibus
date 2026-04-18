@@ -42,6 +42,7 @@
             pkgs.jdk21
             pkgs-unstable.dioxus-cli
             pkgs-unstable.nodejs_22
+            pkgs-unstable.playwright-driver.browsers
           ];
 
           DATABASE_URL = "sqlite://omnibus.db?mode=rwc";
@@ -50,6 +51,12 @@
             echo "Nix dev shell ready."
             echo "Run: cargo test -p omnibus"
             echo "Run: cargo run -p omnibus"
+
+            # Pin Playwright's Chromium to the Nix store so no per-user
+            # download lands in ~/Library/Caches/ms-playwright/. The npm
+            # @playwright/test version must match this bundle's version.
+            export PLAYWRIGHT_BROWSERS_PATH="${pkgs-unstable.playwright-driver.browsers}"
+            export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
             # Nix injects xcbuild's fake xcrun and its own cc wrapper, both of which
             # break iOS builds. Fix: prepend /usr/bin so the real Xcode xcrun and
