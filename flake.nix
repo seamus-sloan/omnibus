@@ -32,6 +32,25 @@
           fenix.packages.${system}.targets.aarch64-apple-ios.latest.rust-std
           fenix.packages.${system}.targets.aarch64-apple-ios-sim.latest.rust-std
         ]);
+
+        # `dioxus-cli` from nixpkgs-unstable bundles `wasm-bindgen-cli 0.2.114`
+        # (appended to PATH via `--suffix`), but `dioxus-fullstack 0.7.5` pulls
+        # in `wasm-bindgen 0.2.118` transitively (js-sys 0.3.95 hard-pins it).
+        # Build the matching CLI ourselves and put it earlier in PATH so dx
+        # picks it up first.
+        wasm-bindgen-cli-0_2_118 = pkgs-unstable.wasm-bindgen-cli.overrideAttrs (old: rec {
+          version = "0.2.118";
+          src = pkgs.fetchCrate {
+            pname = "wasm-bindgen-cli";
+            inherit version;
+            hash = "sha256-ve783oYH0TGv8Z8lIPdGjItzeLDQLOT5uv/jbFOlZpI=";
+          };
+          cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+            inherit src;
+            name = "wasm-bindgen-cli-${version}-vendor";
+            hash = "sha256-EYDfuBlH3zmTxACBL+sjicRna84CvoesKSQVcYiG9P0=";
+          };
+        });
       in {
         devShells.default = pkgs.mkShell {
           packages = [
@@ -41,6 +60,7 @@
             pkgs.openssl
             rust
             pkgs.jdk21
+            wasm-bindgen-cli-0_2_118
             pkgs-unstable.dioxus-cli
             pkgs-unstable.nodejs_22
             pkgs-unstable.playwright-driver.browsers

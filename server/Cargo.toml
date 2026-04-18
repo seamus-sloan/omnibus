@@ -16,8 +16,6 @@ dioxus = "0.7"
 # Server-only deps — all optional and gated behind the `server` feature.
 axum = { version = "0.8", optional = true }
 tower-http = { version = "0.6", features = ["trace"], optional = true }
-tracing = { version = "0.1", optional = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 serde_json = { version = "1", optional = true }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros"], optional = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
@@ -37,8 +35,6 @@ default = ["server"]
 server = [
     "dep:axum",
     "dep:tower-http",
-    "dep:tracing",
-    "dep:tracing-subscriber",
     "dep:serde_json",
     "dep:sqlx",
     "dep:tokio",
