@@ -52,9 +52,10 @@ pub fn Settings() -> Element {
 /// Platform-specific page chrome. Web puts nav at the top of the flow;
 /// mobile puts it at the bottom (via `position: fixed`).
 ///
-/// One definition per exclusive feature set so rsx! type inference sees a
-/// single return expression.
-#[cfg(all(feature = "web", not(feature = "mobile")))]
+/// The web variant is the default (compiled both for the WASM client and
+/// for server-side SSR) so the SSR'd markup matches what the WASM client
+/// expects to hydrate.
+#[cfg(not(feature = "mobile"))]
 #[component]
 fn ScreenLayout(children: Element) -> Element {
     rsx! {
@@ -65,7 +66,7 @@ fn ScreenLayout(children: Element) -> Element {
     }
 }
 
-#[cfg(all(feature = "mobile", not(feature = "web")))]
+#[cfg(feature = "mobile")]
 #[component]
 fn ScreenLayout(children: Element) -> Element {
     rsx! {
@@ -74,12 +75,6 @@ fn ScreenLayout(children: Element) -> Element {
             Nav {}
         }
     }
-}
-
-#[cfg(not(any(feature = "web", feature = "mobile")))]
-#[component]
-fn ScreenLayout(children: Element) -> Element {
-    rsx! { div { {children} } }
 }
 
 /// Return the base URL for API calls. Mobile reads it from the `ServerUrl`

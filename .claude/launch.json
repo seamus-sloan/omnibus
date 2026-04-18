@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "omnibus-fullstack",
+      "runtimeExecutable": "nix",
+      "runtimeArgs": ["develop", "--command", "dx", "serve", "--platform", "web", "--fullstack", "--port", "3000", "--package", "omnibus"],
+      "port": 3000
+    }
+  ]
+}

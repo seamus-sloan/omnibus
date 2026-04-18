@@ -13,26 +13,16 @@ compile_error!(
      `cargo build -p omnibus-mobile` for the mobile app."
 );
 
-#[cfg(all(feature = "web", not(feature = "mobile")))]
+// The default (web) variant must compile under the `server` feature too so
+// SSR markup matches what the WASM client expects to hydrate. Otherwise
+// dioxus's hydration walker fails to locate dynamic text/event nodes and
+// throws "Cannot set properties of undefined".
+#[cfg(not(feature = "mobile"))]
 mod top_nav;
-#[cfg(all(feature = "web", not(feature = "mobile")))]
+#[cfg(not(feature = "mobile"))]
 pub use top_nav::TopNav as Nav;
 
-#[cfg(all(feature = "mobile", not(feature = "web")))]
+#[cfg(feature = "mobile")]
 mod bottom_nav;
-#[cfg(all(feature = "mobile", not(feature = "web")))]
+#[cfg(feature = "mobile")]
 pub use bottom_nav::BottomNav as Nav;
-
-// No platform feature — provide an empty Nav so `cargo doc` / `cargo check`
-// still work without any feature flag.
-#[cfg(not(any(feature = "web", feature = "mobile")))]
-mod fallback {
-    use dioxus::prelude::*;
-
-    #[component]
-    pub fn Nav() -> Element {
-        rsx! { nav {} }
-    }
-}
-#[cfg(not(any(feature = "web", feature = "mobile")))]
-pub use fallback::Nav;

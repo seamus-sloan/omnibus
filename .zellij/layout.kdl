@@ -11,7 +11,7 @@ layout {
 
     tab name="server" focus=true {
         pane command="dx" {
-            args "serve" "--port" "3000" "--package" "omnibus"
+            args "serve" "--platform" "web" "--fullstack" "--port" "3000" "--package" "omnibus"
         }
     }
     tab name="android" {

@@ -25,14 +25,6 @@ fn main() {
             let database_url = std::env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "sqlite://omnibus.db?mode=rwc".to_string());
 
-            tracing_subscriber::fmt()
-                .with_env_filter(
-                    tracing_subscriber::EnvFilter::from_default_env()
-                        .add_directive("omnibus=debug".parse()?)
-                        .add_directive("tower_http=debug".parse()?),
-                )
-                .init();
-
             let pool = omnibus_frontend::db::init_db(&database_url).await?;
             omnibus_frontend::db::seed_settings_from_env(&pool).await?;
 
