@@ -19,13 +19,13 @@ Numbered rules in [.claude/rules/](.claude/rules/), applied in order. Follow the
 
 ## Skills
 
-Auto-discoverable how-tos in [.claude/skills/](.claude/skills/) — use them when their description matches the task.
+Auto-discoverable skills in [.claude/skills/](.claude/skills/) — Claude Code loads each `SKILL.md` automatically, and each is invokable via `/<name>` (e.g. `/jj-basics`).
 
-- [add-backend-route.md](.claude/skills/add-backend-route.md) — adding an Axum page or API endpoint end-to-end.
-- [add-playwright-flow.md](.claude/skills/add-playwright-flow.md) — adding a new E2E spec.
-- [jj-basics.md](.claude/skills/jj-basics.md) — fetch / new / describe / bookmark / push.
-- [jj-workspaces.md](.claude/skills/jj-workspaces.md) — parallel agent work on one repo.
-- [jj-advanced.md](.claude/skills/jj-advanced.md) — squash / rebase / abandon / undo / op log / conflicts.
+- [add-backend-route](.claude/skills/add-backend-route/SKILL.md) — adding an Axum page or API endpoint end-to-end.
+- [add-playwright-flow](.claude/skills/add-playwright-flow/SKILL.md) — adding a new E2E spec.
+- [jj-basics](.claude/skills/jj-basics/SKILL.md) — fetch / new / describe / bookmark / push.
+- [jj-workspaces](.claude/skills/jj-workspaces/SKILL.md) — parallel agent work on one repo.
+- [jj-advanced](.claude/skills/jj-advanced/SKILL.md) — squash / rebase / abandon / undo / op log / conflicts.
 
 ## Architecture
 

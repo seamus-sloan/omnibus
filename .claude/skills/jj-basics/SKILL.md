@@ -47,4 +47,4 @@ jj diff                                            # show uncommitted diff
 jj --help                                          # or `jj <cmd> --help` for more
 ```
 
-For rebase / squash / conflict resolution / undo, see [jj-advanced.md](jj-advanced.md). For parallel agent work, see [jj-workspaces.md](jj-workspaces.md).
+For rebase / squash / conflict resolution / undo, see [jj-advanced](../jj-advanced/SKILL.md). For parallel agent work, see [jj-workspaces](../jj-workspaces/SKILL.md).
