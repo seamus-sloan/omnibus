@@ -1,19 +1,7 @@
 use dioxus::prelude::*;
+use omnibus_shared::{LibraryContents, LibrarySection};
 
 use crate::ServerUrl;
-
-#[derive(Clone, Debug, Default, PartialEq)]
-struct LibrarySection {
-    path: Option<String>,
-    files: Vec<String>,
-    error: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-struct LibraryContents {
-    ebooks: LibrarySection,
-    audiobooks: LibrarySection,
-}
 
 #[component]
 pub fn SettingsPage() -> Element {

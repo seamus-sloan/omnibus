@@ -1,17 +1,4 @@
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct LibrarySection {
-    pub path: Option<String>,
-    pub files: Vec<String>,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LibraryContents {
-    pub ebooks: LibrarySection,
-    pub audiobooks: LibrarySection,
-}
+pub use omnibus_shared::{LibraryContents, LibrarySection};
 
 pub fn list_files(path: Option<&str>) -> LibrarySection {
     let Some(path_str) = path else {
