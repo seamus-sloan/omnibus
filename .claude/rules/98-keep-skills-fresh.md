@@ -12,4 +12,4 @@ When touching any of the following areas, re-read the matching skill and update 
 
 If a skill no longer has a corresponding code area (the pattern was removed), delete the skill rather than leaving it outdated.
 
-A skill is "stale" if: the file paths it references no longer exist, the function/module names it names have been renamed, or the steps it prescribes would no longer produce a working result.
+A skill is "stale" if: the file paths it references no longer exist, the function/module names it names have been renamed, or the steps it prescribes would no longer produce a working result, or if the underlying assumptions it relies on have changed.
