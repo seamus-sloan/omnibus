@@ -6,5 +6,6 @@ edition = "2021"
 [dependencies]
 dioxus = { version = "0.7", features = ["mobile"] }
 dioxus-router = "0.7"
+omnibus-shared = { path = "../shared" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde_json = "1"

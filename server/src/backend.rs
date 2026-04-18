@@ -4,7 +4,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
+use omnibus_shared::{Settings, ValueResponse};
 use sqlx::SqlitePool;
 use tower_http::trace::TraceLayer;
 
@@ -19,11 +19,6 @@ impl AppState {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ValueResponse {
-    pub value: i64,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -44,7 +39,7 @@ async fn index_page(State(state): State<AppState>) -> Response {
         Ok(value) => Html(crate::frontend::render_document(
             Route::Landing {},
             value,
-            db::Settings::default(),
+            Settings::default(),
         ))
         .into_response(),
         Err(error) => (
@@ -109,7 +104,7 @@ async fn get_settings(State(state): State<AppState>) -> Response {
 
 async fn post_settings(
     State(state): State<AppState>,
-    Json(settings): Json<db::Settings>,
+    Json(settings): Json<Settings>,
 ) -> Response {
     match db::set_settings(&state.pool, &settings).await {
         Ok(()) => match db::get_settings(&state.pool).await {

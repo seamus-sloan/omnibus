@@ -1,11 +1,6 @@
-use serde::{Deserialize, Serialize};
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct Settings {
-    pub ebook_library_path: Option<String>,
-    pub audiobook_library_path: Option<String>,
-}
+pub use omnibus_shared::Settings;
 
 pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     let pool = SqlitePoolOptions::new()
