@@ -13,7 +13,10 @@ pub fn LandingPage() -> Element {
         let url = server_url_for_effect.0.clone();
         spawn(async move {
             match fetch_value(&url).await {
-                Ok(v) => { value.set(v); error.set(None); }
+                Ok(v) => {
+                    value.set(v);
+                    error.set(None);
+                }
                 Err(e) => error.set(Some(e)),
             }
         });
@@ -54,7 +57,9 @@ async fn fetch_value(server_url: &str) -> Result<i64, String> {
     })?;
     eprintln!("[mobile] GET {url} -> {}", response.status());
     let payload: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
-    payload["value"].as_i64().ok_or_else(|| "missing value field".into())
+    payload["value"]
+        .as_i64()
+        .ok_or_else(|| "missing value field".into())
 }
 
 async fn post_increment(server_url: &str) -> Result<i64, String> {
@@ -68,5 +73,7 @@ async fn post_increment(server_url: &str) -> Result<i64, String> {
     })?;
     eprintln!("[mobile] POST {url} -> {}", response.status());
     let payload: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
-    payload["value"].as_i64().ok_or_else(|| "missing value field".into())
+    payload["value"]
+        .as_i64()
+        .ok_or_else(|| "missing value field".into())
 }

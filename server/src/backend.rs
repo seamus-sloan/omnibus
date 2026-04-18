@@ -4,9 +4,9 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use tower_http::trace::TraceLayer;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use tower_http::trace::TraceLayer;
 
 use crate::{db, frontend::Route, scanner};
 
