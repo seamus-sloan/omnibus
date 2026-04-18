@@ -76,4 +76,4 @@ See `ui_tests/playwright/tests/flows/settings.spec.ts` for the full version.
 
 ## Mobile E2E
 
-Not yet implemented. The mobile crate is Dioxus Native (not a WebView), so Playwright cannot reach it. When added, this will be a separate track under `ui_tests/` (likely Appium + WebdriverIO, or Maestro) and will require stable accessibility ids on interactive elements in `mobile/src/`.
+Not yet implemented. The mobile crate is Dioxus Native (not a WebView), so Playwright cannot reach it. When added, this will be a separate track under `ui_tests/` (Maestro) and will require stable accessibility ids on interactive elements in `mobile/src/`.
