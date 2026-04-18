@@ -102,6 +102,20 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 
 .bottom-nav a.active { color: #22d3ee; }
+
+.settings-form { display: flex; flex-direction: column; gap: 1.25rem; margin-top: 1rem; }
+.settings-field { display: flex; flex-direction: column; gap: 0.4rem; }
+.settings-label { font-size: 0.875rem; font-weight: 500; color: #cbd5e1; }
+.settings-input {
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px solid rgba(100, 116, 139, 0.4);
+  border-radius: 8px;
+  color: #e5e7eb;
+  font-size: 0.95rem;
+  padding: 0.55rem 0.75rem;
+  width: 100%;
+}
+.success-msg { color: #34d399; font-size: 0.85rem; margin-top: 0.75rem; }
 "#;
 
 #[component]
