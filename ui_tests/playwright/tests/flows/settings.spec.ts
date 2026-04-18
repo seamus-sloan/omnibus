@@ -1,17 +1,23 @@
+import type { Page } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { expectNavVisible } from "../utils/nav";
 
+const ebookInput = (page: Page) => page.getByLabel("Ebook Library Path");
+const audiobookInput = (page: Page) => page.getByLabel("Audiobook Library Path");
+const saveButton = (page: Page) => page.getByRole("button", { name: "Save" });
+const settingsStatus = (page: Page) => page.getByRole("status");
+
 test("renders the settings page layout", async ({ page }) => {
   await page.goto("/settings");
 
-  await expect(page.locator("h1")).toHaveText("Settings");
-  await expect(page.locator("#settings-form")).toBeVisible();
-  await expect(page.locator("#ebook-library-path")).toBeVisible();
-  await expect(page.locator("#audiobook-library-path")).toBeVisible();
-  await expect(page.locator("#settings-status")).toBeAttached();
-  await expect(page.locator("#ebook-library-contents")).toBeVisible();
-  await expect(page.locator("#audiobook-library-contents")).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
+  await expect(ebookInput(page)).toBeVisible();
+  await expect(audiobookInput(page)).toBeVisible();
+  await expect(saveButton(page)).toBeVisible();
+  await expect(settingsStatus(page)).toBeAttached();
+  await expect(page.getByTestId("ebook-library-contents")).toBeVisible();
+  await expect(page.getByTestId("audiobook-library-contents")).toBeVisible();
   await expectNavVisible(page);
 });
 
@@ -21,8 +27,8 @@ test("saves library paths and shows a success status", async ({ page }) => {
   const ebookPath = "/tmp/omnibus-test-ebooks";
   const audiobookPath = "/tmp/omnibus-test-audiobooks";
 
-  await page.locator("#ebook-library-path").fill(ebookPath);
-  await page.locator("#audiobook-library-path").fill(audiobookPath);
+  await ebookInput(page).fill(ebookPath);
+  await audiobookInput(page).fill(audiobookPath);
 
   await expectMutation(
     page,
@@ -35,18 +41,18 @@ test("saves library paths and shows a success status", async ({ page }) => {
       },
       expectedStatus: 200,
     },
-    async () => page.locator("#settings-form button[type=submit]").click(),
+    async () => saveButton(page).click(),
   );
 
-  await expect(page.locator("#settings-status")).toHaveText("Settings saved.");
-  await expect(page.locator("#settings-status")).toHaveClass(/success/);
+  await expect(settingsStatus(page)).toHaveText("Settings saved.");
+  await expect(settingsStatus(page)).toHaveClass(/success/);
 });
 
 test("shows an error status when saving settings fails", async ({ page }) => {
   await page.goto("/settings");
 
-  await page.locator("#ebook-library-path").fill("/tmp/whatever");
-  await page.locator("#audiobook-library-path").fill("/tmp/whatever-audio");
+  await ebookInput(page).fill("/tmp/whatever");
+  await audiobookInput(page).fill("/tmp/whatever-audio");
 
   await page.route("**/api/settings", (route) => {
     if (route.request().method() === "POST") {
@@ -66,9 +72,9 @@ test("shows an error status when saving settings fails", async ({ page }) => {
       },
       expectedStatus: 500,
     },
-    async () => page.locator("#settings-form button[type=submit]").click(),
+    async () => saveButton(page).click(),
   );
 
-  await expect(page.locator("#settings-status")).toHaveText("Failed to save settings.");
-  await expect(page.locator("#settings-status")).toHaveClass(/error/);
+  await expect(settingsStatus(page)).toHaveText("Failed to save settings.");
+  await expect(settingsStatus(page)).toHaveClass(/error/);
 });
