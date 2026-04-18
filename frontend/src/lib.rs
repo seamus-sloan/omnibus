@@ -11,6 +11,12 @@ use dioxus_router::Routable;
 pub mod components;
 pub mod data;
 pub mod pages;
+pub mod rpc;
+
+#[cfg(feature = "server")]
+pub mod db;
+#[cfg(feature = "server")]
+pub mod scanner;
 
 pub use components::Nav;
 pub use pages::{LandingPage, SettingsPage};

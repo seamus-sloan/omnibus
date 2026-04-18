@@ -1,10 +1,14 @@
 //! Feature-gated data-fetching layer.
 //!
-//! Mobile calls the server's REST routes (`/api/*`) via `reqwest`, picking
-//! up the base URL from the `ServerUrl` Dioxus context. Web will be swapped
-//! to `#[server]` functions in Commit 4 — for now the web implementations
-//! return placeholder defaults so the unified components compile and render
-//! stubs while the transport migration is in progress.
+//! - Mobile (`feature = "mobile"`) calls the server's hand-written REST
+//!   routes (`/api/*`) via `reqwest`, picking up the base URL from the
+//!   `ServerUrl` Dioxus context. `server_url` is required at the call site.
+//! - Web (`feature = "web"`) calls the `#[get]`/`#[post]` server functions
+//!   defined in [`crate::rpc`]. No base URL needed — the server-function
+//!   client stubs use the page origin automatically. `server_url` is
+//!   ignored on the web path.
+//! - Server-only compiles (`feature = "server"` without `"web"`) reuse the
+//!   web stubs so SSR-during-fullstack-render still returns sensible data.
 
 use omnibus_shared::{LibraryContents, Settings};
 
@@ -72,29 +76,44 @@ pub async fn get_library(server_url: &str) -> Result<LibraryContents, String> {
         .map_err(|e| e.to_string())
 }
 
-// ===== Web transport: placeholder stubs (replaced with #[server] in Commit 4) =====
+// ===== Web / fullstack-SSR transport: dioxus-fullstack server functions =====
+//
+// `server_url` is unused here — server functions always resolve against the
+// page origin. We keep the parameter so the call sites stay platform-agnostic.
 
-#[cfg(all(feature = "web", not(feature = "mobile")))]
+#[cfg(not(feature = "mobile"))]
 pub async fn get_value(_server_url: &str) -> Result<i64, String> {
-    Ok(0)
+    match crate::rpc::rpc_get_value().await {
+        Ok(payload) => Ok(payload.value),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
-#[cfg(all(feature = "web", not(feature = "mobile")))]
+#[cfg(not(feature = "mobile"))]
 pub async fn post_increment(_server_url: &str) -> Result<i64, String> {
-    Ok(0)
+    match crate::rpc::rpc_increment_value().await {
+        Ok(payload) => Ok(payload.value),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
-#[cfg(all(feature = "web", not(feature = "mobile")))]
+#[cfg(not(feature = "mobile"))]
 pub async fn get_settings(_server_url: &str) -> Result<Settings, String> {
-    Ok(Settings::default())
+    crate::rpc::rpc_get_settings()
+        .await
+        .map_err(|e| e.to_string())
 }
 
-#[cfg(all(feature = "web", not(feature = "mobile")))]
+#[cfg(not(feature = "mobile"))]
 pub async fn save_settings(_server_url: &str, settings: Settings) -> Result<Settings, String> {
-    Ok(settings)
+    crate::rpc::rpc_save_settings(settings)
+        .await
+        .map_err(|e| e.to_string())
 }
 
-#[cfg(all(feature = "web", not(feature = "mobile")))]
+#[cfg(not(feature = "mobile"))]
 pub async fn get_library(_server_url: &str) -> Result<LibraryContents, String> {
-    Ok(LibraryContents::default())
+    crate::rpc::rpc_get_library()
+        .await
+        .map_err(|e| e.to_string())
 }

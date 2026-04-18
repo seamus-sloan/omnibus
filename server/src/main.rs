@@ -1,33 +1,48 @@
-use std::net::SocketAddr;
+//! Unified Dioxus fullstack entrypoint.
+//!
+//! - When built for WASM (no `server` feature), `main` calls `dioxus::launch`
+//!   to hydrate the client in the browser.
+//! - When built natively (`server` feature), `main` calls `dioxus::serve` to
+//!   run an Axum backend that serves SSR'd HTML, the WASM bundle, the
+//!   auto-registered `#[get]`/`#[post]` server functions from
+//!   [`omnibus_frontend::rpc`], and the hand-written `/api/*` REST routes
+//!   from [`omnibus::backend`] (mobile-facing).
 
-use omnibus::{backend, db};
+use omnibus_frontend::App;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "sqlite://omnibus.db?mode=rwc".to_string());
-    let port = std::env::var("PORT")
-        .ok()
-        .and_then(|value| value.parse::<u16>().ok())
-        .unwrap_or(3000);
+fn main() {
+    #[cfg(not(feature = "server"))]
+    {
+        dioxus::launch(App);
+    }
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("omnibus=debug".parse()?)
-                .add_directive("tower_http=debug".parse()?),
-        )
-        .init();
+    #[cfg(feature = "server")]
+    {
+        dioxus::serve(|| async move {
+            use dioxus::server::axum::Extension;
+            use omnibus::backend;
 
-    let pool = db::init_db(&database_url).await?;
-    db::seed_settings_from_env(&pool).await?;
-    let state = backend::AppState::new(pool);
-    let app = backend::router(state);
+            let database_url = std::env::var("DATABASE_URL")
+                .unwrap_or_else(|_| "sqlite://omnibus.db?mode=rwc".to_string());
 
-    let address = SocketAddr::from(([0, 0, 0, 0], port));
-    let listener = tokio::net::TcpListener::bind(address).await?;
-    println!("Server running at http://{}", listener.local_addr()?);
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::from_default_env()
+                        .add_directive("omnibus=debug".parse()?)
+                        .add_directive("tower_http=debug".parse()?),
+                )
+                .init();
 
-    axum::serve(listener, app).await?;
-    Ok(())
+            let pool = omnibus_frontend::db::init_db(&database_url).await?;
+            omnibus_frontend::db::seed_settings_from_env(&pool).await?;
+
+            let state = backend::AppState::new(pool.clone());
+            let router = dioxus::server::router(App)
+                .merge(backend::rest_router(state))
+                .layer(Extension(pool))
+                .layer(tower_http::trace::TraceLayer::new_for_http());
+
+            Ok(router)
+        });
+    }
 }

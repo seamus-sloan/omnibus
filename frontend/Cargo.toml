@@ -4,14 +4,26 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-dioxus = "0.7"
+dioxus = { version = "0.7", features = ["fullstack"] }
 dioxus-router = "0.7"
 omnibus-shared = { path = "../shared" }
 serde = { version = "1", features = ["derive"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
 serde_json = { version = "1", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros"], optional = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
+anyhow = { version = "1", optional = true }
 
 [features]
 default = []
-web = []
+# Web client (WASM): uses dioxus-fullstack server-function client stubs.
+web = ["dioxus/web"]
+# Native mobile client: talks to `/api/*` REST routes via reqwest.
 mobile = ["dep:reqwest", "dep:serde_json"]
+# Server compile: enables full server-function bodies (db + scanner access).
+server = [
+    "dioxus/server",
+    "dep:sqlx",
+    "dep:tokio",
+    "dep:anyhow",
+]
