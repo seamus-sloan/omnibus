@@ -5,7 +5,7 @@ description: Advanced jj operations — squash, rebase, abandon, undo, op log, a
 
 # jj advanced
 
-Beyond the basics in [jj-basics.md](jj-basics.md). If you're unsure about an invocation, run `jj <command> --help` rather than guess.
+Beyond the basics in [jj-basics](../jj-basics/SKILL.md). If you're unsure about an invocation, run `jj <command> --help` rather than guess.
 
 ## Squash — fold a change into its parent
 
