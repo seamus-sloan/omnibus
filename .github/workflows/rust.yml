@@ -1,0 +1,40 @@
+name: Rust
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: rust-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Enable Nix store cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: cargo fmt --check
+        run: nix develop --command cargo fmt --all --check
+
+      - name: cargo clippy
+        run: nix develop --command cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        run: nix develop --command cargo test --workspace
+
+      - name: cargo build (mobile)
+        run: nix develop --command cargo build -p omnibus-mobile
