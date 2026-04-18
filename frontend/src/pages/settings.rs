@@ -68,8 +68,8 @@ pub fn SettingsPage() -> Element {
                                 status_is_error.set(false);
                                 library_refresh.set(library_refresh() + 1);
                             }
-                            Err(e) => {
-                                status.set(Some(e));
+                            Err(_) => {
+                                status.set(Some("Failed to save settings.".to_string()));
                                 status_is_error.set(true);
                             }
                         }
