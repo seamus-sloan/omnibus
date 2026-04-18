@@ -20,6 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let pool = db::init_db(&database_url).await?;
+    db::seed_settings_from_env(&pool).await?;
     let state = backend::AppState::new(pool);
     let app = backend::router(state);
 
