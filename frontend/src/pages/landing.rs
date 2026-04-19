@@ -1,10 +1,10 @@
 use dioxus::prelude::*;
-use omnibus_shared::{EbookLibrary, EbookMetadata};
+use omnibus_shared::{Contributor, EbookLibrary, EbookMetadata, Identifier, RawMeta};
 
 use crate::{data, use_server_url};
 
-/// Landing page — loads the configured ebook library and renders each book
-/// with its cover art and parsed OPF metadata.
+/// Landing page — loads the configured ebook library and renders every
+/// metadata field the parser was able to pull, plus the raw OPF dump.
 #[component]
 pub fn LandingPage() -> Element {
     let server_url = use_server_url();
@@ -65,16 +65,6 @@ pub fn LandingPage() -> Element {
 #[component]
 fn EbookCard(book: EbookMetadata) -> Element {
     let display_title = book.title.clone().unwrap_or_else(|| book.filename.clone());
-    let authors = if book.authors.is_empty() {
-        None
-    } else {
-        Some(book.authors.join(", "))
-    };
-    let subjects = if book.subjects.is_empty() {
-        None
-    } else {
-        Some(book.subjects.join(" · "))
-    };
     let series_line = match (book.series.as_ref(), book.series_index.as_ref()) {
         (Some(s), Some(i)) => Some(format!("{s} #{i}")),
         (Some(s), None) => Some(s.clone()),
@@ -92,39 +82,141 @@ fn EbookCard(book: EbookMetadata) -> Element {
             }
             div { class: "ebook-info",
                 h2 { class: "ebook-title", "{display_title}" }
-                if let Some(a) = authors {
-                    p { class: "ebook-authors", "by {a}" }
+                if !book.creators.is_empty() {
+                    p { class: "ebook-authors", "by ",
+                        {contributor_inline(&book.creators)}
+                    }
                 }
                 if let Some(s) = series_line {
                     p { class: "ebook-series", "Series: {s}" }
                 }
-                if let Some(pub_) = book.publisher.as_ref() {
-                    p { class: "ebook-meta", "Publisher: {pub_}" }
+
+                dl { class: "ebook-fields",
+                    {field_row("Publisher", book.publisher.as_deref())}
+                    {field_row("Published", book.published.as_deref())}
+                    {field_row("Modified", book.modified.as_deref())}
+                    {field_row("Language", book.language.as_deref())}
+                    {field_row("Rights", book.rights.as_deref())}
+                    {field_row("Source", book.source.as_deref())}
+                    {field_row("Coverage", book.coverage.as_deref())}
+                    {field_row("Type", book.dc_type.as_deref())}
+                    {field_row("Format", book.dc_format.as_deref())}
+                    {field_row("Relation", book.relation.as_deref())}
+                    {field_row("EPUB version", book.epub_version.as_deref())}
+                    {field_row("Unique ID", book.unique_identifier.as_deref())}
                 }
-                if let Some(d) = book.published.as_ref() {
-                    p { class: "ebook-meta", "Published: {d}" }
+
+                if !book.identifiers.is_empty() {
+                    IdentifierList { items: book.identifiers.clone() }
                 }
-                if let Some(l) = book.language.as_ref() {
-                    p { class: "ebook-meta", "Language: {l}" }
+                if !book.contributors.is_empty() {
+                    p { class: "ebook-meta", "Contributors: ",
+                        {contributor_inline(&book.contributors)}
+                    }
                 }
-                if let Some(id) = book.identifier.as_ref() {
-                    p { class: "ebook-meta", "Identifier: {id}" }
+                if !book.subjects.is_empty() {
+                    p { class: "ebook-subjects", {book.subjects.join(" · ")} }
                 }
-                if let Some(s) = subjects {
-                    p { class: "ebook-subjects", "{s}" }
+
+                p { class: "ebook-meta ebook-counts",
+                    "{book.resource_count} resources · {book.spine_count} spine items · {book.toc_count} toc entries"
                 }
+
                 if let Some(desc) = book.description.as_ref() {
-                    // Descriptions frequently ship as raw HTML fragments — keep
-                    // as plain text for safety; the card already constrains the
-                    // height via CSS.
-                    p { class: "ebook-description", "{strip_html(desc)}" }
+                    // EPUB descriptions frequently contain HTML — render as
+                    // plain text to avoid injecting arbitrary markup.
+                    p { class: "ebook-description", {strip_html(desc)} }
                 }
+
                 if let Some(err) = book.error.as_ref() {
                     p { class: "error", "⚠ {err} ({book.filename})" }
+                }
+
+                details { class: "ebook-raw",
+                    summary { "Raw OPF metadata ({book.raw_metadata.len()})" }
+                    RawTable { rows: book.raw_metadata.clone() }
                 }
             }
         }
     }
+}
+
+#[component]
+fn IdentifierList(items: Vec<Identifier>) -> Element {
+    rsx! {
+        p { class: "ebook-meta", "Identifiers:" }
+        ul { class: "ebook-ids",
+            for id in items {
+                li {
+                    if let Some(scheme) = id.scheme.as_ref() {
+                        span { class: "ebook-id-scheme", "{scheme}: " }
+                    }
+                    code { "{id.value}" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn RawTable(rows: Vec<RawMeta>) -> Element {
+    rsx! {
+        table { class: "raw-meta-table",
+            thead {
+                tr {
+                    th { "Property" }
+                    th { "Value" }
+                    th { "Refinements" }
+                }
+            }
+            tbody {
+                for r in rows {
+                    tr {
+                        td {
+                            code { "{r.property}" }
+                            if let Some(lang) = r.lang.as_ref() {
+                                span { class: "raw-meta-lang", " @{lang}" }
+                            }
+                        }
+                        td { class: "raw-meta-value", "{r.value}" }
+                        td {
+                            if r.refinements.is_empty() {
+                                span { class: "raw-meta-empty", "—" }
+                            } else {
+                                ul { class: "raw-meta-refs",
+                                    for (k, v) in r.refinements {
+                                        li { code { "{k}" } "={v}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn field_row(label: &'static str, value: Option<&str>) -> Element {
+    let Some(v) = value.filter(|s| !s.is_empty()) else {
+        return rsx! {};
+    };
+    let v = v.to_string();
+    rsx! {
+        dt { "{label}" }
+        dd { "{v}" }
+    }
+}
+
+fn contributor_inline(list: &[Contributor]) -> Element {
+    let rendered: Vec<String> = list
+        .iter()
+        .map(|c| match (c.role.as_deref(), c.file_as.as_deref()) {
+            (Some(role), _) if !role.is_empty() => format!("{} ({})", c.name, role),
+            _ => c.name.clone(),
+        })
+        .collect();
+    rsx! { "{rendered.join(\", \")}" }
 }
 
 /// Extremely cheap HTML-tag stripper. EPUB descriptions are frequently raw

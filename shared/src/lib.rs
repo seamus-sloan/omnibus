@@ -41,6 +41,37 @@ pub struct LibraryContents {
     pub audiobooks: LibrarySection,
 }
 
+/// A contributor (or creator) with the optional OPF refinements — the MARC
+/// role code (`aut`, `ill`, `edt`, `bkp`, `trl`, …) and the sort-key name.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Contributor {
+    pub name: String,
+    pub role: Option<String>,
+    pub file_as: Option<String>,
+}
+
+/// A typed identifier from the OPF, e.g. `{ scheme: "ISBN", value: "…" }`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Identifier {
+    pub value: String,
+    pub scheme: Option<String>,
+}
+
+/// One raw OPF `<meta>` or Dublin Core element as found in the package
+/// document, including any refinements.
+///
+/// Everything the EPUB author wrote into `content.opf` surfaces here — this
+/// is the "show me every possible field" escape hatch, since the OPF schema
+/// is open-ended (Calibre, Adobe, Kobo and publishers all add namespaced
+/// properties).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RawMeta {
+    pub property: String,
+    pub value: String,
+    pub lang: Option<String>,
+    pub refinements: Vec<(String, String)>,
+}
+
 /// Parsed metadata for a single ebook file.
 ///
 /// `cover_image` is a base64 data URL (e.g. `data:image/jpeg;base64,...`) so
@@ -48,17 +79,44 @@ pub struct LibraryContents {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EbookMetadata {
     pub filename: String,
+
+    // Dublin Core core — single-valued first, multi-valued second.
     pub title: Option<String>,
-    pub authors: Vec<String>,
     pub description: Option<String>,
     pub publisher: Option<String>,
     pub published: Option<String>,
+    pub modified: Option<String>,
     pub language: Option<String>,
-    pub identifier: Option<String>,
+    pub rights: Option<String>,
+    pub source: Option<String>,
+    pub coverage: Option<String>,
+    pub dc_type: Option<String>,
+    pub dc_format: Option<String>,
+    pub relation: Option<String>,
+
+    pub creators: Vec<Contributor>,
+    pub contributors: Vec<Contributor>,
     pub subjects: Vec<String>,
+    pub identifiers: Vec<Identifier>,
+
+    // Series / collection (Calibre + EPUB3 belongs-to-collection).
     pub series: Option<String>,
     pub series_index: Option<String>,
+
+    // Structural / document-level info.
+    pub epub_version: Option<String>,
+    pub unique_identifier: Option<String>,
+    pub resource_count: usize,
+    pub spine_count: usize,
+    pub toc_count: usize,
+
     pub cover_image: Option<String>,
+
+    /// Every raw metadata entry from the OPF, in file order. Lets the UI
+    /// render "all potential options" without the server-side code having to
+    /// know about each publisher's custom namespace up front.
+    pub raw_metadata: Vec<RawMeta>,
+
     pub error: Option<String>,
 }
 

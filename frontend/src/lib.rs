@@ -323,8 +323,74 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   overflow-y: auto;
 }
 
+.ebook-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.2rem 0.75rem;
+  margin: 0.6rem 0;
+  font-size: 0.8rem;
+}
+.ebook-fields dt { color: #64748b; }
+.ebook-fields dd { color: #cbd5e1; margin: 0; word-break: break-word; }
+
+.ebook-counts { color: #64748b; font-size: 0.75rem; margin-top: 0.3rem; }
+
+.ebook-ids {
+  list-style: none;
+  padding: 0;
+  margin: 0.2rem 0 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.8rem;
+}
+.ebook-ids code { color: #e2e8f0; }
+.ebook-id-scheme { color: #22d3ee; font-size: 0.75rem; }
+
+.ebook-raw {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(100, 116, 139, 0.2);
+}
+.ebook-raw summary {
+  cursor: pointer;
+  color: #94a3b8;
+  font-size: 0.8rem;
+  padding: 0.2rem 0;
+}
+.ebook-raw summary:hover { color: #e2e8f0; }
+
+.raw-meta-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+  margin-top: 0.5rem;
+}
+.raw-meta-table th,
+.raw-meta-table td {
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid rgba(100, 116, 139, 0.15);
+  vertical-align: top;
+}
+.raw-meta-table th { color: #94a3b8; font-weight: 600; }
+.raw-meta-table td code { color: #22d3ee; font-family: monospace; }
+.raw-meta-value { color: #e2e8f0; word-break: break-word; max-width: 400px; }
+.raw-meta-lang { color: #64748b; font-size: 0.7rem; }
+.raw-meta-empty { color: #475569; }
+.raw-meta-refs {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  color: #cbd5e1;
+}
+
 @media (max-width: 560px) {
   .ebook-card { grid-template-columns: 100px 1fr; gap: 0.75rem; padding: 0.9rem; }
   .ebook-cover { width: 100px; height: 150px; }
+  .raw-meta-value { max-width: none; }
 }
 "#;

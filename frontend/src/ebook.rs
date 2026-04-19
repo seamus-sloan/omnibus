@@ -5,12 +5,18 @@
 //! serialisable `EbookMetadata` per file. Parse failures surface as
 //! `EbookMetadata { error: Some(_), .. }` so one bad file does not hide the
 //! rest of the library.
+//!
+//! The OPF metadata schema is open-ended — publishers, Calibre, Sigil and
+//! DRM toolchains all stuff custom `<meta>` elements into the package
+//! document. We extract the well-known Dublin Core fields into typed slots
+//! and pass *every* entry through in `raw_metadata` so the UI can render the
+//! full picture.
 
 use std::path::Path;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use epub::doc::EpubDoc;
-use omnibus_shared::{EbookLibrary, EbookMetadata};
+use epub::doc::{EpubDoc, EpubVersion};
+use omnibus_shared::{Contributor, EbookLibrary, EbookMetadata, Identifier, RawMeta};
 
 pub fn scan_ebook_library(path: Option<&str>) -> EbookLibrary {
     let Some(path_str) = path else {
@@ -74,20 +80,9 @@ fn extract_metadata(path: &Path, filename: String) -> EbookMetadata {
         }
     };
 
-    let title = first(&doc, "title");
-    let authors = all(&doc, "creator");
-    let description = first(&doc, "description");
-    let publisher = first(&doc, "publisher");
-    let published = first(&doc, "date");
-    let language = first(&doc, "language");
-    let identifier = first(&doc, "identifier");
-    let subjects = all(&doc, "subject");
-    // Calibre stores series as legacy <meta name="calibre:series"> which the
-    // epub crate surfaces under the raw name. EPUB3 uses
-    // `belongs-to-collection`; try both.
-    let series = first(&doc, "calibre:series").or_else(|| first(&doc, "belongs-to-collection"));
-    let series_index =
-        first(&doc, "calibre:series_index").or_else(|| first(&doc, "group-position"));
+    let creators = collect_contributors(&doc, "creator");
+    let contributors = collect_contributors(&doc, "contributor");
+    let identifiers = collect_identifiers(&doc);
 
     let cover_image = doc.get_cover().map(|(bytes, mime)| {
         let mime = if mime.is_empty() {
@@ -98,21 +93,115 @@ fn extract_metadata(path: &Path, filename: String) -> EbookMetadata {
         format!("data:{};base64,{}", mime, STANDARD.encode(&bytes))
     });
 
+    let raw_metadata = doc
+        .metadata
+        .iter()
+        .map(|m| RawMeta {
+            property: m.property.clone(),
+            value: m.value.clone(),
+            lang: m.lang.clone(),
+            refinements: m
+                .refined
+                .iter()
+                .map(|r| (r.property.clone(), r.value.clone()))
+                .collect(),
+        })
+        .collect();
+
     EbookMetadata {
         filename,
-        title,
-        authors,
-        description,
-        publisher,
-        published,
-        language,
-        identifier,
-        subjects,
-        series,
-        series_index,
+        title: first(&doc, "title"),
+        description: first(&doc, "description"),
+        publisher: first(&doc, "publisher"),
+        published: first(&doc, "date"),
+        modified: first(&doc, "dcterms:modified"),
+        language: first(&doc, "language"),
+        rights: first(&doc, "rights"),
+        source: first(&doc, "source"),
+        coverage: first(&doc, "coverage"),
+        dc_type: first(&doc, "type"),
+        dc_format: first(&doc, "format"),
+        relation: first(&doc, "relation"),
+
+        creators,
+        contributors,
+        subjects: all(&doc, "subject"),
+        identifiers,
+
+        // Calibre stores series via legacy `<meta name="calibre:series">`;
+        // EPUB3 uses `belongs-to-collection` with a `group-position` refinement.
+        series: first(&doc, "calibre:series").or_else(|| first(&doc, "belongs-to-collection")),
+        series_index: first(&doc, "calibre:series_index").or_else(|| first(&doc, "group-position")),
+
+        epub_version: Some(format_version(doc.version)),
+        unique_identifier: doc.unique_identifier.clone(),
+        resource_count: doc.resources.len(),
+        spine_count: doc.spine.len(),
+        toc_count: doc.toc.len(),
+
         cover_image,
+        raw_metadata,
         error: None,
     }
+}
+
+fn format_version(v: EpubVersion) -> String {
+    match v {
+        EpubVersion::Version2_0 => "2.0".to_string(),
+        EpubVersion::Version3_0 => "3.0".to_string(),
+        other => format!("{other:?}"),
+    }
+}
+
+fn collect_contributors<R: std::io::Read + std::io::Seek>(
+    doc: &EpubDoc<R>,
+    key: &str,
+) -> Vec<Contributor> {
+    doc.metadata
+        .iter()
+        .filter(|m| m.property == key)
+        .filter_map(|m| {
+            let name = m.value.trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let role = m
+                .refinement("role")
+                .map(|r| r.value.clone())
+                .or_else(|| lookup_refinement(&m.refined, "role"));
+            let file_as = m
+                .refinement("file-as")
+                .map(|r| r.value.clone())
+                .or_else(|| lookup_refinement(&m.refined, "file-as"));
+            Some(Contributor {
+                name,
+                role,
+                file_as,
+            })
+        })
+        .collect()
+}
+
+fn lookup_refinement(refs: &[epub::doc::MetadataRefinement], key: &str) -> Option<String> {
+    refs.iter()
+        .find(|r| r.property == key)
+        .map(|r| r.value.clone())
+}
+
+fn collect_identifiers<R: std::io::Read + std::io::Seek>(doc: &EpubDoc<R>) -> Vec<Identifier> {
+    doc.metadata
+        .iter()
+        .filter(|m| m.property == "identifier")
+        .filter_map(|m| {
+            let value = m.value.trim().to_string();
+            if value.is_empty() {
+                return None;
+            }
+            let scheme = lookup_refinement(&m.refined, "scheme")
+                .or_else(|| lookup_refinement(&m.refined, "identifier-type"));
+            Some(Identifier { value, scheme })
+        })
+        .collect()
 }
 
 fn first<R: std::io::Read + std::io::Seek>(doc: &EpubDoc<R>, key: &str) -> Option<String> {
