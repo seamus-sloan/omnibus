@@ -32,32 +32,45 @@ pub fn scan_ebook_library(path: Option<&str>) -> EbookLibrary {
         };
     }
 
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(e) => {
-            return EbookLibrary {
-                path: Some(path_str.to_string()),
-                books: vec![],
-                error: Some(format!("could not read directory: {e}")),
+    let mut books: Vec<EbookMetadata> = Vec::new();
+    let mut stack: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let entries = match std::fs::read_dir(&current) {
+            Ok(e) => e,
+            Err(e) => {
+                return EbookLibrary {
+                    path: Some(path_str.to_string()),
+                    books: vec![],
+                    error: Some(format!("could not read directory: {e}")),
+                };
+            }
+        };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
             };
+            let entry_path = entry.path();
+            if file_type.is_dir() {
+                stack.push(entry_path);
+            } else if file_type.is_file()
+                && entry_path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.eq_ignore_ascii_case("epub"))
+                    .unwrap_or(false)
+            {
+                // Use the path relative to the library root as the display
+                // identifier so nested files with duplicate names don't
+                // collide as component keys / error tags.
+                let relative = entry_path
+                    .strip_prefix(dir)
+                    .unwrap_or(&entry_path)
+                    .to_string_lossy()
+                    .to_string();
+                books.push(extract_metadata(&entry_path, relative));
+            }
         }
-    };
-
-    let mut books: Vec<EbookMetadata> = entries
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
-        .filter(|e| {
-            e.path()
-                .extension()
-                .and_then(|s| s.to_str())
-                .map(|s| s.eq_ignore_ascii_case("epub"))
-                .unwrap_or(false)
-        })
-        .map(|e| {
-            let filename = e.file_name().to_string_lossy().to_string();
-            extract_metadata(&e.path(), filename)
-        })
-        .collect();
+    }
 
     books.sort_by(|a, b| a.filename.cmp(&b.filename));
 
@@ -276,6 +289,27 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(out.books.is_empty());
         assert!(out.error.is_none());
+    }
+
+    #[test]
+    fn scan_recurses_into_subdirectories() {
+        let dir = std::env::temp_dir().join("omnibus_ebook_recursive_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let nested = dir.join("series").join("vol1");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(dir.join("top.epub"), b"not a zip").unwrap();
+        std::fs::write(nested.join("deep.epub"), b"not a zip").unwrap();
+        std::fs::write(nested.join("cover.jpg"), b"ignore").unwrap();
+        let out = scan_ebook_library(Some(dir.to_str().unwrap()));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(out.books.len(), 2);
+        // Filenames are relative paths from the library root — sorted so the
+        // nested entry sorts before the top-level one by string comparison.
+        let names: Vec<&str> = out.books.iter().map(|b| b.filename.as_str()).collect();
+        assert!(names.contains(&"top.epub"));
+        assert!(names
+            .iter()
+            .any(|n| n.ends_with("deep.epub") && n.contains("series")));
     }
 
     #[test]
