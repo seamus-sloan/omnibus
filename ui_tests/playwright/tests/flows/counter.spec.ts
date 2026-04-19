@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
-import { expectNavVisible } from "../utils/nav";
+import { expectNavVisible, gotoReady } from "../utils/nav";
 
 const incrementButton = (page: Page) =>
   page.getByRole("button", { name: "Increment value" });
@@ -18,7 +18,7 @@ test("renders the counter page layout", async ({ page }) => {
 });
 
 test("clicking increment posts to the API and updates the displayed value", async ({ page }) => {
-  await page.goto("/");
+  await gotoReady(page, "/");
 
   const current = currentValue(page);
   await expect(current).not.toHaveText("");
@@ -36,7 +36,7 @@ test("clicking increment posts to the API and updates the displayed value", asyn
 });
 
 test("leaves the displayed value unchanged when the increment API fails", async ({ page }) => {
-  await page.goto("/");
+  await gotoReady(page, "/");
 
   const current = currentValue(page);
   await expect(current).not.toHaveText("");
