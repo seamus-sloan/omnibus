@@ -36,8 +36,10 @@ test("saves library paths and shows a success status", async ({ page }) => {
       method: "POST",
       url: "/api/rpc/settings",
       expectedBody: {
-        ebook_library_path: ebookPath,
-        audiobook_library_path: audiobookPath,
+        settings: {
+          ebook_library_path: ebookPath,
+          audiobook_library_path: audiobookPath,
+        },
       },
       expectedStatus: 200,
     },
@@ -67,8 +69,10 @@ test("shows an error status when saving settings fails", async ({ page }) => {
       method: "POST",
       url: "/api/rpc/settings",
       expectedBody: {
-        ebook_library_path: "/tmp/whatever",
-        audiobook_library_path: "/tmp/whatever-audio",
+        settings: {
+          ebook_library_path: "/tmp/whatever",
+          audiobook_library_path: "/tmp/whatever-audio",
+        },
       },
       expectedStatus: 500,
     },
