@@ -1,12 +1,13 @@
 use dioxus::prelude::*;
+use dioxus_router::use_navigator;
 use omnibus_shared::{Contributor, EbookLibrary, EbookMetadata};
 
-use crate::{data, use_server_url};
+use crate::{data, use_server_url, Route};
 
 /// Landing page — loads the configured ebook library and renders every book
 /// in a single table with cover thumbnails and the common metadata columns.
-/// Rows are clickable but currently have no destination (book detail page
-/// is a TODO).
+/// Clicking (or pressing Enter / Space on) a row navigates to the stub
+/// `/books/:id` detail page. The detail page itself is still a TODO.
 #[component]
 pub fn LandingPage() -> Element {
     let server_url = use_server_url();
@@ -65,17 +66,17 @@ pub fn LandingPage() -> Element {
                     thead {
                         tr {
                             th { class: "ebook-col-cover", "Cover" }
-                            th { "Title" }
-                            th { "Author" }
-                            th { "Series" }
-                            th { "Publisher" }
-                            th { "Published" }
-                            th { "Language" }
+                            th { class: "ebook-col-title", "Title" }
+                            th { class: "ebook-col-author", "Author" }
+                            th { class: "ebook-col-series", "Series" }
+                            th { class: "ebook-col-publisher", "Publisher" }
+                            th { class: "ebook-col-published", "Published" }
+                            th { class: "ebook-col-language", "Language" }
                         }
                     }
                     tbody {
-                        for book in lib.books {
-                            EbookRow { key: "{book.filename}", book: book }
+                        for (idx, book) in lib.books.into_iter().enumerate() {
+                            EbookRow { key: "{book.filename}", id: idx, book: book }
                         }
                     }
                 }
@@ -85,21 +86,37 @@ pub fn LandingPage() -> Element {
 }
 
 #[component]
-fn EbookRow(book: EbookMetadata) -> Element {
-    let display_title = book.title.clone().unwrap_or_else(|| book.filename.clone());
-    let series_line = match (book.series.as_ref(), book.series_index.as_ref()) {
+fn EbookRow(id: usize, book: EbookMetadata) -> Element {
+    let display_title = book.title.as_deref().unwrap_or(&book.filename).to_string();
+    let series_line = match (book.series.as_deref(), book.series_index.as_deref()) {
         (Some(s), Some(i)) => format!("{s} #{i}"),
-        (Some(s), None) => s.clone(),
+        (Some(s), None) => s.to_string(),
         _ => String::new(),
     };
     let authors = contributor_names(&book.creators);
+
+    // `use_navigator` returns a `Copy` handle, so each handler can call it
+    // independently without cloning.
+    let nav = use_navigator();
 
     rsx! {
         tr {
             class: "ebook-row",
             "data-testid": "ebook-row",
-            // TODO: navigate to a book-detail page once it exists.
-            onclick: move |_| {},
+            role: "button",
+            tabindex: "0",
+            aria_label: "Open details for {display_title}",
+            onclick: move |_| {
+                nav.push(Route::BookDetail { id });
+            },
+            onkeydown: move |evt: Event<KeyboardData>| {
+                // Activate the row on Enter or Space, matching <button> semantics.
+                let key = evt.key();
+                if key == Key::Enter || key == Key::Character(" ".to_string()) {
+                    evt.prevent_default();
+                    nav.push(Route::BookDetail { id });
+                }
+            },
             td { class: "ebook-col-cover",
                 if let Some(src) = book.cover_image.as_ref() {
                     img { class: "ebook-thumb", src: "{src}", alt: "Cover of {display_title}" }
@@ -113,18 +130,22 @@ fn EbookRow(book: EbookMetadata) -> Element {
                     div { class: "error", "⚠ {err}" }
                 }
             }
-            td { "{authors}" }
-            td { "{series_line}" }
-            td { {book.publisher.clone().unwrap_or_default()} }
-            td { {book.published.clone().unwrap_or_default()} }
-            td { {book.language.clone().unwrap_or_default()} }
+            td { class: "ebook-col-author", "{authors}" }
+            td { class: "ebook-col-series", "{series_line}" }
+            td { class: "ebook-col-publisher", {book.publisher.as_deref().unwrap_or("")} }
+            td { class: "ebook-col-published", {book.published.as_deref().unwrap_or("")} }
+            td { class: "ebook-col-language", {book.language.as_deref().unwrap_or("")} }
         }
     }
 }
 
 fn contributor_names(list: &[Contributor]) -> String {
-    list.iter()
-        .map(|c| c.name.clone())
-        .collect::<Vec<_>>()
-        .join(", ")
+    let mut out = String::new();
+    for (i, c) in list.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&c.name);
+    }
+    out
 }
