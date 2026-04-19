@@ -45,12 +45,17 @@ jobs:
       - name: Install Playwright npm deps
         run: nix develop --command bash -c "cd ui_tests/playwright && npm ci"
 
-      - name: Build server
-        run: nix develop --command cargo build -p omnibus
+      - name: Bundle web app
+        run: nix develop --command dx bundle --platform web --package omnibus --fullstack
 
       - name: Start server
         run: |
-          nix develop --command bash -c "cargo run -p omnibus >server.log 2>&1 &"
+          # Run the pre-bundled server binary directly. dx serve/run both host a
+          # "building your app" / "non-hot-reloadable change" splash page while
+          # they compile on demand, which made Playwright race the build. A
+          # bundled binary has its public/ assets ready alongside it and serves
+          # the real SSR app from the first request.
+          nix develop --command bash -c "PORT=3000 ./target/dx/omnibus/debug/web/server >server.log 2>&1 &"
           nix develop --command bash -c "npx --yes wait-on -t 60000 http://127.0.0.1:3000"
 
       - name: Run Playwright tests
