@@ -18,7 +18,7 @@ pub mod db;
 #[cfg(feature = "server")]
 pub mod ebook;
 #[cfg(feature = "server")]
-pub mod ebook_cache;
+pub mod indexer;
 #[cfg(feature = "server")]
 pub mod scanner;
 
