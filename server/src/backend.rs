@@ -333,4 +333,102 @@ mod tests {
         assert!(contents.ebooks.error.is_some());
         assert!(contents.audiobooks.path.is_none());
     }
+
+    #[tokio::test]
+    async fn api_get_ebooks_returns_empty_when_path_not_configured() {
+        let pool = db::init_db("sqlite::memory:")
+            .await
+            .expect("db should initialize");
+        let app = rest_router(AppState::new(pool));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/ebooks")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let lib: omnibus_shared::EbookLibrary = serde_json::from_slice(&bytes).unwrap();
+        assert!(lib.path.is_none());
+        assert!(lib.books.is_empty());
+        assert!(lib.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn api_get_ebooks_reports_error_for_missing_path() {
+        let pool = db::init_db("sqlite::memory:")
+            .await
+            .expect("db should initialize");
+        let missing = "/does/not/exist/omnibus_ebook_test";
+        db::set_settings(
+            &pool,
+            &Settings {
+                ebook_library_path: Some(missing.to_string()),
+                audiobook_library_path: None,
+            },
+        )
+        .await
+        .expect("set should succeed");
+        let app = rest_router(AppState::new(pool));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/ebooks")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let lib: omnibus_shared::EbookLibrary = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(lib.path.as_deref(), Some(missing));
+        assert!(lib.books.is_empty());
+        assert!(lib.error.is_some(), "expected error, got {:?}", lib.error);
+    }
+
+    #[tokio::test]
+    async fn api_get_ebooks_returns_empty_list_for_empty_directory() {
+        let pool = db::init_db("sqlite::memory:")
+            .await
+            .expect("db should initialize");
+        let dir = std::env::temp_dir().join("omnibus_api_ebooks_empty");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        db::set_settings(
+            &pool,
+            &Settings {
+                ebook_library_path: Some(dir.to_string_lossy().into_owned()),
+                audiobook_library_path: None,
+            },
+        )
+        .await
+        .expect("set should succeed");
+        let app = rest_router(AppState::new(pool));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/ebooks")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let lib: omnibus_shared::EbookLibrary = serde_json::from_slice(&bytes).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(lib.path.as_deref(), Some(dir.to_str().unwrap()));
+        assert!(lib.books.is_empty());
+        assert!(lib.error.is_none());
+    }
 }

@@ -80,6 +80,11 @@ pub async fn get_library(server_url: &str) -> Result<LibraryContents, String> {
 pub async fn get_ebooks(server_url: &str) -> Result<EbookLibrary, String> {
     let url = format!("{server_url}/api/ebooks");
     let response = reqwest::get(&url).await.map_err(|e| format!("{e:#}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Server error {status}: {body}"));
+    }
     response
         .json::<EbookLibrary>()
         .await
