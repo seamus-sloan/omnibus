@@ -11,7 +11,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use omnibus_frontend::{db, scanner};
+use omnibus_frontend::{db, ebook, scanner};
 use omnibus_shared::{Settings, ValueResponse};
 use sqlx::SqlitePool;
 
@@ -33,6 +33,7 @@ pub fn rest_router(state: AppState) -> Router {
         .route("/api/settings", get(get_settings))
         .route("/api/settings", post(post_settings))
         .route("/api/library", get(get_library))
+        .route("/api/ebooks", get(get_ebooks))
         .with_state(state)
 }
 
@@ -85,6 +86,28 @@ async fn post_settings(State(state): State<AppState>, Json(settings): Json<Setti
         )
             .into_response(),
     }
+}
+
+async fn get_ebooks(State(state): State<AppState>) -> Response {
+    let settings = match db::get_settings(&state.pool).await {
+        Ok(s) => s,
+        Err(error) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read settings: {error}"),
+            )
+                .into_response();
+        }
+    };
+    let path = settings.ebook_library_path;
+    let library = tokio::task::spawn_blocking(move || ebook::scan_ebook_library(path.as_deref()))
+        .await
+        .unwrap_or_else(|e| omnibus_shared::EbookLibrary {
+            path: None,
+            books: vec![],
+            error: Some(format!("ebook scan task failed: {e}")),
+        });
+    Json(library).into_response()
 }
 
 async fn get_library(State(state): State<AppState>) -> Response {
