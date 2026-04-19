@@ -16,8 +16,8 @@ test("renders the settings page layout", async ({ page }) => {
   await expect(audiobookInput(page)).toBeVisible();
   await expect(saveButton(page)).toBeVisible();
   await expect(settingsStatus(page)).toBeAttached();
-  await expect(page.getByTestId("ebook-library-contents")).toBeVisible();
-  await expect(page.getByTestId("audiobook-library-contents")).toBeVisible();
+  await expect(page.getByTestId("ebook-library-summary")).toBeAttached();
+  await expect(page.getByTestId("audiobook-library-summary")).toBeAttached();
   await expectNavVisible(page);
 });
 
