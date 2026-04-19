@@ -18,8 +18,22 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rustfmt
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
   check:
-    name: fmt + clippy + test
+    name: clippy + test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,9 +48,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-
-      - name: cargo fmt --check
-        run: nix develop --command cargo fmt --all --check
 
       - name: cargo clippy (server)
         run: nix develop --command cargo clippy -p omnibus --all-targets -- -D warnings
