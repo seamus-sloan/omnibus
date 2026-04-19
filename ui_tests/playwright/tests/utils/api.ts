@@ -31,6 +31,7 @@ export async function expectMutation<T>(
 
   const requestPromise = page.waitForRequest(
     (r) => r.method() === opts.method && matchesUrl(r.url()),
+    {timeout: 5_000}
   );
 
   const result = await action();
