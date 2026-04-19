@@ -3,7 +3,7 @@ use omnibus_shared::{LibraryContents, LibrarySection, Settings};
 
 use crate::{data, use_server_url};
 
-/// Library paths settings form + live directory listings.
+/// Library paths settings form + live recursive file-count summaries.
 #[component]
 pub fn SettingsPage() -> Element {
     let server_url = use_server_url();
@@ -85,6 +85,10 @@ pub fn SettingsPage() -> Element {
                         placeholder: "/path/to/ebooks",
                         oninput: move |evt| ebook_path.set(evt.value()),
                     }
+                    LibrarySummary {
+                        testid: "ebook-library-summary",
+                        section: library().ebooks,
+                    }
                 }
                 div { class: "settings-field",
                     label { r#for: "audiobook-library-path", "Audiobook Library Path" }
@@ -95,6 +99,10 @@ pub fn SettingsPage() -> Element {
                         value: "{audiobook_path}",
                         placeholder: "/path/to/audiobooks",
                         oninput: move |evt| audiobook_path.set(evt.value()),
+                    }
+                    LibrarySummary {
+                        testid: "audiobook-library-summary",
+                        section: library().audiobooks,
                     }
                 }
                 button { r#type: "submit", class: "btn", "Save" }
@@ -107,48 +115,43 @@ pub fn SettingsPage() -> Element {
                 if let Some(msg) = status() { "{msg}" }
             }
         }
-
-        LibrarySectionView {
-            title: "Ebook Library",
-            testid: "ebook-library-contents",
-            section: library().ebooks,
-        }
-        LibrarySectionView {
-            title: "Audiobook Library",
-            testid: "audiobook-library-contents",
-            section: library().audiobooks,
-        }
     }
 }
 
 #[component]
-fn LibrarySectionView(title: String, testid: String, section: LibrarySection) -> Element {
-    rsx! {
-        section { class: "card library-card",
-            h2 { "{title}" }
-            div {
+fn LibrarySummary(testid: String, section: LibrarySection) -> Element {
+    if section.path.is_none() {
+        return rsx! {
+            p {
                 id: "{testid}",
                 "data-testid": "{testid}",
-                class: "library-contents",
-                if section.path.is_none() {
-                    p { class: "library-empty", "No path configured." }
-                } else if let Some(err) = &section.error {
-                    p { class: "library-error", "⚠ {err}" }
-                } else if section.files.is_empty() {
-                    p { class: "library-empty",
-                        "No files found in "
-                        code { "{section.path.as_deref().unwrap_or_default()}" }
-                    }
-                } else {
-                    p { class: "library-path", "{section.path.as_deref().unwrap_or_default()}" }
-                    p { class: "library-count", "{section.files.len()} file(s)" }
-                    ul { class: "library-file-list",
-                        for file in &section.files {
-                            li { "{file}" }
-                        }
-                    }
-                }
+                class: "library-summary empty",
             }
+        };
+    }
+
+    if let Some(err) = &section.error {
+        return rsx! {
+            p {
+                id: "{testid}",
+                "data-testid": "{testid}",
+                class: "library-summary error",
+                "⚠ {err}"
+            }
+        };
+    }
+
+    let mut line = format!("{} file(s) found.", section.total_files);
+    for (ext, count) in &section.counts_by_ext {
+        line.push_str(&format!(" {count} .{ext} found."));
+    }
+
+    rsx! {
+        p {
+            id: "{testid}",
+            "data-testid": "{testid}",
+            class: "library-summary",
+            "{line}"
         }
     }
 }

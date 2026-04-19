@@ -273,9 +273,9 @@ mod tests {
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let contents: omnibus_shared::LibraryContents = serde_json::from_slice(&bytes).unwrap();
         assert!(contents.ebooks.path.is_none());
-        assert!(contents.ebooks.files.is_empty());
+        assert_eq!(contents.ebooks.total_files, 0);
         assert!(contents.audiobooks.path.is_none());
-        assert!(contents.audiobooks.files.is_empty());
+        assert_eq!(contents.audiobooks.total_files, 0);
     }
 
     #[tokio::test]
