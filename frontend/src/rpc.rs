@@ -18,13 +18,15 @@ use dioxus::prelude::*;
 use omnibus_shared::{EbookLibrary, LibraryContents, Settings, ValueResponse};
 
 #[cfg(feature = "server")]
-use crate::{db, ebook, scanner};
+use crate::{db, ebook_cache, scanner};
 
 /// Server-only extractor alias used by each server function. Only referenced
 /// by the server-side body; the `#[cfg(feature = "server")]` stops the web
 /// build from importing axum/sqlx types.
 #[cfg(feature = "server")]
 type PoolExt = dioxus::fullstack::axum::Extension<sqlx::SqlitePool>;
+#[cfg(feature = "server")]
+type CacheExt = dioxus::fullstack::axum::Extension<ebook_cache::EbookCache>;
 
 #[get("/api/rpc/value", pool: PoolExt)]
 pub async fn rpc_get_value() -> Result<ValueResponse> {
@@ -43,9 +45,12 @@ pub async fn rpc_get_settings() -> Result<Settings> {
     Ok(db::get_settings(&pool.0).await?)
 }
 
-#[post("/api/rpc/settings", pool: PoolExt)]
+#[post("/api/rpc/settings", pool: PoolExt, cache: CacheExt)]
 pub async fn rpc_save_settings(settings: Settings) -> Result<Settings> {
     db::set_settings(&pool.0, &settings).await?;
+    // Library path may have changed; drop cached scan so the next call to
+    // `rpc_get_ebooks` re-reads from disk.
+    cache.0.clear().await;
     Ok(db::get_settings(&pool.0).await?)
 }
 
@@ -58,19 +63,10 @@ pub async fn rpc_get_library() -> Result<LibraryContents> {
     ))
 }
 
-#[get("/api/rpc/ebooks", pool: PoolExt)]
+#[get("/api/rpc/ebooks", pool: PoolExt, cache: CacheExt)]
 pub async fn rpc_get_ebooks() -> Result<EbookLibrary> {
     let settings = db::get_settings(&pool.0).await?;
-    let path = settings.ebook_library_path.clone();
-    // Parsing epubs can be slow; offload to the blocking pool so we don't
-    // stall the async runtime on zip inflation.
-    Ok(
-        tokio::task::spawn_blocking(move || ebook::scan_ebook_library(path.as_deref()))
-            .await
-            .unwrap_or_else(|e| omnibus_shared::EbookLibrary {
-                path: None,
-                books: vec![],
-                error: Some(format!("ebook scan task failed: {e}")),
-            }),
-    )
+    // Cache hits skip the expensive filesystem walk + OPF parse. The cache
+    // is invalidated from `rpc_save_settings`.
+    Ok(ebook_cache::load_or_scan(&cache.0, settings.ebook_library_path).await)
 }
