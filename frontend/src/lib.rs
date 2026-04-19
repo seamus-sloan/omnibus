@@ -21,7 +21,7 @@ pub mod ebook;
 pub mod scanner;
 
 pub use components::Nav;
-pub use pages::{LandingPage, SettingsPage};
+pub use pages::{BookDetailPage, LandingPage, SettingsPage};
 
 #[cfg(feature = "mobile")]
 pub use data::ServerUrl;
@@ -33,6 +33,8 @@ pub enum Route {
     Landing {},
     #[route("/settings")]
     Settings {},
+    #[route("/books/:id")]
+    BookDetail { id: usize },
 }
 
 /// Route target for `/` — wraps [`LandingPage`] in the platform screen layout.
@@ -48,6 +50,15 @@ pub fn Landing() -> Element {
 pub fn Settings() -> Element {
     rsx! {
         ScreenLayout { SettingsPage {} }
+    }
+}
+
+/// Route target for `/books/:id` — stub detail page. Replace the id shape
+/// once the backend exposes stable book ids.
+#[component]
+pub fn BookDetail(id: usize) -> Element {
+    rsx! {
+        ScreenLayout { BookDetailPage { id } }
     }
 }
 
@@ -118,9 +129,9 @@ body {
 }
 
 .app-shell {
-  max-width: 760px;
+  max-width: 1400px;
   margin: 0 auto;
-  padding: 2rem 1rem;
+  padding: 2rem clamp(1rem, 4vw, 2.5rem);
 }
 
 .screen {
@@ -263,6 +274,17 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   width: 100%;
   border-collapse: collapse;
   font-size: 0.875rem;
+  table-layout: auto;
+}
+.ebook-table td,
+.ebook-table th { white-space: nowrap; }
+.ebook-table .ebook-col-title { white-space: normal; }
+.ebook-table .ebook-title-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 .ebook-table thead th {
   text-align: left;
@@ -288,6 +310,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   transition: background 0.1s;
 }
 .ebook-row:hover { background: rgba(51, 65, 85, 0.4); }
+.ebook-row:focus-visible {
+  outline: 2px solid #22d3ee;
+  outline-offset: -2px;
+  background: rgba(51, 65, 85, 0.4);
+}
 .ebook-row:last-child td { border-bottom: 0; }
 
 .ebook-col-cover { width: 56px; }
@@ -312,7 +339,17 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   font-weight: 600;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 1100px) {
+  .ebook-table .ebook-col-language { display: none; }
+}
+@media (max-width: 900px) {
+  .ebook-table .ebook-col-published { display: none; }
+}
+@media (max-width: 720px) {
+  .ebook-table .ebook-col-publisher { display: none; }
+}
+@media (max-width: 560px) {
+  .ebook-table .ebook-col-series { display: none; }
   .ebook-table thead th,
   .ebook-table tbody td { padding: 0.5rem 0.6rem; }
   .ebook-thumb { width: 32px; height: 48px; }

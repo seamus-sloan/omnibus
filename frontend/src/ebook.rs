@@ -38,11 +38,28 @@ pub fn scan_ebook_library(path: Option<&str>) -> EbookLibrary {
         let entries = match std::fs::read_dir(&current) {
             Ok(e) => e,
             Err(e) => {
-                return EbookLibrary {
-                    path: Some(path_str.to_string()),
-                    books: vec![],
+                // Root failure is fatal (no library to surface at all). A
+                // failure below the root is recorded as a synthetic entry
+                // and we continue — one unreadable subfolder must not hide
+                // the rest of the library, same as a single broken epub.
+                if current == dir {
+                    return EbookLibrary {
+                        path: Some(path_str.to_string()),
+                        books: vec![],
+                        error: Some(format!("could not read directory: {e}")),
+                    };
+                }
+                let relative = current
+                    .strip_prefix(dir)
+                    .unwrap_or(&current)
+                    .to_string_lossy()
+                    .to_string();
+                books.push(EbookMetadata {
+                    filename: relative,
                     error: Some(format!("could not read directory: {e}")),
-                };
+                    ..Default::default()
+                });
+                continue;
             }
         };
         for entry in entries.flatten() {
@@ -265,6 +282,20 @@ fn all<R: std::io::Read + std::io::Seek>(doc: &EpubDoc<R>, key: &str) -> Vec<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Build a unique temp directory per test invocation. Rust runs unit
+    /// tests in parallel by default, so a fixed path under `temp_dir()`
+    /// would collide between tests (and between repeated runs).
+    fn make_test_dir(suffix: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let pid = std::process::id();
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("omnibus_ebook_{suffix}_{pid}_{seq}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("should create test dir");
+        dir
+    }
 
     #[test]
     fn scan_with_no_path_returns_empty() {
@@ -281,9 +312,7 @@ mod tests {
 
     #[test]
     fn scan_ignores_non_epub_files() {
-        let dir = std::env::temp_dir().join("omnibus_ebook_scan_test");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = make_test_dir("ignore");
         std::fs::write(dir.join("notes.txt"), b"hi").unwrap();
         let out = scan_ebook_library(Some(dir.to_str().unwrap()));
         std::fs::remove_dir_all(&dir).unwrap();
@@ -293,8 +322,7 @@ mod tests {
 
     #[test]
     fn scan_recurses_into_subdirectories() {
-        let dir = std::env::temp_dir().join("omnibus_ebook_recursive_test");
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = make_test_dir("recursive");
         let nested = dir.join("series").join("vol1");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(dir.join("top.epub"), b"not a zip").unwrap();
@@ -302,26 +330,70 @@ mod tests {
         std::fs::write(nested.join("cover.jpg"), b"ignore").unwrap();
         let out = scan_ebook_library(Some(dir.to_str().unwrap()));
         std::fs::remove_dir_all(&dir).unwrap();
+        // Two epubs + zero synthetic dir errors under a healthy tree.
+        let book_entries: Vec<&str> = out
+            .books
+            .iter()
+            .filter(|b| b.error.is_none() || !b.filename.is_empty())
+            .map(|b| b.filename.as_str())
+            .collect();
         assert_eq!(out.books.len(), 2);
-        // Filenames are relative paths from the library root — sorted so the
-        // nested entry sorts before the top-level one by string comparison.
-        let names: Vec<&str> = out.books.iter().map(|b| b.filename.as_str()).collect();
-        assert!(names.contains(&"top.epub"));
-        assert!(names
+        assert!(book_entries.contains(&"top.epub"));
+        assert!(book_entries
             .iter()
             .any(|n| n.ends_with("deep.epub") && n.contains("series")));
     }
 
     #[test]
     fn scan_records_parse_errors_per_file() {
-        let dir = std::env::temp_dir().join("omnibus_ebook_bad_test");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = make_test_dir("bad");
         std::fs::write(dir.join("broken.epub"), b"not actually a zip").unwrap();
         let out = scan_ebook_library(Some(dir.to_str().unwrap()));
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(out.books.len(), 1);
         assert!(out.books[0].error.is_some());
         assert_eq!(out.books[0].filename, "broken.epub");
+    }
+
+    // Permission tests only run where we can reliably strip read access
+    // from a directory — on Windows, even removing all permission bits
+    // doesn't reliably make `read_dir` fail as the owning process.
+    #[cfg(unix)]
+    #[test]
+    fn scan_continues_past_unreadable_subdirectory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = make_test_dir("unreadable_subdir");
+        std::fs::write(dir.join("good.epub"), b"not a zip").unwrap();
+        let locked = dir.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        // Drop all permissions so read_dir on the subdir fails. Skip the
+        // test on platforms where this doesn't take effect (e.g. running
+        // as root in CI containers) rather than asserting a false
+        // positive.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read_dir(&locked).is_ok() {
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::fs::remove_dir_all(&dir).unwrap();
+            return;
+        }
+
+        let out = scan_ebook_library(Some(dir.to_str().unwrap()));
+
+        // Restore permissions before removing the tree, otherwise cleanup
+        // fails on some platforms.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // Top-level scan must not report a fatal error.
+        assert!(out.error.is_none());
+        // Good epub still surfaces.
+        assert!(out.books.iter().any(|b| b.filename == "good.epub"));
+        // Locked subdir surfaces as a synthetic error entry, not silently
+        // dropped.
+        assert!(out
+            .books
+            .iter()
+            .any(|b| b.filename == "locked" && b.error.is_some()));
     }
 }
