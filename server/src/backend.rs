@@ -6,24 +6,24 @@
 //! keep working unchanged.
 
 use axum::{
-    extract::State,
+    extract::{Path, State},
+    http::header,
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
-use omnibus_frontend::{db, ebook_cache, ebook_cache::EbookCache, scanner};
+use omnibus_frontend::{db, indexer, scanner};
 use omnibus_shared::{Settings, ValueResponse};
 use sqlx::SqlitePool;
 
 #[derive(Clone)]
 pub struct AppState {
     pool: SqlitePool,
-    pub ebook_cache: EbookCache,
 }
 
 impl AppState {
-    pub fn new(pool: SqlitePool, ebook_cache: EbookCache) -> Self {
-        Self { pool, ebook_cache }
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
     }
 }
 
@@ -35,6 +35,7 @@ pub fn rest_router(state: AppState) -> Router {
         .route("/api/settings", post(post_settings))
         .route("/api/library", get(get_library))
         .route("/api/ebooks", get(get_ebooks))
+        .route("/api/covers/{id}", get(get_cover))
         .with_state(state)
 }
 
@@ -73,19 +74,27 @@ async fn get_settings(State(state): State<AppState>) -> Response {
 
 async fn post_settings(State(state): State<AppState>, Json(settings): Json<Settings>) -> Response {
     match db::set_settings(&state.pool, &settings).await {
-        Ok(()) => {
-            // Settings may have changed the library path. Drop any cached
-            // scan so the next `/api/ebooks` request re-reads from disk.
-            state.ebook_cache.clear().await;
-            match db::get_settings(&state.pool).await {
-                Ok(updated) => Json(updated).into_response(),
-                Err(error) => (
-                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to read updated settings: {error}"),
-                )
-                    .into_response(),
+        Ok(()) => match db::get_settings(&state.pool).await {
+            Ok(updated) => {
+                // Library path may have changed (and even when it hasn't,
+                // the user has signalled they want to pick up on-disk
+                // changes). Kick off a reindex in the background.
+                if let Some(path) = updated.ebook_library_path.clone() {
+                    let pool = state.pool.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = indexer::reindex(&pool, path).await {
+                            eprintln!("post_settings: reindex failed: {e}");
+                        }
+                    });
+                }
+                Json(updated).into_response()
             }
-        }
+            Err(error) => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read updated settings: {error}"),
+            )
+                .into_response(),
+        },
         Err(error) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to save settings: {error}"),
@@ -105,9 +114,35 @@ async fn get_ebooks(State(state): State<AppState>) -> Response {
                 .into_response();
         }
     };
-    let path = settings.ebook_library_path;
-    let library = ebook_cache::load_or_scan(&state.ebook_cache, path).await;
-    Json(library).into_response()
+    match db::library_from_db(&state.pool, settings.ebook_library_path.as_deref()).await {
+        Ok(library) => Json(library).into_response(),
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to read books: {error}"),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_cover(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+    match db::get_cover(&state.pool, id).await {
+        Ok(Some((mime, bytes))) => (
+            [
+                (header::CONTENT_TYPE, mime.as_str()),
+                // Covers are static per-book (new id on reindex), so cache
+                // aggressively at the client.
+                (header::CACHE_CONTROL, "public, max-age=86400"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Ok(None) => axum::http::StatusCode::NOT_FOUND.into_response(),
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to read cover: {error}"),
+        )
+            .into_response(),
+    }
 }
 
 async fn get_library(State(state): State<AppState>) -> Response {
@@ -139,7 +174,7 @@ mod tests {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = rest_router(AppState::new(pool, EbookCache::default()));
+        let app = rest_router(AppState::new(pool));
 
         let response = app
             .clone()
@@ -180,7 +215,7 @@ mod tests {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = rest_router(AppState::new(pool, EbookCache::default()));
+        let app = rest_router(AppState::new(pool));
 
         let response = app
             .oneshot(
@@ -204,7 +239,7 @@ mod tests {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = rest_router(AppState::new(pool, EbookCache::default()));
+        let app = rest_router(AppState::new(pool));
 
         let body = serde_json::json!({
             "ebook_library_path": "/books/ebooks",
@@ -240,7 +275,7 @@ mod tests {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = rest_router(AppState::new(pool, EbookCache::default()));
+        let app = rest_router(AppState::new(pool));
 
         let body = serde_json::json!({
             "ebook_library_path": "/my/ebooks",
@@ -280,7 +315,7 @@ mod tests {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = rest_router(AppState::new(pool, EbookCache::default()));
+        let app = rest_router(AppState::new(pool));
 
         let response = app
             .oneshot(
@@ -315,7 +350,7 @@ mod tests {
         )
         .await
         .expect("set should succeed");
-        let app = rest_router(AppState::new(pool, EbookCache::default()));
+        let app = rest_router(AppState::new(pool));
 
         let response = app
             .oneshot(
@@ -339,7 +374,7 @@ mod tests {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = rest_router(AppState::new(pool, EbookCache::default()));
+        let app = rest_router(AppState::new(pool));
 
         let response = app
             .oneshot(
@@ -360,21 +395,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn api_get_ebooks_reports_error_for_missing_path() {
+    async fn api_get_ebooks_returns_empty_library_for_configured_path_without_index() {
+        // /api/ebooks now reads from the books table; an unindexed path
+        // surfaces as an empty library at that path, not an error.
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let missing = "/does/not/exist/omnibus_ebook_test";
+        let path = "/does/not/exist/omnibus_ebook_test";
         db::set_settings(
             &pool,
             &Settings {
-                ebook_library_path: Some(missing.to_string()),
+                ebook_library_path: Some(path.to_string()),
                 audiobook_library_path: None,
             },
         )
         .await
         .expect("set should succeed");
-        let app = rest_router(AppState::new(pool, EbookCache::default()));
+        let app = rest_router(AppState::new(pool));
 
         let response = app
             .oneshot(
@@ -389,46 +426,26 @@ mod tests {
 
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let lib: omnibus_shared::EbookLibrary = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(lib.path.as_deref(), Some(missing));
+        assert_eq!(lib.path.as_deref(), Some(path));
         assert!(lib.books.is_empty());
-        assert!(lib.error.is_some(), "expected error, got {:?}", lib.error);
+        assert!(lib.error.is_none());
     }
 
     #[tokio::test]
-    async fn api_get_ebooks_returns_empty_list_for_empty_directory() {
+    async fn api_get_covers_returns_not_found_for_missing_id() {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let dir = std::env::temp_dir().join("omnibus_api_ebooks_empty");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        db::set_settings(
-            &pool,
-            &Settings {
-                ebook_library_path: Some(dir.to_string_lossy().into_owned()),
-                audiobook_library_path: None,
-            },
-        )
-        .await
-        .expect("set should succeed");
-        let app = rest_router(AppState::new(pool, EbookCache::default()));
-
+        let app = rest_router(AppState::new(pool));
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/ebooks")
+                    .uri("/api/covers/9999")
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
             .await
             .expect("request should succeed");
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
-
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let lib: omnibus_shared::EbookLibrary = serde_json::from_slice(&bytes).unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(lib.path.as_deref(), Some(dir.to_str().unwrap()));
-        assert!(lib.books.is_empty());
-        assert!(lib.error.is_none());
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
     }
 }

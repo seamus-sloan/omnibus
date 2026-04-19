@@ -14,7 +14,6 @@ sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
 anyhow = { version = "1", optional = true }
 epub = { version = "2", optional = true }
-base64 = { version = "0.22", optional = true }
 
 [features]
 default = []
@@ -29,5 +28,5 @@ server = [
     "dep:tokio",
     "dep:anyhow",
     "dep:epub",
-    "dep:base64",
+    "dep:serde_json",
 ]

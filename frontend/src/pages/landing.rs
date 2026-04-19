@@ -30,6 +30,8 @@ pub fn LandingPage() -> Element {
         });
     });
 
+    let server_url_for_row = server_url.clone();
+
     let lib = library();
     let is_loading = loading();
     let page_error = error();
@@ -76,7 +78,12 @@ pub fn LandingPage() -> Element {
                     }
                     tbody {
                         for (idx, book) in lib.books.into_iter().enumerate() {
-                            EbookRow { key: "{book.filename}", id: idx, book: book }
+                            EbookRow {
+                                key: "{book.filename}",
+                                id: idx,
+                                book: book,
+                                server_url: server_url_for_row.clone(),
+                            }
                         }
                     }
                 }
@@ -86,8 +93,15 @@ pub fn LandingPage() -> Element {
 }
 
 #[component]
-fn EbookRow(id: usize, book: EbookMetadata) -> Element {
+fn EbookRow(id: usize, book: EbookMetadata, server_url: String) -> Element {
     let display_title = book.title.as_deref().unwrap_or(&book.filename).to_string();
+    // Combine the relative cover URL the server returned with the client's
+    // base URL. Web sees an empty base (same-origin); mobile prepends its
+    // configured `ServerUrl`.
+    let cover_src = book
+        .cover_url
+        .as_deref()
+        .map(|rel| format!("{server_url}{rel}"));
     let series_line = match (book.series.as_deref(), book.series_index.as_deref()) {
         (Some(s), Some(i)) => format!("{s} #{i}"),
         (Some(s), None) => s.to_string(),
@@ -118,8 +132,8 @@ fn EbookRow(id: usize, book: EbookMetadata) -> Element {
                 }
             },
             td { class: "ebook-col-cover",
-                if let Some(src) = book.cover_image.as_ref() {
-                    img { class: "ebook-thumb", src: "{src}", alt: "Cover of {display_title}" }
+                if let Some(src) = cover_src.as_ref() {
+                    img { class: "ebook-thumb", src: "{src}", alt: "Cover of {display_title}", loading: "lazy" }
                 } else {
                     div { class: "ebook-thumb ebook-thumb-fallback", "—" }
                 }
