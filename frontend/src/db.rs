@@ -215,6 +215,19 @@ pub async fn replace_books(
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
 
+    // SQLite doesn't enforce ON DELETE CASCADE unless `PRAGMA foreign_keys
+    // = ON` is set per-connection, so drop covers explicitly before the
+    // parent rows. Same txn, so a failure rolls both back together.
+    sqlx::query(
+        r#"
+        DELETE FROM book_covers
+        WHERE book_id IN (SELECT id FROM books WHERE library_path = ?)
+        "#,
+    )
+    .bind(library_path)
+    .execute(&mut *tx)
+    .await?;
+
     sqlx::query("DELETE FROM books WHERE library_path = ?")
         .bind(library_path)
         .execute(&mut *tx)
@@ -575,5 +588,112 @@ mod tests {
         let result = get_settings(&pool).await.expect("get should succeed");
         assert_eq!(result.ebook_library_path, None);
         assert_eq!(result.audiobook_library_path, None);
+    }
+
+    use crate::ebook::IndexedBook;
+
+    fn indexed(filename: &str, title: Option<&str>, cover: Option<(&str, &[u8])>) -> IndexedBook {
+        IndexedBook {
+            metadata: EbookMetadata {
+                filename: filename.into(),
+                title: title.map(|s| s.into()),
+                creators: vec![Contributor {
+                    name: "Author A".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            cover: cover.map(|(m, b)| (m.into(), b.to_vec())),
+        }
+    }
+
+    #[tokio::test]
+    async fn replace_books_inserts_metadata_covers_and_last_indexed() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed("a.epub", Some("A"), Some(("image/jpeg", b"BYTES"))),
+                indexed("b.epub", Some("B"), None),
+            ],
+        )
+        .await
+        .expect("replace should succeed");
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        assert_eq!(books.len(), 2);
+        let a = &books[0];
+        let b = &books[1];
+        assert_eq!(a.filename, "a.epub");
+        assert_eq!(b.filename, "b.epub");
+
+        // cover_url is only set when a cover row exists.
+        assert_eq!(
+            a.cover_url.as_deref(),
+            Some(format!("/api/covers/{}", a.id).as_str())
+        );
+        assert_eq!(b.cover_url, None);
+
+        // creators JSON round-trips through list_books.
+        assert_eq!(a.creators.len(), 1);
+        assert_eq!(a.creators[0].name, "Author A");
+
+        // get_cover reads the bytes back only for books with a cover.
+        let cover = get_cover(&pool, a.id).await.unwrap();
+        assert_eq!(cover, Some(("image/jpeg".to_string(), b"BYTES".to_vec())));
+        assert_eq!(get_cover(&pool, b.id).await.unwrap(), None);
+
+        // Index state recorded.
+        assert!(last_indexed_at(&pool, "/lib").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn replace_books_removes_old_covers_on_reindex() {
+        // Guards against orphaned book_covers rows — SQLite doesn't enforce
+        // ON DELETE CASCADE unless foreign_keys PRAGMA is on, so
+        // replace_books must drop covers explicitly.
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed("a.epub", Some("A"), Some(("image/jpeg", b"OLD")))],
+        )
+        .await
+        .unwrap();
+        let before = list_books(&pool, "/lib").await.unwrap();
+        let old_id = before[0].id;
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed("a.epub", Some("A"), Some(("image/jpeg", b"NEW")))],
+        )
+        .await
+        .unwrap();
+
+        // Old book row gone, so old cover must be gone too.
+        assert!(get_cover(&pool, old_id).await.unwrap().is_none());
+
+        let orphan_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM book_covers WHERE book_id = ?")
+                .bind(old_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(orphan_count, 0);
+
+        let after = list_books(&pool, "/lib").await.unwrap();
+        let new_cover = get_cover(&pool, after[0].id).await.unwrap();
+        assert_eq!(new_cover, Some(("image/jpeg".to_string(), b"NEW".to_vec())));
+    }
+
+    #[tokio::test]
+    async fn library_from_db_returns_empty_for_none_path() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let lib = library_from_db(&pool, None).await.unwrap();
+        assert!(lib.path.is_none());
+        assert!(lib.books.is_empty());
+        assert!(lib.error.is_none());
     }
 }

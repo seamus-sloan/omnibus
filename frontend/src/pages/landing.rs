@@ -77,10 +77,9 @@ pub fn LandingPage() -> Element {
                         }
                     }
                     tbody {
-                        for (idx, book) in lib.books.into_iter().enumerate() {
+                        for book in lib.books.into_iter() {
                             EbookRow {
                                 key: "{book.filename}",
-                                id: idx,
                                 book: book,
                                 server_url: server_url_for_row.clone(),
                             }
@@ -93,7 +92,8 @@ pub fn LandingPage() -> Element {
 }
 
 #[component]
-fn EbookRow(id: usize, book: EbookMetadata, server_url: String) -> Element {
+fn EbookRow(book: EbookMetadata, server_url: String) -> Element {
+    let id = book.id;
     let display_title = book.title.as_deref().unwrap_or(&book.filename).to_string();
     // Combine the relative cover URL the server returned with the client's
     // base URL. Web sees an empty base (same-origin); mobile prepends its

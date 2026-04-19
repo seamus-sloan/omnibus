@@ -3,12 +3,12 @@ use dioxus_router::Link;
 
 use crate::Route;
 
-/// Stub detail page for a single book. The landing page table links each
-/// row here so clicks and keyboard activation work end-to-end. The id is
-/// the book's index in the current landing-page listing — this will be
-/// replaced once the backend exposes stable book ids.
+/// Stub detail page for a single book. `id` is the stable backend id from
+/// the `books` table (`EbookMetadata.id`), so deep links survive re-indexes
+/// and the detail page can later fetch by id without depending on
+/// landing-page row ordering.
 #[component]
-pub fn BookDetailPage(id: usize) -> Element {
+pub fn BookDetailPage(id: i64) -> Element {
     rsx! {
         section { class: "card",
             h1 { "Book #{id}" }
