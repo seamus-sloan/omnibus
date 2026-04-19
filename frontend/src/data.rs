@@ -10,7 +10,7 @@
 //! - Server-only compiles (`feature = "server"` without `"web"`) reuse the
 //!   web stubs so SSR-during-fullstack-render still returns sensible data.
 
-use omnibus_shared::{LibraryContents, Settings};
+use omnibus_shared::{EbookLibrary, LibraryContents, Settings};
 
 // ===== Mobile transport: reqwest =====
 
@@ -76,6 +76,16 @@ pub async fn get_library(server_url: &str) -> Result<LibraryContents, String> {
         .map_err(|e| e.to_string())
 }
 
+#[cfg(feature = "mobile")]
+pub async fn get_ebooks(server_url: &str) -> Result<EbookLibrary, String> {
+    let url = format!("{server_url}/api/ebooks");
+    let response = reqwest::get(&url).await.map_err(|e| format!("{e:#}"))?;
+    response
+        .json::<EbookLibrary>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // ===== Web / fullstack-SSR transport: dioxus-fullstack server functions =====
 //
 // `server_url` is unused here — server functions always resolve against the
@@ -114,6 +124,13 @@ pub async fn save_settings(_server_url: &str, settings: Settings) -> Result<Sett
 #[cfg(not(feature = "mobile"))]
 pub async fn get_library(_server_url: &str) -> Result<LibraryContents, String> {
     crate::rpc::rpc_get_library()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "mobile"))]
+pub async fn get_ebooks(_server_url: &str) -> Result<EbookLibrary, String> {
+    crate::rpc::rpc_get_ebooks()
         .await
         .map_err(|e| e.to_string())
 }

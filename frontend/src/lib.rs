@@ -16,6 +16,8 @@ pub mod rpc;
 #[cfg(feature = "server")]
 pub mod db;
 #[cfg(feature = "server")]
+pub mod ebook;
+#[cfg(feature = "server")]
 pub mod scanner;
 
 pub use components::Nav;
@@ -247,5 +249,82 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   background: rgba(30, 41, 59, 0.5);
   border-radius: 6px;
   color: #e2e8f0;
+}
+
+.ebook-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+.ebook-card {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 1.25rem;
+  padding: 1.25rem;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(100, 116, 139, 0.3);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+.ebook-cover {
+  width: 140px;
+  height: 210px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(30, 41, 59, 0.6);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.ebook-cover img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.ebook-cover-fallback {
+  color: #64748b;
+  font-size: 0.85rem;
+}
+.ebook-info { min-width: 0; }
+.ebook-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+  color: #f1f5f9;
+}
+.ebook-authors {
+  font-size: 0.95rem;
+  color: #cbd5e1;
+  margin-bottom: 0.5rem;
+}
+.ebook-series {
+  font-size: 0.85rem;
+  color: #22d3ee;
+  margin-bottom: 0.4rem;
+}
+.ebook-meta {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  margin-bottom: 0.2rem;
+}
+.ebook-subjects {
+  font-size: 0.75rem;
+  color: #64748b;
+  margin: 0.4rem 0;
+  font-style: italic;
+}
+.ebook-description {
+  font-size: 0.85rem;
+  color: #cbd5e1;
+  margin-top: 0.6rem;
+  line-height: 1.4;
+  max-height: 8rem;
+  overflow-y: auto;
+}
+
+@media (max-width: 560px) {
+  .ebook-card { grid-template-columns: 100px 1fr; gap: 0.75rem; padding: 0.9rem; }
+  .ebook-cover { width: 100px; height: 150px; }
 }
 "#;

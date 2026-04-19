@@ -52,7 +52,7 @@ Default `cargo build` / `clippy` covers `server`, `shared`, `frontend` only. Mob
 ### shared/src/
 
 ```
-lib.rs              — Settings, ValueResponse, LibraryContents, LibrarySection
+lib.rs              — Settings, ValueResponse, LibraryContents, LibrarySection, EbookMetadata, EbookLibrary
 ```
 
 ### frontend/src/
@@ -63,6 +63,7 @@ data.rs             — Feature-gated data transport (mobile=reqwest, web/server
 rpc.rs              — #[get]/#[post] server functions (mounted by dioxus::server::router)
 db.rs               — pool init, schema, queries (feature = "server")
 scanner.rs          — library directory scanning (feature = "server")
+ebook.rs            — EPUB OPF metadata + cover extraction (feature = "server")
 pages/{landing,settings}.rs
 components/{top_nav,bottom_nav}.rs  — feature = web / mobile respectively
 ```

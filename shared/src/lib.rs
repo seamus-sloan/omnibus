@@ -40,3 +40,32 @@ pub struct LibraryContents {
     pub ebooks: LibrarySection,
     pub audiobooks: LibrarySection,
 }
+
+/// Parsed metadata for a single ebook file.
+///
+/// `cover_image` is a base64 data URL (e.g. `data:image/jpeg;base64,...`) so
+/// the client can render it directly without a separate asset endpoint.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EbookMetadata {
+    pub filename: String,
+    pub title: Option<String>,
+    pub authors: Vec<String>,
+    pub description: Option<String>,
+    pub publisher: Option<String>,
+    pub published: Option<String>,
+    pub language: Option<String>,
+    pub identifier: Option<String>,
+    pub subjects: Vec<String>,
+    pub series: Option<String>,
+    pub series_index: Option<String>,
+    pub cover_image: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Response payload for `GET /api/ebooks` and `rpc_get_ebooks`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EbookLibrary {
+    pub path: Option<String>,
+    pub books: Vec<EbookMetadata>,
+    pub error: Option<String>,
+}

@@ -30,3 +30,7 @@ ui_tests/**/.playwright/
 
 # direnv / Nix
 .direnv/
+
+# Local ebook library (test data)
+/epubs
+/epubs/
