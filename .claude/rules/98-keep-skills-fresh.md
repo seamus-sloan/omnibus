@@ -6,7 +6,7 @@ When touching any of the following areas, re-read the matching skill and update 
 
 | Code area | Skill to re-check |
 |---|---|
-| `server/src/backend.rs`, `server/src/main.rs`, `frontend/src/rpc.rs`, `frontend/src/db.rs`, `frontend/src/scanner.rs`, `frontend/src/ebook.rs`, `frontend/src/data.rs`, `shared/src/lib.rs` | [add-backend-route](../skills/add-backend-route/SKILL.md) |
+| `server/src/backend.rs`, `server/src/main.rs`, `frontend/src/rpc.rs`, `frontend/src/db.rs`, `frontend/src/scanner.rs`, `frontend/src/ebook.rs`, `frontend/src/indexer.rs`, `frontend/src/data.rs`, `shared/src/lib.rs` | [add-backend-route](../skills/add-backend-route/SKILL.md) |
 | `ui_tests/playwright/tests/fixtures/`, `ui_tests/playwright/tests/utils/`, selector conventions | [add-playwright-flow](../skills/add-playwright-flow/SKILL.md) |
 | jj workflow changes (new commands, new workspace patterns) | [jj-basics](../skills/jj-basics/SKILL.md), [jj-workspaces](../skills/jj-workspaces/SKILL.md), [jj-advanced](../skills/jj-advanced/SKILL.md) |
 

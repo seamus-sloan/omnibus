@@ -57,27 +57,15 @@ pub struct Identifier {
     pub scheme: Option<String>,
 }
 
-/// One raw OPF `<meta>` or Dublin Core element as found in the package
-/// document, including any refinements.
-///
-/// Everything the EPUB author wrote into `content.opf` surfaces here — this
-/// is the "show me every possible field" escape hatch, since the OPF schema
-/// is open-ended (Calibre, Adobe, Kobo and publishers all add namespaced
-/// properties).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RawMeta {
-    pub property: String,
-    pub value: String,
-    pub lang: Option<String>,
-    pub refinements: Vec<(String, String)>,
-}
-
 /// Parsed metadata for a single ebook file.
 ///
-/// `cover_image` is a base64 data URL (e.g. `data:image/jpeg;base64,...`) so
-/// the client can render it directly without a separate asset endpoint.
+/// `cover_url` is a relative URL pointing at `/api/covers/:id` when the book
+/// has a cover; clients combine it with their configured server base. This
+/// keeps the list response small — covers are fetched lazily as separate
+/// HTTP requests instead of being embedded as base64 data URLs.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EbookMetadata {
+    pub id: i64,
     pub filename: String,
 
     // Dublin Core core — single-valued first, multi-valued second.
@@ -110,12 +98,7 @@ pub struct EbookMetadata {
     pub spine_count: usize,
     pub toc_count: usize,
 
-    pub cover_image: Option<String>,
-
-    /// Every raw metadata entry from the OPF, in file order. Lets the UI
-    /// render "all potential options" without the server-side code having to
-    /// know about each publisher's custom namespace up front.
-    pub raw_metadata: Vec<RawMeta>,
+    pub cover_url: Option<String>,
 
     pub error: Option<String>,
 }

@@ -64,7 +64,8 @@ rpc.rs              — #[get]/#[post] server functions (mounted by dioxus::serv
 db.rs               — pool init, schema, queries (feature = "server")
 scanner.rs          — library directory scanning (feature = "server")
 ebook.rs            — EPUB OPF metadata + cover extraction (feature = "server")
-pages/{landing,settings}.rs
+indexer.rs          — scan → DB indexing, staleness checks (feature = "server")
+pages/{landing,settings,book_detail}.rs
 components/{top_nav,bottom_nav}.rs  — feature = web / mobile respectively
 ```
 

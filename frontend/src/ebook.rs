@@ -1,38 +1,52 @@
 //! EPUB metadata extraction (server-only).
 //!
-//! Opens each `.epub` under the configured ebook library path, pulls the
-//! Dublin Core metadata plus the embedded cover image, and returns a
-//! serialisable `EbookMetadata` per file. Parse failures surface as
-//! `EbookMetadata { error: Some(_), .. }` so one bad file does not hide the
-//! rest of the library.
-//!
-//! The OPF metadata schema is open-ended — publishers, Calibre, Sigil and
-//! DRM toolchains all stuff custom `<meta>` elements into the package
-//! document. We extract the well-known Dublin Core fields into typed slots
-//! and pass *every* entry through in `raw_metadata` so the UI can render the
-//! full picture.
+//! Walks the configured library directory, parses the OPF for each `.epub`,
+//! and produces an [`IndexedBook`] per file — metadata plus the raw cover
+//! bytes. Parse failures surface as `IndexedBook { metadata: EbookMetadata {
+//! error: Some(_), .. }, cover: None }` so one bad file does not hide the
+//! rest of the library. This output is consumed by [`crate::indexer`],
+//! which writes it to the DB.
 
 use std::path::Path;
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use epub::doc::{EpubDoc, EpubVersion};
-use omnibus_shared::{Contributor, EbookLibrary, EbookMetadata, Identifier};
+use omnibus_shared::{Contributor, EbookMetadata, Identifier};
 
-pub fn scan_ebook_library(path: Option<&str>) -> EbookLibrary {
+/// A single scanner output row — metadata plus the raw cover image bytes
+/// (and mime), if the epub included one. Consumed by [`crate::db::replace_books`].
+pub struct IndexedBook {
+    pub metadata: EbookMetadata,
+    pub cover: Option<(String, Vec<u8>)>,
+}
+
+/// Result of scanning an ebook library directory. Separate from
+/// `EbookLibrary` (the API shape) because the scanner carries raw cover
+/// bytes, not the `/api/covers/:id` URLs the API returns.
+pub struct ScanResult {
+    pub path: Option<String>,
+    pub books: Vec<IndexedBook>,
+    pub error: Option<String>,
+}
+
+pub fn scan_ebook_library(path: Option<&str>) -> ScanResult {
     let Some(path_str) = path else {
-        return EbookLibrary::default();
+        return ScanResult {
+            path: None,
+            books: vec![],
+            error: None,
+        };
     };
 
     let dir = Path::new(path_str);
     if !dir.exists() {
-        return EbookLibrary {
+        return ScanResult {
             path: Some(path_str.to_string()),
             books: vec![],
             error: Some(format!("path not found: {path_str}")),
         };
     }
 
-    let mut books: Vec<EbookMetadata> = Vec::new();
+    let mut books: Vec<IndexedBook> = Vec::new();
     let mut stack: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];
     while let Some(current) = stack.pop() {
         let entries = match std::fs::read_dir(&current) {
@@ -43,7 +57,7 @@ pub fn scan_ebook_library(path: Option<&str>) -> EbookLibrary {
                 // and we continue — one unreadable subfolder must not hide
                 // the rest of the library, same as a single broken epub.
                 if current == dir {
-                    return EbookLibrary {
+                    return ScanResult {
                         path: Some(path_str.to_string()),
                         books: vec![],
                         error: Some(format!("could not read directory: {e}")),
@@ -54,10 +68,13 @@ pub fn scan_ebook_library(path: Option<&str>) -> EbookLibrary {
                     .unwrap_or(&current)
                     .to_string_lossy()
                     .to_string();
-                books.push(EbookMetadata {
-                    filename: relative,
-                    error: Some(format!("could not read directory: {e}")),
-                    ..Default::default()
+                books.push(IndexedBook {
+                    metadata: EbookMetadata {
+                        filename: relative,
+                        error: Some(format!("could not read directory: {e}")),
+                        ..Default::default()
+                    },
+                    cover: None,
                 });
                 continue;
             }
@@ -89,23 +106,26 @@ pub fn scan_ebook_library(path: Option<&str>) -> EbookLibrary {
         }
     }
 
-    books.sort_by(|a, b| a.filename.cmp(&b.filename));
+    books.sort_by(|a, b| a.metadata.filename.cmp(&b.metadata.filename));
 
-    EbookLibrary {
+    ScanResult {
         path: Some(path_str.to_string()),
         books,
         error: None,
     }
 }
 
-fn extract_metadata(path: &Path, filename: String) -> EbookMetadata {
+fn extract_metadata(path: &Path, filename: String) -> IndexedBook {
     let mut doc = match EpubDoc::new(path) {
         Ok(d) => d,
         Err(e) => {
-            return EbookMetadata {
-                filename,
-                error: Some(format!("could not open epub: {e}")),
-                ..Default::default()
+            return IndexedBook {
+                metadata: EbookMetadata {
+                    filename,
+                    error: Some(format!("could not open epub: {e}")),
+                    ..Default::default()
+                },
+                cover: None,
             };
         }
     };
@@ -115,53 +135,50 @@ fn extract_metadata(path: &Path, filename: String) -> EbookMetadata {
     let identifiers = collect_identifiers(&doc);
     let (series, series_index) = collect_series(&doc);
 
-    let cover_image = doc.get_cover().map(|(bytes, mime)| {
+    let cover = doc.get_cover().map(|(bytes, mime)| {
         let mime = if mime.is_empty() {
             "image/jpeg".to_string()
         } else {
             mime
         };
-        format!("data:{};base64,{}", mime, STANDARD.encode(&bytes))
+        (mime, bytes)
     });
 
-    // The landing list doesn't use `raw_metadata`; skipping it drops the
-    // serialized payload dramatically (50+ entries per book otherwise).
-    // When a detail endpoint is added, it can re-parse a single epub with
-    // a richer extractor.
-    let raw_metadata = Vec::new();
+    IndexedBook {
+        metadata: EbookMetadata {
+            id: 0,
+            filename,
+            title: first(&doc, "title"),
+            description: first(&doc, "description"),
+            publisher: first(&doc, "publisher"),
+            published: first(&doc, "date"),
+            modified: first(&doc, "dcterms:modified"),
+            language: first(&doc, "language"),
+            rights: first(&doc, "rights"),
+            source: first(&doc, "source"),
+            coverage: first(&doc, "coverage"),
+            dc_type: first(&doc, "type"),
+            dc_format: first(&doc, "format"),
+            relation: first(&doc, "relation"),
 
-    EbookMetadata {
-        filename,
-        title: first(&doc, "title"),
-        description: first(&doc, "description"),
-        publisher: first(&doc, "publisher"),
-        published: first(&doc, "date"),
-        modified: first(&doc, "dcterms:modified"),
-        language: first(&doc, "language"),
-        rights: first(&doc, "rights"),
-        source: first(&doc, "source"),
-        coverage: first(&doc, "coverage"),
-        dc_type: first(&doc, "type"),
-        dc_format: first(&doc, "format"),
-        relation: first(&doc, "relation"),
+            creators,
+            contributors,
+            subjects: all(&doc, "subject"),
+            identifiers,
 
-        creators,
-        contributors,
-        subjects: all(&doc, "subject"),
-        identifiers,
+            series,
+            series_index,
 
-        series,
-        series_index,
+            epub_version: Some(format_version(doc.version)),
+            unique_identifier: doc.unique_identifier.clone(),
+            resource_count: doc.resources.len(),
+            spine_count: doc.spine.len(),
+            toc_count: doc.toc.len(),
 
-        epub_version: Some(format_version(doc.version)),
-        unique_identifier: doc.unique_identifier.clone(),
-        resource_count: doc.resources.len(),
-        spine_count: doc.spine.len(),
-        toc_count: doc.toc.len(),
-
-        cover_image,
-        raw_metadata,
-        error: None,
+            cover_url: None,
+            error: None,
+        },
+        cover,
     }
 }
 
@@ -325,8 +342,8 @@ mod tests {
         let book_entries: Vec<&str> = out
             .books
             .iter()
-            .filter(|b| b.error.is_none() || !b.filename.is_empty())
-            .map(|b| b.filename.as_str())
+            .filter(|b| b.metadata.error.is_none() || !b.metadata.filename.is_empty())
+            .map(|b| b.metadata.filename.as_str())
             .collect();
         assert_eq!(out.books.len(), 2);
         assert!(book_entries.contains(&"top.epub"));
@@ -342,8 +359,8 @@ mod tests {
         let out = scan_ebook_library(Some(dir.to_str().unwrap()));
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(out.books.len(), 1);
-        assert!(out.books[0].error.is_some());
-        assert_eq!(out.books[0].filename, "broken.epub");
+        assert!(out.books[0].metadata.error.is_some());
+        assert_eq!(out.books[0].metadata.filename, "broken.epub");
     }
 
     // Permission tests only run where we can reliably strip read access
@@ -379,12 +396,12 @@ mod tests {
         // Top-level scan must not report a fatal error.
         assert!(out.error.is_none());
         // Good epub still surfaces.
-        assert!(out.books.iter().any(|b| b.filename == "good.epub"));
+        assert!(out.books.iter().any(|b| b.metadata.filename == "good.epub"));
         // Locked subdir surfaces as a synthetic error entry, not silently
         // dropped.
         assert!(out
             .books
             .iter()
-            .any(|b| b.filename == "locked" && b.error.is_some()));
+            .any(|b| b.metadata.filename == "locked" && b.metadata.error.is_some()));
     }
 }
