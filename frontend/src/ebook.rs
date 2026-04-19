@@ -83,6 +83,7 @@ fn extract_metadata(path: &Path, filename: String) -> EbookMetadata {
     let creators = collect_contributors(&doc, "creator");
     let contributors = collect_contributors(&doc, "contributor");
     let identifiers = collect_identifiers(&doc);
+    let (series, series_index) = collect_series(&doc);
 
     let cover_image = doc.get_cover().map(|(bytes, mime)| {
         let mime = if mime.is_empty() {
@@ -128,10 +129,8 @@ fn extract_metadata(path: &Path, filename: String) -> EbookMetadata {
         subjects: all(&doc, "subject"),
         identifiers,
 
-        // Calibre stores series via legacy `<meta name="calibre:series">`;
-        // EPUB3 uses `belongs-to-collection` with a `group-position` refinement.
-        series: first(&doc, "calibre:series").or_else(|| first(&doc, "belongs-to-collection")),
-        series_index: first(&doc, "calibre:series_index").or_else(|| first(&doc, "group-position")),
+        series,
+        series_index,
 
         epub_version: Some(format_version(doc.version)),
         unique_identifier: doc.unique_identifier.clone(),
@@ -186,6 +185,35 @@ fn lookup_refinement(refs: &[epub::doc::MetadataRefinement], key: &str) -> Optio
     refs.iter()
         .find(|r| r.property == key)
         .map(|r| r.value.clone())
+}
+
+/// Resolve (series, series_index) from the OPF.
+///
+/// EPUB3 stores a series as a `belongs-to-collection` metadata entry whose
+/// `group-position` refinement holds the index. Calibre's legacy EPUB2 tooling
+/// writes top-level `<meta name="calibre:series">` and `calibre:series_index`
+/// entries instead. We try EPUB3 first (with the refinement), then fall back
+/// to the Calibre keys.
+fn collect_series<R: std::io::Read + std::io::Seek>(
+    doc: &EpubDoc<R>,
+) -> (Option<String>, Option<String>) {
+    if let Some(m) = doc
+        .metadata
+        .iter()
+        .find(|m| m.property == "belongs-to-collection")
+    {
+        let name = m.value.trim().to_string();
+        if !name.is_empty() {
+            let idx = lookup_refinement(&m.refined, "group-position")
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            return (Some(name), idx);
+        }
+    }
+    (
+        first(doc, "calibre:series"),
+        first(doc, "calibre:series_index"),
+    )
 }
 
 fn collect_identifiers<R: std::io::Read + std::io::Seek>(doc: &EpubDoc<R>) -> Vec<Identifier> {

@@ -27,20 +27,24 @@ pub fn LandingPage() -> Element {
         });
     });
 
+    let lib = library();
+    let is_loading = loading();
+    let page_error = error();
+
     rsx! {
         section { class: "card",
             h1 { "Your Library" }
             p { class: "subtitle",
-                if let Some(path) = library().path.as_ref() {
+                if let Some(path) = lib.path.as_ref() {
                     "{path}"
                 } else {
                     "Configure your ebook library path in Settings."
                 }
             }
-            if let Some(msg) = error() {
+            if let Some(msg) = page_error.as_ref() {
                 p { class: "error", "⚠ {msg}" }
             }
-            if let Some(msg) = library().error.as_ref() {
+            if let Some(msg) = lib.error.as_ref() {
                 p { class: "error", "⚠ {msg}" }
             }
         }
@@ -49,12 +53,12 @@ pub fn LandingPage() -> Element {
             id: "ebook-grid",
             "data-testid": "ebook-grid",
             class: "ebook-grid",
-            if loading() {
+            if is_loading {
                 p { class: "library-empty", "Loading..." }
-            } else if library().books.is_empty() && library().error.is_none() && error().is_none() {
+            } else if lib.books.is_empty() && lib.error.is_none() && page_error.is_none() {
                 p { class: "library-empty", "No ebooks found." }
             } else {
-                for book in library().books {
+                for book in lib.books {
                     EbookCard { key: "{book.filename}", book: book }
                 }
             }
