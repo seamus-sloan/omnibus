@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
-import { expectNavVisible } from "../utils/nav";
+import { expectNavVisible, gotoReady } from "../utils/nav";
 
 const ebookInput = (page: Page) => page.getByLabel("Ebook Library Path");
 const audiobookInput = (page: Page) => page.getByLabel("Audiobook Library Path");
@@ -22,7 +22,7 @@ test("renders the settings page layout", async ({ page }) => {
 });
 
 test("saves library paths and shows a success status", async ({ page }) => {
-  await page.goto("/settings");
+  await gotoReady(page, "/settings");
 
   const ebookPath = "/tmp/omnibus-test-ebooks";
   const audiobookPath = "/tmp/omnibus-test-audiobooks";
@@ -51,7 +51,7 @@ test("saves library paths and shows a success status", async ({ page }) => {
 });
 
 test("shows an error status when saving settings fails", async ({ page }) => {
-  await page.goto("/settings");
+  await gotoReady(page, "/settings");
 
   await ebookInput(page).fill("/tmp/whatever");
   await audiobookInput(page).fill("/tmp/whatever-audio");
