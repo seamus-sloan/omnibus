@@ -4,46 +4,32 @@ Self-hosted ebook and audiobook library — the Plex/Jellyfin for your book coll
 
 > **Status:** early development. The current UI is a placeholder counter; see [docs/roadmap/0-0-summary.md](docs/roadmap/0-0-summary.md) for planned features.
 
-## Prerequisites
-
-All system dependencies are provided by Nix (Rust toolchain, SQLite, Node.js, `dx` CLI, iOS/Android cross-compilation targets):
-
+## Running
+This project utilizes [Nix](https://wiki.nixos.org/wiki/NixOS_Wiki) to save all dependencies.
 ```bash
-nix develop          # enter the dev shell (bash)
-nix develop --command zsh   # preferred — keeps your zsh prompt
+# Launch the nix shell
+nix develop
+
+# Launch the nix shell manually (and keep your shell)
+nix develop --command zsh
+
+# Auto-load the nix shell with direnv
+direnv allow # Only necessary once
 ```
 
-Everything below assumes you're inside the dev shell.
-
-## Running the server
-
+Multiplexers with ZelliJ and Process-Compose both leverage the same `.justfile` to launch all of the different platforms here (frontend, mobile, server, playwright).
 ```bash
-cargo run -p omnibus
-```
+# Launch with ZelliJ
+just serve
 
-Opens at `http://0.0.0.0:3000`. Override with env vars:
+# Launch with Process-Compose
+just serve-pc
+```
 
 | Variable | Default |
 |---|---|
 | `PORT` | `3000` |
 | `DATABASE_URL` | `sqlite://omnibus.db?mode=rwc` |
-
-## Running the full dev stack
-
-Inside the Nix dev shell, one command brings up server + iOS + Android + Playwright panes:
-
-```bash
-just serve          # Zellij — 4 tabs, server auto-runs; press Enter in other panes to start them
-just serve-pc       # process-compose — TUI with logs; F7 to start a disabled process, F10 to quit
-```
-
-Prefer `just serve` if you like tab-based navigation (`Alt+<N>` to jump, `Ctrl-q` to quit). Prefer `just serve-pc` if you want a single scrollable log view.
-
-If you only need the server (no mobile or E2E):
-
-```bash
-cargo run -p omnibus
-```
 
 ## Running the mobile app
 
@@ -51,16 +37,12 @@ The mobile app connects to `http://127.0.0.1:3000` — start the server first (`
 
 ### iOS Simulator
 
-Requires macOS with Xcode and at least one iOS Simulator installed (add one via **Xcode → Window → Devices and Simulators**).
+Requires macOS with Xcode and at least one iOS Simulator installed (add one via **Xcode → Window → Devices and Simulators**). 
 
-```bash
-xcrun simctl boot "iPhone 17" 2>/dev/null
-dx serve --platform ios --package omnibus-mobile
-```
+The iOS pane in the multiplexer will be able to launch the simulator and install the app without any other additional commands.
 
 ### Android Emulator
-
-#### One-time setup
+> To launch the android emulator & app, use the pane/tab inside of the `just serve` commands. You may need to set the environment variables below.
 
 1. **Install Android Studio** — [developer.android.com/studio](https://developer.android.com/studio)
 
@@ -88,31 +70,18 @@ dx serve --platform ios --package omnibus-mobile
    export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$(ls $ANDROID_HOME/ndk | tail -1)
    ```
 
-#### Running
-
-With the emulator booted, launch `just serve` (or `just serve-pc`) and use the Android pane. Then, from any shell inside the dev shell:
-
-```bash
-adb reverse tcp:3000 tcp:3000
-```
-
-The `adb reverse` step is required because `127.0.0.1` inside the Android emulator refers to the emulator itself, not your Mac. Re-run it any time you restart the emulator.
+5. After the app is running, any issues where the app is unable to communicate with the server can be resolved by running `adb reverse tcp:3000 tcp:3000` to properly set the localhost.
 
 ## Tests
 
 ```bash
-cargo test -p omnibus          # all server unit + integration tests
-```
+# [UNIT TESTS] Running tests
+cargo test -p omnibus
 
-### E2E tests (Playwright)
-
-1. Start the server: `cargo run -p omnibus` (or use the `playwright` pane inside `just serve`).
-2. Run:
-
-```bash
+# [WEB UI TESTS] Running tests (Requires server & frontend to be running)
 cd ui_tests/playwright
-npm install          # first time only
+npm install          # First time only. Chromium is provided through Nix.
 npx playwright test
 ```
 
-Chromium is provided by Nix via `PLAYWRIGHT_BROWSERS_PATH` — do **not** run `npx playwright install`.
+*Mobile UI tests will be done later and will be using [Maestro](https://github.com/mobile-dev-inc/maestro)*
