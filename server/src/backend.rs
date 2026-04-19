@@ -11,18 +11,19 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use omnibus_frontend::{db, ebook, scanner};
+use omnibus_frontend::{db, ebook_cache, ebook_cache::EbookCache, scanner};
 use omnibus_shared::{Settings, ValueResponse};
 use sqlx::SqlitePool;
 
 #[derive(Clone)]
 pub struct AppState {
     pool: SqlitePool,
+    pub ebook_cache: EbookCache,
 }
 
 impl AppState {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(pool: SqlitePool, ebook_cache: EbookCache) -> Self {
+        Self { pool, ebook_cache }
     }
 }
 
@@ -72,14 +73,19 @@ async fn get_settings(State(state): State<AppState>) -> Response {
 
 async fn post_settings(State(state): State<AppState>, Json(settings): Json<Settings>) -> Response {
     match db::set_settings(&state.pool, &settings).await {
-        Ok(()) => match db::get_settings(&state.pool).await {
-            Ok(updated) => Json(updated).into_response(),
-            Err(error) => (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read updated settings: {error}"),
-            )
-                .into_response(),
-        },
+        Ok(()) => {
+            // Settings may have changed the library path. Drop any cached
+            // scan so the next `/api/ebooks` request re-reads from disk.
+            state.ebook_cache.clear().await;
+            match db::get_settings(&state.pool).await {
+                Ok(updated) => Json(updated).into_response(),
+                Err(error) => (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to read updated settings: {error}"),
+                )
+                    .into_response(),
+            }
+        }
         Err(error) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to save settings: {error}"),
@@ -100,13 +106,7 @@ async fn get_ebooks(State(state): State<AppState>) -> Response {
         }
     };
     let path = settings.ebook_library_path;
-    let library = tokio::task::spawn_blocking(move || ebook::scan_ebook_library(path.as_deref()))
-        .await
-        .unwrap_or_else(|e| omnibus_shared::EbookLibrary {
-            path: None,
-            books: vec![],
-            error: Some(format!("ebook scan task failed: {e}")),
-        });
+    let library = ebook_cache::load_or_scan(&state.ebook_cache, path).await;
     Json(library).into_response()
 }
 
@@ -139,7 +139,7 @@ mod tests {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = rest_router(AppState::new(pool));
+        let app = rest_router(AppState::new(pool, EbookCache::default()));
 
         let response = app
             .clone()
@@ -180,7 +180,7 @@ mod tests {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = rest_router(AppState::new(pool));
+        let app = rest_router(AppState::new(pool, EbookCache::default()));
 
         let response = app
             .oneshot(
@@ -204,7 +204,7 @@ mod tests {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = rest_router(AppState::new(pool));
+        let app = rest_router(AppState::new(pool, EbookCache::default()));
 
         let body = serde_json::json!({
             "ebook_library_path": "/books/ebooks",
@@ -240,7 +240,7 @@ mod tests {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = rest_router(AppState::new(pool));
+        let app = rest_router(AppState::new(pool, EbookCache::default()));
 
         let body = serde_json::json!({
             "ebook_library_path": "/my/ebooks",
@@ -280,7 +280,7 @@ mod tests {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = rest_router(AppState::new(pool));
+        let app = rest_router(AppState::new(pool, EbookCache::default()));
 
         let response = app
             .oneshot(
@@ -315,7 +315,7 @@ mod tests {
         )
         .await
         .expect("set should succeed");
-        let app = rest_router(AppState::new(pool));
+        let app = rest_router(AppState::new(pool, EbookCache::default()));
 
         let response = app
             .oneshot(
@@ -339,7 +339,7 @@ mod tests {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = rest_router(AppState::new(pool));
+        let app = rest_router(AppState::new(pool, EbookCache::default()));
 
         let response = app
             .oneshot(
@@ -374,7 +374,7 @@ mod tests {
         )
         .await
         .expect("set should succeed");
-        let app = rest_router(AppState::new(pool));
+        let app = rest_router(AppState::new(pool, EbookCache::default()));
 
         let response = app
             .oneshot(
@@ -411,7 +411,7 @@ mod tests {
         )
         .await
         .expect("set should succeed");
-        let app = rest_router(AppState::new(pool));
+        let app = rest_router(AppState::new(pool, EbookCache::default()));
 
         let response = app
             .oneshot(

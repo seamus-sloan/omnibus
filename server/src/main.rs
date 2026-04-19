@@ -21,6 +21,7 @@ fn main() {
         dioxus::serve(|| async move {
             use dioxus::server::axum::Extension;
             use omnibus::backend;
+            use omnibus_frontend::ebook_cache::{self, EbookCache};
 
             let database_url = std::env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "sqlite://omnibus.db?mode=rwc".to_string());
@@ -28,10 +29,24 @@ fn main() {
             let pool = omnibus_frontend::db::init_db(&database_url).await?;
             omnibus_frontend::db::seed_settings_from_env(&pool).await?;
 
-            let state = backend::AppState::new(pool.clone());
+            let ebook_cache = EbookCache::default();
+
+            // Prime the cache in the background so the first user request
+            // is likely to hit a warm cache instead of waiting for the
+            // full filesystem walk + OPF parse.
+            if let Ok(settings) = omnibus_frontend::db::get_settings(&pool).await {
+                let cache_for_warm = ebook_cache.clone();
+                tokio::spawn(async move {
+                    let _ = ebook_cache::load_or_scan(&cache_for_warm, settings.ebook_library_path)
+                        .await;
+                });
+            }
+
+            let state = backend::AppState::new(pool.clone(), ebook_cache.clone());
             let router = dioxus::server::router(App)
                 .merge(backend::rest_router(state))
                 .layer(Extension(pool))
+                .layer(Extension(ebook_cache))
                 .layer(tower_http::trace::TraceLayer::new_for_http());
 
             Ok(router)

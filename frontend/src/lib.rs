@@ -18,6 +18,8 @@ pub mod db;
 #[cfg(feature = "server")]
 pub mod ebook;
 #[cfg(feature = "server")]
+pub mod ebook_cache;
+#[cfg(feature = "server")]
 pub mod scanner;
 
 pub use components::Nav;

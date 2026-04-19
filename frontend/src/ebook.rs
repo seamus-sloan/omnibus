@@ -16,7 +16,7 @@ use std::path::Path;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use epub::doc::{EpubDoc, EpubVersion};
-use omnibus_shared::{Contributor, EbookLibrary, EbookMetadata, Identifier, RawMeta};
+use omnibus_shared::{Contributor, EbookLibrary, EbookMetadata, Identifier};
 
 pub fn scan_ebook_library(path: Option<&str>) -> EbookLibrary {
     let Some(path_str) = path else {
@@ -124,20 +124,11 @@ fn extract_metadata(path: &Path, filename: String) -> EbookMetadata {
         format!("data:{};base64,{}", mime, STANDARD.encode(&bytes))
     });
 
-    let raw_metadata = doc
-        .metadata
-        .iter()
-        .map(|m| RawMeta {
-            property: m.property.clone(),
-            value: m.value.clone(),
-            lang: m.lang.clone(),
-            refinements: m
-                .refined
-                .iter()
-                .map(|r| (r.property.clone(), r.value.clone()))
-                .collect(),
-        })
-        .collect();
+    // The landing list doesn't use `raw_metadata`; skipping it drops the
+    // serialized payload dramatically (50+ entries per book otherwise).
+    // When a detail endpoint is added, it can re-parse a single epub with
+    // a richer extractor.
+    let raw_metadata = Vec::new();
 
     EbookMetadata {
         filename,
