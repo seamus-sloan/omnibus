@@ -36,7 +36,7 @@ pub enum Route {
     #[route("/settings")]
     Settings {},
     #[route("/books/:id")]
-    BookDetail { id: usize },
+    BookDetail { id: i64 },
 }
 
 /// Route target for `/` — wraps [`LandingPage`] in the platform screen layout.
@@ -58,7 +58,7 @@ pub fn Settings() -> Element {
 /// Route target for `/books/:id` — stub detail page. Replace the id shape
 /// once the backend exposes stable book ids.
 #[component]
-pub fn BookDetail(id: usize) -> Element {
+pub fn BookDetail(id: i64) -> Element {
     rsx! {
         ScreenLayout { BookDetailPage { id } }
     }

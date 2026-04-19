@@ -38,15 +38,23 @@ pub async fn is_stale(pool: &SqlitePool, library_path: &str) -> Result<bool, sql
 
 /// Scan `library_path` and replace the DB index for it. Runs the scan on
 /// the blocking pool so callers can `await` it from a normal async context
-/// without blocking the runtime. Returns the scan's top-level error, if any
-/// (so callers can surface it to the UI) — per-book parse failures are
-/// stored as rows with `error = Some(_)`, mirroring the old in-memory shape.
-pub async fn reindex(pool: &SqlitePool, library_path: String) -> anyhow::Result<Option<String>> {
+/// without blocking the runtime.
+///
+/// A fatal scan error (missing or unreadable root) is returned as `Err` and
+/// the existing index is **not** touched — we'd rather serve stale-but-good
+/// data than wipe the table and mark the index "fresh" (which would also
+/// suppress retries until [`REFRESH_AFTER_SECS`] elapses). Per-book parse
+/// failures are *not* fatal; they land in the DB as rows with `error =
+/// Some(_)`, same as before.
+pub async fn reindex(pool: &SqlitePool, library_path: String) -> anyhow::Result<()> {
     let path_for_scan = library_path.clone();
     let scan = tokio::task::spawn_blocking(move || ebook::scan_ebook_library(Some(&path_for_scan)))
         .await?;
+    if let Some(msg) = scan.error {
+        anyhow::bail!("scan of {library_path} failed: {msg}");
+    }
     db::replace_books(pool, &library_path, scan.books).await?;
-    Ok(scan.error)
+    Ok(())
 }
 
 /// Spawn a background reindex if stale. Silent on success — the next list
