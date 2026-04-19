@@ -1,5 +1,5 @@
 mod landing;
 mod settings;
 
-pub use landing::LandingPage;
-pub use settings::SettingsPage;
+pub use landing::landing_page;
+pub use settings::settings_page;

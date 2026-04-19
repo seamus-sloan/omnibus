@@ -6,7 +6,7 @@ use crate::{data, use_server_url};
 /// Landing page — loads the configured ebook library and renders every
 /// metadata field the parser was able to pull, plus the raw OPF dump.
 #[component]
-pub fn LandingPage() -> Element {
+pub fn landing_page() -> Element {
     let server_url = use_server_url();
     let mut library = use_signal(EbookLibrary::default);
     let mut loading = use_signal(|| true);

@@ -25,4 +25,4 @@ pub use top_nav::TopNav as Nav;
 #[cfg(feature = "mobile")]
 mod bottom_nav;
 #[cfg(feature = "mobile")]
-pub use bottom_nav::BottomNav as Nav;
+pub use bottom_nav::bottom_nav as Nav;
