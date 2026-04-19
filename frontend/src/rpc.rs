@@ -15,10 +15,10 @@
 
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
-use omnibus_shared::{LibraryContents, Settings, ValueResponse};
+use omnibus_shared::{EbookLibrary, LibraryContents, Settings, ValueResponse};
 
 #[cfg(feature = "server")]
-use crate::{db, scanner};
+use crate::{db, ebook, scanner};
 
 /// Server-only extractor alias used by each server function. Only referenced
 /// by the server-side body; the `#[cfg(feature = "server")]` stops the web
@@ -56,4 +56,21 @@ pub async fn rpc_get_library() -> Result<LibraryContents> {
         settings.ebook_library_path.as_deref(),
         settings.audiobook_library_path.as_deref(),
     ))
+}
+
+#[get("/api/rpc/ebooks", pool: PoolExt)]
+pub async fn rpc_get_ebooks() -> Result<EbookLibrary> {
+    let settings = db::get_settings(&pool.0).await?;
+    let path = settings.ebook_library_path.clone();
+    // Parsing epubs can be slow; offload to the blocking pool so we don't
+    // stall the async runtime on zip inflation.
+    Ok(
+        tokio::task::spawn_blocking(move || ebook::scan_ebook_library(path.as_deref()))
+            .await
+            .unwrap_or_else(|e| omnibus_shared::EbookLibrary {
+                path: None,
+                books: vec![],
+                error: Some(format!("ebook scan task failed: {e}")),
+            }),
+    )
 }
