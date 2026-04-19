@@ -21,7 +21,7 @@ pub mod ebook;
 pub mod scanner;
 
 pub use components::Nav;
-pub use pages::{landing_page, settings_page};
+pub use pages::{LandingPage, SettingsPage};
 
 #[cfg(feature = "mobile")]
 pub use data::ServerUrl;

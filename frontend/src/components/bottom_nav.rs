@@ -4,7 +4,7 @@ use dioxus_router::Link;
 use crate::Route;
 
 #[component]
-pub fn bottom_nav() -> Element {
+pub fn BottomNav() -> Element {
     rsx! {
         nav { class: "bottom-nav",
             Link { to: Route::Landing {}, "Home" }

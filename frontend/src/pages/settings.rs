@@ -5,7 +5,7 @@ use crate::{data, use_server_url};
 
 /// Library paths settings form + live recursive file-count summaries.
 #[component]
-pub fn settings_page() -> Element {
+pub fn SettingsPage() -> Element {
     let server_url = use_server_url();
 
     let mut ebook_path = use_signal(String::new);
