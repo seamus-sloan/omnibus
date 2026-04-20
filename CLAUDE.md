@@ -2,7 +2,7 @@
 
 Guidance for Claude Code when working in this repo. This file is an index — detailed rules and recipes live in [.claude/](.claude/).
 
-Omnibus is a self-hosted ebook/audiobook library (see [ROADMAP.md](ROADMAP.md)). The current counter app is a placeholder.
+Omnibus is a self-hosted ebook/audiobook library (see [docs/roadmap/0-0-summary.md](docs/roadmap/0-0-summary.md)). The current counter app is a placeholder.
 
 ## Rules
 
@@ -122,4 +122,4 @@ adb reverse tcp:3000 tcp:3000                               # after Android emul
 
 ## Project direction
 
-See [ROADMAP.md](ROADMAP.md) for planned OPDS feed, epub/m4a scanning, Dioxus Native mobile app, and the full intended database schema.
+See [docs/roadmap/0-0-summary.md](docs/roadmap/0-0-summary.md) for the phased roadmap (foundations, browse/discovery, reading/listening, personalization, device sync, admin, mobile).
