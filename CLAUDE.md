@@ -45,7 +45,7 @@ Default `cargo build` / `clippy` covers `server`, `shared`, `frontend` only. Mob
 
 **Mobile data flow:** Dioxus signal/effect → `reqwest` call to `/api/*` (hand-written handlers in `server/src/backend.rs`) → signal update → re-render. Mobile deliberately does **not** use the `/api/rpc/*` server functions.
 
-**Database:** schema is created inline at startup in `frontend::db::initialize_schema`. No migrations framework yet. All tests use `sqlite::memory:` for isolation.
+**Database:** schema ships as numbered SQL migrations under [frontend/migrations/](frontend/migrations/), embedded via `sqlx::migrate!` and run on pool init in `frontend::db::init_db`. Applied versions are recorded in the `_sqlx_migrations` table. Add new migrations as `NNNN_description.sql` — never edit an applied file. All tests use `sqlite::memory:` for isolation; the migrator runs against them the same as production.
 
 **Server URL (mobile):** hardcoded to `http://127.0.0.1:3000` in `mobile/src/main.rs` via `use_context_provider`. Will become a first-launch setup screen.
 
