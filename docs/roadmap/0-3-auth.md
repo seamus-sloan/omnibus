@@ -19,6 +19,8 @@ Every feature touching user state needs it. Building those first and retrofittin
 - Explicit permission **columns** (`is_admin BOOL`, `can_upload BOOL`, `can_edit BOOL`, `can_download BOOL`) rather than a role bitmask — bitmasks are opaque and migration-hostile (see [calibre-inspection recommendation #9](../calibre-inspection/7-recommendations.md)).
 - `auth_required` / `admin_required` axum extractors, mirroring the shape of `StateExtractor`.
 - Unified auth model across web (cookies) and mobile (bearer tokens) — both flow into the same session table.
+- **OIDC/SSO as a day-one extension point, not a v2 bolt-on.** Shape the auth layer so a second `AuthStrategy` (OIDC via the `openidconnect` crate, full PKCE, group→role mapping) slots in without schema rework. ABS's [OidcAuthStrategy.js](https://github.com/advplyr/audiobookshelf/blob/master/server/auth/OidcAuthStrategy.js) is ~560 lines because it was bolted on — designing the trait up front avoids that cost. See [ABS recommendation #11](../audiobookshelf-inspection/7-recommendations.md).
+- **Device rows** for registered clients (`device_id`, `client_name`, `client_version`, `last_seen`, `ip_address`) so admin can see who's connected and revoke a specific phone. ABS pattern: [Device.js](https://github.com/advplyr/audiobookshelf/blob/master/server/models/Device.js).
 
 ## Dependencies
 

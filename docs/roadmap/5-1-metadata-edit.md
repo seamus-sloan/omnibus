@@ -16,6 +16,7 @@ Closes [gap G7](0-0-summary.md#gaps). Self-hosted libraries are messy; fixing me
 
 - **Edits go to DB only, never to disk.** No folder renames, no file mutation, no OPF rewrites. See [recommendations #7, #8](../calibre-inspection/7-recommendations.md) — Calibre-Web's folder-rename-on-edit path races with readers and scanners and is the wrong shape to copy.
 - `books.metadata_overrides` JSON merged on read: scanned values form the base; override keys win.
+- **Per-library metadata precedence as a user setting.** Order the metadata sources (`folder_structure`, `embedded_tags`, `opf_sidecar`, `omnibus_overrides`, `provider_match`) in a JSON array on the library row; the scanner / merge path walks the list for each field. Adopted from AudioBookShelf's per-library `metadataPrecedence` — their best UX decision, verbatim copy ([ABS recommendation #9](../audiobookshelf-inspection/7-recommendations.md), [Library.js](https://github.com/advplyr/audiobookshelf/blob/master/server/models/Library.js)).
 - Cover replace writes to the [F1.2 thumbnail cache](1-2-thumbnails.md) and bumps `last_modified` to invalidate downstream caches.
 - OPF export exists only as a per-book download action (courtesy to users leaving Omnibus), never as a source-of-truth sync target.
 
