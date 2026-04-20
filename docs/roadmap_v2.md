@@ -280,8 +280,9 @@ The "this is why I self-host" story. Target: 4 weeks after Phase 3.
 - **Objective.** Implement `/kobo/v1/library/sync`, `/state`, `/metadata`, `/tags`, `download/*` endpoints (see calibre-web-analysis §6).
 - **Value.** Far superior to OPDS on Kobo: background sync, reading-state round-trip, shelves-as-tags, no manual re-browse.
 - **Tech.** Stream the sync response via `axum::body::StreamBody` — **do not** copy Calibre-Web's 100-item cap (analysis §3, §7 rec #13).
-- **Dependencies.** F0.1 (uuid index), F0.3, F2.1.
-- **Risks.** Undocumented protocol; Calibre-Web's implementation is our reference. Scope to "parity with Calibre-Web minus 100-item cap" for v1.0.
+- **Includes: EPUB → KEPUB conversion via [kepubify](https://github.com/pgaskin/kepubify).** Kobo devices render plain EPUB but with measurably slower page turns than KEPUB; shipping the plain file is leaving UX on the table. Approach: detect kepubify on `PATH` at startup; on first Kobo download of each book, run `kepubify` via F0.5 worker, cache output at `<data_dir>/kepub/<book_id>.kepub.epub`, serve that on subsequent requests. Invalidate cache on `book.last_modified`. If kepubify is absent, fall back to the plain EPUB with a one-time admin warning in the log. Bundle kepubify in the Nix dev shell and in release images; keep it optional at runtime for users who build from source.
+- **Dependencies.** F0.1 (uuid index), F0.3, F0.5, F2.1.
+- **Risks.** Undocumented Kobo protocol; Calibre-Web's implementation is our reference. Scope to "parity with Calibre-Web minus 100-item cap" for v1.0.
 - **Priority.** P1. Promote ahead of OPDS — it's the better UX for the platform that matters most.
 
 #### F4.2 OPDS 1.2 feed (v1 #10)
@@ -323,6 +324,23 @@ Operating the server. Target: 3 weeks after Phase 4.
 - **Changes from v1.** Demoted from Phase 1 to Phase 5. Most self-hosters already ship books to the library via Syncthing/rsync/NFS; in-UI upload is convenience, not a blocker.
 - **Dependencies.** F0.3, F0.5.
 - **Priority.** P2.
+
+#### F5.5 Format conversion (new, optional, deferred)
+
+- **Objective.** Surface a "Convert to…" action on the book detail page (and in admin bulk actions) that shells out to Calibre's `ebook-convert` binary when present on the host. No bundled converter.
+- **Value.** Gives power users the ability to generate AZW3, PDF, TXT, FB2, etc. without leaving Omnibus. Closes a real Calibre-Web parity gap for the subset of users who actually use it.
+- **Scope cap.**
+  - **In scope:** generic `ebook-convert` shell-out for any format pair Calibre supports; per-conversion async job via F0.5 worker; result stored as a new row in `book_files` (formats coexist for the same work — clean because of F0.1).
+  - **In scope:** EPUB → KEPUB via kepubify is **already** shipped by F4.1; this initiative reuses that infrastructure.
+  - **Out of scope for v1.x:** CBZ/CBR generation (different audience); audiobook transcoding (m4a ↔ mp3); any Rust-native converter (see assumption A7).
+- **Tech.** Config flag `ebook_convert_path` (auto-detected on startup, overridable in admin). Task type `ConvertFormat { book_id, source_format, target_format }` posted to the F0.5 worker. Timeout generous — some conversions take minutes. Surface progress/completion through F5.2 observability.
+- **Dependencies.** F0.1, F0.5, F5.2, F5.4 (admin UI for the config flag).
+- **Risks.**
+  - Conversion quality is frequently poor (PDF → EPUB is famously bad); users will blame Omnibus for Calibre's output. Mitigation: docs clearly label this as a pass-through to Calibre.
+  - Resource consumption — `ebook-convert` is CPU- and memory-heavy. F0.5's semaphore must cap concurrent conversions (e.g., `max(1, num_cpus / 2)`).
+  - Deployment complexity: Calibre is ~300 MB. Keep it optional; document the install path for Docker/Nix deployments.
+- **Priority.** P3. **Post-v1.0 unless user demand appears.** Most users asking for format conversion already have Calibre installed; they can convert there.
+- **Open question.** Should Omnibus ship a "convert on upload" mode (e.g. "always convert uploaded AZW3 to EPUB for browser reading")? **Recommendation:** no — keeping formats as the user uploaded them preserves fidelity; convert on demand instead.
 
 #### F5.4 Admin panel (v1 #13)
 
@@ -376,6 +394,8 @@ This section captures the delta from the prior `ROADMAP.md` for reviewers famili
 - **F5.1 Metadata edit** (gap G7).
 - **F5.2 Observability** (gap G8).
 - **F0.6 Library filesystem convention** (gap G11).
+- **kepubify integration** as a sub-scope of F4.1 (Kobo UX win).
+- **F5.5 Format conversion** (optional, deferred; shells out to `ebook-convert`).
 
 ### Reorder
 
@@ -408,6 +428,8 @@ This section captures the delta from the prior `ROADMAP.md` for reviewers famili
 - A3: Users have ≤100k books. Beyond that, keyset pagination alone won't save us and we'll need materialized per-library counts.
 - A4: Kindle still accepts `.epub` via email. Verified as of Q1 2026; if Amazon regresses, F4.3 grows a `kepubify`-style converter.
 - A5: Dioxus fullstack SSR is stable enough for production. If hydration mismatches keep biting us (see memory on `web` feature-gating), we may fall back to axum + vanilla + island hydration.
+- A6: `kepubify` is stable and maintained. It has been since 2016; risk is low. If abandoned, Kobo falls back to plain EPUB with no functional loss.
+- A7: **We do not write our own format converters in Rust.** Every serious attempt (Calibre, Pandoc) is a decades-long effort. F4.1's kepubify and F5.5's ebook-convert are shell-outs to existing tools; that stays true indefinitely.
 
 ---
 
