@@ -16,7 +16,7 @@ All tests use `sqlite::memory:` for isolation — never the on-disk DB.
 - **`server::backend` handlers:** 200 success, 4xx client errors, 5xx DB-failure paths.
 - **`frontend::pages` components with logic:** rendered output contains expected content.
 - **`frontend::rpc` server functions:** thin wrappers — covered transitively by db tests; only add a direct test if the wrapper composes multiple db calls non-trivially.
-- **New features** must not ship without tests covering their acceptance criteria from [ROADMAP.md](../../ROADMAP.md).
+- **New features** must not ship without tests covering their acceptance criteria from the relevant initiative under [docs/roadmap/](../../docs/roadmap/).
 
 ## Shape
 
