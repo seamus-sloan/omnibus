@@ -353,6 +353,44 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn migrator_records_applied_versions() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let versions: Vec<i64> =
+            sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
+                .fetch_all(&pool)
+                .await
+                .expect("_sqlx_migrations should exist after init_db");
+        assert!(
+            versions.contains(&1),
+            "baseline migration 0001 should be recorded, got {versions:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn migrator_is_idempotent_on_rerun() {
+        // sqlx::migrate! against a file-backed DB so a second init_db call
+        // exercises the "already applied" path. In-memory DBs are discarded
+        // between pool connections so they can't test re-runs.
+        let tmp = std::env::temp_dir().join(format!("omnibus-migrate-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        let url = format!("sqlite://{}?mode=rwc", tmp.display());
+
+        let pool1 = init_db(&url).await.expect("first init should succeed");
+        drop(pool1);
+        let pool2 = init_db(&url).await.expect("second init should be a no-op");
+
+        // After two runs there should still be exactly one row per migration.
+        let row_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(&pool2)
+            .await
+            .unwrap();
+        assert_eq!(row_count, 1, "baseline should be recorded exactly once");
+
+        drop(pool2);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
     async fn initializes_and_seeds_default_value() {
         let pool = init_db("sqlite::memory:")
             .await
