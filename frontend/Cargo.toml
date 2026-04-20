@@ -10,7 +10,7 @@ omnibus-shared = { path = "../shared" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros"], optional = true }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate"], optional = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
 anyhow = { version = "1", optional = true }
 epub = { version = "2", optional = true }
