@@ -3,117 +3,22 @@ use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 pub use omnibus_shared::Settings;
 use omnibus_shared::{Contributor, EbookLibrary, EbookMetadata, Identifier};
 
+/// Schema migrations embedded at compile time from `frontend/migrations/`.
+/// Every schema change ships as a new numbered `.sql` file there; applied
+/// versions are recorded in the `_sqlx_migrations` table.
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
 pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect(database_url)
         .await?;
 
-    initialize_schema(&pool).await?;
+    MIGRATOR
+        .run(&pool)
+        .await
+        .map_err(|e| sqlx::Error::Migrate(Box::new(e)))?;
     Ok(pool)
-}
-
-pub async fn initialize_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS app_state (
-            id INTEGER PRIMARY KEY CHECK(id = 1),
-            value INTEGER NOT NULL
-        )
-        "#,
-    )
-    .execute(pool)
-    .await?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO app_state (id, value)
-        SELECT 1, 0
-        WHERE NOT EXISTS (SELECT 1 FROM app_state WHERE id = 1)
-        "#,
-    )
-    .execute(pool)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS settings (
-            key   TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )
-        "#,
-    )
-    .execute(pool)
-    .await?;
-
-    // Cached book metadata. The landing page queries this table instead of
-    // walking the filesystem on every request. Rows are keyed by the library
-    // root they were indexed under + the file's relative path so indexing a
-    // new library (via settings change) doesn't conflict with an old one.
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS books (
-            id                INTEGER PRIMARY KEY AUTOINCREMENT,
-            library_path      TEXT NOT NULL,
-            filename          TEXT NOT NULL,
-            title             TEXT,
-            description       TEXT,
-            publisher         TEXT,
-            published         TEXT,
-            modified          TEXT,
-            language          TEXT,
-            rights            TEXT,
-            source            TEXT,
-            coverage          TEXT,
-            dc_type           TEXT,
-            dc_format         TEXT,
-            relation          TEXT,
-            creators_json     TEXT NOT NULL DEFAULT '[]',
-            contributors_json TEXT NOT NULL DEFAULT '[]',
-            subjects_json     TEXT NOT NULL DEFAULT '[]',
-            identifiers_json  TEXT NOT NULL DEFAULT '[]',
-            series            TEXT,
-            series_index      TEXT,
-            epub_version      TEXT,
-            unique_identifier TEXT,
-            resource_count    INTEGER NOT NULL DEFAULT 0,
-            spine_count       INTEGER NOT NULL DEFAULT 0,
-            toc_count         INTEGER NOT NULL DEFAULT 0,
-            has_cover         INTEGER NOT NULL DEFAULT 0,
-            error             TEXT,
-            UNIQUE(library_path, filename)
-        )
-        "#,
-    )
-    .execute(pool)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS book_covers (
-            book_id INTEGER PRIMARY KEY REFERENCES books(id) ON DELETE CASCADE,
-            mime    TEXT NOT NULL,
-            bytes   BLOB NOT NULL
-        )
-        "#,
-    )
-    .execute(pool)
-    .await?;
-
-    // Tracks the last successful index per library path so callers can
-    // decide when to kick off a refresh.
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS library_index_state (
-            library_path TEXT PRIMARY KEY,
-            last_indexed INTEGER NOT NULL
-        )
-        "#,
-    )
-    .execute(pool)
-    .await?;
-
-    Ok(())
 }
 
 fn decode_json<T: serde::de::DeserializeOwned + Default>(s: &str) -> T {
