@@ -16,6 +16,7 @@ Avoids Calibre-Web's single-`WorkerThread` ceiling (see [performance pain points
 
 - Typed `enum Task { Scan(..), Thumbnail(..), SendEmail(..), ConvertFormat(..) }` — designing this enum conservatively is the main design cost (additions easy, renames painful).
 - `JoinSet` + `Semaphore::new(max_concurrency)` where concurrency is per-task-type (e.g. `max(1, num_cpus / 2)` for conversions; more for thumbnails).
+- **Per-resource fairness guards**, not just global concurrency. When a future task type works against multiple independent resources (e.g. per-library scan, per-provider metadata lookup), one slow resource shouldn't starve the others — hold a per-resource guard inside the task so concurrent work on *different* resources proceeds while the same resource queues serially. ABS serializes all podcast downloads through a single `currentDownload` slot and this is its most-complained-about backlog — the shape of the warning applies even though Omnibus won't fetch media from the web ([ABS recommendation #8](../audiobookshelf-inspection/7-recommendations.md), [PodcastManager.js](https://github.com/advplyr/audiobookshelf/blob/master/server/managers/PodcastManager.js)).
 - In-memory queue initially — acceptable because we own the single-process model. Persist to a `background_tasks` table when [F5.2 observability](5-2-observability.md) arrives so admins can see status and history.
 - Task API: `worker.post(Task::Thumbnail { … }) -> TaskId`; optional `worker.await_completion(id)`.
 
