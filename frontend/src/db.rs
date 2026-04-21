@@ -875,6 +875,10 @@ mod tests {
             versions.contains(&2),
             "normalized migration 0002 should be recorded, got {versions:?}"
         );
+        assert!(
+            versions.contains(&3),
+            "legacy-drop migration 0003 should be recorded, got {versions:?}"
+        );
     }
 
     #[tokio::test]

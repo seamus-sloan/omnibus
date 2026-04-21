@@ -36,7 +36,14 @@ Unblocks:
 
 ## Open questions
 
-Blocked by open questions 1 (cover storage) and 2 (scan paths) in the [summary](0-0-summary.md#open-questions).
+Resolved:
+
+- **Cover storage** — covers live on the filesystem at `$OMNIBUS_COVERS_DIR/<uuid>.<ext>` (default `./covers`). DB tracks only `books.has_cover`; `get_cover` reads from disk and infers the mime from the extension. Keeps the DB small and the "DB is a cache" invariant intact — on restore the covers regenerate from the source EPUBs.
+- **Scan paths** — a `libraries(id, path, display_name, last_indexed)` table replaces the two singleton settings keys. Kind (ebook vs audiobook) is derived from file format, so a single folder with both works without a double-registration. The legacy settings keys still populate `libraries` via auto-upsert on reindex so the settings UI can evolve in F0.6 without blocking this work.
+
+## Status
+
+Landed in migrations `0002_normalized_schema.sql` and `0003_drop_legacy_tables.sql` under [frontend/migrations/](../../frontend/migrations/). The db layer in [frontend/src/db.rs](../../frontend/src/db.rs) was rewritten against the new schema while preserving its public API, so the indexer, rpc, and backend continued to work without changes — the wire-level `EbookMetadata` / `EbookLibrary` shape is preserved for this phase. Future work (custom browse queries, library-scoped filters) can now be built on the normalized tables directly.
 
 ---
 
