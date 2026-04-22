@@ -1,6 +1,6 @@
 //! Normalized DB layer (server-only).
 //!
-//! The schema (see [`../migrations/0002_normalized_schema.sql`]) splits a
+//! The schema (see `../migrations/0002_normalized_schema.sql`) splits a
 //! logical `books` row from one-or-more `book_files` rows per format, and
 //! normalizes authors, series, tags, publishers, languages, and identifiers
 //! into their own tables joined via m2m link tables. The filesystem remains
@@ -19,7 +19,7 @@ use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool, Transaction};
 pub use omnibus_shared::Settings;
 use omnibus_shared::{Contributor, EbookLibrary, EbookMetadata, Identifier};
 
-/// Schema migrations embedded at compile time from `frontend/migrations/`.
+/// Schema migrations embedded at compile time from `db/migrations/`.
 /// Every schema change ships as a new numbered `.sql` file there; applied
 /// versions are recorded in the `_sqlx_migrations` table.
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
@@ -337,7 +337,7 @@ fn find_cover_file(uuid: &str) -> Option<(String, Vec<u8>)> {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if let Some(stem) = name_str.strip_suffix(&format!(".{}", uuid)) {
+            if let Some(stem) = name_str.strip_suffix(&format!(".{uuid}")) {
                 // uuid is the prefix, not suffix; keep falling through
                 let _ = stem;
             }

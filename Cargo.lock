@@ -3642,6 +3642,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "dioxus",
+ "omnibus-db",
  "omnibus-frontend",
  "omnibus-shared",
  "serde_json",
@@ -3668,10 +3669,9 @@ dependencies = [
 name = "omnibus-frontend"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "dioxus",
  "dioxus-router",
- "epub",
+ "omnibus-db",
  "omnibus-shared",
  "reqwest",
  "serde",

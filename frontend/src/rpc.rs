@@ -18,11 +18,11 @@ use dioxus::prelude::*;
 use omnibus_shared::{EbookLibrary, LibraryContents, Settings, ValueResponse};
 
 #[cfg(feature = "server")]
-use crate::{db, indexer, scanner};
+use omnibus_db::{self as db, indexer, scanner};
 
 /// Server-only extractor alias used by each server function. Only referenced
-/// by the server-side body; the `#[cfg(feature = "server")]` stops the web
-/// build from importing axum/sqlx types.
+/// by the server-side body; the `#[cfg(feature = "server")]` stops the
+/// web build from importing axum/sqlx types.
 #[cfg(feature = "server")]
 type PoolExt = dioxus::fullstack::axum::Extension<sqlx::SqlitePool>;
 

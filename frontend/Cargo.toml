@@ -7,13 +7,15 @@ edition = "2021"
 dioxus = { version = "0.7", features = ["fullstack"] }
 dioxus-router = "0.7"
 omnibus-shared = { path = "../shared" }
+omnibus-db = { path = "../db", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate"], optional = true }
+# sqlx + tokio are needed at the type level by rpc.rs when building server
+# functions (PoolExt = Extension<SqlitePool>, #[tokio::spawn] for reindex).
+# Kept as optional deps enabled only by the `server` feature.
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"], optional = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
-anyhow = { version = "1", optional = true }
-epub = { version = "2", optional = true }
 
 [features]
 default = []
@@ -21,12 +23,18 @@ default = []
 web = ["dioxus/web"]
 # Native mobile client: talks to `/api/*` REST routes via reqwest.
 mobile = ["dep:reqwest", "dep:serde_json"]
-# Server compile: enables full server-function bodies (db + scanner access).
+# Server-function bodies: compiles the server-side halves of the #[get]/#[post]
+# functions in rpc.rs against the real DB layer. Used by `server/` when
+# building the fullstack native binary. The DB work lives in `omnibus-db`;
+# this feature just pulls it in alongside dioxus/server's server-fn codegen.
+#
+# NOTE: must be named literally `server` — the dioxus_fullstack_macro
+# hardcodes `#[cfg(feature = "server")]` inside the expanded #[get]/#[post]
+# bodies, so renaming it (e.g. to `server-fns`) makes the server halves
+# compile to empty stubs.
 server = [
     "dioxus/server",
+    "dep:omnibus-db",
     "dep:sqlx",
     "dep:tokio",
-    "dep:anyhow",
-    "dep:epub",
-    "dep:serde_json",
 ]
