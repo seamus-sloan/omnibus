@@ -40,7 +40,7 @@ pub async fn rpc_my_action(input: MyInput) -> Result<MyOutput> {
 
 - The server-only extractor `pool: PoolExt` is declared after the path in the macro. It's extracted by axum on the server and elided from the client-side fetch stub.
 - `Result<T>` is the anyhow-backed alias from `dioxus::prelude::Result`. Domain errors use `thiserror` per [02-error-handling.md](../../rules/02-error-handling.md).
-- The function body is only compiled when `feature = "server"` is active — guard any other imports with `#[cfg(feature = "server")]`.
+- The function body is only compiled when `feature = "server"` is active — guard any other imports with `#[cfg(feature = "server")]`. At the top of `rpc.rs`, import the DB layer as `use omnibus_db::{self as db, indexer, scanner};` (gated on `feature = "server"`).
 - Dioxus auto-registers the route via `dioxus::server::router(App)` in [server/src/main.rs](../../../server/src/main.rs) — no manual registration.
 
 ## 4. Add the hand-written REST handler (mobile transport)
@@ -54,10 +54,11 @@ In [server/src/backend.rs](../../../server/src/backend.rs):
 
 ## 5. Add the DB query (if needed)
 
-In [frontend/src/db.rs](../../../frontend/src/db.rs) (gated behind `feature = "server"`):
+In [db/src/queries.rs](../../../db/src/queries.rs):
 
 - Define a typed error variant in a `DbError` enum (or add one) per [02-error-handling.md](../../rules/02-error-handling.md).
 - Use `sqlx::query_as!` / `sqlx::query!` for compile-time checking against `DATABASE_URL`.
+- Schema changes go as a new numbered SQL file under [db/migrations/](../../../db/migrations/) (never edit an applied file). Re-exported from `omnibus_db::` so callsites just write `omnibus_db::my_query(...)`.
 
 ## 6. Wire the unified data layer
 
@@ -72,7 +73,7 @@ The page component then calls a single `data::my_action(...)` and works on both 
 
 Per [03-unit-testing.md](../../rules/03-unit-testing.md):
 
-- **DB:** inline `#[cfg(test)]` in `frontend/src/db.rs`. Happy path + not-found + constraint violation. Run with `cargo test -p omnibus-frontend --features server`.
+- **DB:** inline `#[cfg(test)]` in `db/src/queries.rs` (or the relevant module). Happy path + not-found + constraint violation. Run with `cargo test -p omnibus-db`.
 - **REST handler:** inline `#[cfg(test)]` in `server/src/backend.rs`. Drive with `tower::ServiceExt::oneshot` against `rest_router(AppState::new(in-memory pool))`. Cover 200 + 4xx + 5xx. Run with `cargo test -p omnibus`.
 - **Server function:** covered indirectly by the DB tests (the function body is a thin wrapper). Add an integration test only if the wrapper does non-trivial composition.
 

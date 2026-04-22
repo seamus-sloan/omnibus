@@ -29,14 +29,15 @@ Auto-discoverable skills in [.claude/skills/](.claude/skills/) — Claude Code l
 
 ## Architecture
 
-Cargo workspace with four crates:
+Cargo workspace with five crates:
 
 - **`shared/`** (`omnibus-shared`) — serde types shared across every target (`Settings`, `ValueResponse`, `LibraryContents`, `LibrarySection`). No Dioxus / axum / sqlx deps.
-- **`frontend/`** (`omnibus-frontend`) — Dioxus UI + the DB layer + server functions. Feature-gated:
+- **`db/`** (`omnibus-db`) — server-side data layer: SQL migrations, SQLite pool init, the normalized query layer, and the indexing pipeline (scanner → ebook metadata extraction → atomic per-library upsert). Consumed by both `server/` (REST handlers) and `frontend/` (server-function bodies). Holds all sqlx / tokio / epub / anyhow dependencies on the server side.
+- **`frontend/`** (`omnibus-frontend`) — Dioxus UI + server-function wire layer (`rpc.rs`). Feature-gated:
   - `web` — WASM client build (used by `server/` when `dx serve --platform web` builds it for WASM).
   - `mobile` — Native Dioxus build; uses `reqwest` against `/api/*` REST routes.
-  - `server` — SSR/native build; enables sqlx + tokio and compiles server-function bodies.
-- **`server/`** (`omnibus`) — **unified Dioxus fullstack binary**. Built twice by `dx serve`: once native (feature `server`) for the axum backend + SSR, once WASM (feature `web`) for the hydrated client. Hosts the hand-written `/api/*` REST router for mobile.
+  - `server` — SSR/native build; pulls in `omnibus-db` and compiles server-function bodies. Name is hardcoded by the dioxus_fullstack_macro — can't be renamed.
+- **`server/`** (`omnibus`) — **unified Dioxus fullstack binary**. Built twice by `dx serve`: once native (feature `server`) for the axum backend + SSR, once WASM (feature `web`) for the hydrated client. Hosts the hand-written `/api/*` REST router for mobile. Depends directly on `omnibus-db`.
 - **`mobile/`** (`omnibus-mobile`) — thin Dioxus Native shell (~16 lines) that injects `ServerUrl` context and launches `omnibus_frontend::App`.
 
 Default `cargo build` / `clippy` covers `server`, `shared`, `frontend` only. Mobile is excluded via workspace `default-members` because its `mobile` feature is mutually exclusive with `web`; build it explicitly: `cargo build -p omnibus-mobile`.
@@ -45,7 +46,7 @@ Default `cargo build` / `clippy` covers `server`, `shared`, `frontend` only. Mob
 
 **Mobile data flow:** Dioxus signal/effect → `reqwest` call to `/api/*` (hand-written handlers in `server/src/backend.rs`) → signal update → re-render. Mobile deliberately does **not** use the `/api/rpc/*` server functions.
 
-**Database:** schema ships as numbered SQL migrations under [frontend/migrations/](frontend/migrations/), embedded via `sqlx::migrate!` and run on pool init in `frontend::db::init_db`. Applied versions are recorded in the `_sqlx_migrations` table. Add new migrations as `NNNN_description.sql` — never edit an applied file. All tests use `sqlite::memory:` for isolation; the migrator runs against them the same as production.
+**Database:** schema ships as numbered SQL migrations under [db/migrations/](db/migrations/), embedded via `sqlx::migrate!` and run on pool init in `omnibus_db::init_db`. Applied versions are recorded in the `_sqlx_migrations` table. Add new migrations as `NNNN_description.sql` — never edit an applied file. All tests use `sqlite::memory:` for isolation; the migrator runs against them the same as production.
 
 **Server URL (mobile):** hardcoded to `http://127.0.0.1:3000` in `mobile/src/main.rs` via `use_context_provider`. Will become a first-launch setup screen.
 
@@ -55,16 +56,23 @@ Default `cargo build` / `clippy` covers `server`, `shared`, `frontend` only. Mob
 lib.rs              — Settings, ValueResponse, LibraryContents, LibrarySection, EbookMetadata, EbookLibrary
 ```
 
+### db/src/
+
+```
+lib.rs              — re-exports queries::*; pub mod ebook/indexer/queries/scanner
+queries.rs          — pool init, schema, query layer (list_books, settings, covers, taxonomy…)
+scanner.rs          — library directory scanning
+ebook.rs            — EPUB OPF metadata + cover extraction
+indexer.rs          — scan → DB indexing, staleness checks
+migrations/         — numbered SQL migrations embedded via sqlx::migrate!
+```
+
 ### frontend/src/
 
 ```
 lib.rs              — Route, App, styles, ScreenLayout (feature-gated)
 data.rs             — Feature-gated data transport (mobile=reqwest, web/server=rpc)
-rpc.rs              — #[get]/#[post] server functions (mounted by dioxus::server::router)
-db.rs               — pool init, schema, queries (feature = "server")
-scanner.rs          — library directory scanning (feature = "server")
-ebook.rs            — EPUB OPF metadata + cover extraction (feature = "server")
-indexer.rs          — scan → DB indexing, staleness checks (feature = "server")
+rpc.rs              — #[get]/#[post] server functions (mounted by dioxus::server::router); server bodies call into omnibus_db
 pages/{landing,settings,book_detail}.rs
 components/{top_nav,bottom_nav}.rs  — feature = web / mobile respectively
 ```
@@ -105,7 +113,7 @@ dx serve --platform web -p omnibus
 # Server only (native backend, no WASM bundle)
 cargo run -p omnibus                                        # start at http://0.0.0.0:3000
 cargo test -p omnibus                                       # /api/* REST integration tests
-cargo test -p omnibus-frontend --features server            # db + scanner tests
+cargo test -p omnibus-db                                    # db + ebook + scanner tests
 cargo clippy                                                # lint default-members crates
 cargo fmt                                                   # format all crates
 

@@ -24,6 +24,10 @@ omnibus-shared = { path = "../shared" }
 # `features` here are forwarded via our own feature flags below. Leaving it
 # bare means frontend compiles with no platform feature (components only).
 omnibus-frontend = { path = "../frontend" }
+# DB + indexing pipeline. Depended on directly (not transitively via
+# frontend) since main.rs and backend.rs call init_db/get_settings/etc.
+# straight. Optional so the `web` (WASM) build doesn't try to drag it in.
+omnibus-db = { path = "../db", optional = true }
 
 [dev-dependencies]
 tower = "0.5"
@@ -38,6 +42,7 @@ server = [
     "dep:serde_json",
     "dep:sqlx",
     "dep:tokio",
+    "dep:omnibus-db",
     "dioxus/server",
     "omnibus-frontend/server",
 ]

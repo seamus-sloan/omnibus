@@ -21,18 +21,18 @@ fn main() {
         dioxus::serve(|| async move {
             use dioxus::server::axum::Extension;
             use omnibus::backend;
-            use omnibus_frontend::indexer;
+            use omnibus_db::indexer;
 
             let database_url = std::env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "sqlite://omnibus.db?mode=rwc".to_string());
 
-            let pool = omnibus_frontend::db::init_db(&database_url).await?;
-            omnibus_frontend::db::seed_settings_from_env(&pool).await?;
+            let pool = omnibus_db::init_db(&database_url).await?;
+            omnibus_db::seed_settings_from_env(&pool).await?;
 
             // Kick off a reindex in the background if the index is empty or
             // stale. The first user request reads whatever is currently in
             // the DB; the refresh flows in next time the page loads.
-            if let Ok(settings) = omnibus_frontend::db::get_settings(&pool).await {
+            if let Ok(settings) = omnibus_db::get_settings(&pool).await {
                 if let Some(path) = settings.ebook_library_path {
                     indexer::spawn_reindex_if_stale(pool.clone(), path);
                 }

@@ -12,7 +12,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use omnibus_frontend::{db, indexer, scanner};
+use omnibus_db::{self as db, indexer, scanner};
 use omnibus_shared::{Settings, ValueResponse};
 use sqlx::SqlitePool;
 

@@ -6,7 +6,7 @@ edition = "2021"
 # Server-side data layer: schema migrations, SQLite pool init, query layer,
 # and the indexing pipeline (file scanner → ebook metadata extraction →
 # atomic per-library upsert). Consumed by both `server/` (axum handlers) and
-# `frontend/` (Dioxus server functions under the `server-fns` feature).
+# `frontend/` (Dioxus server functions under the `server` feature).
 
 [dependencies]
 omnibus-shared = { path = "../shared" }

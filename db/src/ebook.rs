@@ -13,7 +13,7 @@ use epub::doc::{EpubDoc, EpubVersion};
 use omnibus_shared::{Contributor, EbookMetadata, Identifier};
 
 /// A single scanner output row — metadata plus the raw cover image bytes
-/// (and mime), if the epub included one. Consumed by [`crate::db::replace_books`].
+/// (and mime), if the epub included one. Consumed by [`crate::queries::replace_books`].
 pub struct IndexedBook {
     pub metadata: EbookMetadata,
     pub cover: Option<(String, Vec<u8>)>,
