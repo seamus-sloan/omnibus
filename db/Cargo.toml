@@ -1,0 +1,18 @@
+[package]
+name = "omnibus-db"
+version = "0.1.0"
+edition = "2021"
+
+# Server-side data layer: schema migrations, SQLite pool init, query layer,
+# and the indexing pipeline (file scanner → ebook metadata extraction →
+# atomic per-library upsert). Consumed by both `server/` (axum handlers) and
+# `frontend/` (Dioxus server functions under the `server-fns` feature).
+
+[dependencies]
+omnibus-shared = { path = "../shared" }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+anyhow = "1"
+epub = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

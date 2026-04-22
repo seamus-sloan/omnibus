@@ -1,5 +1,5 @@
 [workspace]
-members = ["server", "mobile", "shared", "frontend"]
+members = ["server", "mobile", "shared", "frontend", "db"]
 # Exclude `mobile` from default workspace-wide commands (`cargo build`,
 # `cargo clippy`, etc.) to avoid unifying the mutually exclusive
 # `omnibus-frontend` feature flags (`web` + `mobile`). Build mobile
