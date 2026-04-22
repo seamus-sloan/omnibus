@@ -3652,6 +3652,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "omnibus-db"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "epub",
+ "omnibus-shared",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+]
+
+[[package]]
 name = "omnibus-frontend"
 version = "0.1.0"
 dependencies = [
