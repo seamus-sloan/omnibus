@@ -19,12 +19,14 @@
 pub mod boot;
 pub mod csrf;
 pub mod extractor;
+pub mod gate;
 pub mod handlers;
 pub mod rate_limit;
 pub mod strategy;
 
 pub use csrf::origin_check;
 pub use extractor::{AdminUser, AuthUser};
+pub use gate::require_auth;
 pub use handlers::auth_router;
 pub use rate_limit::{rate_limit_auth, RateLimiter};
 

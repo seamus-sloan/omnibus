@@ -48,14 +48,19 @@ fn main() {
             let limiter = Arc::new(auth::RateLimiter::new());
             let router = dioxus::server::router(App)
                 .merge(backend::rest_router(state.clone()))
-                .merge(
-                    auth::auth_router(state)
-                        .layer(axum::middleware::from_fn_with_state(
-                            limiter,
-                            auth::rate_limit_auth,
-                        ))
-                        .layer(axum::middleware::from_fn(auth::origin_check)),
-                )
+                .merge(auth::auth_router(state.clone()).layer(
+                    axum::middleware::from_fn_with_state(limiter, auth::rate_limit_auth),
+                ))
+                // Apply require_auth and origin_check at the top level so
+                // every cookie-authed /api/* request — not just /api/auth/* —
+                // is origin-checked. Bearer requests and safe methods are
+                // exempt inside origin_check; non-cookie requests short-circuit
+                // there too, so SSR and static assets pass through unchanged.
+                .layer(axum::middleware::from_fn_with_state(
+                    state,
+                    auth::require_auth,
+                ))
+                .layer(axum::middleware::from_fn(auth::origin_check))
                 .layer(Extension(pool))
                 .layer(tower_http::trace::TraceLayer::new_for_http());
 

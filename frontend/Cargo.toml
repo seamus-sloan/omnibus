@@ -11,6 +11,7 @@ omnibus-db = { path = "../db", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+gloo-net = { version = "0.6", default-features = false, features = ["http", "json"], optional = true }
 # sqlx + tokio are needed at the type level by rpc.rs when building server
 # functions (PoolExt = Extension<SqlitePool>, #[tokio::spawn] for reindex).
 # Kept as optional deps enabled only by the `server` feature.
@@ -20,7 +21,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = tr
 [features]
 default = []
 # Web client (WASM): uses dioxus-fullstack server-function client stubs.
-web = ["dioxus/web"]
+web = ["dioxus/web", "dep:gloo-net", "dep:serde_json"]
 # Native mobile client: talks to `/api/*` REST routes via reqwest.
 mobile = ["dep:reqwest", "dep:serde_json"]
 # Server-function bodies: compiles the server-side halves of the #[get]/#[post]
