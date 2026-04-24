@@ -224,6 +224,7 @@ dependencies = [
  "axum",
  "axum-core",
  "bytes",
+ "cookie",
  "futures-util",
  "headers",
  "http",
@@ -3661,16 +3662,21 @@ dependencies = [
 name = "omnibus"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
+ "axum-extra",
  "dioxus",
  "omnibus-db",
  "omnibus-frontend",
  "omnibus-shared",
+ "serde",
  "serde_json",
  "sqlx",
+ "time",
  "tokio",
  "tower",
  "tower-http",
+ "tracing",
 ]
 
 [[package]]

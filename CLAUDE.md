@@ -80,9 +80,13 @@ components/{top_nav,bottom_nav}.rs  — feature = web / mobile respectively
 ### server/src/
 
 ```
-main.rs             — dioxus::launch (WASM) / dioxus::serve (native)
-lib.rs              — re-exports backend under `server` feature for tests
+main.rs             — dioxus::launch (WASM) / dioxus::serve (native); mounts auth_router + rate-limit + origin-check
+lib.rs              — re-exports backend + auth under `server` feature for tests
 backend.rs          — /api/* REST router (mobile-facing) + integration tests
+auth/mod.rs         — /api/auth/{register,login,logout,me} + AuthUser/AdminUser extractors + CSRF origin-check
+auth/rate_limit.rs  — in-memory per-IP token bucket for login/register
+auth/strategy.rs    — AuthStrategy trait + PasswordStrategy (OIDC/WebAuthn fit the same shape)
+auth/boot.rs        — OMNIBUS_INITIAL_ADMIN recovery hook (promotes named user to admin)
 ```
 
 ### ui_tests/playwright/
