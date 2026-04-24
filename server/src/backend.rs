@@ -169,9 +169,12 @@ async fn get_cover(State(state): State<AppState>, Path(id): Path<i64>) -> Respon
         Ok(Some((mime, bytes))) => (
             [
                 (header::CONTENT_TYPE, mime.as_str()),
-                // Covers are static per-book (new id on reindex), so cache
-                // aggressively at the client.
-                (header::CACHE_CONTROL, "public, max-age=86400"),
+                // Covers are static per-book (new id on reindex). Cached on
+                // the client only — `private` + `Vary: Cookie` keep a shared
+                // proxy from serving one user's covers to an unauthenticated
+                // request on the same URL now that the endpoint is gated.
+                (header::CACHE_CONTROL, "private, max-age=86400"),
+                (header::VARY, "Cookie"),
             ],
             bytes,
         )
