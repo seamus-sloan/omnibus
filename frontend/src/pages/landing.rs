@@ -95,6 +95,10 @@ pub fn LandingPage() -> Element {
 fn EbookRow(book: EbookMetadata, server_url: String) -> Element {
     let id = book.id;
     let display_title = book.title.as_deref().unwrap_or(&book.filename).to_string();
+    // Stable per-row testid for Playwright. Derived from the on-disk filename
+    // (stem only, lowercased, non-alphanumerics collapsed to `-`) so fixtures
+    // can look a row up by the same slug they ship under.
+    let row_testid = format!("ebook-row-{}", row_slug(&book.filename));
     // Combine the relative cover URL the server returned with the client's
     // base URL. Web sees an empty base (same-origin); mobile prepends its
     // configured `ServerUrl`.
@@ -116,7 +120,8 @@ fn EbookRow(book: EbookMetadata, server_url: String) -> Element {
     rsx! {
         tr {
             class: "ebook-row",
-            "data-testid": "ebook-row",
+            "data-testid": "{row_testid}",
+            id: "{row_testid}",
             role: "button",
             tabindex: "0",
             aria_label: "Open details for {display_title}",
@@ -131,24 +136,24 @@ fn EbookRow(book: EbookMetadata, server_url: String) -> Element {
                     nav.push(Route::BookDetail { id });
                 }
             },
-            td { class: "ebook-col-cover",
+            td { class: "ebook-col-cover", "data-testid": "ebook-cell-cover",
                 if let Some(src) = cover_src.as_ref() {
                     img { class: "ebook-thumb", src: "{src}", alt: "Cover of {display_title}", loading: "lazy" }
                 } else {
                     div { class: "ebook-thumb ebook-thumb-fallback", "—" }
                 }
             }
-            td { class: "ebook-col-title",
+            td { class: "ebook-col-title", "data-testid": "ebook-cell-title",
                 div { class: "ebook-title-cell", "{display_title}" }
                 if let Some(err) = book.error.as_ref() {
                     div { class: "error", "⚠ {err}" }
                 }
             }
-            td { class: "ebook-col-author", "{authors}" }
-            td { class: "ebook-col-series", "{series_line}" }
-            td { class: "ebook-col-publisher", {book.publisher.as_deref().unwrap_or("")} }
-            td { class: "ebook-col-published", {book.published.as_deref().unwrap_or("")} }
-            td { class: "ebook-col-language", {book.language.as_deref().unwrap_or("")} }
+            td { class: "ebook-col-author", "data-testid": "ebook-cell-author", "{authors}" }
+            td { class: "ebook-col-series", "data-testid": "ebook-cell-series", "{series_line}" }
+            td { class: "ebook-col-publisher", "data-testid": "ebook-cell-publisher", {book.publisher.as_deref().unwrap_or("")} }
+            td { class: "ebook-col-published", "data-testid": "ebook-cell-published", {book.published.as_deref().unwrap_or("")} }
+            td { class: "ebook-col-language", "data-testid": "ebook-cell-language", {book.language.as_deref().unwrap_or("")} }
         }
     }
 }
@@ -162,4 +167,65 @@ fn contributor_names(list: &[Contributor]) -> String {
         out.push_str(&c.name);
     }
     out
+}
+
+/// Stable Playwright row id derived from the ebook's on-disk filename:
+/// strip directories and extension, lowercase, then collapse runs of
+/// non-alphanumeric ASCII characters into a single `-` (with leading and
+/// trailing dashes trimmed). The Playwright fixture table mirrors this
+/// derivation so each `FIXTURE_BOOKS[i].slug` matches the row's testid.
+fn row_slug(filename: &str) -> String {
+    // Take the basename so nested paths (e.g. "series/vol1/deep.epub") still
+    // produce a clean slug from just the file's stem.
+    let basename = filename.rsplit('/').next().unwrap_or(filename);
+    let stem = basename
+        .rsplit_once('.')
+        .map(|(s, _)| s)
+        .unwrap_or(basename);
+    let lower = stem.to_ascii_lowercase();
+    let mut out = String::with_capacity(lower.len());
+    let mut last_was_dash = true; // suppress leading dashes
+    for ch in lower.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            last_was_dash = false;
+        } else if !last_was_dash {
+            out.push('-');
+            last_was_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::row_slug;
+
+    #[test]
+    fn row_slug_lowercases_and_strips_extension() {
+        assert_eq!(row_slug("Alpha.epub"), "alpha");
+    }
+
+    #[test]
+    fn row_slug_collapses_runs_of_non_alphanumerics() {
+        assert_eq!(row_slug("Beta in the Series.epub"), "beta-in-the-series");
+    }
+
+    #[test]
+    fn row_slug_uses_basename_for_nested_paths() {
+        assert_eq!(row_slug("series/vol1/Deep Book.epub"), "deep-book");
+    }
+
+    #[test]
+    fn row_slug_trims_trailing_dashes() {
+        assert_eq!(row_slug("weird---name!!!.epub"), "weird-name");
+    }
+
+    #[test]
+    fn row_slug_handles_filename_without_extension() {
+        assert_eq!(row_slug("plain"), "plain");
+    }
 }
