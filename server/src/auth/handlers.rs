@@ -99,7 +99,10 @@ fn want_bearer(kind: Option<&str>) -> bool {
 
 fn secure_cookies() -> bool {
     match std::env::var("OMNIBUS_SECURE_COOKIES") {
-        Ok(v) => !matches!(v.as_str(), "0" | "false" | "no" | ""),
+        Ok(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            !matches!(v.as_str(), "0" | "false" | "no" | "")
+        }
         Err(_) => false, // default off so the dev shell on http://localhost works
     }
 }
