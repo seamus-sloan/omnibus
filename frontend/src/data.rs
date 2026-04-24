@@ -91,6 +91,32 @@ pub async fn get_ebooks(server_url: &str) -> Result<EbookLibrary, String> {
         .map_err(|e| e.to_string())
 }
 
+#[cfg(feature = "mobile")]
+pub async fn search_ebooks(server_url: &str, q: &str) -> Result<EbookLibrary, String> {
+    // Percent-encode the query so FTS5 operators and whitespace survive the
+    // URL.
+    let encoded: String = q
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect();
+    let url = format!("{server_url}/api/search?q={encoded}");
+    let response = reqwest::get(&url).await.map_err(|e| format!("{e:#}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Server error {status}: {body}"));
+    }
+    response
+        .json::<EbookLibrary>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // ===== Web / fullstack-SSR transport: dioxus-fullstack server functions =====
 //
 // `server_url` is unused here — server functions always resolve against the
@@ -136,6 +162,13 @@ pub async fn get_library(_server_url: &str) -> Result<LibraryContents, String> {
 #[cfg(not(feature = "mobile"))]
 pub async fn get_ebooks(_server_url: &str) -> Result<EbookLibrary, String> {
     crate::rpc::rpc_get_ebooks()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "mobile"))]
+pub async fn search_ebooks(_server_url: &str, q: &str) -> Result<EbookLibrary, String> {
+    crate::rpc::rpc_search(q.to_string())
         .await
         .map_err(|e| e.to_string())
 }

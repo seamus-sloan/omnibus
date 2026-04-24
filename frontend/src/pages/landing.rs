@@ -14,12 +14,21 @@ pub fn LandingPage() -> Element {
     let mut library = use_signal(EbookLibrary::default);
     let mut loading = use_signal(|| true);
     let mut error = use_signal(|| None::<String>);
+    let mut query = use_signal(String::new);
 
     let url_for_fetch = server_url.clone();
     use_effect(move || {
         let url = url_for_fetch.clone();
+        let q = query();
         spawn(async move {
-            match data::get_ebooks(&url).await {
+            loading.set(true);
+            let trimmed = q.trim();
+            let result = if trimmed.is_empty() {
+                data::get_ebooks(&url).await
+            } else {
+                data::search_ebooks(&url, trimmed).await
+            };
+            match result {
                 Ok(lib) => {
                     library.set(lib);
                     error.set(None);
@@ -45,6 +54,20 @@ pub fn LandingPage() -> Element {
                     "{path} · {book_count} book(s)"
                 } else {
                     "Configure your ebook library path in Settings."
+                }
+            }
+            form {
+                class: "library-search",
+                role: "search",
+                onsubmit: move |evt| evt.prevent_default(),
+                input {
+                    id: "library-search-input",
+                    "data-testid": "library-search-input",
+                    r#type: "search",
+                    aria_label: "Search books",
+                    placeholder: "Search title, author, series, tag, ISBN…",
+                    value: "{query}",
+                    oninput: move |evt| query.set(evt.value()),
                 }
             }
             if let Some(msg) = page_error.as_ref() {

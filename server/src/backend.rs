@@ -6,7 +6,7 @@
 //! keep working unchanged.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::header,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -14,6 +14,7 @@ use axum::{
 };
 use omnibus_db::{self as db, indexer, scanner};
 use omnibus_shared::{Settings, ValueResponse};
+use serde::Deserialize;
 use sqlx::SqlitePool;
 
 #[derive(Clone)]
@@ -35,6 +36,7 @@ pub fn rest_router(state: AppState) -> Router {
         .route("/api/settings", post(post_settings))
         .route("/api/library", get(get_library))
         .route("/api/ebooks", get(get_ebooks))
+        .route("/api/search", get(get_search))
         .route("/api/covers/{id}", get(get_cover))
         .with_state(state)
 }
@@ -119,6 +121,40 @@ async fn get_ebooks(State(state): State<AppState>) -> Response {
         Err(error) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to read books: {error}"),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    q: String,
+}
+
+async fn get_search(State(state): State<AppState>, Query(params): Query<SearchQuery>) -> Response {
+    let settings = match db::get_settings(&state.pool).await {
+        Ok(s) => s,
+        Err(error) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read settings: {error}"),
+            )
+                .into_response();
+        }
+    };
+    let Some(path) = settings.ebook_library_path else {
+        return Json(omnibus_shared::EbookLibrary::default()).into_response();
+    };
+    match db::search_books(&state.pool, &path, &params.q).await {
+        Ok(books) => Json(omnibus_shared::EbookLibrary {
+            path: Some(path),
+            books,
+            error: None,
+        })
+        .into_response(),
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to search books: {error}"),
         )
             .into_response(),
     }
@@ -429,6 +465,47 @@ mod tests {
         assert_eq!(lib.path.as_deref(), Some(path));
         assert!(lib.books.is_empty());
         assert!(lib.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn api_search_returns_empty_when_path_not_configured() {
+        let pool = db::init_db("sqlite::memory:")
+            .await
+            .expect("db should initialize");
+        let app = rest_router(AppState::new(pool));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/search?q=hello")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let lib: omnibus_shared::EbookLibrary = serde_json::from_slice(&bytes).unwrap();
+        assert!(lib.path.is_none());
+        assert!(lib.books.is_empty());
+    }
+
+    #[tokio::test]
+    async fn api_search_rejects_missing_q_param() {
+        let pool = db::init_db("sqlite::memory:")
+            .await
+            .expect("db should initialize");
+        let app = rest_router(AppState::new(pool));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/search")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        // axum's Query extractor returns 400 for missing required fields.
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

@@ -77,3 +77,23 @@ pub async fn rpc_get_ebooks() -> Result<EbookLibrary> {
     // it up to date (startup + settings save triggers).
     Ok(db::library_from_db(&pool.0, settings.ebook_library_path.as_deref()).await?)
 }
+
+/// FTS5-backed search across the configured ebook library. Empty or
+/// whitespace-only `q` returns an empty library.
+///
+/// POST (not GET) so the query string can ride in the JSON body — Dioxus
+/// `#[get]` server functions reject arg bodies because HTTP spec forbids
+/// bodies on GET.
+#[post("/api/rpc/search", pool: PoolExt)]
+pub async fn rpc_search(q: String) -> Result<EbookLibrary> {
+    let settings = db::get_settings(&pool.0).await?;
+    let Some(path) = settings.ebook_library_path else {
+        return Ok(EbookLibrary::default());
+    };
+    let books = db::search_books(&pool.0, &path, &q).await?;
+    Ok(EbookLibrary {
+        path: Some(path),
+        books,
+        error: None,
+    })
+}
