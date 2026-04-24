@@ -2,14 +2,15 @@ import { expect, type APIRequestContext } from "@playwright/test";
 import { resolve } from "node:path";
 
 /**
- * Absolute path to the committed EPUB fixtures
- * (`<repo>/test-data/epubs/generated`). Resolved from this file's `__dirname`
- * so the spec doesn't care which working directory Playwright was launched
- * from.
+ * Absolute path to the committed EPUB fixtures (`<repo>/test-data/epubs`).
+ * The scanner recurses, so this picks up both the deterministic synthetic
+ * EPUBs under `generated/` and the public-domain EPUBs under
+ * `publicDomain/`. Resolved from this file's `__dirname` so the spec
+ * doesn't care which working directory Playwright was launched from.
  */
 export function fixturesDir(): string {
   // tests/utils/ -> tests/ -> playwright/ -> ui_tests/ -> <repo>
-  return resolve(__dirname, "..", "..", "..", "..", "test-data", "epubs", "generated");
+  return resolve(__dirname, "..", "..", "..", "..", "test-data", "epubs");
 }
 
 /**
