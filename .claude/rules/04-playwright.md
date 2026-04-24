@@ -74,6 +74,12 @@ test("saves library paths and shows a success status", async ({ page }) => {
 
 See `ui_tests/playwright/tests/flows/settings.spec.ts` for the full version.
 
+## Seeding — point the server at fixtures, then poll
+
+Specs that need real DB content (e.g. landing) call `seedLibrary(request, fixturesDir(), expectedCount)` from `tests/utils/seed.ts` in a `test.beforeAll`. It POSTs the absolute fixtures path to `/api/rpc/settings`, then polls `GET /api/rpc/ebooks` until the indexer has surfaced the expected number of books — `rpc_save_settings` kicks the reindex off in a `tokio::spawn`, so the POST response alone isn't enough.
+
+The committed fixtures live under `test-data/epubs/generated/` and are produced by `ui_tests/playwright/tools/make_epub.ts` (run via `npx tsx`). The single source of truth for expected per-row metadata is `tests/fixtures/epubs.ts` (`FIXTURE_BOOKS`). When you add a fixture, regenerate the EPUBs and update that table in the same change.
+
 ## Mobile E2E
 
 Not yet implemented. The mobile crate is Dioxus Native (not a WebView), so Playwright cannot reach it. When added, this will be a separate track under `ui_tests/` (Maestro) and will require stable accessibility ids on interactive elements in `mobile/src/`.
