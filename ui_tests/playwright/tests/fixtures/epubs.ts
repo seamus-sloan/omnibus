@@ -65,4 +65,44 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     language: "es",
     hasCover: false,
   },
+
+  // Public-domain Project Gutenberg / Standard Ebooks EPUBs under
+  // `test-data/epubs/publicDomain/`. Metadata below is what each file's OPF
+  // actually claims — `db/tests/fixture_epubs.rs` keeps the parser honest.
+  {
+    slug: "dracula",
+    filename: "publicDomain/dracula.epub",
+    title: "Dracula",
+    authors: ["Bram Stoker"],
+    published: "1995-10-01",
+    language: "en",
+    hasCover: true,
+  },
+  {
+    slug: "frankenstein",
+    filename: "publicDomain/frankenstein.epub",
+    title: "Frankenstein; or, the modern prometheus",
+    authors: ["Mary Wollstonecraft Shelley"],
+    published: "1993-10-01",
+    language: "en",
+    hasCover: true,
+  },
+  {
+    slug: "great-gatsby",
+    filename: "publicDomain/great_gatsby.epub",
+    title: "The Great Gatsby",
+    authors: ["F. Scott Fitzgerald"],
+    published: "2021-01-17",
+    language: "en",
+    hasCover: true,
+  },
+  {
+    slug: "romeo-and-juliet",
+    filename: "publicDomain/romeo_and_juliet.epub",
+    title: "Romeo and Juliet",
+    authors: ["William Shakespeare"],
+    published: "1998-11-01",
+    language: "en",
+    hasCover: true,
+  },
 ] as const;
