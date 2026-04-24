@@ -3645,6 +3645,7 @@ dependencies = [
  "omnibus-db",
  "omnibus-frontend",
  "omnibus-shared",
+ "serde",
  "serde_json",
  "sqlx",
  "tokio",

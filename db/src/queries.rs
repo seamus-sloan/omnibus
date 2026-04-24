@@ -410,6 +410,17 @@ pub async fn replace_books(
     let mut tx = pool.begin().await?;
     let library_id = upsert_library(&mut tx, library_path).await?;
 
+    // `books_fts` is a standalone FTS5 table with no FK/cascade to `books`,
+    // so we must clear its rows explicitly before the cascade delete below.
+    // Scoped to this library via the books.id → books_fts.rowid mapping.
+    sqlx::query(
+        "DELETE FROM books_fts WHERE rowid IN
+            (SELECT id FROM books WHERE library_id = ?)",
+    )
+    .bind(library_id)
+    .execute(&mut *tx)
+    .await?;
+
     sqlx::query("DELETE FROM books WHERE library_id = ?")
         .bind(library_id)
         .execute(&mut *tx)
@@ -565,6 +576,31 @@ pub async fn replace_books(
             .execute(&mut *tx)
             .await?;
         }
+
+        // FTS row. Written inline so the bulk reindex doesn't need a trigger
+        // fan-out across six tables. Keeps the denormalized row in lock-step
+        // with the book's canonical inserts above.
+        let authors_text = join_names(
+            m.creators
+                .iter()
+                .chain(m.contributors.iter())
+                .map(|c| c.name.as_str()),
+        );
+        let series_text = m.series.clone().unwrap_or_default();
+        let tags_text = join_names(m.subjects.iter().map(String::as_str));
+        sqlx::query(
+            "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(book_id)
+        .bind(&title)
+        .bind(&authors_text)
+        .bind(&series_text)
+        .bind(&tags_text)
+        .bind(m.description.as_deref().unwrap_or(""))
+        .bind(first_isbn.as_deref().unwrap_or(""))
+        .execute(&mut *tx)
+        .await?;
 
         if let Some((mime, bytes)) = b.cover {
             new_covers.push((uuid, mime, bytes));
@@ -728,6 +764,106 @@ async fn load_identifiers(pool: &SqlitePool, book_id: i64) -> Result<Vec<Identif
         .collect())
 }
 
+/// Full-text search across `books_fts`. Returns hydrated `EbookMetadata`
+/// ordered by bm25 rank (best first). Matching is scoped to
+/// `title/authors/series` via a column filter so that short prefix queries
+/// don't surface spurious hits on generic `tags` values (e.g. typing "Dr"
+/// matching books tagged "Drama"). Ranking weights favour title matches:
+/// `bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0)` — unused columns keep
+/// neutral weights since the column filter prevents them from contributing.
+///
+/// `q` is sanitized via [`sanitize_fts_query`] before reaching `MATCH`, so
+/// arbitrary user input is safe to pass through. Returns an empty vec when
+/// the sanitized query is empty.
+pub async fn search_books(
+    pool: &SqlitePool,
+    library_path: &str,
+    q: &str,
+) -> Result<Vec<EbookMetadata>, sqlx::Error> {
+    let Some(sanitized) = sanitize_fts_query(q) else {
+        return Ok(Vec::new());
+    };
+    // FTS5 column filter. Scoping to title/authors/series keeps short
+    // queries like "Dr" from matching generic `tags` values ("Drama") or
+    // `description` contents. ISBN, tags, description remain in the index
+    // so they can be re-enabled without a migration.
+    let match_expr = format!("{{title authors series}} : ({sanitized})");
+
+    let rows = sqlx::query(
+        r#"
+        SELECT b.id, b.uuid, bf.filename AS file_stem, bf.format AS file_format,
+               b.title, b.description, b.series_index, b.has_cover,
+               b.pubdate, b.last_modified, b.isbn,
+               pub.name AS publisher_name, lang.code AS language_code,
+               s.name AS series_name
+        FROM books_fts
+        JOIN books b ON b.id = books_fts.rowid
+        JOIN libraries l ON l.id = b.library_id
+        LEFT JOIN book_files bf ON bf.book_id = b.id
+        LEFT JOIN books_publishers_link bpl ON bpl.book = b.id
+        LEFT JOIN publishers pub ON pub.id = bpl.publisher
+        LEFT JOIN books_languages_link bll ON bll.book = b.id
+        LEFT JOIN languages lang ON lang.id = bll.language
+        LEFT JOIN books_series_link bsl ON bsl.book = b.id
+        LEFT JOIN series s ON s.id = bsl.series
+        WHERE books_fts MATCH ? AND l.path = ?
+        ORDER BY bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0), b.sort, b.id
+        "#,
+    )
+    .bind(&match_expr)
+    .bind(library_path)
+    .fetch_all(pool)
+    .await?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let id: i64 = r.get("id");
+        let has_cover: i64 = r.get("has_cover");
+        let file_stem: Option<String> = r.get("file_stem");
+        let file_format: Option<String> = r.get("file_format");
+        let filename = match (file_stem, file_format) {
+            (Some(stem), Some(fmt)) => format!("{stem}.{}", fmt.to_ascii_lowercase()),
+            _ => String::new(),
+        };
+        let series_index: Option<f64> = r.get("series_index");
+
+        let creators = load_creators(pool, id).await?;
+        let subjects = load_subjects(pool, id).await?;
+        let identifiers = load_identifiers(pool, id).await?;
+
+        out.push(EbookMetadata {
+            id,
+            filename,
+            title: r.get("title"),
+            description: r.get("description"),
+            publisher: r.get("publisher_name"),
+            published: r.get("pubdate"),
+            modified: r.get("last_modified"),
+            language: r.get("language_code"),
+            rights: None,
+            source: None,
+            coverage: None,
+            dc_type: None,
+            dc_format: None,
+            relation: None,
+            creators,
+            contributors: vec![],
+            subjects,
+            identifiers,
+            series: r.get("series_name"),
+            series_index: series_index.map(format_series_index),
+            epub_version: None,
+            unique_identifier: Some(r.get::<String, _>("uuid")),
+            resource_count: 0,
+            spine_count: 0,
+            toc_count: 0,
+            cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
+            error: None,
+        });
+    }
+    Ok(out)
+}
+
 /// Build an `EbookLibrary` from whatever is currently in the DB for
 /// `library_path`. Returns an empty library (no error, no books) if the path
 /// is `None`.
@@ -795,6 +931,48 @@ fn split_filename(filename: &str) -> (String, String, String) {
 
 fn parse_series_index(s: &str) -> Option<f64> {
     s.trim().parse::<f64>().ok()
+}
+
+/// Join an iterator of names into a single whitespace-separated string for
+/// the FTS `authors` / `tags` columns. Empty inputs collapse to "".
+fn join_names<'a, I: IntoIterator<Item = &'a str>>(iter: I) -> String {
+    let mut out = String::new();
+    for name in iter {
+        if name.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(name);
+    }
+    out
+}
+
+/// Wrap each whitespace-separated token in double-quotes and append `*` to
+/// the last one for prefix matching. This lets the user type plain words
+/// (including FTS5-reserved tokens like `AND`/`NOT` or hyphenated ISBNs)
+/// without triggering a `MATCH` parse error, and gives type-ahead cheaply.
+///
+/// Returns `None` when the sanitized query is empty — callers should treat
+/// that as "don't run the query" rather than passing an empty MATCH.
+pub fn sanitize_fts_query(raw: &str) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for token in raw.split_whitespace() {
+        // Double quotes inside a token would terminate the quoted phrase.
+        // FTS5's quoted phrase escape is `""`, so double every quote.
+        let escaped = token.replace('"', "\"\"");
+        if escaped.is_empty() {
+            continue;
+        }
+        parts.push(format!("\"{escaped}\""));
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let last = parts.len() - 1;
+    parts[last].push('*');
+    Some(parts.join(" "))
 }
 
 fn format_series_index(v: f64) -> String {
@@ -1253,6 +1431,243 @@ mod tests {
         assert!(lib.path.is_none());
         assert!(lib.books.is_empty());
         assert!(lib.error.is_none());
+    }
+
+    // ---------- FTS5 (F0.4) ----------
+
+    #[test]
+    fn sanitize_fts_query_quotes_tokens_and_prefixes_last() {
+        assert_eq!(
+            sanitize_fts_query("harry pott").as_deref(),
+            Some("\"harry\" \"pott\"*")
+        );
+    }
+
+    #[test]
+    fn sanitize_fts_query_escapes_embedded_double_quotes() {
+        assert_eq!(
+            sanitize_fts_query("say \"hi").as_deref(),
+            Some("\"say\" \"\"\"hi\"*")
+        );
+    }
+
+    #[test]
+    fn sanitize_fts_query_returns_none_for_empty_and_whitespace() {
+        assert!(sanitize_fts_query("").is_none());
+        assert!(sanitize_fts_query("   \t  ").is_none());
+    }
+
+    #[test]
+    fn sanitize_fts_query_treats_operators_as_literals() {
+        // Bare `AND` / `NOT` would otherwise be parsed as FTS5 operators and
+        // could throw. Quoting makes them into literal tokens.
+        let out = sanitize_fts_query("AND NOT OR").expect("non-empty");
+        assert!(out.contains("\"AND\""));
+        assert!(out.contains("\"NOT\""));
+        assert!(out.contains("\"OR\"*"));
+    }
+
+    #[test]
+    fn sanitize_fts_query_keeps_hyphenated_isbn_as_single_token() {
+        let out = sanitize_fts_query("978-0-123456-78-9").expect("non-empty");
+        assert_eq!(out, "\"978-0-123456-78-9\"*");
+    }
+
+    #[tokio::test]
+    async fn search_books_finds_by_title_and_ranks_by_bm25() {
+        let _covers = CoversTempDir::new("fts_title");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed(
+                    "a.epub",
+                    Some("Harry Potter"),
+                    &["J.K. Rowling"],
+                    &[],
+                    None,
+                    None,
+                ),
+                indexed(
+                    "b.epub",
+                    Some("Something Else"),
+                    &["Author B"],
+                    &["harry"],
+                    None,
+                    None,
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let hits = search_books(&pool, "/lib", "harry").await.unwrap();
+        // Column filter scopes MATCH to title/authors/series — the tag-only
+        // hit on "Something Else" is intentionally excluded.
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title.as_deref(), Some("Harry Potter"));
+    }
+
+    #[tokio::test]
+    async fn search_books_finds_by_author_and_scopes_to_library() {
+        let _covers = CoversTempDir::new("fts_author");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib-a",
+            vec![indexed("a.epub", Some("A"), &["Tolkien"], &[], None, None)],
+        )
+        .await
+        .unwrap();
+        replace_books(
+            &pool,
+            "/lib-b",
+            vec![indexed("b.epub", Some("B"), &["Tolkien"], &[], None, None)],
+        )
+        .await
+        .unwrap();
+
+        let hits = search_books(&pool, "/lib-a", "tolkien").await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title.as_deref(), Some("A"));
+    }
+
+    #[tokio::test]
+    async fn search_books_empty_query_returns_empty_vec() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let hits = search_books(&pool, "/lib", "   ").await.unwrap();
+        assert!(hits.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_books_handles_unbalanced_quote_without_error() {
+        let _covers = CoversTempDir::new("fts_unbalanced");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "a.epub",
+                Some("Quoted"),
+                &["Author"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        // Unbalanced `"` in raw input must not surface as a MATCH parse error.
+        let hits = search_books(&pool, "/lib", "say \"hi")
+            .await
+            .expect("sanitizer guards against MATCH parse errors");
+        assert!(hits.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_books_excludes_isbn_column_from_match() {
+        // ISBN is indexed in books_fts but the search column filter scopes
+        // MATCH to title/authors/series, so ISBN lookups are intentionally
+        // not surfaced. When/if we re-enable ISBN search, flip this to
+        // assert a hit — no migration required.
+        let _covers = CoversTempDir::new("fts_isbn");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let mut meta = indexed("a.epub", Some("ISBN Book"), &["A"], &[], None, None).metadata;
+        meta.identifiers.push(Identifier {
+            value: "978-0-123456-78-9".into(),
+            scheme: Some("isbn".into()),
+        });
+        replace_books(
+            &pool,
+            "/lib",
+            vec![IndexedBook {
+                metadata: meta,
+                cover: None,
+            }],
+        )
+        .await
+        .unwrap();
+
+        let hits = search_books(&pool, "/lib", "978-0-123456-78-9")
+            .await
+            .unwrap();
+        assert!(hits.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rename_author_updates_fts_via_trigger() {
+        let _covers = CoversTempDir::new("fts_rename");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "a.epub",
+                Some("Book"),
+                &["OldName"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            search_books(&pool, "/lib", "OldName").await.unwrap().len(),
+            1
+        );
+
+        sqlx::query("UPDATE authors SET name = 'NewName' WHERE name = 'OldName'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            search_books(&pool, "/lib", "NewName").await.unwrap().len(),
+            1
+        );
+        assert_eq!(
+            search_books(&pool, "/lib", "OldName").await.unwrap().len(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn reindex_keeps_fts_row_count_in_sync() {
+        let _covers = CoversTempDir::new("fts_reindex");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed("a.epub", Some("A"), &["X"], &[], None, None),
+                indexed("b.epub", Some("B"), &["Y"], &[], None, None),
+            ],
+        )
+        .await
+        .unwrap();
+        // Reindex with one fewer book.
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed("a.epub", Some("A"), &["X"], &[], None, None)],
+        )
+        .await
+        .unwrap();
+
+        let book_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let fts_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books_fts")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(book_count, 1);
+        assert_eq!(fts_count, 1, "FTS row count must match book count");
     }
 
     #[tokio::test]
