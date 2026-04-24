@@ -28,6 +28,8 @@ test("renders every fixture book with the expected metadata", async ({ page }) =
   await expect(page.getByTestId(/^ebook-row-/)).toHaveCount(FIXTURE_BOOKS.length);
 
   for (const expected of FIXTURE_BOOKS) {
-    await expectRowMatches(page, expected);
+    await test.step(`renders "${expected.title}" from ${expected.filename}`, async () => {
+      await expectRowMatches(page, expected);
+    });
   }
 });

@@ -1,6 +1,28 @@
-import type { Locator, Page } from "@playwright/test";
+import type { APIRequestContext, Locator, Page } from "@playwright/test";
 import { expect } from "../fixtures/test";
 import type { ExpectedBook } from "../fixtures/epubs";
+
+/**
+ * Look up the backend `id` for a fixture book by exact title. Hits the same
+ * RPC the landing page reads, so the id matches what `/books/:id` would
+ * receive on a real click. Throws if the seeded library does not contain a
+ * book with that title.
+ */
+export async function fetchBookIdByTitle(
+  request: APIRequestContext,
+  title: string,
+): Promise<number> {
+  const resp = await request.get("/api/rpc/ebooks");
+  expect(resp.status(), "GET /api/rpc/ebooks failed").toBe(200);
+  const body = (await resp.json()) as { books: { id: number; title: string | null }[] };
+  const match = body.books.find((b) => b.title === title);
+  if (!match) {
+    throw new Error(
+      `no seeded book with title ${JSON.stringify(title)} (got ${body.books.length} books)`,
+    );
+  }
+  return match.id;
+}
 
 /** Locate the row for a fixture by its slug — matches `data-testid="ebook-row-${slug}"`. */
 export function getRow(page: Page, slug: string): Locator {
