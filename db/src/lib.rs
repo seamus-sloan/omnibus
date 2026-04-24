@@ -4,6 +4,7 @@
 //! (axum REST handlers) and `frontend/` (Dioxus server functions under
 //! `feature = "server"`).
 
+pub mod auth;
 pub mod ebook;
 pub mod indexer;
 pub mod queries;
