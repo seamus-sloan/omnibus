@@ -8,18 +8,21 @@ path and waits for the indexer to surface the same number of books listed in
 ## Contents
 
 ```
-generated/   — synthetic EPUBs produced by tools/make_epub.ts (committed)
+generated/    — synthetic EPUBs produced by tools/make_epub.ts (committed)
+publicDomain/ — real EPUBs from Project Gutenberg / Standard Ebooks
 ```
 
-## Why synthetic instead of public-domain text?
+The seeder points the server at `test-data/epubs/` (this directory). The
+scanner recurses, so both subdirectories load in a single seed call.
 
-The plan originally called for a small set of Project Gutenberg EPUBs alongside
-the synthetic ones, but synthetic EPUBs already give us total control over every
-metadata column the landing page renders (title, authors, publisher, date,
-language, series + index, cover/no-cover) without depending on what Gutenberg
-happens to ship in their OPF. Add real EPUBs here later if a test needs to
-exercise the parser against real-world data; the synthetic set is sufficient for
-the landing-page contract.
+## Synthetic vs. public-domain
+
+The synthetic EPUBs cover every metadata column the landing page renders
+(title, authors, publisher, date, language, series + index, cover / no-cover)
+because we control their OPFs end-to-end. The public-domain EPUBs exercise the
+OPF parser against real-world files we don't control; their expected metadata
+is pinned in `db/tests/public_domain_epubs.rs` so a parser change that subtly
+drops a field surfaces there before Playwright sees it.
 
 ## Single source of truth for expected metadata
 
