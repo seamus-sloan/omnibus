@@ -8,7 +8,7 @@
 //! * [`handlers`] — `/api/auth/{register,login,logout,me}` + [`auth_router`].
 //! * [`csrf`] — `origin_check` middleware for cookie-authed state-changing
 //!   requests.
-//! * [`rate_limit`] — per-IP token bucket + `rate_limit_auth` middleware
+//! * [`rate_limit`] — per-IP fixed-window counter + `rate_limit_auth` middleware
 //!   scoped to the login/register endpoints.
 //! * [`strategy`] — `AuthStrategy` trait + `PasswordStrategy` impl. OIDC
 //!   and WebAuthn fit the same shape.
