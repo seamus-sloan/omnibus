@@ -20,14 +20,20 @@ fn main() {
     {
         dioxus::serve(|| async move {
             use dioxus::server::axum::Extension;
-            use omnibus::backend;
+            use omnibus::{auth, backend};
             use omnibus_db::indexer;
+            use std::sync::Arc;
 
             let database_url = std::env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "sqlite://omnibus.db?mode=rwc".to_string());
 
             let pool = omnibus_db::init_db(&database_url).await?;
             omnibus_db::seed_settings_from_env(&pool).await?;
+
+            // Recovery hook: promote the named user to admin if
+            // OMNIBUS_INITIAL_ADMIN is set. No-op otherwise. Logs on
+            // promotion so the action is auditable.
+            auth::boot::apply_initial_admin(&pool).await?;
 
             // Kick off a reindex in the background if the index is empty or
             // stale. The first user request reads whatever is currently in
@@ -39,8 +45,17 @@ fn main() {
             }
 
             let state = backend::AppState::new(pool.clone());
+            let limiter = Arc::new(auth::RateLimiter::new());
             let router = dioxus::server::router(App)
-                .merge(backend::rest_router(state))
+                .merge(backend::rest_router(state.clone()))
+                .merge(
+                    auth::auth_router(state)
+                        .layer(axum::middleware::from_fn_with_state(
+                            limiter,
+                            auth::rate_limit_auth,
+                        ))
+                        .layer(axum::middleware::from_fn(auth::origin_check)),
+                )
                 .layer(Extension(pool))
                 .layer(tower_http::trace::TraceLayer::new_for_http());
 
