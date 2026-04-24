@@ -17,11 +17,14 @@ use axum::{
 };
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 pub const WINDOW_SECS: u64 = 60;
 pub const MAX_REQUESTS: u32 = 10;
+/// Maximum number of tracked IPs before stale buckets are pruned.
+const MAX_BUCKETS: usize = 10_000;
 
 fn trust_forwarded_for() -> bool {
     matches!(
@@ -35,6 +38,9 @@ struct Bucket {
     count: u32,
 }
 
+/// `tokio::sync::Mutex` is used here rather than `std::sync::Mutex` so that
+/// `allow()` never blocks a Tokio worker thread while waiting for the lock
+/// under contention.
 pub struct RateLimiter {
     inner: Mutex<HashMap<IpAddr, Bucket>>,
     window: Duration,
@@ -54,15 +60,16 @@ impl RateLimiter {
         }
     }
 
-    pub fn allow(&self, ip: IpAddr) -> bool {
+    pub async fn allow(&self, ip: IpAddr) -> bool {
         let now = Instant::now();
-        let mut map = match self.inner.lock() {
-            Ok(g) => g,
-            // Poisoned lock = a previous caller panicked while holding it.
-            // For a rate limiter the safe fallback is "fail open" — we'd
-            // rather let one extra request through than 500 the whole server.
-            Err(_) => return true,
-        };
+        let mut map = self.inner.lock().await;
+
+        // Prune stale entries when the map gets large to prevent unbounded growth.
+        if map.len() >= MAX_BUCKETS {
+            let window = self.window;
+            map.retain(|_, b| now.duration_since(b.window_start) < window * 2);
+        }
+
         let bucket = map.entry(ip).or_insert(Bucket {
             window_start: now,
             count: 0,
@@ -118,7 +125,7 @@ pub async fn rate_limit_auth(
                 .and_then(|s| s.trim().parse().ok())
         })
         .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-    if !limiter.allow(ip) {
+    if !limiter.allow(ip).await {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded").into_response();
     }
     next.run(req).await
@@ -128,33 +135,48 @@ pub async fn rate_limit_auth(
 mod tests {
     use super::*;
 
-    #[test]
-    fn allows_up_to_max_then_blocks() {
+    #[tokio::test]
+    async fn allows_up_to_max_then_blocks() {
         let rl = RateLimiter::with_policy(Duration::from_secs(60), 3);
         let ip: IpAddr = "127.0.0.1".parse().unwrap();
-        assert!(rl.allow(ip));
-        assert!(rl.allow(ip));
-        assert!(rl.allow(ip));
-        assert!(!rl.allow(ip));
+        assert!(rl.allow(ip).await);
+        assert!(rl.allow(ip).await);
+        assert!(rl.allow(ip).await);
+        assert!(!rl.allow(ip).await);
     }
 
-    #[test]
-    fn separate_ips_have_separate_buckets() {
+    #[tokio::test]
+    async fn separate_ips_have_separate_buckets() {
         let rl = RateLimiter::with_policy(Duration::from_secs(60), 1);
         let a: IpAddr = "127.0.0.1".parse().unwrap();
         let b: IpAddr = "127.0.0.2".parse().unwrap();
-        assert!(rl.allow(a));
-        assert!(!rl.allow(a));
-        assert!(rl.allow(b));
+        assert!(rl.allow(a).await);
+        assert!(!rl.allow(a).await);
+        assert!(rl.allow(b).await);
     }
 
-    #[test]
-    fn window_resets_after_elapsed() {
+    #[tokio::test]
+    async fn window_resets_after_elapsed() {
         let rl = RateLimiter::with_policy(Duration::from_millis(10), 1);
         let ip: IpAddr = "127.0.0.1".parse().unwrap();
-        assert!(rl.allow(ip));
-        assert!(!rl.allow(ip));
-        std::thread::sleep(Duration::from_millis(20));
-        assert!(rl.allow(ip));
+        assert!(rl.allow(ip).await);
+        assert!(!rl.allow(ip).await);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(rl.allow(ip).await);
+    }
+
+    #[tokio::test]
+    async fn prunes_stale_entries_at_cap() {
+        let rl = RateLimiter::with_policy(Duration::from_millis(1), MAX_REQUESTS);
+        // Fill to just under the cap using distinct IPs.
+        for i in 0..MAX_BUCKETS {
+            let ip = IpAddr::V4(std::net::Ipv4Addr::from(i as u32));
+            rl.allow(ip).await;
+        }
+        // All windows are stale; a new allow() call should prune and succeed.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let ip: IpAddr = "1.2.3.4".parse().unwrap();
+        assert!(rl.allow(ip).await);
+        assert!(rl.inner.lock().await.len() < MAX_BUCKETS);
     }
 }
