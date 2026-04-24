@@ -93,23 +93,92 @@ pub async fn get_settings(pool: &SqlitePool) -> Result<Settings, sqlx::Error> {
 }
 
 pub async fn set_settings(pool: &SqlitePool, settings: &Settings) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
     upsert_or_clear(
-        pool,
+        &mut tx,
         "ebook_library_path",
         settings.ebook_library_path.as_deref(),
     )
     .await?;
     upsert_or_clear(
-        pool,
+        &mut tx,
         "audiobook_library_path",
         settings.audiobook_library_path.as_deref(),
     )
     .await?;
+    let orphan_uuids = prune_orphan_libraries(
+        &mut tx,
+        &[
+            settings.ebook_library_path.as_deref(),
+            settings.audiobook_library_path.as_deref(),
+        ],
+    )
+    .await?;
+    tx.commit().await?;
+
+    delete_cover_files_for(&orphan_uuids);
     Ok(())
 }
 
+/// Delete every `libraries` row whose `path` is not in `keep`, along with
+/// its books, dependent rows removed by book-level cascades, FTS rows, and
+/// on-disk cover files. Settings has at most one ebook and one audiobook
+/// path, so any library whose path isn't one of those is orphaned and must
+/// go — otherwise switching the configured path leaves the old library's
+/// rows behind and `list_books` callers for the old path continue to see
+/// its data.
+///
+/// Returns the orphaned books' UUIDs so the caller can delete the matching
+/// cover files *after* committing the transaction — filesystem side-effects
+/// must not run inside the DB transaction.
+async fn prune_orphan_libraries(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    keep: &[Option<&str>],
+) -> Result<Vec<String>, sqlx::Error> {
+    let orphans: Vec<(i64, String)> = sqlx::query_as("SELECT id, path FROM libraries")
+        .fetch_all(&mut **tx)
+        .await?
+        .into_iter()
+        .filter(|(_, path): &(i64, String)| {
+            !keep.iter().any(|k| k.map(|s| s == path).unwrap_or(false))
+        })
+        .collect();
+
+    if orphans.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut orphan_uuids: Vec<String> = Vec::new();
+    for (id, _) in &orphans {
+        let mut uuids: Vec<String> =
+            sqlx::query_scalar("SELECT uuid FROM books WHERE library_id = ?")
+                .bind(id)
+                .fetch_all(&mut **tx)
+                .await?;
+        orphan_uuids.append(&mut uuids);
+
+        sqlx::query(
+            "DELETE FROM books_fts WHERE rowid IN
+                (SELECT id FROM books WHERE library_id = ?)",
+        )
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+        sqlx::query("DELETE FROM books WHERE library_id = ?")
+            .bind(id)
+            .execute(&mut **tx)
+            .await?;
+        sqlx::query("DELETE FROM libraries WHERE id = ?")
+            .bind(id)
+            .execute(&mut **tx)
+            .await?;
+    }
+
+    Ok(orphan_uuids)
+}
+
 async fn upsert_or_clear(
-    pool: &SqlitePool,
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
     key: &str,
     value: Option<&str>,
 ) -> Result<(), sqlx::Error> {
@@ -118,13 +187,13 @@ async fn upsert_or_clear(
             sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
                 .bind(key)
                 .bind(v)
-                .execute(pool)
+                .execute(&mut **tx)
                 .await?;
         }
         None => {
             sqlx::query("DELETE FROM settings WHERE key = ?")
                 .bind(key)
-                .execute(pool)
+                .execute(&mut **tx)
                 .await?;
         }
     }
@@ -1695,5 +1764,134 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(titles, vec!["A".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn set_settings_prunes_library_when_ebook_path_changes() {
+        let _covers = CoversTempDir::new("prune-change");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        set_settings(
+            &pool,
+            &Settings {
+                ebook_library_path: Some("/old".into()),
+                audiobook_library_path: None,
+            },
+        )
+        .await
+        .unwrap();
+        replace_books(
+            &pool,
+            "/old",
+            vec![indexed(
+                "a.epub",
+                Some("Dracula"),
+                &["Stoker"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+        assert_eq!(list_books(&pool, "/old").await.unwrap().len(), 1);
+
+        set_settings(
+            &pool,
+            &Settings {
+                ebook_library_path: Some("/new".into()),
+                audiobook_library_path: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(list_books(&pool, "/old").await.unwrap().is_empty());
+        let library_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM libraries")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(library_count, 0);
+        let book_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(book_count, 0);
+        let fts_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books_fts")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(fts_count, 0);
+    }
+
+    #[tokio::test]
+    async fn set_settings_keeps_libraries_still_configured() {
+        let _covers = CoversTempDir::new("prune-keep");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        set_settings(
+            &pool,
+            &Settings {
+                ebook_library_path: Some("/books".into()),
+                audiobook_library_path: Some("/audio".into()),
+            },
+        )
+        .await
+        .unwrap();
+        replace_books(
+            &pool,
+            "/books",
+            vec![indexed("a.epub", Some("A"), &["X"], &[], None, None)],
+        )
+        .await
+        .unwrap();
+
+        set_settings(
+            &pool,
+            &Settings {
+                ebook_library_path: Some("/books".into()),
+                audiobook_library_path: Some("/audio".into()),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(list_books(&pool, "/books").await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn set_settings_none_removes_library_data() {
+        let _covers = CoversTempDir::new("prune-clear");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        set_settings(
+            &pool,
+            &Settings {
+                ebook_library_path: Some("/books".into()),
+                audiobook_library_path: None,
+            },
+        )
+        .await
+        .unwrap();
+        replace_books(
+            &pool,
+            "/books",
+            vec![indexed("a.epub", Some("A"), &["X"], &[], None, None)],
+        )
+        .await
+        .unwrap();
+
+        set_settings(
+            &pool,
+            &Settings {
+                ebook_library_path: None,
+                audiobook_library_path: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let library_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM libraries")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(library_count, 0);
     }
 }
