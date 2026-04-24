@@ -37,3 +37,7 @@ ui_tests/**/.playwright/
 # Local ebook library (test data)
 /epubs
 /epubs/
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store
