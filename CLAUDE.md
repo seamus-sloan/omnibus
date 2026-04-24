@@ -73,7 +73,7 @@ migrations/         — numbered SQL migrations embedded via sqlx::migrate!
 lib.rs              — Route, App, styles, ScreenLayout (feature-gated)
 data.rs             — Feature-gated data transport (mobile=reqwest, web/server=rpc)
 rpc.rs              — #[get]/#[post] server functions (mounted by dioxus::server::router); server bodies call into omnibus_db
-pages/{landing,settings,book_detail}.rs
+pages/{landing,settings,book_detail,auth}.rs  — auth.rs hosts LoginPage + RegisterPage
 components/{top_nav,bottom_nav}.rs  — feature = web / mobile respectively
 ```
 
@@ -84,7 +84,8 @@ main.rs             — dioxus::launch (WASM) / dioxus::serve (native); mounts a
 lib.rs              — re-exports backend + auth under `server` feature for tests
 backend.rs          — /api/* REST router (mobile-facing) + integration tests
 auth/mod.rs         — /api/auth/{register,login,logout,me} + AuthUser/AdminUser extractors + CSRF origin-check
-auth/rate_limit.rs  — in-memory per-IP token bucket for login/register
+auth/gate.rs        — top-level middleware gating /api/* (pass-through for /api/auth/*)
+auth/rate_limit.rs  — in-memory per-IP fixed-window counter for login/register
 auth/strategy.rs    — AuthStrategy trait + PasswordStrategy (OIDC/WebAuthn fit the same shape)
 auth/boot.rs        — OMNIBUS_INITIAL_ADMIN recovery hook (promotes named user to admin)
 ```

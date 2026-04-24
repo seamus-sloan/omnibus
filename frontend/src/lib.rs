@@ -14,7 +14,7 @@ pub mod pages;
 pub mod rpc;
 
 pub use components::Nav;
-pub use pages::{BookDetailPage, LandingPage, SettingsPage};
+pub use pages::{BookDetailPage, LandingPage, LoginPage, RegisterPage, SettingsPage};
 
 #[cfg(feature = "mobile")]
 pub use data::ServerUrl;
@@ -28,6 +28,10 @@ pub enum Route {
     Settings {},
     #[route("/books/:id")]
     BookDetail { id: i64 },
+    #[route("/login")]
+    Login {},
+    #[route("/register")]
+    Register {},
 }
 
 /// Route target for `/` — wraps [`LandingPage`] in the platform screen layout.
@@ -52,6 +56,28 @@ pub fn Settings() -> Element {
 pub fn BookDetail(id: i64) -> Element {
     rsx! {
         ScreenLayout { BookDetailPage { id } }
+    }
+}
+
+/// Route target for `/login` — credential entry form. Rendered without the
+/// main screen chrome so the login flow stands alone.
+#[component]
+pub fn Login() -> Element {
+    rsx! {
+        div { class: "auth-shell",
+            LoginPage {}
+        }
+    }
+}
+
+/// Route target for `/register` — account-creation form. Same chrome as
+/// [`Login`] so the two pages feel like one flow.
+#[component]
+pub fn Register() -> Element {
+    rsx! {
+        div { class: "auth-shell",
+            RegisterPage {}
+        }
     }
 }
 
@@ -133,6 +159,18 @@ body {
   min-height: 100vh;
   padding: 1.5rem 1rem 5rem;
 }
+
+.auth-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+}
+.auth-card { width: 100%; max-width: 380px; }
+.auth-form { display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem; }
+.auth-footer { font-size: 0.85rem; color: #94a3b8; margin-top: 1rem; text-align: center; }
+.auth-footer a { color: #22d3ee; }
 
 .top-nav {
   display: flex;

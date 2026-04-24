@@ -12,10 +12,20 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   reporter: "list",
+  globalSetup: require.resolve("./globalSetup.ts"),
   use: {
     baseURL: "http://127.0.0.1:3000",
     trace: "on-first-retry",
     screenshot: "only-on-failure",
+    storageState: "./.auth/storage.json",
+    // Server-side `origin_check` middleware rejects cookie-authed
+    // state-changing requests with no `Origin`/`Referer`. Playwright's
+    // APIRequestContext (used by `globalSetup` and seeding helpers) does
+    // not send Origin by default, so attach one matching `baseURL` to
+    // every request the suite makes — both browser and API.
+    extraHTTPHeaders: {
+      Origin: "http://127.0.0.1:3000",
+    },
   },
   projects: [
     {

@@ -11,6 +11,8 @@
 //!   web stubs so SSR-during-fullstack-render still returns sensible data.
 
 use omnibus_shared::{EbookLibrary, LibraryContents, Settings};
+#[cfg(feature = "web")]
+use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};
 
 // ===== Mobile transport: reqwest =====
 
@@ -171,4 +173,79 @@ pub async fn search_ebooks(_server_url: &str, q: &str) -> Result<EbookLibrary, S
     crate::rpc::rpc_search(q.to_string())
         .await
         .map_err(|e| e.to_string())
+}
+
+// ===== Auth transport (web only) =====
+//
+// The web client hits the REST auth endpoints directly via `gloo-net` rather
+// than going through a Dioxus server function. The REST endpoints already
+// know how to set/clear the `omnibus_session` cookie via the `CookieJar`
+// extractor, and browser fetch (same-origin) round-trips the cookie
+// automatically. Server functions would force us to re-plumb cookie
+// handling through the Dioxus fullstack response shape for no gain.
+//
+// SSR and server-only builds don't need these helpers: the login/register
+// pages render the same markup on the server (no auth calls issued during
+// SSR), and the actions only fire on user interaction after hydration.
+
+#[cfg(feature = "web")]
+pub async fn login(req: LoginRequest) -> Result<LoginResponse, String> {
+    post_auth_json("/api/auth/login", &req).await
+}
+
+#[cfg(feature = "web")]
+pub async fn register(req: RegisterRequest) -> Result<LoginResponse, String> {
+    post_auth_json("/api/auth/register", &req).await
+}
+
+#[cfg(feature = "web")]
+pub async fn logout() -> Result<(), String> {
+    use gloo_net::http::Request;
+    let res = Request::post("/api/auth/logout")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !res.ok() && res.status() != 204 {
+        return Err(format!("logout failed: {}", res.status()));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "web")]
+pub async fn current_user() -> Result<Option<UserSummary>, String> {
+    use gloo_net::http::Request;
+    let res = Request::get("/api/auth/me")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if res.status() == 401 {
+        return Ok(None);
+    }
+    if !res.ok() {
+        return Err(format!("me failed: {}", res.status()));
+    }
+    res.json::<UserSummary>()
+        .await
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(feature = "web")]
+async fn post_auth_json<T: serde::Serialize>(
+    path: &str,
+    body: &T,
+) -> Result<LoginResponse, String> {
+    use gloo_net::http::Request;
+    let res = Request::post(path)
+        .json(body)
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !res.ok() {
+        let status = res.status();
+        let msg = res.text().await.unwrap_or_default();
+        return Err(format!("{status}: {msg}"));
+    }
+    res.json::<LoginResponse>().await.map_err(|e| e.to_string())
 }
