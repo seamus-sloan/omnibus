@@ -9,7 +9,7 @@ path and waits for the indexer to surface the same number of books listed in
 
 ```
 generated/    — synthetic EPUBs produced by tools/make_epub.ts (committed)
-publicDomain/ — real EPUBs from Project Gutenberg / Standard Ebooks
+public_domain/ — real EPUBs from Project Gutenberg / Standard Ebooks
 ```
 
 The seeder points the server at `test-data/epubs/` (this directory). The
