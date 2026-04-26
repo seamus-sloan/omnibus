@@ -14,7 +14,12 @@
 //!   and WebAuthn fit the same shape.
 //! * [`boot`] — `OMNIBUS_INITIAL_ADMIN` recovery hook.
 //!
-//! No existing `/api/*` routes are gated yet — PR3 flips that switch.
+//! Per-route enforcement (F0.7): every protected handler in
+//! [`crate::backend`] and every server function in `omnibus_frontend::rpc`
+//! declares the strictest extractor it needs (`AuthUser` for read paths,
+//! `AdminUser` for state-changing ops on shared config). The middleware
+//! [`gate::require_auth`] is just the boundary; the per-route extractors
+//! are what actually enforce the permission columns.
 
 pub mod boot;
 pub mod csrf;
@@ -23,6 +28,9 @@ pub mod gate;
 pub mod handlers;
 pub mod rate_limit;
 pub mod strategy;
+
+#[cfg(test)]
+pub mod test_support;
 
 pub use csrf::origin_check;
 pub use extractor::{AdminUser, AuthUser};
