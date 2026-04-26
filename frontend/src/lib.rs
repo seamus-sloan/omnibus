@@ -101,6 +101,51 @@ fn ScreenLayout(children: Element) -> Element {
 #[cfg(feature = "mobile")]
 #[component]
 fn ScreenLayout(children: Element) -> Element {
+    // Mobile auth gate. Two layers:
+    //
+    // * **Render-path placeholder.** When `authed` is false we render an
+    //   empty screen instead of `{children}`. This is the no-flash
+    //   guarantee — protected pages never mount and never kick off a
+    //   data-fetch effect that would 401.
+    // * **Reactive redirect.** `authed` is a Dioxus `Signal` driven by
+    //   the `data::token_store::subscribe()` watch channel. When the
+    //   token gets cleared mid-session (e.g. `data::note_status` on a
+    //   401), the worker pushes `false`, the `use_future` loop updates
+    //   the signal, the component re-renders, and the `use_effect`
+    //   (which now reads a reactive signal) fires `nav.replace`.
+    //
+    // The auth-shell screens (`Login` / `Register`) don't go through
+    // `ScreenLayout`, so they stay reachable for unauthenticated users.
+    let nav = dioxus_router::use_navigator();
+    let mut authed = use_signal(|| data::token_store::get().is_some());
+
+    use_future(move || async move {
+        let mut rx = data::token_store::subscribe();
+        // Sync initial value once before awaiting changes — the signal's
+        // initial closure ran at scope-creation time, which can race with
+        // a token write that happens between scope creation and this
+        // future starting.
+        let current = *rx.borrow_and_update();
+        if current != authed() {
+            authed.set(current);
+        }
+        while rx.changed().await.is_ok() {
+            let now = *rx.borrow_and_update();
+            if now != authed() {
+                authed.set(now);
+            }
+        }
+    });
+
+    use_effect(move || {
+        if !authed() {
+            nav.replace(Route::Login {});
+        }
+    });
+
+    if !authed() {
+        return rsx! { div { class: "screen" } };
+    }
     rsx! {
         div { class: "screen",
             {children}
