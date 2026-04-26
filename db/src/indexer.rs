@@ -5,7 +5,9 @@
 //! scan the configured library, then atomically replace the DB rows for
 //! that path.
 //!
-//! Two triggers fire a reindex:
+//! Two triggers fire a reindex (both routed through
+//! [`crate::worker::Worker`] so concurrency and per-path serialization are
+//! enforced centrally):
 //! - On startup, if no index exists yet or the existing one is older than
 //!   [`REFRESH_AFTER_SECS`].
 //! - On every settings save (the library path may have changed, and even if
@@ -55,22 +57,4 @@ pub async fn reindex(pool: &SqlitePool, library_path: String) -> anyhow::Result<
     }
     queries::replace_books(pool, &library_path, scan.books).await?;
     Ok(())
-}
-
-/// Spawn a background reindex if stale. Silent on success — the next list
-/// request will see the new rows. Errors are logged but not surfaced.
-pub fn spawn_reindex_if_stale(pool: SqlitePool, library_path: String) {
-    tokio::spawn(async move {
-        match is_stale(&pool, &library_path).await {
-            Ok(false) => return,
-            Ok(true) => {}
-            Err(e) => {
-                eprintln!("indexer: could not read index state: {e}");
-                return;
-            }
-        }
-        if let Err(e) = reindex(&pool, library_path).await {
-            eprintln!("indexer: reindex failed: {e}");
-        }
-    });
 }

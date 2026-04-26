@@ -152,7 +152,7 @@ impl Worker {
     async fn execute(&self, task: Task) -> TaskOutcome {
         match task {
             Task::Scan { library_path } => {
-                match omnibus_db::indexer::reindex(&self.pool, library_path).await {
+                match crate::indexer::reindex(&self.pool, library_path).await {
                     Ok(()) => TaskOutcome::Ok,
                     Err(e) => TaskOutcome::Err(e.to_string()),
                 }
@@ -186,7 +186,7 @@ mod tests {
     use std::time::Instant;
 
     async fn pool() -> SqlitePool {
-        omnibus_db::init_db("sqlite::memory:").await.unwrap()
+        crate::init_db("sqlite::memory:").await.unwrap()
     }
 
     fn make_worker_default(pool: SqlitePool) -> Arc<Worker> {

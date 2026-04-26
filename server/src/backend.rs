@@ -5,6 +5,8 @@
 //! merged alongside them in `main.rs` so mobile's existing `reqwest` paths
 //! keep working unchanged.
 
+use std::sync::Arc;
+
 use axum::{
     extract::{Path, Query, State},
     http::header,
@@ -12,7 +14,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use omnibus_db::{self as db, indexer, scanner};
+use omnibus_db::{
+    self as db, scanner,
+    worker::{Task, Worker, WorkerConfig},
+};
 use omnibus_shared::{Settings, ValueResponse};
 use serde::Deserialize;
 use sqlx::SqlitePool;
@@ -20,15 +25,21 @@ use sqlx::SqlitePool;
 #[derive(Clone)]
 pub struct AppState {
     pool: SqlitePool,
+    worker: Arc<Worker>,
 }
 
 impl AppState {
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        let worker = Worker::new(pool.clone(), WorkerConfig::default());
+        Self { pool, worker }
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub fn worker(&self) -> &Arc<Worker> {
+        &self.worker
     }
 }
 
@@ -84,16 +95,26 @@ async fn post_settings(State(state): State<AppState>, Json(settings): Json<Setti
             Ok(updated) => {
                 // Library path may have changed (and even when it hasn't,
                 // the user has signalled they want to pick up on-disk
-                // changes). Kick off a reindex in the background.
-                if let Some(path) = updated.ebook_library_path.clone() {
-                    let pool = state.pool.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = indexer::reindex(&pool, path).await {
-                            eprintln!("post_settings: reindex failed: {e}");
-                        }
-                    });
+                // changes). Hand the reindex to the shared Worker so the
+                // per-path mutex serializes overlapping saves and the
+                // scan_concurrency cap stays honored.
+                let task_id = updated
+                    .ebook_library_path
+                    .clone()
+                    .map(|library_path| state.worker.post(Task::Scan { library_path }));
+
+                let mut response = Json(updated).into_response();
+                #[cfg(debug_assertions)]
+                if let Some(id) = task_id {
+                    if let Ok(value) = id.to_string().parse::<axum::http::HeaderValue>() {
+                        response
+                            .headers_mut()
+                            .insert("X-Omnibus-Worker-Task-Id", value);
+                    }
                 }
-                Json(updated).into_response()
+                #[cfg(not(debug_assertions))]
+                let _ = task_id;
+                response
             }
             Err(error) => (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -531,5 +552,76 @@ mod tests {
             .await
             .expect("request should succeed");
         assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn post_settings_triggers_scan_via_worker() {
+        use db::worker::TaskOutcome;
+
+        let pool = db::init_db("sqlite::memory:")
+            .await
+            .expect("db should initialize");
+        let state = AppState::new(pool);
+        let app = rest_router(state.clone());
+
+        // Resolve the playwright fixtures directory relative to the server
+        // crate manifest. Asserting `is_dir` up front avoids a confusing
+        // "scan failed" error if the fixtures move.
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../test_data/epubs/generated")
+            .canonicalize()
+            .expect("fixtures dir should resolve");
+        assert!(fixtures.is_dir(), "fixtures dir missing: {fixtures:?}");
+        let path_str = fixtures.to_string_lossy().to_string();
+
+        let body = serde_json::json!({
+            "ebook_library_path": path_str,
+            "audiobook_library_path": null,
+        });
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/settings")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("POST should succeed");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let task_id: db::worker::TaskId = response
+            .headers()
+            .get("X-Omnibus-Worker-Task-Id")
+            .expect("worker task id header should be set in debug builds")
+            .to_str()
+            .expect("header value should be ASCII")
+            .parse()
+            .expect("header value should be a u64");
+
+        match state.worker().await_completion(task_id).await {
+            TaskOutcome::Ok => {}
+            TaskOutcome::Err(e) => panic!("worker scan failed: {e}"),
+        }
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/ebooks")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("GET /api/ebooks should succeed");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let lib: omnibus_shared::EbookLibrary = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            !lib.books.is_empty(),
+            "worker should have indexed at least one book from {path_str}"
+        );
     }
 }

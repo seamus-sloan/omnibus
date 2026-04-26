@@ -9,6 +9,7 @@ pub mod ebook;
 pub mod indexer;
 pub mod queries;
 pub mod scanner;
+pub mod worker;
 
 // Flatten the query layer so callers write `omnibus_db::list_books(...)`
 // instead of `omnibus_db::queries::list_books(...)`. Keeps callsites terse

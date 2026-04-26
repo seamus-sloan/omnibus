@@ -18,13 +18,20 @@ use dioxus::prelude::*;
 use omnibus_shared::{EbookLibrary, LibraryContents, Settings, ValueResponse};
 
 #[cfg(feature = "server")]
-use omnibus_db::{self as db, indexer, scanner};
+use omnibus_db::{self as db, scanner};
 
 /// Server-only extractor alias used by each server function. Only referenced
 /// by the server-side body; the `#[cfg(feature = "server")]` stops the
 /// web build from importing axum/sqlx types.
 #[cfg(feature = "server")]
 type PoolExt = dioxus::fullstack::axum::Extension<sqlx::SqlitePool>;
+
+/// Server-only extractor alias for the shared background `Worker`. The
+/// fullstack router in `server/src/main.rs` layers it as
+/// `Extension<Arc<Worker>>` so server-function bodies can post tasks
+/// instead of spawning their own `tokio::spawn` calls.
+#[cfg(feature = "server")]
+type WorkerExt = dioxus::fullstack::axum::Extension<std::sync::Arc<omnibus_db::worker::Worker>>;
 
 #[get("/api/rpc/value", pool: PoolExt)]
 pub async fn rpc_get_value() -> Result<ValueResponse> {
@@ -43,20 +50,17 @@ pub async fn rpc_get_settings() -> Result<Settings> {
     Ok(db::get_settings(&pool.0).await?)
 }
 
-#[post("/api/rpc/settings", pool: PoolExt)]
+#[post("/api/rpc/settings", pool: PoolExt, worker: WorkerExt)]
 pub async fn rpc_save_settings(settings: Settings) -> Result<Settings> {
     db::set_settings(&pool.0, &settings).await?;
     let updated = db::get_settings(&pool.0).await?;
     // Library path may have changed (and even when it hasn't, the user has
-    // signalled they want to pick up on-disk changes). Kick off a reindex
-    // so the next list request sees fresh data.
-    if let Some(path) = updated.ebook_library_path.clone() {
-        let pool_clone = pool.0.clone();
-        tokio::spawn(async move {
-            if let Err(e) = indexer::reindex(&pool_clone, path).await {
-                eprintln!("rpc_save_settings: reindex failed: {e}");
-            }
-        });
+    // signalled they want to pick up on-disk changes). Hand the reindex
+    // off to the shared Worker so concurrent saves serialize per-path.
+    if let Some(library_path) = updated.ebook_library_path.clone() {
+        worker
+            .0
+            .post(omnibus_db::worker::Task::Scan { library_path });
     }
     Ok(updated)
 }
