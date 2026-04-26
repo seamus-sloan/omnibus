@@ -10,9 +10,9 @@ use std::path::PathBuf;
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
-        .join("test-data")
+        .join("test_data")
         .join("epubs")
-        .join("publicDomain")
+        .join("public_domain")
 }
 
 #[test]
