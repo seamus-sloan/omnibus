@@ -27,7 +27,6 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use axum_extra::extract::cookie::CookieJar;
 use omnibus_db::auth as auth_db;
 
 use super::extractor::extract_token;
@@ -38,8 +37,7 @@ pub async fn require_auth(State(state): State<AppState>, req: Request, next: Nex
     if !path.starts_with("/api/") || path == "/api/auth" || path.starts_with("/api/auth/") {
         return next.run(req).await;
     }
-    let jar = CookieJar::from_headers(req.headers());
-    let Some((token, _kind)) = extract_token(req.headers(), &jar) else {
+    let Some((token, _kind)) = extract_token(req.headers()) else {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     };
     match auth_db::lookup_session(state.pool(), &token).await {

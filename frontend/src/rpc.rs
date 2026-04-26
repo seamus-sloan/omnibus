@@ -83,7 +83,10 @@ mod server_auth {
     {
         type Rejection = Response;
 
-        async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        async fn from_request_parts(
+            parts: &mut Parts,
+            _state: &S,
+        ) -> Result<Self, Self::Rejection> {
             let pool = parts
                 .extensions
                 .get::<SqlitePool>()

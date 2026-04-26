@@ -231,7 +231,7 @@ async fn logout_handler(
 ) -> Response {
     // Resolve the session from either cookie or bearer, revoke it, and
     // clear the cookie. Idempotent: unknown tokens still return 204.
-    if let Some((token, _)) = extract_token(&headers, &jar) {
+    if let Some((token, _)) = extract_token(&headers) {
         match auth_db::lookup_session(state.pool(), &token).await {
             Ok((_user, session)) => {
                 if let Err(e) = auth_db::revoke_session(state.pool(), session.id).await {

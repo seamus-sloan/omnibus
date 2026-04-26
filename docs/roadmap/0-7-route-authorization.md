@@ -66,7 +66,7 @@ Closes a real privilege-escalation today: any non-admin who registers (or is add
 
 ## Status
 
-Not started. Captured during the [2026-04-26 auth audit](../qa/qa-report-2026-04-26.md) follow-up review, when the F0.3 permission-columns claim was traced through the codebase and found to terminate at `UserSummary` with no enforcement site.
+Shipped 2026-04-26. Every protected handler in [server/src/backend.rs](../../server/src/backend.rs) now declares `AuthUser` (read paths + the placeholder counter mutation) or `AdminUser` (`/api/settings` GET/POST), and every Dioxus server function in [frontend/src/rpc.rs](../../frontend/src/rpc.rs) does the same. The `AuthUser` / `AdminUser` `FromRequestParts` impls were decoupled from `AppState` and now read the pool from `Extension<SqlitePool>` so the same logic backs both routers; the wire-format token resolution lives in [`omnibus_db::auth::parse_session_token`](../../db/src/auth.rs) so the `frontend` crate can reuse it without taking a dep on the `server` crate. Integration-test bootstrap is consolidated in [`server/src/auth/test_support.rs`](../../server/src/auth/test_support.rs); each protected route gained an anon-401 sibling test, and admin-only routes additionally gained a non-admin-403 sibling test per [03-unit-testing.md](../../.claude/rules/03-unit-testing.md). Playwright already seeds an admin session via `globalSetup` (F0.3) so the `seedLibrary` helper kept working without modification.
 
 ---
 
