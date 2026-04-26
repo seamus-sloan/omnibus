@@ -40,7 +40,7 @@ pub async fn rpc_my_action(input: MyInput) -> Result<MyOutput> {
 
 - The server-only extractor `pool: PoolExt` is declared after the path in the macro. It's extracted by axum on the server and elided from the client-side fetch stub.
 - `Result<T>` is the anyhow-backed alias from `dioxus::prelude::Result`. Domain errors use `thiserror` per [02-error-handling.md](../../rules/02-error-handling.md).
-- The function body is only compiled when `feature = "server"` is active — guard any other imports with `#[cfg(feature = "server")]`. At the top of `rpc.rs`, import the DB layer as `use omnibus_db::{self as db, indexer, scanner};` (gated on `feature = "server"`).
+- The function body is only compiled when `feature = "server"` is active — guard any other imports with `#[cfg(feature = "server")]`. At the top of `rpc.rs`, import the DB layer as `use omnibus_db::{self as db, scanner};` (gated on `feature = "server"`). Background reindex work goes through the shared `Worker` extension (`worker: WorkerExt` on the macro, then `worker.0.post(omnibus_db::worker::Task::Scan { library_path })`) — never `tokio::spawn(indexer::reindex(...))` from a handler.
 - Dioxus auto-registers the route via `dioxus::server::router(App)` in [server/src/main.rs](../../../server/src/main.rs) — no manual registration.
 
 ## 4. Add the hand-written REST handler (mobile transport)

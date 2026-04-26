@@ -21,7 +21,10 @@ fn main() {
         dioxus::serve(|| async move {
             use dioxus::server::axum::Extension;
             use omnibus::{auth, backend};
-            use omnibus_db::indexer;
+            use omnibus_db::{
+                indexer,
+                worker::{Task, Worker},
+            };
             use std::sync::Arc;
 
             let database_url = std::env::var("DATABASE_URL")
@@ -35,16 +38,23 @@ fn main() {
             // promotion so the action is auditable.
             auth::boot::apply_initial_admin(&pool).await?;
 
-            // Kick off a reindex in the background if the index is empty or
-            // stale. The first user request reads whatever is currently in
-            // the DB; the refresh flows in next time the page loads.
+            let state = backend::AppState::new(pool.clone());
+            let worker: Arc<Worker> = state.worker().clone();
+
+            // Kick off a reindex through the shared worker if the index is
+            // empty or stale. The first user request reads whatever is
+            // currently in the DB; the refresh flows in next time the page
+            // loads. Treat read errors as "stale" so a malformed timestamp
+            // doesn't silently suppress the recovery scan.
             if let Ok(settings) = omnibus_db::get_settings(&pool).await {
                 if let Some(path) = settings.ebook_library_path {
-                    indexer::spawn_reindex_if_stale(pool.clone(), path);
+                    let stale = indexer::is_stale(&pool, &path).await.unwrap_or(true);
+                    if stale {
+                        worker.post(Task::Scan { library_path: path });
+                    }
                 }
             }
 
-            let state = backend::AppState::new(pool.clone());
             let limiter = Arc::new(auth::RateLimiter::new());
             let router = dioxus::server::router(App)
                 .merge(backend::rest_router(state.clone()))
@@ -62,6 +72,7 @@ fn main() {
                 ))
                 .layer(axum::middleware::from_fn(auth::origin_check))
                 .layer(Extension(pool))
+                .layer(Extension(worker))
                 .layer(tower_http::trace::TraceLayer::new_for_http());
 
             Ok(router)

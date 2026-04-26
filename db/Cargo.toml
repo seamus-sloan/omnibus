@@ -11,7 +11,7 @@ edition = "2021"
 [dependencies]
 omnibus-shared = { path = "../shared" }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
 anyhow = "1"
 thiserror = "1"
 epub = "2"
