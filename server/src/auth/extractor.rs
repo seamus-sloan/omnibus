@@ -13,8 +13,6 @@ use omnibus_db::auth::{self as auth_db, AuthError, SessionKind};
 use omnibus_shared::UserSummary;
 use sqlx::SqlitePool;
 
-use super::SESSION_COOKIE;
-
 /// Authenticated user resolved from either a session cookie or a bearer
 /// token. Extractor returns `401 Unauthorized` on anything that isn't a
 /// live session.
@@ -48,25 +46,20 @@ impl AuthUser {
 pub struct AdminUser(pub AuthUser);
 
 /// Pull a session token out of the request, preferring a `Bearer` header
-/// over a cookie. Returns `None` when neither source has a non-empty token.
-pub(super) fn extract_token(headers: &HeaderMap, jar: &CookieJar) -> Option<(String, SessionKind)> {
-    if let Some(value) = headers.get(header::AUTHORIZATION) {
-        if let Ok(s) = value.to_str() {
-            if let Some(rest) = s.strip_prefix("Bearer ") {
-                let token = rest.trim().to_string();
-                if !token.is_empty() {
-                    return Some((token, SessionKind::Bearer));
-                }
-            }
-        }
-    }
-    if let Some(cookie) = jar.get(SESSION_COOKIE) {
-        let token = cookie.value().to_string();
-        if !token.is_empty() {
-            return Some((token, SessionKind::Cookie));
-        }
-    }
-    None
+/// over a cookie. Thin wrapper around [`auth_db::parse_session_token`] —
+/// the pure-string parsing lives in `omnibus-db` so the rpc.rs server
+/// functions can call the same logic without pulling axum-extra in.
+///
+/// `_jar` is retained for backward compatibility with callers (the gate
+/// middleware) that already have a `CookieJar` parsed from the request;
+/// the cookie value is read from the raw `Cookie` header inside the db
+/// helper.
+pub(super) fn extract_token(headers: &HeaderMap, _jar: &CookieJar) -> Option<(String, SessionKind)> {
+    let authorization = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    let cookie_header = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
+    auth_db::parse_session_token(authorization, cookie_header)
 }
 
 fn unauthorized() -> Response {
@@ -215,7 +208,7 @@ mod tests {
                     .uri("/api/auth/me")
                     .header(
                         header::COOKIE,
-                        format!("{}={}", SESSION_COOKIE, issued.raw_token),
+                        format!("{}={}", crate::auth::SESSION_COOKIE, issued.raw_token),
                     )
                     .body(Body::empty())
                     .unwrap(),
