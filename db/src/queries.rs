@@ -834,29 +834,25 @@ async fn load_identifiers(pool: &SqlitePool, book_id: i64) -> Result<Vec<Identif
 }
 
 /// Full-text search across `books_fts`. Returns hydrated `EbookMetadata`
-/// ordered by bm25 rank (best first). Matching is scoped to
+/// ordered by bm25 rank (best first). Free-text terms are scoped to
 /// `title/authors/series` via a column filter so that short prefix queries
 /// don't surface spurious hits on generic `tags` values (e.g. typing "Dr"
 /// matching books tagged "Drama"). Ranking weights favour title matches:
 /// `bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0)` — unused columns keep
 /// neutral weights since the column filter prevents them from contributing.
 ///
-/// `q` is sanitized via [`sanitize_fts_query`] before reaching `MATCH`, so
-/// arbitrary user input is safe to pass through. Returns an empty vec when
-/// the sanitized query is empty.
+/// `q` is parsed via [`build_fts_match`] (which recognises `author:`,
+/// `series:`, `tag:` facets and sanitises every token) before reaching
+/// `MATCH`, so arbitrary user input is safe to pass through. Returns an
+/// empty vec when the parsed query is empty.
 pub async fn search_books(
     pool: &SqlitePool,
     library_path: &str,
     q: &str,
 ) -> Result<Vec<EbookMetadata>, sqlx::Error> {
-    let Some(sanitized) = sanitize_fts_query(q) else {
+    let Some(match_expr) = build_fts_match(q) else {
         return Ok(Vec::new());
     };
-    // FTS5 column filter. Scoping to title/authors/series keeps short
-    // queries like "Dr" from matching generic `tags` values ("Drama") or
-    // `description` contents. ISBN, tags, description remain in the index
-    // so they can be re-enabled without a migration.
-    let match_expr = format!("{{title authors series}} : ({sanitized})");
 
     let rows = sqlx::query(
         r#"
@@ -1018,6 +1014,79 @@ fn join_names<'a, I: IntoIterator<Item = &'a str>>(iter: I) -> String {
     out
 }
 
+/// Parse a user-typed query into a single FTS5 MATCH expression.
+///
+/// Recognises `author:foo`, `series:foo`, `tag:foo` (case-insensitive on
+/// the prefix) and emits column-scoped clauses. Everything else falls
+/// through to the default `{title authors series}` filter as free-text
+/// terms, preserving the existing scope and prefix-on-last semantics from
+/// [`sanitize_fts_query`].
+///
+/// Returns `None` when nothing usable remains (empty input, or only empty
+/// `author:` / `series:` / `tag:` tokens) so callers can short-circuit
+/// instead of submitting an empty `MATCH`.
+pub fn build_fts_match(raw: &str) -> Option<String> {
+    let mut author_tokens: Vec<&str> = Vec::new();
+    let mut series_tokens: Vec<&str> = Vec::new();
+    let mut tag_tokens: Vec<&str> = Vec::new();
+    let mut free_tokens: Vec<&str> = Vec::new();
+
+    for token in raw.split_whitespace() {
+        if let Some((prefix, value)) = token.split_once(':') {
+            let lower = prefix.to_ascii_lowercase();
+            if value.is_empty() {
+                // `author:` with no value — drop silently rather than
+                // treating it as free-text or erroring.
+                if matches!(lower.as_str(), "author" | "series" | "tag") {
+                    continue;
+                }
+            }
+            match lower.as_str() {
+                "author" => {
+                    author_tokens.push(value);
+                    continue;
+                }
+                "series" => {
+                    series_tokens.push(value);
+                    continue;
+                }
+                "tag" => {
+                    tag_tokens.push(value);
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        free_tokens.push(token);
+    }
+
+    let mut clauses: Vec<String> = Vec::new();
+    if let Some(s) = sanitize_fts_tokens(&author_tokens) {
+        clauses.push(format!("{{authors}} : ({s})"));
+    }
+    if let Some(s) = sanitize_fts_tokens(&series_tokens) {
+        clauses.push(format!("{{series}} : ({s})"));
+    }
+    if let Some(s) = sanitize_fts_tokens(&tag_tokens) {
+        clauses.push(format!("{{tags}} : ({s})"));
+    }
+    if let Some(s) = sanitize_fts_tokens(&free_tokens) {
+        // Default scope: title/authors/series (matches F0.4 design — keeps
+        // short prefix queries from dragging in generic tag/description
+        // values).
+        clauses.push(format!("{{title authors series}} : ({s})"));
+    }
+
+    if clauses.is_empty() {
+        None
+    } else {
+        // Multiple column-filter clauses must be joined with an explicit
+        // FTS5 boolean operator — implicit AND only works *inside* a
+        // single column filter's `( ... )` body.
+        Some(clauses.join(" AND "))
+    }
+}
+
 /// Wrap each whitespace-separated token in double-quotes and append `*` to
 /// the last one for prefix matching. This lets the user type plain words
 /// (including FTS5-reserved tokens like `AND`/`NOT` or hyphenated ISBNs)
@@ -1026,8 +1095,16 @@ fn join_names<'a, I: IntoIterator<Item = &'a str>>(iter: I) -> String {
 /// Returns `None` when the sanitized query is empty — callers should treat
 /// that as "don't run the query" rather than passing an empty MATCH.
 pub fn sanitize_fts_query(raw: &str) -> Option<String> {
+    let tokens: Vec<&str> = raw.split_whitespace().collect();
+    sanitize_fts_tokens(&tokens)
+}
+
+/// Per-token quoting/escaping shared by [`sanitize_fts_query`] and
+/// [`build_fts_match`]. Tokens are assumed to be whitespace-free (the
+/// callers split on whitespace first).
+fn sanitize_fts_tokens(tokens: &[&str]) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
-    for token in raw.split_whitespace() {
+    for token in tokens {
         // Double quotes inside a token would terminate the quoted phrase.
         // FTS5's quoted phrase escape is `""`, so double every quote.
         let escaped = token.replace('"', "\"\"");
@@ -1542,6 +1619,79 @@ mod tests {
         assert_eq!(out, "\"978-0-123456-78-9\"*");
     }
 
+    #[test]
+    fn build_fts_match_returns_none_for_empty_input() {
+        assert!(build_fts_match("").is_none());
+        assert!(build_fts_match("   \t  ").is_none());
+    }
+
+    #[test]
+    fn build_fts_match_returns_none_when_only_empty_facets() {
+        // `author:` / `series:` / `tag:` with no value are dropped silently.
+        assert!(build_fts_match("author:").is_none());
+        assert!(build_fts_match("series:   tag:").is_none());
+    }
+
+    #[test]
+    fn build_fts_match_emits_default_scope_for_free_text() {
+        // Free-text falls into the same `{title authors series}` filter
+        // that the F0.4 hardcoded filter used to apply directly.
+        assert_eq!(
+            build_fts_match("harry pott").as_deref(),
+            Some("{title authors series} : (\"harry\" \"pott\"*)")
+        );
+    }
+
+    #[test]
+    fn build_fts_match_emits_author_facet() {
+        assert_eq!(
+            build_fts_match("author:austen").as_deref(),
+            Some("{authors} : (\"austen\"*)")
+        );
+    }
+
+    #[test]
+    fn build_fts_match_combines_facet_and_free_text() {
+        // Two clauses joined by an explicit `AND` — FTS5's grammar only
+        // implicit-ANDs *inside* a column-filter body, not between two
+        // top-level column filters.
+        let out = build_fts_match("author:austen pride").expect("non-empty");
+        assert_eq!(
+            out,
+            "{authors} : (\"austen\"*) AND {title authors series} : (\"pride\"*)"
+        );
+    }
+
+    #[test]
+    fn build_fts_match_emits_series_and_tag_facets() {
+        assert_eq!(
+            build_fts_match("series:dune").as_deref(),
+            Some("{series} : (\"dune\"*)")
+        );
+        assert_eq!(
+            build_fts_match("tag:fiction").as_deref(),
+            Some("{tags} : (\"fiction\"*)")
+        );
+    }
+
+    #[test]
+    fn build_fts_match_facet_prefix_is_case_insensitive() {
+        assert_eq!(
+            build_fts_match("Author:Austen").as_deref(),
+            Some("{authors} : (\"Austen\"*)")
+        );
+    }
+
+    #[test]
+    fn build_fts_match_unknown_prefix_falls_through_to_free_text() {
+        // `isbn:` is not a recognised facet — treat the whole token as
+        // free-text rather than erroring.
+        assert_eq!(
+            build_fts_match("isbn:foo").as_deref(),
+            Some("{title authors series} : (\"isbn:foo\"*)")
+        );
+    }
+
     #[tokio::test]
     async fn search_books_finds_by_title_and_ranks_by_bm25() {
         let _covers = CoversTempDir::new("fts_title");
@@ -1663,6 +1813,111 @@ mod tests {
             .await
             .unwrap();
         assert!(hits.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_books_author_facet_filters_to_matching_author() {
+        let _covers = CoversTempDir::new("fts_facet_author");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed(
+                    "a.epub",
+                    Some("Pride and Prejudice"),
+                    &["Austen"],
+                    &[],
+                    None,
+                    None,
+                ),
+                indexed("b.epub", Some("Hamlet"), &["Shakespeare"], &[], None, None),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let hits = search_books(&pool, "/lib", "author:austen").await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title.as_deref(), Some("Pride and Prejudice"));
+    }
+
+    #[tokio::test]
+    async fn search_books_series_facet_filters_to_matching_series() {
+        let _covers = CoversTempDir::new("fts_facet_series");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed(
+                    "a.epub",
+                    Some("Dune"),
+                    &["Herbert"],
+                    &[],
+                    Some(("Dune Saga", "1")),
+                    None,
+                ),
+                indexed("b.epub", Some("Standalone"), &["Author"], &[], None, None),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let hits = search_books(&pool, "/lib", "series:dune").await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title.as_deref(), Some("Dune"));
+    }
+
+    #[tokio::test]
+    async fn search_books_tag_facet_filters_to_matching_tag() {
+        let _covers = CoversTempDir::new("fts_facet_tag");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed("a.epub", Some("A"), &["X"], &["fiction"], None, None),
+                indexed("b.epub", Some("B"), &["Y"], &["history"], None, None),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let hits = search_books(&pool, "/lib", "tag:fiction").await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title.as_deref(), Some("A"));
+    }
+
+    #[tokio::test]
+    async fn search_books_facet_combines_with_free_text_via_explicit_and() {
+        let _covers = CoversTempDir::new("fts_facet_combined");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed(
+                    "a.epub",
+                    Some("Pride and Prejudice"),
+                    &["Austen"],
+                    &[],
+                    None,
+                    None,
+                ),
+                indexed("b.epub", Some("Emma"), &["Austen"], &[], None, None),
+            ],
+        )
+        .await
+        .unwrap();
+
+        // Both clauses must match — only Pride and Prejudice carries the
+        // "pride" token in title/authors/series.
+        let hits = search_books(&pool, "/lib", "author:austen pride")
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title.as_deref(), Some("Pride and Prejudice"));
     }
 
     #[tokio::test]

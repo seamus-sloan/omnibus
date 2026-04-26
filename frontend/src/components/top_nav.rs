@@ -1,15 +1,65 @@
 use dioxus::prelude::*;
-use dioxus_router::{use_navigator, Link};
+use dioxus_router::{use_navigator, use_route, Link};
 
-use crate::Route;
+use crate::{use_search_query, Route};
 
 #[component]
 pub fn TopNav() -> Element {
+    // Hide the search box on `/settings` — the page has its own dense form
+    // layout and a search box wedged into the nav above it just clutters
+    // the chrome.
+    let on_settings = matches!(use_route::<Route>(), Route::Settings {});
+
     rsx! {
         nav { class: "top-nav",
             Link { to: Route::Landing {}, "Home" }
             Link { to: Route::Settings {}, "Settings" }
+            if !on_settings {
+                NavSearch {}
+            }
             AuthControl {}
+        }
+    }
+}
+
+/// Site-wide search box. Owns the input wired to the [`crate::SearchQuery`]
+/// context, so typing here updates the same signal the landing page reads
+/// from. When the user types from a non-Landing route, navigate to `/` so
+/// they actually see the matching rows.
+#[component]
+fn NavSearch() -> Element {
+    let mut query = use_search_query().0;
+    let nav = use_navigator();
+    let route = use_route::<Route>();
+
+    rsx! {
+        form {
+            class: "library-search",
+            role: "search",
+            onsubmit: move |evt| evt.prevent_default(),
+            input {
+                id: "library-search-input",
+                "data-testid": "library-search-input",
+                r#type: "search",
+                aria_label: "Search books",
+                placeholder: "Search title, author, series, tag, ISBN…",
+                value: "{query}",
+                oninput: move |evt| {
+                    let v = evt.value();
+                    query.set(v.clone());
+                    // Off-Landing keystrokes redirect to `/` so the
+                    // matching rows render. Once we navigate, the
+                    // component re-renders with `route == Landing` and
+                    // this branch stops firing — so editing a non-empty
+                    // query from a detail route still redirects, but
+                    // typing on Landing doesn't spam `replace`. Empty
+                    // input is excluded so clearing the box doesn't drag
+                    // the user back to `/` mid-edit.
+                    if !v.is_empty() && !matches!(route, Route::Landing {}) {
+                        nav.replace(Route::Landing {});
+                    }
+                },
+            }
         }
     }
 }

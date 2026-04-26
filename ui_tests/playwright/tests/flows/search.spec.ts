@@ -45,3 +45,45 @@ test("clearing the search restores the full library", async ({ page }) => {
     .poll(async () => page.getByTestId(/^ebook-row-/).count())
     .toBe(FIXTURE_BOOKS.length);
 });
+
+test("settings page does not render the search box", async ({ page }) => {
+  await gotoReady(page, "/settings");
+  await expect(
+    page.getByRole("searchbox", { name: "Search books" }),
+  ).toHaveCount(0);
+});
+
+test("typing in the nav from a non-Landing route navigates to Landing", async ({
+  page,
+}) => {
+  await gotoReady(page, "/books/1");
+  const search = page.getByRole("searchbox", { name: "Search books" });
+  await expect(search).toBeVisible();
+
+  await search.fill("dracula");
+
+  // Off-Landing keystrokes redirect to `/` so matching rows render.
+  await expect.poll(async () => new URL(page.url()).pathname).toBe("/");
+  await expect.poll(async () => page.getByTestId(/^ebook-row-/).count()).toBe(1);
+  await expect(page.getByTestId("ebook-row-dracula")).toBeVisible();
+});
+
+test("author: facet narrows by author", async ({ page }) => {
+  await gotoReady(page, "/");
+  const search = page.getByRole("searchbox", { name: "Search books" });
+
+  await search.fill("author:shakespeare");
+  await expect.poll(async () => page.getByTestId(/^ebook-row-/).count()).toBe(1);
+  await expect(page.getByTestId("ebook-row-romeo-and-juliet")).toBeVisible();
+});
+
+test("tag: facet narrows by tag", async ({ page }) => {
+  await gotoReady(page, "/");
+  const search = page.getByRole("searchbox", { name: "Search books" });
+
+  // "Vampires" only appears as a dc:subject on Dracula across the fixture
+  // set — Frankenstein/Gatsby/etc. share `Horror tales` etc. but not this.
+  await search.fill("tag:vampires");
+  await expect.poll(async () => page.getByTestId(/^ebook-row-/).count()).toBe(1);
+  await expect(page.getByTestId("ebook-row-dracula")).toBeVisible();
+});
