@@ -9,10 +9,10 @@
 use std::path::PathBuf;
 
 fn fixtures_dir() -> PathBuf {
-    // CARGO_MANIFEST_DIR points at `db/`; fixtures live at `<repo>/test-data/epubs/generated`.
+    // CARGO_MANIFEST_DIR points at `db/`; fixtures live at `<repo>/test_data/epubs/generated`.
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
-        .join("test-data")
+        .join("test_data")
         .join("epubs")
         .join("generated")
 }
