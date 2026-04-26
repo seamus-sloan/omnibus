@@ -68,7 +68,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
 
   // Public-domain Project Gutenberg / Standard Ebooks EPUBs under
   // `test_data/epubs/public_domain/`. Metadata below is what each file's OPF
-  // actually claims — `db/tests/fixture_epubs.rs` keeps the parser honest.
+  // actually claims — `db/tests/public_domain_epubs.rs` keeps the parser honest.
   {
     slug: "dracula",
     filename: "public_domain/dracula.epub",
