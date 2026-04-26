@@ -17,6 +17,7 @@ Closes [gap G8](0-0-summary.md#gaps). First production bug is free of guesswork;
 - `tracing` + `tracing-subscriber` with both stderr and rolling-file JSON sinks.
 - `axum-prometheus` for HTTP method/status/path histograms.
 - `background_tasks` table populated by the [F0.5 worker](0-5-background-worker.md) once it starts persisting — feeds the admin dashboard. Status, started/finished timestamps, error message.
+- **Worker in-memory map cleanup.** F0.5 ships with two append-only maps inside the `Worker` (`completions` keyed by `TaskId`, `resource_locks` keyed by `library_path`). Practical leak is small for omnibus's workload (one library path, one scan per settings save), but the persistence work in this initiative has to answer the same lifecycle question, so address them together: drop `completions` entries after they're observed (or after a grace window) once the row exists in `background_tasks`; reference-count `resource_locks` so a key drops when its last guard releases. Per Copilot review on [omnibus#48](https://github.com/seamus-sloan/omnibus/pull/48) (deferred to here).
 - Log viewer is just a paginated query over the JSON logs with filter-by-level/module/time-range.
 
 ## Dependencies
