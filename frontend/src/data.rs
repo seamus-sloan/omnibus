@@ -180,27 +180,45 @@ pub mod token_store {
         }
     }
 
+    /// Cached state of the persistence worker. Once we've decided
+    /// persistence isn't possible (no `HOME`, thread spawn failed) we
+    /// record `Disabled` and never re-attempt — otherwise every
+    /// `set`/`clear` would re-run `token_path()` and `Builder::spawn`.
+    enum TxState {
+        Disabled,
+        Ready(mpsc::Sender<Op>),
+    }
+
     /// Lazily start the persistence worker on first use and return a
     /// sender to its op channel. Returns `None` if either the worker
     /// thread fails to spawn or there is no on-disk path to persist to;
     /// callers in those cases simply skip persistence and the in-memory
-    /// state remains authoritative.
+    /// state remains authoritative. The decision is cached in `SLOT`
+    /// so that follow-up calls don't re-run the spawn dance.
     fn persistence_tx() -> Option<mpsc::Sender<Op>> {
-        static TX: OnceLock<Mutex<Option<mpsc::Sender<Op>>>> = OnceLock::new();
-        let slot = TX.get_or_init(|| Mutex::new(None));
+        static SLOT: OnceLock<Mutex<Option<TxState>>> = OnceLock::new();
+        let slot = SLOT.get_or_init(|| Mutex::new(None));
         let mut guard = unpoison(slot.lock());
-        if let Some(tx) = guard.as_ref() {
-            return Some(tx.clone());
+        if let Some(state) = guard.as_ref() {
+            return match state {
+                TxState::Disabled => None,
+                TxState::Ready(tx) => Some(tx.clone()),
+            };
         }
-        // No disk path available → keep `guard` empty so future calls
-        // don't re-attempt the spawn dance every time.
-        let path = token_path()?;
+        let Some(path) = token_path() else {
+            *guard = Some(TxState::Disabled);
+            return None;
+        };
         let (tx, rx) = mpsc::channel::<Op>();
-        std::thread::Builder::new()
+        if std::thread::Builder::new()
             .name("omnibus-token-store".into())
             .spawn(move || persistence_worker(path, rx))
-            .ok()?;
-        *guard = Some(tx.clone());
+            .is_err()
+        {
+            *guard = Some(TxState::Disabled);
+            return None;
+        }
+        *guard = Some(TxState::Ready(tx.clone()));
         Some(tx)
     }
 
