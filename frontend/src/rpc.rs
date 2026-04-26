@@ -33,24 +33,119 @@ type PoolExt = dioxus::fullstack::axum::Extension<sqlx::SqlitePool>;
 #[cfg(feature = "server")]
 type WorkerExt = dioxus::fullstack::axum::Extension<std::sync::Arc<omnibus_db::worker::Worker>>;
 
-#[get("/api/rpc/value", pool: PoolExt)]
+#[cfg(feature = "server")]
+pub use server_auth::{AdminUser, AuthUser};
+
+/// Server-side per-route authorization extractors used by the `#[get]` /
+/// `#[post]` macros below. These are deliberately scoped to this module
+/// instead of imported from `crate::omnibus::auth` — the `frontend` crate
+/// can't depend on the `server` crate (cycle), and dioxus already
+/// re-exports axum/axum-extra under `dioxus::fullstack::*`, so duplicating
+/// ~50 lines is cheaper than restructuring the workspace.
+///
+/// Behaviour mirrors `server::auth::extractor::AuthUser` /
+/// `AdminUser`. Both call `omnibus_db::auth::parse_session_token` and
+/// `lookup_session` so the wire-level token format stays in lockstep with
+/// the REST side.
+#[cfg(feature = "server")]
+mod server_auth {
+    use dioxus::fullstack::axum::extract::FromRequestParts;
+    use dioxus::fullstack::axum::http::{header, request::Parts, StatusCode};
+    use dioxus::fullstack::axum::response::{IntoResponse, Response};
+    use omnibus_db::auth::{self as auth_db, AuthError};
+    use sqlx::SqlitePool;
+
+    /// Authenticated user. Extractor returns 401 when no live session is
+    /// attached to the request.
+    #[derive(Debug, Clone)]
+    pub struct AuthUser {
+        pub id: i64,
+        pub is_admin: bool,
+    }
+
+    /// Admin-only wrapper. Extracting this returns 403 for non-admin users
+    /// (after a successful `AuthUser` resolution).
+    #[derive(Debug, Clone)]
+    pub struct AdminUser(pub AuthUser);
+
+    fn unauthorized() -> Response {
+        (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
+    }
+
+    fn internal<E: std::fmt::Display>(e: E) -> Response {
+        eprintln!("rpc auth extractor error: {e}");
+        (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
+    }
+
+    impl<S> FromRequestParts<S> for AuthUser
+    where
+        S: Send + Sync,
+    {
+        type Rejection = Response;
+
+        async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+            let pool = parts
+                .extensions
+                .get::<SqlitePool>()
+                .cloned()
+                .ok_or_else(|| internal("missing SqlitePool extension"))?;
+            let authorization = parts
+                .headers
+                .get(header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok());
+            let cookie_header = parts
+                .headers
+                .get(header::COOKIE)
+                .and_then(|v| v.to_str().ok());
+            let Some((token, _kind)) = auth_db::parse_session_token(authorization, cookie_header)
+            else {
+                return Err(unauthorized());
+            };
+            match auth_db::lookup_session(&pool, &token).await {
+                Ok((user, _session)) => Ok(AuthUser {
+                    id: user.id,
+                    is_admin: user.is_admin,
+                }),
+                Err(AuthError::SessionNotFound) => Err(unauthorized()),
+                Err(e) => Err(internal(e)),
+            }
+        }
+    }
+
+    impl<S> FromRequestParts<S> for AdminUser
+    where
+        S: Send + Sync,
+    {
+        type Rejection = Response;
+
+        async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+            let user = AuthUser::from_request_parts(parts, state).await?;
+            if !user.is_admin {
+                return Err((StatusCode::FORBIDDEN, "admin required").into_response());
+            }
+            Ok(AdminUser(user))
+        }
+    }
+}
+
+#[get("/api/rpc/value", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_get_value() -> Result<ValueResponse> {
     let value = db::get_value(&pool.0).await?;
     Ok(ValueResponse { value })
 }
 
-#[post("/api/rpc/value/increment", pool: PoolExt)]
+#[post("/api/rpc/value/increment", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_increment_value() -> Result<ValueResponse> {
     let value = db::increment_value(&pool.0).await?;
     Ok(ValueResponse { value })
 }
 
-#[get("/api/rpc/settings", pool: PoolExt)]
+#[get("/api/rpc/settings", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_get_settings() -> Result<Settings> {
     Ok(db::get_settings(&pool.0).await?)
 }
 
-#[post("/api/rpc/settings", pool: PoolExt, worker: WorkerExt)]
+#[post("/api/rpc/settings", pool: PoolExt, worker: WorkerExt, _admin: AdminUser)]
 pub async fn rpc_save_settings(settings: Settings) -> Result<Settings> {
     db::set_settings(&pool.0, &settings).await?;
     let updated = db::get_settings(&pool.0).await?;
@@ -65,7 +160,7 @@ pub async fn rpc_save_settings(settings: Settings) -> Result<Settings> {
     Ok(updated)
 }
 
-#[get("/api/rpc/library", pool: PoolExt)]
+#[get("/api/rpc/library", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_get_library() -> Result<LibraryContents> {
     let settings = db::get_settings(&pool.0).await?;
     Ok(scanner::scan_libraries(
@@ -74,7 +169,7 @@ pub async fn rpc_get_library() -> Result<LibraryContents> {
     ))
 }
 
-#[get("/api/rpc/ebooks", pool: PoolExt)]
+#[get("/api/rpc/ebooks", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_get_ebooks() -> Result<EbookLibrary> {
     let settings = db::get_settings(&pool.0).await?;
     // Served straight from the DB — the indexer is responsible for keeping
@@ -88,7 +183,7 @@ pub async fn rpc_get_ebooks() -> Result<EbookLibrary> {
 /// POST (not GET) so the query string can ride in the JSON body — Dioxus
 /// `#[get]` server functions reject arg bodies because HTTP spec forbids
 /// bodies on GET.
-#[post("/api/rpc/search", pool: PoolExt)]
+#[post("/api/rpc/search", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_search(q: String) -> Result<EbookLibrary> {
     let settings = db::get_settings(&pool.0).await?;
     let Some(path) = settings.ebook_library_path else {
