@@ -61,10 +61,10 @@ gh pr create --label enhancement --label run_ui_tests ...
 
 ## End-to-end example
 
-Run `gh` from the repo's main checkout (e.g. `/Users/seamus/Repos/omnibus`). When working from a jj workspace (e.g. `omnibus-xray`), `cd` into the main repo first — `gh` resolves the upstream repo from the working directory, and a workspace path may not have one wired up the same way.
+Run `gh` from the repo's main checkout (e.g. `/Users/me/Repos/omnibus`). When working from a jj workspace (e.g. `omnibus-xray`), `cd` into the main repo first — `gh` resolves the upstream repo from the working directory, and a workspace path may not have one wired up the same way.
 
 ```bash
-cd /Users/seamus/Repos/omnibus
+cd /Users/me/Repos/omnibus
 gh pr create \
   --title "feat: add ratings & journaling tables" \
   --assignee @me \
