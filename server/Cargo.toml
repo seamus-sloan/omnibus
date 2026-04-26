@@ -36,6 +36,10 @@ omnibus-db = { path = "../db", optional = true }
 
 [dev-dependencies]
 tower = "0.5"
+# RAII temp directories so panicking integration tests don't leak fixture
+# copies under /tmp. Already a transitive dep elsewhere — explicit here only
+# for the backend integration tests.
+tempfile = "3"
 
 [features]
 default = ["server"]
