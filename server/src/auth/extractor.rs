@@ -8,7 +8,6 @@ use axum::{
     http::{header, request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use axum_extra::extract::cookie::CookieJar;
 use omnibus_db::auth::{self as auth_db, AuthError, SessionKind};
 use omnibus_shared::UserSummary;
 use sqlx::SqlitePool;
@@ -49,12 +48,7 @@ pub struct AdminUser(pub AuthUser);
 /// over a cookie. Thin wrapper around [`auth_db::parse_session_token`] —
 /// the pure-string parsing lives in `omnibus-db` so the rpc.rs server
 /// functions can call the same logic without pulling axum-extra in.
-///
-/// `_jar` is retained for backward compatibility with callers (the gate
-/// middleware) that already have a `CookieJar` parsed from the request;
-/// the cookie value is read from the raw `Cookie` header inside the db
-/// helper.
-pub(super) fn extract_token(headers: &HeaderMap, _jar: &CookieJar) -> Option<(String, SessionKind)> {
+pub(super) fn extract_token(headers: &HeaderMap) -> Option<(String, SessionKind)> {
     let authorization = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
@@ -89,8 +83,7 @@ where
             .get::<SqlitePool>()
             .cloned()
             .ok_or_else(|| internal("missing SqlitePool extension"))?;
-        let jar = CookieJar::from_headers(&parts.headers);
-        let Some((token, _kind)) = extract_token(&parts.headers, &jar) else {
+        let Some((token, _kind)) = extract_token(&parts.headers) else {
             return Err(unauthorized());
         };
         match auth_db::lookup_session(&pool, &token).await {
