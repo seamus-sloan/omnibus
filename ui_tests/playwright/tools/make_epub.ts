@@ -7,7 +7,7 @@
  *
  * Output is deterministic — given the same inputs, the resulting bytes are
  * identical run-to-run. Generated files are committed under
- * `test-data/epubs/generated/` so CI does not need to run this tool.
+ * `test_data/epubs/generated/` so CI does not need to run this tool.
  *
  * Usage:
  *   npx tsx ui_tests/playwright/tools/make_epub.ts
@@ -199,7 +199,7 @@ async function buildEpub(input: EpubInput): Promise<Buffer> {
 async function main() {
   const here = dirname(fileURLToPath(import.meta.url));
   const repoRoot = resolve(here, "..", "..", "..");
-  const outDir = resolve(repoRoot, "test-data", "epubs", "generated");
+  const outDir = resolve(repoRoot, "test_data", "epubs", "generated");
   mkdirSync(outDir, { recursive: true });
 
   for (const fx of FIXTURES) {
