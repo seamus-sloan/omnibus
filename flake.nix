@@ -76,6 +76,14 @@
             echo "Run: cargo test -p omnibus"
             echo "Run: cargo run -p omnibus"
 
+            # Keep target/ out of the repo so flake evaluations don't snapshot
+            # ~12GB of build artifacts into /nix/store on every direnv reload.
+            # Resolve the repo root so `nix develop` from a subdir lands in the
+            # same target dir; basename keeps it per-worktree so parallel jj
+            # workspaces don't race.
+            _cargo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+            export CARGO_TARGET_DIR="$HOME/.cache/cargo-target/$(basename "$_cargo_root")"
+
             # Pin Playwright's Chromium to the Nix store so no per-user
             # download lands in ~/Library/Caches/ms-playwright/. The npm
             # @playwright/test version must match this bundle's version.
