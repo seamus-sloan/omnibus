@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 use dioxus_router::use_navigator;
 use omnibus_shared::{Contributor, EbookLibrary, EbookMetadata};
 
-use crate::{data, use_server_url, Route};
+use crate::{data, use_search_query, use_server_url, Route};
 
 /// Landing page — loads the configured ebook library and renders every book
 /// in a single table with cover thumbnails and the common metadata columns.
@@ -14,7 +14,9 @@ pub fn LandingPage() -> Element {
     let mut library = use_signal(EbookLibrary::default);
     let mut loading = use_signal(|| true);
     let mut error = use_signal(|| None::<String>);
-    let mut query = use_signal(String::new);
+    // Search box lives in the top nav; the query is shared via context so
+    // typing on any route drives the landing results without a route param.
+    let query = use_search_query().0;
 
     let url_for_fetch = server_url.clone();
     use_effect(move || {
@@ -54,20 +56,6 @@ pub fn LandingPage() -> Element {
                     "{path} · {book_count} book(s)"
                 } else {
                     "Configure your ebook library path in Settings."
-                }
-            }
-            form {
-                class: "library-search",
-                role: "search",
-                onsubmit: move |evt| evt.prevent_default(),
-                input {
-                    id: "library-search-input",
-                    "data-testid": "library-search-input",
-                    r#type: "search",
-                    aria_label: "Search books",
-                    placeholder: "Search title, author, series, tag, ISBN…",
-                    value: "{query}",
-                    oninput: move |evt| query.set(evt.value()),
                 }
             }
             if let Some(msg) = page_error.as_ref() {

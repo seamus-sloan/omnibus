@@ -167,9 +167,22 @@ pub fn use_server_url() -> String {
     }
 }
 
+/// Cross-route search query. Owned by [`App`] via `use_context_provider`
+/// so the [`Nav`]-hosted search box and the [`LandingPage`] read/write the
+/// same signal — typing in the nav from any route updates the landing
+/// results without a route-param round-trip.
+#[derive(Copy, Clone)]
+pub struct SearchQuery(pub Signal<String>);
+
+/// Convenience accessor for the search-query context.
+pub fn use_search_query() -> SearchQuery {
+    use_context::<SearchQuery>()
+}
+
 /// Root app component. Renders global styles and the router.
 #[component]
 pub fn App() -> Element {
+    use_context_provider(|| SearchQuery(Signal::new(String::new())));
     rsx! {
         document::Title { "Omnibus" }
         style { {STYLES} }
@@ -234,6 +247,22 @@ body {
 }
 .top-nav a:hover, .top-nav .top-nav-btn:hover { background: rgba(51, 65, 85, 0.9); }
 .top-nav .top-nav-btn { margin-left: auto; }
+
+.top-nav .library-search { flex: 1; min-width: 0; max-width: 480px; }
+.top-nav .library-search input[type="search"] {
+  width: 100%;
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px solid rgba(100, 116, 139, 0.4);
+  border-radius: 8px;
+  color: #e5e7eb;
+  font: inherit;
+  padding: 0.4rem 0.75rem;
+}
+.top-nav .library-search input[type="search"]::placeholder { color: #94a3b8; }
+.top-nav .library-search input[type="search"]:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
 
 .bottom-nav {
   position: fixed;
