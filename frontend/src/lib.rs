@@ -222,14 +222,18 @@ body {
   gap: 1rem;
   margin-bottom: 1.5rem;
 }
-.top-nav a {
+.top-nav a, .top-nav .top-nav-btn {
   color: #cbd5e1;
   text-decoration: none;
   padding: 0.4rem 0.75rem;
   border-radius: 8px;
   background: rgba(30, 41, 59, 0.7);
+  border: 0;
+  font: inherit;
+  cursor: pointer;
 }
-.top-nav a:hover { background: rgba(51, 65, 85, 0.9); }
+.top-nav a:hover, .top-nav .top-nav-btn:hover { background: rgba(51, 65, 85, 0.9); }
+.top-nav .top-nav-btn { margin-left: auto; }
 
 .bottom-nav {
   position: fixed;
