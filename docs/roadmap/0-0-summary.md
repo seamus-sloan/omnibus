@@ -78,7 +78,7 @@ Phase 6  Mobile                   (feature parity on native)
 
 | Phase | Theme | v1 features inside | New initiatives | Target horizon |
 |---|---|---|---|---|
-| 0 | Foundations | — | F0.1–F0.6 | short-term |
+| 0 | Foundations | — | F0.1–F0.7 | short-term |
 | 1 | Browse & discovery | #4 Views, #5 Detail | F1.1 Search, F1.2 Thumbnails | short-term |
 | 2 | Reading & listening | #8 Reader, #9 Audio | F2.1 Progress sync service | medium-term |
 | 3 | Personalization | #3 Libraries, #6 Ratings/journal, #12 Suggestions | — | medium-term |
@@ -98,6 +98,7 @@ Phase 6  Mobile                   (feature parity on native)
 - [F0.4 FTS5 index](0-4-fts5.md)
 - [F0.5 Background worker primitive](0-5-background-worker.md)
 - [F0.6 Library filesystem convention](0-6-library-filesystem.md)
+- [F0.7 Per-route authorization](0-7-route-authorization.md)
 
 ### Phase 1 — Browse & discovery
 
@@ -210,7 +211,7 @@ Phase 6  Mobile                   (feature parity on native)
 
 ## 8. Immediate next steps
 
-1. Review and approve Phase 0 scope ([F0.1](0-1-schema-refactor.md) – [F0.6](0-6-library-filesystem.md)).
+1. Review and approve Phase 0 scope ([F0.1](0-1-schema-refactor.md) – [F0.7](0-7-route-authorization.md)).
 2. File GitHub issues for each F-number, porting acceptance criteria from the prior roadmap where the feature survives into v2.
 3. Resolve open questions 1 (covers) and 2 (scan paths) before [F0.1](0-1-schema-refactor.md) kicks off — both block schema design.
 4. Spike [F0.3](0-3-auth.md) session cookies on web + bearer tokens on mobile to verify the auth model is unified across surfaces.
