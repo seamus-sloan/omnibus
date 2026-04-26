@@ -10,7 +10,7 @@ use axum::{
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use omnibus_db::auth::{self as auth_db, AuthError, SessionKind};
@@ -21,12 +21,18 @@ use super::{BEARER_TTL_SECS, COOKIE_TTL_SECS, SESSION_COOKIE};
 use crate::backend::AppState;
 
 pub fn auth_router(state: AppState) -> Router {
+    let pool = state.pool().clone();
     Router::new()
         .route("/api/auth/register", post(register_handler))
         .route("/api/auth/login", post(login_handler))
         .route("/api/auth/logout", post(logout_handler))
         .route("/api/auth/me", get(me_handler))
         .with_state(state)
+        // `AuthUser` reads the pool from `Extension<SqlitePool>` so it stays
+        // state-agnostic. Keep this layer here so the router is usable
+        // standalone (in integration tests) without relying on the
+        // top-level Extension layer in `main.rs`.
+        .layer(Extension(pool))
 }
 
 fn user_summary(u: &auth_db::User) -> UserSummary {
