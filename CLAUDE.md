@@ -12,6 +12,7 @@ Numbered rules in [.claude/rules/](.claude/rules/), applied in order. Follow the
 - [02-error-handling.md](.claude/rules/02-error-handling.md) — `thiserror` for domain errors, `anyhow` for handlers.
 - [03-unit-testing.md](.claude/rules/03-unit-testing.md) — inline `#[cfg(test)]`, `oneshot` for handlers, coverage expectations.
 - [04-playwright.md](.claude/rules/04-playwright.md) — full E2E conventions (selectors, fixtures, `expectMutation`, error paths).
+- [05-pull-requests.md](.claude/rules/05-pull-requests.md) — PR title/body/assignee/label conventions; `run_ui_tests` gate for `ui_tests/` diffs.
 - [98-keep-skills-fresh.md](.claude/rules/98-keep-skills-fresh.md) — update skills when the code they reference changes.
 - [99-end-of-session.md](.claude/rules/99-end-of-session.md) — end-of-session checklist (docs sync, fmt/clippy, coverage, line-count cap).
 

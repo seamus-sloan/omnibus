@@ -59,6 +59,7 @@ ASCII-fold, lowercase, non-alphanumerics → `-`, collapse runs, trim to 80 char
 
 - Users expect Calibre interop and are disappointed. Mitigation: explicit in docs, and the tolerant scan means their library still works — just not as "their Calibre library."
 - Slug collisions across unicode-equivalent titles. Mitigated by collision-suffix on write.
+- **UUID invalidation on reorganization.** The current `stable_uuid(library_path, filename)` scheme hashes the library root path into every book's UUID. Moving files to the canonical layout (a new path) would assign every book a new UUID, silently breaking any user data (ratings, journals from [F3.2](3-2-ratings-journaling.md)) anchored to the old UUID. The UUID scheme **must be replaced with a content-based anchor** (`dc:identifier` → file SHA-256 fallback) before the canonical write path ships. See [F3.2 Book identity & durability](3-2-ratings-journaling.md#book-identity--durability).
 
 ## Open questions
 
