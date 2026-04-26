@@ -18,6 +18,15 @@ epub = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# F0.6 library filesystem: ASCII-fold author/title slugs ("Café" → "cafe",
+# "東京" → "dong-jing") so canonical-layout folder names stay tool-agnostic.
+deunicode = "1"
+
+# F0.6 library filesystem: structured logging when sidecar materialization
+# falls back to embedded covers (read-only fs, etc.). Subscriber is set up
+# by the binary; library code only emits events.
+tracing = "0.1"
+
 # Auth (F0.3). Argon2id password hashing, CSPRNG token generation, SHA-256
 # of the raw token for at-rest storage, base64url for wire-format tokens.
 argon2 = "0.5"

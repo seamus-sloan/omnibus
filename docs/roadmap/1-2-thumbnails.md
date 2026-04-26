@@ -21,6 +21,7 @@ This sidesteps Calibre-Web's scheduled-only pipeline (see [calibre-inspection §
 - Generation runs on the [F0.5 worker](0-5-background-worker.md) so the web request returns immediately (serve placeholder → 304 after generate).
 - Prefer `cover.jpg` sidecar next to the ebook over the embedded cover ([F0.6](0-6-library-filesystem.md)).
 - LRU eviction past a configurable cap (default ~5 GB) to keep disk footprint bounded on 100k-book libraries.
+- **Re-examine [F0.6](0-6-library-filesystem.md) sidecar lookup cost while we have a perf harness.** [`sidecar_cover_for`](../../db/src/library_layout.rs) currently does up to 2× `read_dir` per epub (per-stem then folder-level). Acceptable for canonical Omnibus layouts (1 epub per folder), but may show up on flat-dump libraries with thousands of files in one folder. F1.2 is the natural moment to measure: thumbnail generation iterates every book and stresses the same code path. If measurement shows it matters, swap in a fast-path that checks the expected exact-case names directly via `is_file()` before falling back to the case-insensitive `read_dir`. Tracked in [omnibus#52](https://github.com/seamus-sloan/omnibus/issues/52).
 
 ## Dependencies
 

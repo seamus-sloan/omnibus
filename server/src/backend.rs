@@ -559,15 +559,26 @@ mod tests {
         let admin = test_support::create_admin(&pool, "admin").await;
         let token = test_support::bearer_token(&pool, admin.id).await;
 
-        // Resolve the playwright fixtures directory relative to the server
-        // crate manifest. Asserting `is_dir` up front avoids a confusing
-        // "scan failed" error if the fixtures move.
-        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        // Copy the playwright fixtures into an RAII temp dir before pointing
+        // the indexer at them. Reindex now opts into cover-sidecar
+        // materialization (F0.6) and would otherwise write `<stem>.{jpg|png}`
+        // into the shared fixtures dir on every CI run. `tempfile::TempDir`
+        // cleans itself up on Drop, so a panic before the assert below doesn't
+        // leak under /tmp.
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../test_data/epubs/generated")
             .canonicalize()
             .expect("fixtures dir should resolve");
-        assert!(fixtures.is_dir(), "fixtures dir missing: {fixtures:?}");
-        let path_str = fixtures.to_string_lossy().to_string();
+        assert!(source.is_dir(), "fixtures dir missing: {source:?}");
+        let scratch = tempfile::tempdir().expect("create scratch dir");
+        for entry in std::fs::read_dir(&source).expect("read fixtures dir") {
+            let entry = entry.expect("fixture entry");
+            if entry.file_type().expect("file type").is_file() {
+                let dest = scratch.path().join(entry.file_name());
+                std::fs::copy(entry.path(), dest).expect("copy fixture");
+            }
+        }
+        let path_str = scratch.path().to_string_lossy().to_string();
 
         let body = serde_json::json!({
             "ebook_library_path": path_str,
@@ -614,6 +625,8 @@ mod tests {
             !lib.books.is_empty(),
             "worker should have indexed at least one book from {path_str}"
         );
+        // `scratch` (and any cover sidecars the indexer materialized into
+        // it) cleans up on Drop here.
     }
 
     // -------------------------------------------------------------------
