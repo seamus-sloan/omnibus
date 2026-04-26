@@ -1,7 +1,7 @@
 /**
  * Single source of truth for the synthetic EPUB fixtures the landing-page
  * spec asserts against. Every entry corresponds 1:1 with a file in
- * `test-data/epubs/generated/` produced by `tools/make_epub.ts`.
+ * `test_data/epubs/generated/` produced by `tools/make_epub.ts`.
  *
  * The `slug` mirrors the Rust `row_slug()` derivation in
  * `frontend/src/pages/landing.rs` (filename stem, lowercased, runs of
@@ -11,7 +11,7 @@
 export interface ExpectedBook {
   /** `data-testid` suffix on the row — `ebook-row-${slug}`. */
   slug: string;
-  /** On-disk filename relative to `test-data/epubs/`. */
+  /** On-disk filename relative to `test_data/epubs/`. */
   filename: string;
   /** Rendered in the title cell. */
   title: string;
@@ -67,11 +67,11 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
   },
 
   // Public-domain Project Gutenberg / Standard Ebooks EPUBs under
-  // `test-data/epubs/publicDomain/`. Metadata below is what each file's OPF
+  // `test_data/epubs/public_domain/`. Metadata below is what each file's OPF
   // actually claims — `db/tests/fixture_epubs.rs` keeps the parser honest.
   {
     slug: "dracula",
-    filename: "publicDomain/dracula.epub",
+    filename: "public_domain/dracula.epub",
     title: "Dracula",
     authors: ["Bram Stoker"],
     published: "1995-10-01",
@@ -80,7 +80,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
   },
   {
     slug: "frankenstein",
-    filename: "publicDomain/frankenstein.epub",
+    filename: "public_domain/frankenstein.epub",
     title: "Frankenstein; or, the modern prometheus",
     authors: ["Mary Wollstonecraft Shelley"],
     published: "1993-10-01",
@@ -89,7 +89,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
   },
   {
     slug: "great-gatsby",
-    filename: "publicDomain/great_gatsby.epub",
+    filename: "public_domain/great_gatsby.epub",
     title: "The Great Gatsby",
     authors: ["F. Scott Fitzgerald"],
     published: "2021-01-17",
@@ -98,7 +98,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
   },
   {
     slug: "romeo-and-juliet",
-    filename: "publicDomain/romeo_and_juliet.epub",
+    filename: "public_domain/romeo_and_juliet.epub",
     title: "Romeo and Juliet",
     authors: ["William Shakespeare"],
     published: "1998-11-01",
