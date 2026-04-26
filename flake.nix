@@ -90,6 +90,16 @@
             export PLAYWRIGHT_BROWSERS_PATH="${pkgs-unstable.playwright-driver.browsers}"
             export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
+            # `dx serve --fullstack` runs an HTTP proxy on $PORT that
+            # rewrites Host: to the upstream backend's loopback address,
+            # without setting X-Forwarded-Host. The CSRF origin_check
+            # middleware then sees Origin=http://localhost:3000 vs
+            # Host=127.0.0.1:<random>, calls it a mismatch, and 403s every
+            # cookie-authed POST. Declare an allowlist so origin_check can
+            # match the browser's Origin directly. Override or extend in
+            # production deployments.
+            export OMNIBUS_PUBLIC_ORIGIN="http://localhost:''${PORT:-3000}"
+
             # Nix injects xcbuild's fake xcrun and its own cc wrapper, both of which
             # break iOS builds. Fix: prepend /usr/bin so the real Xcode xcrun and
             # Apple clang shadow Nix's stubs. Set DEVELOPER_DIR so the real xcrun
