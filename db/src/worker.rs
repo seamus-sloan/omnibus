@@ -75,7 +75,7 @@ pub struct Worker {
     pool: SqlitePool,
     scan_sem: Arc<Semaphore>,
     resource_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
-    completions: Arc<StdMutex<HashMap<TaskId, watch::Sender<Option<TaskOutcome>>>>>,
+    completions: Arc<StdMutex<HashMap<TaskId, watch::Receiver<Option<TaskOutcome>>>>>,
     next_id: std::sync::atomic::AtomicU64,
 }
 
@@ -94,12 +94,18 @@ impl Worker {
         let id = self
             .next_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let (tx, _rx) = watch::channel(None);
-        self.completions.lock().unwrap().insert(id, tx.clone());
+        // Store the receiver, not the sender: if the spawned task panics
+        // before sending, dropping `tx` closes the channel and any pending
+        // `await_completion` falls through to the "dropped" error branch.
+        let (tx, rx) = watch::channel(None);
+        self.completions.lock().unwrap().insert(id, rx);
 
         let this = self.clone();
         tokio::spawn(async move {
             let outcome = this.run(task).await;
+            if let TaskOutcome::Err(ref msg) = outcome {
+                eprintln!("worker: task {id} failed: {msg}");
+            }
             let _ = tx.send(Some(outcome));
         });
 
@@ -110,7 +116,7 @@ impl Worker {
         let mut rx = {
             let map = self.completions.lock().unwrap();
             match map.get(&id) {
-                Some(tx) => tx.subscribe(),
+                Some(rx) => rx.clone(),
                 None => return TaskOutcome::Err("unknown task id".into()),
             }
         };
@@ -125,15 +131,9 @@ impl Worker {
     }
 
     async fn run(self: &Arc<Self>, task: Task) -> TaskOutcome {
-        let _scan_permit = if task.uses_scan_sem() {
-            match self.scan_sem.clone().acquire_owned().await {
-                Ok(p) => Some(p),
-                Err(_) => return TaskOutcome::Err("scan semaphore closed".into()),
-            }
-        } else {
-            None
-        };
-
+        // Resource lock first, then the scan semaphore: holding a permit
+        // while blocked on a per-resource mutex would let same-resource
+        // queueing starve other resources from running concurrently.
         let _resource_guard = if let Some(key) = task.resource_key() {
             let inner = {
                 let mut map = self.resource_locks.lock().await;
@@ -142,6 +142,15 @@ impl Worker {
                     .clone()
             };
             Some(inner.lock_owned().await)
+        } else {
+            None
+        };
+
+        let _scan_permit = if task.uses_scan_sem() {
+            match self.scan_sem.clone().acquire_owned().await {
+                Ok(p) => Some(p),
+                Err(_) => return TaskOutcome::Err("scan semaphore closed".into()),
+            }
         } else {
             None
         };
@@ -352,6 +361,23 @@ mod tests {
         match w.await_completion(99999).await {
             TaskOutcome::Err(_) => {}
             other => panic!("expected Err, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn await_completion_returns_err_when_task_panics() {
+        let w = make_worker_default(pool().await);
+        let id = w.post(Task::Test {
+            tag: "panicker",
+            latency_ms: 0,
+            resource: None,
+            route_through_scan_sem: false,
+            on_run: Some(Arc::new(|| panic!("intentional test panic"))),
+            on_done: None,
+        });
+        match w.await_completion(id).await {
+            TaskOutcome::Err(_) => {}
+            other => panic!("expected Err on task panic, got {other:?}"),
         }
     }
 }
