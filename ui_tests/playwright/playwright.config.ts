@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+import { STORAGE_STATE_PATH } from "./globalSetup";
+
 // Omnibus UI e2e tests.
 //
 // Requires a locally running server at http://127.0.0.1:3000 (e.g. `cargo run
@@ -17,12 +19,18 @@ export default defineConfig({
     baseURL: "http://127.0.0.1:3000",
     trace: "on-first-retry",
     screenshot: "only-on-failure",
-    storageState: "./.auth/storage.json",
+    // Absolute path so the writer (`globalSetup`) and reader (test contexts)
+    // agree regardless of CWD — `npx playwright test -c …` from the repo
+    // root and `cd ui_tests/playwright && npx playwright test` both hit the
+    // same file.
+    storageState: STORAGE_STATE_PATH,
     // Server-side `origin_check` middleware rejects cookie-authed
-    // state-changing requests with no `Origin`/`Referer`. Playwright's
-    // APIRequestContext (used by `globalSetup` and seeding helpers) does
-    // not send Origin by default, so attach one matching `baseURL` to
-    // every request the suite makes — both browser and API.
+    // state-changing requests with no `Origin`/`Referer`. Playwright does
+    // not send Origin by default, so set it here for browser pages and the
+    // spec-level `request` fixture. `globalSetup` reads this same value
+    // from `config.projects[0].use` and passes it into its own
+    // APIRequestContext so register/login (and any future state-changing
+    // setup call) inherit the Origin too.
     extraHTTPHeaders: {
       Origin: "http://127.0.0.1:3000",
     },
