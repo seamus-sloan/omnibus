@@ -4,16 +4,16 @@
 //! a typed view of the authenticated user.
 
 use axum::{
-    extract::{FromRef, FromRequestParts},
+    extract::FromRequestParts,
     http::{header, request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use axum_extra::extract::cookie::CookieJar;
 use omnibus_db::auth::{self as auth_db, AuthError, SessionKind};
 use omnibus_shared::UserSummary;
+use sqlx::SqlitePool;
 
 use super::SESSION_COOKIE;
-use crate::backend::AppState;
 
 /// Authenticated user resolved from either a session cookie or a bearer
 /// token. Extractor returns `401 Unauthorized` on anything that isn't a
@@ -81,17 +81,26 @@ fn internal<E: std::fmt::Display>(e: E) -> Response {
 impl<S> FromRequestParts<S> for AuthUser
 where
     S: Send + Sync,
-    AppState: FromRef<S>,
 {
     type Rejection = Response;
 
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let state = AppState::from_ref(state);
+    // The pool is read from `Extension<SqlitePool>` rather than from router
+    // state so the same extractor works on the hand-written `/api/*` REST
+    // router (which uses `with_state(AppState)`) and on the auto-mounted
+    // Dioxus server-function router for `/api/rpc/*` (whose state type is
+    // private). The top-level fullstack router in `server/src/main.rs`
+    // installs `Extension(pool)` on every request.
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let pool = parts
+            .extensions
+            .get::<SqlitePool>()
+            .cloned()
+            .ok_or_else(|| internal("missing SqlitePool extension"))?;
         let jar = CookieJar::from_headers(&parts.headers);
         let Some((token, _kind)) = extract_token(&parts.headers, &jar) else {
             return Err(unauthorized());
         };
-        match auth_db::lookup_session(state.pool(), &token).await {
+        match auth_db::lookup_session(&pool, &token).await {
             Ok((user, session)) => Ok(AuthUser {
                 id: user.id,
                 username: user.username,
@@ -111,7 +120,6 @@ where
 impl<S> FromRequestParts<S> for AdminUser
 where
     S: Send + Sync,
-    AppState: FromRef<S>,
 {
     type Rejection = Response;
 
@@ -128,6 +136,7 @@ where
 mod tests {
     use super::*;
     use crate::auth::handlers::auth_router;
+    use crate::backend::AppState;
     use axum::{body::Body, http::Request};
     use omnibus_db as db;
     use tower::ServiceExt;

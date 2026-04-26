@@ -12,7 +12,7 @@ use axum::{
     http::header,
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use omnibus_db::{
     self as db, scanner,
@@ -21,6 +21,8 @@ use omnibus_db::{
 use omnibus_shared::{Settings, ValueResponse};
 use serde::Deserialize;
 use sqlx::SqlitePool;
+
+use crate::auth::{AdminUser, AuthUser};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -44,6 +46,7 @@ impl AppState {
 }
 
 pub fn rest_router(state: AppState) -> Router {
+    let pool = state.pool().clone();
     Router::new()
         .route("/api/value", get(get_value))
         .route("/api/value/increment", post(increment_value))
@@ -54,9 +57,14 @@ pub fn rest_router(state: AppState) -> Router {
         .route("/api/search", get(get_search))
         .route("/api/covers/{id}", get(get_cover))
         .with_state(state)
+        // `AuthUser`/`AdminUser` read the pool from `Extension<SqlitePool>`.
+        // Layer it here so the router is self-contained for integration
+        // tests; in the live server `main.rs` adds the same Extension at
+        // the top, which is harmless overlap.
+        .layer(Extension(pool))
 }
 
-async fn get_value(State(state): State<AppState>) -> Response {
+async fn get_value(_user: AuthUser, State(state): State<AppState>) -> Response {
     match db::get_value(&state.pool).await {
         Ok(value) => Json(ValueResponse { value }).into_response(),
         Err(error) => (
@@ -67,7 +75,7 @@ async fn get_value(State(state): State<AppState>) -> Response {
     }
 }
 
-async fn increment_value(State(state): State<AppState>) -> Response {
+async fn increment_value(_user: AuthUser, State(state): State<AppState>) -> Response {
     match db::increment_value(&state.pool).await {
         Ok(value) => Json(ValueResponse { value }).into_response(),
         Err(error) => (
@@ -78,7 +86,7 @@ async fn increment_value(State(state): State<AppState>) -> Response {
     }
 }
 
-async fn get_settings(State(state): State<AppState>) -> Response {
+async fn get_settings(_admin: AdminUser, State(state): State<AppState>) -> Response {
     match db::get_settings(&state.pool).await {
         Ok(settings) => Json(settings).into_response(),
         Err(error) => (
@@ -89,7 +97,11 @@ async fn get_settings(State(state): State<AppState>) -> Response {
     }
 }
 
-async fn post_settings(State(state): State<AppState>, Json(settings): Json<Settings>) -> Response {
+async fn post_settings(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+    Json(settings): Json<Settings>,
+) -> Response {
     match db::set_settings(&state.pool, &settings).await {
         Ok(()) => match db::get_settings(&state.pool).await {
             Ok(updated) => {
@@ -130,7 +142,7 @@ async fn post_settings(State(state): State<AppState>, Json(settings): Json<Setti
     }
 }
 
-async fn get_ebooks(State(state): State<AppState>) -> Response {
+async fn get_ebooks(_user: AuthUser, State(state): State<AppState>) -> Response {
     let settings = match db::get_settings(&state.pool).await {
         Ok(s) => s,
         Err(error) => {
@@ -156,7 +168,11 @@ struct SearchQuery {
     q: String,
 }
 
-async fn get_search(State(state): State<AppState>, Query(params): Query<SearchQuery>) -> Response {
+async fn get_search(
+    _user: AuthUser,
+    State(state): State<AppState>,
+    Query(params): Query<SearchQuery>,
+) -> Response {
     let settings = match db::get_settings(&state.pool).await {
         Ok(s) => s,
         Err(error) => {
@@ -185,7 +201,7 @@ async fn get_search(State(state): State<AppState>, Query(params): Query<SearchQu
     }
 }
 
-async fn get_cover(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+async fn get_cover(_user: AuthUser, State(state): State<AppState>, Path(id): Path<i64>) -> Response {
     match db::get_cover(&state.pool, id).await {
         Ok(Some((mime, bytes))) => (
             [
@@ -209,7 +225,7 @@ async fn get_cover(State(state): State<AppState>, Path(id): Path<i64>) -> Respon
     }
 }
 
-async fn get_library(State(state): State<AppState>) -> Response {
+async fn get_library(_user: AuthUser, State(state): State<AppState>) -> Response {
     match db::get_settings(&state.pool).await {
         Ok(settings) => {
             let contents = scanner::scan_libraries(
@@ -228,46 +244,75 @@ async fn get_library(State(state): State<AppState>) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use axum::{body::to_bytes, http::Request};
+    use axum::{
+        body::{to_bytes, Body},
+        http::{header::AUTHORIZATION, Request, StatusCode},
+    };
     use tower::ServiceExt;
 
     use super::*;
+    use crate::auth::test_support;
 
-    #[tokio::test]
-    async fn api_reads_and_increments_value() {
+    /// Build a router + AppState wired against a fresh in-memory DB.
+    async fn fixture() -> (Router, AppState, sqlx::SqlitePool) {
         let pool = db::init_db("sqlite::memory:")
             .await
             .expect("db should initialize");
-        let app = rest_router(AppState::new(pool));
+        let state = AppState::new(pool.clone());
+        let app = rest_router(state.clone());
+        (app, state, pool)
+    }
+
+    /// Convenience: GET request with a bearer auth header.
+    fn get_with_bearer(uri: &str, token: &str) -> Request<Body> {
+        Request::builder()
+            .uri(uri)
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    /// Convenience: anonymous GET (no auth header).
+    fn get_anon(uri: &str) -> Request<Body> {
+        Request::builder()
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    // -------------------------------------------------------------------
+    // Happy paths — every protected route bootstraps the appropriate user.
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn api_reads_and_increments_value() {
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
 
         let response = app
             .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/value")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(get_with_bearer("/api/value", &token))
             .await
             .expect("request should succeed");
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK);
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let payload: ValueResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(payload.value, 0);
 
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/value/increment")
                     .method("POST")
-                    .body(axum::body::Body::empty())
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
                     .unwrap(),
             )
             .await
             .expect("request should succeed");
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK);
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let payload: ValueResponse = serde_json::from_slice(&body).unwrap();
@@ -276,21 +321,15 @@ mod tests {
 
     #[tokio::test]
     async fn api_get_settings_returns_null_defaults() {
-        let pool = db::init_db("sqlite::memory:")
-            .await
-            .expect("db should initialize");
-        let app = rest_router(AppState::new(pool));
+        let (app, _state, pool) = fixture().await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
 
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/settings")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(get_with_bearer("/api/settings", &token))
             .await
             .expect("request should succeed");
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK);
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let settings: Settings = serde_json::from_slice(&body).unwrap();
@@ -300,10 +339,9 @@ mod tests {
 
     #[tokio::test]
     async fn api_post_settings_persists_and_returns_saved_values() {
-        let pool = db::init_db("sqlite::memory:")
-            .await
-            .expect("db should initialize");
-        let app = rest_router(AppState::new(pool));
+        let (app, _state, pool) = fixture().await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
 
         let body = serde_json::json!({
             "ebook_library_path": "/books/ebooks",
@@ -315,12 +353,13 @@ mod tests {
                     .uri("/api/settings")
                     .method("POST")
                     .header("content-type", "application/json")
-                    .body(axum::body::Body::from(body.to_string()))
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body.to_string()))
                     .unwrap(),
             )
             .await
             .expect("request should succeed");
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK);
 
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let settings: Settings = serde_json::from_slice(&bytes).unwrap();
@@ -336,10 +375,9 @@ mod tests {
 
     #[tokio::test]
     async fn api_get_settings_after_post_reflects_saved_values() {
-        let pool = db::init_db("sqlite::memory:")
-            .await
-            .expect("db should initialize");
-        let app = rest_router(AppState::new(pool));
+        let (app, _state, pool) = fixture().await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
 
         let body = serde_json::json!({
             "ebook_library_path": "/my/ebooks",
@@ -351,22 +389,18 @@ mod tests {
                     .uri("/api/settings")
                     .method("POST")
                     .header("content-type", "application/json")
-                    .body(axum::body::Body::from(body.to_string()))
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body.to_string()))
                     .unwrap(),
             )
             .await
             .expect("POST should succeed");
 
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/settings")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(get_with_bearer("/api/settings", &token))
             .await
             .expect("GET should succeed");
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK);
 
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let settings: Settings = serde_json::from_slice(&bytes).unwrap();
@@ -376,21 +410,15 @@ mod tests {
 
     #[tokio::test]
     async fn api_get_library_returns_empty_sections_when_paths_not_configured() {
-        let pool = db::init_db("sqlite::memory:")
-            .await
-            .expect("db should initialize");
-        let app = rest_router(AppState::new(pool));
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
 
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/library")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(get_with_bearer("/api/library", &token))
             .await
             .expect("request should succeed");
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK);
 
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let contents: omnibus_shared::LibraryContents = serde_json::from_slice(&bytes).unwrap();
@@ -402,9 +430,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_get_library_reports_error_for_nonexistent_path() {
-        let pool = db::init_db("sqlite::memory:")
-            .await
-            .expect("db should initialize");
+        let (_, _, pool) = fixture().await;
         db::set_settings(
             &pool,
             &Settings {
@@ -414,18 +440,15 @@ mod tests {
         )
         .await
         .expect("set should succeed");
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
         let app = rest_router(AppState::new(pool));
 
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/library")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(get_with_bearer("/api/library", &token))
             .await
             .expect("request should succeed");
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK);
 
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let contents: omnibus_shared::LibraryContents = serde_json::from_slice(&bytes).unwrap();
@@ -435,21 +458,15 @@ mod tests {
 
     #[tokio::test]
     async fn api_get_ebooks_returns_empty_when_path_not_configured() {
-        let pool = db::init_db("sqlite::memory:")
-            .await
-            .expect("db should initialize");
-        let app = rest_router(AppState::new(pool));
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
 
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/ebooks")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(get_with_bearer("/api/ebooks", &token))
             .await
             .expect("request should succeed");
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK);
 
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let lib: omnibus_shared::EbookLibrary = serde_json::from_slice(&bytes).unwrap();
@@ -475,18 +492,15 @@ mod tests {
         )
         .await
         .expect("set should succeed");
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
         let app = rest_router(AppState::new(pool));
 
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/ebooks")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(get_with_bearer("/api/ebooks", &token))
             .await
             .expect("request should succeed");
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK);
 
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let lib: omnibus_shared::EbookLibrary = serde_json::from_slice(&bytes).unwrap();
@@ -497,20 +511,14 @@ mod tests {
 
     #[tokio::test]
     async fn api_search_returns_empty_when_path_not_configured() {
-        let pool = db::init_db("sqlite::memory:")
-            .await
-            .expect("db should initialize");
-        let app = rest_router(AppState::new(pool));
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/search?q=hello")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(get_with_bearer("/api/search?q=hello", &token))
             .await
             .expect("request should succeed");
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let lib: omnibus_shared::EbookLibrary = serde_json::from_slice(&bytes).unwrap();
         assert!(lib.path.is_none());
@@ -519,50 +527,36 @@ mod tests {
 
     #[tokio::test]
     async fn api_search_rejects_missing_q_param() {
-        let pool = db::init_db("sqlite::memory:")
-            .await
-            .expect("db should initialize");
-        let app = rest_router(AppState::new(pool));
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/search")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(get_with_bearer("/api/search", &token))
             .await
             .expect("request should succeed");
         // axum's Query extractor returns 400 for missing required fields.
-        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
     async fn api_get_covers_returns_not_found_for_missing_id() {
-        let pool = db::init_db("sqlite::memory:")
-            .await
-            .expect("db should initialize");
-        let app = rest_router(AppState::new(pool));
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/covers/9999")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(get_with_bearer("/api/covers/9999", &token))
             .await
             .expect("request should succeed");
-        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn post_settings_triggers_scan_via_worker() {
         use db::worker::TaskOutcome;
 
-        let pool = db::init_db("sqlite::memory:")
-            .await
-            .expect("db should initialize");
-        let state = AppState::new(pool);
-        let app = rest_router(state.clone());
+        let (app, state, pool) = fixture().await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
 
         // Resolve the playwright fixtures directory relative to the server
         // crate manifest. Asserting `is_dir` up front avoids a confusing
@@ -585,12 +579,13 @@ mod tests {
                     .uri("/api/settings")
                     .method("POST")
                     .header("content-type", "application/json")
-                    .body(axum::body::Body::from(body.to_string()))
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body.to_string()))
                     .unwrap(),
             )
             .await
             .expect("POST should succeed");
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK);
 
         let task_id: db::worker::TaskId = response
             .headers()
@@ -607,15 +602,10 @@ mod tests {
         }
 
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/ebooks")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(get_with_bearer("/api/ebooks", &token))
             .await
             .expect("GET /api/ebooks should succeed");
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK);
 
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let lib: omnibus_shared::EbookLibrary = serde_json::from_slice(&bytes).unwrap();
@@ -623,5 +613,130 @@ mod tests {
             !lib.books.is_empty(),
             "worker should have indexed at least one book from {path_str}"
         );
+    }
+
+    // -------------------------------------------------------------------
+    // 401 — anonymous request rejected by the per-route extractor (the
+    // top-level `require_auth` middleware is not in this test stack;
+    // these assertions confirm the extractor itself enforces the gate).
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn api_value_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let res = app.oneshot(get_anon("/api/value")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_value_increment_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/value/increment")
+                    .method("POST")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_get_settings_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let res = app.oneshot(get_anon("/api/settings")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_post_settings_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let body = serde_json::json!({
+            "ebook_library_path": null,
+            "audiobook_library_path": null,
+        });
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/settings")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_library_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let res = app.oneshot(get_anon("/api/library")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_ebooks_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let res = app.oneshot(get_anon("/api/ebooks")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_search_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let res = app.oneshot(get_anon("/api/search?q=hello")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_covers_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let res = app.oneshot(get_anon("/api/covers/1")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // -------------------------------------------------------------------
+    // 403 — non-admin authenticated user hits an admin-only route.
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn api_get_settings_returns_403_when_not_admin() {
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "reader").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+        let res = app
+            .oneshot(get_with_bearer("/api/settings", &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn api_post_settings_returns_403_when_not_admin() {
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "reader").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+        let body = serde_json::json!({
+            "ebook_library_path": "/evil/path",
+            "audiobook_library_path": null,
+        });
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/settings")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
     }
 }
