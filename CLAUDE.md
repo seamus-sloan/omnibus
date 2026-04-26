@@ -59,11 +59,12 @@ lib.rs              — Settings, ValueResponse, LibraryContents, LibrarySection
 ### db/src/
 
 ```
-lib.rs              — re-exports queries::*; pub mod ebook/indexer/queries/scanner
+lib.rs              — re-exports queries::*; pub mod auth/ebook/indexer/queries/scanner/worker
 queries.rs          — pool init, schema, query layer (list_books, settings, covers, taxonomy…)
 scanner.rs          — library directory scanning
 ebook.rs            — EPUB OPF metadata + cover extraction
-indexer.rs          — scan → DB indexing, staleness checks
+indexer.rs          — scan → DB indexing, staleness checks (is_stale + reindex)
+worker.rs           — single-process Worker primitive: per-task-type concurrency cap + per-resource keyed mutex; reindexes route through Task::Scan
 migrations/         — numbered SQL migrations embedded via sqlx::migrate!
 ```
 
