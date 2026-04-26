@@ -2,6 +2,8 @@
 
 How to open a PR. Apply mechanically — these are not preferences.
 
+Not every change needs a PR. Only open one when the user explicitly asks for it (e.g. "open a PR", "push it up as a PR"). For local commits or pushes without a PR request, stop after the push.
+
 ## Title
 
 Match the conventional-commit prefix used on the branch's commits. The prefix maps 1:1 with the type of work:
@@ -16,7 +18,7 @@ Keep titles under ~70 chars. Detail goes in the body, not the title.
 
 ## Body
 
-Two sections, in this order:
+Follow the repo's PR template at [.github/pull_request_template.md](../../.github/pull_request_template.md). The required sections, in order:
 
 ```markdown
 ## Summary
@@ -24,16 +26,19 @@ Two sections, in this order:
 
 ## Test plan
 - [ ] Bulleted checklist of how to verify the change.
+
+## Notes
+- Anything else worth flagging (follow-ups, caveats, screenshots). Omit if empty.
 ```
 
 Pull facts from the actual diff and the conversation that led to the change — never invent items to fill space. If the change is doc-only, the test plan is "N/A — docs only" and that's fine.
 
 ## Assignee
 
-Always assign `seamus-sloan` (the repo owner). Without an assignee the PR drops out of the dashboard view.
+Always assign the current user (the GitHub login resolved via `gh api user --jq .login`). Without an assignee the PR drops out of the dashboard view.
 
 ```bash
-gh pr create --assignee seamus-sloan ...
+gh pr create --assignee @me ...
 ```
 
 ## Labels
@@ -56,10 +61,13 @@ gh pr create --label enhancement --label run_ui_tests ...
 
 ## End-to-end example
 
+Run `gh` from the repo's main checkout (e.g. `/Users/seamus/Repos/omnibus`). When working from a jj workspace (e.g. `omnibus-xray`), `cd` into the main repo first — `gh` resolves the upstream repo from the working directory, and a workspace path may not have one wired up the same way.
+
 ```bash
+cd /Users/seamus/Repos/omnibus
 gh pr create \
   --title "feat: add ratings & journaling tables" \
-  --assignee seamus-sloan \
+  --assignee @me \
   --label enhancement \
   --label run_ui_tests \
   --body "$(cat <<'EOF'
