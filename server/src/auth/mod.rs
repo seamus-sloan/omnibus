@@ -38,11 +38,13 @@ pub use gate::require_auth;
 pub use handlers::auth_router;
 pub use rate_limit::{rate_limit_auth, RateLimiter};
 
-/// Name of the session cookie issued to web clients. Not using the
-/// `__Host-` prefix so the dev server on plain HTTP still works; production
-/// deployments behind HTTPS should set `OMNIBUS_SECURE_COOKIES=1` to toggle
-/// the `Secure` attribute.
-pub const SESSION_COOKIE: &str = "omnibus_session";
+/// Name of the session cookie issued to web clients. Re-exported from
+/// `omnibus_db::auth::SESSION_COOKIE_NAME` so cookie issuance
+/// (`Set-Cookie`), CSRF cookie checks, and token parsing all share a
+/// single source of truth. Not using the `__Host-` prefix so the dev
+/// server on plain HTTP still works; production deployments behind HTTPS
+/// should set `OMNIBUS_SECURE_COOKIES=1` to toggle the `Secure` attribute.
+pub use omnibus_db::auth::SESSION_COOKIE_NAME as SESSION_COOKIE;
 
 /// 30 days for cookie sessions; matches the plan's absolute expiry.
 pub const COOKIE_TTL_SECS: i64 = 30 * 24 * 60 * 60;

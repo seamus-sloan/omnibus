@@ -201,7 +201,11 @@ async fn get_search(
     }
 }
 
-async fn get_cover(_user: AuthUser, State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+async fn get_cover(
+    _user: AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Response {
     match db::get_cover(&state.pool, id).await {
         Ok(Some((mime, bytes))) => (
             [
@@ -274,10 +278,7 @@ mod tests {
 
     /// Convenience: anonymous GET (no auth header).
     fn get_anon(uri: &str) -> Request<Body> {
-        Request::builder()
-            .uri(uri)
-            .body(Body::empty())
-            .unwrap()
+        Request::builder().uri(uri).body(Body::empty()).unwrap()
     }
 
     // -------------------------------------------------------------------
