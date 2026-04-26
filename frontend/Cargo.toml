@@ -14,16 +14,23 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 gloo-net = { version = "0.6", default-features = false, features = ["http", "json"], optional = true }
 # sqlx + tokio are needed at the type level by rpc.rs when building server
 # functions (PoolExt = Extension<SqlitePool>, #[tokio::spawn] for reindex).
-# Kept as optional deps enabled only by the `server` feature.
+# Kept as optional deps enabled only by the `server` feature. Tokio is
+# pulled in with no default features so each consuming feature opts into
+# only what it needs — mobile gets `sync` for `watch`, server gets the
+# multi-thread runtime + macros for `#[tokio::main]`-style usage in rpc.rs.
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"], optional = true }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
+tokio = { version = "1", default-features = false, optional = true }
 
 [features]
 default = []
 # Web client (WASM): uses dioxus-fullstack server-function client stubs.
 web = ["dioxus/web", "dep:gloo-net", "dep:serde_json"]
 # Native mobile client: talks to `/api/*` REST routes via reqwest.
-mobile = ["dep:reqwest", "dep:serde_json"]
+# tokio is enabled for `sync::watch` — used by `data::token_store` to
+# notify the UI when auth state changes so screens redirect to /login
+# without a polling loop. No runtime/macro features are pulled in here:
+# reqwest's own runtime is sufficient and `watch` is sync-only.
+mobile = ["dep:reqwest", "dep:serde_json", "dep:tokio", "tokio/sync"]
 # Server-function bodies: compiles the server-side halves of the #[get]/#[post]
 # functions in rpc.rs against the real DB layer. Used by `server/` when
 # building the fullstack native binary. The DB work lives in `omnibus-db`;
@@ -38,4 +45,6 @@ server = [
     "dep:omnibus-db",
     "dep:sqlx",
     "dep:tokio",
+    "tokio/macros",
+    "tokio/rt-multi-thread",
 ]

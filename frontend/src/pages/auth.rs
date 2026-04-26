@@ -1,17 +1,29 @@
-//! Login and register pages for the web client.
+//! Login and register pages for the web and mobile clients.
 //!
-//! Both pages render the same markup on SSR and in WASM so hydration matches.
-//! The actual login/register action fires on form submit and only compiles
-//! on the `web` feature. `server` / `mobile` builds still wire the submit
-//! handler — it just returns a static error ("login is only available in
-//! the web client") that the form renders via the usual error alert. The
-//! `server` path is effectively unreachable because SSR never runs the
-//! closure; the `mobile` stub is in place until PR4 ships the bearer flow.
+//! Both pages render the same markup on every target so SSR/WASM hydration
+//! matches. Submit handlers branch on feature:
+//!
+//! * `web` — POST JSON to `/api/auth/{login,register}` via `gloo-net`; the
+//!   server sets the `omnibus_session` cookie via `Set-Cookie` and the
+//!   browser's same-origin fetch keeps it for subsequent requests.
+//! * `mobile` — POST JSON to the same endpoints via `reqwest`, with a
+//!   `client_kind` of `ios` / `android` / `bearer` so the server issues a
+//!   bearer token in the body. The token is stashed in
+//!   `data::token_store` (only present under `feature = "mobile"`, hence
+//!   this is a code-formatted reference rather than an intra-doc link)
+//!   and attached to every subsequent request. Until secure storage
+//!   lands, **debug builds only** persist the token in plaintext to
+//!   `$HOME/.omnibus-token`; release builds keep it in memory and
+//!   require re-login on each cold start. See the TODO at the top of
+//!   that module.
+//! * `server` — SSR never executes the submit closure (no interaction
+//!   happens during SSR), so this path is a compile-only stub returning a
+//!   static error.
 
 use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};
 
-use crate::Route;
+use crate::{use_server_url, Route};
 
 #[component]
 pub fn LoginPage() -> Element {
@@ -20,6 +32,10 @@ pub fn LoginPage() -> Element {
     let mut error = use_signal(|| Option::<String>::None);
     let mut submitting = use_signal(|| false);
     let nav = use_navigator();
+
+    // `use_server_url()` is feature-aware: empty string on web/server (where
+    // requests are same-origin) and the `ServerUrl` context value on mobile.
+    let server_url = use_server_url();
 
     let on_submit = move |evt: FormEvent| {
         evt.prevent_default();
@@ -31,8 +47,9 @@ pub fn LoginPage() -> Element {
         }
         error.set(None);
         submitting.set(true);
+        let server_url = server_url.clone();
         spawn(async move {
-            let res = submit_login(u, p).await;
+            let res = submit_login(&server_url, u, p).await;
             submitting.set(false);
             match res {
                 Ok(()) => {
@@ -98,6 +115,10 @@ pub fn RegisterPage() -> Element {
     let mut submitting = use_signal(|| false);
     let nav = use_navigator();
 
+    // `use_server_url()` is feature-aware: empty string on web/server (where
+    // requests are same-origin) and the `ServerUrl` context value on mobile.
+    let server_url = use_server_url();
+
     let on_submit = move |evt: FormEvent| {
         evt.prevent_default();
         let u = username();
@@ -108,8 +129,9 @@ pub fn RegisterPage() -> Element {
         }
         error.set(None);
         submitting.set(true);
+        let server_url = server_url.clone();
         spawn(async move {
-            let res = submit_register(u, p).await;
+            let res = submit_register(&server_url, u, p).await;
             submitting.set(false);
             match res {
                 Ok(()) => {
@@ -169,13 +191,21 @@ pub fn RegisterPage() -> Element {
 
 // ---- submit helpers ------------------------------------------------------
 //
-// Only the `web` feature has a real HTTP transport for auth. `server` builds
-// compile the component markup for SSR but never execute the submit closure
-// (no interaction happens during SSR), so a compile-only stub is enough.
-// Mobile has its own login flow (PR4), so the stub returns an error there.
+// Per-target HTTP transports for auth. The cfg gates are kept mutually
+// exclusive within this file: the web impl compiles only for `web`
+// builds without `mobile`, the mobile impl compiles for any `mobile`
+// build, and the no-feature stub covers SSR-without-web. The
+// `web` + `mobile` combination is rejected at crate level by a
+// `compile_error!` in `frontend/src/components/mod.rs`, so this layer
+// is defense-in-depth rather than the primary guard — but keeping the
+// gates precise here means a future change that loosens the crate-level
+// guard won't silently produce duplicate `submit_*` definitions.
+// `server`-only builds (no `web` and no `mobile`) get a compile-only
+// stub — SSR never executes the submit closure, so the stub is
+// unreachable at runtime.
 
-#[cfg(feature = "web")]
-async fn submit_login(username: String, password: String) -> Result<(), String> {
+#[cfg(all(feature = "web", not(feature = "mobile")))]
+async fn submit_login(_server_url: &str, username: String, password: String) -> Result<(), String> {
     use omnibus_shared::LoginRequest;
     crate::data::login(LoginRequest {
         username,
@@ -188,8 +218,12 @@ async fn submit_login(username: String, password: String) -> Result<(), String> 
     .map(|_| ())
 }
 
-#[cfg(feature = "web")]
-async fn submit_register(username: String, password: String) -> Result<(), String> {
+#[cfg(all(feature = "web", not(feature = "mobile")))]
+async fn submit_register(
+    _server_url: &str,
+    username: String,
+    password: String,
+) -> Result<(), String> {
     use omnibus_shared::RegisterRequest;
     crate::data::register(RegisterRequest {
         username,
@@ -202,12 +236,54 @@ async fn submit_register(username: String, password: String) -> Result<(), Strin
     .map(|_| ())
 }
 
-#[cfg(not(feature = "web"))]
-async fn submit_login(_username: String, _password: String) -> Result<(), String> {
-    Err("login is only available in the web client".into())
+#[cfg(feature = "mobile")]
+async fn submit_login(server_url: &str, username: String, password: String) -> Result<(), String> {
+    crate::data::mobile_login(server_url, username, password, default_device_name())
+        .await
+        .map(|_| ())
 }
 
-#[cfg(not(feature = "web"))]
-async fn submit_register(_username: String, _password: String) -> Result<(), String> {
-    Err("registration is only available in the web client".into())
+#[cfg(feature = "mobile")]
+async fn submit_register(
+    server_url: &str,
+    username: String,
+    password: String,
+) -> Result<(), String> {
+    crate::data::mobile_register(server_url, username, password, default_device_name())
+        .await
+        .map(|_| ())
+}
+
+/// Best-effort device name for the bearer-login `device_name` field. The
+/// value shows up in the admin UI's session list, so prefer something the
+/// user will recognize. Until a settings screen lets the user override
+/// this, we send a generic platform label.
+#[cfg(feature = "mobile")]
+fn default_device_name() -> Option<String> {
+    let label = if cfg!(target_os = "ios") {
+        "Omnibus iOS"
+    } else if cfg!(target_os = "android") {
+        "Omnibus Android"
+    } else {
+        "Omnibus Mobile"
+    };
+    Some(label.to_string())
+}
+
+#[cfg(not(any(feature = "web", feature = "mobile")))]
+async fn submit_login(
+    _server_url: &str,
+    _username: String,
+    _password: String,
+) -> Result<(), String> {
+    Err("login is only available in the web or mobile client".into())
+}
+
+#[cfg(not(any(feature = "web", feature = "mobile")))]
+async fn submit_register(
+    _server_url: &str,
+    _username: String,
+    _password: String,
+) -> Result<(), String> {
+    Err("registration is only available in the web or mobile client".into())
 }

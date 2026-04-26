@@ -102,8 +102,21 @@ tests/
 ### mobile/src/
 
 ```
-main.rs             — dioxus::launch, ServerUrl context, wraps omnibus_frontend::App
+main.rs             — dioxus::launch, ServerUrl context, hydrates bearer token from disk, wraps omnibus_frontend::App
 ```
+
+Mobile auth: bearer-token login flow lives in `frontend/src/data.rs` under
+`feature = "mobile"`. `data::mobile_login` / `mobile_register` POST to
+`/api/auth/{login,register}` with `client_kind: ios|android|bearer` so the
+server returns a bearer token in the JSON body. `data::token_store` keeps
+the token in a process-local `OnceLock<RwLock<...>>` and — **only in
+debug builds** (`cfg!(debug_assertions)`) — persists it to
+`$HOME/.omnibus-token`. Release builds keep the token in memory only and
+require re-login on every cold start. UI components subscribe to
+`data::token_store::subscribe()` (a `tokio::sync::watch` receiver) so a
+401-driven `token_store::clear()` reactively redirects to `/login`.
+**TODO**: replace the disk-persistence stub with iOS Keychain / Android
+Keystore and flip persistence on unconditionally — see the module docs.
 
 ## Quick commands
 
