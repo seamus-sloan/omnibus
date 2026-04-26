@@ -7,6 +7,7 @@
 pub mod auth;
 pub mod ebook;
 pub mod indexer;
+pub mod library_layout;
 pub mod queries;
 pub mod scanner;
 pub mod worker;

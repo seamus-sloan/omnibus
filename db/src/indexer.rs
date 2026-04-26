@@ -50,8 +50,18 @@ pub async fn is_stale(pool: &SqlitePool, library_path: &str) -> Result<bool, sql
 /// Some(_)`, same as before.
 pub async fn reindex(pool: &SqlitePool, library_path: String) -> anyhow::Result<()> {
     let path_for_scan = library_path.clone();
-    let scan = tokio::task::spawn_blocking(move || ebook::scan_ebook_library(Some(&path_for_scan)))
-        .await?;
+    let scan = tokio::task::spawn_blocking(move || {
+        // Materialize cover sidecars so future scans skip the zip
+        // (F0.6). Best-effort: read-only filesystems fall through to the
+        // in-memory bytes for the current scan and retry next time.
+        ebook::scan_ebook_library_with(
+            Some(&path_for_scan),
+            ebook::ScanOptions {
+                materialize_sidecars: true,
+            },
+        )
+    })
+    .await?;
     if let Some(msg) = scan.error {
         anyhow::bail!("scan of {library_path} failed: {msg}");
     }
