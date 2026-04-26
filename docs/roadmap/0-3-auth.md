@@ -34,6 +34,36 @@ Every feature touching user state needs it. Building those first and retrofittin
 
 The "first registered user is admin" rule stays, plus the `OMNIBUS_INITIAL_ADMIN` env-var for recovery. No email verification, no password reset flow in v1.0 — both land with [F5.4 admin panel](5-4-admin-panel.md).
 
+## TODOs
+
+### Web `/login` route guard at `ScreenLayout` level
+
+**What:** When an anonymous user hits `/`, `/settings`, or `/books/:id` on the web client, redirect them to `/login` after hydration the way mobile already does in `ScreenLayout` ([frontend/src/lib.rs:101](../../frontend/src/lib.rs)).
+
+**Why:** Today the web SSR shell renders for anyone; only the `/api/*` calls 401 silently. Users see "No ebooks found" or a blank settings form with no cue that they're unauthenticated. The 2026-04-26 QA pass ([qa-report](../qa/qa-report-2026-04-26.md)) flagged this as the most visible "looks broken" follow-up after the origin_check fix.
+
+**Context:** Mirror the mobile pattern. The web `ScreenLayout` pings `/api/auth/me` (already exposed via `data::current_user()`) once on hydrate, drives a `use_signal(authed)`, and `nav.replace(Route::Login {})` if 401. SSR keeps rendering the empty shell — the redirect happens client-side after one RTT, so SSR markup stays deterministic and hydration doesn't break. Auth-shell screens (`Login`/`Register`) already bypass `ScreenLayout` so they stay reachable to anonymous users.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** None.
+
+### Playwright auth E2E flow
+
+**What:** New `ui_tests/playwright/tests/flows/auth.spec.ts` covering register → authenticated `/api/*` call → click **Log out** → land on `/login` → log back in → assert landing.
+
+**Why:** Auth has no E2E coverage today. The 2026-04-26 origin_check regression (cookie-authed POSTs 403'ing through the dx-fullstack proxy) had passing unit tests but no E2E that would have caught it. Codifying the happy path as a Playwright spec means the next break in this surface trips CI instead of landing in main.
+
+**Context:** Stable testids are already in the markup: `data-testid="login-form"` and `data-testid="register-form"` on the auth pages, `data-testid="logout-button"` on the new TopNav slot. Use the existing `expectMutation` helper for `POST /api/auth/register`, `/api/auth/logout`, `/api/auth/login` round-trips and `expectNavVisible` for the post-login layout. Once the web route-guard TODO above lands, extend this spec with an anonymous `/ → /login` redirect assertion.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** None (independent of the route-guard TODO; either can land first).
+
+## Status
+
+In progress. Auth core landed across multiple PRs: registration, login, logout endpoints, session persistence on web cookies + mobile bearer tokens (PR4), first-user-admin promotion, `OMNIBUS_INITIAL_ADMIN` recovery hook, CSRF `origin_check` middleware, and per-IP rate limiting on `/api/auth/{login,register}`. The 2026-04-26 QA pass ([qa-report](../qa/qa-report-2026-04-26.md), [PR #43](https://github.com/seamus-sloan/omnibus/pull/43)) cleared the cookie-authed-POST regression behind the dx-fullstack proxy and added the missing logout button to TopNav. Outstanding work captured in the TODOs above.
+
 ---
 
 [← Back to roadmap summary](0-0-summary.md)
