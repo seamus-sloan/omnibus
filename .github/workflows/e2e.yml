@@ -20,6 +20,9 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'run_ui_tests')
     env:
       CI: "1"
+      # Pin target dir so the bundled binary lands at the path "Start server"
+      # expects and rust-cache (keyed on `. -> target`) caches the right path.
+      CARGO_TARGET_DIR: ./target
     steps:
       - uses: actions/checkout@v4
 

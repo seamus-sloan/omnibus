@@ -21,6 +21,10 @@ jobs:
   check:
     name: fmt + clippy + test
     runs-on: ubuntu-latest
+    env:
+      # Match e2e.yml: pin target dir so rust-cache (keyed on `. -> target`)
+      # actually caches anything across runs.
+      CARGO_TARGET_DIR: ./target
     steps:
       - uses: actions/checkout@v4
 

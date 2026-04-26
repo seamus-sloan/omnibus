@@ -81,8 +81,12 @@
             # Resolve the repo root so `nix develop` from a subdir lands in the
             # same target dir; basename keeps it per-worktree so parallel jj
             # workspaces don't race.
-            _cargo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-            export CARGO_TARGET_DIR="$HOME/.cache/cargo-target/$(basename "$_cargo_root")"
+            # Skip if the caller already pinned CARGO_TARGET_DIR (CI sets it
+            # to ./target so workflow paths and rust-cache stay valid).
+            if [ -z "''${CARGO_TARGET_DIR:-}" ]; then
+              _cargo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+              export CARGO_TARGET_DIR="$HOME/.cache/cargo-target/$(basename "$_cargo_root")"
+            fi
 
             # Pin Playwright's Chromium to the Nix store so no per-user
             # download lands in ~/Library/Caches/ms-playwright/. The npm
