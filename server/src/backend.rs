@@ -56,6 +56,7 @@ pub fn rest_router(state: AppState) -> Router {
         .route("/api/ebooks", get(get_ebooks))
         .route("/api/search", get(get_search))
         .route("/api/covers/{id}", get(get_cover))
+        .route("/api/thumbs/{id}/{size}", get(get_thumb))
         .with_state(state)
         // `AuthUser`/`AdminUser` read the pool from `Extension<SqlitePool>`.
         // Layer it here so the router is self-contained for integration
@@ -224,6 +225,77 @@ async fn get_cover(
         Err(error) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to read cover: {error}"),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_thumb(
+    _user: AuthUser,
+    State(state): State<AppState>,
+    Path((id, size_str)): Path<(i64, String)>,
+) -> Response {
+    let size: db::ThumbSize = match size_str.parse() {
+        Ok(s) => s,
+        Err(_) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                "invalid size; use sm, md, or lg",
+            )
+                .into_response();
+        }
+    };
+
+    let last_modified_epoch = match db::get_last_modified_epoch(&state.pool, id).await {
+        Ok(Some(ts)) => ts,
+        Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("db error: {e}"),
+            )
+                .into_response();
+        }
+    };
+
+    // Cache hit: thumb exists and is fresh.
+    let thumb_path = db::thumb_path_for(id, size);
+    if !db::thumbs::is_stale(id, size, last_modified_epoch) {
+        if let Ok(bytes) = std::fs::read(&thumb_path) {
+            return (
+                [
+                    (header::CONTENT_TYPE, "image/webp"),
+                    (header::CACHE_CONTROL, "private, max-age=86400"),
+                    (header::VARY, "Cookie"),
+                ],
+                bytes,
+            )
+                .into_response();
+        }
+    }
+
+    // Cache miss or stale: queue background generation.
+    state.worker.post(db::worker::Task::GenerateThumbs {
+        book_id: id,
+        last_modified_epoch,
+    });
+
+    // Serve original cover as placeholder while the worker generates.
+    match db::get_cover(&state.pool, id).await {
+        Ok(Some((mime, bytes))) => (
+            [
+                (header::CONTENT_TYPE, mime.as_str()),
+                // Short TTL: browser will re-fetch after ~5 s when the WebP is ready.
+                (header::CACHE_CONTROL, "private, max-age=5"),
+                (header::VARY, "Cookie"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Ok(None) => axum::http::StatusCode::ACCEPTED.into_response(),
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("cover fetch failed: {e}"),
         )
             .into_response(),
     }
@@ -711,6 +783,87 @@ mod tests {
     async fn api_covers_returns_401_when_anonymous() {
         let (app, _, _) = fixture().await;
         let res = app.oneshot(get_anon("/api/covers/1")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // -------------------------------------------------------------------
+    // /api/thumbs — thumbnail pipeline endpoint
+    // -------------------------------------------------------------------
+
+    /// Seed a book row with `has_cover = 0`. Returns the inserted book id.
+    async fn seed_book_no_cover(pool: &sqlx::SqlitePool) -> i64 {
+        // Insert a minimal library row first (FK requirement).
+        sqlx::query(
+            "INSERT OR IGNORE INTO libraries(path, display_name) VALUES ('/test/library', 'Test')",
+        )
+        .execute(pool)
+        .await
+        .expect("insert library");
+        let library_id: i64 =
+            sqlx::query_scalar("SELECT id FROM libraries WHERE path = '/test/library'")
+                .fetch_one(pool)
+                .await
+                .expect("library id");
+        // Use a fixed UUID; each test gets its own in-memory pool so there is
+        // no collision risk.
+        sqlx::query(
+            "INSERT INTO books(uuid, library_id, path, title, has_cover) VALUES (?, ?, ?, ?, 0)",
+        )
+        .bind("00000000-0000-0000-0000-000000000001")
+        .bind(library_id)
+        .bind("/test/library/no-cover.epub")
+        .bind("No Cover Book")
+        .execute(pool)
+        .await
+        .expect("insert book")
+        .last_insert_rowid()
+    }
+
+    #[tokio::test]
+    async fn api_thumbs_returns_400_for_bad_size() {
+        let (app, _, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+        let res = app
+            .oneshot(get_with_bearer("/api/thumbs/1/xxl", &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn api_thumbs_returns_404_for_missing_book() {
+        let (app, _, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+        let res = app
+            .oneshot(get_with_bearer("/api/thumbs/9999/md", &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn api_thumbs_returns_202_for_book_without_cover() {
+        let (_, _, pool) = fixture().await;
+        let book_id = seed_book_no_cover(&pool).await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+        let app = rest_router(AppState::new(pool));
+        let res = app
+            .oneshot(get_with_bearer(
+                &format!("/api/thumbs/{book_id}/md"),
+                &token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn api_thumbs_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let res = app.oneshot(get_anon("/api/thumbs/1/md")).await.unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 
