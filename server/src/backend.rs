@@ -258,10 +258,11 @@ async fn get_thumb(
         }
     };
 
-    // Cache hit: thumb exists and is fresh.
+    // Cache hit: thumb exists and is fresh. Use async I/O here so a hot
+    // `srcset` grid doesn't pin tokio worker threads on the synchronous read.
     let thumb_path = db::thumb_path_for(id, size);
-    if !db::thumbs::is_stale(id, size, last_modified_epoch) {
-        if let Ok(bytes) = std::fs::read(&thumb_path) {
+    if !db::thumbs::is_stale_async(id, size, last_modified_epoch).await {
+        if let Ok(bytes) = tokio::fs::read(&thumb_path).await {
             return (
                 [
                     (header::CONTENT_TYPE, "image/webp"),
@@ -274,24 +275,27 @@ async fn get_thumb(
         }
     }
 
-    // Cache miss or stale: queue background generation.
-    state.worker.post(db::worker::Task::GenerateThumbs {
-        book_id: id,
-        last_modified_epoch,
-    });
-
-    // Serve original cover as placeholder while the worker generates.
+    // Cache miss or stale: fetch the original cover first so we only queue
+    // generation when there's actually something to thumbnail. Queuing for
+    // a coverless book just produces a guaranteed `no cover for book …`
+    // worker error on every request, polluting the log.
     match db::get_cover(&state.pool, id).await {
-        Ok(Some((mime, bytes))) => (
-            [
-                (header::CONTENT_TYPE, mime.as_str()),
-                // Short TTL: browser will re-fetch after ~5 s when the WebP is ready.
-                (header::CACHE_CONTROL, "private, max-age=5"),
-                (header::VARY, "Cookie"),
-            ],
-            bytes,
-        )
-            .into_response(),
+        Ok(Some((mime, bytes))) => {
+            state.worker.post(db::worker::Task::GenerateThumbs {
+                book_id: id,
+                last_modified_epoch,
+            });
+            (
+                [
+                    (header::CONTENT_TYPE, mime.as_str()),
+                    // Short TTL: browser will re-fetch after ~5 s when the WebP is ready.
+                    (header::CACHE_CONTROL, "private, max-age=5"),
+                    (header::VARY, "Cookie"),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
         Ok(None) => axum::http::StatusCode::ACCEPTED.into_response(),
         Err(e) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,

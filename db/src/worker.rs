@@ -184,10 +184,7 @@ impl Worker {
                     }
                     Err(e) => return TaskOutcome::Err(e.to_string()),
                 };
-                let cap = std::env::var("OMNIBUS_THUMBS_CAP_BYTES")
-                    .ok()
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(crate::thumbs::DEFAULT_CAP_BYTES);
+                let cap = crate::thumbs::cap_bytes();
                 match tokio::task::spawn_blocking(move || {
                     crate::thumbs::ensure_thumbnails_sync(book_id, last_modified_epoch, cover)?;
                     crate::thumbs::evict_if_over_cap(cap)
@@ -198,7 +195,14 @@ impl Worker {
                     Ok(Ok(())) => TaskOutcome::Ok,
                     Ok(Err(e)) => TaskOutcome::Err(e.to_string()),
                     Err(join_err) => {
-                        TaskOutcome::Err(format!("spawn_blocking panicked: {join_err}"))
+                        // `JoinError` covers both panics and cancellation —
+                        // distinguish so the log doesn't lie about which one.
+                        let kind = if join_err.is_panic() {
+                            "panicked"
+                        } else {
+                            "was cancelled"
+                        };
+                        TaskOutcome::Err(format!("spawn_blocking {kind}: {join_err}"))
                     }
                 }
             }
