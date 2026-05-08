@@ -449,6 +449,20 @@ pub async fn get_cover(
     }
 }
 
+/// Return `strftime('%s', last_modified)` as epoch seconds for `book_id`,
+/// or `None` if the book does not exist.
+pub async fn get_last_modified_epoch(
+    pool: &SqlitePool,
+    book_id: i64,
+) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT CAST(strftime('%s', last_modified) AS INTEGER) FROM books WHERE id = ?",
+    )
+    .bind(book_id)
+    .fetch_optional(pool)
+    .await
+}
+
 // -----------------------------------------------------------------------------
 // Indexer write path.
 // -----------------------------------------------------------------------------

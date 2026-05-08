@@ -18,6 +18,10 @@ pub enum Task {
     Scan {
         library_path: String,
     },
+    GenerateThumbs {
+        book_id: i64,
+        last_modified_epoch: i64,
+    },
     #[cfg(test)]
     Test {
         tag: &'static str,
@@ -33,6 +37,7 @@ impl Task {
     fn resource_key(&self) -> Option<String> {
         match self {
             Task::Scan { library_path } => Some(library_path.clone()),
+            Task::GenerateThumbs { book_id, .. } => Some(format!("thumb:{book_id}")),
             #[cfg(test)]
             Task::Test { resource, .. } => resource.clone(),
         }
@@ -41,6 +46,7 @@ impl Task {
     fn uses_scan_sem(&self) -> bool {
         match self {
             Task::Scan { .. } => true,
+            Task::GenerateThumbs { .. } => false,
             #[cfg(test)]
             Task::Test {
                 route_through_scan_sem,
@@ -164,6 +170,36 @@ impl Worker {
                 match crate::indexer::reindex(&self.pool, library_path).await {
                     Ok(()) => TaskOutcome::Ok,
                     Err(e) => TaskOutcome::Err(e.to_string()),
+                }
+            }
+            Task::GenerateThumbs {
+                book_id,
+                last_modified_epoch,
+            } => {
+                let pool = self.pool.clone();
+                let cover = match crate::queries::get_cover(&pool, book_id).await {
+                    Ok(Some((_mime, bytes))) => bytes,
+                    Ok(None) => {
+                        return TaskOutcome::Err(format!("no cover for book {book_id}"));
+                    }
+                    Err(e) => return TaskOutcome::Err(e.to_string()),
+                };
+                let cap = std::env::var("OMNIBUS_THUMBS_CAP_BYTES")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(crate::thumbs::DEFAULT_CAP_BYTES);
+                match tokio::task::spawn_blocking(move || {
+                    crate::thumbs::ensure_thumbnails_sync(book_id, last_modified_epoch, cover)?;
+                    crate::thumbs::evict_if_over_cap(cap)
+                        .map_err(|e| crate::thumbs::ThumbError::Io(e.to_string()))
+                })
+                .await
+                {
+                    Ok(Ok(())) => TaskOutcome::Ok,
+                    Ok(Err(e)) => TaskOutcome::Err(e.to_string()),
+                    Err(join_err) => {
+                        TaskOutcome::Err(format!("spawn_blocking panicked: {join_err}"))
+                    }
                 }
             }
             #[cfg(test)]
