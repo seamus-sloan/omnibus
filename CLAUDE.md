@@ -137,7 +137,7 @@ cargo test -p omnibus-db                                    # db + ebook + scann
 cargo clippy                                                # lint default-members crates
 cargo fmt                                                   # format all crates
 
-# Playwright E2E (server must be running)
+# Playwright E2E (server must be running on port 3000)
 cd ui_tests/playwright && npm install                       # first time
 cd ui_tests/playwright && npx playwright test               # run all
 
