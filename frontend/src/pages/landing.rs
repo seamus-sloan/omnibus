@@ -110,13 +110,11 @@ fn EbookRow(book: EbookMetadata, server_url: String) -> Element {
     // (stem only, lowercased, non-alphanumerics collapsed to `-`) so fixtures
     // can look a row up by the same slug they ship under.
     let row_testid = format!("ebook-row-{}", row_slug(&book.filename));
-    // Combine the relative cover URL the server returned with the client's
-    // base URL. Web sees an empty base (same-origin); mobile prepends its
+    // Derive thumbnail base URL from book.id when a cover exists.
+    // Web sees an empty server_url (same-origin); mobile prepends its
     // configured `ServerUrl`.
-    let cover_src = book
-        .cover_url
-        .as_deref()
-        .map(|rel| format!("{server_url}{rel}"));
+    let has_cover = book.cover_url.is_some();
+    let thumb_base = format!("{server_url}/api/thumbs/{}", book.id);
     let series_line = match (book.series.as_deref(), book.series_index.as_deref()) {
         (Some(s), Some(i)) => format!("{s} #{i}"),
         (Some(s), None) => s.to_string(),
@@ -148,8 +146,17 @@ fn EbookRow(book: EbookMetadata, server_url: String) -> Element {
                 }
             },
             td { class: "ebook-col-cover", "data-testid": "ebook-cell-cover",
-                if let Some(src) = cover_src.as_ref() {
-                    img { class: "ebook-thumb", src: "{src}", alt: "Cover of {display_title}", loading: "lazy" }
+                if has_cover {
+                    img {
+                        class: "ebook-thumb",
+                        src: "{thumb_base}/md",
+                        srcset: "{thumb_base}/sm 160w, {thumb_base}/md 320w, {thumb_base}/lg 640w",
+                        sizes: "(max-width: 640px) 160px, (max-width: 1280px) 320px, 640px",
+                        alt: "Cover of {display_title}",
+                        loading: "lazy",
+                        width: "320",
+                        height: "480",
+                    }
                 } else {
                     div { class: "ebook-thumb ebook-thumb-fallback", "—" }
                 }
