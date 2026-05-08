@@ -66,6 +66,9 @@ pub enum ThumbError {
     Db(#[from] sqlx::Error),
 }
 
+/// Default eviction cap (5 GiB).
+const DEFAULT_CAP_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+
 /// Root directory for thumbnail files. Override with `OMNIBUS_THUMBS_DIR`.
 pub fn thumbs_dir() -> PathBuf {
     std::env::var("OMNIBUS_THUMBS_DIR")
@@ -73,43 +76,67 @@ pub fn thumbs_dir() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("./thumbs"))
 }
 
+/// Resolved eviction cap in bytes. Reads `OMNIBUS_THUMBS_CAP_BYTES`; falls
+/// back to [`DEFAULT_CAP_BYTES`] when unset or unparseable.
+pub fn cap_bytes() -> u64 {
+    std::env::var("OMNIBUS_THUMBS_CAP_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_CAP_BYTES)
+}
+
 /// Full on-disk path: `<thumbs_dir>/<book_id>_<size>.webp`
 pub fn thumb_path_for(book_id: i64, size: ThumbSize) -> PathBuf {
     thumbs_dir().join(format!("{book_id}_{size}.webp"))
 }
 
-/// True if the cached thumbnail is absent or older than `last_modified_epoch` (Unix seconds).
+fn mtime_epoch(meta: &std::fs::Metadata) -> i64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// True if the cached thumbnail is absent or older than `last_modified_epoch`
+/// (Unix seconds). Synchronous variant — call from `spawn_blocking` contexts
+/// (the worker's encode loop). For the async request path, use
+/// [`is_stale_async`] so the metadata syscall doesn't pin a tokio worker.
 pub fn is_stale(book_id: i64, size: ThumbSize, last_modified_epoch: i64) -> bool {
     let path = thumb_path_for(book_id, size);
     match std::fs::metadata(&path) {
         Err(_) => true,
-        Ok(meta) => {
-            let mtime = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            mtime < last_modified_epoch
-        }
+        Ok(meta) => mtime_epoch(&meta) < last_modified_epoch,
     }
 }
 
-/// Generate one thumbnail size from raw cover bytes and write to disk.
+/// Async variant of [`is_stale`] for the request path.
+pub async fn is_stale_async(book_id: i64, size: ThumbSize, last_modified_epoch: i64) -> bool {
+    let path = thumb_path_for(book_id, size);
+    match tokio::fs::metadata(&path).await {
+        Err(_) => true,
+        Ok(meta) => mtime_epoch(&meta) < last_modified_epoch,
+    }
+}
+
+/// Resize a pre-decoded cover and write the WebP to disk for one size.
 ///
-/// Must be called inside `tokio::task::spawn_blocking` — decode + encode are CPU-bound.
-pub fn generate_thumbnail(
+/// Atomic on POSIX: the WebP is written to a per-(book,size) temp file in
+/// `thumbs_dir()` and then `rename`d into place, so a concurrent reader can
+/// never observe a partial file.
+fn write_thumbnail(
     book_id: i64,
     size: ThumbSize,
-    cover_bytes: &[u8],
+    decoded: &image::DynamicImage,
 ) -> Result<usize, ThumbError> {
     use image::{imageops::FilterType, ImageFormat};
 
-    let img =
-        image::load_from_memory(cover_bytes).map_err(|e| ThumbError::Decode(e.to_string()))?;
-
     let (w, h) = size.dimensions();
-    let resized = img.resize(w, h, FilterType::Lanczos3);
+    // `resize_to_fill` guarantees output dimensions equal `(w, h)` by
+    // resizing-then-cropping. Plain `resize` preserves aspect ratio and can
+    // return a smaller image, which would defeat the frontend's fixed
+    // `width`/`height` attributes and stretch covers.
+    let resized = decoded.resize_to_fill(w, h, FilterType::Lanczos3);
 
     let webp_bytes = {
         let mut buf = std::io::Cursor::new(Vec::new());
@@ -122,14 +149,36 @@ pub fn generate_thumbnail(
     let dir = thumbs_dir();
     std::fs::create_dir_all(&dir).map_err(|e| ThumbError::Io(e.to_string()))?;
 
-    let path = thumb_path_for(book_id, size);
-    let n = webp_bytes.len();
-    std::fs::write(&path, &webp_bytes).map_err(|e| ThumbError::Io(e.to_string()))?;
+    let final_path = thumb_path_for(book_id, size);
+    // Per-(book,size) temp name keeps concurrent generations from clobbering
+    // each other's temp files. The worker's `thumb:{book_id}` resource lock
+    // already serializes per-book, so a single suffix is enough.
+    let tmp_path = dir.join(format!("{book_id}_{size}.webp.tmp"));
+    std::fs::write(&tmp_path, &webp_bytes).map_err(|e| ThumbError::Io(e.to_string()))?;
+    std::fs::rename(&tmp_path, &final_path).map_err(|e| ThumbError::Io(e.to_string()))?;
 
-    Ok(n)
+    Ok(webp_bytes.len())
+}
+
+/// Generate one thumbnail size from raw cover bytes and write to disk.
+///
+/// Must be called inside `tokio::task::spawn_blocking` — decode + encode are
+/// CPU-bound. Prefer [`ensure_thumbnails_sync`] when generating multiple
+/// sizes for the same cover, since it decodes the source image only once.
+pub fn generate_thumbnail(
+    book_id: i64,
+    size: ThumbSize,
+    cover_bytes: &[u8],
+) -> Result<usize, ThumbError> {
+    let decoded =
+        image::load_from_memory(cover_bytes).map_err(|e| ThumbError::Decode(e.to_string()))?;
+    write_thumbnail(book_id, size, &decoded)
 }
 
 /// Ensure all three thumbnail sizes are generated and fresh.
+///
+/// Decodes `cover_bytes` once and reuses the [`image::DynamicImage`] across
+/// every size that's currently stale, then writes each WebP atomically.
 ///
 /// Must be called inside `tokio::task::spawn_blocking`.
 pub fn ensure_thumbnails_sync(
@@ -137,17 +186,28 @@ pub fn ensure_thumbnails_sync(
     last_modified_epoch: i64,
     cover_bytes: Vec<u8>,
 ) -> Result<(), ThumbError> {
+    let mut decoded: Option<image::DynamicImage> = None;
     for size in ThumbSize::all() {
-        if is_stale(book_id, size, last_modified_epoch) {
-            generate_thumbnail(book_id, size, &cover_bytes)?;
+        if !is_stale(book_id, size, last_modified_epoch) {
+            continue;
         }
+        let img = match decoded.as_ref() {
+            Some(img) => img,
+            None => {
+                let d = image::load_from_memory(&cover_bytes)
+                    .map_err(|e| ThumbError::Decode(e.to_string()))?;
+                decoded = Some(d);
+                decoded.as_ref().unwrap()
+            }
+        };
+        write_thumbnail(book_id, size, img)?;
     }
     Ok(())
 }
 
-pub(crate) const DEFAULT_CAP_BYTES: u64 = 5 * 1024 * 1024 * 1024;
-
-/// Walk `thumbs_dir()` and delete oldest `.webp` files until total size is under `cap_bytes`.
+/// Walk `thumbs_dir()` and delete files in oldest-mtime-first order until the
+/// total cache size is under `cap_bytes`. This is FIFO by file modification
+/// time — not true LRU, since we don't bump `mtime` on read.
 ///
 /// Must be called inside `tokio::task::spawn_blocking`.
 pub fn evict_if_over_cap(cap_bytes: u64) -> Result<(), std::io::Error> {
@@ -179,8 +239,16 @@ pub fn evict_if_over_cap(cap_bytes: u64) -> Result<(), std::io::Error> {
         if total <= cap_bytes {
             break;
         }
-        let _ = std::fs::remove_file(path);
-        total = total.saturating_sub(*size);
+        // Only credit the eviction if the delete actually succeeded —
+        // otherwise the cache is still over-cap and we shouldn't lie to
+        // the running total. Silent failures (e.g. a concurrent reader
+        // holding the file open on Windows) get logged so they don't
+        // disappear, but we keep going so a single bad file can't block
+        // freeing the rest.
+        match std::fs::remove_file(path) {
+            Ok(()) => total = total.saturating_sub(*size),
+            Err(e) => eprintln!("thumbs: evict {path:?} failed: {e}"),
+        }
     }
 
     Ok(())
@@ -269,7 +337,8 @@ mod tests {
 
     #[test]
     fn generate_thumbnail_produces_valid_webp() {
-        // Create a minimal PNG in memory (1×1 white pixel).
+        // Create a synthetic 100×150 white PNG in memory (matches the 2:3
+        // cover aspect ratio so resize_to_fill doesn't crop the pixels).
         use image::{ImageBuffer, Rgba};
         let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
             ImageBuffer::from_fn(100, 150, |_, _| Rgba([255u8, 255, 255, 255]));

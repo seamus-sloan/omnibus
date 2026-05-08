@@ -15,7 +15,11 @@ The shell hook sets:
 - `OMNIBUS_PUBLIC_ORIGIN=http://localhost:$PORT` — comma-separated allowlist consumed by `auth::origin_check`. Required for `dx serve --fullstack`: its HTTP proxy rewrites `Host` to the upstream backend's loopback address without setting `X-Forwarded-Host`, so without an allowlist every cookie-authed POST 403s. Override in production deployments behind a reverse proxy.
 - `ANDROID_HOME` and `ANDROID_NDK_HOME` (auto-detected from standard Android Studio install paths)
 
-Override `PORT` (default `3000`) if you need a different port.
+Override `PORT` (default `3000`) if you need a different port. Playwright targets the default port `3000`.
+
+Optional thumbnail cache overrides (F1.2):
+- `OMNIBUS_THUMBS_DIR` — where WebP thumbnails are cached (default `./thumbs`)
+- `OMNIBUS_THUMBS_CAP_BYTES` — eviction cap in bytes (default 5 GiB)
 
 If `ANDROID_HOME` / `ANDROID_NDK_HOME` come back empty, set them manually:
 

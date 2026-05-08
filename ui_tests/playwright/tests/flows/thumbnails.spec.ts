@@ -12,16 +12,16 @@ test.beforeAll(async ({ request }) => {
 test("renders book grid with srcset cover images", async ({ page }) => {
   await gotoReady(page, "/");
 
-  // Pick a fixture book that has a cover. "alpha" is the first in the list.
+  // Pick a fixture book that has a cover and target its row directly by slug.
+  // Earlier this filtered by `ebook-cell-cover`, but every row has that
+  // testid (covered or not) so the filter was a no-op and the chosen row
+  // depended on sort order.
   const bookWithCover = FIXTURE_BOOKS.find((b) => b.hasCover);
   expect(bookWithCover, "expected at least one fixture book with hasCover=true").toBeTruthy();
 
-  // Find any cover <img> in the grid (there will be several for books with covers).
   const coverImg = page
-    .getByTestId(/^ebook-row-/)
-    .filter({ has: page.getByTestId("ebook-cell-cover") })
-    .first()
-    .getByRole("img");
+    .getByTestId(`ebook-row-${bookWithCover!.slug}`)
+    .getByRole("img", { name: /^Cover of/ });
 
   await expect(coverImg).toBeVisible();
 

@@ -89,7 +89,7 @@ function slugFromFilename(name: string): string {
 /** Smallest possible PNG: 1×1 transparent pixel. Bytes are public-domain. */
 const TINY_PNG = Buffer.from(
   "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4" +
-    "890000000d49444154789c6300010000000500010d0a2db40000000049454e44ae426082",
+    "890000000b49444154789c6360000200000500017a5eab3f0000000049454e44ae426082",
   "hex",
 );
 
