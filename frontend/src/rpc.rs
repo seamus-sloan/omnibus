@@ -15,7 +15,7 @@
 
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
-use omnibus_shared::{EbookLibrary, LibraryContents, Settings, ValueResponse};
+use omnibus_shared::{EbookLibrary, EbookMetadata, LibraryContents, Settings, ValueResponse};
 
 #[cfg(feature = "server")]
 use omnibus_db::{self as db, scanner};
@@ -178,6 +178,14 @@ pub async fn rpc_get_ebooks() -> Result<EbookLibrary> {
     // Served straight from the DB — the indexer is responsible for keeping
     // it up to date (startup + settings save triggers).
     Ok(db::library_from_db(&pool.0, settings.ebook_library_path.as_deref()).await?)
+}
+
+/// POST (not GET) for the same reason as `rpc_search`: Dioxus `#[get]`
+/// server functions can't carry an argument body, so anything that needs
+/// `id` rides as a JSON-bodied POST.
+#[post("/api/rpc/ebook", pool: PoolExt, _user: AuthUser)]
+pub async fn rpc_get_ebook(id: i64) -> Result<Option<EbookMetadata>> {
+    Ok(db::get_book(&pool.0, id).await?)
 }
 
 /// FTS5-backed search across the configured ebook library. Empty or
