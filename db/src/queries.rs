@@ -1583,8 +1583,9 @@ mod tests {
 
         // F1.3: list_books exposes the row insertion timestamp so the
         // landing page can offer a "Newest Added" sort. The migration
-        // defaults `books.timestamp` to CURRENT_TIMESTAMP, so every row
-        // surfaces a non-empty ISO8601 string.
+        // defaults `books.timestamp` to `datetime('now')`
+        // (`YYYY-MM-DD HH:MM:SS`, UTC), so every row surfaces a non-empty
+        // sortable string.
         for book in &books {
             let added = book.added_at.as_deref().unwrap_or("");
             assert!(

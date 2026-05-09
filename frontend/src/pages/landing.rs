@@ -198,6 +198,13 @@ fn Toolbar(prefs: ViewPrefs, on_change: EventHandler<ViewPrefs>) -> Element {
         let prefs = prefs.clone();
         move |key: SortKey| {
             let mut next = prefs.clone();
+            // Switching to a different axis from the grid dropdown should
+            // adopt that axis's natural direction (descending for time-based
+            // axes, ascending for alphabetical) — matches the table-view
+            // header behavior so the two views stay consistent.
+            if next.sort_key != key {
+                next.sort_dir = default_dir_for(key);
+            }
             next.sort_key = key;
             apply(next);
         }
@@ -216,21 +223,20 @@ fn Toolbar(prefs: ViewPrefs, on_change: EventHandler<ViewPrefs>) -> Element {
 
     rsx! {
         div { class: "lib-toolbar", role: "toolbar", "data-testid": "lib-toolbar",
-            div { class: "lib-view-toggle", role: "tablist", aria_label: "View mode",
+            // Pressed-button toggle group, not an ARIA tablist — there are no
+            // associated tab panels and no arrow-key tab navigation, so
+            // `aria-pressed` on plain `<button>`s is the right shape.
+            div { class: "lib-view-toggle", "aria-label": "View mode",
                 button {
                     class: "lib-toggle-btn",
-                    role: "tab",
                     "aria-pressed": "{view_mode == ViewMode::Table}",
-                    "aria-selected": "{view_mode == ViewMode::Table}",
                     "data-testid": "view-toggle-table",
                     onclick: move |_| set_view_table(ViewMode::Table),
                     "Table"
                 }
                 button {
                     class: "lib-toggle-btn",
-                    role: "tab",
                     "aria-pressed": "{view_mode == ViewMode::Grid}",
-                    "aria-selected": "{view_mode == ViewMode::Grid}",
                     "data-testid": "view-toggle-grid",
                     onclick: move |_| set_view_grid(ViewMode::Grid),
                     "Grid"
@@ -674,69 +680,99 @@ fn title_key(book: &EbookMetadata) -> String {
     t.to_ascii_lowercase()
 }
 
-fn series_key(book: &EbookMetadata) -> Option<(String, f64)> {
-    let series = book.series.as_deref()?;
-    let idx = book
-        .series_index
-        .as_deref()
-        .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(0.0);
-    Some((series.to_ascii_lowercase(), idx))
+/// Cached per-row sort key. We compute exactly one of these (matching the
+/// active [`SortKey`]) per book before sorting, then `sort_by` only borrows
+/// pre-built strings — no per-comparison allocation, no re-parsing of
+/// `series_index`. `series_index` is normalized to milli-units of an i64 so
+/// the whole struct is `Ord`-derivable (no f64 NaN issues).
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct RowKey {
+    /// Plain string axes (Title / Author / LastUpdated / NewestAdded).
+    /// `None` only for genuinely missing values; see [`cmp_with_missing_last`].
+    plain: Option<String>,
+    /// Series tuple: lowercased name + `series_index * 1000` rounded to i64.
+    series: Option<(String, i64)>,
 }
 
-fn compare_books(a: &EbookMetadata, b: &EbookMetadata, key: SortKey, dir: SortDir) -> Ordering {
-    let ord = match key {
-        SortKey::Title => title_key(a).cmp(&title_key(b)),
-        SortKey::Author => primary_author_key(a).cmp(&primary_author_key(b)),
-        SortKey::Series => match (series_key(a), series_key(b)) {
-            (Some(x), Some(y)) => {
-                x.0.cmp(&y.0)
-                    .then_with(|| x.1.partial_cmp(&y.1).unwrap_or(Ordering::Equal))
-            }
-            (Some(_), None) => Ordering::Less, // books with a series sort first
-            (None, Some(_)) => Ordering::Greater,
-            (None, None) => Ordering::Equal,
+fn row_key(book: &EbookMetadata, key: SortKey) -> RowKey {
+    match key {
+        SortKey::Title => RowKey {
+            plain: Some(title_key(book)),
+            series: None,
         },
-        SortKey::LastUpdated => option_str_cmp(&a.modified, &b.modified),
-        SortKey::NewestAdded => option_str_cmp(&a.added_at, &b.added_at),
-    };
-    let tiebreak = a.id.cmp(&b.id);
-    let combined = ord.then(tiebreak);
-    if dir == SortDir::Desc {
-        combined.reverse()
-    } else {
-        combined
+        SortKey::Author => RowKey {
+            plain: Some(primary_author_key(book)),
+            series: None,
+        },
+        SortKey::Series => RowKey {
+            plain: None,
+            series: book.series.as_deref().filter(|s| !s.is_empty()).map(|s| {
+                let idx = book
+                    .series_index
+                    .as_deref()
+                    .and_then(|raw| raw.parse::<f64>().ok())
+                    .map(|f| (f * 1000.0).round() as i64)
+                    .unwrap_or(0);
+                (s.to_ascii_lowercase(), idx)
+            }),
+        },
+        SortKey::LastUpdated => RowKey {
+            plain: book.modified.clone(),
+            series: None,
+        },
+        SortKey::NewestAdded => RowKey {
+            plain: book.added_at.clone(),
+            series: None,
+        },
     }
 }
 
-fn option_str_cmp(a: &Option<String>, b: &Option<String>) -> Ordering {
-    match (a.as_deref(), b.as_deref()) {
-        (Some(x), Some(y)) => x.cmp(y),
+/// Compare two `Option<K>` values where missing always sorts last regardless
+/// of direction. Direction only flips ordering between two present values;
+/// `None` keeps a stable "last" position so reversing a desc sort doesn't
+/// shove un-timestamped or seriesless books to the top.
+fn cmp_with_missing_last<K: Ord>(a: Option<&K>, b: Option<&K>, dir: SortDir) -> Ordering {
+    match (a, b) {
+        (Some(x), Some(y)) => {
+            let ord = x.cmp(y);
+            if dir == SortDir::Desc {
+                ord.reverse()
+            } else {
+                ord
+            }
+        }
         (Some(_), None) => Ordering::Less,
         (None, Some(_)) => Ordering::Greater,
         (None, None) => Ordering::Equal,
     }
 }
 
-fn sort_books(mut books: Vec<EbookMetadata>, key: SortKey, dir: SortDir) -> Vec<EbookMetadata> {
-    books.sort_by(|a, b| compare_books(a, b, key, dir));
-    books
-}
-
-fn book_authors_set(book: &EbookMetadata) -> HashSet<String> {
-    book.creators.iter().map(|c| c.name.clone()).collect()
-}
-
-fn book_tags_set(book: &EbookMetadata) -> HashSet<String> {
-    book.subjects.iter().cloned().collect()
+fn sort_books(books: Vec<EbookMetadata>, key: SortKey, dir: SortDir) -> Vec<EbookMetadata> {
+    let mut keyed: Vec<(RowKey, EbookMetadata)> =
+        books.into_iter().map(|b| (row_key(&b, key), b)).collect();
+    keyed.sort_by(|(ka, ba), (kb, bb)| {
+        let primary = match key {
+            SortKey::Series => cmp_with_missing_last(ka.series.as_ref(), kb.series.as_ref(), dir),
+            _ => cmp_with_missing_last(ka.plain.as_ref(), kb.plain.as_ref(), dir),
+        };
+        // Stable tiebreak on id, never reversed — keeps run-to-run order
+        // deterministic when the primary key matches.
+        primary.then(ba.id.cmp(&bb.id))
+    });
+    keyed.into_iter().map(|(_, b)| b).collect()
 }
 
 fn matches_filters(book: &EbookMetadata, filters: &ViewFilters) -> bool {
-    if !filters.authors.is_empty() {
-        let authors = book_authors_set(book);
-        if !filters.authors.iter().any(|a| authors.contains(a)) {
-            return false;
-        }
+    // Allocation-free membership checks: filter buckets are typically tiny
+    // (a handful of selected chips), so a nested `any().any()` is faster
+    // than building a fresh HashSet per book on every filter pass.
+    if !filters.authors.is_empty()
+        && !filters
+            .authors
+            .iter()
+            .any(|a| book.creators.iter().any(|c| &c.name == a))
+    {
+        return false;
     }
     if !filters.series.is_empty() {
         let series = book.series.as_deref().unwrap_or("");
@@ -744,11 +780,13 @@ fn matches_filters(book: &EbookMetadata, filters: &ViewFilters) -> bool {
             return false;
         }
     }
-    if !filters.tags.is_empty() {
-        let tags = book_tags_set(book);
-        if !filters.tags.iter().any(|t| tags.contains(t)) {
-            return false;
-        }
+    if !filters.tags.is_empty()
+        && !filters
+            .tags
+            .iter()
+            .any(|t| book.subjects.iter().any(|s| s == t))
+    {
+        return false;
     }
     true
 }
@@ -1017,6 +1055,59 @@ mod tests {
         let desc = sort_books(s, SortKey::NewestAdded, SortDir::Desc);
         // alpha 2025-03 > gamma 2025-02 > beta 2025-01
         assert_eq!(ids(&desc), vec![1, 3, 2]);
+    }
+
+    #[test]
+    fn missing_timestamps_always_sort_last_even_on_desc() {
+        // Two timestamped books + one with no `modified` value. In descending
+        // order the most-recent timestamp comes first, but the missing-value
+        // book stays at the end (it doesn't get flipped to the top by the
+        // direction reversal).
+        let books = vec![
+            book(
+                1,
+                "old.epub",
+                Some("Old"),
+                &[],
+                None,
+                Some("2024-01-01T00:00:00"),
+                None,
+                &[],
+            ),
+            book(
+                2,
+                "new.epub",
+                Some("New"),
+                &[],
+                None,
+                Some("2025-01-01T00:00:00"),
+                None,
+                &[],
+            ),
+            book(
+                3,
+                "missing.epub",
+                Some("Missing"),
+                &[],
+                None,
+                None,
+                None,
+                &[],
+            ),
+        ];
+        let desc = sort_books(books.clone(), SortKey::LastUpdated, SortDir::Desc);
+        assert_eq!(ids(&desc), vec![2, 1, 3]);
+        let asc = sort_books(books, SortKey::LastUpdated, SortDir::Asc);
+        assert_eq!(ids(&asc), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn series_sort_keeps_seriesless_last_in_desc_too() {
+        let s = sample();
+        let desc = sort_books(s, SortKey::Series, SortDir::Desc);
+        // Foundation #2 (id 2) → Foundation #1 (id 1) → seriesless gamma (id 3)
+        // last regardless of direction.
+        assert_eq!(ids(&desc), vec![2, 1, 3]);
     }
 
     // --- apply_filters ---
