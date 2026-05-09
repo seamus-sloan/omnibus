@@ -100,7 +100,7 @@ pub struct EbookMetadata {
 
     pub cover_url: Option<String>,
 
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub formats: Vec<String>,
 
     pub error: Option<String>,
