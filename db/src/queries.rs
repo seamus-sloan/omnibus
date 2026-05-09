@@ -795,6 +795,7 @@ pub async fn list_books(
             spine_count: 0,
             toc_count: 0,
             cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
+            formats: vec![],
             error: None,
         });
     }
@@ -845,6 +846,86 @@ async fn load_identifiers(pool: &SqlitePool, book_id: i64) -> Result<Vec<Identif
             scheme: Some(r.get("scheme")),
         })
         .collect())
+}
+
+async fn load_formats(pool: &SqlitePool, book_id: i64) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT format FROM book_files WHERE book_id = ? ORDER BY format")
+        .bind(book_id)
+        .fetch_all(pool)
+        .await
+}
+
+/// Fetch a single book by its stable `books.id`. Returns `None` if not found.
+pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata>, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT b.id, b.uuid, bf.filename AS file_stem, bf.format AS file_format,
+               b.title, b.description, b.series_index, b.has_cover,
+               b.pubdate, b.last_modified, b.isbn,
+               pub.name AS publisher_name, lang.code AS language_code,
+               s.name AS series_name
+        FROM books b
+        LEFT JOIN book_files bf ON bf.book_id = b.id
+        LEFT JOIN books_publishers_link bpl ON bpl.book = b.id
+        LEFT JOIN publishers pub ON pub.id = bpl.publisher
+        LEFT JOIN books_languages_link bll ON bll.book = b.id
+        LEFT JOIN languages lang ON lang.id = bll.language
+        LEFT JOIN books_series_link bsl ON bsl.book = b.id
+        LEFT JOIN series s ON s.id = bsl.series
+        WHERE b.id = ?
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(r) = row else {
+        return Ok(None);
+    };
+    let book_id: i64 = r.get("id");
+    let has_cover: i64 = r.get("has_cover");
+    let file_stem: Option<String> = r.get("file_stem");
+    let file_format: Option<String> = r.get("file_format");
+    let filename = match (file_stem, file_format) {
+        (Some(stem), Some(fmt)) => format!("{stem}.{}", fmt.to_ascii_lowercase()),
+        _ => String::new(),
+    };
+    let series_index: Option<f64> = r.get("series_index");
+    let creators = load_creators(pool, book_id).await?;
+    let subjects = load_subjects(pool, book_id).await?;
+    let identifiers = load_identifiers(pool, book_id).await?;
+    let formats = load_formats(pool, book_id).await?;
+
+    Ok(Some(EbookMetadata {
+        id: book_id,
+        filename,
+        title: r.get("title"),
+        description: r.get("description"),
+        publisher: r.get("publisher_name"),
+        published: r.get("pubdate"),
+        modified: r.get("last_modified"),
+        language: r.get("language_code"),
+        rights: None,
+        source: None,
+        coverage: None,
+        dc_type: None,
+        dc_format: None,
+        relation: None,
+        creators,
+        contributors: vec![],
+        subjects,
+        identifiers,
+        series: r.get("series_name"),
+        series_index: series_index.map(format_series_index),
+        epub_version: None,
+        unique_identifier: Some(r.get::<String, _>("uuid")),
+        resource_count: 0,
+        spine_count: 0,
+        toc_count: 0,
+        cover_url: (has_cover != 0).then(|| format!("/api/covers/{book_id}")),
+        formats,
+        error: None,
+    }))
 }
 
 /// Full-text search across `books_fts`. Returns hydrated `EbookMetadata`
@@ -937,6 +1018,7 @@ pub async fn search_books(
             spine_count: 0,
             toc_count: 0,
             cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
+            formats: vec![],
             error: None,
         });
     }
@@ -2162,5 +2244,49 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(library_count, 0);
+    }
+
+    #[tokio::test]
+    async fn get_book_returns_none_for_missing_id() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let result = get_book(&pool, 9999).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_book_returns_metadata_for_indexed_book() {
+        let _covers = CoversTempDir::new("get_book");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "alpha.epub",
+                Some("Alpha Book"),
+                &["Author A"],
+                &["Fiction"],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let id = books[0].id;
+
+        let book = get_book(&pool, id)
+            .await
+            .unwrap()
+            .expect("book should exist");
+        assert_eq!(book.id, id);
+        assert_eq!(book.title.as_deref(), Some("Alpha Book"));
+        assert_eq!(book.creators.len(), 1);
+        assert_eq!(book.creators[0].name, "Author A");
+        assert_eq!(book.subjects, vec!["Fiction"]);
+        assert!(!book.formats.is_empty(), "formats should be populated");
+        assert!(
+            book.formats.iter().any(|f| f.eq_ignore_ascii_case("epub")),
+            "EPUB format should be present"
+        );
     }
 }

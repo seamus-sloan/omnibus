@@ -100,6 +100,9 @@ pub struct EbookMetadata {
 
     pub cover_url: Option<String>,
 
+    #[serde(default)]
+    pub formats: Vec<String>,
+
     pub error: Option<String>,
 }
 
