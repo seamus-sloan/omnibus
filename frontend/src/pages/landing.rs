@@ -1,23 +1,31 @@
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashSet};
+
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
-use omnibus_shared::{Contributor, EbookLibrary, EbookMetadata};
+use omnibus_shared::{
+    Contributor, EbookLibrary, EbookMetadata, SortDir, SortKey, ViewFilters, ViewMode, ViewPrefs,
+};
 
-use crate::{data, use_search_query, use_server_url, Route};
+use crate::{data, use_search_query, use_server_url, view_prefs, Route};
 
-/// Landing page — loads the configured ebook library and renders every book
-/// in a single table with cover thumbnails and the common metadata columns.
-/// Clicking (or pressing Enter / Space on) a row navigates to the stub
-/// `/books/:id` detail page. The detail page itself is still a TODO.
+/// Landing page — primary library surface.
+///
+/// Hydrates the configured ebook library once, then renders either a dense
+/// table or a cover grid. Sort and filter happen entirely client-side over
+/// the hydrated list (per F1.3 spec for libraries up to ~10k books). View
+/// mode + sort + filters persist per library path via [`view_prefs`].
 #[component]
 pub fn LandingPage() -> Element {
     let server_url = use_server_url();
     let mut library = use_signal(EbookLibrary::default);
     let mut loading = use_signal(|| true);
     let mut error = use_signal(|| None::<String>);
-    // Search box lives in the top nav; the query is shared via context so
-    // typing on any route drives the landing results without a route param.
+    let mut prefs = use_signal(ViewPrefs::default);
+    // Search box lives in the top nav; the query is shared via context.
     let query = use_search_query().0;
 
+    // Fetch the library when the search query changes.
     let url_for_fetch = server_url.clone();
     use_effect(move || {
         let url = url_for_fetch.clone();
@@ -41,12 +49,41 @@ pub fn LandingPage() -> Element {
         });
     });
 
-    let server_url_for_row = server_url.clone();
+    // Hydrate persisted prefs whenever the library path resolves.
+    use_effect(move || {
+        if let Some(path) = library.read().path.clone() {
+            let stored = view_prefs::load(&path);
+            if stored != prefs.peek().clone() {
+                prefs.set(stored);
+            }
+        }
+    });
 
     let lib = library();
     let is_loading = loading();
     let page_error = error();
     let book_count = lib.books.len();
+    let view_mode = prefs().view_mode;
+
+    // Pure derivations: facet chips, then filtered+sorted view.
+    let facets = facet_counts(&lib.books);
+    let visible: Vec<EbookMetadata> = sort_books(
+        apply_filters(&lib.books, &prefs().filters),
+        prefs().sort_key,
+        prefs().sort_dir,
+    );
+
+    let server_url_for_row = server_url.clone();
+    let path_for_save = lib.path.clone();
+    let save = {
+        let path = path_for_save.clone();
+        move |new_prefs: ViewPrefs| {
+            if let Some(path) = path.as_ref() {
+                view_prefs::save(path, &new_prefs);
+            }
+            prefs.set(new_prefs);
+        }
+    };
 
     rsx! {
         section { class: "card",
@@ -66,34 +103,283 @@ pub fn LandingPage() -> Element {
             }
         }
 
-        div {
-            id: "ebook-table",
-            "data-testid": "ebook-table",
-            class: "ebook-table-wrap",
-            if is_loading {
-                p { class: "library-empty", "Loading..." }
-            } else if lib.books.is_empty() && lib.error.is_none() && page_error.is_none() {
-                p { class: "library-empty", "No ebooks found." }
-            } else {
-                table { class: "ebook-table",
-                    thead {
-                        tr {
-                            th { class: "ebook-col-cover", "Cover" }
-                            th { class: "ebook-col-title", "Title" }
-                            th { class: "ebook-col-author", "Author" }
-                            th { class: "ebook-col-series", "Series" }
-                            th { class: "ebook-col-publisher", "Publisher" }
-                            th { class: "ebook-col-published", "Published" }
-                            th { class: "ebook-col-language", "Language" }
+        Toolbar {
+            prefs: prefs(),
+            on_change: save.clone(),
+        }
+
+        div { class: "lib-layout",
+            FilterSidebar {
+                facets: facets,
+                filters: prefs().filters.clone(),
+                on_change: {
+                    let mut save = save.clone();
+                    move |filters: ViewFilters| {
+                        let mut next = prefs.peek().clone();
+                        next.filters = filters;
+                        save(next);
+                    }
+                },
+            }
+
+            div { class: "lib-main",
+                if is_loading {
+                    p { class: "library-empty", "Loading..." }
+                } else if visible.is_empty() && lib.error.is_none() && page_error.is_none() {
+                    if lib.books.is_empty() {
+                        p { class: "library-empty", "No ebooks found." }
+                    } else {
+                        EmptyFiltered {
+                            on_clear: {
+                                let mut save = save.clone();
+                                move |_| {
+                                    let mut next = prefs.peek().clone();
+                                    next.filters = ViewFilters::default();
+                                    save(next);
+                                }
+                            },
                         }
                     }
-                    tbody {
-                        for book in lib.books.into_iter() {
-                            EbookRow {
-                                key: "{book.filename}",
-                                book: book,
+                } else {
+                    match view_mode {
+                        ViewMode::Table => rsx! {
+                            BookTable {
+                                books: visible.clone(),
+                                prefs: prefs(),
+                                on_sort: {
+                                    let mut save = save.clone();
+                                    move |key: SortKey| {
+                                        let mut next = prefs.peek().clone();
+                                        next.sort_dir = if next.sort_key == key {
+                                            toggle_dir(next.sort_dir)
+                                        } else {
+                                            default_dir_for(key)
+                                        };
+                                        next.sort_key = key;
+                                        save(next);
+                                    }
+                                },
                                 server_url: server_url_for_row.clone(),
                             }
+                        },
+                        ViewMode::Grid => rsx! {
+                            BookGrid {
+                                books: visible.clone(),
+                                server_url: server_url_for_row.clone(),
+                            }
+                        },
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Toolbar
+// ---------------------------------------------------------------------------
+
+#[component]
+fn Toolbar(prefs: ViewPrefs, on_change: EventHandler<ViewPrefs>) -> Element {
+    let view_mode = prefs.view_mode;
+    let sort_key = prefs.sort_key;
+    let sort_dir = prefs.sort_dir;
+
+    let apply = move |new_prefs: ViewPrefs| on_change.call(new_prefs);
+    let set_view = {
+        let prefs = prefs.clone();
+        move |mode: ViewMode| {
+            let mut next = prefs.clone();
+            next.view_mode = mode;
+            apply(next);
+        }
+    };
+    let set_sort_key = {
+        let prefs = prefs.clone();
+        move |key: SortKey| {
+            let mut next = prefs.clone();
+            next.sort_key = key;
+            apply(next);
+        }
+    };
+    let toggle_sort_dir = {
+        let prefs = prefs.clone();
+        move |_| {
+            let mut next = prefs.clone();
+            next.sort_dir = toggle_dir(next.sort_dir);
+            apply(next);
+        }
+    };
+
+    let set_view_table = set_view.clone();
+    let set_view_grid = set_view.clone();
+
+    rsx! {
+        div { class: "lib-toolbar", role: "toolbar", "data-testid": "lib-toolbar",
+            div { class: "lib-view-toggle", role: "tablist", aria_label: "View mode",
+                button {
+                    class: "lib-toggle-btn",
+                    role: "tab",
+                    "aria-pressed": "{view_mode == ViewMode::Table}",
+                    "aria-selected": "{view_mode == ViewMode::Table}",
+                    "data-testid": "view-toggle-table",
+                    onclick: move |_| set_view_table(ViewMode::Table),
+                    "Table"
+                }
+                button {
+                    class: "lib-toggle-btn",
+                    role: "tab",
+                    "aria-pressed": "{view_mode == ViewMode::Grid}",
+                    "aria-selected": "{view_mode == ViewMode::Grid}",
+                    "data-testid": "view-toggle-grid",
+                    onclick: move |_| set_view_grid(ViewMode::Grid),
+                    "Grid"
+                }
+            }
+
+            if view_mode == ViewMode::Grid {
+                div { class: "lib-sort-controls",
+                    label { class: "lib-sort-label",
+                        "Sort by"
+                        select {
+                            class: "lib-sort-select",
+                            "data-testid": "lib-sort-select",
+                            onchange: move |evt: Event<FormData>| {
+                                if let Some(key) = sort_key_from_value(&evt.value()) {
+                                    set_sort_key(key);
+                                }
+                            },
+                            for opt in SORT_KEYS.iter().copied() {
+                                option {
+                                    value: "{sort_key_value(opt)}",
+                                    selected: opt == sort_key,
+                                    "{sort_key_label(opt)}"
+                                }
+                            }
+                        }
+                    }
+                    button {
+                        class: "lib-sort-dir",
+                        "data-testid": "lib-sort-dir",
+                        aria_label: "Toggle sort direction",
+                        onclick: toggle_sort_dir,
+                        if sort_dir == SortDir::Asc { "▲" } else { "▼" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Filter sidebar
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, PartialEq)]
+struct FacetCounts {
+    authors: Vec<(String, usize)>,
+    series: Vec<(String, usize)>,
+    tags: Vec<(String, usize)>,
+}
+
+#[component]
+fn FilterSidebar(
+    facets: FacetCounts,
+    filters: ViewFilters,
+    on_change: EventHandler<ViewFilters>,
+) -> Element {
+    let any_active = !filters.is_empty();
+    let toggle = {
+        let filters = filters.clone();
+        move |group: &'static str, value: String| {
+            let mut next = filters.clone();
+            let bucket = match group {
+                "authors" => &mut next.authors,
+                "series" => &mut next.series,
+                _ => &mut next.tags,
+            };
+            if let Some(pos) = bucket.iter().position(|v| v == &value) {
+                bucket.remove(pos);
+            } else {
+                bucket.push(value);
+            }
+            on_change.call(next);
+        }
+    };
+
+    rsx! {
+        aside { class: "lib-sidebar", "data-testid": "lib-sidebar", aria_label: "Filters",
+            if any_active {
+                button {
+                    class: "lib-clear-filters",
+                    "data-testid": "lib-clear-filters",
+                    onclick: move |_| on_change.call(ViewFilters::default()),
+                    "Clear filters"
+                }
+            }
+
+            FacetSection {
+                title: "Authors",
+                testid: "lib-facet-authors",
+                items: facets.authors.clone(),
+                selected: filters.authors.clone(),
+                on_toggle: {
+                    let toggle = toggle.clone();
+                    move |v: String| toggle("authors", v)
+                },
+            }
+            FacetSection {
+                title: "Series",
+                testid: "lib-facet-series",
+                items: facets.series.clone(),
+                selected: filters.series.clone(),
+                on_toggle: {
+                    let toggle = toggle.clone();
+                    move |v: String| toggle("series", v)
+                },
+            }
+            FacetSection {
+                title: "Tags",
+                testid: "lib-facet-tags",
+                items: facets.tags.clone(),
+                selected: filters.tags.clone(),
+                on_toggle: {
+                    let toggle = toggle.clone();
+                    move |v: String| toggle("tags", v)
+                },
+            }
+        }
+    }
+}
+
+#[component]
+fn FacetSection(
+    title: String,
+    testid: String,
+    items: Vec<(String, usize)>,
+    selected: Vec<String>,
+    on_toggle: EventHandler<String>,
+) -> Element {
+    if items.is_empty() {
+        return rsx! { Fragment {} };
+    }
+    let selected_set: HashSet<&String> = selected.iter().collect();
+    rsx! {
+        section { class: "lib-facet", "data-testid": "{testid}",
+            h3 { class: "lib-facet-title", "{title}" }
+            ul { class: "lib-chip-list",
+                for (name, count) in items.iter() {
+                    li {
+                        button {
+                            class: "lib-chip",
+                            "aria-pressed": "{selected_set.contains(&name)}",
+                            "data-value": "{name}",
+                            onclick: {
+                                let name = name.clone();
+                                move |_| on_toggle.call(name.clone())
+                            },
+                            "{name}"
+                            span { class: "lib-chip-count", "{count}" }
                         }
                     }
                 }
@@ -103,16 +389,131 @@ pub fn LandingPage() -> Element {
 }
 
 #[component]
+fn EmptyFiltered(on_clear: EventHandler<()>) -> Element {
+    rsx! {
+        div { class: "library-empty",
+            p { "No books match these filters." }
+            button {
+                class: "btn",
+                "data-testid": "lib-clear-filters-empty",
+                onclick: move |_| on_clear.call(()),
+                "Clear filters"
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Table view
+// ---------------------------------------------------------------------------
+
+#[component]
+fn BookTable(
+    books: Vec<EbookMetadata>,
+    prefs: ViewPrefs,
+    on_sort: EventHandler<SortKey>,
+    server_url: String,
+) -> Element {
+    rsx! {
+        div {
+            id: "ebook-table",
+            "data-testid": "ebook-table",
+            class: "ebook-table-wrap",
+            table { class: "ebook-table",
+                thead {
+                    tr {
+                        th { class: "ebook-col-cover", "Cover" }
+                        SortableHeader {
+                            class: "ebook-col-title".to_string(),
+                            label: "Title".to_string(),
+                            sort_key: SortKey::Title,
+                            prefs: prefs.clone(),
+                            on_sort: on_sort,
+                        }
+                        SortableHeader {
+                            class: "ebook-col-author".to_string(),
+                            label: "Author".to_string(),
+                            sort_key: SortKey::Author,
+                            prefs: prefs.clone(),
+                            on_sort: on_sort,
+                        }
+                        SortableHeader {
+                            class: "ebook-col-series".to_string(),
+                            label: "Series".to_string(),
+                            sort_key: SortKey::Series,
+                            prefs: prefs.clone(),
+                            on_sort: on_sort,
+                        }
+                        th { class: "ebook-col-publisher", "Publisher" }
+                        th { class: "ebook-col-published", "Published" }
+                        SortableHeader {
+                            class: "ebook-col-updated".to_string(),
+                            label: "Last Updated".to_string(),
+                            sort_key: SortKey::LastUpdated,
+                            prefs: prefs.clone(),
+                            on_sort: on_sort,
+                        }
+                        SortableHeader {
+                            class: "ebook-col-added".to_string(),
+                            label: "Added".to_string(),
+                            sort_key: SortKey::NewestAdded,
+                            prefs: prefs.clone(),
+                            on_sort: on_sort,
+                        }
+                        th { class: "ebook-col-language", "Language" }
+                    }
+                }
+                tbody {
+                    for book in books.into_iter() {
+                        EbookRow {
+                            key: "{book.filename}",
+                            book: book,
+                            server_url: server_url.clone(),
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn SortableHeader(
+    class: String,
+    label: String,
+    sort_key: SortKey,
+    prefs: ViewPrefs,
+    on_sort: EventHandler<SortKey>,
+) -> Element {
+    let active = prefs.sort_key == sort_key;
+    let aria_sort = match (active, prefs.sort_dir) {
+        (true, SortDir::Asc) => "ascending",
+        (true, SortDir::Desc) => "descending",
+        _ => "none",
+    };
+    let arrow = if !active {
+        ""
+    } else if prefs.sort_dir == SortDir::Asc {
+        " ▲"
+    } else {
+        " ▼"
+    };
+    rsx! {
+        th { class: "{class} sort-th", aria_sort: "{aria_sort}",
+            button {
+                class: "sort-th-btn",
+                onclick: move |_| on_sort.call(sort_key),
+                "{label}{arrow}"
+            }
+        }
+    }
+}
+
+#[component]
 fn EbookRow(book: EbookMetadata, server_url: String) -> Element {
     let id = book.id;
     let display_title = book.title.as_deref().unwrap_or(&book.filename).to_string();
-    // Stable per-row testid for Playwright. Derived from the on-disk filename
-    // (stem only, lowercased, non-alphanumerics collapsed to `-`) so fixtures
-    // can look a row up by the same slug they ship under.
     let row_testid = format!("ebook-row-{}", row_slug(&book.filename));
-    // Derive thumbnail base URL from book.id when a cover exists.
-    // Web sees an empty server_url (same-origin); mobile prepends its
-    // configured `ServerUrl`.
     let has_cover = book.cover_url.is_some();
     let thumb_base = format!("{server_url}/api/thumbs/{}", book.id);
     let series_line = match (book.series.as_deref(), book.series_index.as_deref()) {
@@ -121,9 +522,9 @@ fn EbookRow(book: EbookMetadata, server_url: String) -> Element {
         _ => String::new(),
     };
     let authors = contributor_names(&book.creators);
+    let updated = book.modified.as_deref().unwrap_or("").to_string();
+    let added = book.added_at.as_deref().unwrap_or("").to_string();
 
-    // `use_navigator` returns a `Copy` handle, so each handler can call it
-    // independently without cloning.
     let nav = use_navigator();
 
     rsx! {
@@ -138,7 +539,6 @@ fn EbookRow(book: EbookMetadata, server_url: String) -> Element {
                 nav.push(Route::BookDetail { id });
             },
             onkeydown: move |evt: Event<KeyboardData>| {
-                // Activate the row on Enter or Space, matching <button> semantics.
                 let key = evt.key();
                 if key == Key::Enter || key == Key::Character(" ".to_string()) {
                     evt.prevent_default();
@@ -171,10 +571,84 @@ fn EbookRow(book: EbookMetadata, server_url: String) -> Element {
             td { class: "ebook-col-series", "data-testid": "ebook-cell-series", "{series_line}" }
             td { class: "ebook-col-publisher", "data-testid": "ebook-cell-publisher", {book.publisher.as_deref().unwrap_or("")} }
             td { class: "ebook-col-published", "data-testid": "ebook-cell-published", {book.published.as_deref().unwrap_or("")} }
+            td { class: "ebook-col-updated", "data-testid": "ebook-cell-updated", "{updated}" }
+            td { class: "ebook-col-added", "data-testid": "ebook-cell-added", "{added}" }
             td { class: "ebook-col-language", "data-testid": "ebook-cell-language", {book.language.as_deref().unwrap_or("")} }
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Grid view
+// ---------------------------------------------------------------------------
+
+#[component]
+fn BookGrid(books: Vec<EbookMetadata>, server_url: String) -> Element {
+    rsx! {
+        div { class: "lib-grid", "data-testid": "lib-grid", role: "list",
+            for book in books.into_iter() {
+                GridTile {
+                    key: "{book.filename}",
+                    book: book,
+                    server_url: server_url.clone(),
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn GridTile(book: EbookMetadata, server_url: String) -> Element {
+    let id = book.id;
+    let display_title = book.title.as_deref().unwrap_or(&book.filename).to_string();
+    let tile_testid = format!("ebook-tile-{}", row_slug(&book.filename));
+    let has_cover = book.cover_url.is_some();
+    let thumb_base = format!("{server_url}/api/thumbs/{}", book.id);
+    let authors = contributor_names(&book.creators);
+    let nav = use_navigator();
+
+    rsx! {
+        div {
+            class: "lib-tile",
+            "data-testid": "{tile_testid}",
+            role: "listitem",
+            tabindex: "0",
+            aria_label: "Open details for {display_title}",
+            onclick: move |_| { nav.push(Route::BookDetail { id }); },
+            onkeydown: move |evt: Event<KeyboardData>| {
+                let key = evt.key();
+                if key == Key::Enter || key == Key::Character(" ".to_string()) {
+                    evt.prevent_default();
+                    nav.push(Route::BookDetail { id });
+                }
+            },
+            div { class: "lib-tile-cover",
+                if has_cover {
+                    img {
+                        class: "lib-tile-img",
+                        src: "{thumb_base}/md",
+                        srcset: "{thumb_base}/sm 160w, {thumb_base}/md 320w, {thumb_base}/lg 640w",
+                        sizes: "(max-width: 640px) 160px, (max-width: 1280px) 320px, 640px",
+                        alt: "Cover of {display_title}",
+                        loading: "lazy",
+                        width: "320",
+                        height: "480",
+                    }
+                } else {
+                    div { class: "lib-tile-img lib-tile-fallback", "—" }
+                }
+            }
+            div { class: "lib-tile-title", "{display_title}" }
+            if !authors.is_empty() {
+                div { class: "lib-tile-author", "{authors}" }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pure helpers — exercised by tests below.
+// ---------------------------------------------------------------------------
 
 fn contributor_names(list: &[Contributor]) -> String {
     let mut out = String::new();
@@ -187,14 +661,199 @@ fn contributor_names(list: &[Contributor]) -> String {
     out
 }
 
+fn primary_author_key(book: &EbookMetadata) -> String {
+    let c = book.creators.first();
+    let name = c
+        .map(|c| c.file_as.as_deref().unwrap_or(&c.name).to_string())
+        .unwrap_or_default();
+    name.to_ascii_lowercase()
+}
+
+fn title_key(book: &EbookMetadata) -> String {
+    let t = book.title.as_deref().unwrap_or(&book.filename);
+    t.to_ascii_lowercase()
+}
+
+fn series_key(book: &EbookMetadata) -> Option<(String, f64)> {
+    let series = book.series.as_deref()?;
+    let idx = book
+        .series_index
+        .as_deref()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    Some((series.to_ascii_lowercase(), idx))
+}
+
+fn compare_books(a: &EbookMetadata, b: &EbookMetadata, key: SortKey, dir: SortDir) -> Ordering {
+    let ord = match key {
+        SortKey::Title => title_key(a).cmp(&title_key(b)),
+        SortKey::Author => primary_author_key(a).cmp(&primary_author_key(b)),
+        SortKey::Series => match (series_key(a), series_key(b)) {
+            (Some(x), Some(y)) => {
+                x.0.cmp(&y.0)
+                    .then_with(|| x.1.partial_cmp(&y.1).unwrap_or(Ordering::Equal))
+            }
+            (Some(_), None) => Ordering::Less, // books with a series sort first
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        },
+        SortKey::LastUpdated => option_str_cmp(&a.modified, &b.modified),
+        SortKey::NewestAdded => option_str_cmp(&a.added_at, &b.added_at),
+    };
+    let tiebreak = a.id.cmp(&b.id);
+    let combined = ord.then(tiebreak);
+    if dir == SortDir::Desc {
+        combined.reverse()
+    } else {
+        combined
+    }
+}
+
+fn option_str_cmp(a: &Option<String>, b: &Option<String>) -> Ordering {
+    match (a.as_deref(), b.as_deref()) {
+        (Some(x), Some(y)) => x.cmp(y),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+fn sort_books(mut books: Vec<EbookMetadata>, key: SortKey, dir: SortDir) -> Vec<EbookMetadata> {
+    books.sort_by(|a, b| compare_books(a, b, key, dir));
+    books
+}
+
+fn book_authors_set(book: &EbookMetadata) -> HashSet<String> {
+    book.creators.iter().map(|c| c.name.clone()).collect()
+}
+
+fn book_tags_set(book: &EbookMetadata) -> HashSet<String> {
+    book.subjects.iter().cloned().collect()
+}
+
+fn matches_filters(book: &EbookMetadata, filters: &ViewFilters) -> bool {
+    if !filters.authors.is_empty() {
+        let authors = book_authors_set(book);
+        if !filters.authors.iter().any(|a| authors.contains(a)) {
+            return false;
+        }
+    }
+    if !filters.series.is_empty() {
+        let series = book.series.as_deref().unwrap_or("");
+        if !filters.series.iter().any(|s| s == series) {
+            return false;
+        }
+    }
+    if !filters.tags.is_empty() {
+        let tags = book_tags_set(book);
+        if !filters.tags.iter().any(|t| tags.contains(t)) {
+            return false;
+        }
+    }
+    true
+}
+
+fn apply_filters(books: &[EbookMetadata], filters: &ViewFilters) -> Vec<EbookMetadata> {
+    if filters.is_empty() {
+        return books.to_vec();
+    }
+    books
+        .iter()
+        .filter(|b| matches_filters(b, filters))
+        .cloned()
+        .collect()
+}
+
+fn facet_counts(books: &[EbookMetadata]) -> FacetCounts {
+    let mut authors: BTreeMap<String, usize> = BTreeMap::new();
+    let mut series: BTreeMap<String, usize> = BTreeMap::new();
+    let mut tags: BTreeMap<String, usize> = BTreeMap::new();
+    for book in books {
+        for c in &book.creators {
+            *authors.entry(c.name.clone()).or_default() += 1;
+        }
+        if let Some(s) = book.series.as_deref() {
+            if !s.is_empty() {
+                *series.entry(s.to_string()).or_default() += 1;
+            }
+        }
+        for t in &book.subjects {
+            *tags.entry(t.clone()).or_default() += 1;
+        }
+    }
+    FacetCounts {
+        authors: sorted_facet(authors),
+        series: sorted_facet(series),
+        tags: sorted_facet(tags),
+    }
+}
+
+fn sorted_facet(map: BTreeMap<String, usize>) -> Vec<(String, usize)> {
+    let mut v: Vec<(String, usize)> = map.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    v
+}
+
+fn toggle_dir(d: SortDir) -> SortDir {
+    match d {
+        SortDir::Asc => SortDir::Desc,
+        SortDir::Desc => SortDir::Asc,
+    }
+}
+
+fn default_dir_for(key: SortKey) -> SortDir {
+    // "Newest Added" / "Last Updated" feel natural with newest first.
+    match key {
+        SortKey::NewestAdded | SortKey::LastUpdated => SortDir::Desc,
+        _ => SortDir::Asc,
+    }
+}
+
+const SORT_KEYS: [SortKey; 5] = [
+    SortKey::Title,
+    SortKey::Author,
+    SortKey::Series,
+    SortKey::LastUpdated,
+    SortKey::NewestAdded,
+];
+
+fn sort_key_value(key: SortKey) -> &'static str {
+    match key {
+        SortKey::Title => "title",
+        SortKey::Author => "author",
+        SortKey::Series => "series",
+        SortKey::LastUpdated => "last_updated",
+        SortKey::NewestAdded => "newest_added",
+    }
+}
+
+fn sort_key_label(key: SortKey) -> &'static str {
+    match key {
+        SortKey::Title => "Title",
+        SortKey::Author => "Author",
+        SortKey::Series => "Series",
+        SortKey::LastUpdated => "Last Updated",
+        SortKey::NewestAdded => "Newest Added",
+    }
+}
+
+fn sort_key_from_value(value: &str) -> Option<SortKey> {
+    match value {
+        "title" => Some(SortKey::Title),
+        "author" => Some(SortKey::Author),
+        "series" => Some(SortKey::Series),
+        "last_updated" => Some(SortKey::LastUpdated),
+        "newest_added" => Some(SortKey::NewestAdded),
+        _ => None,
+    }
+}
+
 /// Stable Playwright row id derived from the ebook's on-disk filename:
 /// strip directories and extension, lowercase, then collapse runs of
 /// non-alphanumeric ASCII characters into a single `-` (with leading and
 /// trailing dashes trimmed). The Playwright fixture table mirrors this
 /// derivation so each `FIXTURE_BOOKS[i].slug` matches the row's testid.
 fn row_slug(filename: &str) -> String {
-    // Take the basename so nested paths (e.g. "series/vol1/deep.epub") still
-    // produce a clean slug from just the file's stem.
     let basename = filename.rsplit('/').next().unwrap_or(filename);
     let stem = basename
         .rsplit_once('.')
@@ -202,7 +861,7 @@ fn row_slug(filename: &str) -> String {
         .unwrap_or(basename);
     let lower = stem.to_ascii_lowercase();
     let mut out = String::with_capacity(lower.len());
-    let mut last_was_dash = true; // suppress leading dashes
+    let mut last_was_dash = true;
     for ch in lower.chars() {
         if ch.is_ascii_alphanumeric() {
             out.push(ch);
@@ -220,30 +879,211 @@ fn row_slug(filename: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::row_slug;
+    use super::*;
+    use omnibus_shared::Contributor;
+
+    #[allow(clippy::too_many_arguments)]
+    fn book(
+        id: i64,
+        filename: &str,
+        title: Option<&str>,
+        authors: &[(&str, Option<&str>)],
+        series: Option<(&str, &str)>,
+        modified: Option<&str>,
+        added_at: Option<&str>,
+        subjects: &[&str],
+    ) -> EbookMetadata {
+        EbookMetadata {
+            id,
+            filename: filename.into(),
+            title: title.map(Into::into),
+            creators: authors
+                .iter()
+                .map(|(name, file_as)| Contributor {
+                    name: (*name).into(),
+                    role: None,
+                    file_as: file_as.map(Into::into),
+                })
+                .collect(),
+            series: series.map(|(s, _)| s.into()),
+            series_index: series.map(|(_, i)| i.into()),
+            modified: modified.map(Into::into),
+            added_at: added_at.map(Into::into),
+            subjects: subjects.iter().map(|s| (*s).to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    fn ids(books: &[EbookMetadata]) -> Vec<i64> {
+        books.iter().map(|b| b.id).collect()
+    }
+
+    // --- row_slug ---
 
     #[test]
     fn row_slug_lowercases_and_strips_extension() {
         assert_eq!(row_slug("Alpha.epub"), "alpha");
     }
-
     #[test]
     fn row_slug_collapses_runs_of_non_alphanumerics() {
         assert_eq!(row_slug("Beta in the Series.epub"), "beta-in-the-series");
     }
-
     #[test]
     fn row_slug_uses_basename_for_nested_paths() {
         assert_eq!(row_slug("series/vol1/Deep Book.epub"), "deep-book");
     }
-
     #[test]
     fn row_slug_trims_trailing_dashes() {
         assert_eq!(row_slug("weird---name!!!.epub"), "weird-name");
     }
-
     #[test]
     fn row_slug_handles_filename_without_extension() {
         assert_eq!(row_slug("plain"), "plain");
+    }
+
+    // --- sort_books ---
+
+    fn sample() -> Vec<EbookMetadata> {
+        vec![
+            book(
+                1,
+                "alpha.epub",
+                Some("Alpha"),
+                &[("Tolkien, J.R.R.", Some("Tolkien, J.R.R."))],
+                Some(("Foundation", "1")),
+                Some("2024-01-01T00:00:00"),
+                Some("2025-03-10T00:00:00"),
+                &["Fantasy"],
+            ),
+            book(
+                2,
+                "beta.epub",
+                Some("Beta"),
+                &[("Asimov, Isaac", Some("Asimov, Isaac"))],
+                Some(("Foundation", "2")),
+                Some("2024-06-01T00:00:00"),
+                Some("2025-01-05T00:00:00"),
+                &["Sci-Fi"],
+            ),
+            book(
+                3,
+                "gamma.epub",
+                Some("Gamma"),
+                &[("Le Guin, Ursula", Some("Le Guin, Ursula"))],
+                None,
+                Some("2023-01-01T00:00:00"),
+                Some("2025-02-20T00:00:00"),
+                &["Fantasy", "Sci-Fi"],
+            ),
+        ]
+    }
+
+    #[test]
+    fn sorts_by_title_asc_and_desc() {
+        let s = sample();
+        let asc = sort_books(s.clone(), SortKey::Title, SortDir::Asc);
+        assert_eq!(ids(&asc), vec![1, 2, 3]);
+        let desc = sort_books(s, SortKey::Title, SortDir::Desc);
+        assert_eq!(ids(&desc), vec![3, 2, 1]);
+    }
+
+    #[test]
+    fn sorts_by_author_asc() {
+        let s = sample();
+        let asc = sort_books(s, SortKey::Author, SortDir::Asc);
+        // Asimov < Le Guin < Tolkien
+        assert_eq!(ids(&asc), vec![2, 3, 1]);
+    }
+
+    #[test]
+    fn sorts_by_series_grouping_with_index_then_pushes_seriesless_last() {
+        let s = sample();
+        let asc = sort_books(s, SortKey::Series, SortDir::Asc);
+        // Foundation #1 (id 1), Foundation #2 (id 2), then no-series (id 3).
+        assert_eq!(ids(&asc), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn sorts_by_last_updated_desc_picks_most_recent_first() {
+        let s = sample();
+        let desc = sort_books(s, SortKey::LastUpdated, SortDir::Desc);
+        // beta 2024-06 > alpha 2024-01 > gamma 2023
+        assert_eq!(ids(&desc), vec![2, 1, 3]);
+    }
+
+    #[test]
+    fn sorts_by_newest_added_desc() {
+        let s = sample();
+        let desc = sort_books(s, SortKey::NewestAdded, SortDir::Desc);
+        // alpha 2025-03 > gamma 2025-02 > beta 2025-01
+        assert_eq!(ids(&desc), vec![1, 3, 2]);
+    }
+
+    // --- apply_filters ---
+
+    #[test]
+    fn empty_filters_returns_all_books() {
+        let s = sample();
+        let out = apply_filters(&s, &ViewFilters::default());
+        assert_eq!(ids(&out), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn single_facet_or_within_group() {
+        let s = sample();
+        let f = ViewFilters {
+            authors: vec!["Tolkien, J.R.R.".into(), "Asimov, Isaac".into()],
+            ..Default::default()
+        };
+        let out = apply_filters(&s, &f);
+        assert_eq!(ids(&out), vec![1, 2]);
+    }
+
+    #[test]
+    fn multi_facet_and_across_groups() {
+        let s = sample();
+        let f = ViewFilters {
+            tags: vec!["Fantasy".into()],
+            series: vec!["Foundation".into()],
+            ..Default::default()
+        };
+        let out = apply_filters(&s, &f);
+        // gamma is Fantasy but no series; alpha is Fantasy + Foundation.
+        assert_eq!(ids(&out), vec![1]);
+    }
+
+    #[test]
+    fn series_filter_excludes_books_with_no_series() {
+        let s = sample();
+        let f = ViewFilters {
+            series: vec!["Foundation".into()],
+            ..Default::default()
+        };
+        let out = apply_filters(&s, &f);
+        assert_eq!(ids(&out), vec![1, 2]);
+    }
+
+    // --- facet_counts ---
+
+    #[test]
+    fn facet_counts_orders_by_count_desc_then_name() {
+        let s = sample();
+        let f = facet_counts(&s);
+        // Tags: Fantasy(2), Sci-Fi(2) — count tied so name asc
+        let tag_names: Vec<&str> = f.tags.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(tag_names, vec!["Fantasy", "Sci-Fi"]);
+        assert!(f.tags.iter().all(|(_, c)| *c == 2));
+        // Series: Foundation present once with count 2
+        assert_eq!(f.series, vec![("Foundation".into(), 2)]);
+        // Authors: each unique once
+        assert_eq!(f.authors.len(), 3);
+    }
+
+    #[test]
+    fn facet_counts_skips_empty_series_strings() {
+        let mut b = sample();
+        b[0].series = Some(String::new());
+        let f = facet_counts(&b);
+        assert!(f.series.iter().all(|(s, _)| !s.is_empty()));
     }
 }
