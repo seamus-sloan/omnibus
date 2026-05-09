@@ -469,15 +469,15 @@ pub async fn search_ebooks(server_url: &str, q: &str) -> Result<EbookLibrary, St
 }
 
 #[cfg(feature = "mobile")]
-pub async fn get_ebook(server_url: &str, id: i64) -> Result<EbookMetadata, String> {
+pub async fn get_ebook(server_url: &str, id: i64) -> Result<Option<EbookMetadata>, String> {
     let url = format!("{server_url}/api/ebooks/{id}");
     let response = with_bearer(http_client().get(&url))
         .send()
         .await
         .map_err(|e| format!("{e:#}"))?;
     let status = note_status(response.status());
-    if status.as_u16() == 404 {
-        return Err(format!("Book {id} not found"));
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
     }
     if !status.is_success() {
         return Err(drain_error(response, status).await);
@@ -485,6 +485,7 @@ pub async fn get_ebook(server_url: &str, id: i64) -> Result<EbookMetadata, Strin
     response
         .json::<EbookMetadata>()
         .await
+        .map(Some)
         .map_err(|e| e.to_string())
 }
 
@@ -635,11 +636,10 @@ pub async fn search_ebooks(_server_url: &str, q: &str) -> Result<EbookLibrary, S
 }
 
 #[cfg(not(feature = "mobile"))]
-pub async fn get_ebook(_server_url: &str, id: i64) -> Result<EbookMetadata, String> {
+pub async fn get_ebook(_server_url: &str, id: i64) -> Result<Option<EbookMetadata>, String> {
     crate::rpc::rpc_get_ebook(id)
         .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Book {id} not found"))
+        .map_err(|e| e.to_string())
 }
 
 // ===== Auth transport (web only) =====
