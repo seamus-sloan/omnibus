@@ -55,3 +55,6 @@ test_data/epubs/**/*.webp
 # macOS Finder metadata
 .DS_Store
 **/.DS_Store
+
+# Lock file written by Claude Code's ScheduleWakeup tool
+.claude/scheduled_tasks.lock
