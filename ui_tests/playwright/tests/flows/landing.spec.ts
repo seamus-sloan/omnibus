@@ -12,17 +12,11 @@ test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
 });
 
-// View prefs persist in localStorage; clear before each test so one spec's
-// state can't leak into the next one's table-vs-grid assumption.
-test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => {
-    try {
-      window.localStorage.clear();
-    } catch {
-      /* private mode — nothing to clear */
-    }
-  });
-});
+// View prefs persist in localStorage. Each Playwright test gets a fresh
+// browser context and storageState's `origins` is empty (only the auth
+// cookie is saved), so localStorage starts empty per test without needing
+// an explicit cleanup hook. A `page.addInitScript` clear() would run on
+// `page.reload()` too — wiping the very state the persistence test asserts.
 
 test("renders the landing page layout", async ({ page }) => {
   await gotoReady(page, "/");
