@@ -16,7 +16,7 @@ Use for issues that **must** be fixed before merge. Reserve for real problems �
 - Security vulnerabilities (SQL injection, XSS, auth bypass, CSRF, secret leakage, path traversal, unsanitized user input reaching the filesystem or DB)
 - Data loss or corruption risks (non-atomic writes to the library, broken migrations, missing transaction boundaries on multi-statement updates)
 - Panics in production paths (`unwrap()`, `expect()`, `panic!`, array indexing without bounds checks, integer overflow in release mode)
-- Broken invariants in the unified Dioxus fullstack model (component bodies feature-gated on `web`/`server` causing SSR ≠ WASM hydration mismatches — see [memory note on hydration](../CLAUDE.md))
+- Broken invariants in the unified Dioxus fullstack model — component bodies feature-gated on `web`/`server` cause SSR ≠ WASM hydration mismatches. Feature-gate transports (`data.rs`) and imports, not component output.
 - Missing auth/authorization on a route that handles user data
 - Force-push, history-rewriting, or destructive jj/git operations on shared bookmarks
 
@@ -105,7 +105,7 @@ Each review comment must follow this shape:
 > ❌ CRITICAL ❌
 > Raw SQL string interpolation enables SQL injection.
 >
-> `format!("SELECT * FROM books WHERE id = {}", user_input)` lets a caller break out of the query. Use `sqlx::query!` with a bind parameter. See [02-error-handling.md](../.claude/rules/02-error-handling.md) and existing patterns in [db/src/queries.rs](../db/src/queries.rs).
+> `format!("SELECT * FROM books WHERE id = {}", user_input)` lets a caller break out of the query. Use `sqlx::query!` / `sqlx::query_as!` with bind parameters — follow the existing patterns in [db/src/queries.rs](../db/src/queries.rs).
 
 > ⚠️ WARNING ⚠️
 > New `/api/books/:id/cover` handler ships without an integration test.
