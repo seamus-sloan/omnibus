@@ -54,6 +54,7 @@ pub fn rest_router(state: AppState) -> Router {
         .route("/api/settings", post(post_settings))
         .route("/api/library", get(get_library))
         .route("/api/ebooks", get(get_ebooks))
+        .route("/api/ebooks/{id}", get(get_ebook_by_id))
         .route("/api/search", get(get_search))
         .route("/api/covers/{id}", get(get_cover))
         .route("/api/thumbs/{id}/{size}", get(get_thumb))
@@ -159,6 +160,22 @@ async fn get_ebooks(_user: AuthUser, State(state): State<AppState>) -> Response 
         Err(error) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to read books: {error}"),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_ebook_by_id(
+    _user: AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Response {
+    match db::get_book(&state.pool, id).await {
+        Ok(Some(book)) => Json(book).into_response(),
+        Ok(None) => axum::http::StatusCode::NOT_FOUND.into_response(),
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to read book: {error}"),
         )
             .into_response(),
     }
@@ -584,6 +601,65 @@ mod tests {
         assert_eq!(lib.path.as_deref(), Some(path));
         assert!(lib.books.is_empty());
         assert!(lib.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn api_get_ebook_returns_200_with_metadata() {
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        db::replace_books(
+            &pool,
+            "/lib",
+            vec![db::ebook::IndexedBook {
+                metadata: omnibus_shared::EbookMetadata {
+                    filename: "alpha.epub".into(),
+                    title: Some("Alpha Book".into()),
+                    ..Default::default()
+                },
+                cover: None,
+            }],
+        )
+        .await
+        .unwrap();
+
+        let books = db::list_books(&pool, "/lib").await.unwrap();
+        let id = books[0].id;
+
+        let response = app
+            .oneshot(get_with_bearer(&format!("/api/ebooks/{id}"), &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let book: omnibus_shared::EbookMetadata = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(book.title.as_deref(), Some("Alpha Book"));
+        assert_eq!(book.id, id);
+    }
+
+    #[tokio::test]
+    async fn api_get_ebook_returns_404_for_unknown_id() {
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        let response = app
+            .oneshot(get_with_bearer("/api/ebooks/9999", &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn api_get_ebook_returns_401_when_anonymous() {
+        let (app, _state, _pool) = fixture().await;
+        let response = app
+            .oneshot(get_anon("/api/ebooks/1"))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
