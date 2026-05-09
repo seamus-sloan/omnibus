@@ -103,6 +103,11 @@ pub struct EbookMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub formats: Vec<String>,
 
+    /// ISO-8601 row insertion timestamp from `books.timestamp`. Drives the
+    /// "Newest Added" sort in F1.3 — distinct from `modified` (DC last-write).
+    #[serde(default)]
+    pub added_at: Option<String>,
+
     pub error: Option<String>,
 }
 
@@ -112,6 +117,71 @@ pub struct EbookLibrary {
     pub path: Option<String>,
     pub books: Vec<EbookMetadata>,
     pub error: Option<String>,
+}
+
+// -----------------------------------------------------------------------------
+// Library view preferences (F1.3)
+//
+// These types live here — and not in `frontend/` — so a future server-backed
+// per-user prefs endpoint can reuse them verbatim. For now persistence is
+// localStorage on web and in-memory on mobile (see `frontend/src/view_prefs.rs`).
+// -----------------------------------------------------------------------------
+
+/// Which list view to render on the library page.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ViewMode {
+    #[default]
+    Table,
+    Grid,
+}
+
+/// Sortable axes exposed in the toolbar / table headers.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SortKey {
+    #[default]
+    Title,
+    Author,
+    Series,
+    LastUpdated,
+    NewestAdded,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SortDir {
+    #[default]
+    Asc,
+    Desc,
+}
+
+/// Active filter facets. AND across facet groups; OR within a group.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ViewFilters {
+    #[serde(default)]
+    pub authors: Vec<String>,
+    #[serde(default)]
+    pub series: Vec<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+impl ViewFilters {
+    /// `true` when no facet has any selected value.
+    pub fn is_empty(&self) -> bool {
+        self.authors.is_empty() && self.series.is_empty() && self.tags.is_empty()
+    }
+}
+
+/// Persisted library-view preference for a single library path.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ViewPrefs {
+    pub view_mode: ViewMode,
+    pub sort_key: SortKey,
+    pub sort_dir: SortDir,
+    #[serde(default)]
+    pub filters: ViewFilters,
 }
 
 // -----------------------------------------------------------------------------

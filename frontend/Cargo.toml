@@ -12,6 +12,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
 gloo-net = { version = "0.6", default-features = false, features = ["http", "json"], optional = true }
+# `web-sys` is enabled only on the WASM client for `Window::local_storage()`.
+# F1.3 view-mode / sort / filter prefs are persisted there per library path.
+web-sys = { version = "0.3", features = ["Window", "Storage"], optional = true }
 # sqlx + tokio are needed at the type level by rpc.rs when building server
 # functions (PoolExt = Extension<SqlitePool>, #[tokio::spawn] for reindex).
 # Kept as optional deps enabled only by the `server` feature. Tokio is
@@ -24,7 +27,7 @@ tokio = { version = "1", default-features = false, optional = true }
 [features]
 default = []
 # Web client (WASM): uses dioxus-fullstack server-function client stubs.
-web = ["dioxus/web", "dep:gloo-net", "dep:serde_json"]
+web = ["dioxus/web", "dep:gloo-net", "dep:serde_json", "dep:web-sys"]
 # Native mobile client: talks to `/api/*` REST routes via reqwest.
 # tokio is enabled for `sync::watch` — used by `data::token_store` to
 # notify the UI when auth state changes so screens redirect to /login

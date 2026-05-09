@@ -732,7 +732,7 @@ pub async fn list_books(
         r#"
         SELECT b.id, b.uuid, bf.filename AS file_stem, bf.format AS file_format,
                b.title, b.description, b.series_index, b.has_cover,
-               b.pubdate, b.last_modified, b.isbn,
+               b.pubdate, b.last_modified, b.timestamp, b.isbn,
                pub.name AS publisher_name, lang.code AS language_code,
                s.name AS series_name
         FROM books b
@@ -796,6 +796,7 @@ pub async fn list_books(
             toc_count: 0,
             cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
             formats: vec![],
+            added_at: r.get("timestamp"),
             error: None,
         });
     }
@@ -925,7 +926,7 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
     let row = sqlx::query(
         r#"
         SELECT id, uuid, title, description, series_index, has_cover,
-               pubdate, last_modified, isbn
+               pubdate, last_modified, timestamp, isbn
         FROM books
         WHERE id = ?
         "#,
@@ -982,6 +983,7 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
         toc_count: 0,
         cover_url: (has_cover != 0).then(|| format!("/api/covers/{book_id}")),
         formats,
+        added_at: r.get("timestamp"),
         error: None,
     }))
 }
@@ -1011,7 +1013,7 @@ pub async fn search_books(
         r#"
         SELECT b.id, b.uuid, bf.filename AS file_stem, bf.format AS file_format,
                b.title, b.description, b.series_index, b.has_cover,
-               b.pubdate, b.last_modified, b.isbn,
+               b.pubdate, b.last_modified, b.timestamp, b.isbn,
                pub.name AS publisher_name, lang.code AS language_code,
                s.name AS series_name
         FROM books_fts
@@ -1077,6 +1079,7 @@ pub async fn search_books(
             toc_count: 0,
             cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
             formats: vec![],
+            added_at: r.get("timestamp"),
             error: None,
         });
     }
@@ -1577,6 +1580,19 @@ mod tests {
             Some(format!("/api/covers/{}", a.id).as_str())
         );
         assert_eq!(b.cover_url, None);
+
+        // F1.3: list_books exposes the row insertion timestamp so the
+        // landing page can offer a "Newest Added" sort. The migration
+        // defaults `books.timestamp` to CURRENT_TIMESTAMP, so every row
+        // surfaces a non-empty ISO8601 string.
+        for book in &books {
+            let added = book.added_at.as_deref().unwrap_or("");
+            assert!(
+                !added.is_empty(),
+                "added_at should be populated for {:?}",
+                book.title
+            );
+        }
 
         let cover = get_cover(&pool, a.id).await.unwrap();
         assert_eq!(cover, Some(("image/jpeg".into(), b"BYTES".to_vec())));

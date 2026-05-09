@@ -3770,6 +3770,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tokio",
+ "web-sys",
 ]
 
 [[package]]
