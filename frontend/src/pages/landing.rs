@@ -59,19 +59,29 @@ pub fn LandingPage() -> Element {
         }
     });
 
+    // Memoize the two O(N) derivations so unrelated re-renders (the
+    // `loading` flag flipping, search-query churn that doesn't change the
+    // hydrated list) don't re-walk every book. `use_memo` re-runs only
+    // when a signal it reads changes — so `facets` is keyed implicitly on
+    // `library`, and `visible` on `library + prefs` (filters + sort).
+    let facets = use_memo(move || facet_counts(&library.read().books));
+    let visible = use_memo(move || {
+        let p = prefs();
+        sort_books(
+            apply_filters(&library.read().books, &p.filters),
+            p.sort_key,
+            p.sort_dir,
+        )
+    });
+
     let lib = library();
     let is_loading = loading();
     let page_error = error();
     let book_count = lib.books.len();
     let view_mode = prefs().view_mode;
-
-    // Pure derivations: facet chips, then filtered+sorted view.
-    let facets = facet_counts(&lib.books);
-    let visible: Vec<EbookMetadata> = sort_books(
-        apply_filters(&lib.books, &prefs().filters),
-        prefs().sort_key,
-        prefs().sort_dir,
-    );
+    let visible_books = visible();
+    let visible_is_empty = visible_books.is_empty();
+    let facet_counts_view = facets();
 
     let server_url_for_row = server_url.clone();
     let path_for_save = lib.path.clone();
@@ -110,7 +120,7 @@ pub fn LandingPage() -> Element {
 
         div { class: "lib-layout",
             FilterSidebar {
-                facets: facets,
+                facets: facet_counts_view,
                 filters: prefs().filters.clone(),
                 on_change: {
                     let mut save = save.clone();
@@ -125,7 +135,7 @@ pub fn LandingPage() -> Element {
             div { class: "lib-main",
                 if is_loading {
                     p { class: "library-empty", "Loading..." }
-                } else if visible.is_empty() && lib.error.is_none() && page_error.is_none() {
+                } else if visible_is_empty && lib.error.is_none() && page_error.is_none() {
                     if lib.books.is_empty() {
                         p { class: "library-empty", "No ebooks found." }
                     } else {
@@ -144,7 +154,7 @@ pub fn LandingPage() -> Element {
                     match view_mode {
                         ViewMode::Table => rsx! {
                             BookTable {
-                                books: visible.clone(),
+                                books: visible_books.clone(),
                                 prefs: prefs(),
                                 on_sort: {
                                     let mut save = save.clone();
@@ -164,7 +174,7 @@ pub fn LandingPage() -> Element {
                         },
                         ViewMode::Grid => rsx! {
                             BookGrid {
-                                books: visible.clone(),
+                                books: visible_books.clone(),
                                 server_url: server_url_for_row.clone(),
                             }
                         },
