@@ -18,7 +18,7 @@ pub fn BookDetailPage(id: i64) -> Element {
             loading.set(true);
             match data::get_ebook(&url, id).await {
                 Ok(b) => {
-                    book.set(Some(b));
+                    book.set(b);
                     error.set(None);
                 }
                 Err(e) => error.set(Some(e)),
@@ -160,10 +160,12 @@ pub fn BookDetailPage(id: i64) -> Element {
                 }
 
                 div {
+                    class: "ratings-slot",
                     "data-testid": "ratings-slot",
                     aria_label: "Ratings \u{2014} coming soon",
                 }
                 div {
+                    class: "suggestions-slot",
                     "data-testid": "suggestions-slot",
                     aria_label: "Suggestions \u{2014} coming soon",
                 }
