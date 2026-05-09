@@ -93,7 +93,7 @@ pub fn BookDetailPage(id: i64) -> Element {
             div { class: "book-detail-meta",
                 h1 { "{title}" }
                 if !authors.is_empty() {
-                    p { "{authors}" }
+                    p { "data-testid": "book-authors", "{authors}" }
                 }
                 if let Some(s) = series_label {
                     p { class: "subtitle", "{s}" }
