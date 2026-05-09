@@ -197,6 +197,7 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
             toc_count: doc.toc.len(),
 
             cover_url: None,
+            formats: vec![],
             error: None,
         },
         cover,
