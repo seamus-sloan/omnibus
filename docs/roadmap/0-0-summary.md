@@ -106,6 +106,7 @@ Phase 6  Mobile                   (feature parity on native)
 - [F1.2 Thumbnail pipeline](1-2-thumbnails.md)
 - [F1.3 Library views](1-3-library-views.md)
 - [F1.4 Book detail page](1-4-book-detail.md)
+- [F1.5 Advanced search](1-5-advanced-search.md)
 
 ### Phase 2 — Reading & listening
 
@@ -166,6 +167,7 @@ Phase 6  Mobile                   (feature parity on native)
 - **F0.6 Library filesystem convention** (gap G11).
 - **F1.1 Search** (gap G1).
 - **F1.2 Thumbnail pipeline** (gap G5).
+- **F1.5 Advanced search** (gap G1 follow-up) — structured filter modal anchored below the nav search; complements [F1.1](1-1-search.md)'s free-text path with taxonomy-backed facet pickers and a mobile-consumable REST endpoint.
 - **F2.1 Progress sync service** (unifies #8 and #9).
 - **F4.1 Native Kobo sync** (gap G9).
 - **F5.1 Metadata edit** (gap G7).
