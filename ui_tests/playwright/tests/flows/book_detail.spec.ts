@@ -44,8 +44,10 @@ test("renders the detail contents for the selected book", async ({ page, request
   // Title heading matches the fixture
   await expect(page.getByRole("heading", { level: 1, name: TARGET.title })).toBeVisible();
 
-  // At least the first author is visible
-  await expect(page.getByText(TARGET.authors[0])).toBeVisible();
+  // At least the first author is visible. Scoped to the dedicated authors
+  // line because the breadcrumb falls back to the first author when the book
+  // has no series, so a bare getByText(...) matches twice.
+  await expect(page.getByTestId("book-authors")).toContainText(TARGET.authors[0]);
 
   // Breadcrumb navigation: "Home" link must be present inside the breadcrumb nav
   await expect(
