@@ -855,24 +855,79 @@ async fn load_formats(pool: &SqlitePool, book_id: i64) -> Result<Vec<String>, sq
         .await
 }
 
+/// Pick the preferred file row for a book. EPUB wins when present; otherwise
+/// fall back to the first format alphabetically. Returns `(filename_stem,
+/// format)` or `None` when the book has no files.
+async fn load_primary_file(
+    pool: &SqlitePool,
+    book_id: i64,
+) -> Result<Option<(String, String)>, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT filename, format FROM book_files
+         WHERE book_id = ?
+         ORDER BY (format != 'EPUB'), format
+         LIMIT 1",
+    )
+    .bind(book_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| (r.get("filename"), r.get("format"))))
+}
+
+async fn load_publisher(pool: &SqlitePool, book_id: i64) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT pub.name FROM books_publishers_link bpl
+         JOIN publishers pub ON pub.id = bpl.publisher
+         WHERE bpl.book = ?
+         ORDER BY pub.name
+         LIMIT 1",
+    )
+    .bind(book_id)
+    .fetch_optional(pool)
+    .await
+}
+
+async fn load_language(pool: &SqlitePool, book_id: i64) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT lang.code FROM books_languages_link bll
+         JOIN languages lang ON lang.id = bll.language
+         WHERE bll.book = ?
+         ORDER BY lang.code
+         LIMIT 1",
+    )
+    .bind(book_id)
+    .fetch_optional(pool)
+    .await
+}
+
+async fn load_series_name(pool: &SqlitePool, book_id: i64) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT s.name FROM books_series_link bsl
+         JOIN series s ON s.id = bsl.series
+         WHERE bsl.book = ?
+         ORDER BY s.name
+         LIMIT 1",
+    )
+    .bind(book_id)
+    .fetch_optional(pool)
+    .await
+}
+
 /// Fetch a single book by its stable `books.id`. Returns `None` if not found.
+///
+/// The main SELECT pulls only `books`-table columns so it remains 1:1 even
+/// when the book has multiple files / publishers / languages / series.
+/// Multi-valued and ambiguous columns are loaded via dedicated helpers that
+/// each apply a deterministic `ORDER BY ... LIMIT 1` (see
+/// `load_primary_file` / `load_publisher` / `load_language` /
+/// `load_series_name`) so the response is stable across calls.
 pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata>, sqlx::Error> {
     let row = sqlx::query(
         r#"
-        SELECT b.id, b.uuid, bf.filename AS file_stem, bf.format AS file_format,
-               b.title, b.description, b.series_index, b.has_cover,
-               b.pubdate, b.last_modified, b.isbn,
-               pub.name AS publisher_name, lang.code AS language_code,
-               s.name AS series_name
-        FROM books b
-        LEFT JOIN book_files bf ON bf.book_id = b.id
-        LEFT JOIN books_publishers_link bpl ON bpl.book = b.id
-        LEFT JOIN publishers pub ON pub.id = bpl.publisher
-        LEFT JOIN books_languages_link bll ON bll.book = b.id
-        LEFT JOIN languages lang ON lang.id = bll.language
-        LEFT JOIN books_series_link bsl ON bsl.book = b.id
-        LEFT JOIN series s ON s.id = bsl.series
-        WHERE b.id = ?
+        SELECT id, uuid, title, description, series_index, has_cover,
+               pubdate, last_modified, isbn
+        FROM books
+        WHERE id = ?
         "#,
     )
     .bind(id)
@@ -884,13 +939,16 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
     };
     let book_id: i64 = r.get("id");
     let has_cover: i64 = r.get("has_cover");
-    let file_stem: Option<String> = r.get("file_stem");
-    let file_format: Option<String> = r.get("file_format");
-    let filename = match (file_stem, file_format) {
-        (Some(stem), Some(fmt)) => format!("{stem}.{}", fmt.to_ascii_lowercase()),
-        _ => String::new(),
-    };
     let series_index: Option<f64> = r.get("series_index");
+
+    let primary_file = load_primary_file(pool, book_id).await?;
+    let filename = primary_file
+        .map(|(stem, fmt)| format!("{stem}.{}", fmt.to_ascii_lowercase()))
+        .unwrap_or_default();
+
+    let publisher = load_publisher(pool, book_id).await?;
+    let language = load_language(pool, book_id).await?;
+    let series = load_series_name(pool, book_id).await?;
     let creators = load_creators(pool, book_id).await?;
     let subjects = load_subjects(pool, book_id).await?;
     let identifiers = load_identifiers(pool, book_id).await?;
@@ -901,10 +959,10 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
         filename,
         title: r.get("title"),
         description: r.get("description"),
-        publisher: r.get("publisher_name"),
+        publisher,
         published: r.get("pubdate"),
         modified: r.get("last_modified"),
-        language: r.get("language_code"),
+        language,
         rights: None,
         source: None,
         coverage: None,
@@ -915,7 +973,7 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
         contributors: vec![],
         subjects,
         identifiers,
-        series: r.get("series_name"),
+        series,
         series_index: series_index.map(format_series_index),
         epub_version: None,
         unique_identifier: Some(r.get::<String, _>("uuid")),
@@ -2251,6 +2309,92 @@ mod tests {
         let pool = init_db("sqlite::memory:").await.unwrap();
         let result = get_book(&pool, 9999).await.unwrap();
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_book_is_deterministic_with_multiple_files_and_links() {
+        // Regression for PR #55 review: when a book has multiple `book_files`
+        // rows (and incidental duplicate publisher/language/series links),
+        // get_book() must return the EPUB-preferred filename and stable
+        // publisher/language/series values rather than whichever joined row
+        // SQLite happens to return first.
+        let _covers = CoversTempDir::new("get_book_multi");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "alpha.epub",
+                Some("Alpha Book"),
+                &["Author A"],
+                &["Fiction"],
+                Some(("Saga", "1")),
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let id = books[0].id;
+
+        // Add a second physical file in another format.
+        sqlx::query(
+            "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime)
+             VALUES (?, 'M4B', 'alpha', 0, '')",
+        )
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Add a second publisher and a second language to exercise the
+        // multi-row JOIN path on those link tables. Series already has one
+        // row from `replace_books`.
+        sqlx::query("INSERT INTO publishers (name) VALUES ('Acme'), ('Zenith')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO books_publishers_link (book, publisher)
+             SELECT ?, id FROM publishers WHERE name IN ('Acme', 'Zenith')",
+        )
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO languages (code) VALUES ('eng'), ('fra')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO books_languages_link (book, language)
+             SELECT ?, id FROM languages WHERE code IN ('eng', 'fra')",
+        )
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Run get_book repeatedly — every call must return identical values.
+        let first = get_book(&pool, id).await.unwrap().expect("book");
+        for _ in 0..3 {
+            let again = get_book(&pool, id).await.unwrap().expect("book");
+            assert_eq!(again.filename, first.filename);
+            assert_eq!(again.publisher, first.publisher);
+            assert_eq!(again.language, first.language);
+            assert_eq!(again.series, first.series);
+            assert_eq!(again.formats, first.formats);
+        }
+
+        // EPUB should win the tiebreak for filename.
+        assert_eq!(first.filename, "alpha.epub");
+        // Both formats surface in the formats list, sorted by format code.
+        assert_eq!(first.formats, vec!["EPUB".to_string(), "M4B".to_string()]);
+        // Publisher/language pick alphabetical winners deterministically.
+        assert_eq!(first.publisher.as_deref(), Some("Acme"));
+        assert_eq!(first.language.as_deref(), Some("eng"));
+        assert_eq!(first.series.as_deref(), Some("Saga"));
+        assert_eq!(first.series_index.as_deref(), Some("1"));
     }
 
     #[tokio::test]
