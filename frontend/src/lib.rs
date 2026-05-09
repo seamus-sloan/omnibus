@@ -201,6 +201,7 @@ pub const STYLES: &str = r#"
 body {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background: radial-gradient(circle at top, #1f2937 0%, #0b1020 50%, #070b16 100%);
+  background-attachment: fixed;
   min-height: 100vh;
   color: #e5e7eb;
 }
