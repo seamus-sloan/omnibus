@@ -11,8 +11,8 @@ mobile app can consume directly.
 
 Add a discoverable, structured complement to the [F1.1](1-1-search.md) free-text search:
 
-- A modal that expands below the existing nav search input on demand (Google-
-  expanded-search style), not a separate route.
+- A modal that expands below the existing nav search input on demand
+  (Google-expanded-search style), not a separate route.
 - Multi-select facet pickers populated from the live taxonomy
   (`authors`, `series`, `tags`, `publishers`, `languages`) with
   type-ahead. Selections combine with AND across facets, OR within a facet.
@@ -20,7 +20,7 @@ Add a discoverable, structured complement to the [F1.1](1-1-search.md) free-text
   by [F1.1](1-1-search.md)'s `search_books`.
 - An "Apply" action that pushes a structured query into the URL (so the
   filtered view is shareable / back-button-correct) and re-renders the
-  landing list against the existing `EbookMetadata` row component.
+  landing list using the existing book-row rendering of `EbookMetadata`.
 - A new `GET /api/books/search` REST endpoint mirroring the Dioxus server
   function so the mobile shell can issue the same query.
 
@@ -29,7 +29,7 @@ facets and the free-text box. Narrator is deferred (see Open questions).
 
 ## User / business value
 
-Closes the residual half of [gap G1](0-0-summary.md#gaps): [F1.1](1-1-search.md) made search
+Closes the residual half of [gap G1](0-0-summary.md#32-gaps): [F1.1](1-1-search.md) made search
 tokenized and ranked, but the only way to filter today is the invisible
 `author:` / `series:` / `tag:` facet syntax. Self-hosters migrating from
 Calibre-Web expect publisher and language filters, and the population
@@ -63,6 +63,7 @@ Unblocks:
 - **Structured filter shape — the contract.** New type in
   [shared/src/lib.rs](../../shared/src/lib.rs):
   ```rust
+  #[non_exhaustive]
   pub struct AdvancedSearchQuery {
       pub q: Option<String>,                // free-text (FTS5)
       pub authors: Vec<i64>,                // OR within, AND across
@@ -70,6 +71,7 @@ Unblocks:
       pub tags: Vec<i64>,                   // tags == "genre"
       pub publishers: Vec<i64>,
       pub languages: Vec<i64>,
+      // pub narrators: Vec<i64>,           // reserved — see Open questions
       pub limit: Option<u32>,
       pub cursor: Option<String>,           // keyset, matches F1.3
   }
@@ -149,8 +151,11 @@ Unblocks:
   chips.
 - **Narrator facet?** — Deferred. The schema has no `narrators` table;
   audiobook metadata extraction is a Phase 2 prerequisite. The
-  `AdvancedSearchQuery` struct leaves a `narrators: Vec<i64>` slot
-  reserved (commented out) so adding it later is a non-breaking change.
+  `AdvancedSearchQuery` struct ships with `#[non_exhaustive]` and a
+  commented-out `narrators: Vec<i64>` placeholder so future callers
+  can't construct it via positional struct literals; uncommenting the
+  field then adds the facet without breaking call sites that use the
+  builder/`..Default::default()` path.
 - **Mobile parity?** — Yes. Ship `GET /api/books/search` alongside the
   Dioxus server function in this initiative.
 - **"Genre" naming?** — Genre maps to existing `tags`. The UI labels
