@@ -103,8 +103,10 @@ pub struct EbookMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub formats: Vec<String>,
 
-    /// ISO-8601 row insertion timestamp from `books.timestamp`. Drives the
-    /// "Newest Added" sort in F1.3 — distinct from `modified` (DC last-write).
+    /// Row insertion timestamp from `books.timestamp` — SQLite
+    /// `datetime('now')` format (`YYYY-MM-DD HH:MM:SS`, UTC, space separator).
+    /// Drives the "Newest Added" sort in F1.3 — distinct from `modified`
+    /// (DC last-write).
     #[serde(default)]
     pub added_at: Option<String>,
 
