@@ -41,10 +41,28 @@ test("renders the detail contents for the selected book", async ({ page, request
 
   await gotoReady(page, `/books/${id}`);
 
-  await expect(page.getByRole("heading", { level: 1, name: `Book #${id}` })).toBeVisible();
-  // Today the detail page is a stub. Pin the placeholder copy so when the
-  // real metadata view lands, this test fails loudly and forces us to
-  // rewrite it against the new contract instead of silently passing.
-  await expect(page.getByText("Book detail page — TODO.")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Back to library" })).toBeVisible();
+  // Title heading matches the fixture
+  await expect(page.getByRole("heading", { level: 1, name: TARGET.title })).toBeVisible();
+
+  // At least the first author is visible
+  await expect(page.getByText(TARGET.authors[0])).toBeVisible();
+
+  // Breadcrumb navigation: "Home" link must be present inside the breadcrumb nav
+  await expect(
+    page.getByRole("navigation", { name: "breadcrumb" }).getByRole("link", { name: "Home" }),
+  ).toBeVisible();
+
+  // All fixture books are EPUB — "Read" CTA must be rendered
+  await expect(page.getByTestId("action-read")).toBeVisible();
+
+  // F3.2 / F3.3 placeholder slots must be in the DOM (may be invisible)
+  await expect(page.getByTestId("ratings-slot")).toBeAttached();
+  await expect(page.getByTestId("suggestions-slot")).toBeAttached();
+
+  // Back link still navigates to landing
+  const backLink = page.getByRole("link", { name: "Back to library" });
+  await expect(backLink).toBeVisible();
+  await backLink.click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByTestId("ebook-table")).toBeVisible();
 });
