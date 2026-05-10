@@ -279,7 +279,7 @@ fn Toolbar(prefs: ViewPrefs, on_change: EventHandler<ViewPrefs>) -> Element {
                         "data-testid": "lib-sort-dir",
                         aria_label: "Toggle sort direction",
                         onclick: toggle_sort_dir,
-                        if sort_dir == SortDir::Asc { "▲" } else { "▼" }
+                        if sort_dir == SortDir::Asc { "↑" } else { "↓" }
                     }
                 }
             }
@@ -390,11 +390,12 @@ fn FacetSection(
                             class: "lib-chip",
                             "aria-pressed": "{selected_set.contains(&name)}",
                             "data-value": "{name}",
+                            title: "{name}",
                             onclick: {
                                 let name = name.clone();
                                 move |_| on_toggle.call(name.clone())
                             },
-                            "{name}"
+                            span { class: "lib-chip-label", "{name}" }
                             span { class: "lib-chip-count", "{count}" }
                         }
                     }
@@ -510,9 +511,9 @@ fn SortableHeader(
     let arrow = if !active {
         ""
     } else if prefs.sort_dir == SortDir::Asc {
-        " ▲"
+        " ↑"
     } else {
-        " ▼"
+        " ↓"
     };
     rsx! {
         th { class: "{class} sort-th", aria_sort: "{aria_sort}",

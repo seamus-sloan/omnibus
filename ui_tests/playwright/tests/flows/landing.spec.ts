@@ -62,7 +62,7 @@ test("sorts by title descending when the Title header is clicked", async ({ page
   await gotoReady(page, "/");
 
   // Default sort is title asc — click once to flip to desc.
-  await page.getByRole("button", { name: /^Title( ▲| ▼)?$/ }).click();
+  await page.getByRole("button", { name: /^Title( ↑| ↓)?$/ }).click();
 
   const titleHeader = page.locator(".sort-th[aria-sort='descending']");
   await expect(titleHeader).toBeVisible();
