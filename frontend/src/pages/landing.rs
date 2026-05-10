@@ -118,7 +118,7 @@ pub fn LandingPage() -> Element {
             on_change: save.clone(),
         }
 
-        div { class: "lib-layout",
+        div { class: if prefs().filters_open { "lib-layout" } else { "lib-layout lib-layout--collapsed" },
             FilterSidebar {
                 facets: facet_counts_view,
                 filters: prefs().filters.clone(),
@@ -194,6 +194,7 @@ fn Toolbar(prefs: ViewPrefs, on_change: EventHandler<ViewPrefs>) -> Element {
     let view_mode = prefs.view_mode;
     let sort_key = prefs.sort_key;
     let sort_dir = prefs.sort_dir;
+    let filters_open = prefs.filters_open;
 
     let apply = move |new_prefs: ViewPrefs| on_change.call(new_prefs);
     let set_view = {
@@ -201,6 +202,14 @@ fn Toolbar(prefs: ViewPrefs, on_change: EventHandler<ViewPrefs>) -> Element {
         move |mode: ViewMode| {
             let mut next = prefs.clone();
             next.view_mode = mode;
+            apply(next);
+        }
+    };
+    let toggle_filters = {
+        let prefs = prefs.clone();
+        move |_| {
+            let mut next = prefs.clone();
+            next.filters_open = !next.filters_open;
             apply(next);
         }
     };
@@ -233,6 +242,14 @@ fn Toolbar(prefs: ViewPrefs, on_change: EventHandler<ViewPrefs>) -> Element {
 
     rsx! {
         div { class: "lib-toolbar", role: "toolbar", "data-testid": "lib-toolbar",
+            button {
+                class: "lib-toggle-btn lib-filters-btn",
+                "aria-pressed": "{filters_open}",
+                "data-testid": "lib-filters-toggle",
+                aria_label: "Toggle filter sidebar",
+                onclick: toggle_filters,
+                "Filters"
+            }
             // Pressed-button toggle group, not an ARIA tablist — there are no
             // associated tab panels and no arrow-key tab navigation, so
             // `aria-pressed` on plain `<button>`s is the right shape.
@@ -295,7 +312,6 @@ fn Toolbar(prefs: ViewPrefs, on_change: EventHandler<ViewPrefs>) -> Element {
 struct FacetCounts {
     authors: Vec<(String, usize)>,
     series: Vec<(String, usize)>,
-    tags: Vec<(String, usize)>,
 }
 
 #[component]
@@ -304,15 +320,15 @@ fn FilterSidebar(
     filters: ViewFilters,
     on_change: EventHandler<ViewFilters>,
 ) -> Element {
-    let any_active = !filters.is_empty();
+    let any_active = !filters.authors.is_empty() || !filters.series.is_empty();
     let toggle = {
         let filters = filters.clone();
         move |group: &'static str, value: String| {
             let mut next = filters.clone();
-            let bucket = match group {
-                "authors" => &mut next.authors,
-                "series" => &mut next.series,
-                _ => &mut next.tags,
+            let bucket = if group == "authors" {
+                &mut next.authors
+            } else {
+                &mut next.series
             };
             if let Some(pos) = bucket.iter().position(|v| v == &value) {
                 bucket.remove(pos);
@@ -329,6 +345,8 @@ fn FilterSidebar(
                 button {
                     class: "lib-clear-filters",
                     "data-testid": "lib-clear-filters",
+                    // Keep tag selections cleared too so prefs that pre-date
+                    // the dropped Tags facet don't linger in localStorage.
                     onclick: move |_| on_change.call(ViewFilters::default()),
                     "Clear filters"
                 }
@@ -352,16 +370,6 @@ fn FilterSidebar(
                 on_toggle: {
                     let toggle = toggle.clone();
                     move |v: String| toggle("series", v)
-                },
-            }
-            FacetSection {
-                title: "Tags",
-                testid: "lib-facet-tags",
-                items: facets.tags.clone(),
-                selected: filters.tags.clone(),
-                on_toggle: {
-                    let toggle = toggle.clone();
-                    move |v: String| toggle("tags", v)
                 },
             }
         }
@@ -816,7 +824,6 @@ fn apply_filters(books: &[EbookMetadata], filters: &ViewFilters) -> Vec<EbookMet
 fn facet_counts(books: &[EbookMetadata]) -> FacetCounts {
     let mut authors: BTreeMap<String, usize> = BTreeMap::new();
     let mut series: BTreeMap<String, usize> = BTreeMap::new();
-    let mut tags: BTreeMap<String, usize> = BTreeMap::new();
     for book in books {
         for c in &book.creators {
             *authors.entry(c.name.clone()).or_default() += 1;
@@ -826,14 +833,10 @@ fn facet_counts(books: &[EbookMetadata]) -> FacetCounts {
                 *series.entry(s.to_string()).or_default() += 1;
             }
         }
-        for t in &book.subjects {
-            *tags.entry(t.clone()).or_default() += 1;
-        }
     }
     FacetCounts {
         authors: sorted_facet(authors),
         series: sorted_facet(series),
-        tags: sorted_facet(tags),
     }
 }
 
@@ -1171,10 +1174,6 @@ mod tests {
     fn facet_counts_orders_by_count_desc_then_name() {
         let s = sample();
         let f = facet_counts(&s);
-        // Tags: Fantasy(2), Sci-Fi(2) — count tied so name asc
-        let tag_names: Vec<&str> = f.tags.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(tag_names, vec!["Fantasy", "Sci-Fi"]);
-        assert!(f.tags.iter().all(|(_, c)| *c == 2));
         // Series: Foundation present once with count 2
         assert_eq!(f.series, vec![("Foundation".into(), 2)]);
         // Authors: each unique once
