@@ -24,6 +24,12 @@ test("renders the landing page layout", async ({ page }) => {
   await expect(page.getByRole("heading", { level: 1, name: "Your Library" })).toBeVisible();
   await expect(page.getByTestId("ebook-table")).toBeVisible();
   await expect(page.getByTestId("lib-toolbar")).toBeVisible();
+  // Sidebar is collapsed by default; opening it via the toolbar toggle
+  // exercises the new persisted preference and confirms the sidebar
+  // markup is wired up.
+  const filtersToggle = page.getByTestId("lib-filters-toggle");
+  await expect(filtersToggle).toHaveAttribute("aria-pressed", "false");
+  await filtersToggle.click();
   await expect(page.getByTestId("lib-sidebar")).toBeVisible();
   await expectNavVisible(page);
 });
@@ -80,6 +86,9 @@ test("sorts by title descending when the Title header is clicked", async ({ page
 test("filters by author chip and clears via the clear-all button", async ({ page }) => {
   await gotoReady(page, "/");
   await expect(page.getByTestId(/^ebook-row-/)).toHaveCount(FIXTURE_BOOKS.length);
+
+  // Sidebar starts collapsed; open it before reaching for the chip.
+  await page.getByTestId("lib-filters-toggle").click();
 
   const authorsFacet = page.getByTestId("lib-facet-authors");
   const lovelaceChip = authorsFacet.locator('button.lib-chip[data-value="Ada Lovelace"]');

@@ -567,8 +567,39 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   margin-top: 1rem;
   align-items: start;
 }
+.lib-layout--collapsed {
+  grid-template-columns: 1fr;
+}
+.lib-layout--collapsed > .lib-sidebar { display: none; }
+
+/* Narrow viewports: layout always single-column. The sidebar becomes a
+   right-edge drawer overlay when open, so it doesn't squeeze the grid. */
 @media (max-width: 900px) {
   .lib-layout { grid-template-columns: 1fr; }
+  .lib-layout > .lib-sidebar {
+    position: fixed;
+    top: 4rem;
+    right: 0.75rem;
+    z-index: 50;
+    width: min(280px, calc(100vw - 1.5rem));
+    max-height: calc(100vh - 5rem);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  }
+}
+
+/* Filters toggle in the toolbar: same pill shape as the view-mode pair,
+   but a standalone button (no enclosing toggle group). */
+.lib-filters-btn {
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(100, 116, 139, 0.3);
+  border-radius: 8px;
+  padding: 0.4rem 0.9rem;
+}
+.lib-filters-btn[aria-pressed="true"] {
+  background: linear-gradient(135deg, #22d3ee, #3b82f6);
+  color: #031525;
+  font-weight: 600;
+  border-color: transparent;
 }
 
 .lib-sidebar {
