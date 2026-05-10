@@ -562,7 +562,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 
 .lib-layout {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 210px 1fr;
   gap: 1.25rem;
   margin-top: 1rem;
   align-items: start;
@@ -617,6 +617,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
+  max-width: 100%;
   background: rgba(30, 41, 59, 0.8);
   border: 1px solid rgba(100, 116, 139, 0.35);
   border-radius: 9999px;
@@ -625,6 +626,18 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   font: inherit;
   font-size: 0.8rem;
   cursor: pointer;
+  /* Long author names / sentence-y tags shouldn't blow out the sidebar
+     or wrap into multi-line chips. The label span clips with ellipsis;
+     the full value stays accessible via the chip's `title` tooltip. */
+  text-align: left;
+}
+.lib-chip-label {
+  display: inline-block;
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 .lib-chip:hover { background: rgba(51, 65, 85, 0.7); }
 .lib-chip[aria-pressed="true"] {
@@ -633,6 +646,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   color: #67e8f9;
 }
 .lib-chip-count {
+  flex-shrink: 0;
   font-size: 0.7rem;
   color: #64748b;
   background: rgba(15, 23, 42, 0.6);
