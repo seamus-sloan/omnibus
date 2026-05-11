@@ -165,14 +165,12 @@ pub struct ViewFilters {
     pub authors: Vec<String>,
     #[serde(default)]
     pub series: Vec<String>,
-    #[serde(default)]
-    pub tags: Vec<String>,
 }
 
 impl ViewFilters {
     /// `true` when no facet has any selected value.
     pub fn is_empty(&self) -> bool {
-        self.authors.is_empty() && self.series.is_empty() && self.tags.is_empty()
+        self.authors.is_empty() && self.series.is_empty()
     }
 }
 

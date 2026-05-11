@@ -135,22 +135,7 @@ pub fn LandingPage() -> Element {
             div { class: "lib-main",
                 if is_loading {
                     p { class: "library-empty", "Loading..." }
-                } else if visible_is_empty && lib.error.is_none() && page_error.is_none() {
-                    if lib.books.is_empty() {
-                        p { class: "library-empty", "No ebooks found." }
-                    } else {
-                        EmptyFiltered {
-                            on_clear: {
-                                let mut save = save.clone();
-                                move |_| {
-                                    let mut next = prefs.peek().clone();
-                                    next.filters = ViewFilters::default();
-                                    save(next);
-                                }
-                            },
-                        }
-                    }
-                } else {
+                } else if !visible_is_empty || lib.error.is_some() || page_error.is_some() {
                     match view_mode {
                         ViewMode::Table => rsx! {
                             BookTable {
@@ -176,6 +161,19 @@ pub fn LandingPage() -> Element {
                             BookGrid {
                                 books: visible_books.clone(),
                                 server_url: server_url_for_row.clone(),
+                            }
+                        },
+                    }
+                } else if lib.books.is_empty() {
+                    p { class: "library-empty", "No ebooks found." }
+                } else {
+                    EmptyFiltered {
+                        on_clear: {
+                            let mut save = save.clone();
+                            move |_| {
+                                let mut next = prefs.peek().clone();
+                                next.filters = ViewFilters::default();
+                                save(next);
                             }
                         },
                     }
@@ -345,8 +343,6 @@ fn FilterSidebar(
                 button {
                     class: "lib-clear-filters",
                     "data-testid": "lib-clear-filters",
-                    // Keep tag selections cleared too so prefs that pre-date
-                    // the dropped Tags facet don't linger in localStorage.
                     onclick: move |_| on_change.call(ViewFilters::default()),
                     "Clear filters"
                 }
@@ -799,14 +795,6 @@ fn matches_filters(book: &EbookMetadata, filters: &ViewFilters) -> bool {
             return false;
         }
     }
-    if !filters.tags.is_empty()
-        && !filters
-            .tags
-            .iter()
-            .any(|t| book.subjects.iter().any(|s| s == t))
-    {
-        return false;
-    }
     true
 }
 
@@ -1148,13 +1136,14 @@ mod tests {
     fn multi_facet_and_across_groups() {
         let s = sample();
         let f = ViewFilters {
-            tags: vec!["Fantasy".into()],
+            authors: vec!["Tolkien, J.R.R.".into(), "Asimov, Isaac".into()],
             series: vec!["Foundation".into()],
-            ..Default::default()
         };
         let out = apply_filters(&s, &f);
-        // gamma is Fantasy but no series; alpha is Fantasy + Foundation.
-        assert_eq!(ids(&out), vec![1]);
+        // alpha is Tolkien + Foundation, beta is Asimov + Foundation, gamma
+        // is Le Guin with no series — so only alpha + beta survive the AND
+        // across (authors, series).
+        assert_eq!(ids(&out), vec![1, 2]);
     }
 
     #[test]
