@@ -54,8 +54,27 @@ test("renders the detail contents for the selected book", async ({ page, request
     page.getByRole("navigation", { name: "breadcrumb" }).getByRole("link", { name: "Home" }),
   ).toBeVisible();
 
-  // All fixture books are EPUB — "Read" CTA must be rendered
-  await expect(page.getByTestId("action-read")).toBeVisible();
+  // Format switcher renders one row per available format (F1.4).
+  const switcher = page.getByTestId("format-switcher");
+  await expect(switcher).toBeVisible();
+
+  // All fixture books are EPUB; the EPUB row must exist with its badge and
+  // the per-format CTAs grouped underneath.
+  const epubRow = switcher.locator('[data-format="EPUB"]');
+  await expect(epubRow).toBeVisible();
+  await expect(epubRow.locator(".format-badge")).toHaveText("EPUB");
+
+  // Read + Send-to-Kindle are scoped inside the EPUB row and stay disabled
+  // until F2.2 (reader) and F4.x (kindle) ship.
+  const readBtn = epubRow.getByTestId("action-read");
+  await expect(readBtn).toBeVisible();
+  await expect(readBtn).toBeDisabled();
+  const kindleBtn = epubRow.getByTestId("action-kindle");
+  await expect(kindleBtn).toBeVisible();
+  await expect(kindleBtn).toBeDisabled();
+
+  // No M4B fixture in the seed — the Listen CTA must NOT render.
+  await expect(page.getByTestId("action-listen")).toHaveCount(0);
 
   // F3.2 / F3.3 placeholder slots must be in the DOM (may be invisible)
   await expect(page.getByTestId("ratings-slot")).toBeAttached();
