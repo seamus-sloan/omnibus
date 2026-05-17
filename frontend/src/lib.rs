@@ -763,7 +763,30 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .breadcrumb a { color: #22d3ee; text-decoration: none; }
 .breadcrumb a:hover { text-decoration: underline; }
 .book-detail-description { line-height: 1.6; color: rgba(255,255,255,.8); margin: .5rem 0 1rem; }
-.format-actions { display: flex; gap: .75rem; flex-wrap: wrap; margin: .75rem 0; }
+.format-switcher {
+  display: flex; flex-direction: column; gap: .4rem;
+  margin: .75rem 0; padding: .5rem .75rem;
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 6px;
+}
+.format-row {
+  display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
+}
+.format-row + .format-row {
+  padding-top: .4rem; border-top: 1px solid rgba(255,255,255,.05);
+}
+.format-badge {
+  font-family: monospace; font-size: .75rem; font-weight: 600;
+  letter-spacing: .05em; padding: .15rem .5rem;
+  background: rgba(34,211,238,.12); color: #22d3ee;
+  border: 1px solid rgba(34,211,238,.3); border-radius: 4px;
+  min-width: 3.5rem; text-align: center;
+}
+.format-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+.format-actions-empty {
+  font-size: .8rem; color: rgba(255,255,255,.4); font-style: italic;
+}
 .tag-list { display: flex; flex-wrap: wrap; gap: .4rem; list-style: none; padding: 0; margin: .4rem 0; }
 .tag {
   background: rgba(34,211,238,.12); border: 1px solid rgba(34,211,238,.3);
