@@ -202,6 +202,7 @@ pub const STYLES: &str = r#"
 body {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background: radial-gradient(circle at top, #1f2937 0%, #0b1020 50%, #070b16 100%);
+  background-attachment: fixed;
   min-height: 100vh;
   color: #e5e7eb;
 }
@@ -324,7 +325,10 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   font-weight: 500;
   color: #cbd5e1;
 }
-.settings-field input[type="text"], .settings-input {
+.settings-field input[type="text"],
+.settings-field input[type="password"],
+.settings-field input[type="email"],
+.settings-input {
   background: rgba(30, 41, 59, 0.8);
   border: 1px solid rgba(100, 116, 139, 0.4);
   border-radius: 8px;
@@ -333,7 +337,10 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   padding: 0.55rem 0.75rem;
   width: 100%;
 }
-.settings-field input[type="text"]:focus, .settings-input:focus {
+.settings-field input[type="text"]:focus,
+.settings-field input[type="password"]:focus,
+.settings-field input[type="email"]:focus,
+.settings-input:focus {
   outline: none;
   border-color: #3b82f6;
 }
