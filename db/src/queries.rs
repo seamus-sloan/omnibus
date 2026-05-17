@@ -851,86 +851,79 @@ async fn load_identifiers(pool: &SqlitePool, book_id: i64) -> Result<Vec<Identif
         .collect())
 }
 
-async fn load_formats(pool: &SqlitePool, book_id: i64) -> Result<Vec<String>, sqlx::Error> {
-    sqlx::query_scalar("SELECT format FROM book_files WHERE book_id = ? ORDER BY format")
-        .bind(book_id)
-        .fetch_all(pool)
-        .await
-}
-
-/// Pick the preferred file row for a book. EPUB wins when present; otherwise
-/// fall back to the first format alphabetically. Returns `(filename_stem,
-/// format)` or `None` when the book has no files.
-async fn load_primary_file(
-    pool: &SqlitePool,
-    book_id: i64,
-) -> Result<Option<(String, String)>, sqlx::Error> {
-    let row = sqlx::query(
-        "SELECT filename, format FROM book_files
-         WHERE book_id = ?
-         ORDER BY (format != 'EPUB'), format
-         LIMIT 1",
-    )
-    .bind(book_id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.map(|r| (r.get("filename"), r.get("format"))))
-}
-
-async fn load_publisher(pool: &SqlitePool, book_id: i64) -> Result<Option<String>, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT pub.name FROM books_publishers_link bpl
-         JOIN publishers pub ON pub.id = bpl.publisher
-         WHERE bpl.book = ?
-         ORDER BY pub.name
-         LIMIT 1",
-    )
-    .bind(book_id)
-    .fetch_optional(pool)
-    .await
-}
-
-async fn load_language(pool: &SqlitePool, book_id: i64) -> Result<Option<String>, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT lang.code FROM books_languages_link bll
-         JOIN languages lang ON lang.id = bll.language
-         WHERE bll.book = ?
-         ORDER BY lang.code
-         LIMIT 1",
-    )
-    .bind(book_id)
-    .fetch_optional(pool)
-    .await
-}
-
-async fn load_series_name(pool: &SqlitePool, book_id: i64) -> Result<Option<String>, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT s.name FROM books_series_link bsl
-         JOIN series s ON s.id = bsl.series
-         WHERE bsl.book = ?
-         ORDER BY s.name
-         LIMIT 1",
-    )
-    .bind(book_id)
-    .fetch_optional(pool)
-    .await
-}
-
 /// Fetch a single book by its stable `books.id`. Returns `None` if not found.
 ///
-/// The main SELECT pulls only `books`-table columns so it remains 1:1 even
-/// when the book has multiple files / publishers / languages / series.
-/// Multi-valued and ambiguous columns are loaded via dedicated helpers that
-/// each apply a deterministic `ORDER BY ... LIMIT 1` (see
-/// `load_primary_file` / `load_publisher` / `load_language` /
-/// `load_series_name`) so the response is stable across calls.
+/// One round-trip to SQLite: the main `books` row plus every m2m relation are
+/// pulled in a single statement using scalar subqueries (for single-valued
+/// joins) and `GROUP_CONCAT` over ordered inner selects (for multi-valued
+/// lists). Determinism is preserved by always ordering the inner selects —
+/// EPUB-preferred for the primary file, alphabetical for publisher/language/
+/// series/tags/formats/identifiers, and `books_authors_link.position` for
+/// authors.
+///
+/// Multi-valued lists are encoded with two private separators that can't
+/// appear in user content: `0x1F` (unit separator) between records and `0x1E`
+/// (record separator) between fields within a record. The two-level encoding
+/// lets `creators` and `identifiers` carry pairs (name+sort, scheme+value)
+/// through `GROUP_CONCAT` without colliding with commas or other punctuation
+/// in real titles, names, or ISBNs.
 pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata>, sqlx::Error> {
+    const FS: char = '\x1F';
+    const RS: char = '\x1E';
+
     let row = sqlx::query(
         r#"
-        SELECT id, uuid, title, description, series_index, has_cover,
-               pubdate, last_modified, timestamp, isbn, accent_color
-        FROM books
-        WHERE id = ?
+        SELECT
+            b.id, b.uuid, b.title, b.description, b.series_index, b.has_cover,
+            b.pubdate, b.last_modified, b.timestamp, b.accent_color,
+
+            (SELECT bf.filename || char(0x1E) || bf.format
+               FROM book_files bf
+              WHERE bf.book_id = b.id
+              ORDER BY (bf.format != 'EPUB'), bf.format
+              LIMIT 1)                                     AS primary_file,
+
+            (SELECT pub.name FROM books_publishers_link bpl
+              JOIN publishers pub ON pub.id = bpl.publisher
+             WHERE bpl.book = b.id ORDER BY pub.name LIMIT 1)
+                                                           AS publisher,
+
+            (SELECT lang.code FROM books_languages_link bll
+              JOIN languages lang ON lang.id = bll.language
+             WHERE bll.book = b.id ORDER BY lang.code LIMIT 1)
+                                                           AS language,
+
+            (SELECT s.name FROM books_series_link bsl
+              JOIN series s ON s.id = bsl.series
+             WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
+                                                           AS series_name,
+
+            (SELECT GROUP_CONCAT(record, char(0x1F))
+               FROM (SELECT a.name || char(0x1E) || COALESCE(a.sort, '') AS record
+                       FROM books_authors_link bal
+                       JOIN authors a ON a.id = bal.author
+                      WHERE bal.book = b.id
+                      ORDER BY bal.position))              AS creators_blob,
+
+            (SELECT GROUP_CONCAT(name, char(0x1F))
+               FROM (SELECT t.name FROM books_tags_link btl
+                       JOIN tags t ON t.id = btl.tag
+                      WHERE btl.book = b.id
+                      ORDER BY t.name))                    AS subjects_blob,
+
+            (SELECT GROUP_CONCAT(record, char(0x1F))
+               FROM (SELECT scheme || char(0x1E) || value AS record
+                       FROM book_identifiers
+                      WHERE book_id = b.id
+                      ORDER BY scheme, value))             AS identifiers_blob,
+
+            (SELECT GROUP_CONCAT(format, char(0x1F))
+               FROM (SELECT format FROM book_files
+                      WHERE book_id = b.id
+                      ORDER BY format))                    AS formats_blob
+
+        FROM books b
+        WHERE b.id = ?
         "#,
     )
     .bind(id)
@@ -940,32 +933,62 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
     let Some(r) = row else {
         return Ok(None);
     };
+
     let book_id: i64 = r.get("id");
     let has_cover: i64 = r.get("has_cover");
     let series_index: Option<f64> = r.get("series_index");
+    let uuid: String = r.get("uuid");
 
-    let primary_file = load_primary_file(pool, book_id).await?;
-    let filename = primary_file
-        .map(|(stem, fmt)| format!("{stem}.{}", fmt.to_ascii_lowercase()))
+    let filename = r
+        .get::<Option<String>, _>("primary_file")
+        .map(|blob| {
+            let mut parts = blob.splitn(2, RS);
+            let stem = parts.next().unwrap_or("");
+            let fmt = parts.next().unwrap_or("");
+            format!("{stem}.{}", fmt.to_ascii_lowercase())
+        })
         .unwrap_or_default();
 
-    let publisher = load_publisher(pool, book_id).await?;
-    let language = load_language(pool, book_id).await?;
-    let series = load_series_name(pool, book_id).await?;
-    let creators = load_creators(pool, book_id).await?;
-    let subjects = load_subjects(pool, book_id).await?;
-    let identifiers = load_identifiers(pool, book_id).await?;
-    let formats = load_formats(pool, book_id).await?;
+    let creators = split_concat(r.get::<Option<String>, _>("creators_blob"), FS)
+        .into_iter()
+        .map(|rec| {
+            let mut parts = rec.splitn(2, RS);
+            let name = parts.next().unwrap_or("").to_string();
+            let sort = parts.next().unwrap_or("");
+            Contributor {
+                name,
+                role: None,
+                file_as: (!sort.is_empty()).then(|| sort.to_string()),
+            }
+        })
+        .collect();
+
+    let subjects = split_concat(r.get::<Option<String>, _>("subjects_blob"), FS);
+
+    let identifiers = split_concat(r.get::<Option<String>, _>("identifiers_blob"), FS)
+        .into_iter()
+        .map(|rec| {
+            let mut parts = rec.splitn(2, RS);
+            let scheme = parts.next().unwrap_or("").to_string();
+            let value = parts.next().unwrap_or("").to_string();
+            Identifier {
+                value,
+                scheme: Some(scheme),
+            }
+        })
+        .collect();
+
+    let formats = split_concat(r.get::<Option<String>, _>("formats_blob"), FS);
 
     Ok(Some(EbookMetadata {
         id: book_id,
         filename,
         title: r.get("title"),
         description: r.get("description"),
-        publisher,
+        publisher: r.get("publisher"),
         published: r.get("pubdate"),
         modified: r.get("last_modified"),
-        language,
+        language: r.get("language"),
         rights: None,
         source: None,
         coverage: None,
@@ -976,10 +999,10 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
         contributors: vec![],
         subjects,
         identifiers,
-        series,
+        series: r.get("series_name"),
         series_index: series_index.map(format_series_index),
         epub_version: None,
-        unique_identifier: Some(r.get::<String, _>("uuid")),
+        unique_identifier: Some(uuid),
         resource_count: 0,
         spine_count: 0,
         toc_count: 0,
@@ -989,6 +1012,15 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
         added_at: r.get("timestamp"),
         error: None,
     }))
+}
+
+/// Decode a `GROUP_CONCAT` blob produced by `get_book`. A `None` or empty
+/// payload yields an empty vec; otherwise the blob is split on `sep`.
+fn split_concat(blob: Option<String>, sep: char) -> Vec<String> {
+    match blob {
+        Some(s) if !s.is_empty() => s.split(sep).map(str::to_string).collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Full-text search across `books_fts`. Returns hydrated `EbookMetadata`
@@ -2513,5 +2545,46 @@ mod tests {
             book.formats.iter().any(|f| f.eq_ignore_ascii_case("epub")),
             "EPUB format should be present"
         );
+    }
+
+    #[tokio::test]
+    async fn get_book_handles_book_with_no_relations() {
+        // A `books` row that has zero m2m link rows and zero files: every
+        // GROUP_CONCAT subquery in the single-query rewrite returns NULL, and
+        // every scalar subquery returns NULL. The function must still return
+        // a populated `EbookMetadata` with empty vecs and an empty filename
+        // rather than erroring out on the missing data.
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let lib_res =
+            sqlx::query("INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib')")
+                .execute(&pool)
+                .await
+                .unwrap();
+        let lib_id = lib_res.last_insert_rowid();
+        let res = sqlx::query(
+            "INSERT INTO books (uuid, library_id, path, title) \
+             VALUES ('lonely-uuid', ?, '/lib/lonely', 'Lonely')",
+        )
+        .bind(lib_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let id = res.last_insert_rowid();
+
+        let book = get_book(&pool, id)
+            .await
+            .unwrap()
+            .expect("book should exist");
+        assert_eq!(book.id, id);
+        assert_eq!(book.title.as_deref(), Some("Lonely"));
+        assert_eq!(book.filename, "");
+        assert!(book.creators.is_empty());
+        assert!(book.subjects.is_empty());
+        assert!(book.identifiers.is_empty());
+        assert!(book.formats.is_empty());
+        assert!(book.publisher.is_none());
+        assert!(book.language.is_none());
+        assert!(book.series.is_none());
+        assert!(book.cover_url.is_none());
     }
 }
