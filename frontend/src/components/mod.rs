@@ -27,6 +27,9 @@ mod bottom_nav;
 #[cfg(feature = "mobile")]
 pub use bottom_nav::BottomNav as Nav;
 
+mod format_switcher;
+pub use format_switcher::FormatSwitcher;
+
 pub mod atrium;
 
 // Auth-page primitives — used by the login / register / first-run /
