@@ -26,3 +26,8 @@ pub use top_nav::TopNav as Nav;
 mod bottom_nav;
 #[cfg(feature = "mobile")]
 pub use bottom_nav::BottomNav as Nav;
+
+// Auth-page primitives — used by the login / register / first-run /
+// recovery screens on every target. Stays platform-agnostic so the same
+// markup ships under web SSR, web WASM, and mobile native.
+pub mod auth;
