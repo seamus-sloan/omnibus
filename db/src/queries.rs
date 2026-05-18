@@ -855,33 +855,33 @@ async fn load_identifiers(pool: &SqlitePool, book_id: i64) -> Result<Vec<Identif
 ///
 /// One round-trip to SQLite: the main `books` row plus every m2m relation are
 /// pulled in a single statement using scalar subqueries (for single-valued
-/// joins) and `GROUP_CONCAT` over ordered inner selects (for multi-valued
+/// joins) and `json_group_array` over ordered inner selects (for multi-valued
 /// lists). Determinism is preserved by always ordering the inner selects —
 /// EPUB-preferred for the primary file, alphabetical for publisher/language/
 /// series/tags/formats/identifiers, and `books_authors_link.position` for
 /// authors.
 ///
-/// Multi-valued lists are encoded with two private separators that can't
-/// appear in user content: `0x1F` (unit separator) between records and `0x1E`
-/// (record separator) between fields within a record. The two-level encoding
-/// lets `creators` and `identifiers` carry pairs (name+sort, scheme+value)
-/// through `GROUP_CONCAT` without colliding with commas or other punctuation
-/// in real titles, names, or ISBNs.
+/// Multi-valued lists are returned as JSON via SQLite's `json_group_array` +
+/// `json_object`, which round-trips any UTF-8 — including control chars and
+/// punctuation that a delimiter-based encoding would corrupt. The Rust side
+/// parses each blob with `serde_json`. Empty aggregates come back as `"[]"`,
+/// so the `Option<String>` path only fires when the column itself was NULL.
 pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata>, sqlx::Error> {
-    const FS: char = '\x1F';
-    const RS: char = '\x1E';
-
     let row = sqlx::query(
         r#"
         SELECT
             b.id, b.uuid, b.title, b.description, b.series_index, b.has_cover,
             b.pubdate, b.last_modified, b.timestamp, b.accent_color,
 
-            (SELECT bf.filename || char(0x1E) || bf.format
-               FROM book_files bf
+            (SELECT bf.filename FROM book_files bf
               WHERE bf.book_id = b.id
               ORDER BY (bf.format != 'EPUB'), bf.format
-              LIMIT 1)                                     AS primary_file,
+              LIMIT 1)                                     AS primary_filename,
+
+            (SELECT bf.format FROM book_files bf
+              WHERE bf.book_id = b.id
+              ORDER BY (bf.format != 'EPUB'), bf.format
+              LIMIT 1)                                     AS primary_format,
 
             (SELECT pub.name FROM books_publishers_link bpl
               JOIN publishers pub ON pub.id = bpl.publisher
@@ -898,29 +898,28 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
              WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
                                                            AS series_name,
 
-            (SELECT GROUP_CONCAT(record, char(0x1F))
-               FROM (SELECT a.name || char(0x1E) || COALESCE(a.sort, '') AS record
+            (SELECT json_group_array(json_object('name', name, 'sort', sort))
+               FROM (SELECT a.name AS name, a.sort AS sort
                        FROM books_authors_link bal
                        JOIN authors a ON a.id = bal.author
                       WHERE bal.book = b.id
-                      ORDER BY bal.position))              AS creators_blob,
+                      ORDER BY bal.position))              AS creators_json,
 
-            (SELECT GROUP_CONCAT(name, char(0x1F))
-               FROM (SELECT t.name FROM books_tags_link btl
+            (SELECT json_group_array(name)
+               FROM (SELECT t.name AS name FROM books_tags_link btl
                        JOIN tags t ON t.id = btl.tag
                       WHERE btl.book = b.id
-                      ORDER BY t.name))                    AS subjects_blob,
+                      ORDER BY t.name))                    AS subjects_json,
 
-            (SELECT GROUP_CONCAT(record, char(0x1F))
-               FROM (SELECT scheme || char(0x1E) || value AS record
-                       FROM book_identifiers
+            (SELECT json_group_array(json_object('scheme', scheme, 'value', value))
+               FROM (SELECT scheme, value FROM book_identifiers
                       WHERE book_id = b.id
-                      ORDER BY scheme, value))             AS identifiers_blob,
+                      ORDER BY scheme, value))             AS identifiers_json,
 
-            (SELECT GROUP_CONCAT(format, char(0x1F))
+            (SELECT json_group_array(format)
                FROM (SELECT format FROM book_files
                       WHERE book_id = b.id
-                      ORDER BY format))                    AS formats_blob
+                      ORDER BY format))                    AS formats_json
 
         FROM books b
         WHERE b.id = ?
@@ -939,46 +938,48 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
     let series_index: Option<f64> = r.get("series_index");
     let uuid: String = r.get("uuid");
 
-    let filename = r
-        .get::<Option<String>, _>("primary_file")
-        .map(|blob| {
-            let mut parts = blob.splitn(2, RS);
-            let stem = parts.next().unwrap_or("");
-            let fmt = parts.next().unwrap_or("");
-            format!("{stem}.{}", fmt.to_ascii_lowercase())
-        })
-        .unwrap_or_default();
+    let filename = match (
+        r.get::<Option<String>, _>("primary_filename"),
+        r.get::<Option<String>, _>("primary_format"),
+    ) {
+        (Some(stem), Some(fmt)) => format!("{stem}.{}", fmt.to_ascii_lowercase()),
+        _ => String::new(),
+    };
 
-    let creators = split_concat(r.get::<Option<String>, _>("creators_blob"), FS)
+    #[derive(serde::Deserialize)]
+    struct CreatorRow {
+        name: String,
+        #[serde(default)]
+        sort: Option<String>,
+    }
+
+    let creators: Vec<Contributor> = parse_json_array::<CreatorRow>(r.get("creators_json"))?
         .into_iter()
-        .map(|rec| {
-            let mut parts = rec.splitn(2, RS);
-            let name = parts.next().unwrap_or("").to_string();
-            let sort = parts.next().unwrap_or("");
-            Contributor {
-                name,
-                role: None,
-                file_as: (!sort.is_empty()).then(|| sort.to_string()),
-            }
+        .map(|c| Contributor {
+            name: c.name,
+            role: None,
+            file_as: c.sort.filter(|s| !s.is_empty()),
         })
         .collect();
 
-    let subjects = split_concat(r.get::<Option<String>, _>("subjects_blob"), FS);
+    let subjects: Vec<String> = parse_json_array(r.get("subjects_json"))?;
 
-    let identifiers = split_concat(r.get::<Option<String>, _>("identifiers_blob"), FS)
-        .into_iter()
-        .map(|rec| {
-            let mut parts = rec.splitn(2, RS);
-            let scheme = parts.next().unwrap_or("").to_string();
-            let value = parts.next().unwrap_or("").to_string();
-            Identifier {
-                value,
-                scheme: Some(scheme),
-            }
-        })
-        .collect();
+    #[derive(serde::Deserialize)]
+    struct IdentifierRow {
+        scheme: String,
+        value: String,
+    }
 
-    let formats = split_concat(r.get::<Option<String>, _>("formats_blob"), FS);
+    let identifiers: Vec<Identifier> =
+        parse_json_array::<IdentifierRow>(r.get("identifiers_json"))?
+            .into_iter()
+            .map(|i| Identifier {
+                value: i.value,
+                scheme: Some(i.scheme),
+            })
+            .collect();
+
+    let formats: Vec<String> = parse_json_array(r.get("formats_json"))?;
 
     Ok(Some(EbookMetadata {
         id: book_id,
@@ -1014,12 +1015,16 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
     }))
 }
 
-/// Decode a `GROUP_CONCAT` blob produced by `get_book`. A `None` or empty
-/// payload yields an empty vec; otherwise the blob is split on `sep`.
-fn split_concat(blob: Option<String>, sep: char) -> Vec<String> {
+/// Decode a `json_group_array` blob produced by `get_book`. SQLite returns
+/// `"[]"` for an aggregate over zero rows, so a `None` here only means the
+/// column itself was NULL (which the get_book subqueries never produce, but
+/// we tolerate it defensively).
+fn parse_json_array<T: serde::de::DeserializeOwned>(
+    blob: Option<String>,
+) -> Result<Vec<T>, sqlx::Error> {
     match blob {
-        Some(s) if !s.is_empty() => s.split(sep).map(str::to_string).collect(),
-        _ => Vec::new(),
+        Some(s) => serde_json::from_str(&s).map_err(|e| sqlx::Error::Decode(Box::new(e))),
+        None => Ok(Vec::new()),
     }
 }
 
@@ -2550,7 +2555,7 @@ mod tests {
     #[tokio::test]
     async fn get_book_handles_book_with_no_relations() {
         // A `books` row that has zero m2m link rows and zero files: every
-        // GROUP_CONCAT subquery in the single-query rewrite returns NULL, and
+        // `json_group_array` subquery returns "[]" (over zero inner rows) and
         // every scalar subquery returns NULL. The function must still return
         // a populated `EbookMetadata` with empty vecs and an empty filename
         // rather than erroring out on the missing data.
@@ -2586,5 +2591,48 @@ mod tests {
         assert!(book.language.is_none());
         assert!(book.series.is_none());
         assert!(book.cover_url.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_book_round_trips_values_containing_control_chars_and_quotes() {
+        // Regression for PR #65 review: prior delimiter-based encoding
+        // (`GROUP_CONCAT` with 0x1F/0x1E separators) would have silently
+        // corrupted any value containing those control chars. The JSON
+        // encoding must survive arbitrary UTF-8 — control chars, quotes,
+        // backslashes, commas — without altering the round-tripped value.
+        let _covers = CoversTempDir::new("get_book_collide");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let nasty_name = "Smith\u{001F}, John \"O'Reilly\" \\back\u{001E}/";
+        let nasty_tag = "Sci-Fi\u{001F}Drama";
+        let nasty_value = "9780\u{001E}123\"456\\";
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "alpha.epub",
+                Some("Alpha"),
+                &[nasty_name],
+                &[nasty_tag],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+        let id = list_books(&pool, "/lib").await.unwrap()[0].id;
+        sqlx::query("INSERT INTO book_identifiers (book_id, scheme, value) VALUES (?, 'ISBN', ?)")
+            .bind(id)
+            .bind(nasty_value)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let book = get_book(&pool, id).await.unwrap().expect("book");
+        assert_eq!(book.creators.len(), 1);
+        assert_eq!(book.creators[0].name, nasty_name);
+        assert_eq!(book.subjects, vec![nasty_tag.to_string()]);
+        assert_eq!(book.identifiers.len(), 1);
+        assert_eq!(book.identifiers[0].value, nasty_value);
+        assert_eq!(book.identifiers[0].scheme.as_deref(), Some("ISBN"));
     }
 }

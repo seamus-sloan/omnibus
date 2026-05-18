@@ -59,10 +59,11 @@ test("renders the detail contents for the selected book", async ({ page, request
   await expect(switcher).toBeVisible();
 
   // All fixture books are EPUB; the EPUB row must exist with its badge and
-  // the per-format CTAs grouped underneath.
-  const epubRow = switcher.locator('[data-format="EPUB"]');
+  // the per-format CTAs grouped underneath. Use getByTestId rather than CSS
+  // attribute/class locators per `04-playwright.md` ("semantic first").
+  const epubRow = switcher.getByTestId("format-row-epub");
   await expect(epubRow).toBeVisible();
-  await expect(epubRow.locator(".format-badge")).toHaveText("EPUB");
+  await expect(epubRow.getByTestId("format-badge")).toHaveText("EPUB");
 
   // Read + Send-to-Kindle are scoped inside the EPUB row and stay disabled
   // until F2.2 (reader) and F4.x (kindle) ship.
