@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 use dioxus_router::{use_navigator, use_route, Link};
 
+use crate::components::atrium::ThemeToggle;
 use crate::{use_search_query, Route};
 
 #[component]
@@ -17,6 +18,7 @@ pub fn TopNav() -> Element {
             if !on_settings {
                 NavSearch {}
             }
+            ThemeToggle {}
             AuthControl {}
         }
     }

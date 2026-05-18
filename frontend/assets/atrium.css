@@ -1,0 +1,263 @@
+/* Omnibus · Atrium design system
+ * ──────────────────────────────────────────────────────────
+ * F1.7 foundation. Loaded via Dioxus `asset!` from frontend/src/lib.rs.
+ *
+ * Tokens are oklch-based warm neutrals. Two themes today (dark default,
+ * light via `data-theme="light"` on the `.atrium` wrapper div emitted by
+ * the `AtriumRoot` Dioxus component — not on `<html>`). Per-book accent
+ * comes from `books.accent_color`, set inline as `--accent` on the cover
+ * element.
+ *
+ * Fonts: pulled from Google Fonts for the foundation PR. Self-hosting
+ * (`@font-face` under `frontend/assets/fonts/`) is tracked as a follow-up
+ * inside F1.7 for offline / airgapped installs.
+ *
+ * Sepia, density, type pairing toggles deferred to F1.9.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap');
+
+/* ── Tokens · dark (default) ─────────────────────────────────────── */
+:root {
+  --bg-0:    oklch(0.135 0.006 70);
+  --bg-1:    oklch(0.175 0.008 70);
+  --bg-2:    oklch(0.215 0.010 70);
+  --bg-3:    oklch(0.265 0.011 70);
+  --line:    oklch(0.30 0.010 70 / 0.65);
+  --line-2:  oklch(0.30 0.010 70 / 0.30);
+
+  --ink-0:   oklch(0.97 0.006 80);
+  --ink-1:   oklch(0.82 0.010 75);
+  --ink-2:   oklch(0.62 0.012 70);
+  --ink-3:   oklch(0.48 0.012 70);
+
+  --accent:        oklch(0.78 0.13 65);
+  --accent-soft:   oklch(0.30 0.07 65);
+  --accent-ink:    oklch(0.16 0.02 65);
+
+  --ok:   oklch(0.78 0.13 150);
+  --warn: oklch(0.78 0.13 75);
+  --bad:  oklch(0.72 0.16 25);
+
+  --serif: 'Instrument Serif', 'EB Garamond', Georgia, serif;
+  --sans:  'Geist', ui-sans-serif, -apple-system, system-ui, sans-serif;
+  --mono:  'Geist Mono', ui-monospace, 'SF Mono', monospace;
+
+  --r-sm: 6px;  --r-md: 10px;  --r-lg: 14px;  --r-xl: 22px;
+  --pad: 28px;  --gap: 18px;
+
+  color-scheme: dark;
+}
+
+/* ── Tokens · light ──────────────────────────────────────────────── */
+[data-theme="light"] {
+  --bg-0:  oklch(0.985 0.003 75);
+  --bg-1:  oklch(0.965 0.004 75);
+  --bg-2:  oklch(0.940 0.006 75);
+  --bg-3:  oklch(0.910 0.008 75);
+  --line:  oklch(0.40 0.010 70 / 0.20);
+  --line-2:oklch(0.40 0.010 70 / 0.10);
+  --ink-0: oklch(0.17 0.006 70);
+  --ink-1: oklch(0.36 0.008 70);
+  --ink-2: oklch(0.52 0.010 70);
+  --ink-3: oklch(0.66 0.010 70);
+  --accent-ink: oklch(0.99 0 0);
+  color-scheme: light;
+}
+
+/* ── Base ───────────────────────────────────────────────────────── */
+body.atrium,
+.atrium {
+  background: var(--bg-0);
+  color: var(--ink-0);
+  font-family: var(--sans);
+  font-feature-settings: 'ss01', 'cv11', 'cv02';
+  -webkit-font-smoothing: antialiased;
+  font-size: 14px;
+  line-height: 1.45;
+  letter-spacing: -0.005em;
+  min-height: 100vh;
+  margin: 0;
+}
+
+.atrium *,
+.atrium *::before,
+.atrium *::after { box-sizing: border-box; }
+
+.atrium h1, .atrium h2, .atrium h3, .atrium h4, .atrium h5 {
+  font-family: var(--serif); font-weight: 400;
+  letter-spacing: -0.015em; margin: 0; color: var(--ink-0);
+}
+.atrium h1 { font-size: 64px; line-height: 1.0; letter-spacing: -0.025em; }
+.atrium h2 { font-size: 42px; line-height: 1.05; }
+.atrium h3 { font-size: 28px; line-height: 1.1;  }
+.atrium h4 { font-size: 20px; line-height: 1.2;  }
+.atrium p  { margin: 0; }
+.atrium a  { color: inherit; text-decoration: none; }
+
+.label, .atrium .label {
+  font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--ink-2); font-weight: 500;
+}
+.mono, .atrium .mono {
+  font-family: var(--mono); font-size: 12px;
+  color: var(--ink-1); letter-spacing: -0.01em;
+}
+
+/* ── Chrome (top bar) ────────────────────────────────────────────── */
+.atrium-topbar {
+  display: flex; align-items: center; gap: 18px;
+  padding: 14px 28px; border-bottom: 1px solid var(--line-2);
+  position: sticky; top: 0;
+  background: color-mix(in oklch, var(--bg-0) 92%, transparent);
+  backdrop-filter: blur(10px); z-index: 5;
+}
+.atrium-brand { display: flex; align-items: center; gap: 10px; }
+.atrium-brand-mark {
+  width: 24px; height: 24px; border-radius: 6px;
+  background: var(--ink-0); position: relative;
+}
+.atrium-brand-word {
+  font-family: var(--serif); font-size: 22px; letter-spacing: -0.02em;
+  font-style: italic; line-height: 1; padding-top: 3px;
+}
+.atrium-nav { display: flex; align-items: center; gap: 4px; margin-left: 24px; }
+.atrium-nav a {
+  padding: 6px 12px; border-radius: 999px;
+  color: var(--ink-1); font-size: 13px;
+  transition: color .15s, background .15s; cursor: pointer;
+}
+.atrium-nav a:hover { color: var(--ink-0); background: var(--bg-1); }
+.atrium-nav a.on    { color: var(--ink-0); background: var(--bg-2); }
+
+/* ── Buttons ────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 0 14px; height: 36px; border-radius: 10px; cursor: pointer;
+  font: inherit; font-weight: 500; font-size: 13px;
+  background: var(--bg-2); color: var(--ink-0);
+  border: 1px solid var(--line-2);
+  transition: background .15s, border-color .15s, transform .12s, color .15s;
+}
+.btn:hover { background: var(--bg-3); border-color: var(--line); }
+.btn:active { transform: translateY(1px); }
+.btn.primary {
+  background: var(--accent); color: var(--accent-ink);
+  border-color: transparent; font-weight: 600;
+}
+.btn.primary:hover { background: color-mix(in oklch, var(--accent) 88%, white); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--ink-1); }
+.btn.ghost:hover { color: var(--ink-0); background: var(--bg-1); }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
+.btn.lg { height: 44px; padding: 0 20px; font-size: 14px; border-radius: 12px; }
+
+/* ── Chips ──────────────────────────────────────────────────────── */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px; font-size: 12px;
+  background: var(--bg-2); color: var(--ink-1);
+  border: 1px solid var(--line-2);
+  transition: color .15s, border-color .15s, background .15s; cursor: pointer;
+}
+.chip:hover { color: var(--ink-0); border-color: var(--accent); }
+.chip.on    { color: var(--ink-0); border-color: var(--accent); }
+.chip .count { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+
+/* ── Cards ──────────────────────────────────────────────────────── */
+.card {
+  background: var(--bg-1); border: 1px solid var(--line-2);
+  border-radius: var(--r-lg); padding: 20px;
+  transition: border-color .15s, background .15s;
+}
+.card:hover { border-color: var(--line); }
+
+/* ── Cover (real-image first, stylized fallback) ────────────────── */
+.cover-wrap {
+  position: relative; display: block; aspect-ratio: 2/3;
+  min-width: 0;
+  filter: drop-shadow(0 18px 22px color-mix(in oklch, black 50%, transparent))
+          drop-shadow(0 2px 0 color-mix(in oklch, black 30%, transparent));
+  transition: filter .25s ease, transform .35s cubic-bezier(.2,.7,.2,1);
+}
+.cover {
+  position: absolute; inset: 0;
+  background: var(--accent); color: var(--accent-ink);
+  border-radius: 2px 4px 4px 2px;
+  overflow: hidden; font-family: var(--serif);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklch, black 18%, transparent),
+    inset 1px 0 0 color-mix(in oklch, black 28%, transparent),
+    inset -1px 0 0 color-mix(in oklch, white 8%, transparent);
+}
+.cover img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; display: block;
+}
+/* page-block sliver suggesting bound pages */
+.cover-wrap::after {
+  content: ''; position: absolute; top: 1.5%; bottom: 1.5%; right: -2px;
+  width: 4px; border-radius: 0 2px 2px 0;
+  background: linear-gradient(90deg,
+    color-mix(in oklch, black 35%, transparent) 0%,
+    oklch(0.92 0.01 80) 22%,
+    oklch(0.78 0.012 80) 55%,
+    oklch(0.62 0.012 80) 100%);
+  pointer-events: none;
+}
+.cover-wrap::before {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 8px;
+  background: linear-gradient(90deg,
+    color-mix(in oklch, black 30%, transparent), transparent);
+  border-radius: 2px 0 0 2px; pointer-events: none; z-index: 2;
+}
+
+/* stylized fallback (no cover image) — plate template */
+.cover.tpl-plate {
+  padding: 9% 8% 8%;
+  display: flex; flex-direction: column; justify-content: space-between;
+}
+.cover .ct {
+  font-size: clamp(13px, 14cqi, 38px); line-height: 1.0;
+  letter-spacing: -0.018em; font-weight: 500; text-wrap: balance;
+}
+.cover .ca {
+  font-family: var(--sans); font-size: clamp(6.5px, 5.5cqi, 12px);
+  letter-spacing: 0.22em; text-transform: uppercase;
+  opacity: .82; font-weight: 600;
+}
+.cover .imprint {
+  position: absolute; bottom: 6%; left: 0; right: 0;
+  text-align: center; font-family: var(--sans);
+  font-size: clamp(5.5px, 4cqi, 10px);
+  letter-spacing: 0.32em; opacity: .55; text-transform: uppercase;
+}
+
+/* Cover-as-link: lift on hover */
+.cover-link { display: block; position: relative; cursor: pointer; }
+.cover-link:hover .cover-wrap {
+  transform: translateY(-5px) scale(1.015);
+  filter: drop-shadow(0 28px 30px color-mix(in oklch, black 65%, transparent))
+          drop-shadow(0 2px 0 color-mix(in oklch, black 30%, transparent));
+}
+
+/* ── Progress bar ───────────────────────────────────────────────── */
+.pbar { height: 3px; background: var(--bg-3); border-radius: 999px; overflow: hidden; }
+.pbar > i {
+  display: block; height: 100%;
+  background: var(--accent); border-radius: 999px;
+}
+
+/* ── Divider ────────────────────────────────────────────────────── */
+.divider { height: 1px; background: var(--line-2); margin: 24px 0; }
+
+/* ── Theme toggle ───────────────────────────────────────────────── */
+.theme-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 50%;
+  background: var(--bg-2); border: 1px solid var(--line-2);
+  color: var(--ink-1); cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+  font-size: 14px; line-height: 1; padding: 0;
+}
+.theme-toggle:hover { border-color: var(--accent); color: var(--ink-0); }

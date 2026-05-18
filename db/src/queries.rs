@@ -536,8 +536,8 @@ pub async fn replace_books(
         let book_id = sqlx::query_scalar::<_, i64>(
             "INSERT INTO books
                 (uuid, library_id, path, title, sort, author_sort, series_index,
-                 pubdate, has_cover, description, isbn)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 pubdate, has_cover, description, isbn, accent_color)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              RETURNING id",
         )
         .bind(&uuid)
@@ -551,6 +551,7 @@ pub async fn replace_books(
         .bind(has_cover)
         .bind(&m.description)
         .bind(&first_isbn)
+        .bind(m.accent.as_deref())
         .fetch_one(&mut *tx)
         .await?;
 
@@ -732,7 +733,7 @@ pub async fn list_books(
         r#"
         SELECT b.id, b.uuid, bf.filename AS file_stem, bf.format AS file_format,
                b.title, b.description, b.series_index, b.has_cover,
-               b.pubdate, b.last_modified, b.timestamp, b.isbn,
+               b.pubdate, b.last_modified, b.timestamp, b.isbn, b.accent_color,
                pub.name AS publisher_name, lang.code AS language_code,
                s.name AS series_name
         FROM books b
@@ -795,6 +796,7 @@ pub async fn list_books(
             spine_count: 0,
             toc_count: 0,
             cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
+            accent: r.get("accent_color"),
             formats: vec![],
             added_at: r.get("timestamp"),
             error: None,
@@ -926,7 +928,7 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
     let row = sqlx::query(
         r#"
         SELECT id, uuid, title, description, series_index, has_cover,
-               pubdate, last_modified, timestamp, isbn
+               pubdate, last_modified, timestamp, isbn, accent_color
         FROM books
         WHERE id = ?
         "#,
@@ -982,6 +984,7 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
         spine_count: 0,
         toc_count: 0,
         cover_url: (has_cover != 0).then(|| format!("/api/covers/{book_id}")),
+        accent: r.get("accent_color"),
         formats,
         added_at: r.get("timestamp"),
         error: None,
@@ -1013,7 +1016,7 @@ pub async fn search_books(
         r#"
         SELECT b.id, b.uuid, bf.filename AS file_stem, bf.format AS file_format,
                b.title, b.description, b.series_index, b.has_cover,
-               b.pubdate, b.last_modified, b.timestamp, b.isbn,
+               b.pubdate, b.last_modified, b.timestamp, b.isbn, b.accent_color,
                pub.name AS publisher_name, lang.code AS language_code,
                s.name AS series_name
         FROM books_fts
@@ -1078,6 +1081,7 @@ pub async fn search_books(
             spine_count: 0,
             toc_count: 0,
             cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
+            accent: r.get("accent_color"),
             formats: vec![],
             added_at: r.get("timestamp"),
             error: None,
@@ -1600,6 +1604,66 @@ mod tests {
         assert!(get_cover(&pool, b.id).await.unwrap().is_none());
 
         assert!(last_indexed_at(&pool, "/lib").await.unwrap().is_some());
+    }
+
+    /// F1.7 Atrium accent round-trip. `replace_books` writes
+    /// `metadata.accent` into `books.accent_color`; `list_books` /
+    /// `get_book` / `search_books` read it back into
+    /// `EbookMetadata.accent`. Verify the column survives the trip and
+    /// `None` stays `None` (not coerced to an empty string).
+    #[tokio::test]
+    async fn replace_books_round_trips_accent_color() {
+        let _covers = CoversTempDir::new("accent_round_trip");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+
+        let with_accent = IndexedBook {
+            metadata: EbookMetadata {
+                filename: "with-accent.epub".into(),
+                title: Some("Piranesi".into()),
+                creators: vec![Contributor {
+                    name: "Susanna Clarke".into(),
+                    ..Default::default()
+                }],
+                accent: Some("oklch(0.660 0.130 245.0)".into()),
+                ..Default::default()
+            },
+            cover: None,
+        };
+        let no_accent = IndexedBook {
+            metadata: EbookMetadata {
+                filename: "no-accent.epub".into(),
+                title: Some("Plain".into()),
+                creators: vec![Contributor {
+                    name: "Anon".into(),
+                    ..Default::default()
+                }],
+                accent: None,
+                ..Default::default()
+            },
+            cover: None,
+        };
+        replace_books(&pool, "/lib", vec![with_accent, no_accent])
+            .await
+            .expect("replace should succeed");
+
+        // list_books returns the accent column for every row.
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let p = books
+            .iter()
+            .find(|b| b.title.as_deref() == Some("Piranesi"))
+            .unwrap();
+        let plain = books
+            .iter()
+            .find(|b| b.title.as_deref() == Some("Plain"))
+            .unwrap();
+        assert_eq!(p.accent.as_deref(), Some("oklch(0.660 0.130 245.0)"));
+        assert_eq!(plain.accent, None);
+
+        // get_book returns the same value through the single-row path.
+        let detail = get_book(&pool, p.id).await.unwrap().unwrap();
+        assert_eq!(detail.accent.as_deref(), Some("oklch(0.660 0.130 245.0)"));
+        let detail_plain = get_book(&pool, plain.id).await.unwrap().unwrap();
+        assert_eq!(detail_plain.accent, None);
     }
 
     #[tokio::test]

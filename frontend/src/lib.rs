@@ -180,14 +180,23 @@ pub fn use_search_query() -> SearchQuery {
     use_context::<SearchQuery>()
 }
 
+/// Atrium design-system stylesheet (F1.7). Served as a hashed static asset
+/// via Dioxus's Manganis pipeline so the browser caches it independently of
+/// the WASM bundle.
+const ATRIUM_CSS: Asset = asset!("/assets/atrium.css");
+
 /// Root app component. Renders global styles and the router.
 #[component]
 pub fn App() -> Element {
     use_context_provider(|| SearchQuery(Signal::new(String::new())));
+    components::atrium::init_theme();
     rsx! {
         document::Title { "Omnibus" }
+        document::Stylesheet { href: ATRIUM_CSS }
         style { {STYLES} }
-        dioxus_router::Router::<Route> {}
+        components::atrium::AtriumRoot {
+            dioxus_router::Router::<Route> {}
+        }
     }
 }
 
