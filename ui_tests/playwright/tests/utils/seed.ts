@@ -34,8 +34,10 @@ export async function seedLibrary(
   });
   expect(settingsResp.status(), "POST /api/rpc/settings failed").toBe(200);
 
-  // Poll until the indexer's reindex task has populated the DB. ~15s budget
-  // covers cold starts; healthy runs settle in <1s.
+  // Poll until the indexer's reindex task has populated the DB. The 45s
+  // budget covers cold starts on the GitHub-hosted Linux runner, where
+  // indexing the full public-domain set (including an 84 MB Count of Monte
+  // Cristo) measured 27–36s in practice. Healthy local runs settle in <1s.
   await expect
     .poll(
       async () => {
@@ -46,8 +48,8 @@ export async function seedLibrary(
       },
       {
         message: `expected ${expectedCount} books from /api/rpc/ebooks after seeding`,
-        timeout: 15_000,
-        intervals: [100, 200, 500, 1_000],
+        timeout: 45_000,
+        intervals: [100, 200, 500, 1_000, 2_000],
       },
     )
     .toBe(expectedCount);
