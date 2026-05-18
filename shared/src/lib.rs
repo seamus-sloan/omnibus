@@ -100,6 +100,12 @@ pub struct EbookMetadata {
 
     pub cover_url: Option<String>,
 
+    /// Cover-derived accent color (F1.7 Atrium). Opaque CSS color value
+    /// extracted during indexing. `None` means "no cover or extraction
+    /// failed" — the frontend falls back to the theme default accent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub formats: Vec<String>,
 

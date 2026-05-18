@@ -164,6 +164,9 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
     let (series, series_index) = collect_series(&doc);
 
     let cover = resolve_cover(path, &mut doc, opts);
+    let accent = cover
+        .as_ref()
+        .and_then(|(_mime, bytes)| extract_accent(bytes));
 
     IndexedBook {
         metadata: EbookMetadata {
@@ -197,6 +200,7 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
             toc_count: doc.toc.len(),
 
             cover_url: None,
+            accent,
             formats: vec![],
             added_at: None,
             error: None,
@@ -426,6 +430,105 @@ fn all<R: std::io::Read + std::io::Seek>(doc: &EpubDoc<R>, key: &str) -> Vec<Str
         .collect()
 }
 
+/// F1.7 Atrium: extract a representative accent color from cover bytes.
+/// Returns an `oklch(L C H)` string clamped to a readable band, or `None`
+/// when decoding fails or the cover has no chromatic content. See the
+/// [Atrium design doc](../../../docs/design/atrium-design-system.md) §2b
+/// for the algorithm rationale (hue-bucket → highest-weighted → OKLCH).
+pub fn extract_accent(bytes: &[u8]) -> Option<String> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let img = image::load_from_memory(bytes).ok()?;
+    let small = img.thumbnail(32, 48).to_rgb8();
+
+    let mut buckets = [AccentBucket::default(); 12];
+    for px in small.pixels() {
+        let r = px[0] as f32 / 255.0;
+        let g = px[1] as f32 / 255.0;
+        let b = px[2] as f32 / 255.0;
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let delta = max - min;
+        // Filter near-black and near-grayscale pixels so they don't
+        // overwhelm the actual artwork color.
+        if max < 0.10 || delta < 0.06 {
+            continue;
+        }
+        let hue = if delta == 0.0 {
+            0.0
+        } else if (max - r).abs() < f32::EPSILON {
+            60.0 * (((g - b) / delta).rem_euclid(6.0))
+        } else if (max - g).abs() < f32::EPSILON {
+            60.0 * ((b - r) / delta + 2.0)
+        } else {
+            60.0 * ((r - g) / delta + 4.0)
+        };
+        let sat = if max == 0.0 { 0.0 } else { delta / max };
+        let weight = sat * max;
+        let idx = ((hue / 30.0).floor() as usize).min(11);
+        buckets[idx].r += r * weight;
+        buckets[idx].g += g * weight;
+        buckets[idx].b += b * weight;
+        buckets[idx].w += weight;
+    }
+
+    let best = buckets
+        .iter()
+        .max_by(|a, b| a.w.partial_cmp(&b.w).unwrap_or(std::cmp::Ordering::Equal))?;
+    if best.w == 0.0 {
+        return None;
+    }
+    let r = best.r / best.w;
+    let g = best.g / best.w;
+    let b = best.b / best.w;
+    let (l, c, h) = rgb_to_oklch(r, g, b);
+    let l = l.clamp(0.55, 0.78);
+    let c = c.clamp(0.06, 0.18);
+    Some(format!("oklch({l:.3} {c:.3} {h:.1})"))
+}
+
+#[derive(Default, Clone, Copy)]
+struct AccentBucket {
+    r: f32,
+    g: f32,
+    b: f32,
+    w: f32,
+}
+
+/// Convert non-linear sRGB in [0, 1] to OKLCH. Matrix from Björn Ottosson,
+/// <https://bottosson.github.io/posts/oklab/>. Returns `(L, C, H°)`.
+fn rgb_to_oklch(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    fn linearize(v: f32) -> f32 {
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    // OKLab matrix coefficients (Björn Ottosson). Truncated to f32 precision
+    // — clippy's `excessive_precision` lint flags the full 10-digit form,
+    // and the extra digits don't survive `f32` round-off anyway.
+    let r = linearize(r);
+    let g = linearize(g);
+    let b = linearize(b);
+    let l = 0.412_221_47 * r + 0.536_332_54 * g + 0.051_445_995 * b;
+    let m = 0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b;
+    let s = 0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b;
+    let l_ = l.cbrt();
+    let m_ = m.cbrt();
+    let s_ = s.cbrt();
+    let big_l = 0.210_454_26 * l_ + 0.793_617_8 * m_ - 0.004_072_047 * s_;
+    let a = 1.977_998_5 * l_ - 2.428_592_2 * m_ + 0.450_593_7 * s_;
+    let b_oklab = 0.025_904_037 * l_ + 0.782_771_77 * m_ - 0.808_675_77 * s_;
+    let c = (a * a + b_oklab * b_oklab).sqrt();
+    let mut h = b_oklab.atan2(a).to_degrees();
+    if h < 0.0 {
+        h += 360.0;
+    }
+    (big_l, c, h)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,6 +552,89 @@ mod tests {
         let out = scan_ebook_library(None);
         assert!(out.books.is_empty());
         assert!(out.path.is_none());
+    }
+
+    // ── F1.7 accent extraction ─────────────────────────────────────────
+
+    /// Build an in-memory PNG of a single solid color. Used to drive
+    /// `extract_accent` without baking a fixture cover into the repo.
+    fn solid_color_png(r: u8, g: u8, b: u8, w: u32, h: u32) -> Vec<u8> {
+        let img = image::RgbImage::from_pixel(w, h, image::Rgb([r, g, b]));
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .expect("png encode");
+        bytes
+    }
+
+    #[test]
+    fn extract_accent_returns_oklch_for_saturated_cover() {
+        let bytes = solid_color_png(200, 60, 50, 64, 96);
+        let accent = extract_accent(&bytes).expect("saturated cover yields accent");
+        assert!(
+            accent.starts_with("oklch("),
+            "accent should be an oklch() string, got {accent}"
+        );
+        // Clamps in extract_accent require the L value to stay readable.
+        let mid = accent
+            .trim_start_matches("oklch(")
+            .trim_end_matches(')')
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .parse::<f32>()
+            .unwrap();
+        assert!(
+            (0.55..=0.78).contains(&mid),
+            "lightness {mid} should be clamped to [0.55, 0.78]"
+        );
+    }
+
+    #[test]
+    fn extract_accent_returns_none_for_empty_bytes() {
+        assert!(extract_accent(&[]).is_none());
+    }
+
+    #[test]
+    fn extract_accent_returns_none_for_corrupt_bytes() {
+        assert!(extract_accent(b"not an image, just text").is_none());
+    }
+
+    #[test]
+    fn extract_accent_returns_none_for_pure_black() {
+        let bytes = solid_color_png(0, 0, 0, 64, 96);
+        assert!(
+            extract_accent(&bytes).is_none(),
+            "all-black cover should produce no accent"
+        );
+    }
+
+    #[test]
+    fn extract_accent_returns_none_for_pure_gray() {
+        let bytes = solid_color_png(128, 128, 128, 64, 96);
+        assert!(
+            extract_accent(&bytes).is_none(),
+            "grayscale cover should produce no accent (no chroma)"
+        );
+    }
+
+    #[test]
+    fn extract_accent_completes_within_budget() {
+        // Real EPUB covers top out around 1500×2250. Test against that size
+        // with a generous debug-mode budget — release builds run ~3× faster.
+        // The point of the test is to catch a regression to seconds, not to
+        // hold a tight production-grade budget in unoptimized builds.
+        let bytes = solid_color_png(80, 140, 200, 1500, 2250);
+        let start = std::time::Instant::now();
+        let _ = extract_accent(&bytes);
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "extract_accent must stay well under one second on realistic input; took {elapsed:?}"
+        );
     }
 
     #[test]

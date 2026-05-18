@@ -79,7 +79,7 @@ Phase 6  Mobile                   (feature parity on native)
 | Phase | Theme | v1 features inside | New initiatives | Target horizon |
 |---|---|---|---|---|
 | 0 | Foundations | — | F0.1–F0.7 | short-term |
-| 1 | Browse & discovery | #4 Views, #5 Detail | F1.1 Search, F1.2 Thumbnails, F1.6 Auth UI | short-term |
+| 1 | Browse & discovery | #4 Views, #5 Detail | F1.1 Search, F1.2 Thumbnails, F1.6 Auth UI, F1.7 Atrium design system | short-term |
 | 2 | Reading & listening | #8 Reader, #9 Audio | F2.1 Progress sync service | medium-term |
 | 3 | Personalization | #3 Libraries, #6 Ratings/journal, #12 Suggestions | — | medium-term |
 | 4 | Device sync | #10 OPDS, #11 Kindle | F4.1 Native Kobo sync | medium-term |
@@ -108,6 +108,9 @@ Phase 6  Mobile                   (feature parity on native)
 - [F1.4 Book detail page](1-4-book-detail.md)
 - [F1.5 Advanced search](1-5-advanced-search.md)
 - [F1.6 Auth UI polish](1-6-auth-ui.md)
+- [F1.7 Atrium design system](1-7-atrium-design-system.md)
+- [F1.8 Discovery pages](1-8-discovery-pages.md)
+- [F1.9 Themes & density](1-9-themes-and-density.md)
 
 ### Phase 2 — Reading & listening
 
@@ -120,6 +123,8 @@ Phase 6  Mobile                   (feature parity on native)
 - [F3.1 Libraries with metadata filters](3-1-libraries.md)
 - [F3.2 Ratings & journaling](3-2-ratings-journaling.md)
 - [F3.3 Suggestions](3-3-suggestions.md)
+- [F3.4 Reading stats](3-4-stats.md)
+- [F3.5 Shared shelves](3-5-shared-shelves.md)
 
 ### Phase 4 — Device sync
 
@@ -134,6 +139,8 @@ Phase 6  Mobile                   (feature parity on native)
 - [F5.3 Uploads](5-3-uploads.md)
 - [F5.4 Admin panel](5-4-admin-panel.md)
 - [F5.5 Format conversion](5-5-format-conversion.md)
+- [F5.6 Admin server health](5-6-admin-health.md)
+- [F5.7 Journal & quote cards](5-7-journal-quote-cards.md)
 
 ### Phase 6 — Mobile
 
