@@ -20,7 +20,7 @@ The current pages render `error running server function: HTTP 401: unauthorized 
   - `Banner` — `err` / `warn` / `info` / `ok` kinds with optional `action` slot.
   - `StrengthMeter` — four-segment presentational meter (no backend policy enforcement).
 - Components must render identical markup under SSR and WASM hydration — no `cfg(feature = "web")` gates inside component bodies (the data-fetch and submit layers stay feature-gated, the rendered tree does not).
-- Reuse the existing transport surface — `crate::data::login`, `crate::data::register`, `crate::data::current_user`, `crate::data::token_store::subscribe` — and the `data-testid` contract already exercised by [F0.3](0-3-auth.md)'s pending Playwright spec (`login-form`, `register-form`).
+- Reuse the existing transport surface — `crate::data::login`, `crate::data::register`, `crate::data::current_user`, `crate::data::token_store::subscribe`. Keep the existing semantic selectors `auth.spec.ts` already drives by (`getByLabel("Username")`, `getByLabel("Password")`, `getByRole("button", { name: "Log in" })`, `getByRole("alert")`) so the existing E2E coverage keeps passing across the rewrite. The `data-testid="login-form"` / `"register-form"` attributes on the `<form>` elements are not currently used by any spec but should be preserved as the form-level anchor for future tests.
 - Honor the design system tokens (`--accent`, `--ink-{0..3}`, `--bg-{0..3}`, `--line`, `--line-2`, `--ok`, `--warn`, `--bad`, `--serif`, `--mono`). The existing `auth-card` CSS namespace expands rather than gets replaced — incremental migration keeps screenshots reviewable per PR.
 - Strength meter is **presentational**. Actual password policy stays on the server (argon2 hashing, length minimum). No client-side enforcement that the server doesn't also enforce.
 
@@ -52,7 +52,7 @@ The current pages render `error running server function: HTTP 401: unauthorized 
 
 **What:** Three small components under `frontend/src/components/auth/`:
 - `Field` — `label`, `hint`, `error`, `success`, `action` props. Renders an accent ring + tinted shadow per state. Owns the label/input pairing so consumers stop hand-writing `settings-field` div + label + input triplets.
-- `Banner` — `kind: BannerKind` (`Err` / `Warn` / `Info` / `Ok`), `title`, `message`, `action`, `dismissable`. Maps to the design's icon + color treatment.
+- `Banner` — `kind: BannerKind` (`Err` / `Warn` / `Info` / `Ok`), `title`, `message`, `action`, `dismissible`. Maps to the design's icon + color treatment.
 - `StrengthMeter` — `score: u8` (0..=4) + `label: &str`. Four-segment bar, color tier per score.
 
 **Why:** Without shared primitives, every screen below re-implements the styling and we end up with three flavors of "error tinted input." Build the vocabulary once.
