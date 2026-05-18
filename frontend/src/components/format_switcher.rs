@@ -33,11 +33,13 @@ pub fn FormatSwitcher(formats: Vec<String>) -> Element {
 #[component]
 fn FormatRow(kind: FormatKind) -> Element {
     let label = kind.label();
+    let testid = format!("format-row-{}", label.to_ascii_lowercase());
     rsx! {
         div {
             class: "format-row",
             "data-format": "{label}",
-            span { class: "format-badge", "{label}" }
+            "data-testid": "{testid}",
+            span { class: "format-badge", "data-testid": "format-badge", "{label}" }
             div { class: "format-actions",
                 match kind {
                     FormatKind::Epub => rsx! {
@@ -104,11 +106,18 @@ impl FormatKind {
     }
 }
 
-/// Dedupe (case-insensitive), sort alphabetical by label, and map raw format
-/// strings to the typed rows the switcher renders.
+/// Dedupe (case-insensitive), sort alphabetical by label (also case-
+/// insensitive — otherwise unknown-cased rows like `"cbz"` would sort after
+/// the upper-cased known ones, which doesn't match the "alphabetical"
+/// contract or the dedupe logic), and map raw format strings to the typed
+/// rows the switcher renders.
 fn prepare_rows(formats: &[String]) -> Vec<FormatKind> {
     let mut rows: Vec<FormatKind> = formats.iter().map(|s| FormatKind::from_raw(s)).collect();
-    rows.sort_by(|a, b| a.label().cmp(b.label()));
+    rows.sort_by(|a, b| {
+        a.label()
+            .to_ascii_lowercase()
+            .cmp(&b.label().to_ascii_lowercase())
+    });
     rows.dedup_by(|a, b| a.label().eq_ignore_ascii_case(b.label()));
     rows
 }
@@ -131,6 +140,19 @@ mod tests {
         let rows = prepare_rows(&["epub".into(), "EPUB".into()]);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label(), "EPUB");
+    }
+
+    #[test]
+    fn prepare_rows_sorts_case_insensitively() {
+        // Regression for PR #65 review: mixed-case input must produce a
+        // consistent alphabetical order regardless of casing — otherwise
+        // upper-cased known formats (EPUB, M4B) would always sort before
+        // lower-cased unknown ones (cbz), which surprises users.
+        let rows = prepare_rows(&["PDF".into(), "cbz".into(), "EPUB".into()]);
+        assert_eq!(
+            rows.iter().map(|r| r.label()).collect::<Vec<_>>(),
+            vec!["cbz", "EPUB", "PDF"],
+        );
     }
 
     #[test]
