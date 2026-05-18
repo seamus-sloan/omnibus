@@ -79,7 +79,7 @@ Phase 6  Mobile                   (feature parity on native)
 | Phase | Theme | v1 features inside | New initiatives | Target horizon |
 |---|---|---|---|---|
 | 0 | Foundations | — | F0.1–F0.7 | short-term |
-| 1 | Browse & discovery | #4 Views, #5 Detail | F1.1 Search, F1.2 Thumbnails | short-term |
+| 1 | Browse & discovery | #4 Views, #5 Detail | F1.1 Search, F1.2 Thumbnails, F1.6 Auth UI | short-term |
 | 2 | Reading & listening | #8 Reader, #9 Audio | F2.1 Progress sync service | medium-term |
 | 3 | Personalization | #3 Libraries, #6 Ratings/journal, #12 Suggestions | — | medium-term |
 | 4 | Device sync | #10 OPDS, #11 Kindle | F4.1 Native Kobo sync | medium-term |
@@ -107,6 +107,7 @@ Phase 6  Mobile                   (feature parity on native)
 - [F1.3 Library views](1-3-library-views.md)
 - [F1.4 Book detail page](1-4-book-detail.md)
 - [F1.5 Advanced search](1-5-advanced-search.md)
+- [F1.6 Auth UI polish](1-6-auth-ui.md)
 
 ### Phase 2 — Reading & listening
 
