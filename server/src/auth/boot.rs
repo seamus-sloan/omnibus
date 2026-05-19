@@ -8,11 +8,13 @@
 //! * [`seed_dev_user`] — `OMNIBUS_DEV_SEED_USER=<username>:<password>`
 //!   creates the named user (and promotes to admin) if it doesn't exist
 //!   yet. Strictly a dev convenience so Claude's `ui-validate` skill and
-//!   parallel agents can rely on a known login. The env var is only set
-//!   from a developer's `.env` (gitignored, sourced by `flake.nix`) —
-//!   production deployments must never set it. Idempotent: an existing
-//!   user is left untouched, so re-running boot won't reset a password
-//!   the developer has rotated.
+//!   parallel agents can rely on a known login. **Gated on
+//!   `debug_assertions`** so release builds no-op even if the env var is
+//!   somehow set in production — relying on operational discipline alone
+//!   would be a footgun. The env var is sourced from a developer's `.env`
+//!   (gitignored, sourced by `flake.nix`). Idempotent: an existing user
+//!   is left untouched, so re-running boot won't reset a password the
+//!   developer has rotated.
 //!
 //! Successful promotions and seeds are logged at `warn` so they show up
 //! in the audit trail; misconfigurations also log at `warn` so they're
@@ -46,12 +48,28 @@ pub async fn apply_initial_admin(pool: &SqlitePool) -> Result<(), omnibus_db::au
 }
 
 /// Read `OMNIBUS_DEV_SEED_USER=<username>:<password>` and create the named
-/// user (promoted to admin) if it doesn't already exist. No-op when the
-/// env var is unset, malformed, or the user is already present.
+/// user (promoted to admin) if it doesn't already exist. No-op when:
 ///
-/// Always log seed actions at `warn` — this hook should never fire in
-/// production, so a stray seed event in prod logs is meant to stand out.
+/// - the binary is a release build (`!cfg!(debug_assertions)`) — hard
+///   gate so a misconfigured prod env can't silently provision an admin;
+/// - the env var is unset, malformed, or has empty halves;
+/// - the user is already present (idempotent).
+///
+/// Log seed actions at `warn` so any stray seed event in prod logs stands
+/// out (even though the release-build gate above should prevent them).
 pub async fn seed_dev_user(pool: &SqlitePool) -> Result<(), omnibus_db::auth::AuthError> {
+    // Release builds must not provision admin credentials from env, even
+    // if OMNIBUS_DEV_SEED_USER is somehow set. We additionally warn so a
+    // misconfigured deploy is visible in the logs.
+    if !cfg!(debug_assertions) {
+        if std::env::var_os("OMNIBUS_DEV_SEED_USER").is_some() {
+            tracing::warn!(
+                "OMNIBUS_DEV_SEED_USER is set in a release build; ignoring (dev-only hook)"
+            );
+        }
+        return Ok(());
+    }
+
     let Ok(raw) = std::env::var("OMNIBUS_DEV_SEED_USER") else {
         return Ok(());
     };
@@ -80,14 +98,27 @@ pub async fn seed_dev_user(pool: &SqlitePool) -> Result<(), omnibus_db::auth::Au
         return Ok(());
     }
 
-    // Registration may have been disabled (set_registration_enabled flips
-    // to false once the first user exists). create_user gates on that
-    // flag for non-first users, so re-enable around the insert. If the
-    // table is empty, the first-user path engages and admin is set
-    // automatically; otherwise we promote afterwards.
+    // create_user gates on registration_enabled, which flips to false
+    // after the first user exists. Snapshot the current value, flip on
+    // for the insert, then restore — so seeding doesn't accidentally
+    // re-open registration in a half-bootstrapped DB.
+    let prior_registration = omnibus_db::auth::registration_enabled(pool).await?;
     omnibus_db::auth::set_registration_enabled(pool, true).await?;
-    omnibus_db::auth::create_user(pool, username, password).await?;
-    let _ = omnibus_db::auth::promote_to_admin(pool, username).await?;
+    let create_result = omnibus_db::auth::create_user(pool, username, password).await;
+    // Restore the prior flag whether the insert succeeded or not. We
+    // ignore restore errors so they don't mask a more useful create_user
+    // error — surfacing the underlying failure matters more than a
+    // best-effort restore.
+    let _ = omnibus_db::auth::set_registration_enabled(pool, prior_registration).await;
+    create_result?;
+
+    let promoted = omnibus_db::auth::promote_to_admin(pool, username).await?;
+    if !promoted {
+        tracing::warn!(
+            user = username,
+            "OMNIBUS_DEV_SEED_USER created user but promote_to_admin did not update a row"
+        );
+    }
     tracing::warn!(
         user = username,
         "OMNIBUS_DEV_SEED_USER created admin user (dev seed hook)"
@@ -269,5 +300,28 @@ mod tests {
             .unwrap()
             .expect("admin should be created even after registration closed");
         assert!(u.is_admin);
+    }
+
+    #[tokio::test]
+    async fn seed_restores_prior_registration_enabled_flag() {
+        // Reviewer PR #71 / boot.rs:94 — seed_dev_user used to leave
+        // registration_enabled=true after running, accidentally re-opening
+        // public registration in a half-bootstrapped DB. The fix snapshots
+        // the flag before the insert and restores it after.
+        let _lock = ENV_LOCK.lock().unwrap();
+        let pool = db::init_db("sqlite::memory:").await.unwrap();
+        // First user closes registration as a side effect.
+        db::auth::create_user(&pool, "alice", "correct horse battery staple")
+            .await
+            .unwrap();
+        assert!(!db::auth::registration_enabled(&pool).await.unwrap());
+
+        let _g = EnvGuard::set("OMNIBUS_DEV_SEED_USER", "admin:omnibus-dev");
+        seed_dev_user(&pool).await.unwrap();
+
+        assert!(
+            !db::auth::registration_enabled(&pool).await.unwrap(),
+            "seed_dev_user must restore the prior registration_enabled flag"
+        );
     }
 }

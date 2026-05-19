@@ -67,20 +67,33 @@ pub fn rest_router(state: AppState) -> Router {
         .layer(Extension(pool))
 }
 
-/// Process-start build id. Captured once on first call to `build_id()` and
-/// preserved for the lifetime of the process — so any HMR cycle that
-/// restarts the server (the only way `dx serve` rebuilds Rust changes)
-/// produces a new id. Claude's `ui-validate` skill polls this to know when
-/// a rebuild has actually landed.
-fn build_id() -> u128 {
-    use std::sync::OnceLock;
-    static ID: OnceLock<u128> = OnceLock::new();
-    *ID.get_or_init(|| {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0)
-    })
+/// Process-start build id. Captured once and preserved for the lifetime of
+/// the process — so any HMR cycle that restarts the server (the only way
+/// `dx serve` rebuilds Rust changes) produces a new id. Claude's
+/// `ui-validate` skill polls this to know when a rebuild has actually
+/// landed.
+///
+/// `main.rs` calls [`init_build_id`] eagerly during boot so the id is set
+/// before any request can read it; this keeps the doc accurate ("process
+/// start" rather than "first health check"). Calling `build_id()` later
+/// returns the same value because `OnceLock::get_or_init` is idempotent.
+pub fn build_id() -> u128 {
+    *BUILD_ID.get_or_init(now_millis)
+}
+
+/// Eagerly initialize [`build_id`] so the returned timestamp truly
+/// represents process-start rather than first-call. Idempotent.
+pub fn init_build_id() {
+    let _ = BUILD_ID.get_or_init(now_millis);
+}
+
+static BUILD_ID: std::sync::OnceLock<u128> = std::sync::OnceLock::new();
+
+fn now_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
 }
 
 /// Unauthenticated liveness + fingerprint endpoint. The `app` field lets

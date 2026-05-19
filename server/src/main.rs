@@ -27,6 +27,13 @@ fn main() {
             };
             use std::sync::Arc;
 
+            // Capture process-start timestamp as the /api/_health build_id
+            // before anything else can race the first probe. Lazy init from
+            // the first request would label that timestamp "build_id" even
+            // though the process has been up for seconds — misleading for
+            // the rebuild-detection use case.
+            backend::init_build_id();
+
             let database_url = std::env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "sqlite://omnibus.db?mode=rwc".to_string());
 
