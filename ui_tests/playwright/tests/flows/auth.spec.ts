@@ -29,7 +29,9 @@ test("renders the register page layout", async ({ page }) => {
     page.getByRole("heading", { level: 2, name: /Make yourself at home/i }),
   ).toBeVisible();
   await expect(page.getByLabel("Username")).toBeVisible();
-  await expect(page.getByLabel("Password")).toBeVisible();
+  // `exact: true` scopes to the input — the StrengthMeter carries
+  // `aria-label="Password strength"` which would otherwise also match.
+  await expect(page.getByLabel("Password", { exact: true })).toBeVisible();
   await expect(page.getByRole("meter")).toBeVisible();
   await expect(page.getByText("At least 10 characters")).toBeVisible();
   await expect(
@@ -97,8 +99,11 @@ test("register routes a password error to the password Field", async ({ page }) 
     });
   });
 
+  // `exact: true` scopes the password label to the input; the
+  // StrengthMeter's `aria-label="Password strength"` would otherwise
+  // make this a strict-mode violation.
   await page.getByLabel("Username").fill("new-user");
-  await page.getByLabel("Password").fill("short");
+  await page.getByLabel("Password", { exact: true }).fill("short");
 
   await expectMutation(
     page,
@@ -114,7 +119,7 @@ test("register routes a password error to the password Field", async ({ page }) 
   // Prove the routing: the password input flips to aria-invalid, and
   // the error message renders inside the password Field (not the
   // top-level Banner, which would also carry role=alert).
-  const passwordInput = page.getByLabel("Password");
+  const passwordInput = page.getByLabel("Password", { exact: true });
   await expect(passwordInput).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByLabel("Username")).toHaveAttribute("aria-invalid", "false");
   const passwordField = passwordInput.locator("xpath=ancestor::label[contains(@class,'auth-field')]");
