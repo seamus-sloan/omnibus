@@ -17,11 +17,11 @@ dioxus = "0.7"
 axum = { version = "0.8", optional = true }
 axum-extra = { version = "0.10", features = ["cookie"], optional = true }
 tower-http = { version = "0.6", features = ["trace"], optional = true }
-serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros"], optional = true }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"], optional = true }
-tracing = { version = "0.1", optional = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"], optional = true }
+tracing = { workspace = true, optional = true }
 async-trait = { version = "0.1", optional = true }
 time = { version = "0.3", optional = true }
 
@@ -39,7 +39,7 @@ tower = "0.5"
 # RAII temp directories so panicking integration tests don't leak fixture
 # copies under /tmp. Already a transitive dep elsewhere — explicit here only
 # for the backend integration tests.
-tempfile = "3"
+tempfile.workspace = true
 
 [features]
 default = ["server"]
