@@ -222,17 +222,18 @@ body {
   padding: 1.5rem 1rem 5rem;
 }
 
-.auth-shell {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2rem 1rem;
-}
-.auth-card { width: 100%; max-width: 380px; }
-.auth-form { display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem; }
 .auth-footer { font-size: 0.85rem; color: #94a3b8; margin-top: 1rem; text-align: center; }
 .auth-footer a { color: #22d3ee; }
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 
 /* ---- F1.6 auth primitives (AuthShell / Field / Banner / StrengthMeter) ----
    Self-contained block. Tokens are `--auth-*` prefixed and declared on
@@ -558,7 +559,6 @@ body {
 }
 .auth-req.ok { color: var(--auth-ink-0); }
 .auth-req.ok .auth-req-dot { background: var(--auth-ok); }
-.auth-req.bad .auth-req-dot { background: var(--auth-bad); }
 
 .auth-footer-note {
   margin-top: 1.1rem;
