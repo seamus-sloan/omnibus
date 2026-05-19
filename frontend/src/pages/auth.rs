@@ -19,10 +19,17 @@
 //! * `server` — SSR never executes the submit closure (no interaction
 //!   happens during SSR), so this path is a compile-only stub returning a
 //!   static error.
+//!
+//! Polish ([F1.6](../../../../docs/roadmap/1-6-auth-ui.md)) wraps both
+//! pages in [`AuthShell`] and replaces the bare `settings-field` divs with
+//! the [`Field`] / [`Banner`] / [`StrengthMeter`] primitives from
+//! [`crate::components::auth`]. The visual layer is presentational only —
+//! server policy still owns password validation and session expiry.
 
 use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};
 
+use crate::components::auth::{AuthShell, Banner, BannerKind, Field, StrengthMeter, StrengthScore};
 use crate::{use_server_url, Route};
 
 #[component]
@@ -31,6 +38,9 @@ pub fn LoginPage() -> Element {
     let mut password = use_signal(String::new);
     let mut error = use_signal(|| Option::<String>::None);
     let mut submitting = use_signal(|| false);
+    // Presentational only this PR; LoginRequest.session_ttl wiring is the
+    // documented follow-up (F1.6 roadmap, "Keep me signed in" bullet).
+    let mut keep_signed_in = use_signal(|| false);
     let nav = use_navigator();
 
     // `use_server_url()` is feature-aware: empty string on web/server (where
@@ -61,14 +71,24 @@ pub fn LoginPage() -> Element {
     };
 
     rsx! {
-        div { class: "auth-card card",
-            h1 { "Log in" }
-            p { class: "subtitle", "Welcome back to Omnibus." }
-            form { class: "auth-form",
+        AuthShell {
+            kicker: "Sign in".to_string(),
+            title: rsx! {
+                "Welcome "
+                span { class: "auth-shell-headline-em", "back" }
+            },
+            lede: Some("Continue to your library.".to_string()),
+            form { class: "auth-form-inner",
                 onsubmit: on_submit,
                 "data-testid": "login-form",
-                div { class: "settings-field",
-                    label { r#for: "login-username", "Username" }
+                if let Some(msg) = error() {
+                    Banner {
+                        kind: BannerKind::Err,
+                        title: msg,
+                        dismissible: false,
+                    }
+                }
+                Field { label: "Username".to_string(),
                     input {
                         id: "login-username",
                         name: "username",
@@ -78,8 +98,18 @@ pub fn LoginPage() -> Element {
                         oninput: move |e| username.set(e.value()),
                     }
                 }
-                div { class: "settings-field",
-                    label { r#for: "login-password", "Password" }
+                Field {
+                    label: "Password".to_string(),
+                    // Stub: forgot-password page is P3-deferred (F5.4).
+                    // Routing it back to /login keeps the affordance
+                    // without dead routes.
+                    action: rsx! {
+                        Link {
+                            to: Route::Login {},
+                            class: "auth-field-action-link",
+                            "Forgot?"
+                        }
+                    },
                     input {
                         id: "login-password",
                         name: "password",
@@ -89,19 +119,28 @@ pub fn LoginPage() -> Element {
                         oninput: move |e| password.set(e.value()),
                     }
                 }
-                if let Some(msg) = error() {
-                    div { class: "error", role: "alert", "{msg}" }
+                label { class: "auth-checkbox",
+                    input {
+                        r#type: "checkbox",
+                        checked: keep_signed_in(),
+                        oninput: move |e| keep_signed_in.set(e.value() == "true"),
+                    }
+                    span { "Keep me signed in for 30 days" }
                 }
                 button {
-                    class: "btn",
+                    class: "btn primary lg auth-submit",
                     r#type: "submit",
                     disabled: submitting(),
                     if submitting() { "Logging in…" } else { "Log in" }
                 }
-            }
-            p { class: "auth-footer",
-                "No account? "
-                Link { to: Route::Register {}, "Register" }
+                p { class: "auth-footer",
+                    "No account? "
+                    Link { to: Route::Register {}, "Register" }
+                }
+                div { class: "auth-footer-note",
+                    "omnibus · v"
+                    {env!("CARGO_PKG_VERSION")}
+                }
             }
         }
     }
@@ -111,12 +150,11 @@ pub fn LoginPage() -> Element {
 pub fn RegisterPage() -> Element {
     let mut username = use_signal(String::new);
     let mut password = use_signal(String::new);
-    let mut error = use_signal(|| Option::<String>::None);
+    let mut error = use_signal(|| Option::<RegisterError>::None);
     let mut submitting = use_signal(|| false);
+    let mut terms_ack = use_signal(|| false);
     let nav = use_navigator();
 
-    // `use_server_url()` is feature-aware: empty string on web/server (where
-    // requests are same-origin) and the `ServerUrl` context value on mobile.
     let server_url = use_server_url();
 
     let on_submit = move |evt: FormEvent| {
@@ -124,7 +162,9 @@ pub fn RegisterPage() -> Element {
         let u = username();
         let p = password();
         if u.is_empty() || p.is_empty() {
-            error.set(Some("enter a username and password".into()));
+            error.set(Some(RegisterError::Other(
+                "enter a username and password".into(),
+            )));
             return;
         }
         error.set(None);
@@ -137,20 +177,55 @@ pub fn RegisterPage() -> Element {
                 Ok(()) => {
                     nav.replace(Route::Landing {});
                 }
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(classify_register_error(&e))),
             }
         });
     };
 
+    let pw = password();
+    let (score, score_label, rules) = score_password(&pw);
+    let err = error();
+    let username_err = err.as_ref().and_then(|e| match e {
+        RegisterError::Username(m) => Some(m.clone()),
+        _ => None,
+    });
+    let password_err = err.as_ref().and_then(|e| match e {
+        RegisterError::Password(m) => Some(m.clone()),
+        _ => None,
+    });
+    let other_err = err.as_ref().and_then(|e| match e {
+        RegisterError::Other(m) => Some(m.clone()),
+        _ => None,
+    });
+    let has_error = err.is_some();
+    let submit_label = if submitting() {
+        "Creating…"
+    } else if has_error {
+        "Fix to continue"
+    } else {
+        "Create account"
+    };
+
     rsx! {
-        div { class: "auth-card card",
-            h1 { "Create an account" }
-            p { class: "subtitle", "Register to start using Omnibus." }
-            form { class: "auth-form",
+        AuthShell {
+            kicker: "Create account".to_string(),
+            title: rsx! {
+                "Make "
+                span { class: "auth-shell-headline-em", "yourself" }
+                " at home"
+            },
+            lede: Some("Set up your account to start using Omnibus.".to_string()),
+            form { class: "auth-form-inner",
                 onsubmit: on_submit,
                 "data-testid": "register-form",
-                div { class: "settings-field",
-                    label { r#for: "register-username", "Username" }
+                if let Some(msg) = other_err {
+                    Banner {
+                        kind: BannerKind::Err,
+                        title: msg,
+                        dismissible: false,
+                    }
+                }
+                Field { label: "Username".to_string(), error: username_err,
                     input {
                         id: "register-username",
                         name: "username",
@@ -160,8 +235,7 @@ pub fn RegisterPage() -> Element {
                         oninput: move |e| username.set(e.value()),
                     }
                 }
-                div { class: "settings-field",
-                    label { r#for: "register-password", "Password" }
+                Field { label: "Password".to_string(), error: password_err,
                     input {
                         id: "register-password",
                         name: "password",
@@ -171,22 +245,115 @@ pub fn RegisterPage() -> Element {
                         oninput: move |e| password.set(e.value()),
                     }
                 }
-                if let Some(msg) = error() {
-                    div { class: "error", role: "alert", "{msg}" }
+                StrengthMeter {
+                    score: score,
+                    label: Some(score_label.to_string()),
+                }
+                div { class: "auth-requirements",
+                    div { class: "auth-requirements-title", "Password needs" }
+                    PasswordRequirementRow { ok: rules[0], text: "At least 12 characters" }
+                    PasswordRequirementRow { ok: rules[1], text: "Mixed case" }
+                    PasswordRequirementRow { ok: rules[2], text: "One number or symbol" }
+                }
+                label { class: "auth-checkbox auth-checkbox-block",
+                    input {
+                        r#type: "checkbox",
+                        checked: terms_ack(),
+                        oninput: move |e| terms_ack.set(e.value() == "true"),
+                    }
+                    span {
+                        "I understand that the server admin can see my reading list, ratings, journals on shared shelves, and audiobook play position."
+                    }
                 }
                 button {
-                    class: "btn",
+                    class: "btn primary lg auth-submit",
                     r#type: "submit",
                     disabled: submitting(),
-                    if submitting() { "Creating…" } else { "Create account" }
+                    "{submit_label}"
                 }
-            }
-            p { class: "auth-footer",
-                "Already have an account? "
-                Link { to: Route::Login {}, "Log in" }
+                p { class: "auth-footer",
+                    "Already have an account? "
+                    Link { to: Route::Login {}, "Log in" }
+                }
             }
         }
     }
+}
+
+#[component]
+fn PasswordRequirementRow(ok: bool, text: String) -> Element {
+    let cls = if ok { "auth-req ok" } else { "auth-req" };
+    rsx! {
+        div { class: "{cls}",
+            span { class: "auth-req-dot" }
+            span { "{text}" }
+        }
+    }
+}
+
+// ---- presentational helpers ---------------------------------------------
+
+#[derive(Clone, Debug, PartialEq)]
+enum RegisterError {
+    Username(String),
+    Password(String),
+    Other(String),
+}
+
+/// Classify a flat error string into a field bucket. Heuristic — keys on
+/// lowercase substring matches so trivial server-message wording changes
+/// don't strand the UI. New variants ride the `Other` fallback (renders as
+/// a top banner) rather than breaking field rendering.
+fn classify_register_error(raw: &str) -> RegisterError {
+    let lower = raw.to_lowercase();
+    if lower.contains("username") || lower.contains("user already") {
+        RegisterError::Username(raw.to_string())
+    } else if lower.contains("password") {
+        RegisterError::Password(raw.to_string())
+    } else {
+        RegisterError::Other(raw.to_string())
+    }
+}
+
+/// Presentational password scoring — server still enforces policy. Returns
+/// the meter score (0..=4), a short label, and the three checklist booleans
+/// (length≥12, mixed case, number-or-symbol) so the page renders both the
+/// meter and the requirements list from one pass.
+fn score_password(pw: &str) -> (StrengthScore, &'static str, [bool; 3]) {
+    let len = pw.chars().count();
+    let has_lower = pw.chars().any(|c| c.is_ascii_lowercase());
+    let has_upper = pw.chars().any(|c| c.is_ascii_uppercase());
+    let mixed_case = has_lower && has_upper;
+    let has_number_or_symbol = pw
+        .chars()
+        .any(|c| c.is_ascii_digit() || !c.is_alphanumeric());
+    let len_ok = len >= 12;
+
+    let mut raw: u8 = 0;
+    if len >= 4 {
+        raw = raw.saturating_add(1);
+    }
+    if len >= 8 {
+        raw = raw.saturating_add(1);
+    }
+    if mixed_case {
+        raw = raw.saturating_add(1);
+    }
+    if has_number_or_symbol {
+        raw = raw.saturating_add(1);
+    }
+    if len_ok {
+        raw = raw.saturating_add(1);
+    }
+    let score = StrengthScore::new(raw.min(StrengthScore::MAX));
+    let label = match score.value() {
+        0 => "empty",
+        1 => "weak",
+        2 => "fair",
+        3 => "good",
+        _ => "strong",
+    };
+    (score, label, [len_ok, mixed_case, has_number_or_symbol])
 }
 
 // ---- submit helpers ------------------------------------------------------
@@ -286,4 +453,61 @@ async fn submit_register(
     _password: String,
 ) -> Result<(), String> {
     Err("registration is only available in the web or mobile client".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn score_password_empty_is_zero() {
+        let (score, label, rules) = score_password("");
+        assert_eq!(score.value(), 0);
+        assert_eq!(label, "empty");
+        assert_eq!(rules, [false, false, false]);
+    }
+
+    #[test]
+    fn score_password_grows_with_length_and_classes() {
+        let (s, _, _) = score_password("abcd");
+        assert_eq!(s.value(), 1);
+        let (s, _, _) = score_password("AbCdEfGh");
+        assert_eq!(s.value(), 3);
+        let (s, label, rules) = score_password("AbCdEfGh1!2x");
+        assert_eq!(s.value(), 4);
+        assert_eq!(label, "strong");
+        assert_eq!(rules, [true, true, true]);
+    }
+
+    #[test]
+    fn score_password_rules_track_thresholds() {
+        let (_, _, rules) = score_password("Ab1");
+        assert_eq!(rules, [false, true, true]);
+        let (_, _, rules) = score_password("abcdefghijk1");
+        assert_eq!(rules, [true, false, true]);
+    }
+
+    #[test]
+    fn classify_register_error_routes_username() {
+        match classify_register_error("username already exists") {
+            RegisterError::Username(m) => assert_eq!(m, "username already exists"),
+            other => panic!("expected Username variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_register_error_routes_password() {
+        match classify_register_error("password is too short") {
+            RegisterError::Password(m) => assert_eq!(m, "password is too short"),
+            other => panic!("expected Password variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_register_error_falls_back_to_other() {
+        match classify_register_error("500: internal server error") {
+            RegisterError::Other(m) => assert_eq!(m, "500: internal server error"),
+            other => panic!("expected Other variant, got {other:?}"),
+        }
+    }
 }
