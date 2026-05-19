@@ -1,11 +1,13 @@
 import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { gotoReady } from "../utils/nav";
+import { fixturesDir, seedLibrary } from "../utils/seed";
 
-// Depend on the worker-scoped `seededLibrary` fixture. Each spec file runs
-// in its own worker, so this can't rely on another spec having seeded.
-test.beforeAll(({ seededLibrary }) => {
-  void seededLibrary;
+// Seed once before all thumbnail tests so the running server is indexed
+// against the committed EPUB fixtures, independent of whatever ran earlier
+// in this worker.
+test.beforeAll(async ({ request }) => {
+  await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
 });
 
 test("renders book grid with srcset cover images", async ({ page }) => {
