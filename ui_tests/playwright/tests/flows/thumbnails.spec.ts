@@ -1,12 +1,11 @@
 import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { gotoReady } from "../utils/nav";
-import { fixturesDir, seedLibrary } from "../utils/seed";
 
-// Seed once before all thumbnail tests. The landing page tests likely already
-// seeded, but each spec file is independent so we seed again defensively.
-test.beforeAll(async ({ request }) => {
-  await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
+// Depend on the worker-scoped `seededLibrary` fixture. Each spec file runs
+// in its own worker, so this can't rely on another spec having seeded.
+test.beforeAll(({ seededLibrary }) => {
+  void seededLibrary;
 });
 
 test("renders book grid with srcset cover images", async ({ page }) => {
