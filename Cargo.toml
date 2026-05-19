@@ -6,3 +6,21 @@ members = ["server", "mobile", "shared", "frontend", "db"]
 # explicitly with `cargo build -p omnibus-mobile`.
 default-members = ["server", "shared", "frontend"]
 resolver = "2"
+
+# Centralized dependency versions shared across crates. Crates pull these in
+# via `<dep>.workspace = true` (or `{ workspace = true, features = [...] }`
+# when they need extra features beyond the workspace baseline). Only deps
+# that appear in 2+ crates at the same version are centralized here — single-
+# crate deps stay in their own Cargo.toml, and framework-specific deps with
+# divergent features (dioxus, sqlx, axum) are intentionally left per-crate.
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Declared with no features at the workspace level — `default-features = false`
+# is preserved so the frontend WASM build doesn't accidentally pull the
+# multi-thread runtime in. Consumers opt into the features they need
+# (`macros`, `rt-multi-thread`, `sync`, `time`).
+tokio = { version = "1", default-features = false }
+tracing = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tempfile = "3"

@@ -8,9 +8,9 @@ dioxus = { version = "0.7", features = ["fullstack"] }
 dioxus-router = "0.7"
 omnibus-shared = { path = "../shared" }
 omnibus-db = { path = "../db", optional = true }
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+serde.workspace = true
+serde_json = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
 gloo-net = { version = "0.6", default-features = false, features = ["http", "json"], optional = true }
 # `web-sys` is enabled only on the WASM client for `Window::local_storage()`.
 # F1.3 view-mode / sort / filter prefs are persisted there per library path.
@@ -22,7 +22,7 @@ web-sys = { version = "0.3", features = ["Window", "Storage"], optional = true }
 # only what it needs — mobile gets `sync` for `watch`, server gets the
 # multi-thread runtime + macros for `#[tokio::main]`-style usage in rpc.rs.
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"], optional = true }
-tokio = { version = "1", default-features = false, optional = true }
+tokio = { workspace = true, optional = true }
 
 [features]
 default = []

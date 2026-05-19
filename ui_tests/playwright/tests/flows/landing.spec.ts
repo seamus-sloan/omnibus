@@ -2,14 +2,13 @@ import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expectNavVisible, gotoReady } from "../utils/nav";
 import { expectRowMatches } from "../utils/ebooks";
-import { fixturesDir, seedLibrary } from "../utils/seed";
 
-// Seed the running server against the committed EPUB fixtures before any
-// landing-page assertion runs. The settings POST kicks off an async reindex
-// inside the server (`tokio::spawn`), so `seedLibrary` polls
-// `/api/rpc/ebooks` until the indexer has surfaced every fixture.
-test.beforeAll(async ({ request }) => {
-  await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
+// Depend on the worker-scoped `seededLibrary` fixture so the server is
+// indexed against the committed EPUB fixtures before any test in this file
+// runs. The fixture is opt-in (not `auto: true`) so flows that don't care
+// about library state — auth, settings, theme — skip the seed cost.
+test.beforeAll(({ seededLibrary }) => {
+  void seededLibrary;
 });
 
 // View prefs persist in localStorage. Each Playwright test gets a fresh
