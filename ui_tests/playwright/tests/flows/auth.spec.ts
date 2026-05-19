@@ -87,7 +87,7 @@ test("shows an error when submitting an empty form", async ({ page }) => {
 });
 
 test("register routes a password error to the password Field", async ({ page }) => {
-  await page.goto("/register");
+  await gotoReady(page, "/register");
 
   await page.route("**/api/auth/register", async (route) => {
     await route.fulfill({
@@ -111,7 +111,14 @@ test("register routes a password error to the password Field", async ({ page }) 
       page.getByRole("button", { name: "Create account" }).click(),
   );
 
-  await expect(page.getByRole("alert")).toContainText("password is too short");
+  // Prove the routing: the password input flips to aria-invalid, and
+  // the error message renders inside the password Field (not the
+  // top-level Banner, which would also carry role=alert).
+  const passwordInput = page.getByLabel("Password");
+  await expect(passwordInput).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByLabel("Username")).toHaveAttribute("aria-invalid", "false");
+  const passwordField = passwordInput.locator("xpath=ancestor::label[contains(@class,'auth-field')]");
+  await expect(passwordField.getByRole("alert")).toContainText("password is too short");
   await expect(
     page.getByRole("button", { name: /fix to continue/i }),
   ).toBeDisabled();
