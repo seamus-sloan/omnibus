@@ -272,8 +272,9 @@ pub async fn last_indexed_at(
 // <table> (<col>) VALUES (?)` then `SELECT id FROM <table> WHERE <col> = ?`.
 // We use a macro so the table/column appear as compile-time string literals
 // inside `sqlx::query` — no runtime SQL construction with user input.
-// `authors` carries an extra `sort` column, so it gets a thin wrapper that
-// calls the generic helper then patches `sort` in place.
+// `authors` is hand-written because it carries an extra `sort` column whose
+// `ON CONFLICT(name) DO UPDATE SET sort = COALESCE(...)` semantics don't fit
+// the simple `INSERT OR IGNORE` template.
 // -----------------------------------------------------------------------------
 
 macro_rules! resolve_or_insert_simple {
@@ -342,8 +343,8 @@ pub fn covers_dir() -> PathBuf {
 }
 
 /// Image formats we know how to round-trip through the on-disk cover cache.
-/// The `Other` variant covers SVG (which sticks around because some EPUB
-/// covers ship as SVG) and the bin fallback for unknown bytes.
+/// `Svg` sticks around because some EPUB covers ship as SVG; `Bin` is the
+/// fallback extension for unknown bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ImageFormat {
     Jpeg,
@@ -593,7 +594,7 @@ struct InsertedBook {
 }
 
 /// Insert the canonical `books` row (returning its id) and its single
-/// `book_files` row. Same SQL and bind order as the inline form.
+/// `book_files` row.
 async fn insert_book_row(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_id: i64,
@@ -666,8 +667,7 @@ async fn insert_book_row(
 }
 
 /// Insert the per-book metadata join rows (authors + contributors, series,
-/// tags, publisher, language, identifiers). Same SQL, same order as the
-/// inline form — extracted only to keep `replace_books` legible.
+/// tags, publisher, language, identifiers).
 async fn insert_metadata_links(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
