@@ -39,8 +39,13 @@ pub fn Field(
     let state_class = field_state_class(error.as_deref(), success);
     let wrapper_class = format!("auth-field {state_class}");
 
+    // A stable `data-testid` on the wrapper lets Playwright scope alerts /
+    // hints to a specific field without resorting to XPath or class-based
+    // ancestor walks (which violate `.claude/rules/04-playwright.md`).
+    let field_testid = format!("{input_id}-field");
+
     rsx! {
-        div { class: "{wrapper_class}",
+        div { class: "{wrapper_class}", "data-testid": "{field_testid}",
             div { class: "auth-field-label-row",
                 label { class: "auth-field-label", r#for: "{input_id}", "{label}" }
                 if let Some(slot) = action {

@@ -363,7 +363,10 @@ fn FilterSidebar(
     filters: ViewFilters,
     on_change: EventHandler<ViewFilters>,
 ) -> Element {
-    let any_active = !filters.authors.is_empty() || !filters.series.is_empty();
+    // Reflect every filter bucket — including `formats` set via the top
+    // chip row — so a user with only a format chip selected still sees
+    // the sidebar's "Clear filters" affordance.
+    let any_active = !filters.is_empty();
     let toggle = {
         let filters = filters.clone();
         move |group: &'static str, value: String| {
