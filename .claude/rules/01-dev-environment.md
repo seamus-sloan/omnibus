@@ -15,7 +15,18 @@ The shell hook sets:
 - `OMNIBUS_PUBLIC_ORIGIN=http://localhost:$PORT` — comma-separated allowlist consumed by `auth::origin_check`. Required for `dx serve --fullstack`: its HTTP proxy rewrites `Host` to the upstream backend's loopback address without setting `X-Forwarded-Host`, so without an allowlist every cookie-authed POST 403s. Override in production deployments behind a reverse proxy.
 - `ANDROID_HOME` and `ANDROID_NDK_HOME` (auto-detected from standard Android Studio install paths)
 
-Override `PORT` (default `3000`) if you need a different port. Playwright targets the default port `3000`.
+Override `PORT` (default `3000`) if you need a different port. Playwright targets `$PLAYWRIGHT_BASE_URL` (set by `scripts/dev-server-up.sh`); it falls back to `http://127.0.0.1:3000` when unset.
+
+## `.env` for secret-bearing values
+
+Non-secret defaults stay in the shellHook above. Anything with a secret — passwords, tokens, per-developer overrides — lives in a gitignored `.env` at the repo root. The shellHook sources `.env` **after** its own exports, so `.env` always wins on conflict.
+
+- [`.env.example`](../../.env.example) is checked in and documents every supported var with example values.
+- `.env` is gitignored. Copy from `.env.example` on first checkout.
+
+Currently documented:
+
+- `OMNIBUS_DEV_SEED_USER=username:password` — creates a named admin user on server boot if absent. Dev convenience for `ui-validate` and parallel agents; never set in production. Password must satisfy `db::auth` validation (≥10 chars, not in `COMMON_PASSWORDS`).
 
 Optional thumbnail cache overrides (F1.2):
 - `OMNIBUS_THUMBS_DIR` — where WebP thumbnails are cached (default `./thumbs`)

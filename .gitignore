@@ -48,6 +48,14 @@ test_data/epubs/**/*.webp
 # direnv / Nix
 .direnv/
 
+# Per-developer env vars (sourced by flake.nix shellHook). The committed
+# template is .env.example; .env is gitignored and may contain secrets.
+.env
+
+# Runtime scratch for scripts/dev-server-up.sh — server.log, server.pid,
+# port, env.sh. Per-checkout, ephemeral.
+.claude/runtime/
+
 # Local ebook library (test data)
 /epubs
 /epubs/

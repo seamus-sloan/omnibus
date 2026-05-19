@@ -4,10 +4,15 @@ import { STORAGE_STATE_PATH } from "./globalSetup";
 
 // Omnibus UI e2e tests.
 //
-// Requires a locally running server at http://127.0.0.1:3000 (e.g. `cargo run
-// -p omnibus` or `dx serve --port 3000 --package omnibus`). There's
-// intentionally no `webServer` block — the server lifecycle is managed by the
-// developer so tests stay predictable against hot-reload workflows.
+// Requires a locally running server. The base URL comes from
+// $PLAYWRIGHT_BASE_URL (set by `scripts/dev-server-up.sh` in
+// `.claude/runtime/env.sh`); falls back to http://127.0.0.1:3000 for
+// humans running `cargo run -p omnibus` directly. There's intentionally
+// no `webServer` block — the server lifecycle is managed externally so
+// tests stay predictable against hot-reload workflows and shared by
+// multiple parallel agents.
+const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3000";
+
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: true,
@@ -16,7 +21,7 @@ export default defineConfig({
   reporter: "list",
   globalSetup: require.resolve("./globalSetup.ts"),
   use: {
-    baseURL: "http://127.0.0.1:3000",
+    baseURL: BASE_URL,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     // Absolute path so the writer (`globalSetup`) and reader (test contexts)
@@ -30,9 +35,10 @@ export default defineConfig({
     // spec-level `request` fixture. `globalSetup` reads this same value
     // from `config.projects[0].use` and passes it into its own
     // APIRequestContext so register/login (and any future state-changing
-    // setup call) inherit the Origin too.
+    // setup call) inherit the Origin too. Tracks baseURL so an alternate
+    // port (set via PLAYWRIGHT_BASE_URL) stays origin-allowed.
     extraHTTPHeaders: {
-      Origin: "http://127.0.0.1:3000",
+      Origin: BASE_URL,
     },
   },
   projects: [
