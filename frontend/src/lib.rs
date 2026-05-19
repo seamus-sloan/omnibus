@@ -314,8 +314,8 @@ body {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  gap: 0.4rem;
-  min-height: 320px;
+  gap: 0.55rem;
+  min-height: 360px;
 }
 .auth-shell-spine {
   position: relative;
@@ -323,6 +323,7 @@ body {
   align-items: center;
   justify-content: center;
   border-radius: 2px 2px 0 0;
+  transform-origin: bottom center;
   /* board edge: subtle spine highlight + shadow + drop shadow on the shelf */
   box-shadow:
     inset 1px 0 0 rgba(255, 255, 255, 0.14),
@@ -330,26 +331,49 @@ body {
     inset 0 -8px 12px -8px rgba(0, 0, 0, 0.45),
     0 6px 8px -4px rgba(0, 0, 0, 0.55);
 }
-/* Varied widths (28–52px) and heights (250–340px) — gives the random
-   library look while staying deterministic across SSR/WASM/native. */
+/* Two horizontal binding bands per spine — the dark strips that wrap
+   around the spine of a real bound book. Positioned near top and
+   bottom so the centerfield stays clean for the optional dot motif. */
+.auth-shell-spine::before,
+.auth-shell-spine::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: rgba(0, 0, 0, 0.32);
+  pointer-events: none;
+}
+.auth-shell-spine::before { top: 10%; }
+.auth-shell-spine::after  { bottom: 10%; }
+/* Varied widths (28–52px) and heights (250–340px). A few spines tilt
+   slightly so the shelf reads "casual library" rather than "soldiers
+   on parade." Tilts stay subtle (≤2°) so the binding bands stay
+   readable. */
 .auth-shell-spine-0 { width: 36px; height: 280px; }
 .auth-shell-spine-1 { width: 44px; height: 320px; }
-.auth-shell-spine-2 { width: 28px; height: 240px; }
+.auth-shell-spine-2 { width: 28px; height: 240px; transform: rotate(-1.8deg); }
 .auth-shell-spine-3 { width: 50px; height: 340px; }
 .auth-shell-spine-4 { width: 40px; height: 300px; }
-.auth-shell-spine-5 { width: 32px; height: 260px; }
+.auth-shell-spine-5 { width: 32px; height: 260px; transform: rotate(1.5deg); }
 .auth-shell-spine-6 { width: 46px; height: 310px; }
-.auth-shell-spine-7 { width: 36px; height: 280px; }
+.auth-shell-spine-7 { width: 36px; height: 280px; transform: rotate(-1.1deg); }
 .auth-shell-spine-8 { width: 42px; height: 290px; }
-/* Small motif circle on each spine — outlined dot using currentColor
-   with reduced opacity so it picks up the book's accent ink subtly. */
+/* Small motif circle — only on a curated subset (spines 1, 3, 6) so
+   the shelf doesn't read as "every book has the same sticker." */
 .auth-shell-spine-dot {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  border: 1.5px solid rgba(0, 0, 0, 0.35);
+  border: 1.5px solid rgba(0, 0, 0, 0.4);
   background: transparent;
-  opacity: 0.7;
+  opacity: 0.75;
+  display: none;
+}
+.auth-shell-spine-1 .auth-shell-spine-dot,
+.auth-shell-spine-3 .auth-shell-spine-dot,
+.auth-shell-spine-6 .auth-shell-spine-dot {
+  display: block;
 }
 /* Wooden plank under the books — warm brown gradient with a darker
    shadow line below to suggest a real shelf. */
