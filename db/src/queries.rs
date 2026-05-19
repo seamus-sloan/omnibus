@@ -24,6 +24,11 @@ use omnibus_shared::{Contributor, EbookLibrary, EbookMetadata, Identifier};
 /// versions are recorded in the `_sqlx_migrations` table.
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
+/// `settings` KV keys consumed by the UI/RPC layer. Kept as constants so the
+/// indexer, settings handlers, and tests all reference the same identifier.
+const EBOOK_LIBRARY_PATH_KEY: &str = "ebook_library_path";
+const AUDIOBOOK_LIBRARY_PATH_KEY: &str = "audiobook_library_path";
+
 pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
@@ -76,16 +81,16 @@ pub async fn increment_value(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
 // -----------------------------------------------------------------------------
 
 pub async fn get_settings(pool: &SqlitePool) -> Result<Settings, sqlx::Error> {
-    let ebook_library_path = sqlx::query_scalar::<_, String>(
-        "SELECT value FROM settings WHERE key = 'ebook_library_path'",
-    )
-    .fetch_optional(pool)
-    .await?;
-    let audiobook_library_path = sqlx::query_scalar::<_, String>(
-        "SELECT value FROM settings WHERE key = 'audiobook_library_path'",
-    )
-    .fetch_optional(pool)
-    .await?;
+    let ebook_library_path =
+        sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
+            .bind(EBOOK_LIBRARY_PATH_KEY)
+            .fetch_optional(pool)
+            .await?;
+    let audiobook_library_path =
+        sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
+            .bind(AUDIOBOOK_LIBRARY_PATH_KEY)
+            .fetch_optional(pool)
+            .await?;
     Ok(Settings {
         ebook_library_path,
         audiobook_library_path,
@@ -96,13 +101,13 @@ pub async fn set_settings(pool: &SqlitePool, settings: &Settings) -> Result<(), 
     let mut tx = pool.begin().await?;
     upsert_or_clear(
         &mut tx,
-        "ebook_library_path",
+        EBOOK_LIBRARY_PATH_KEY,
         settings.ebook_library_path.as_deref(),
     )
     .await?;
     upsert_or_clear(
         &mut tx,
-        "audiobook_library_path",
+        AUDIOBOOK_LIBRARY_PATH_KEY,
         settings.audiobook_library_path.as_deref(),
     )
     .await?;
@@ -262,7 +267,43 @@ pub async fn last_indexed_at(
 // -----------------------------------------------------------------------------
 // Taxonomy resolve-or-insert helpers. Each returns the row id for the given
 // (case-insensitive) name, inserting a row if one doesn't exist yet.
+//
+// The shape is identical for every taxonomy table: `INSERT OR IGNORE INTO
+// <table> (<col>) VALUES (?)` then `SELECT id FROM <table> WHERE <col> = ?`.
+// We use a macro so the table/column appear as compile-time string literals
+// inside `sqlx::query` — no runtime SQL construction with user input.
+// `authors` carries an extra `sort` column, so it gets a thin wrapper that
+// calls the generic helper then patches `sort` in place.
 // -----------------------------------------------------------------------------
+
+macro_rules! resolve_or_insert_simple {
+    ($name:ident, $table:literal, $col:literal) => {
+        async fn $name(
+            tx: &mut Transaction<'_, sqlx::Sqlite>,
+            value: &str,
+        ) -> Result<i64, sqlx::Error> {
+            sqlx::query(concat!(
+                "INSERT OR IGNORE INTO ",
+                $table,
+                " (",
+                $col,
+                ") VALUES (?)",
+            ))
+            .bind(value)
+            .execute(&mut **tx)
+            .await?;
+            sqlx::query_scalar(concat!("SELECT id FROM ", $table, " WHERE ", $col, " = ?",))
+                .bind(value)
+                .fetch_one(&mut **tx)
+                .await
+        }
+    };
+}
+
+resolve_or_insert_simple!(resolve_or_insert_series, "series", "name");
+resolve_or_insert_simple!(resolve_or_insert_tag, "tags", "name");
+resolve_or_insert_simple!(resolve_or_insert_publisher, "publishers", "name");
+resolve_or_insert_simple!(resolve_or_insert_language, "languages", "code");
 
 async fn resolve_or_insert_author(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
@@ -279,62 +320,6 @@ async fn resolve_or_insert_author(
     .await?;
     sqlx::query_scalar("SELECT id FROM authors WHERE name = ?")
         .bind(name)
-        .fetch_one(&mut **tx)
-        .await
-}
-
-async fn resolve_or_insert_series(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    name: &str,
-) -> Result<i64, sqlx::Error> {
-    sqlx::query("INSERT OR IGNORE INTO series (name) VALUES (?)")
-        .bind(name)
-        .execute(&mut **tx)
-        .await?;
-    sqlx::query_scalar("SELECT id FROM series WHERE name = ?")
-        .bind(name)
-        .fetch_one(&mut **tx)
-        .await
-}
-
-async fn resolve_or_insert_tag(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    name: &str,
-) -> Result<i64, sqlx::Error> {
-    sqlx::query("INSERT OR IGNORE INTO tags (name) VALUES (?)")
-        .bind(name)
-        .execute(&mut **tx)
-        .await?;
-    sqlx::query_scalar("SELECT id FROM tags WHERE name = ?")
-        .bind(name)
-        .fetch_one(&mut **tx)
-        .await
-}
-
-async fn resolve_or_insert_publisher(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    name: &str,
-) -> Result<i64, sqlx::Error> {
-    sqlx::query("INSERT OR IGNORE INTO publishers (name) VALUES (?)")
-        .bind(name)
-        .execute(&mut **tx)
-        .await?;
-    sqlx::query_scalar("SELECT id FROM publishers WHERE name = ?")
-        .bind(name)
-        .fetch_one(&mut **tx)
-        .await
-}
-
-async fn resolve_or_insert_language(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    code: &str,
-) -> Result<i64, sqlx::Error> {
-    sqlx::query("INSERT OR IGNORE INTO languages (code) VALUES (?)")
-        .bind(code)
-        .execute(&mut **tx)
-        .await?;
-    sqlx::query_scalar("SELECT id FROM languages WHERE code = ?")
-        .bind(code)
         .fetch_one(&mut **tx)
         .await
 }
@@ -356,26 +341,75 @@ pub fn covers_dir() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("./covers"))
 }
 
-fn mime_to_ext(mime: &str) -> &'static str {
-    match mime.to_ascii_lowercase().as_str() {
-        "image/jpeg" | "image/jpg" => "jpg",
-        "image/png" => "png",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        "image/svg+xml" => "svg",
-        _ => "bin",
-    }
+/// Image formats we know how to round-trip through the on-disk cover cache.
+/// The `Other` variant covers SVG (which sticks around because some EPUB
+/// covers ship as SVG) and the bin fallback for unknown bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImageFormat {
+    Jpeg,
+    Png,
+    Gif,
+    Webp,
+    Svg,
+    Bin,
 }
 
-fn ext_to_mime(ext: &str) -> String {
-    match ext.to_ascii_lowercase().as_str() {
-        "jpg" | "jpeg" => "image/jpeg".to_string(),
-        "png" => "image/png".to_string(),
-        "gif" => "image/gif".to_string(),
-        "webp" => "image/webp".to_string(),
-        "svg" => "image/svg+xml".to_string(),
-        _ => "application/octet-stream".to_string(),
+impl ImageFormat {
+    fn to_mime(self) -> &'static str {
+        match self {
+            ImageFormat::Jpeg => "image/jpeg",
+            ImageFormat::Png => "image/png",
+            ImageFormat::Gif => "image/gif",
+            ImageFormat::Webp => "image/webp",
+            ImageFormat::Svg => "image/svg+xml",
+            ImageFormat::Bin => "application/octet-stream",
+        }
     }
+
+    fn to_ext(self) -> &'static str {
+        match self {
+            ImageFormat::Jpeg => "jpg",
+            ImageFormat::Png => "png",
+            ImageFormat::Gif => "gif",
+            ImageFormat::Webp => "webp",
+            ImageFormat::Svg => "svg",
+            ImageFormat::Bin => "bin",
+        }
+    }
+
+    fn from_mime(mime: &str) -> Self {
+        match mime.to_ascii_lowercase().as_str() {
+            "image/jpeg" | "image/jpg" => ImageFormat::Jpeg,
+            "image/png" => ImageFormat::Png,
+            "image/gif" => ImageFormat::Gif,
+            "image/webp" => ImageFormat::Webp,
+            "image/svg+xml" => ImageFormat::Svg,
+            _ => ImageFormat::Bin,
+        }
+    }
+
+    fn from_ext(ext: &str) -> Self {
+        match ext.to_ascii_lowercase().as_str() {
+            "jpg" | "jpeg" => ImageFormat::Jpeg,
+            "png" => ImageFormat::Png,
+            "gif" => ImageFormat::Gif,
+            "webp" => ImageFormat::Webp,
+            "svg" => ImageFormat::Svg,
+            _ => ImageFormat::Bin,
+        }
+    }
+
+    /// Extensions probed in `find_cover_file`, ordered by how likely each is
+    /// to be the on-disk format. Keeping it on the type means adding a new
+    /// variant only requires updating the match arms above plus this list.
+    const PROBE_ORDER: [ImageFormat; 6] = [
+        ImageFormat::Jpeg,
+        ImageFormat::Png,
+        ImageFormat::Webp,
+        ImageFormat::Gif,
+        ImageFormat::Svg,
+        ImageFormat::Bin,
+    ];
 }
 
 fn cover_path_for(uuid: &str, ext: &str) -> PathBuf {
@@ -385,7 +419,7 @@ fn cover_path_for(uuid: &str, ext: &str) -> PathBuf {
 fn write_cover_file(uuid: &str, mime: &str, bytes: &[u8]) -> std::io::Result<()> {
     let dir = covers_dir();
     std::fs::create_dir_all(&dir)?;
-    let ext = mime_to_ext(mime);
+    let ext = ImageFormat::from_mime(mime).to_ext();
     std::fs::write(cover_path_for(uuid, ext), bytes)
 }
 
@@ -394,10 +428,10 @@ fn find_cover_file(uuid: &str) -> Option<(String, Vec<u8>)> {
     // written. Fall back to a directory scan for `<uuid>.*` if none match,
     // so migrations that introduce new extensions don't require a code
     // change here.
-    for ext in ["jpg", "png", "webp", "gif", "svg", "bin"] {
-        let p = cover_path_for(uuid, ext);
+    for fmt in ImageFormat::PROBE_ORDER {
+        let p = cover_path_for(uuid, fmt.to_ext());
         if let Ok(bytes) = std::fs::read(&p) {
-            return Some((ext_to_mime(ext), bytes));
+            return Some((fmt.to_mime().to_string(), bytes));
         }
     }
     // Fallback scan.
@@ -414,7 +448,8 @@ fn find_cover_file(uuid: &str) -> Option<(String, Vec<u8>)> {
                 let (stem, ext) = name_str.split_at(dot);
                 if stem == uuid {
                     if let Ok(bytes) = std::fs::read(entry.path()) {
-                        return Some((ext_to_mime(&ext[1..]), bytes));
+                        let mime = ImageFormat::from_ext(&ext[1..]).to_mime();
+                        return Some((mime.to_string(), bytes));
                     }
                 }
             }
@@ -425,8 +460,8 @@ fn find_cover_file(uuid: &str) -> Option<(String, Vec<u8>)> {
 
 fn delete_cover_files_for(uuids: &[String]) {
     for uuid in uuids {
-        for ext in ["jpg", "png", "webp", "gif", "svg", "bin"] {
-            let _ = std::fs::remove_file(cover_path_for(uuid, ext));
+        for fmt in ImageFormat::PROBE_ORDER {
+            let _ = std::fs::remove_file(cover_path_for(uuid, fmt.to_ext()));
         }
     }
 }
@@ -512,182 +547,19 @@ pub async fn replace_books(
     let mut new_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
 
     for b in books {
-        let m = &b.metadata;
-        let uuid = stable_uuid(library_path, &m.filename);
-        let (book_path, file_stem, file_ext) = split_filename(&m.filename);
-        let title = m.title.clone().unwrap_or_else(|| m.filename.clone());
-        let series_index_num = m.series_index.as_deref().and_then(parse_series_index);
-        let author_sort = m
-            .creators
-            .first()
-            .and_then(|c| c.file_as.clone())
-            .or_else(|| m.creators.first().map(|c| c.name.clone()));
-        let first_isbn = m
-            .identifiers
-            .iter()
-            .find(|id| {
-                id.scheme
-                    .as_deref()
-                    .is_some_and(|s| s.eq_ignore_ascii_case("isbn"))
-            })
-            .map(|id| id.value.clone());
-        let has_cover = if b.cover.is_some() { 1 } else { 0 };
-
-        let book_id = sqlx::query_scalar::<_, i64>(
-            "INSERT INTO books
-                (uuid, library_id, path, title, sort, author_sort, series_index,
-                 pubdate, has_cover, description, isbn, accent_color)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             RETURNING id",
+        let inserted = insert_book_row(&mut tx, library_id, library_path, &b).await?;
+        insert_metadata_links(&mut tx, inserted.book_id, &b.metadata).await?;
+        insert_fts_row(
+            &mut tx,
+            inserted.book_id,
+            &inserted.title,
+            inserted.first_isbn.as_deref(),
+            &b.metadata,
         )
-        .bind(&uuid)
-        .bind(library_id)
-        .bind(&book_path)
-        .bind(&title)
-        .bind(&title)
-        .bind(&author_sort)
-        .bind(series_index_num)
-        .bind(&m.published)
-        .bind(has_cover)
-        .bind(&m.description)
-        .bind(&first_isbn)
-        .bind(m.accent.as_deref())
-        .fetch_one(&mut *tx)
-        .await?;
-
-        let size_bytes = 0i64;
-        let mtime = m.modified.clone().unwrap_or_default();
-        sqlx::query(
-            "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime)
-             VALUES (?, ?, ?, ?, ?)",
-        )
-        .bind(book_id)
-        .bind(&file_ext)
-        .bind(&file_stem)
-        .bind(size_bytes)
-        .bind(&mtime)
-        .execute(&mut *tx)
-        .await?;
-
-        // Authors + contributors both land in `authors` — role/file_as are
-        // flattened. The first creator gets position 0.
-        for (pos, c) in m.creators.iter().enumerate() {
-            let author_id =
-                resolve_or_insert_author(&mut tx, &c.name, c.file_as.as_deref()).await?;
-            sqlx::query(
-                "INSERT OR IGNORE INTO books_authors_link (book, author, position)
-                 VALUES (?, ?, ?)",
-            )
-            .bind(book_id)
-            .bind(author_id)
-            .bind(pos as i64)
-            .execute(&mut *tx)
-            .await?;
-        }
-        let author_count = m.creators.len();
-        for (i, c) in m.contributors.iter().enumerate() {
-            let author_id =
-                resolve_or_insert_author(&mut tx, &c.name, c.file_as.as_deref()).await?;
-            sqlx::query(
-                "INSERT OR IGNORE INTO books_authors_link (book, author, position)
-                 VALUES (?, ?, ?)",
-            )
-            .bind(book_id)
-            .bind(author_id)
-            .bind((author_count + i) as i64)
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        if let Some(series_name) = m.series.as_deref().filter(|s| !s.is_empty()) {
-            let series_id = resolve_or_insert_series(&mut tx, series_name).await?;
-            sqlx::query("INSERT OR IGNORE INTO books_series_link (book, series) VALUES (?, ?)")
-                .bind(book_id)
-                .bind(series_id)
-                .execute(&mut *tx)
-                .await?;
-        }
-
-        for subject in &m.subjects {
-            if subject.is_empty() {
-                continue;
-            }
-            let tag_id = resolve_or_insert_tag(&mut tx, subject).await?;
-            sqlx::query("INSERT OR IGNORE INTO books_tags_link (book, tag) VALUES (?, ?)")
-                .bind(book_id)
-                .bind(tag_id)
-                .execute(&mut *tx)
-                .await?;
-        }
-
-        if let Some(pub_name) = m.publisher.as_deref().filter(|s| !s.is_empty()) {
-            let pub_id = resolve_or_insert_publisher(&mut tx, pub_name).await?;
-            sqlx::query(
-                "INSERT OR IGNORE INTO books_publishers_link (book, publisher) VALUES (?, ?)",
-            )
-            .bind(book_id)
-            .bind(pub_id)
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        if let Some(lang_code) = m.language.as_deref().filter(|s| !s.is_empty()) {
-            let lang_id = resolve_or_insert_language(&mut tx, lang_code).await?;
-            sqlx::query(
-                "INSERT OR IGNORE INTO books_languages_link (book, language) VALUES (?, ?)",
-            )
-            .bind(book_id)
-            .bind(lang_id)
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        for ident in &m.identifiers {
-            if ident.value.is_empty() {
-                continue;
-            }
-            let scheme = ident
-                .scheme
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string());
-            sqlx::query(
-                "INSERT OR REPLACE INTO book_identifiers (book_id, scheme, value)
-                 VALUES (?, ?, ?)",
-            )
-            .bind(book_id)
-            .bind(&scheme)
-            .bind(&ident.value)
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        // FTS row. Written inline so the bulk reindex doesn't need a trigger
-        // fan-out across six tables. Keeps the denormalized row in lock-step
-        // with the book's canonical inserts above.
-        let authors_text = join_names(
-            m.creators
-                .iter()
-                .chain(m.contributors.iter())
-                .map(|c| c.name.as_str()),
-        );
-        let series_text = m.series.clone().unwrap_or_default();
-        let tags_text = join_names(m.subjects.iter().map(String::as_str));
-        sqlx::query(
-            "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(book_id)
-        .bind(&title)
-        .bind(&authors_text)
-        .bind(&series_text)
-        .bind(&tags_text)
-        .bind(m.description.as_deref().unwrap_or(""))
-        .bind(first_isbn.as_deref().unwrap_or(""))
-        .execute(&mut *tx)
         .await?;
 
         if let Some((mime, bytes)) = b.cover {
-            new_covers.push((uuid, mime, bytes));
+            new_covers.push((inserted.uuid, mime, bytes));
         }
     }
 
@@ -706,13 +578,233 @@ pub async fn replace_books(
     // DB commit succeeded — now reconcile the covers directory. Delete the
     // files for every book that was replaced, then write out the new covers.
     delete_cover_files_for(&old_uuids);
+    materialize_new_covers(new_covers);
+
+    Ok(())
+}
+
+/// Fields the per-book outer loop needs after the canonical `books` /
+/// `book_files` inserts have run.
+struct InsertedBook {
+    book_id: i64,
+    uuid: String,
+    title: String,
+    first_isbn: Option<String>,
+}
+
+/// Insert the canonical `books` row (returning its id) and its single
+/// `book_files` row. Same SQL and bind order as the inline form.
+async fn insert_book_row(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    library_id: i64,
+    library_path: &str,
+    b: &crate::ebook::IndexedBook,
+) -> Result<InsertedBook, sqlx::Error> {
+    let m = &b.metadata;
+    let uuid = stable_uuid(library_path, &m.filename);
+    let (book_path, file_stem, file_ext) = split_filename(&m.filename);
+    let title = m.title.clone().unwrap_or_else(|| m.filename.clone());
+    let series_index_num = m.series_index.as_deref().and_then(parse_series_index);
+    let author_sort = m
+        .creators
+        .first()
+        .and_then(|c| c.file_as.clone())
+        .or_else(|| m.creators.first().map(|c| c.name.clone()));
+    let first_isbn = m
+        .identifiers
+        .iter()
+        .find(|id| {
+            id.scheme
+                .as_deref()
+                .is_some_and(|s| s.eq_ignore_ascii_case("isbn"))
+        })
+        .map(|id| id.value.clone());
+    let has_cover = i64::from(b.cover.is_some());
+
+    let book_id = sqlx::query_scalar::<_, i64>(
+        "INSERT INTO books
+            (uuid, library_id, path, title, sort, author_sort, series_index,
+             pubdate, has_cover, description, isbn, accent_color)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         RETURNING id",
+    )
+    .bind(&uuid)
+    .bind(library_id)
+    .bind(&book_path)
+    .bind(&title)
+    .bind(&title)
+    .bind(&author_sort)
+    .bind(series_index_num)
+    .bind(&m.published)
+    .bind(has_cover)
+    .bind(&m.description)
+    .bind(&first_isbn)
+    .bind(m.accent.as_deref())
+    .fetch_one(&mut **tx)
+    .await?;
+
+    let size_bytes = 0i64;
+    let mtime = m.modified.clone().unwrap_or_default();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime)
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(book_id)
+    .bind(&file_ext)
+    .bind(&file_stem)
+    .bind(size_bytes)
+    .bind(&mtime)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(InsertedBook {
+        book_id,
+        uuid,
+        title,
+        first_isbn,
+    })
+}
+
+/// Insert the per-book metadata join rows (authors + contributors, series,
+/// tags, publisher, language, identifiers). Same SQL, same order as the
+/// inline form — extracted only to keep `replace_books` legible.
+async fn insert_metadata_links(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    m: &EbookMetadata,
+) -> Result<(), sqlx::Error> {
+    // Authors + contributors both land in `authors` — role/file_as are
+    // flattened. The first creator gets position 0.
+    for (pos, c) in m.creators.iter().enumerate() {
+        let author_id = resolve_or_insert_author(tx, &c.name, c.file_as.as_deref()).await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO books_authors_link (book, author, position)
+             VALUES (?, ?, ?)",
+        )
+        .bind(book_id)
+        .bind(author_id)
+        .bind(pos as i64)
+        .execute(&mut **tx)
+        .await?;
+    }
+    let author_count = m.creators.len();
+    for (i, c) in m.contributors.iter().enumerate() {
+        let author_id = resolve_or_insert_author(tx, &c.name, c.file_as.as_deref()).await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO books_authors_link (book, author, position)
+             VALUES (?, ?, ?)",
+        )
+        .bind(book_id)
+        .bind(author_id)
+        .bind((author_count + i) as i64)
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    if let Some(series_name) = m.series.as_deref().filter(|s| !s.is_empty()) {
+        let series_id = resolve_or_insert_series(tx, series_name).await?;
+        sqlx::query("INSERT OR IGNORE INTO books_series_link (book, series) VALUES (?, ?)")
+            .bind(book_id)
+            .bind(series_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+
+    for subject in &m.subjects {
+        if subject.is_empty() {
+            continue;
+        }
+        let tag_id = resolve_or_insert_tag(tx, subject).await?;
+        sqlx::query("INSERT OR IGNORE INTO books_tags_link (book, tag) VALUES (?, ?)")
+            .bind(book_id)
+            .bind(tag_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+
+    if let Some(pub_name) = m.publisher.as_deref().filter(|s| !s.is_empty()) {
+        let pub_id = resolve_or_insert_publisher(tx, pub_name).await?;
+        sqlx::query("INSERT OR IGNORE INTO books_publishers_link (book, publisher) VALUES (?, ?)")
+            .bind(book_id)
+            .bind(pub_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+
+    if let Some(lang_code) = m.language.as_deref().filter(|s| !s.is_empty()) {
+        let lang_id = resolve_or_insert_language(tx, lang_code).await?;
+        sqlx::query("INSERT OR IGNORE INTO books_languages_link (book, language) VALUES (?, ?)")
+            .bind(book_id)
+            .bind(lang_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+
+    for ident in &m.identifiers {
+        if ident.value.is_empty() {
+            continue;
+        }
+        let scheme = ident
+            .scheme
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        sqlx::query(
+            "INSERT OR REPLACE INTO book_identifiers (book_id, scheme, value)
+             VALUES (?, ?, ?)",
+        )
+        .bind(book_id)
+        .bind(&scheme)
+        .bind(&ident.value)
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    Ok(())
+}
+
+/// Write the `books_fts` row for a book. Inline (rather than a trigger) so
+/// the bulk reindex doesn't fan out across six tables; keeps the
+/// denormalized row in lock-step with the canonical inserts.
+async fn insert_fts_row(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    title: &str,
+    first_isbn: Option<&str>,
+    m: &EbookMetadata,
+) -> Result<(), sqlx::Error> {
+    let authors_text = join_names(
+        m.creators
+            .iter()
+            .chain(m.contributors.iter())
+            .map(|c| c.name.as_str()),
+    );
+    let series_text = m.series.clone().unwrap_or_default();
+    let tags_text = join_names(m.subjects.iter().map(String::as_str));
+    sqlx::query(
+        "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(book_id)
+    .bind(title)
+    .bind(&authors_text)
+    .bind(&series_text)
+    .bind(&tags_text)
+    .bind(m.description.as_deref().unwrap_or(""))
+    .bind(first_isbn.unwrap_or(""))
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Write the cover bytes that accompanied a successful `replace_books`
+/// transaction. Filesystem side-effect, so deliberately split out of the
+/// transactional path — failures are logged, not fatal.
+fn materialize_new_covers(new_covers: Vec<(String, String, Vec<u8>)>) {
     for (uuid, mime, bytes) in new_covers {
         if let Err(e) = write_cover_file(&uuid, &mime, &bytes) {
             eprintln!("replace_books: failed to write cover for {uuid}: {e}");
         }
     }
-
-    Ok(())
 }
 
 // -----------------------------------------------------------------------------
