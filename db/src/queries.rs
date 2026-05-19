@@ -827,7 +827,14 @@ pub async fn list_books(
                b.title, b.description, b.series_index, b.has_cover,
                b.pubdate, b.last_modified, b.timestamp, b.isbn, b.accent_color,
                pub.name AS publisher_name, lang.code AS language_code,
-               s.name AS series_name
+               s.name AS series_name,
+
+               -- All formats for this book, sorted, as a JSON array. Drives the
+               -- F1.7 power-user table and the inline format-chip filter row.
+               (SELECT json_group_array(format)
+                  FROM (SELECT format FROM book_files
+                         WHERE book_id = b.id
+                         ORDER BY format))                  AS formats_json
         FROM books b
         JOIN libraries l ON l.id = b.library_id
         LEFT JOIN book_files bf ON bf.book_id = b.id
@@ -889,7 +896,7 @@ pub async fn list_books(
             toc_count: 0,
             cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
             accent: r.get("accent_color"),
-            formats: vec![],
+            formats: parse_json_array(r.get("formats_json"))?,
             added_at: r.get("timestamp"),
             error: None,
         });
@@ -1147,7 +1154,12 @@ pub async fn search_books(
                b.title, b.description, b.series_index, b.has_cover,
                b.pubdate, b.last_modified, b.timestamp, b.isbn, b.accent_color,
                pub.name AS publisher_name, lang.code AS language_code,
-               s.name AS series_name
+               s.name AS series_name,
+
+               (SELECT json_group_array(format)
+                  FROM (SELECT format FROM book_files
+                         WHERE book_id = b.id
+                         ORDER BY format))                  AS formats_json
         FROM books_fts
         JOIN books b ON b.id = books_fts.rowid
         JOIN libraries l ON l.id = b.library_id
@@ -1211,7 +1223,7 @@ pub async fn search_books(
             toc_count: 0,
             cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
             accent: r.get("accent_color"),
-            formats: vec![],
+            formats: parse_json_array(r.get("formats_json"))?,
             added_at: r.get("timestamp"),
             error: None,
         });
@@ -2356,6 +2368,38 @@ mod tests {
             .unwrap();
         assert_eq!(book_count, 1);
         assert_eq!(fts_count, 1, "FTS row count must match book count");
+    }
+
+    #[tokio::test]
+    async fn list_books_populates_formats_from_book_files() {
+        // Regression: F1.7 power-user table & inline format chips read
+        // `EbookMetadata.formats` off the list endpoint; if list_books only
+        // returns `vec![]` the chip row hides itself entirely.
+        //
+        // The single-format path (one book_files row per book) is the only
+        // shape the existing list_books LEFT JOIN handles cleanly — adding a
+        // second physical file currently duplicates the parent row, which is
+        // tracked separately for the future multi-format query refactor that
+        // `get_book` already implements via scalar subqueries.
+        let _covers = CoversTempDir::new("list_books_formats");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "alpha.epub",
+                Some("Alpha"),
+                &["Author A"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+        let books = list_books(&pool, "/lib").await.unwrap();
+        assert_eq!(books.len(), 1);
+        assert_eq!(books[0].formats, vec!["EPUB".to_string()]);
     }
 
     #[tokio::test]

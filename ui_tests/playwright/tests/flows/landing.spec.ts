@@ -83,6 +83,35 @@ test("sorts by title descending when the Title header is clicked", async ({ page
   );
 });
 
+test("filters by format chip and clears via the All-formats chip", async ({ page }) => {
+  await gotoReady(page, "/");
+  await expect(page.getByTestId(/^ebook-row-/)).toHaveCount(FIXTURE_BOOKS.length);
+
+  const chipRow = page.getByTestId("lib-format-chips");
+  await expect(chipRow).toBeVisible();
+
+  // Every fixture EPUB shows up under the "ePub" chip; clicking it keeps
+  // the same row count and toggles the chip's aria-pressed state.
+  const epubChip = chipRow.locator('button[data-format="epub"]');
+  await expect(epubChip).toContainText(`${FIXTURE_BOOKS.length}`);
+  await epubChip.click();
+
+  await expect(epubChip).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId(/^ebook-row-/)).toHaveCount(FIXTURE_BOOKS.length);
+
+  // Every visible row exposes its formats in the new column.
+  const formatCells = page.getByTestId("ebook-cell-formats");
+  await expect(formatCells.first()).toContainText("EPUB");
+
+  // Clearing via the "All formats" chip returns to the unfiltered state.
+  await chipRow.locator('button[data-format="all"]').click();
+  await expect(epubChip).toHaveAttribute("aria-pressed", "false");
+  await expect(chipRow.locator('button[data-format="all"]')).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+});
+
 test("filters by author chip and clears via the clear-all button", async ({ page }) => {
   await gotoReady(page, "/");
   await expect(page.getByTestId(/^ebook-row-/)).toHaveCount(FIXTURE_BOOKS.length);

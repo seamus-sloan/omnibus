@@ -95,13 +95,36 @@ pub fn LandingPage() -> Element {
         }
     };
 
+    let path_subtitle = lib.path.as_ref().map(|p| short_path(p)).unwrap_or_default();
+    let visible_count = visible_books.len();
+    let filters_for_chips = prefs().filters.clone();
+    let total_formats: usize = facet_counts_view.formats.iter().map(|(_, c)| c).sum();
+
     rsx! {
-        section { class: "card",
-            h1 { "Your Library" }
-            p { class: "subtitle",
-                if let Some(path) = lib.path.as_ref() {
-                    "{path} · {book_count} book(s)"
-                } else {
+        header { class: "lib-header", "data-testid": "lib-header",
+            div { class: "lib-header-kicker",
+                // Semantic page title — kept visually small (label-style) so
+                // the cinematic count below reads as the dominant element,
+                // but assistive tech and `getByRole("heading", { level: 1 })`
+                // still find a stable "Your Library" anchor.
+                h1 { class: "label lib-header-kicker-title", "Your Library" }
+                if !path_subtitle.is_empty() {
+                    span { class: "mono lib-header-path", " · {path_subtitle}" }
+                }
+            }
+            div { class: "lib-header-row",
+                p { class: "lib-header-title",
+                    em { "{book_count}" }
+                    " "
+                    if book_count == 1 { "book" } else { "books" }
+                }
+                Toolbar {
+                    prefs: prefs(),
+                    on_change: save.clone(),
+                }
+            }
+            if lib.path.is_none() {
+                p { class: "lib-header-hint",
                     "Configure your ebook library path in Settings."
                 }
             }
@@ -113,9 +136,20 @@ pub fn LandingPage() -> Element {
             }
         }
 
-        Toolbar {
-            prefs: prefs(),
-            on_change: save.clone(),
+        FormatChips {
+            counts: facet_counts_view.formats.clone(),
+            total: total_formats,
+            visible_count: visible_count,
+            book_count: book_count,
+            selected: filters_for_chips.formats.clone(),
+            on_change: {
+                let mut save = save.clone();
+                move |formats: Vec<String>| {
+                    let mut next = prefs.peek().clone();
+                    next.filters.formats = formats;
+                    save(next);
+                }
+            },
         }
 
         div { class: if prefs().filters_open { "lib-layout" } else { "lib-layout lib-layout--collapsed" },
@@ -160,7 +194,6 @@ pub fn LandingPage() -> Element {
                         ViewMode::Grid => rsx! {
                             BookGrid {
                                 books: visible_books.clone(),
-                                server_url: server_url_for_row.clone(),
                             }
                         },
                     }
@@ -181,6 +214,15 @@ pub fn LandingPage() -> Element {
             }
         }
     }
+}
+
+/// Short, human-friendly tail of an absolute library path. We show only the
+/// last segment to keep the header line tidy — full path lives in Settings.
+fn short_path(path: &str) -> String {
+    path.rsplit('/')
+        .find(|s| !s.is_empty())
+        .unwrap_or(path)
+        .to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +352,10 @@ fn Toolbar(prefs: ViewPrefs, on_change: EventHandler<ViewPrefs>) -> Element {
 struct FacetCounts {
     authors: Vec<(String, usize)>,
     series: Vec<(String, usize)>,
+    /// Normalized lowercase format keys (`"epub"`, `"m4b"`, …) paired with
+    /// counts. The display label is derived at render time via
+    /// [`format_display_label`] so the keys stay canonical.
+    formats: Vec<(String, usize)>,
 }
 
 #[component]
@@ -391,7 +437,10 @@ fn FacetSection(
                 for (name, count) in items.iter() {
                     li {
                         button {
-                            class: "lib-chip",
+                            // Layer Atrium's `.chip` look onto the existing
+                            // `.lib-chip` class — the Playwright selector
+                            // `button.lib-chip[data-value="…"]` still matches.
+                            class: "chip lib-chip",
                             "aria-pressed": "{selected_set.contains(&name)}",
                             "data-value": "{name}",
                             title: "{name}",
@@ -400,10 +449,81 @@ fn FacetSection(
                                 move |_| on_toggle.call(name.clone())
                             },
                             span { class: "lib-chip-label", "{name}" }
-                            span { class: "lib-chip-count", "{count}" }
+                            span { class: "count lib-chip-count", "{count}" }
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Format chips (top-of-page inline filter)
+// ---------------------------------------------------------------------------
+
+#[component]
+fn FormatChips(
+    counts: Vec<(String, usize)>,
+    total: usize,
+    visible_count: usize,
+    book_count: usize,
+    selected: Vec<String>,
+    on_change: EventHandler<Vec<String>>,
+) -> Element {
+    if counts.is_empty() {
+        return rsx! { Fragment {} };
+    }
+    let selected_set: HashSet<String> = selected.iter().cloned().collect();
+    let all_active = selected.is_empty();
+
+    rsx! {
+        div { class: "lib-format-chips",
+            "data-testid": "lib-format-chips",
+            role: "group",
+            aria_label: "Format filters",
+
+            span { class: "label lib-format-chips-label", "Filter" }
+
+            button {
+                class: if all_active { "chip on" } else { "chip" },
+                "data-format": "all",
+                "aria-pressed": "{all_active}",
+                onclick: move |_| on_change.call(Vec::new()),
+                "All formats "
+                span { class: "count", "{total}" }
+            }
+
+            for (key, count) in counts.into_iter() {
+                {
+                    let is_selected = selected_set.contains(&key);
+                    let label = format_display_label(&key);
+                    let key_for_click = key.clone();
+                    let selected_for_click = selected.clone();
+                    rsx! {
+                        button {
+                            class: if is_selected { "chip on" } else { "chip" },
+                            "data-format": "{key}",
+                            "aria-pressed": "{is_selected}",
+                            onclick: move |_| {
+                                let mut next: Vec<String> = selected_for_click.clone();
+                                if let Some(pos) = next.iter().position(|v| v == &key_for_click) {
+                                    next.remove(pos);
+                                } else {
+                                    next.push(key_for_click.clone());
+                                }
+                                on_change.call(next);
+                            },
+                            "{label} "
+                            span { class: "count", "{count}" }
+                        }
+                    }
+                }
+            }
+
+            div { class: "lib-format-chips-spacer" }
+            span { class: "mono lib-format-chips-count",
+                "{visible_count} of {book_count}"
             }
         }
     }
@@ -467,6 +587,7 @@ fn BookTable(
                         }
                         th { class: "ebook-col-publisher", "Publisher" }
                         th { class: "ebook-col-published", "Published" }
+                        th { class: "ebook-col-formats", "Formats" }
                         SortableHeader {
                             class: "ebook-col-updated".to_string(),
                             label: "Last Updated".to_string(),
@@ -592,6 +713,15 @@ fn EbookRow(book: EbookMetadata, server_url: String) -> Element {
             td { class: "ebook-col-series", "data-testid": "ebook-cell-series", "{series_line}" }
             td { class: "ebook-col-publisher", "data-testid": "ebook-cell-publisher", {book.publisher.as_deref().unwrap_or("")} }
             td { class: "ebook-col-published", "data-testid": "ebook-cell-published", {book.published.as_deref().unwrap_or("")} }
+            td { class: "ebook-col-formats", "data-testid": "ebook-cell-formats",
+                if book.formats.is_empty() {
+                    span { class: "ebook-cell-formats-empty", "—" }
+                } else {
+                    for fmt in book.formats.iter() {
+                        span { class: "format-badge", "{format_badge_label(fmt)}" }
+                    }
+                }
+            }
             td { class: "ebook-col-updated", "data-testid": "ebook-cell-updated", "{updated}" }
             td { class: "ebook-col-added", "data-testid": "ebook-cell-added", "{added}" }
             td { class: "ebook-col-language", "data-testid": "ebook-cell-language", {book.language.as_deref().unwrap_or("")} }
@@ -604,14 +734,13 @@ fn EbookRow(book: EbookMetadata, server_url: String) -> Element {
 // ---------------------------------------------------------------------------
 
 #[component]
-fn BookGrid(books: Vec<EbookMetadata>, server_url: String) -> Element {
+fn BookGrid(books: Vec<EbookMetadata>) -> Element {
     rsx! {
         div { class: "lib-grid", "data-testid": "lib-grid", role: "list",
             for book in books.into_iter() {
                 GridTile {
                     key: "{book.filename}",
                     book: book,
-                    server_url: server_url.clone(),
                 }
             }
         }
@@ -619,18 +748,17 @@ fn BookGrid(books: Vec<EbookMetadata>, server_url: String) -> Element {
 }
 
 #[component]
-fn GridTile(book: EbookMetadata, server_url: String) -> Element {
+fn GridTile(book: EbookMetadata) -> Element {
     let id = book.id;
     let display_title = book.title.as_deref().unwrap_or(&book.filename).to_string();
     let tile_testid = format!("ebook-tile-{}", row_slug(&book.filename));
-    let has_cover = book.cover_url.is_some();
-    let thumb_base = format!("{server_url}/api/thumbs/{}", book.id);
     let authors = contributor_names(&book.creators);
+    let book_for_cover = book.clone();
     let nav = use_navigator();
 
     rsx! {
-        div {
-            class: "lib-tile",
+        a {
+            class: "cover-link lib-tile",
             "data-testid": "{tile_testid}",
             role: "listitem",
             tabindex: "0",
@@ -643,22 +771,7 @@ fn GridTile(book: EbookMetadata, server_url: String) -> Element {
                     nav.push(Route::BookDetail { id });
                 }
             },
-            div { class: "lib-tile-cover",
-                if has_cover {
-                    img {
-                        class: "lib-tile-img",
-                        src: "{thumb_base}/md",
-                        srcset: "{thumb_base}/sm 160w, {thumb_base}/md 320w, {thumb_base}/lg 640w",
-                        sizes: "(max-width: 640px) 160px, (max-width: 1280px) 320px, 640px",
-                        alt: "Cover of {display_title}",
-                        loading: "lazy",
-                        width: "320",
-                        height: "480",
-                    }
-                } else {
-                    div { class: "lib-tile-img lib-tile-fallback", "—" }
-                }
-            }
+            crate::components::atrium::Cover { book: book_for_cover }
             div { class: "lib-tile-title", "{display_title}" }
             if !authors.is_empty() {
                 div { class: "lib-tile-author", "{authors}" }
@@ -795,6 +908,14 @@ fn matches_filters(book: &EbookMetadata, filters: &ViewFilters) -> bool {
             return false;
         }
     }
+    if !filters.formats.is_empty()
+        && !filters
+            .formats
+            .iter()
+            .any(|f| book.formats.iter().any(|bf| bf.eq_ignore_ascii_case(f)))
+    {
+        return false;
+    }
     true
 }
 
@@ -812,6 +933,7 @@ fn apply_filters(books: &[EbookMetadata], filters: &ViewFilters) -> Vec<EbookMet
 fn facet_counts(books: &[EbookMetadata]) -> FacetCounts {
     let mut authors: BTreeMap<String, usize> = BTreeMap::new();
     let mut series: BTreeMap<String, usize> = BTreeMap::new();
+    let mut formats: BTreeMap<String, usize> = BTreeMap::new();
     for book in books {
         for c in &book.creators {
             *authors.entry(c.name.clone()).or_default() += 1;
@@ -821,11 +943,37 @@ fn facet_counts(books: &[EbookMetadata]) -> FacetCounts {
                 *series.entry(s.to_string()).or_default() += 1;
             }
         }
+        for fmt in &book.formats {
+            let key = fmt.trim().to_ascii_lowercase();
+            if !key.is_empty() {
+                *formats.entry(key).or_default() += 1;
+            }
+        }
     }
     FacetCounts {
         authors: sorted_facet(authors),
         series: sorted_facet(series),
+        formats: sorted_facet(formats),
     }
+}
+
+/// User-facing label for a normalized format key. Recognized formats get a
+/// friendly name (`"epub"` → `"ePub"`, `"m4b"` → `"Audiobook"`); anything
+/// else passes through upper-cased.
+fn format_display_label(key: &str) -> String {
+    match key {
+        "epub" => "ePub".to_string(),
+        "m4b" => "Audiobook".to_string(),
+        "pdf" => "PDF".to_string(),
+        "mp3" => "Audiobook (MP3)".to_string(),
+        other => other.to_ascii_uppercase(),
+    }
+}
+
+/// Short badge text for the table's Formats column. Stays compact so a row
+/// with two formats doesn't overflow the cell.
+fn format_badge_label(raw: &str) -> String {
+    raw.trim().to_ascii_uppercase()
 }
 
 fn sorted_facet(map: BTreeMap<String, usize>) -> Vec<(String, usize)> {
@@ -1138,6 +1286,7 @@ mod tests {
         let f = ViewFilters {
             authors: vec!["Tolkien, J.R.R.".into(), "Asimov, Isaac".into()],
             series: vec!["Foundation".into()],
+            ..Default::default()
         };
         let out = apply_filters(&s, &f);
         // alpha is Tolkien + Foundation, beta is Asimov + Foundation, gamma
@@ -1175,5 +1324,96 @@ mod tests {
         b[0].series = Some(String::new());
         let f = facet_counts(&b);
         assert!(f.series.iter().all(|(s, _)| !s.is_empty()));
+    }
+
+    // --- format filter ---
+
+    fn with_formats(mut b: EbookMetadata, formats: &[&str]) -> EbookMetadata {
+        b.formats = formats.iter().map(|s| (*s).to_string()).collect();
+        b
+    }
+
+    #[test]
+    fn format_counts_normalize_case_insensitively() {
+        let books = vec![
+            with_formats(sample()[0].clone(), &["EPUB"]),
+            with_formats(sample()[1].clone(), &["epub", "m4b"]),
+            with_formats(sample()[2].clone(), &["M4B"]),
+        ];
+        let f = facet_counts(&books);
+        let formats: std::collections::HashMap<_, _> = f.formats.into_iter().collect();
+        assert_eq!(formats.get("epub").copied(), Some(2));
+        assert_eq!(formats.get("m4b").copied(), Some(2));
+    }
+
+    #[test]
+    fn empty_formats_filter_keeps_all_books() {
+        let books = vec![
+            with_formats(sample()[0].clone(), &["EPUB"]),
+            with_formats(sample()[1].clone(), &["m4b"]),
+        ];
+        let out = apply_filters(&books, &ViewFilters::default());
+        assert_eq!(ids(&out), vec![1, 2]);
+    }
+
+    #[test]
+    fn format_filter_or_within_bucket() {
+        let books = vec![
+            with_formats(sample()[0].clone(), &["epub"]),
+            with_formats(sample()[1].clone(), &["m4b"]),
+            with_formats(sample()[2].clone(), &["pdf"]),
+        ];
+        let f = ViewFilters {
+            formats: vec!["epub".into(), "m4b".into()],
+            ..Default::default()
+        };
+        let out = apply_filters(&books, &f);
+        assert_eq!(ids(&out), vec![1, 2]);
+    }
+
+    #[test]
+    fn format_filter_matches_case_insensitively() {
+        // A book whose persisted format string is upper-case "EPUB" should
+        // still match a filter chip whose normalized key is "epub".
+        let books = vec![with_formats(sample()[0].clone(), &["EPUB"])];
+        let f = ViewFilters {
+            formats: vec!["epub".into()],
+            ..Default::default()
+        };
+        let out = apply_filters(&books, &f);
+        assert_eq!(ids(&out), vec![1]);
+    }
+
+    #[test]
+    fn format_filter_intersects_with_other_facets() {
+        // Tolkien wrote `alpha` (Fantasy + Foundation) and only that book is
+        // EPUB — a Tolkien + EPUB filter should leave just alpha.
+        let books = vec![
+            with_formats(sample()[0].clone(), &["epub"]),
+            with_formats(sample()[1].clone(), &["m4b"]),
+        ];
+        let f = ViewFilters {
+            authors: vec!["Tolkien, J.R.R.".into()],
+            formats: vec!["epub".into()],
+            ..Default::default()
+        };
+        let out = apply_filters(&books, &f);
+        assert_eq!(ids(&out), vec![1]);
+    }
+
+    #[test]
+    fn format_display_label_friendly_names() {
+        assert_eq!(format_display_label("epub"), "ePub");
+        assert_eq!(format_display_label("m4b"), "Audiobook");
+        assert_eq!(format_display_label("pdf"), "PDF");
+        // Unknown formats fall through upper-cased.
+        assert_eq!(format_display_label("azw3"), "AZW3");
+    }
+
+    #[test]
+    fn short_path_returns_last_segment() {
+        assert_eq!(short_path("/Users/ek/books"), "books");
+        assert_eq!(short_path("/Users/ek/books/"), "books");
+        assert_eq!(short_path("relative"), "relative");
     }
 }
