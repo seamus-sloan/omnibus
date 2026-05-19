@@ -299,52 +299,72 @@ body {
   letter-spacing: 0.04em;
 }
 
-/* Decorative book-spine row. Absolutely positioned so the tagline below
-   can stack on top via z-index. Inline `background`/`color` set per
-   spine; height/rotation patterns live here so the markup stays clean. */
-.auth-shell-spines {
+/* Decorative bookshelf: a row of upright books standing on a wooden
+   plank. Anchored to the top of the art panel so the tagline below sits
+   on its own ground line. Books are pure block elements (no rotation)
+   with varied widths/heights to mimic the casual library look. Each
+   spine has a small decorative dot rendered via a child span. */
+.auth-shell-shelf {
   position: absolute;
-  left: 3.5rem; right: 3.5rem; bottom: 3.5rem; top: 6rem;
-  display: flex;
-  gap: 0.5rem;
-  align-items: flex-end;
+  left: 3.5rem; right: 3.5rem; top: 6rem;
   pointer-events: none;
-  opacity: 0.92;
   z-index: 1;
 }
-.auth-shell-spine {
-  flex: 1 1 0;
-  min-width: 0;
-  border-radius: 2px;
-  box-shadow:
-    inset 1px 0 0 rgba(255, 255, 255, 0.12),
-    inset -1px 0 0 rgba(0, 0, 0, 0.25),
-    0 16px 30px -20px rgba(0, 0, 0, 0.7);
-  overflow: hidden;
+.auth-shell-spines {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 320px;
 }
-/* Heights cycle every 4, rotations every 5, vertical offset every 3 —
-   gives the "casually leaned against each other" look without random
-   per-render churn. */
-.auth-shell-spine-0 { height: 230px; transform: rotate(-4deg)   translateY(0); }
-.auth-shell-spine-1 { height: 274px; transform: rotate(-2.3deg) translateY(8px); }
-.auth-shell-spine-2 { height: 318px; transform: rotate(-0.6deg) translateY(16px); }
-.auth-shell-spine-3 { height: 362px; transform: rotate(1.1deg)  translateY(0); }
-.auth-shell-spine-4 { height: 230px; transform: rotate(2.8deg)  translateY(8px); }
-.auth-shell-spine-5 { height: 274px; transform: rotate(-4deg)   translateY(16px); }
-.auth-shell-spine-6 { height: 318px; transform: rotate(-2.3deg) translateY(0); }
-.auth-shell-spine-7 { height: 362px; transform: rotate(-0.6deg) translateY(8px); }
-.auth-shell-spine-8 { height: 230px; transform: rotate(1.1deg)  translateY(16px); }
-.auth-shell-spine-title {
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  padding: 0.9rem 0;
-  font-family: var(--auth-serif);
-  font-size: 0.8rem;
-  font-style: italic;
-  text-align: center;
-  height: 100%;
-  white-space: nowrap;
-  overflow: hidden;
+.auth-shell-spine {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px 2px 0 0;
+  /* board edge: subtle spine highlight + shadow + drop shadow on the shelf */
+  box-shadow:
+    inset 1px 0 0 rgba(255, 255, 255, 0.14),
+    inset -1px 0 0 rgba(0, 0, 0, 0.28),
+    inset 0 -8px 12px -8px rgba(0, 0, 0, 0.45),
+    0 6px 8px -4px rgba(0, 0, 0, 0.55);
+}
+/* Varied widths (28–52px) and heights (250–340px) — gives the random
+   library look while staying deterministic across SSR/WASM/native. */
+.auth-shell-spine-0 { width: 36px; height: 280px; }
+.auth-shell-spine-1 { width: 44px; height: 320px; }
+.auth-shell-spine-2 { width: 28px; height: 240px; }
+.auth-shell-spine-3 { width: 50px; height: 340px; }
+.auth-shell-spine-4 { width: 40px; height: 300px; }
+.auth-shell-spine-5 { width: 32px; height: 260px; }
+.auth-shell-spine-6 { width: 46px; height: 310px; }
+.auth-shell-spine-7 { width: 36px; height: 280px; }
+.auth-shell-spine-8 { width: 42px; height: 290px; }
+/* Small motif circle on each spine — outlined dot using currentColor
+   with reduced opacity so it picks up the book's accent ink subtly. */
+.auth-shell-spine-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(0, 0, 0, 0.35);
+  background: transparent;
+  opacity: 0.7;
+}
+/* Wooden plank under the books — warm brown gradient with a darker
+   shadow line below to suggest a real shelf. */
+.auth-shell-shelf-plank {
+  height: 14px;
+  margin-top: -2px;
+  border-radius: 2px;
+  background:
+    linear-gradient(180deg,
+      oklch(0.42 0.04 55) 0%,
+      oklch(0.34 0.04 55) 55%,
+      oklch(0.26 0.03 55) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 10px 16px -8px rgba(0, 0, 0, 0.7);
 }
 
 .auth-shell-tagline { margin-top: auto; max-width: 460px; position: relative; z-index: 2; }
