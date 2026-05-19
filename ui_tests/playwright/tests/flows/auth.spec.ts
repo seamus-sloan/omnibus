@@ -122,7 +122,10 @@ test("register routes a password error to the password Field", async ({ page }) 
   const passwordInput = page.getByLabel("Password", { exact: true });
   await expect(passwordInput).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByLabel("Username")).toHaveAttribute("aria-invalid", "false");
-  const passwordField = passwordInput.locator("xpath=ancestor::label[contains(@class,'auth-field')]");
+  // Field's outer element is a <div class="auth-field …"> — the inner
+  // <label for="…"> only wraps the visible label text so the input's
+  // accessible name stays "Password" once an error appears.
+  const passwordField = passwordInput.locator("xpath=ancestor::div[contains(@class,'auth-field')]");
   await expect(passwordField.getByRole("alert")).toContainText("password is too short");
   await expect(
     page.getByRole("button", { name: /fix to continue/i }),
