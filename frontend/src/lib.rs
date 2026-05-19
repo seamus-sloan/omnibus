@@ -61,25 +61,18 @@ pub fn BookDetail(id: i64) -> Element {
 }
 
 /// Route target for `/login` — credential entry form. Rendered without the
-/// main screen chrome so the login flow stands alone.
+/// main screen chrome so the login flow stands alone. `LoginPage` owns its
+/// own full-page chrome via [`crate::components::auth::AuthShell`].
 #[component]
 pub fn Login() -> Element {
-    rsx! {
-        div { class: "auth-shell",
-            LoginPage {}
-        }
-    }
+    rsx! { LoginPage {} }
 }
 
 /// Route target for `/register` — account-creation form. Same chrome as
 /// [`Login`] so the two pages feel like one flow.
 #[component]
 pub fn Register() -> Element {
-    rsx! {
-        div { class: "auth-shell",
-            RegisterPage {}
-        }
-    }
+    rsx! { RegisterPage {} }
 }
 
 /// Platform-specific page chrome. Web puts nav at the top of the flow;
@@ -274,10 +267,6 @@ body {
   color: var(--auth-ink-0);
   font-family: var(--auth-sans);
 }
-@media (max-width: 720px) {
-  .auth-shell-grid { grid-template-columns: 1fr; }
-  .auth-shell-art { display: none; }
-}
 
 .auth-shell-art {
   background: var(--auth-bg-1);
@@ -287,6 +276,14 @@ body {
   flex-direction: column;
   position: relative;
   overflow: hidden;
+}
+
+/* Mobile collapse: hides the art panel below 720px. Placed *after* the
+   base .auth-shell-art rule so the cascade-by-source-order picks
+   `display: none` instead of the base `display: flex`. */
+@media (max-width: 720px) {
+  .auth-shell-grid { grid-template-columns: 1fr; }
+  .auth-shell-art { display: none; }
 }
 .auth-shell-brand { display: flex; align-items: center; gap: 0.6rem; }
 .auth-shell-brand-mark {
@@ -494,6 +491,83 @@ body {
 .auth-strength-label-rhs.auth-strength-tier-warn { color: var(--auth-warn); }
 .auth-strength-label-rhs.auth-strength-tier-mid  { color: #eab308; }
 .auth-strength-label-rhs.auth-strength-tier-ok   { color: var(--auth-ok); }
+
+/* Page-level adornments consumed by LoginPage / RegisterPage on top of the
+   F1.6 primitives. Stays in the auth-* namespace so a future move to a
+   dedicated stylesheet is grep-friendly. */
+.auth-form-inner { display: block; }
+.auth-submit {
+  width: 100%;
+  justify-content: center;
+  margin-top: 0.4rem;
+}
+.auth-field-action-link {
+  color: var(--auth-accent);
+  font-size: 0.78rem;
+  text-decoration: none;
+}
+.auth-field-action-link:hover { text-decoration: underline; }
+
+.auth-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.4rem 0 0.8rem;
+  font-size: 0.85rem;
+  color: var(--auth-ink-1);
+  cursor: pointer;
+}
+.auth-checkbox-block { align-items: flex-start; line-height: 1.5; }
+.auth-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  accent-color: var(--auth-accent);
+  margin-top: 1px;
+}
+
+.auth-requirements {
+  margin-top: 0.9rem;
+  padding: 0.7rem 0.85rem;
+  background: var(--auth-bg-2);
+  border: 1px solid var(--auth-line-2);
+  border-radius: 10px;
+}
+.auth-requirements-title {
+  font-family: var(--auth-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--auth-ink-2);
+  margin-bottom: 0.5rem;
+}
+.auth-req {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--auth-ink-2);
+  padding: 0.15rem 0;
+}
+.auth-req-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--auth-ink-3);
+  flex: 0 0 6px;
+}
+.auth-req.ok { color: var(--auth-ink-0); }
+.auth-req.ok .auth-req-dot { background: var(--auth-ok); }
+.auth-req.bad .auth-req-dot { background: var(--auth-bad); }
+
+.auth-footer-note {
+  margin-top: 1.1rem;
+  text-align: center;
+  font-family: var(--auth-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  color: var(--auth-ink-3);
+}
 
 .top-nav {
   display: flex;
