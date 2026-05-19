@@ -107,8 +107,23 @@ pub fn AtriumRoot(children: Element) -> Element {
 /// accent color (or left to inherit the page-level default). Consumers who
 /// want the accent to bleed past the cover (e.g. detail-page hero backdrop)
 /// can read the same value from `book.accent`.
+///
+/// Props:
+/// - `book` — the metadata row driving the cover.
+/// - `src_override` — when present, used for the rendered `<img src>`
+///   instead of `book.cover_url`. Grid callers point this at the
+///   `/api/thumbs/:id/{sm,md,lg}` responsive thumbnail endpoint with the
+///   client's `use_server_url()` prefix; the raw `/api/covers/:id` would
+///   skip the resized WebP cache and break the mobile origin.
+/// - `srcset` / `sizes` — companion responsive-image attributes for the
+///   thumbnail variant; ignored when no image is rendered.
 #[component]
-pub fn Cover(book: EbookMetadata) -> Element {
+pub fn Cover(
+    book: EbookMetadata,
+    #[props(default)] src_override: Option<String>,
+    #[props(default)] srcset: Option<String>,
+    #[props(default)] sizes: Option<String>,
+) -> Element {
     let accent_style = book
         .accent
         .as_deref()
@@ -134,6 +149,9 @@ pub fn Cover(book: EbookMetadata) -> Element {
         .next_back()
         .unwrap_or("")
         .to_uppercase();
+    let image_src = src_override.or_else(|| book.cover_url.clone());
+    let srcset_attr = srcset.unwrap_or_default();
+    let sizes_attr = sizes.unwrap_or_default();
 
     rsx! {
         div {
@@ -142,8 +160,14 @@ pub fn Cover(book: EbookMetadata) -> Element {
             "data-testid": "cover",
             div {
                 class: "cover tpl-plate",
-                if let Some(url) = book.cover_url.clone() {
-                    img { src: "{url}", alt: "Cover of {title}" }
+                if let Some(url) = image_src {
+                    img {
+                        src: "{url}",
+                        srcset: "{srcset_attr}",
+                        sizes: "{sizes_attr}",
+                        alt: "Cover of {title}",
+                        loading: "lazy",
+                    }
                 } else {
                     div { class: "ca", "{author_label}" }
                     div { class: "ct", "{title}" }

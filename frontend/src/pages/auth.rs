@@ -86,7 +86,7 @@ pub fn LoginPage() -> Element {
                         dismissible: false,
                     }
                 }
-                Field { label: "Username".to_string(),
+                Field { label: "Username".to_string(), input_id: "login-username".to_string(),
                     input {
                         id: "login-username",
                         name: "username",
@@ -98,6 +98,7 @@ pub fn LoginPage() -> Element {
                 }
                 Field {
                     label: "Password".to_string(),
+                    input_id: "login-password".to_string(),
                     // Stub: forgot-password page is P3-deferred (F5.4).
                     // Routing it back to /login keeps the affordance
                     // without dead routes.
@@ -225,7 +226,10 @@ pub fn RegisterPage() -> Element {
                         dismissible: false,
                     }
                 }
-                Field { label: "Username".to_string(), error: username_err,
+                Field {
+                    label: "Username".to_string(),
+                    input_id: "register-username".to_string(),
+                    error: username_err,
                     input {
                         id: "register-username",
                         name: "username",
@@ -239,7 +243,10 @@ pub fn RegisterPage() -> Element {
                         },
                     }
                 }
-                Field { label: "Password".to_string(), error: password_err,
+                Field {
+                    label: "Password".to_string(),
+                    input_id: "register-password".to_string(),
+                    error: password_err,
                     input {
                         id: "register-password",
                         name: "password",

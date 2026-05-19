@@ -821,29 +821,49 @@ pub async fn list_books(
     pool: &SqlitePool,
     library_path: &str,
 ) -> Result<Vec<EbookMetadata>, sqlx::Error> {
+    // One row per `books.id`. Every multi-valued relation (book_files,
+    // publishers, languages, series, formats) is fetched via scalar
+    // subquery so adding a second physical file (EPUB + M4B) doesn't
+    // duplicate the parent — the previous LEFT JOIN on `book_files`
+    // expanded the row count by format and would over-count the chip
+    // facets / inflate the table.
     let rows = sqlx::query(
         r#"
-        SELECT b.id, b.uuid, bf.filename AS file_stem, bf.format AS file_format,
+        SELECT b.id, b.uuid,
                b.title, b.description, b.series_index, b.has_cover,
                b.pubdate, b.last_modified, b.timestamp, b.isbn, b.accent_color,
-               pub.name AS publisher_name, lang.code AS language_code,
-               s.name AS series_name,
 
-               -- All formats for this book, sorted, as a JSON array. Drives the
-               -- F1.7 power-user table and the inline format-chip filter row.
+               (SELECT bf.filename FROM book_files bf
+                 WHERE bf.book_id = b.id
+                 ORDER BY (bf.format != 'EPUB'), bf.format
+                 LIMIT 1)                                   AS primary_filename,
+
+               (SELECT bf.format FROM book_files bf
+                 WHERE bf.book_id = b.id
+                 ORDER BY (bf.format != 'EPUB'), bf.format
+                 LIMIT 1)                                   AS primary_format,
+
+               (SELECT pub.name FROM books_publishers_link bpl
+                  JOIN publishers pub ON pub.id = bpl.publisher
+                 WHERE bpl.book = b.id ORDER BY pub.name LIMIT 1)
+                                                            AS publisher_name,
+
+               (SELECT lang.code FROM books_languages_link bll
+                  JOIN languages lang ON lang.id = bll.language
+                 WHERE bll.book = b.id ORDER BY lang.code LIMIT 1)
+                                                            AS language_code,
+
+               (SELECT s.name FROM books_series_link bsl
+                  JOIN series s ON s.id = bsl.series
+                 WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
+                                                            AS series_name,
+
                (SELECT json_group_array(format)
                   FROM (SELECT format FROM book_files
                          WHERE book_id = b.id
                          ORDER BY format))                  AS formats_json
         FROM books b
         JOIN libraries l ON l.id = b.library_id
-        LEFT JOIN book_files bf ON bf.book_id = b.id
-        LEFT JOIN books_publishers_link bpl ON bpl.book = b.id
-        LEFT JOIN publishers pub ON pub.id = bpl.publisher
-        LEFT JOIN books_languages_link bll ON bll.book = b.id
-        LEFT JOIN languages lang ON lang.id = bll.language
-        LEFT JOIN books_series_link bsl ON bsl.book = b.id
-        LEFT JOIN series s ON s.id = bsl.series
         WHERE l.path = ?
         ORDER BY b.sort, b.id
         "#,
@@ -856,9 +876,9 @@ pub async fn list_books(
     for r in rows {
         let id: i64 = r.get("id");
         let has_cover: i64 = r.get("has_cover");
-        let file_stem: Option<String> = r.get("file_stem");
-        let file_format: Option<String> = r.get("file_format");
-        let filename = match (file_stem, file_format) {
+        let primary_filename: Option<String> = r.get("primary_filename");
+        let primary_format: Option<String> = r.get("primary_format");
+        let filename = match (primary_filename, primary_format) {
             (Some(stem), Some(fmt)) => format!("{stem}.{}", fmt.to_ascii_lowercase()),
             _ => String::new(),
         };
@@ -1148,13 +1168,39 @@ pub async fn search_books(
         return Ok(Vec::new());
     };
 
+    // Mirror `list_books`: one row per `books.id` via scalar subqueries
+    // for every multi-valued relation, so multi-format books don't
+    // duplicate in search results / inflate facets.
     let rows = sqlx::query(
         r#"
-        SELECT b.id, b.uuid, bf.filename AS file_stem, bf.format AS file_format,
+        SELECT b.id, b.uuid,
                b.title, b.description, b.series_index, b.has_cover,
                b.pubdate, b.last_modified, b.timestamp, b.isbn, b.accent_color,
-               pub.name AS publisher_name, lang.code AS language_code,
-               s.name AS series_name,
+
+               (SELECT bf.filename FROM book_files bf
+                 WHERE bf.book_id = b.id
+                 ORDER BY (bf.format != 'EPUB'), bf.format
+                 LIMIT 1)                                   AS primary_filename,
+
+               (SELECT bf.format FROM book_files bf
+                 WHERE bf.book_id = b.id
+                 ORDER BY (bf.format != 'EPUB'), bf.format
+                 LIMIT 1)                                   AS primary_format,
+
+               (SELECT pub.name FROM books_publishers_link bpl
+                  JOIN publishers pub ON pub.id = bpl.publisher
+                 WHERE bpl.book = b.id ORDER BY pub.name LIMIT 1)
+                                                            AS publisher_name,
+
+               (SELECT lang.code FROM books_languages_link bll
+                  JOIN languages lang ON lang.id = bll.language
+                 WHERE bll.book = b.id ORDER BY lang.code LIMIT 1)
+                                                            AS language_code,
+
+               (SELECT s.name FROM books_series_link bsl
+                  JOIN series s ON s.id = bsl.series
+                 WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
+                                                            AS series_name,
 
                (SELECT json_group_array(format)
                   FROM (SELECT format FROM book_files
@@ -1163,13 +1209,6 @@ pub async fn search_books(
         FROM books_fts
         JOIN books b ON b.id = books_fts.rowid
         JOIN libraries l ON l.id = b.library_id
-        LEFT JOIN book_files bf ON bf.book_id = b.id
-        LEFT JOIN books_publishers_link bpl ON bpl.book = b.id
-        LEFT JOIN publishers pub ON pub.id = bpl.publisher
-        LEFT JOIN books_languages_link bll ON bll.book = b.id
-        LEFT JOIN languages lang ON lang.id = bll.language
-        LEFT JOIN books_series_link bsl ON bsl.book = b.id
-        LEFT JOIN series s ON s.id = bsl.series
         WHERE books_fts MATCH ? AND l.path = ?
         ORDER BY bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0), b.sort, b.id
         "#,
@@ -1183,9 +1222,9 @@ pub async fn search_books(
     for r in rows {
         let id: i64 = r.get("id");
         let has_cover: i64 = r.get("has_cover");
-        let file_stem: Option<String> = r.get("file_stem");
-        let file_format: Option<String> = r.get("file_format");
-        let filename = match (file_stem, file_format) {
+        let primary_filename: Option<String> = r.get("primary_filename");
+        let primary_format: Option<String> = r.get("primary_format");
+        let filename = match (primary_filename, primary_format) {
             (Some(stem), Some(fmt)) => format!("{stem}.{}", fmt.to_ascii_lowercase()),
             _ => String::new(),
         };
@@ -2373,14 +2412,8 @@ mod tests {
     #[tokio::test]
     async fn list_books_populates_formats_from_book_files() {
         // Regression: F1.7 power-user table & inline format chips read
-        // `EbookMetadata.formats` off the list endpoint; if list_books only
-        // returns `vec![]` the chip row hides itself entirely.
-        //
-        // The single-format path (one book_files row per book) is the only
-        // shape the existing list_books LEFT JOIN handles cleanly — adding a
-        // second physical file currently duplicates the parent row, which is
-        // tracked separately for the future multi-format query refactor that
-        // `get_book` already implements via scalar subqueries.
+        // `EbookMetadata.formats` off the list endpoint; if list_books
+        // returned `vec![]` the chip row would hide itself entirely.
         let _covers = CoversTempDir::new("list_books_formats");
         let pool = init_db("sqlite::memory:").await.unwrap();
         replace_books(
@@ -2400,6 +2433,86 @@ mod tests {
         let books = list_books(&pool, "/lib").await.unwrap();
         assert_eq!(books.len(), 1);
         assert_eq!(books[0].formats, vec!["EPUB".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn list_books_returns_one_row_per_book_with_multi_format() {
+        // Regression for PR #74 review: adding a second physical file
+        // (EPUB + M4B) used to duplicate the parent row because the outer
+        // query LEFT-JOINed `book_files`. The chip facets / table would
+        // then over-count. Both queries now use scalar subqueries so the
+        // result is one row per `books.id` and `.formats` carries both.
+        let _covers = CoversTempDir::new("list_books_multi");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "alpha.epub",
+                Some("Alpha"),
+                &["Author A"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+        let id = list_books(&pool, "/lib").await.unwrap()[0].id;
+        sqlx::query(
+            "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime)
+             VALUES (?, 'M4B', 'alpha', 0, '')",
+        )
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        assert_eq!(books.len(), 1, "multi-format must not duplicate rows");
+        assert_eq!(
+            books[0].formats,
+            vec!["EPUB".to_string(), "M4B".to_string()]
+        );
+        // EPUB wins the primary-filename tiebreak, matching get_book.
+        assert_eq!(books[0].filename, "alpha.epub");
+    }
+
+    #[tokio::test]
+    async fn search_books_returns_one_row_per_book_with_multi_format() {
+        // Same regression in the FTS path.
+        let _covers = CoversTempDir::new("search_books_multi");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "alpha.epub",
+                Some("Alpha"),
+                &["Author A"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+        let id = list_books(&pool, "/lib").await.unwrap()[0].id;
+        sqlx::query(
+            "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime)
+             VALUES (?, 'M4B', 'alpha', 0, '')",
+        )
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let results = search_books(&pool, "/lib", "Alpha").await.unwrap();
+        assert_eq!(results.len(), 1, "FTS results must not duplicate rows");
+        assert_eq!(
+            results[0].formats,
+            vec!["EPUB".to_string(), "M4B".to_string()]
+        );
     }
 
     #[tokio::test]

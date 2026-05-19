@@ -2,15 +2,25 @@ use dioxus::prelude::*;
 
 /// Form field with shared label / hint / error / success states.
 ///
-/// Owns the `<label>` and the input wrapper so callers stop hand-rolling
-/// label-input pairs with the same class triplet. Pass any input element
-/// (`input`, `select`, `textarea`) as `children`.
+/// The outer element is a `<div>`, and the visible label is a real
+/// `<label for={input_id}>`. **The error / hint message is rendered as a
+/// sibling of the input wrapper, not inside the label** — wrapping the
+/// alert in the `<label>` (as a prior version did) pollutes the input's
+/// accessible name, so `getByLabel("Password", { exact: true })` stops
+/// matching as soon as an error appears.
+///
+/// Callers pass any input element (`input`, `select`, `textarea`) as
+/// `children` and the matching `input_id` so the `<label>` can bind via
+/// `for=`.
 ///
 /// Props:
 /// - `label` — visible label text.
+/// - `input_id` — the `id` set on the inner input element; drives the
+///   label's `for=` binding so screen readers and Playwright's
+///   `getByLabel` resolve the input by label text alone.
 /// - `hint` — supporting copy under the input (hidden when an error is shown).
 /// - `error` — when present, switches the field to its error visual and
-///   shows the message under the input.
+///   shows the message under the input as `role="alert"`.
 /// - `success` — when true, switches the field to its success visual
 ///   (green accent + check mark).
 /// - `action` — optional right-aligned slot in the label row
@@ -19,6 +29,7 @@ use dioxus::prelude::*;
 #[component]
 pub fn Field(
     label: String,
+    input_id: String,
     #[props(default)] hint: Option<String>,
     #[props(default)] error: Option<String>,
     #[props(default = false)] success: bool,
@@ -29,9 +40,9 @@ pub fn Field(
     let wrapper_class = format!("auth-field {state_class}");
 
     rsx! {
-        label { class: "{wrapper_class}",
+        div { class: "{wrapper_class}",
             div { class: "auth-field-label-row",
-                span { class: "auth-field-label", "{label}" }
+                label { class: "auth-field-label", r#for: "{input_id}", "{label}" }
                 if let Some(slot) = action {
                     span { class: "auth-field-action", {slot} }
                 }

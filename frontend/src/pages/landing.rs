@@ -98,7 +98,6 @@ pub fn LandingPage() -> Element {
     let path_subtitle = lib.path.as_ref().map(|p| short_path(p)).unwrap_or_default();
     let visible_count = visible_books.len();
     let filters_for_chips = prefs().filters.clone();
-    let total_formats: usize = facet_counts_view.formats.iter().map(|(_, c)| c).sum();
 
     rsx! {
         header { class: "lib-header", "data-testid": "lib-header",
@@ -138,7 +137,6 @@ pub fn LandingPage() -> Element {
 
         FormatChips {
             counts: facet_counts_view.formats.clone(),
-            total: total_formats,
             visible_count: visible_count,
             book_count: book_count,
             selected: filters_for_chips.formats.clone(),
@@ -194,6 +192,7 @@ pub fn LandingPage() -> Element {
                         ViewMode::Grid => rsx! {
                             BookGrid {
                                 books: visible_books.clone(),
+                                server_url: server_url_for_row.clone(),
                             }
                         },
                     }
@@ -465,7 +464,6 @@ fn FacetSection(
 #[component]
 fn FormatChips(
     counts: Vec<(String, usize)>,
-    total: usize,
     visible_count: usize,
     book_count: usize,
     selected: Vec<String>,
@@ -490,8 +488,10 @@ fn FormatChips(
                 "data-format": "all",
                 "aria-pressed": "{all_active}",
                 onclick: move |_| on_change.call(Vec::new()),
+                // Count distinct books, not per-format memberships — a book
+                // with EPUB+M4B contributes 1, not 2.
                 "All formats "
-                span { class: "count", "{total}" }
+                span { class: "count", "{book_count}" }
             }
 
             for (key, count) in counts.into_iter() {
@@ -734,13 +734,14 @@ fn EbookRow(book: EbookMetadata, server_url: String) -> Element {
 // ---------------------------------------------------------------------------
 
 #[component]
-fn BookGrid(books: Vec<EbookMetadata>) -> Element {
+fn BookGrid(books: Vec<EbookMetadata>, server_url: String) -> Element {
     rsx! {
         div { class: "lib-grid", "data-testid": "lib-grid", role: "list",
             for book in books.into_iter() {
                 GridTile {
                     key: "{book.filename}",
                     book: book,
+                    server_url: server_url.clone(),
                 }
             }
         }
@@ -748,13 +749,27 @@ fn BookGrid(books: Vec<EbookMetadata>) -> Element {
 }
 
 #[component]
-fn GridTile(book: EbookMetadata) -> Element {
+fn GridTile(book: EbookMetadata, server_url: String) -> Element {
     let id = book.id;
     let display_title = book.title.as_deref().unwrap_or(&book.filename).to_string();
     let tile_testid = format!("ebook-tile-{}", row_slug(&book.filename));
     let authors = contributor_names(&book.creators);
     let book_for_cover = book.clone();
     let nav = use_navigator();
+
+    // Prefer the responsive `/api/thumbs/:id/{sm,md,lg}` endpoint over the
+    // raw `/api/covers/:id`: smaller payload (WebP, resized per slot) and
+    // the URL is server-prefixed so mobile picks up the right origin.
+    // Books with no cover fall back to the Atrium plate template.
+    let (thumb_src, thumb_srcset) = if book.cover_url.is_some() {
+        let base = format!("{server_url}/api/thumbs/{id}");
+        (
+            Some(format!("{base}/md")),
+            Some(format!("{base}/sm 160w, {base}/md 320w, {base}/lg 640w")),
+        )
+    } else {
+        (None, None)
+    };
 
     rsx! {
         a {
@@ -771,7 +786,15 @@ fn GridTile(book: EbookMetadata) -> Element {
                     nav.push(Route::BookDetail { id });
                 }
             },
-            crate::components::atrium::Cover { book: book_for_cover }
+            crate::components::atrium::Cover {
+                book: book_for_cover,
+                src_override: thumb_src,
+                srcset: thumb_srcset,
+                sizes: Some(
+                    "(max-width: 640px) 160px, (max-width: 1280px) 200px, 240px"
+                        .to_string(),
+                ),
+            }
             div { class: "lib-tile-title", "{display_title}" }
             if !authors.is_empty() {
                 div { class: "lib-tile-author", "{authors}" }
