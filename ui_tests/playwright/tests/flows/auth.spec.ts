@@ -34,7 +34,7 @@ test("renders the register page layout", async ({ page }) => {
   // StrengthMeter renders role=meter.
   await expect(page.getByRole("meter")).toBeVisible();
   // One checklist row is enough — full coverage is overkill.
-  await expect(page.getByText("At least 12 characters")).toBeVisible();
+  await expect(page.getByText("At least 10 characters")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Create account" }),
   ).toBeVisible();
