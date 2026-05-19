@@ -38,8 +38,6 @@ pub fn LoginPage() -> Element {
     let mut password = use_signal(String::new);
     let mut error = use_signal(|| Option::<String>::None);
     let mut submitting = use_signal(|| false);
-    // Presentational only this PR; LoginRequest.session_ttl wiring is the
-    // documented follow-up (F1.6 roadmap, "Keep me signed in" bullet).
     let mut keep_signed_in = use_signal(|| false);
     let nav = use_navigator();
 
@@ -198,6 +196,8 @@ pub fn RegisterPage() -> Element {
         _ => None,
     });
     let has_error = err.is_some();
+    let username_invalid = username_err.is_some();
+    let password_invalid = password_err.is_some();
     let submit_label = if submitting() {
         "Creating…"
     } else if has_error {
@@ -232,6 +232,7 @@ pub fn RegisterPage() -> Element {
                         r#type: "text",
                         autocomplete: "username",
                         value: "{username}",
+                        aria_invalid: "{username_invalid}",
                         oninput: move |e| username.set(e.value()),
                     }
                 }
@@ -242,6 +243,7 @@ pub fn RegisterPage() -> Element {
                         r#type: "password",
                         autocomplete: "new-password",
                         value: "{password}",
+                        aria_invalid: "{password_invalid}",
                         oninput: move |e| password.set(e.value()),
                     }
                 }
@@ -283,10 +285,14 @@ pub fn RegisterPage() -> Element {
 #[component]
 fn PasswordRequirementRow(ok: bool, text: String) -> Element {
     let cls = if ok { "auth-req ok" } else { "auth-req" };
+    let status = if ok { "met" } else { "not met" };
     rsx! {
         div { class: "{cls}",
-            span { class: "auth-req-dot" }
+            span { class: "auth-req-dot", aria_hidden: "true" }
             span { "{text}" }
+            // Screen-reader-only status — the dot color alone isn't
+            // perceivable to assistive tech, so announce met/unmet.
+            span { class: "sr-only", ": {status}" }
         }
     }
 }

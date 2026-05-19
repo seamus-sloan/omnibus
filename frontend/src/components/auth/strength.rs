@@ -51,6 +51,7 @@ pub fn StrengthMeter(score: StrengthScore, #[props(default)] label: Option<Strin
             div {
                 class: "auth-strength-bar {tier}",
                 role: "meter",
+                aria_label: "Password strength",
                 aria_valuemin: "0",
                 aria_valuemax: "{StrengthScore::MAX}",
                 aria_valuenow: "{filled}",

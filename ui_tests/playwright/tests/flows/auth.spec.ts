@@ -10,7 +10,6 @@ test.use({ storageState: { cookies: [], origins: [] } });
 test("renders the login page layout", async ({ page }) => {
   await gotoReady(page, "/login");
 
-  // F1.6 wraps the form in AuthShell — the form title is now an h2.
   await expect(
     page.getByRole("heading", { level: 2, name: /Welcome back/i }),
   ).toBeVisible();
@@ -31,9 +30,7 @@ test("renders the register page layout", async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByLabel("Username")).toBeVisible();
   await expect(page.getByLabel("Password")).toBeVisible();
-  // StrengthMeter renders role=meter.
   await expect(page.getByRole("meter")).toBeVisible();
-  // One checklist row is enough — full coverage is overkill.
   await expect(page.getByText("At least 10 characters")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Create account" }),
@@ -76,8 +73,6 @@ test("shows an error when login credentials are wrong", async ({ page }) => {
     async () => page.getByRole("button", { name: "Log in" }).click(),
   );
 
-  // F1.6 routes errors through the Banner primitive; BannerKind::Err
-  // renders role=alert and inherits the server's flat error string.
   await expect(page.getByRole("alert")).toContainText("invalid credentials");
   await expect(page).toHaveURL(/\/login$/);
 });
@@ -89,4 +84,35 @@ test("shows an error when submitting an empty form", async ({ page }) => {
   await page.getByRole("button", { name: "Log in" }).click();
 
   await expect(page.getByRole("alert")).toContainText(/username and password/i);
+});
+
+test("register routes a password error to the password Field", async ({ page }) => {
+  await page.goto("/register");
+
+  await page.route("**/api/auth/register", async (route) => {
+    await route.fulfill({
+      status: 400,
+      contentType: "text/plain",
+      body: "password is too short",
+    });
+  });
+
+  await page.getByLabel("Username").fill("new-user");
+  await page.getByLabel("Password").fill("short");
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/auth/register",
+      expectedStatus: 400,
+    },
+    async () =>
+      page.getByRole("button", { name: "Create account" }).click(),
+  );
+
+  await expect(page.getByRole("alert")).toContainText("password is too short");
+  await expect(
+    page.getByRole("button", { name: /fix to continue/i }),
+  ).toBeDisabled();
 });
