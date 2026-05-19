@@ -39,5 +39,12 @@ base64 = "0.22"
 # compile times and binary size down.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
+# HTML sanitization for EPUB description fields (issue #62). OPF
+# `<dc:description>` is often HTML; we sanitize server-side with a strict
+# allowlist so the `book_detail` page can render it via `dangerous_inner_html`
+# without exposing XSS. Done at read time in `get_book` so existing rows in
+# the DB are sanitized without a reindex.
+ammonia = "4"
+
 [dev-dependencies]
 tempfile.workspace = true

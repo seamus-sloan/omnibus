@@ -1104,7 +1104,7 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
         id: book_id,
         filename,
         title: r.get("title"),
-        description: r.get("description"),
+        description: sanitize_description(r.get("description")),
         publisher: r.get("publisher"),
         published: r.get("pubdate"),
         modified: r.get("last_modified"),
@@ -1144,6 +1144,26 @@ fn parse_json_array<T: serde::de::DeserializeOwned>(
     match blob {
         Some(s) => serde_json::from_str(&s).map_err(|e| sqlx::Error::Decode(Box::new(e))),
         None => Ok(Vec::new()),
+    }
+}
+
+/// Sanitize an EPUB `<dc:description>` payload for safe rendering via
+/// `dangerous_inner_html`. OPF descriptions are commonly HTML fragments
+/// (`<p>`, `<b>`, `<em>`, lists, links). We rely on ammonia's default
+/// allowlist: it strips `<script>`, event handlers, `javascript:` URLs,
+/// `<style>`, `<iframe>`, etc., while preserving inline formatting.
+///
+/// Applied at read time in `get_book` so existing DB rows benefit without a
+/// reindex. Empty/whitespace-only output collapses to `None` so the book
+/// detail page hides the description block entirely.
+fn sanitize_description(raw: Option<String>) -> Option<String> {
+    let raw = raw?;
+    let cleaned = ammonia::clean(&raw);
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 
@@ -2883,5 +2903,77 @@ mod tests {
         assert_eq!(book.identifiers.len(), 1);
         assert_eq!(book.identifiers[0].value, nasty_value);
         assert_eq!(book.identifiers[0].scheme.as_deref(), Some("ISBN"));
+    }
+
+    #[test]
+    fn sanitize_description_preserves_safe_html() {
+        let cleaned = sanitize_description(Some(
+            "<p>Hello <strong>world</strong>!</p><p>Second <em>line</em>.</p>".into(),
+        ))
+        .unwrap();
+        assert!(cleaned.contains("<p>"));
+        assert!(cleaned.contains("<strong>world</strong>"));
+        assert!(cleaned.contains("<em>line</em>"));
+    }
+
+    #[test]
+    fn sanitize_description_strips_scripts_and_event_handlers() {
+        // ammonia's defaults must drop <script>, inline `onerror`, and
+        // `javascript:` URLs. Anything that could execute on the detail page
+        // when rendered via dangerous_inner_html is the threat model here.
+        let cleaned = sanitize_description(Some(
+            "<p>Safe</p><script>alert('xss')</script>\
+             <img src=x onerror=\"alert(1)\"/>\
+             <a href=\"javascript:alert(1)\">click</a>"
+                .into(),
+        ))
+        .unwrap();
+        assert!(!cleaned.contains("<script"));
+        assert!(!cleaned.to_ascii_lowercase().contains("onerror"));
+        assert!(!cleaned.to_ascii_lowercase().contains("javascript:"));
+        assert!(cleaned.contains("<p>Safe</p>"));
+    }
+
+    #[test]
+    fn sanitize_description_collapses_empty_input_to_none() {
+        assert_eq!(sanitize_description(None), None);
+        assert_eq!(sanitize_description(Some(String::new())), None);
+        assert_eq!(sanitize_description(Some("   \n\t".into())), None);
+        // A bare <script> with no other content sanitizes to "" and must
+        // collapse to None so the UI hides the description block entirely.
+        assert_eq!(
+            sanitize_description(Some("<script>alert(1)</script>".into())),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn get_book_returns_sanitized_html_description() {
+        let _covers = CoversTempDir::new("sanitize_desc");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let raw =
+            "<p>Brief.</p><script>alert('xss')</script><p>More <b>detail</b>.</p>".to_string();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![IndexedBook {
+                metadata: EbookMetadata {
+                    filename: "alpha.epub".into(),
+                    title: Some("Alpha".into()),
+                    description: Some(raw),
+                    ..Default::default()
+                },
+                cover: None,
+            }],
+        )
+        .await
+        .unwrap();
+        let id = list_books(&pool, "/lib").await.unwrap()[0].id;
+
+        let desc = get_book(&pool, id).await.unwrap().unwrap().description;
+        let desc = desc.expect("description should be present");
+        assert!(desc.contains("<p>Brief.</p>"));
+        assert!(desc.contains("<b>detail</b>"));
+        assert!(!desc.contains("<script"));
     }
 }
