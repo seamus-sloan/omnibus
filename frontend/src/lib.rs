@@ -808,19 +808,18 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   color: #e2e8f0;
 }
 
+/* Power-user table — dense rows, mono uppercase headers, hover row background.
+   Atrium tokens drive colors so light theme works for free. */
 .ebook-table-wrap {
-  margin-top: 1.25rem;
-  background: rgba(15, 23, 42, 0.8);
-  border: 1px solid rgba(100, 116, 139, 0.3);
-  border-radius: 14px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  margin-top: 0.5rem;
   overflow-x: auto;
 }
 .ebook-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.875rem;
+  font-size: 12.5px;
   table-layout: auto;
+  color: var(--ink-1);
 }
 .ebook-table td,
 .ebook-table th { white-space: nowrap; }
@@ -834,59 +833,82 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .ebook-table thead th {
   text-align: left;
-  padding: 0.75rem 0.9rem;
-  color: #94a3b8;
-  font-weight: 600;
-  font-size: 0.8rem;
+  padding: 0.55rem 0.65rem;
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-weight: 500;
+  font-size: 10.5px;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
-  border-bottom: 1px solid rgba(100, 116, 139, 0.3);
-  background: rgba(15, 23, 42, 0.9);
+  letter-spacing: 0.14em;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
   position: sticky;
   top: 0;
 }
 .ebook-table tbody td {
-  padding: 0.6rem 0.9rem;
-  border-bottom: 1px solid rgba(100, 116, 139, 0.15);
-  color: #cbd5e1;
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid var(--line-2);
+  color: var(--ink-1);
   vertical-align: middle;
 }
 .ebook-row {
   cursor: pointer;
-  transition: background 0.1s;
+  transition: background 0.15s;
 }
-.ebook-row:hover { background: rgba(51, 65, 85, 0.4); }
+.ebook-row:hover { background: var(--bg-1); }
 .ebook-row:focus-visible {
-  outline: 2px solid #22d3ee;
+  outline: 2px solid var(--accent);
   outline-offset: -2px;
-  background: rgba(51, 65, 85, 0.4);
+  background: var(--bg-1);
 }
 .ebook-row:last-child td { border-bottom: 0; }
 
-.ebook-col-cover { width: 56px; }
+.ebook-col-cover { width: 40px; }
 .ebook-thumb {
-  width: 40px;
-  height: 60px;
+  width: 26px;
+  height: 38px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: 2px;
   display: block;
-  background: rgba(30, 41, 59, 0.6);
+  background: var(--bg-2);
+  box-shadow: 0 4px 8px -4px color-mix(in oklch, black 60%, transparent);
 }
 .ebook-thumb-fallback {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #475569;
-  font-size: 0.75rem;
+  color: var(--ink-3);
+  font-size: 0.7rem;
 }
 .ebook-col-title { min-width: 220px; }
 .ebook-title-cell {
-  color: #f1f5f9;
-  font-weight: 600;
+  color: var(--ink-0);
+  font-weight: 500;
 }
+
+/* Formats column: mono bordered chips per format. */
+.ebook-col-formats { min-width: 90px; }
+.ebook-col-formats .format-badge + .format-badge { margin-left: 4px; }
+.format-badge {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-1);
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  padding: 2px 6px;
+  background: transparent;
+}
+.ebook-cell-formats-empty { color: var(--ink-3); }
 
 @media (max-width: 1100px) {
   .ebook-table .ebook-col-language { display: none; }
+}
+@media (max-width: 1000px) {
+  .ebook-table .ebook-col-formats { display: none; }
 }
 @media (max-width: 900px) {
   .ebook-table .ebook-col-published { display: none; }
@@ -897,8 +919,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 @media (max-width: 560px) {
   .ebook-table .ebook-col-series { display: none; }
   .ebook-table thead th,
-  .ebook-table tbody td { padding: 0.5rem 0.6rem; }
-  .ebook-thumb { width: 32px; height: 48px; }
+  .ebook-table tbody td { padding: 0.4rem 0.5rem; }
+  .ebook-thumb { width: 22px; height: 32px; }
 }
 
 /* ===== Book detail page ===== */
@@ -966,64 +988,154 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .identifier-list dd { margin: 0; font-family: monospace; }
 .ratings-slot, .suggestions-slot { min-height: 1px; }
 
-/* ===== F1.3 — Library views (toolbar / sidebar / grid / chips) ===== */
+/* ===== F1.7 Atrium — Library views (header / toolbar / chips / grid) ===== */
 
-.lib-toolbar {
+/* Editorial header above the library — small mono kicker, large serif title,
+   toolbar buttons on the right. */
+.lib-header {
   display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 24px 0 18px;
+}
+.lib-header-kicker {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--ink-2);
+}
+.lib-header-path { color: var(--ink-3); }
+/* The kicker is the semantic <h1>; visually it stays a small mono label so
+   the cinematic count below remains the dominant element. Selector is
+   doubled to outrank `.atrium h1` (which would otherwise re-apply 64px). */
+.lib-header-kicker-title.lib-header-kicker-title {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  font-weight: 500;
+  line-height: 1.45;
+  margin: 0;
+}
+.lib-header-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.lib-header-title {
+  font-family: var(--serif);
+  font-size: clamp(40px, 6vw, 64px);
+  line-height: 1.0;
+  letter-spacing: -0.025em;
+  margin: 0;
+  color: var(--ink-0);
+}
+.lib-header-title em {
+  font-style: italic;
+  font-feature-settings: 'lnum';
+}
+.lib-header-hint { color: var(--ink-2); font-size: 13px; }
+
+/* Toolbar — Filters / Table / Grid pills plus optional sort cluster. */
+.lib-toolbar {
+  display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.75rem;
-  margin-top: 1rem;
-  padding: 0.5rem 0.25rem;
+  gap: 8px;
 }
 .lib-view-toggle {
   display: inline-flex;
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px solid rgba(100, 116, 139, 0.3);
-  border-radius: 8px;
-  overflow: hidden;
+  align-items: center;
+  gap: 6px;
 }
 .lib-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
   background: transparent;
-  border: 0;
-  color: #cbd5e1;
+  color: var(--ink-1);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
   font: inherit;
-  padding: 0.4rem 0.9rem;
+  font-weight: 500;
+  font-size: 12px;
   cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
 }
+.lib-toggle-btn:hover { color: var(--ink-0); background: var(--bg-1); border-color: var(--line); }
 .lib-toggle-btn[aria-pressed="true"] {
-  background: linear-gradient(135deg, #22d3ee, #3b82f6);
-  color: #031525;
-  font-weight: 600;
+  background: var(--bg-2);
+  color: var(--ink-0);
+  border-color: var(--line);
 }
-.lib-sort-controls { display: inline-flex; align-items: center; gap: 0.5rem; margin-left: auto; }
+.lib-filters-btn { /* same look as view toggle */ }
+
+.lib-sort-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+  padding-left: 10px;
+  border-left: 1px solid var(--line-2);
+}
 .lib-sort-label {
-  display: inline-flex; align-items: center; gap: 0.4rem;
-  color: #94a3b8; font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  font-weight: 500;
 }
 .lib-sort-select {
-  background: rgba(30, 41, 59, 0.8);
-  border: 1px solid rgba(100, 116, 139, 0.4);
-  border-radius: 6px;
-  color: #e5e7eb;
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  color: var(--ink-0);
   font: inherit;
-  padding: 0.35rem 0.55rem;
+  font-size: 12px;
+  padding: 4px 8px;
+  height: 28px;
 }
+.lib-sort-select:focus { outline: none; border-color: var(--accent); }
 .lib-sort-dir {
-  background: rgba(30, 41, 59, 0.8);
-  border: 1px solid rgba(100, 116, 139, 0.4);
-  border-radius: 6px;
-  color: #e5e7eb;
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  color: var(--ink-0);
   font: inherit;
-  padding: 0.35rem 0.65rem;
+  padding: 0 10px;
+  height: 28px;
   cursor: pointer;
+}
+.lib-sort-dir:hover { border-color: var(--accent); }
+
+/* Format chip row — inline below the header. */
+.lib-format-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 18px;
+}
+.lib-format-chips-label { margin-right: 4px; }
+.lib-format-chips-spacer { flex: 1; }
+.lib-format-chips-count {
+  color: var(--ink-3);
+  font-size: 11.5px;
 }
 
 .lib-layout {
   display: grid;
-  grid-template-columns: 210px 1fr;
-  gap: 1.25rem;
-  margin-top: 1rem;
+  grid-template-columns: 220px 1fr;
+  gap: 24px;
+  margin-top: 4px;
   align-items: start;
 }
 .lib-layout--collapsed {
@@ -1031,8 +1143,6 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .lib-layout--collapsed > .lib-sidebar { display: none; }
 
-/* Narrow viewports: layout always single-column. The sidebar becomes a
-   right-edge drawer overlay when open, so it doesn't squeeze the grid. */
 @media (max-width: 900px) {
   .lib-layout { grid-template-columns: 1fr; }
   .lib-layout > .lib-sidebar {
@@ -1043,84 +1153,57 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
     width: min(280px, calc(100vw - 1.5rem));
     max-height: calc(100vh - 5rem);
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+    background: var(--bg-1);
   }
 }
 
-/* Filters toggle in the toolbar: same pill shape as the view-mode pair,
-   but a standalone button (no enclosing toggle group). */
-.lib-filters-btn {
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px solid rgba(100, 116, 139, 0.3);
-  border-radius: 8px;
-  padding: 0.4rem 0.9rem;
-}
-.lib-filters-btn[aria-pressed="true"] {
-  background: linear-gradient(135deg, #22d3ee, #3b82f6);
-  color: #031525;
-  font-weight: 600;
-  border-color: transparent;
-}
-
 .lib-sidebar {
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px solid rgba(100, 116, 139, 0.25);
-  border-radius: 12px;
-  padding: 1rem;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 16px;
   position: sticky;
-  top: 1rem;
-  max-height: calc(100vh - 2rem);
+  top: 80px;
+  max-height: calc(100vh - 6rem);
   overflow-y: auto;
 }
 .lib-clear-filters {
   align-self: flex-start;
   background: transparent;
-  border: 1px solid rgba(100, 116, 139, 0.4);
-  color: #cbd5e1;
+  border: 1px solid var(--line-2);
+  color: var(--ink-1);
   border-radius: 9999px;
-  padding: 0.25rem 0.7rem;
+  padding: 4px 10px;
   font: inherit;
-  font-size: 0.8rem;
+  font-size: 11.5px;
   cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
 }
-.lib-clear-filters:hover { background: rgba(51, 65, 85, 0.5); }
+.lib-clear-filters:hover { color: var(--ink-0); border-color: var(--accent); background: var(--bg-2); }
 
-.lib-facet { display: flex; flex-direction: column; gap: 0.5rem; }
+.lib-facet { display: flex; flex-direction: column; gap: 8px; }
 .lib-facet-title {
-  font-size: 0.8rem;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #94a3b8;
-  font-weight: 600;
+  color: var(--ink-2);
+  font-weight: 500;
 }
 .lib-chip-list {
   list-style: none;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  gap: 6px;
   padding: 0;
   margin: 0;
 }
-.lib-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  max-width: 100%;
-  background: rgba(30, 41, 59, 0.8);
-  border: 1px solid rgba(100, 116, 139, 0.35);
-  border-radius: 9999px;
-  padding: 0.2rem 0.6rem;
-  color: #cbd5e1;
-  font: inherit;
-  font-size: 0.8rem;
-  cursor: pointer;
-  /* Long author names / sentence-y tags shouldn't blow out the sidebar
-     or wrap into multi-line chips. The label span clips with ellipsis;
-     the full value stays accessible via the chip's `title` tooltip. */
-  text-align: left;
-}
+/* `.lib-chip` defers to Atrium's `.chip` look (composed via class="chip lib-chip");
+   only overrides the bits the facet list needs: long-name clipping. */
+.lib-chip { max-width: 100%; text-align: left; }
 .lib-chip-label {
   display: inline-block;
   max-width: 11rem;
@@ -1129,21 +1212,12 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   white-space: nowrap;
   vertical-align: bottom;
 }
-.lib-chip:hover { background: rgba(51, 65, 85, 0.7); }
 .lib-chip[aria-pressed="true"] {
-  background: rgba(34, 211, 238, 0.18);
-  border-color: rgba(34, 211, 238, 0.55);
-  color: #67e8f9;
+  color: var(--ink-0);
+  border-color: var(--accent);
+  background: var(--bg-2);
 }
-.lib-chip-count {
-  flex-shrink: 0;
-  font-size: 0.7rem;
-  color: #64748b;
-  background: rgba(15, 23, 42, 0.6);
-  border-radius: 9999px;
-  padding: 0 0.4rem;
-}
-.lib-chip[aria-pressed="true"] .lib-chip-count { color: #cbd5e1; }
+.lib-chip-count { flex-shrink: 0; }
 
 .lib-main { min-width: 0; }
 
@@ -1159,46 +1233,42 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   padding: 0;
 }
 .sort-th[aria-sort="ascending"] .sort-th-btn,
-.sort-th[aria-sort="descending"] .sort-th-btn { color: #22d3ee; }
+.sort-th[aria-sort="descending"] .sort-th-btn { color: var(--accent); }
 
-/* Cover grid */
+/* Cover grid — covers float on the warm dark canvas. The Atrium `Cover`
+   component handles the cover render + hover lift via `.cover-link`. */
 .lib-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 36px 24px;
+  margin-top: 4px;
+  padding-bottom: 40px;
 }
 .lib-tile {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px solid rgba(100, 116, 139, 0.25);
-  border-radius: 10px;
-  padding: 0.75rem;
+  display: block;
+  text-decoration: none;
   cursor: pointer;
-  transition: transform 0.1s, background 0.1s;
 }
-.lib-tile:hover { background: rgba(51, 65, 85, 0.55); transform: translateY(-2px); }
-.lib-tile:focus-visible { outline: 2px solid #22d3ee; outline-offset: 2px; }
-.lib-tile-cover { aspect-ratio: 2 / 3; overflow: hidden; border-radius: 6px; background: rgba(30, 41, 59, 0.6); }
-.lib-tile-img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.lib-tile-fallback {
-  display: flex; align-items: center; justify-content: center;
-  color: #475569; font-size: 1.5rem;
+.lib-tile:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 2px;
 }
 .lib-tile-title {
-  font-weight: 600;
-  color: #f1f5f9;
-  font-size: 0.9rem;
+  margin-top: 10px;
+  font-size: 13.5px;
+  color: var(--ink-0);
+  font-weight: 500;
+  line-height: 1.3;
   overflow: hidden;
   text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  white-space: nowrap;
 }
 .lib-tile-author {
-  color: #94a3b8;
-  font-size: 0.8rem;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ink-2);
+  line-height: 1.3;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

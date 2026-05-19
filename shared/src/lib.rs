@@ -165,18 +165,23 @@ pub enum SortDir {
 }
 
 /// Active filter facets. AND across facet groups; OR within a group.
+///
+/// Format values are stored lowercase (`"epub"`, `"m4b"`) since the underlying
+/// `EbookMetadata.formats` strings vary in case across sources.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ViewFilters {
     #[serde(default)]
     pub authors: Vec<String>,
     #[serde(default)]
     pub series: Vec<String>,
+    #[serde(default)]
+    pub formats: Vec<String>,
 }
 
 impl ViewFilters {
     /// `true` when no facet has any selected value.
     pub fn is_empty(&self) -> bool {
-        self.authors.is_empty() && self.series.is_empty()
+        self.authors.is_empty() && self.series.is_empty() && self.formats.is_empty()
     }
 }
 
