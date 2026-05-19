@@ -251,7 +251,7 @@ pub fn RegisterPage() -> Element {
                 }
                 div { class: "auth-requirements",
                     div { class: "auth-requirements-title", "Password needs" }
-                    PasswordRequirementRow { ok: rules[0], text: "At least 12 characters" }
+                    PasswordRequirementRow { ok: rules[0], text: "At least 10 characters" }
                     PasswordRequirementRow { ok: rules[1], text: "Mixed case" }
                     PasswordRequirementRow { ok: rules[2], text: "One number or symbol" }
                 }
@@ -315,10 +315,10 @@ fn classify_register_error(raw: &str) -> RegisterError {
     }
 }
 
-/// Presentational password scoring — server still enforces policy. Returns
-/// the meter score (0..=4), a short label, and the three checklist booleans
-/// (length≥12, mixed case, number-or-symbol) so the page renders both the
-/// meter and the requirements list from one pass.
+/// Presentational password scoring — server still enforces policy (10-char
+/// minimum). Returns the meter score (0..=4), a short label, and the three
+/// checklist booleans (length≥10, mixed case, number-or-symbol) so the
+/// page renders both the meter and the requirements list from one pass.
 fn score_password(pw: &str) -> (StrengthScore, &'static str, [bool; 3]) {
     let len = pw.chars().count();
     let has_lower = pw.chars().any(|c| c.is_ascii_lowercase());
@@ -327,7 +327,7 @@ fn score_password(pw: &str) -> (StrengthScore, &'static str, [bool; 3]) {
     let has_number_or_symbol = pw
         .chars()
         .any(|c| c.is_ascii_digit() || !c.is_alphanumeric());
-    let len_ok = len >= 12;
+    let len_ok = len >= 10;
 
     let mut raw: u8 = 0;
     if len >= 4 {
