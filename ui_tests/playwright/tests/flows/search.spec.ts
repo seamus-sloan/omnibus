@@ -1,9 +1,10 @@
 import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { gotoReady } from "../utils/nav";
+import { fixturesDir, seedLibrary } from "../utils/seed";
 
-test.beforeAll(({ seededLibrary }) => {
-  void seededLibrary;
+test.beforeAll(async ({ request }) => {
+  await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
 });
 
 test("search input narrows the library to matching rows", async ({ page }) => {

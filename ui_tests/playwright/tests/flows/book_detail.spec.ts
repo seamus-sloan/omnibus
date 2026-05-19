@@ -2,13 +2,13 @@ import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { fetchBookIdByTitle, getRow } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
+import { fixturesDir, seedLibrary } from "../utils/seed";
 
-// Depend on the worker-scoped `seededLibrary` fixture so the running server
-// is indexed against the committed EPUB fixtures before any test in this
-// file runs. Each Playwright file runs in its own worker, so this can't
-// rely on another spec's seed.
-test.beforeAll(({ seededLibrary }) => {
-  void seededLibrary;
+// Re-seed in this spec's beforeAll so the running server is indexed against
+// the committed EPUB fixtures before any assertion runs — independent of
+// whatever other specs in the same worker did before us.
+test.beforeAll(async ({ request }) => {
+  await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
 });
 
 // A fixture with predictable, distinctive metadata to drive both tests.
