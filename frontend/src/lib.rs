@@ -299,7 +299,55 @@ body {
   letter-spacing: 0.04em;
 }
 
-.auth-shell-tagline { margin-top: auto; max-width: 460px; }
+/* Decorative book-spine row. Absolutely positioned so the tagline below
+   can stack on top via z-index. Inline `background`/`color` set per
+   spine; height/rotation patterns live here so the markup stays clean. */
+.auth-shell-spines {
+  position: absolute;
+  left: 3.5rem; right: 3.5rem; bottom: 3.5rem; top: 6rem;
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+  pointer-events: none;
+  opacity: 0.92;
+  z-index: 1;
+}
+.auth-shell-spine {
+  flex: 1 1 0;
+  min-width: 0;
+  border-radius: 2px;
+  box-shadow:
+    inset 1px 0 0 rgba(255, 255, 255, 0.12),
+    inset -1px 0 0 rgba(0, 0, 0, 0.25),
+    0 16px 30px -20px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+}
+/* Heights cycle every 4, rotations every 5, vertical offset every 3 —
+   gives the "casually leaned against each other" look without random
+   per-render churn. */
+.auth-shell-spine-0 { height: 230px; transform: rotate(-4deg)   translateY(0); }
+.auth-shell-spine-1 { height: 274px; transform: rotate(-2.3deg) translateY(8px); }
+.auth-shell-spine-2 { height: 318px; transform: rotate(-0.6deg) translateY(16px); }
+.auth-shell-spine-3 { height: 362px; transform: rotate(1.1deg)  translateY(0); }
+.auth-shell-spine-4 { height: 230px; transform: rotate(2.8deg)  translateY(8px); }
+.auth-shell-spine-5 { height: 274px; transform: rotate(-4deg)   translateY(16px); }
+.auth-shell-spine-6 { height: 318px; transform: rotate(-2.3deg) translateY(0); }
+.auth-shell-spine-7 { height: 362px; transform: rotate(-0.6deg) translateY(8px); }
+.auth-shell-spine-8 { height: 230px; transform: rotate(1.1deg)  translateY(16px); }
+.auth-shell-spine-title {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  padding: 0.9rem 0;
+  font-family: var(--auth-serif);
+  font-size: 0.8rem;
+  font-style: italic;
+  text-align: center;
+  height: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.auth-shell-tagline { margin-top: auto; max-width: 460px; position: relative; z-index: 2; }
 .auth-shell-headline {
   font-family: var(--auth-serif);
   font-size: clamp(2.4rem, 5vw, 3.5rem);
