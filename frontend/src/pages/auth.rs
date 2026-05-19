@@ -233,7 +233,10 @@ pub fn RegisterPage() -> Element {
                         autocomplete: "username",
                         value: "{username}",
                         aria_invalid: "{username_invalid}",
-                        oninput: move |e| username.set(e.value()),
+                        oninput: move |e| {
+                            username.set(e.value());
+                            error.set(None);
+                        },
                     }
                 }
                 Field { label: "Password".to_string(), error: password_err,
@@ -244,7 +247,10 @@ pub fn RegisterPage() -> Element {
                         autocomplete: "new-password",
                         value: "{password}",
                         aria_invalid: "{password_invalid}",
-                        oninput: move |e| password.set(e.value()),
+                        oninput: move |e| {
+                            password.set(e.value());
+                            error.set(None);
+                        },
                     }
                 }
                 StrengthMeter {
@@ -270,7 +276,11 @@ pub fn RegisterPage() -> Element {
                 button {
                     class: "btn primary lg auth-submit",
                     r#type: "submit",
-                    disabled: submitting(),
+                    // Disable while submitting AND while a routed error is
+                    // shown — keeps users from immediately re-submitting
+                    // the same invalid form. Each input's `oninput` clears
+                    // the error signal so editing re-enables the button.
+                    disabled: submitting() || has_error,
                     "{submit_label}"
                 }
                 p { class: "auth-footer",
@@ -352,12 +362,17 @@ fn score_password(pw: &str) -> (StrengthScore, &'static str, [bool; 3]) {
         raw = raw.saturating_add(1);
     }
     let score = StrengthScore::new(raw.min(StrengthScore::MAX));
-    let label = match score.value() {
-        0 => "empty",
-        1 => "weak",
-        2 => "fair",
-        3 => "good",
-        _ => "strong",
+    // "empty" only when nothing was typed; a non-empty score-0 input
+    // (1–3 chars, no special chars) is still weak, not empty.
+    let label = if pw.is_empty() {
+        "empty"
+    } else {
+        match score.value() {
+            0 | 1 => "weak",
+            2 => "fair",
+            3 => "good",
+            _ => "strong",
+        }
     };
     (score, label, [len_ok, mixed_case, has_number_or_symbol])
 }
@@ -491,6 +506,31 @@ mod tests {
         assert_eq!(rules, [false, true, true]);
         let (_, _, rules) = score_password("abcdefghijk1");
         assert_eq!(rules, [true, false, true]);
+    }
+
+    #[test]
+    fn score_password_length_rule_boundary() {
+        // Right at the server-policy boundary (10 chars). 9-char inputs
+        // must report length-not-met; 10-char inputs must report met.
+        let (_, _, rules) = score_password("abcdefgh1");
+        assert!(!rules[0], "9-char input must not satisfy len_ok");
+        let (_, _, rules) = score_password("abcdefghi1");
+        assert!(rules[0], "10-char input must satisfy len_ok");
+        let (_, _, rules) = score_password("abcdefghij1");
+        assert!(rules[0], "11-char input must satisfy len_ok");
+    }
+
+    #[test]
+    fn score_password_label_distinguishes_empty_from_short() {
+        // Empty -> "empty"; any non-empty input -> at least "weak"
+        // (covers the 1–3 char range where score=0 but typed content
+        // exists, so the meter shouldn't lie about being empty).
+        let (_, label, _) = score_password("");
+        assert_eq!(label, "empty");
+        let (_, label, _) = score_password("a");
+        assert_eq!(label, "weak");
+        let (_, label, _) = score_password("ab");
+        assert_eq!(label, "weak");
     }
 
     #[test]
