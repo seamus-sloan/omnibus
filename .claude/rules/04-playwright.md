@@ -2,6 +2,8 @@
 
 These rules exist so every flow is tested the same way. Don't diverge without updating this file first.
 
+For live preview validation during development (not E2E specs), see the [ui-validate](../skills/ui-validate/SKILL.md) skill — it covers port-walking server bring-up, login state, and rebuild detection.
+
 ## Chromium comes from Nix, not npm
 
 The `playwright-driver.browsers` package in [flake.nix](../../flake.nix) provides the browser bundle, and the shellHook exports `PLAYWRIGHT_BROWSERS_PATH` into the Nix store. Do **not** run `npx playwright install` — it would re-download Chromium into `~/Library/Caches/ms-playwright/` and diverge from the flake.
