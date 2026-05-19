@@ -97,7 +97,18 @@ pub fn BookDetailPage(id: i64) -> Element {
                     p { class: "subtitle", "{s}" }
                 }
                 if let Some(desc) = &b.description {
-                    p { class: "book-detail-description", "{desc}" }
+                    // EPUB OPF descriptions are commonly HTML fragments. The
+                    // server sanitizes the payload in `omnibus_db::get_book`
+                    // via ammonia's default allowlist before it reaches us,
+                    // so `dangerous_inner_html` is safe here. A `<div>`
+                    // wraps the fragment because the sanitized HTML may
+                    // itself contain block-level tags (`<p>`, `<ul>`, …)
+                    // that aren't valid children of `<p>`.
+                    div {
+                        class: "book-detail-description",
+                        "data-testid": "book-description",
+                        dangerous_inner_html: "{desc}",
+                    }
                 }
 
                 FormatSwitcher { formats: b.formats.clone() }
