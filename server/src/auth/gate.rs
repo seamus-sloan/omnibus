@@ -9,6 +9,10 @@
 //! * Anything under `/api/auth/*` — these handle their own authentication
 //!   (`/me` uses the [`AuthUser`] extractor; `/login`/`/register` deliberately
 //!   don't require auth).
+//! * `/api/_health` — unauthenticated liveness + fingerprint probe used by
+//!   `scripts/dev-server-up.sh` to decide whether to reuse an existing
+//!   omnibus server on the port. Cannot require auth or the probe couldn't
+//!   run before a session exists.
 //!
 //! Everything else under `/api/*` — the REST routes (`/api/value`,
 //! `/api/settings`, `/api/library`, `/api/ebooks`, `/api/covers/{id}`) and the
@@ -34,7 +38,11 @@ use crate::backend::AppState;
 
 pub async fn require_auth(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let path = req.uri().path();
-    if !path.starts_with("/api/") || path == "/api/auth" || path.starts_with("/api/auth/") {
+    if !path.starts_with("/api/")
+        || path == "/api/auth"
+        || path.starts_with("/api/auth/")
+        || path == "/api/_health"
+    {
         return next.run(req).await;
     }
     let Some((token, _kind)) = extract_token(req.headers()) else {
@@ -66,9 +74,25 @@ mod tests {
         let router = Router::new()
             .route("/api/value", get(|| async { "ok" }))
             .route("/api/auth/login", get(|| async { "login ok" }))
+            .route("/api/_health", get(|| async { "health ok" }))
             .route("/", get(|| async { "home" }))
             .layer(from_fn_with_state(state, require_auth));
         (router, pool)
+    }
+
+    #[tokio::test]
+    async fn api_health_passes_through_without_auth() {
+        let (app, _pool) = app().await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/_health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
     }
 
     #[tokio::test]

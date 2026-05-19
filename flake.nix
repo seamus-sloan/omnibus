@@ -133,6 +133,21 @@
               _ndk=$(ls -d "$ANDROID_HOME/ndk/"* 2>/dev/null | sort -V | tail -1)
               [ -n "$_ndk" ] && export ANDROID_NDK_HOME="$_ndk" && echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
             fi
+
+            # Source per-repo .env last so it can override any default set
+            # above. Look in the worktree root (resolved via git so
+            # `nix develop` from a subdir still picks it up); fall back to
+            # the current dir. `.env` is gitignored and is meant for
+            # secret-bearing or per-developer values only — non-secret
+            # defaults live in this shellHook. `.env.example` is the
+            # checked-in template.
+            _env_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+            if [ -f "$_env_root/.env" ]; then
+              set -a
+              # shellcheck disable=SC1090
+              source "$_env_root/.env"
+              set +a
+            fi
           '';
         };
       });

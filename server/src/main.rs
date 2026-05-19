@@ -38,6 +38,12 @@ fn main() {
             // promotion so the action is auditable.
             auth::boot::apply_initial_admin(&pool).await?;
 
+            // Dev convenience: create OMNIBUS_DEV_SEED_USER if set and the
+            // user doesn't yet exist. Sourced from `.env` (gitignored) via
+            // the flake.nix shellHook — production never sets it. Logs on
+            // seed so any stray prod-env occurrence is loud.
+            auth::boot::seed_dev_user(&pool).await?;
+
             let state = backend::AppState::new(pool.clone());
             let worker: Arc<Worker> = state.worker().clone();
 

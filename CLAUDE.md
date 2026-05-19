@@ -26,6 +26,7 @@ Auto-discoverable skills in [.claude/skills/](.claude/skills/) — Claude Code l
 - [jj-basics](.claude/skills/jj-basics/SKILL.md) — fetch / new / describe / bookmark / push.
 - [jj-workspaces](.claude/skills/jj-workspaces/SKILL.md) — parallel agent work on one repo.
 - [jj-advanced](.claude/skills/jj-advanced/SKILL.md) — squash / rebase / abandon / undo / op log / conflicts.
+- [ui-validate](.claude/skills/ui-validate/SKILL.md) — bring up a port-walking dev server, log in as the seeded admin, drive the browser preview, poll `/api/_health` for rebuild signal.
 
 ## Architecture
 
@@ -127,6 +128,13 @@ Keystore and flip persistence on unconditionally — see the module docs.
 just serve                                                  # Zellij
 just serve-pc                                               # process-compose
 
+# Idempotent dev-server bring-up — port-walks from $PORT (default 3000)
+# up to PORT+20, reuses an existing omnibus server if found, seeds the
+# admin user from $OMNIBUS_DEV_SEED_USER, writes .claude/runtime/{port,env.sh}.
+# Used by the `ui-validate` skill; safe to re-run.
+just dev-up
+source .claude/runtime/env.sh                               # picks up OMNIBUS_PORT + PLAYWRIGHT_BASE_URL
+
 # Fullstack dev (serves SSR + WASM hydration at http://localhost:8080 by default)
 dx serve --platform web -p omnibus
 
@@ -137,7 +145,7 @@ cargo test -p omnibus-db                                    # db + ebook + scann
 cargo clippy                                                # lint default-members crates
 cargo fmt                                                   # format all crates
 
-# Playwright E2E (server must be running on port 3000)
+# Playwright E2E (server must be running; baseURL = $PLAYWRIGHT_BASE_URL or :3000)
 cd ui_tests/playwright && npm install                       # first time
 cd ui_tests/playwright && npx playwright test               # run all
 

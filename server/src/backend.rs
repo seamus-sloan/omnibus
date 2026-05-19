@@ -48,6 +48,7 @@ impl AppState {
 pub fn rest_router(state: AppState) -> Router {
     let pool = state.pool().clone();
     Router::new()
+        .route("/api/_health", get(get_health))
         .route("/api/value", get(get_value))
         .route("/api/value/increment", post(increment_value))
         .route("/api/settings", get(get_settings))
@@ -64,6 +65,35 @@ pub fn rest_router(state: AppState) -> Router {
         // tests; in the live server `main.rs` adds the same Extension at
         // the top, which is harmless overlap.
         .layer(Extension(pool))
+}
+
+/// Process-start build id. Captured once on first call to `build_id()` and
+/// preserved for the lifetime of the process — so any HMR cycle that
+/// restarts the server (the only way `dx serve` rebuilds Rust changes)
+/// produces a new id. Claude's `ui-validate` skill polls this to know when
+/// a rebuild has actually landed.
+fn build_id() -> u128 {
+    use std::sync::OnceLock;
+    static ID: OnceLock<u128> = OnceLock::new();
+    *ID.get_or_init(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    })
+}
+
+/// Unauthenticated liveness + fingerprint endpoint. The `app` field lets
+/// `scripts/dev-server-up.sh` distinguish an omnibus instance from some
+/// other process that happens to bind the same port. Whitelisted in
+/// `auth::gate::require_auth` so it remains reachable without a session.
+async fn get_health() -> Response {
+    Json(serde_json::json!({
+        "app": "omnibus",
+        "status": "ok",
+        "build_id": build_id().to_string(),
+    }))
+    .into_response()
 }
 
 async fn get_value(_user: AuthUser, State(state): State<AppState>) -> Response {
@@ -372,6 +402,32 @@ mod tests {
     /// Convenience: anonymous GET (no auth header).
     fn get_anon(uri: &str) -> Request<Body> {
         Request::builder().uri(uri).body(Body::empty()).unwrap()
+    }
+
+    // -------------------------------------------------------------------
+    // /api/_health — unauthenticated liveness + fingerprint.
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn api_health_returns_200_unauth_with_app_and_build_id() {
+        let (app, _state, _pool) = fixture().await;
+        let res = app
+            .oneshot(get_anon("/api/_health"))
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON body");
+        assert_eq!(body["app"], "omnibus");
+        assert_eq!(body["status"], "ok");
+        let build_id = body["build_id"]
+            .as_str()
+            .expect("build_id should be string");
+        assert!(
+            build_id.chars().all(|c| c.is_ascii_digit()),
+            "build_id should be all digits, got {build_id:?}"
+        );
     }
 
     // -------------------------------------------------------------------
