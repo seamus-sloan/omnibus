@@ -951,6 +951,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .breadcrumb a { color: #22d3ee; text-decoration: none; }
 .breadcrumb a:hover { text-decoration: underline; }
 .book-detail-description { line-height: 1.6; color: rgba(255,255,255,.8); margin: .5rem 0 1rem; }
+.book-detail-description > :first-child { margin-top: 0; }
+.book-detail-description > :last-child { margin-bottom: 0; }
+.book-detail-description p { margin: 0 0 .75rem; }
+.book-detail-description ul, .book-detail-description ol { margin: 0 0 .75rem; padding-left: 1.25rem; }
+.book-detail-description a { color: #22d3ee; }
 .format-switcher {
   display: flex; flex-direction: column; gap: .4rem;
   margin: .75rem 0; padding: .5rem .75rem;
