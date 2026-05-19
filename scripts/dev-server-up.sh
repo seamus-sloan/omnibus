@@ -124,10 +124,24 @@ EOF
     # cleaner but isn't on macOS by default.
     nohup dx serve --platform web --fullstack --port "$port" --package omnibus \
         >"$RUNTIME_DIR/server.log" 2>&1 &
-    echo $! >"$RUNTIME_DIR/server.pid"
+    local server_pid=$!
+    echo "$server_pid" >"$RUNTIME_DIR/server.pid"
 
     if ! wait_for_health "$port" >/dev/null; then
-        echo "dev-up: server did not become healthy within 90s. Tail the log:" >&2
+        # Kill the orphan rather than leaving it bound to $port — a stale,
+        # unhealthy process would block the next dev-up (or get "reused"
+        # as if it were healthy if it manages to start serving later).
+        if kill -0 "$server_pid" 2>/dev/null; then
+            echo "dev-up: server did not become healthy within 90s; killing pid $server_pid" >&2
+            kill "$server_pid" 2>/dev/null || true
+            # Reap dx-wrap's grandchildren too (dx spawns the actual server
+            # in a subprocess). pkill -P walks one level; that's enough
+            # here because dx is the only child of $server_pid we care
+            # about.
+            pkill -P "$server_pid" 2>/dev/null || true
+        fi
+        rm -f "$RUNTIME_DIR/server.pid"
+        echo "dev-up: tail the log for the underlying error:" >&2
         echo "  tail -n 50 $RUNTIME_DIR/server.log" >&2
         exit 1
     fi
