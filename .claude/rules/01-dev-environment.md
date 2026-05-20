@@ -27,6 +27,7 @@ Non-secret defaults stay in the shellHook above. Anything with a secret — pass
 Currently documented:
 
 - `OMNIBUS_DEV_SEED_USER=username:password` — creates a named admin user on server boot if absent. Dev convenience for `ui-validate` and parallel agents; never set in production. Password must satisfy `db::auth` validation (≥10 chars, not in `COMMON_PASSWORDS`).
+- `OMNIBUS_SECURE_COOKIES=0` — disables the `Secure` flag on session cookies. The default is `true` (secure-by-default). Set to `0` only for local http:// dev where browsers would otherwise drop the cookie. Never set in production.
 
 Optional thumbnail cache overrides (F1.2):
 - `OMNIBUS_THUMBS_DIR` — where WebP thumbnails are cached (default `./thumbs`)
