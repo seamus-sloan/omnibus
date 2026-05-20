@@ -88,6 +88,38 @@ test("shows an error when submitting an empty form", async ({ page }) => {
   await expect(page.getByRole("alert")).toContainText(/username and password/i);
 });
 
+test("tab from Username focuses Password (skipping the Forgot? link)", async ({ page }) => {
+  // The Forgot? link sits visually beside the Password label. It must
+  // not intercept the tab path between Username and Password — otherwise
+  // a user typing "name <Tab> password <Enter>" lands on the link with
+  // their typed password going nowhere, and Enter activates the link
+  // (re-navigates /login) instead of submitting.
+  await gotoReady(page, "/login");
+
+  await page.getByLabel("Username").focus();
+  await page.keyboard.press("Tab");
+  await expect(page.getByLabel("Password")).toBeFocused();
+});
+
+test("Enter from Password submits the login form", async ({ page }) => {
+  await gotoReady(page, "/login");
+
+  await page.getByLabel("Username").fill(TEST_USERNAME);
+  await page.getByLabel("Password").fill(TEST_PASSWORD);
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/auth/login",
+      expectedStatus: 200,
+    },
+    async () => page.getByLabel("Password").press("Enter"),
+  );
+
+  await expect(page).toHaveURL(/\/$/);
+});
+
 test("register routes a password error to the password Field", async ({ page }) => {
   await gotoReady(page, "/register");
 

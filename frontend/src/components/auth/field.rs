@@ -23,8 +23,12 @@ use dioxus::prelude::*;
 ///   shows the message under the input as `role="alert"`.
 /// - `success` — when true, switches the field to its success visual
 ///   (green accent + check mark).
-/// - `action` — optional right-aligned slot in the label row
-///   (e.g. a "Forgot?" link).
+/// - `action` — optional slot rendered visually at the top-right of the
+///   field (e.g. a "Forgot?" link). Lives **after** the input in DOM order
+///   and is positioned by CSS, so tabbing through the form goes
+///   label → input → action → next field rather than label → action →
+///   input (the latter pulls focus to the action between fields and traps
+///   typed characters that the user thought were going into the input).
 /// - `children` — the input element.
 #[component]
 pub fn Field(
@@ -48,15 +52,15 @@ pub fn Field(
         div { class: "{wrapper_class}", "data-testid": "{field_testid}",
             div { class: "auth-field-label-row",
                 label { class: "auth-field-label", r#for: "{input_id}", "{label}" }
-                if let Some(slot) = action {
-                    span { class: "auth-field-action", {slot} }
-                }
             }
             div { class: "auth-field-input-wrap",
                 {children}
                 if success {
                     span { class: "auth-field-check", "✓" }
                 }
+            }
+            if let Some(slot) = action {
+                span { class: "auth-field-action", {slot} }
             }
             if let Some(msg) = error.as_deref() {
                 div { class: "auth-field-msg auth-field-msg-err", role: "alert", "{msg}" }
