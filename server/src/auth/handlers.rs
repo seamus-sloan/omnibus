@@ -103,14 +103,18 @@ fn want_bearer(kind: Option<&str>) -> bool {
     matches!(kind, Some("ios") | Some("android") | Some("bearer"))
 }
 
-fn secure_cookies() -> bool {
-    match std::env::var("OMNIBUS_SECURE_COOKIES") {
-        Ok(v) => {
+fn parse_secure_cookies(raw: Option<&str>) -> bool {
+    match raw {
+        Some(v) => {
             let v = v.trim().to_ascii_lowercase();
             !matches!(v.as_str(), "0" | "false" | "no" | "")
         }
-        Err(_) => true, // default on; set OMNIBUS_SECURE_COOKIES=0 only for non-localhost HTTP origins (e.g. LAN IPs)
+        None => true, // default on; set OMNIBUS_SECURE_COOKIES=0 only for non-localhost HTTP origins (e.g. LAN IPs)
     }
+}
+
+fn secure_cookies() -> bool {
+    parse_secure_cookies(std::env::var("OMNIBUS_SECURE_COOKIES").ok().as_deref())
 }
 
 fn session_cookie(value: String, max_age_secs: i64) -> Cookie<'static> {
@@ -274,6 +278,31 @@ mod tests {
             .header("content-type", "application/json")
             .body(Body::from(body.to_string()))
             .unwrap()
+    }
+
+    #[test]
+    fn parse_secure_cookies_defaults_on_when_unset() {
+        assert!(parse_secure_cookies(None));
+    }
+
+    #[test]
+    fn parse_secure_cookies_off_for_falsey_values() {
+        for raw in ["0", "false", "FALSE", "no", " 0 ", ""] {
+            assert!(
+                !parse_secure_cookies(Some(raw)),
+                "expected {raw:?} to disable Secure"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_secure_cookies_on_for_anything_else() {
+        for raw in ["1", "true", "yes", "anything"] {
+            assert!(
+                parse_secure_cookies(Some(raw)),
+                "expected {raw:?} to keep Secure on"
+            );
+        }
     }
 
     #[tokio::test]
