@@ -109,7 +109,7 @@ fn secure_cookies() -> bool {
             let v = v.trim().to_ascii_lowercase();
             !matches!(v.as_str(), "0" | "false" | "no" | "")
         }
-        Err(_) => true, // default on; set OMNIBUS_SECURE_COOKIES=0 in .env for http://localhost dev
+        Err(_) => true, // default on; set OMNIBUS_SECURE_COOKIES=0 only for non-localhost HTTP origins (e.g. LAN IPs)
     }
 }
 
