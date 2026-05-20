@@ -444,7 +444,12 @@ body {
 .auth-shell-body { margin-top: 1.6rem; }
 
 /* Field */
-.auth-field { display: block; margin-bottom: 0.9rem; }
+/* `position: relative` anchors the absolutely-positioned `.auth-field-action`
+   to the field box. The action slot lives after the input in DOM order
+   (see `components/auth/field.rs`) so tab order is label → input → action;
+   absolute positioning pulls it back to the visual top-right next to the
+   label. */
+.auth-field { display: block; margin-bottom: 0.9rem; position: relative; }
 .auth-field-label-row {
   display: flex;
   justify-content: space-between;
@@ -458,7 +463,15 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.1em;
 }
-.auth-field-action { font-size: 0.78rem; color: var(--auth-accent); }
+.auth-field-action {
+  position: absolute;
+  top: 0;
+  right: 0;
+  font-size: 0.78rem;
+  color: var(--auth-accent);
+  /* Baseline-align with the label row (0.72rem uppercase). */
+  line-height: 1;
+}
 .auth-field-input-wrap { position: relative; }
 .auth-field input,
 .auth-field textarea,
