@@ -350,14 +350,14 @@ body.atrium,
   font-size: 18px;
   color: var(--ink-1);
 }
-.author-link {
+.bd-author-link {
   color: var(--ink-0);
   border-bottom: 1px solid var(--line-2);
   position: relative;
   transition: border-color .15s;
 }
-.author-link:hover { border-bottom-color: var(--accent); }
-.author-link-hint {
+.bd-author-link:hover { border-bottom-color: var(--accent); }
+.bd-author-link-hint {
   font-size: 12px;
   color: var(--ink-3);
   border: 0;
@@ -366,7 +366,7 @@ body.atrium,
   margin-left: 4px;
   font-family: var(--mono);
 }
-.author-link:hover .author-link-hint { opacity: 1; }
+.bd-author-link:hover .bd-author-link-hint { opacity: 1; }
 
 .bd-desc {
   margin-top: 22px;

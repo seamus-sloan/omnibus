@@ -129,16 +129,19 @@ fn render_loaded(b: EbookMetadata) -> Element {
             // ── Hero ────────────────────────────────────────────────────
             section { class: "bd-hero",
                 BdCrumb {
-                    items: vec![
-                        ("Home".to_string(), true),
-                        (primary_author.clone(), false),
-                        (title.clone(), false),
-                    ],
+                    items: {
+                        let mut crumbs = vec![("Home".to_string(), true)];
+                        if !primary_author.is_empty() {
+                            crumbs.push((primary_author.clone(), false));
+                        }
+                        crumbs.push((title.clone(), false));
+                        crumbs
+                    },
                 }
 
                 div { class: "bd-hero-grid",
                     // Cover column
-                    div { class: "bd-cover-col cover-link",
+                    div { class: "bd-cover-col",
                         Cover { book: b.clone() }
                         if !b.formats.is_empty() {
                             div { class: "bd-format-badges",
@@ -158,9 +161,13 @@ fn render_loaded(b: EbookMetadata) -> Element {
                                 class: "bd-by",
                                 "data-testid": "book-authors",
                                 "by "
-                                span { class: "author-link",
+                                span { class: "bd-author-link",
                                     "{authors_line}"
-                                    span { class: "author-link-hint", " view author \u{2192}" }
+                                    span {
+                                        class: "bd-author-link-hint",
+                                        aria_hidden: "true",
+                                        " view author \u{2192}"
+                                    }
                                 }
                             }
                         }
@@ -173,12 +180,22 @@ fn render_loaded(b: EbookMetadata) -> Element {
                             }
                         }
                         div { class: "bd-cta-row",
-                            button {
-                                class: "btn primary lg",
-                                disabled: true,
-                                title: "Reader coming soon",
-                                // TODO(F2.2): open the ebook reader, or "Resume" with progress (F2.1)
-                                if has_ebook { "Start reading" } else { "Start listening" }
+                            if has_ebook {
+                                button {
+                                    class: "btn primary lg",
+                                    disabled: true,
+                                    title: "Reader coming soon",
+                                    // TODO(F2.2): open the ebook reader, or "Resume" with progress (F2.1)
+                                    "Start reading"
+                                }
+                            } else if has_audio {
+                                button {
+                                    class: "btn primary lg",
+                                    disabled: true,
+                                    title: "Audio player coming soon",
+                                    // TODO(F2.3): open audiobook player
+                                    "Start listening"
+                                }
                             }
                             if has_audio && has_ebook {
                                 button {
@@ -449,8 +466,7 @@ fn BdCrumb(items: Vec<(String, bool)>) -> Element {
 }
 
 /// Body section heading row — kicker label + serif title. The kicker stacks
-/// above the title (mirrors `screens/_shared.jsx#SectionHead`); the optional
-/// action slot sits flush right.
+/// above the title (mirrors `screens/_shared.jsx#SectionHead`).
 #[component]
 fn BdSectionHead(kicker: String, title: String) -> Element {
     rsx! {
