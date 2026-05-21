@@ -1,5 +1,4 @@
-import { type APIRequestContext } from "@playwright/test";
-import { expect } from "../fixtures/test";
+import { expect, type APIRequestContext } from "@playwright/test";
 
 // A single shared test user. The server gates all `/api/*` routes behind
 // authentication and disables registration after the first user is created,
@@ -38,4 +37,32 @@ export async function ensureLoggedIn(request: APIRequestContext): Promise<void> 
     loginResp.status(),
     `auth setup: /api/auth/login returned ${loginResp.status()} — wipe omnibus.db and rerun if the existing ${TEST_USERNAME} row has a different password`,
   ).toBe(200);
+}
+
+/**
+ * Mint a bearer session for the shared test user and return the raw token.
+ * Used by `globalSetup` to provision a token for the undici-backed `request`
+ * fixture — Playwright's `APIRequestContext` does not honor Chromium's
+ * `http://localhost` secure-context exception, so the Secure cookie from
+ * `ensureLoggedIn` is dropped on every undici-side call. Bearer tokens ride
+ * in `Authorization: Bearer` and are not subject to Secure, matching the
+ * mobile-client auth path the server already supports in production.
+ *
+ * Assumes the shared test user already exists (`ensureLoggedIn` runs first
+ * in `globalSetup`).
+ */
+export async function loginBearer(request: APIRequestContext): Promise<string> {
+  const resp = await request.post("/api/auth/login", {
+    data: {
+      username: TEST_USERNAME,
+      password: TEST_PASSWORD,
+      client_kind: "bearer",
+    },
+  });
+  expect(resp.status(), "bearer login failed").toBe(200);
+  const body = (await resp.json()) as { token?: string };
+  if (!body.token) {
+    throw new Error("bearer login: response missing `token` — server did not honor client_kind");
+  }
+  return body.token;
 }
