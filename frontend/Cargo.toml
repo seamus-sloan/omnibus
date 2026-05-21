@@ -23,6 +23,10 @@ web-sys = { version = "0.3", features = ["Window", "Storage"], optional = true }
 # multi-thread runtime + macros for `#[tokio::main]`-style usage in rpc.rs.
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"], optional = true }
 tokio = { workspace = true, optional = true }
+# Server-side structured logging for #[cfg(feature = "server")] code paths
+# (rpc.rs auth extractor errors). Optional so the WASM client build doesn't
+# pull tracing into the bundle.
+tracing = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -50,4 +54,5 @@ server = [
     "dep:tokio",
     "tokio/macros",
     "tokio/rt-multi-thread",
+    "dep:tracing",
 ]

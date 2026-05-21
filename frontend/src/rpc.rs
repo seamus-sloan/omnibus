@@ -73,7 +73,7 @@ mod server_auth {
     }
 
     fn internal<E: std::fmt::Display>(e: E) -> Response {
-        eprintln!("rpc auth extractor error: {e}");
+        tracing::error!(error = %e, "rpc auth extractor error");
         (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
     }
 

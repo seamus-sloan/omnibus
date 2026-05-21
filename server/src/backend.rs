@@ -24,6 +24,18 @@ use sqlx::SqlitePool;
 
 use crate::auth::{AdminUser, AuthUser};
 
+/// Generic 500 response that never leaks internal error details to the wire.
+/// The full error is logged server-side via `tracing::error!` so it remains
+/// available in structured logs; the client sees only the boilerplate body.
+fn internal<E: std::fmt::Display>(context: &'static str, e: E) -> Response {
+    tracing::error!(error = %e, context = context, "internal server error");
+    (
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        "internal server error",
+    )
+        .into_response()
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pool: SqlitePool,
@@ -112,33 +124,21 @@ async fn get_health() -> Response {
 async fn get_value(_user: AuthUser, State(state): State<AppState>) -> Response {
     match db::get_value(&state.pool).await {
         Ok(value) => Json(ValueResponse { value }).into_response(),
-        Err(error) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to read value: {error}"),
-        )
-            .into_response(),
+        Err(error) => internal("read value", error),
     }
 }
 
 async fn increment_value(_user: AuthUser, State(state): State<AppState>) -> Response {
     match db::increment_value(&state.pool).await {
         Ok(value) => Json(ValueResponse { value }).into_response(),
-        Err(error) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to increment value: {error}"),
-        )
-            .into_response(),
+        Err(error) => internal("increment value", error),
     }
 }
 
 async fn get_settings(_admin: AdminUser, State(state): State<AppState>) -> Response {
     match db::get_settings(&state.pool).await {
         Ok(settings) => Json(settings).into_response(),
-        Err(error) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to read settings: {error}"),
-        )
-            .into_response(),
+        Err(error) => internal("read settings", error),
     }
 }
 
@@ -173,38 +173,20 @@ async fn post_settings(
                 let _ = task_id;
                 response
             }
-            Err(error) => (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read updated settings: {error}"),
-            )
-                .into_response(),
+            Err(error) => internal("read updated settings", error),
         },
-        Err(error) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to save settings: {error}"),
-        )
-            .into_response(),
+        Err(error) => internal("save settings", error),
     }
 }
 
 async fn get_ebooks(_user: AuthUser, State(state): State<AppState>) -> Response {
     let settings = match db::get_settings(&state.pool).await {
         Ok(s) => s,
-        Err(error) => {
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read settings: {error}"),
-            )
-                .into_response();
-        }
+        Err(error) => return internal("read settings", error),
     };
     match db::library_from_db(&state.pool, settings.ebook_library_path.as_deref()).await {
         Ok(library) => Json(library).into_response(),
-        Err(error) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to read books: {error}"),
-        )
-            .into_response(),
+        Err(error) => internal("read books", error),
     }
 }
 
@@ -216,11 +198,7 @@ async fn get_ebook_by_id(
     match db::get_book(&state.pool, id).await {
         Ok(Some(book)) => Json(book).into_response(),
         Ok(None) => axum::http::StatusCode::NOT_FOUND.into_response(),
-        Err(error) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to read book: {error}"),
-        )
-            .into_response(),
+        Err(error) => internal("read book", error),
     }
 }
 
@@ -236,13 +214,7 @@ async fn get_search(
 ) -> Response {
     let settings = match db::get_settings(&state.pool).await {
         Ok(s) => s,
-        Err(error) => {
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read settings: {error}"),
-            )
-                .into_response();
-        }
+        Err(error) => return internal("read settings", error),
     };
     let Some(path) = settings.ebook_library_path else {
         return Json(omnibus_shared::EbookLibrary::default()).into_response();
@@ -254,11 +226,7 @@ async fn get_search(
             error: None,
         })
         .into_response(),
-        Err(error) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to search books: {error}"),
-        )
-            .into_response(),
+        Err(error) => internal("search books", error),
     }
 }
 
@@ -282,11 +250,7 @@ async fn get_cover(
         )
             .into_response(),
         Ok(None) => axum::http::StatusCode::NOT_FOUND.into_response(),
-        Err(error) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to read cover: {error}"),
-        )
-            .into_response(),
+        Err(error) => internal("read cover", error),
     }
 }
 
@@ -309,13 +273,7 @@ async fn get_thumb(
     let last_modified_epoch = match db::get_last_modified_epoch(&state.pool, id).await {
         Ok(Some(ts)) => ts,
         Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("db error: {e}"),
-            )
-                .into_response();
-        }
+        Err(e) => return internal("read last_modified_epoch", e),
     };
 
     // Cache hit: thumb exists and is fresh. Use async I/O here so a hot
@@ -357,11 +315,7 @@ async fn get_thumb(
                 .into_response()
         }
         Ok(None) => axum::http::StatusCode::ACCEPTED.into_response(),
-        Err(e) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("cover fetch failed: {e}"),
-        )
-            .into_response(),
+        Err(e) => internal("cover fetch for thumb", e),
     }
 }
 
@@ -374,11 +328,7 @@ async fn get_library(_user: AuthUser, State(state): State<AppState>) -> Response
             );
             Json(contents).into_response()
         }
-        Err(error) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to read settings: {error}"),
-        )
-            .into_response(),
+        Err(error) => internal("read settings", error),
     }
 }
 
@@ -1054,5 +1004,40 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    // -------------------------------------------------------------------
+    // 500 — handler error path returns a generic body, never leaks the
+    // underlying sqlx error message. Regression test for #78.
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn api_value_500_body_is_generic_and_never_leaks_db_details() {
+        let (_, _, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        // Force `db::get_value` to fail by dropping the table it reads.
+        // Auth setup above completed before the drop, so the request still
+        // passes the `AuthUser` extractor and reaches `get_value`.
+        sqlx::query("DROP TABLE app_state")
+            .execute(&pool)
+            .await
+            .expect("drop app_state");
+
+        let app = rest_router(AppState::new(pool));
+        let res = app
+            .oneshot(get_with_bearer("/api/value", &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body = std::str::from_utf8(&bytes).expect("utf-8 body");
+        assert_eq!(body, "internal server error");
+        assert!(
+            !body.contains("app_state") && !body.contains("sqlx") && !body.contains("SQL"),
+            "500 body must not leak internal error details, got {body:?}"
+        );
     }
 }
