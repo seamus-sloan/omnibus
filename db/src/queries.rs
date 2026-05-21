@@ -813,20 +813,14 @@ fn materialize_new_covers(new_covers: Vec<(String, String, Vec<u8>)>) {
 // normalized.
 // -----------------------------------------------------------------------------
 
-/// Return every book indexed under `library_path`. Multi-valued fields are
-/// materialized via follow-up queries rather than `GROUP_CONCAT` so the
-/// shapes round-trip cleanly through JSON and we don't have to parse
-/// delimiter-escaped strings.
+/// Return every book indexed under `library_path`. One round-trip to SQLite:
+/// every multi-valued relation is pulled in a single statement using scalar
+/// subqueries (for single-valued joins) and `json_group_array` over ordered
+/// inner selects (for multi-valued lists), matching the pattern in `get_book`.
 pub async fn list_books(
     pool: &SqlitePool,
     library_path: &str,
 ) -> Result<Vec<EbookMetadata>, sqlx::Error> {
-    // One row per `books.id`. Every multi-valued relation (book_files,
-    // publishers, languages, series, formats) is fetched via scalar
-    // subquery so adding a second physical file (EPUB + M4B) doesn't
-    // duplicate the parent — the previous LEFT JOIN on `book_files`
-    // expanded the row count by format and would over-count the chip
-    // facets / inflate the table.
     let rows = sqlx::query(
         r#"
         SELECT b.id, b.uuid,
@@ -858,6 +852,24 @@ pub async fn list_books(
                  WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
                                                             AS series_name,
 
+               (SELECT json_group_array(json_object('name', name, 'sort', sort))
+                  FROM (SELECT a.name AS name, a.sort AS sort
+                          FROM books_authors_link bal
+                          JOIN authors a ON a.id = bal.author
+                         WHERE bal.book = b.id
+                         ORDER BY bal.position))            AS creators_json,
+
+               (SELECT json_group_array(name)
+                  FROM (SELECT t.name AS name FROM books_tags_link btl
+                          JOIN tags t ON t.id = btl.tag
+                         WHERE btl.book = b.id
+                         ORDER BY t.name))                  AS subjects_json,
+
+               (SELECT json_group_array(json_object('scheme', scheme, 'value', value))
+                  FROM (SELECT scheme, value FROM book_identifiers
+                         WHERE book_id = b.id
+                         ORDER BY scheme, value))           AS identifiers_json,
+
                (SELECT json_group_array(format)
                   FROM (SELECT format FROM book_files
                          WHERE book_id = b.id
@@ -884,9 +896,23 @@ pub async fn list_books(
         };
         let series_index: Option<f64> = r.get("series_index");
 
-        let creators = load_creators(pool, id).await?;
-        let subjects = load_subjects(pool, id).await?;
-        let identifiers = load_identifiers(pool, id).await?;
+        let creators: Vec<Contributor> = parse_json_array::<CreatorRow>(r.get("creators_json"))?
+            .into_iter()
+            .map(|c| Contributor {
+                name: c.name,
+                role: None,
+                file_as: c.sort.filter(|s| !s.is_empty()),
+            })
+            .collect();
+        let subjects: Vec<String> = parse_json_array(r.get("subjects_json"))?;
+        let identifiers: Vec<Identifier> =
+            parse_json_array::<IdentifierRow>(r.get("identifiers_json"))?
+                .into_iter()
+                .map(|i| Identifier {
+                    value: i.value,
+                    scheme: Some(i.scheme),
+                })
+                .collect();
 
         out.push(EbookMetadata {
             id,
@@ -922,52 +948,6 @@ pub async fn list_books(
         });
     }
     Ok(out)
-}
-
-async fn load_creators(pool: &SqlitePool, book_id: i64) -> Result<Vec<Contributor>, sqlx::Error> {
-    let rows = sqlx::query(
-        "SELECT a.name, a.sort FROM books_authors_link bal
-         JOIN authors a ON a.id = bal.author
-         WHERE bal.book = ?
-         ORDER BY bal.position",
-    )
-    .bind(book_id)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| Contributor {
-            name: r.get("name"),
-            role: None,
-            file_as: r.get("sort"),
-        })
-        .collect())
-}
-
-async fn load_subjects(pool: &SqlitePool, book_id: i64) -> Result<Vec<String>, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT t.name FROM books_tags_link btl
-         JOIN tags t ON t.id = btl.tag
-         WHERE btl.book = ?
-         ORDER BY t.name",
-    )
-    .bind(book_id)
-    .fetch_all(pool)
-    .await
-}
-
-async fn load_identifiers(pool: &SqlitePool, book_id: i64) -> Result<Vec<Identifier>, sqlx::Error> {
-    let rows = sqlx::query("SELECT scheme, value FROM book_identifiers WHERE book_id = ?")
-        .bind(book_id)
-        .fetch_all(pool)
-        .await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| Identifier {
-            value: r.get("value"),
-            scheme: Some(r.get("scheme")),
-        })
-        .collect())
 }
 
 /// Fetch a single book by its stable `books.id`. Returns `None` if not found.
@@ -1065,13 +1045,6 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
         _ => String::new(),
     };
 
-    #[derive(serde::Deserialize)]
-    struct CreatorRow {
-        name: String,
-        #[serde(default)]
-        sort: Option<String>,
-    }
-
     let creators: Vec<Contributor> = parse_json_array::<CreatorRow>(r.get("creators_json"))?
         .into_iter()
         .map(|c| Contributor {
@@ -1082,12 +1055,6 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
         .collect();
 
     let subjects: Vec<String> = parse_json_array(r.get("subjects_json"))?;
-
-    #[derive(serde::Deserialize)]
-    struct IdentifierRow {
-        scheme: String,
-        value: String,
-    }
 
     let identifiers: Vec<Identifier> =
         parse_json_array::<IdentifierRow>(r.get("identifiers_json"))?
@@ -1134,10 +1101,22 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
     }))
 }
 
-/// Decode a `json_group_array` blob produced by `get_book`. SQLite returns
-/// `"[]"` for an aggregate over zero rows, so a `None` here only means the
-/// column itself was NULL (which the get_book subqueries never produce, but
-/// we tolerate it defensively).
+#[derive(serde::Deserialize)]
+struct CreatorRow {
+    name: String,
+    #[serde(default)]
+    sort: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct IdentifierRow {
+    scheme: String,
+    value: String,
+}
+
+/// Decode a `json_group_array` blob produced by SQLite. Returns `"[]"` for an
+/// aggregate over zero rows, so a `None` here only means the column itself was
+/// NULL (which the subqueries never produce, but we tolerate it defensively).
 fn parse_json_array<T: serde::de::DeserializeOwned>(
     blob: Option<String>,
 ) -> Result<Vec<T>, sqlx::Error> {
@@ -1188,9 +1167,6 @@ pub async fn search_books(
         return Ok(Vec::new());
     };
 
-    // Mirror `list_books`: one row per `books.id` via scalar subqueries
-    // for every multi-valued relation, so multi-format books don't
-    // duplicate in search results / inflate facets.
     let rows = sqlx::query(
         r#"
         SELECT b.id, b.uuid,
@@ -1222,6 +1198,24 @@ pub async fn search_books(
                  WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
                                                             AS series_name,
 
+               (SELECT json_group_array(json_object('name', name, 'sort', sort))
+                  FROM (SELECT a.name AS name, a.sort AS sort
+                          FROM books_authors_link bal
+                          JOIN authors a ON a.id = bal.author
+                         WHERE bal.book = b.id
+                         ORDER BY bal.position))            AS creators_json,
+
+               (SELECT json_group_array(name)
+                  FROM (SELECT t.name AS name FROM books_tags_link btl
+                          JOIN tags t ON t.id = btl.tag
+                         WHERE btl.book = b.id
+                         ORDER BY t.name))                  AS subjects_json,
+
+               (SELECT json_group_array(json_object('scheme', scheme, 'value', value))
+                  FROM (SELECT scheme, value FROM book_identifiers
+                         WHERE book_id = b.id
+                         ORDER BY scheme, value))           AS identifiers_json,
+
                (SELECT json_group_array(format)
                   FROM (SELECT format FROM book_files
                          WHERE book_id = b.id
@@ -1250,9 +1244,23 @@ pub async fn search_books(
         };
         let series_index: Option<f64> = r.get("series_index");
 
-        let creators = load_creators(pool, id).await?;
-        let subjects = load_subjects(pool, id).await?;
-        let identifiers = load_identifiers(pool, id).await?;
+        let creators: Vec<Contributor> = parse_json_array::<CreatorRow>(r.get("creators_json"))?
+            .into_iter()
+            .map(|c| Contributor {
+                name: c.name,
+                role: None,
+                file_as: c.sort.filter(|s| !s.is_empty()),
+            })
+            .collect();
+        let subjects: Vec<String> = parse_json_array(r.get("subjects_json"))?;
+        let identifiers: Vec<Identifier> =
+            parse_json_array::<IdentifierRow>(r.get("identifiers_json"))?
+                .into_iter()
+                .map(|i| Identifier {
+                    value: i.value,
+                    scheme: Some(i.scheme),
+                })
+                .collect();
 
         out.push(EbookMetadata {
             id,
@@ -2560,6 +2568,85 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(titles, vec!["A".to_string()]);
+    }
+
+    /// Regression guard for the N+1 fix in list_books / search_books.
+    /// Both functions must return all creators, subjects, and identifiers
+    /// via the inline json_group_array subqueries rather than per-book
+    /// round-trip calls.
+    #[tokio::test]
+    async fn list_and_search_books_return_multi_valued_fields() {
+        let _covers = CoversTempDir::new("multi_valued");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![IndexedBook {
+                metadata: EbookMetadata {
+                    filename: "multi.epub".into(),
+                    title: Some("Multi".into()),
+                    creators: vec![
+                        Contributor {
+                            name: "Alice".into(),
+                            ..Default::default()
+                        },
+                        Contributor {
+                            name: "Bob".into(),
+                            ..Default::default()
+                        },
+                    ],
+                    subjects: vec!["Fiction".into(), "Sci-Fi".into()],
+                    identifiers: vec![
+                        Identifier {
+                            value: "978-0-000000-00-0".into(),
+                            scheme: Some("isbn".into()),
+                        },
+                        Identifier {
+                            value: "https://example.com/book/1".into(),
+                            scheme: Some("uri".into()),
+                        },
+                    ],
+                    ..Default::default()
+                },
+                cover: None,
+            }],
+        )
+        .await
+        .unwrap();
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        assert_eq!(books.len(), 1);
+        let book = &books[0];
+        assert_eq!(
+            book.creators
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Alice", "Bob"]
+        );
+        assert_eq!(
+            book.subjects,
+            vec!["Fiction".to_string(), "Sci-Fi".to_string()]
+        );
+        assert_eq!(book.identifiers.len(), 2);
+        assert_eq!(book.identifiers[0].scheme.as_deref(), Some("isbn"));
+        assert_eq!(book.identifiers[1].scheme.as_deref(), Some("uri"));
+
+        let hits = search_books(&pool, "/lib", "Multi").await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0]
+                .creators
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Alice", "Bob"]
+        );
+        assert_eq!(
+            hits[0].subjects,
+            vec!["Fiction".to_string(), "Sci-Fi".to_string()]
+        );
+        assert_eq!(hits[0].identifiers.len(), 2);
     }
 
     #[tokio::test]
