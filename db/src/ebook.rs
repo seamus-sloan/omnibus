@@ -626,14 +626,18 @@ mod tests {
         // Real EPUB covers top out around 1500×2250. Test against that size
         // with a generous debug-mode budget — release builds run ~3× faster.
         // The point of the test is to catch a regression to seconds, not to
-        // hold a tight production-grade budget in unoptimized builds.
+        // hold a tight production-grade budget in unoptimized builds. GitHub
+        // Actions ubuntu-latest runners have measurably slower per-core
+        // throughput than developer workstations and can spend 600–700 ms on
+        // this input in debug builds, so the threshold is set to 2 s — any
+        // multi-second regression still trips it.
         let bytes = solid_color_png(80, 140, 200, 1500, 2250);
         let start = std::time::Instant::now();
         let _ = extract_accent(&bytes);
         let elapsed = start.elapsed();
         assert!(
-            elapsed < std::time::Duration::from_millis(500),
-            "extract_accent must stay well under one second on realistic input; took {elapsed:?}"
+            elapsed < std::time::Duration::from_secs(2),
+            "extract_accent must stay well under multiple seconds on realistic input; took {elapsed:?}"
         );
     }
 
