@@ -169,4 +169,73 @@ test.describe("with seeded library", () => {
     await expect(page.getByTestId("sp-coming-soon")).toBeVisible();
     await expect(page.getByTestId("sp-coming-soon")).toHaveText("Coming soon");
   });
+
+  test("clicking author result navigates to author detail page", async ({ page }) => {
+    await gotoReady(page, "/");
+    await page.getByTestId("search-trigger").click();
+    await page.getByTestId("sp-input").fill("stoker");
+
+    await expect
+      .poll(async () => page.getByTestId("sp-author-row").count())
+      .toBeGreaterThanOrEqual(1);
+
+    await page.getByTestId("sp-author-row").first().click();
+    await expect.poll(async () => new URL(page.url()).pathname).toMatch(
+      /^\/authors\/\d+$/,
+    );
+  });
+
+  test("clicking series result navigates to series detail page", async ({ page }) => {
+    await gotoReady(page, "/");
+    await page.getByTestId("search-trigger").click();
+    await page.getByTestId("sp-input").fill("pioneers");
+
+    await expect
+      .poll(async () => page.getByTestId("sp-series-row").count())
+      .toBeGreaterThanOrEqual(1);
+
+    await page.getByTestId("sp-series-row").first().click();
+    await expect.poll(async () => new URL(page.url()).pathname).toMatch(
+      /^\/series\/\d+$/,
+    );
+  });
+
+  test("pressing Enter without arrow-key navigation goes to /search", async ({ page }) => {
+    await gotoReady(page, "/");
+    await page.getByTestId("search-trigger").click();
+    const input = page.getByTestId("sp-input");
+    await input.fill("dracula");
+
+    // Wait for at least one result so the palette has loaded, then press
+    // Enter without engaging arrow keys — should route to the full-page
+    // results, not drill into the first result.
+    await expect
+      .poll(async () => page.getByTestId("sp-book-row").count())
+      .toBeGreaterThanOrEqual(1);
+
+    await input.press("Enter");
+    await expect.poll(async () => new URL(page.url()).pathname).toMatch(
+      /^\/search\/dracula$/,
+    );
+    await expect(page.getByTestId("search-back")).toBeVisible();
+  });
+
+  test("Enter after arrow-key selection drills into the highlighted result", async ({ page }) => {
+    await gotoReady(page, "/");
+    await page.getByTestId("search-trigger").click();
+    const input = page.getByTestId("sp-input");
+    await input.fill("dracula");
+
+    await expect
+      .poll(async () => page.getByTestId("sp-book-row").count())
+      .toBeGreaterThanOrEqual(1);
+
+    // Arrow down to engage selection, then Enter to drill in.
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+
+    await expect.poll(async () => new URL(page.url()).pathname).toMatch(
+      /^\/books\/\d+$/,
+    );
+  });
 });

@@ -45,8 +45,16 @@ pub fn LoginPage() -> Element {
     // requests are same-origin) and the `ServerUrl` context value on mobile.
     let server_url = use_server_url();
 
-    let on_submit = move |evt: FormEvent| {
-        evt.prevent_default();
+    // Submission logic, decoupled from the event source so both the form's
+    // `onsubmit` (click) and a per-input `onkeydown` Enter handler can drive
+    // it. Dioxus 0.7's submit event doesn't reliably fire on implicit form
+    // submission from Enter, so we trigger it explicitly. `use_callback`
+    // gives us a `Copy` handle so the closure can be installed on both
+    // listeners.
+    let submit_now = use_callback(move |_: ()| {
+        if submitting() {
+            return;
+        }
         let u = username();
         let p = password();
         if u.is_empty() || p.is_empty() {
@@ -66,6 +74,16 @@ pub fn LoginPage() -> Element {
                 Err(e) => error.set(Some(e)),
             }
         });
+    });
+    let on_submit = move |evt: FormEvent| {
+        evt.prevent_default();
+        submit_now.call(());
+    };
+    let on_keydown = move |evt: Event<KeyboardData>| {
+        if evt.key() == Key::Enter {
+            evt.prevent_default();
+            submit_now.call(());
+        }
     };
 
     rsx! {
@@ -94,6 +112,7 @@ pub fn LoginPage() -> Element {
                         autocomplete: "username",
                         value: "{username}",
                         oninput: move |e| username.set(e.value()),
+                        onkeydown: on_keydown,
                     }
                 }
                 Field {
@@ -116,6 +135,7 @@ pub fn LoginPage() -> Element {
                         autocomplete: "current-password",
                         value: "{password}",
                         oninput: move |e| password.set(e.value()),
+                        onkeydown: on_keydown,
                     }
                 }
                 label { class: "auth-checkbox",
@@ -156,8 +176,10 @@ pub fn RegisterPage() -> Element {
 
     let server_url = use_server_url();
 
-    let on_submit = move |evt: FormEvent| {
-        evt.prevent_default();
+    let submit_now = use_callback(move |_: ()| {
+        if submitting() {
+            return;
+        }
         let u = username();
         let p = password();
         if u.is_empty() || p.is_empty() {
@@ -179,6 +201,16 @@ pub fn RegisterPage() -> Element {
                 Err(e) => error.set(Some(classify_register_error(&e))),
             }
         });
+    });
+    let on_submit = move |evt: FormEvent| {
+        evt.prevent_default();
+        submit_now.call(());
+    };
+    let on_keydown = move |evt: Event<KeyboardData>| {
+        if evt.key() == Key::Enter {
+            evt.prevent_default();
+            submit_now.call(());
+        }
     };
 
     let pw = password();
@@ -241,6 +273,7 @@ pub fn RegisterPage() -> Element {
                             username.set(e.value());
                             error.set(None);
                         },
+                        onkeydown: on_keydown,
                     }
                 }
                 Field {
@@ -254,6 +287,7 @@ pub fn RegisterPage() -> Element {
                         autocomplete: "new-password",
                         value: "{password}",
                         aria_invalid: "{password_invalid}",
+                        onkeydown: on_keydown,
                         oninput: move |e| {
                             password.set(e.value());
                             error.set(None);

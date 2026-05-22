@@ -30,7 +30,7 @@ use omnibus_shared::{
     PaletteAuthorHit, PaletteBookHit, PaletteResults, PaletteSeriesHit, PaletteTagHit,
 };
 
-use crate::{data, use_search_query, use_server_url, Route};
+use crate::{data, use_server_url, Route};
 
 /// Whether the search palette overlay is open. Registered at the App level
 /// via `use_context_provider` so both the trigger button and the global
@@ -102,8 +102,11 @@ fn SpOverlay(open: PaletteOpen) -> Element {
     let mut loading = use_signal(|| false);
     // Generation counter for debounce — stale responses are discarded.
     let mut generation = use_signal(|| 0_u64);
+    // Tracks whether the user has driven selection with arrow keys this
+    // session. When false, pressing Enter navigates to the full-page
+    // search results instead of drilling into `selected`.
+    let mut has_navigated = use_signal(|| false);
     let nav = use_navigator();
-    let mut search_query = use_search_query();
 
     // Build a flat list of selectable items for keyboard navigation.
     let flat_items = use_memo(move || build_flat_items(&results.read()));
@@ -113,24 +116,25 @@ fn SpOverlay(open: PaletteOpen) -> Element {
         open.0.set(false);
     };
 
-    // Navigate to the selected result.
+    // Navigate to the selected result. Books/Authors/Series go to their
+    // detail pages; Tags fall through to the full-page /search results
+    // (no per-tag detail page exists yet).
     let navigate_to_item = {
         move |item: &FlatItem| {
             match item {
                 FlatItem::Book { id, .. } => {
                     nav.push(Route::BookDetail { id: *id });
                 }
-                FlatItem::Author { name, .. } => {
-                    search_query.0.set(facet_query("author", name));
-                    nav.push(Route::Landing {});
+                FlatItem::Author { id, .. } => {
+                    nav.push(Route::AuthorDetail { id: *id });
                 }
-                FlatItem::Series { name, .. } => {
-                    search_query.0.set(facet_query("series", name));
-                    nav.push(Route::Landing {});
+                FlatItem::Series { id, .. } => {
+                    nav.push(Route::SeriesDetail { id: *id });
                 }
                 FlatItem::Tag { name, .. } => {
-                    search_query.0.set(facet_query("tag", name));
-                    nav.push(Route::Landing {});
+                    nav.push(Route::Search {
+                        query: facet_query("tag", name),
+                    });
                 }
             }
             open.0.set(false);
@@ -152,6 +156,7 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                 let len = items_for_key.read().len();
                 if len > 0 {
                     selected.set((selected() + 1) % len);
+                    has_navigated.set(true);
                 }
             }
             Key::ArrowUp => {
@@ -163,13 +168,22 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                     } else {
                         selected() - 1
                     });
+                    has_navigated.set(true);
                 }
             }
             Key::Enter => {
                 evt.prevent_default();
                 let items = items_for_key.read();
-                if let Some(item) = items.get(selected()) {
-                    nav_for_key(item);
+                if has_navigated() {
+                    if let Some(item) = items.get(selected()) {
+                        nav_for_key(item);
+                    }
+                } else {
+                    let q = query().trim().to_string();
+                    if !q.is_empty() {
+                        nav.push(Route::Search { query: q });
+                        open.0.set(false);
+                    }
                 }
             }
             _ => {}
@@ -280,6 +294,10 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                             let v = evt.value();
                             query.set(v);
                             generation += 1;
+                            // Typing reverts to "Enter goes to /search" until
+                            // the user re-engages arrow-key navigation.
+                            has_navigated.set(false);
+                            selected.set(0);
                         },
                     }
                     if is_loading {
@@ -323,11 +341,9 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                                     author: author.clone(),
                                     selected: is_selected(&items, sel, &FlatItem::Author { id: author.id, name: author.name.clone() }),
                                     on_click: {
-                                        let name = author.name.clone();
-                                        let mut sq = search_query;
+                                        let id = author.id;
                                         move |_| {
-                                            sq.0.set(format!("author:{name}"));
-                                            nav.push(Route::Landing {});
+                                            nav.push(Route::AuthorDetail { id });
                                             open.0.set(false);
                                         }
                                     },
@@ -343,11 +359,9 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                                     series: s.clone(),
                                     selected: is_selected(&items, sel, &FlatItem::Series { id: s.id, name: s.name.clone() }),
                                     on_click: {
-                                        let name = s.name.clone();
-                                        let mut sq = search_query;
+                                        let id = s.id;
                                         move |_| {
-                                            sq.0.set(format!("series:{name}"));
-                                            nav.push(Route::Landing {});
+                                            nav.push(Route::SeriesDetail { id });
                                             open.0.set(false);
                                         }
                                     },
@@ -364,10 +378,10 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                                     selected: is_selected(&items, sel, &FlatItem::Tag { id: tag.id, name: tag.name.clone() }),
                                     on_click: {
                                         let name = tag.name.clone();
-                                        let mut sq = search_query;
                                         move |_| {
-                                            sq.0.set(format!("tag:{name}"));
-                                            nav.push(Route::Landing {});
+                                            nav.push(Route::Search {
+                                                query: facet_query("tag", &name),
+                                            });
                                             open.0.set(false);
                                         }
                                     },
