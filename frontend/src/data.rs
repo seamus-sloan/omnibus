@@ -11,7 +11,8 @@
 //!   web stubs so SSR-during-fullstack-render still returns sensible data.
 
 use omnibus_shared::{
-    AuthorDetail, EbookLibrary, EbookMetadata, LibraryContents, SeriesDetail, Settings, TagWeight,
+    AuthorDetail, EbookLibrary, EbookMetadata, LibraryContents, MetadataOverrides, SeriesDetail,
+    Settings, TagWeight,
 };
 #[cfg(any(feature = "web", feature = "mobile"))]
 use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};
@@ -550,6 +551,53 @@ pub async fn get_tag_cloud(server_url: &str) -> Result<Vec<TagWeight>, String> {
         .map_err(|e| e.to_string())
 }
 
+#[cfg(feature = "mobile")]
+pub async fn save_overrides(
+    server_url: &str,
+    id: i64,
+    overrides: &MetadataOverrides,
+) -> Result<Option<EbookMetadata>, String> {
+    #[derive(serde::Serialize)]
+    struct Body<'a> {
+        book_id: i64,
+        overrides: &'a MetadataOverrides,
+    }
+    let url = format!("{server_url}/api/ebooks/{id}/overrides");
+    let response = with_bearer(http_client().post(&url))
+        .json(&Body {
+            book_id: id,
+            overrides,
+        })
+        .send()
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    response
+        .json::<Option<EbookMetadata>>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(feature = "mobile")]
+pub async fn delete_overrides(server_url: &str, id: i64) -> Result<Option<EbookMetadata>, String> {
+    let url = format!("{server_url}/api/ebooks/{id}/overrides/delete");
+    let response = with_bearer(http_client().post(&url))
+        .send()
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    response
+        .json::<Option<EbookMetadata>>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // ===== Mobile auth transport: bearer token =====
 //
 // Mobile cannot use cookies (Dioxus Native is not a webview), so login
@@ -720,6 +768,24 @@ pub async fn get_series(_server_url: &str, id: i64) -> Result<Option<SeriesDetai
 #[cfg(not(feature = "mobile"))]
 pub async fn get_tag_cloud(_server_url: &str) -> Result<Vec<TagWeight>, String> {
     crate::rpc::rpc_get_tag_cloud()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "mobile"))]
+pub async fn save_overrides(
+    _server_url: &str,
+    id: i64,
+    overrides: &MetadataOverrides,
+) -> Result<Option<EbookMetadata>, String> {
+    crate::rpc::rpc_save_overrides(id, overrides.clone())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "mobile"))]
+pub async fn delete_overrides(_server_url: &str, id: i64) -> Result<Option<EbookMetadata>, String> {
+    crate::rpc::rpc_delete_overrides(id)
         .await
         .map_err(|e| e.to_string())
 }
