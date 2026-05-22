@@ -97,7 +97,6 @@ fn render_series(s: SeriesDetail) -> Element {
                     div {
                         span { class: "label", "Series · {s.book_count} in library" }
                         h1 { class: "disc-hero-title",
-                            "The "
                             em { "{title_first}" }
                             if !title_rest.is_empty() {
                                 " {title_rest}"
