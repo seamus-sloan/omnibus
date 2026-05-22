@@ -16,8 +16,8 @@ pub mod view_prefs;
 
 pub use components::Nav;
 pub use pages::{
-    AuthorPage, BookDetailPage, LandingPage, LoginPage, RegisterPage, SeriesPage, SettingsPage,
-    TagCloudPage,
+    AuthorPage, BookDetailPage, LandingPage, LoginPage, MetadataEditPage, RegisterPage, SeriesPage,
+    SettingsPage, TagCloudPage,
 };
 
 #[cfg(feature = "mobile")]
@@ -32,6 +32,8 @@ pub enum Route {
     Settings {},
     #[route("/books/:id")]
     BookDetail { id: i64 },
+    #[route("/books/:id/edit")]
+    MetadataEdit { id: i64 },
     #[route("/authors/:id")]
     AuthorDetail { id: i64 },
     #[route("/series/:id")]
@@ -66,6 +68,14 @@ pub fn Settings() -> Element {
 pub fn BookDetail(id: i64) -> Element {
     rsx! {
         ScreenLayout { BookDetailPage { id } }
+    }
+}
+
+/// Route target for `/books/:id/edit` — metadata edit form.
+#[component]
+pub fn MetadataEdit(id: i64) -> Element {
+    rsx! {
+        ScreenLayout { MetadataEditPage { id } }
     }
 }
 
