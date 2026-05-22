@@ -29,9 +29,6 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
 
-      - name: Enable Nix store cache
-        uses: DeterminateSystems/magic-nix-cache-action@main
-
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
         with:
