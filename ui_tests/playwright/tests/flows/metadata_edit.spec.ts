@@ -118,7 +118,7 @@ test("adds and removes tags via chip row", async ({ page, request }) => {
   await gotoReady(page, `/books/${id}/edit`);
 
   // Add a new tag via the inline input.
-  const tagInput = page.getByPlaceholder("+ add tag");
+  const tagInput = page.getByPlaceholder("+ add tag…");
   await tagInput.fill("test-tag");
   await tagInput.press("Enter");
 

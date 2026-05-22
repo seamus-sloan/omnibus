@@ -250,5 +250,6 @@ pub async fn rpc_delete_overrides(book_id: i64) -> Result<Option<EbookMetadata>>
     };
     db::delete_metadata_overrides(&pool.0, &uuid).await?;
     db::delete_override_cover(&uuid);
+    db::thumbs::invalidate_thumbs(book_id);
     Ok(db::get_book(&pool.0, book_id).await?)
 }

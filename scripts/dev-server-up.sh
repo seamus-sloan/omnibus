@@ -3,7 +3,7 @@
 # anyone who wants a port-walking, "just give me a server" front door.
 #
 # What it does:
-#   1. Probes 127.0.0.1:<port> starting at $PORT (default 3000), walking up
+#   1. Probes 127.0.0.1:<port> starting at $PORT (default 3003), walking up
 #      to PORT+20. Reuses an existing omnibus instance if /api/_health
 #      identifies one; picks the first free port otherwise; exits 1 if every
 #      candidate is held by a foreign process.

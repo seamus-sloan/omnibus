@@ -401,6 +401,7 @@ async fn delete_ebook_overrides(
         return internal("delete_metadata_overrides", e);
     }
     db::delete_override_cover(&uuid);
+    db::thumbs::invalidate_thumbs(id);
     match db::get_book(&state.pool, id).await {
         Ok(Some(book)) => Json(book).into_response(),
         Ok(None) => (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),

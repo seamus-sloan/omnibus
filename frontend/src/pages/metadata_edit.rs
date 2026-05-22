@@ -547,8 +547,9 @@ fn MetadataEditForm(book: EbookMetadata, id: i64) -> Element {
 
 // ---------------------------------------------------------------------------
 // Build the MetadataOverrides from the edited fields. Only sets `Some` for
-// fields that actually differ from the original scanned values — this avoids
-// clobbering fields with their own value when the user didn't touch them.
+// fields that differ from the initially loaded book (which already has any
+// prior overrides merged in). Server-side merge ensures prior overrides on
+// untouched fields are preserved.
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
@@ -613,14 +614,18 @@ fn build_overrides(
 // ---------------------------------------------------------------------------
 
 /// Label with optional "EDITED" badge and hint text.
+/// Renders a `<label for=…>` so screen readers associate it with the input.
 #[component]
 fn MeLabel(
     text: String,
     #[props(default)] edited: bool,
     #[props(default)] hint: String,
+    /// The `id` of the input this label targets.
+    #[props(default)]
+    target: String,
 ) -> Element {
     rsx! {
-        div { class: "me-label",
+        label { class: "me-label", r#for: target,
             span { "{text}" }
             if edited {
                 span { class: "mono me-label-edited", "\u{b7} EDITED" }
@@ -630,6 +635,18 @@ fn MeLabel(
             }
         }
     }
+}
+
+/// Derive a stable input `id` from a label string (lowercase, hyphens for spaces).
+fn label_to_id(label: &str) -> String {
+    format!(
+        "me-{}",
+        label
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '-' })
+            .collect::<String>()
+    )
 }
 
 /// Single-line input field in the form grid.
@@ -662,10 +679,13 @@ fn MeField(
     };
     let border_class = if edited { " me-input-edited" } else { "" };
 
+    let field_id = label_to_id(&label);
+
     rsx! {
         div { class: col_class,
-            MeLabel { text: label.clone(), edited, hint }
+            MeLabel { text: label.clone(), edited, hint, target: field_id.clone() }
             input {
+                id: field_id,
                 class: "{input_class}{border_class}",
                 value: "{value}",
                 placeholder: if placeholder.is_empty() { label } else { placeholder },
@@ -688,11 +708,13 @@ fn MeArea(
     #[props(default)] hint: String,
 ) -> Element {
     let border_class = if edited { " me-input-edited" } else { "" };
+    let field_id = label_to_id(&label);
 
     rsx! {
         div { class: "me-field me-field-full",
-            MeLabel { text: label.clone(), edited, hint }
+            MeLabel { text: label.clone(), edited, hint, target: field_id.clone() }
             textarea {
+                id: field_id,
                 class: "me-textarea{border_class}",
                 rows: "{rows}",
                 value: "{value}",
