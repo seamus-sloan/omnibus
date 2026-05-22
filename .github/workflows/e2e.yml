@@ -45,24 +45,28 @@ jobs:
           restore-keys: |
             playwright-node-modules-${{ runner.os }}-
 
-      - name: Install Playwright npm deps
-        run: nix develop --command bash -c "cd ui_tests/playwright && npm ci"
-
-      - name: Bundle web app
-        run: nix develop --command dx bundle --platform web --package omnibus --fullstack
-
-      - name: Start server
+      - name: Build, start server, and run Playwright tests
         run: |
-          # Run the pre-bundled server binary directly. dx serve/run both host a
-          # "building your app" / "non-hot-reloadable change" splash page while
-          # they compile on demand, which made Playwright race the build. A
-          # bundled binary has its public/ assets ready alongside it and serves
-          # the real SSR app from the first request.
-          nix develop --command bash -c "PORT=3000 ./target/dx/omnibus/debug/web/server >server.log 2>&1 &"
-          nix develop --command bash -c "npx --yes wait-on -t 60000 http://127.0.0.1:3000"
+          nix develop --command bash -c '
+            set -euo pipefail
 
-      - name: Run Playwright tests
-        run: nix develop --command bash -c "cd ui_tests/playwright && npm test"
+            echo "::group::Install Playwright npm deps"
+            cd ui_tests/playwright && npm ci && cd ../..
+            echo "::endgroup::"
+
+            echo "::group::Bundle web app"
+            dx bundle --platform web --package omnibus --fullstack
+            echo "::endgroup::"
+
+            echo "::group::Start server"
+            PORT=3000 ./target/dx/omnibus/debug/web/server >server.log 2>&1 &
+            npx --yes wait-on -t 60000 http://127.0.0.1:3000
+            echo "::endgroup::"
+
+            echo "::group::Run Playwright tests"
+            cd ui_tests/playwright && npm test
+            echo "::endgroup::"
+          '
 
       - name: Upload Playwright report
         if: failure()
