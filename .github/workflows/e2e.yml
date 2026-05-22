@@ -49,6 +49,7 @@ jobs:
         run: |
           nix develop --command bash -c '
             set -euo pipefail
+            trap 'echo "::endgroup::"' ERR
 
             echo "::group::Install Playwright npm deps"
             cd ui_tests/playwright && npm ci && cd ../..
