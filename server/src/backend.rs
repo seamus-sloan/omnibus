@@ -73,7 +73,11 @@ pub fn rest_router(state: AppState) -> Router {
             "/api/ebooks/{id}/overrides/delete",
             post(delete_ebook_overrides),
         )
-        .route("/api/ebooks/{id}/cover", post(post_ebook_cover))
+        .merge(
+            Router::new()
+                .route("/api/ebooks/{id}/cover", post(post_ebook_cover))
+                .layer(axum::extract::DefaultBodyLimit::max(11 * 1024 * 1024)),
+        )
         .route("/api/search", get(get_search))
         .route("/api/covers/{id}", get(get_cover))
         .route("/api/thumbs/{id}/{size}", get(get_thumb))
@@ -251,6 +255,9 @@ async fn get_cover(
                 // request on the same URL now that the endpoint is gated.
                 (header::CACHE_CONTROL, "private, max-age=86400"),
                 (header::VARY, "Cookie"),
+                // Prevent browsers from MIME-sniffing a cover into an
+                // executable type (e.g. an SVG disguised as JPEG).
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             ],
             bytes,
         )
@@ -292,6 +299,7 @@ async fn get_thumb(
                     (header::CONTENT_TYPE, "image/webp"),
                     (header::CACHE_CONTROL, "private, max-age=86400"),
                     (header::VARY, "Cookie"),
+                    (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
                 ],
                 bytes,
             )
@@ -315,6 +323,7 @@ async fn get_thumb(
                     // Short TTL: browser will re-fetch after ~5 s when the WebP is ready.
                     (header::CACHE_CONTROL, "private, max-age=5"),
                     (header::VARY, "Cookie"),
+                    (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
                 ],
                 bytes,
             )
@@ -355,6 +364,9 @@ async fn post_ebook_overrides(
             "edit permission required",
         )
             .into_response();
+    }
+    if let Err(msg) = overrides.validate() {
+        return (axum::http::StatusCode::BAD_REQUEST, msg).into_response();
     }
     let uuid = match db::get_book_uuid(&state.pool, id).await {
         Ok(Some(u)) => u,
@@ -409,6 +421,26 @@ async fn delete_ebook_overrides(
     }
 }
 
+/// Detect image format from magic bytes. Returns the canonical MIME type for
+/// accepted raster formats (JPEG, PNG, GIF, WebP). Returns `None` for
+/// unrecognised or dangerous formats (SVG, arbitrary binaries).
+fn detect_image_format(bytes: &[u8]) -> Option<String> {
+    if bytes.len() < 4 {
+        return None;
+    }
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg".into())
+    } else if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+        Some("image/png".into())
+    } else if bytes.starts_with(b"GIF8") {
+        Some("image/gif".into())
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp".into())
+    } else {
+        None
+    }
+}
+
 /// Upload a replacement cover image for a book. Multipart form with a single
 /// `cover` field containing the image bytes.
 async fn post_ebook_cover(
@@ -450,6 +482,15 @@ async fn post_ebook_cover(
                     )
                         .into_response();
                 }
+                // Reject SVG — contains executable content and can XSS when
+                // opened directly in a browser tab.
+                if content_type.contains("svg") {
+                    return (
+                        axum::http::StatusCode::BAD_REQUEST,
+                        "SVG covers are not accepted",
+                    )
+                        .into_response();
+                }
                 match field.bytes().await {
                     Ok(b) => {
                         if b.len() > 10 * 1024 * 1024 {
@@ -459,7 +500,18 @@ async fn post_ebook_cover(
                             )
                                 .into_response();
                         }
-                        break (content_type, b);
+                        // Validate magic bytes — don't trust Content-Type alone.
+                        let detected = detect_image_format(&b);
+                        if detected.is_none() {
+                            return (
+                                axum::http::StatusCode::BAD_REQUEST,
+                                "file does not appear to be a valid image",
+                            )
+                                .into_response();
+                        }
+                        // Use the detected MIME so the stored extension matches
+                        // actual content, not the (untrusted) client header.
+                        break (detected.unwrap(), b);
                     }
                     Err(e) => return internal("read cover field", e),
                 }

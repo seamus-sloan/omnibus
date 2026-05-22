@@ -226,6 +226,9 @@ pub async fn rpc_save_overrides(
     if !user.is_admin && !user.can_edit {
         return Err(ServerFnError::new("forbidden: edit permission required").into());
     }
+    if let Err(msg) = overrides.validate() {
+        return Err(ServerFnError::new(msg).into());
+    }
     let Some(uuid) = db::get_book_uuid(&pool.0, book_id).await? else {
         return Ok(None);
     };

@@ -97,6 +97,16 @@ fn MetadataEditForm(book: EbookMetadata, id: i64) -> Element {
     // Tags (subjects) as a signal of Vec<String>.
     let mut tags = use_signal(|| book.subjects.clone());
 
+    // Read-only field signals — hoisted here so `use_signal` isn't called
+    // inside the `rsx!` body on every render.
+    let sort_by = use_signal(|| {
+        book.creators
+            .first()
+            .map(|c| c.file_as.clone().unwrap_or_else(|| c.name.clone()))
+            .unwrap_or_default()
+    });
+    let filename = use_signal(|| book.filename.clone());
+
     // Inline-add input states for chips.
     let mut new_author = use_signal(String::new);
     let mut new_tag = use_signal(String::new);
@@ -208,13 +218,7 @@ fn MetadataEditForm(book: EbookMetadata, id: i64) -> Element {
                         // File-as / sort name (mono, read-only for now)
                         MeField {
                             label: "Sort by",
-                            value: use_signal(|| {
-                                book.creators.first()
-                                    .map(|c| {
-                                        c.file_as.clone().unwrap_or_else(|| c.name.clone())
-                                    })
-                                    .unwrap_or_default()
-                            }),
+                            value: sort_by,
                             on_change: move |_: String| {},
                             mono: true,
                             locked: true,
@@ -224,7 +228,7 @@ fn MetadataEditForm(book: EbookMetadata, id: i64) -> Element {
                         // Filename (mono, read-only)
                         MeField {
                             label: "Filename",
-                            value: use_signal(|| book.filename.clone()),
+                            value: filename,
                             on_change: move |_: String| {},
                             mono: true,
                             locked: true,

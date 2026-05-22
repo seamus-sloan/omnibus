@@ -157,6 +157,63 @@ pub struct MetadataOverrides {
 }
 
 impl MetadataOverrides {
+    /// Maximum length for scalar string fields (title, publisher, etc.).
+    const MAX_SCALAR_LEN: usize = 4096;
+    /// Maximum length for the description field.
+    const MAX_DESCRIPTION_LEN: usize = 256 * 1024;
+    /// Maximum number of tags (subjects).
+    const MAX_SUBJECTS: usize = 64;
+    /// Maximum length of a single tag.
+    const MAX_SUBJECT_LEN: usize = 128;
+    /// Maximum number of creators.
+    const MAX_CREATORS: usize = 32;
+    /// Maximum length of a creator name.
+    const MAX_CREATOR_LEN: usize = 256;
+
+    /// Validate field lengths. Returns `Err` with a human-readable message if
+    /// any field exceeds the cap. Call at the handler level before persisting.
+    pub fn validate(&self) -> Result<(), String> {
+        let check_scalar = |name: &str, val: &Option<String>, max: usize| -> Result<(), String> {
+            if let Some(v) = val {
+                if v.len() > max {
+                    return Err(format!("{name} exceeds {max} characters"));
+                }
+            }
+            Ok(())
+        };
+        check_scalar("title", &self.title, Self::MAX_SCALAR_LEN)?;
+        check_scalar("publisher", &self.publisher, Self::MAX_SCALAR_LEN)?;
+        check_scalar("published", &self.published, Self::MAX_SCALAR_LEN)?;
+        check_scalar("language", &self.language, Self::MAX_SCALAR_LEN)?;
+        check_scalar("series", &self.series, Self::MAX_SCALAR_LEN)?;
+        check_scalar("series_index", &self.series_index, Self::MAX_SCALAR_LEN)?;
+        check_scalar("description", &self.description, Self::MAX_DESCRIPTION_LEN)?;
+        if let Some(ref creators) = self.creators {
+            if creators.len() > Self::MAX_CREATORS {
+                return Err(format!("too many creators (max {})", Self::MAX_CREATORS));
+            }
+            for c in creators {
+                if c.name.len() > Self::MAX_CREATOR_LEN {
+                    return Err(format!(
+                        "creator name exceeds {} characters",
+                        Self::MAX_CREATOR_LEN
+                    ));
+                }
+            }
+        }
+        if let Some(ref subjects) = self.subjects {
+            if subjects.len() > Self::MAX_SUBJECTS {
+                return Err(format!("too many tags (max {})", Self::MAX_SUBJECTS));
+            }
+            for s in subjects {
+                if s.len() > Self::MAX_SUBJECT_LEN {
+                    return Err(format!("tag exceeds {} characters", Self::MAX_SUBJECT_LEN));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Merge `incoming` on top of `self`. Fields that are `Some` in `incoming`
     /// win; `None` fields in `incoming` preserve `self`'s value. This lets a
     /// second edit that only touches two fields preserve earlier overrides on
