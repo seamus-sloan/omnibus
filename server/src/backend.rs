@@ -16,7 +16,7 @@ use axum::{
 };
 use omnibus_db::{
     self as db, scanner,
-    worker::{Task, Worker, WorkerConfig},
+    worker::{Task, TaskOutcome, Worker, WorkerConfig},
 };
 use omnibus_shared::{Settings, ValueResponse};
 use serde::Deserialize;
@@ -65,6 +65,7 @@ pub fn rest_router(state: AppState) -> Router {
         .route("/api/value/increment", post(increment_value))
         .route("/api/settings", get(get_settings))
         .route("/api/settings", post(post_settings))
+        .route("/api/reindex", post(post_reindex))
         .route("/api/library", get(get_library))
         .route("/api/ebooks", get(get_ebooks))
         .route("/api/ebooks/{id}", get(get_ebook_by_id))
@@ -179,6 +180,41 @@ async fn post_settings(
             Err(error) => internal("read updated settings", error),
         },
         Err(error) => internal("save settings", error),
+    }
+}
+
+/// Synchronously reindex the currently-configured ebook library and report
+/// the outcome to the caller. Unlike `post_settings`, which hands the scan to
+/// the worker fire-and-forget so the HTTP roundtrip stays fast, this endpoint
+/// awaits the worker's `TaskOutcome` so admin-driven "force reindex" flows
+/// get a real success/failure signal instead of a silent background task.
+///
+/// Returns:
+/// - `200 OK` once the worker reports `TaskOutcome::Ok`.
+/// - `409 Conflict` when no ebook library path is configured (nothing to scan).
+/// - `500 Internal Server Error` on any worker failure — the underlying error
+///   is logged via `tracing::error!` and never leaked to the client (see the
+///   `internal()` helper). Regression target for issue #112: previously this
+///   path `panic!`'d the spawned task instead of returning a structured 500.
+async fn post_reindex(_admin: AdminUser, State(state): State<AppState>) -> Response {
+    let settings = match db::get_settings(&state.pool).await {
+        Ok(s) => s,
+        Err(error) => return internal("read settings", error),
+    };
+    let Some(library_path) = settings.ebook_library_path else {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            "no ebook library path configured",
+        )
+            .into_response();
+    };
+    let task_id = state.worker.post(Task::Scan { library_path });
+    match state.worker.await_completion(task_id).await {
+        TaskOutcome::Ok => axum::http::StatusCode::OK.into_response(),
+        TaskOutcome::Err(e) => {
+            tracing::error!(error = %e, "worker scan failed");
+            internal("reindex", e)
+        }
     }
 }
 
@@ -758,8 +794,6 @@ mod tests {
 
     #[tokio::test]
     async fn post_settings_triggers_scan_via_worker() {
-        use db::worker::TaskOutcome;
-
         let (app, state, pool) = fixture().await;
         let admin = test_support::create_admin(&pool, "admin").await;
         let token = test_support::bearer_token(&pool, admin.id).await;
@@ -813,10 +847,11 @@ mod tests {
             .parse()
             .expect("header value should be a u64");
 
-        match state.worker().await_completion(task_id).await {
-            TaskOutcome::Ok => {}
-            TaskOutcome::Err(e) => panic!("worker scan failed: {e}"),
-        }
+        let outcome = state.worker().await_completion(task_id).await;
+        assert!(
+            matches!(outcome, TaskOutcome::Ok),
+            "worker scan should succeed on a valid fixture dir, got {outcome:?}"
+        );
 
         let response = app
             .oneshot(get_with_bearer("/api/ebooks", &token))
@@ -832,6 +867,79 @@ mod tests {
         );
         // `scratch` (and any cover sidecars the indexer materialized into
         // it) cleans up on Drop here.
+    }
+
+    /// Regression test for issue #112: when the worker's scan fails (here,
+    /// because the configured library path doesn't exist on disk), the
+    /// `/api/reindex` handler must surface the failure as a 500 via the
+    /// `internal()` helper rather than panicking the spawned task or
+    /// returning a misleading 200. This is the live request path the
+    /// original `panic!("worker scan failed: ...")` was masking.
+    #[tokio::test]
+    async fn reindex_returns_500_when_worker_fails() {
+        let (app, _state, pool) = fixture().await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        // Point settings at a path that definitely doesn't exist on disk so
+        // the worker's `Task::Scan` returns `TaskOutcome::Err`.
+        let bogus_path = std::env::temp_dir()
+            .join(format!(
+                "omnibus-nonexistent-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or_default(),
+            ))
+            .to_string_lossy()
+            .to_string();
+        let settings = omnibus_shared::Settings {
+            ebook_library_path: Some(bogus_path),
+            audiobook_library_path: None,
+        };
+        db::set_settings(&pool, &settings)
+            .await
+            .expect("set_settings should persist the bogus path");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/reindex")
+                    .method("POST")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Body must stay generic — the underlying scan error message is
+        // logged via `tracing::error!` but never leaked on the wire (see
+        // `internal()`).
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = std::str::from_utf8(&bytes).unwrap_or("");
+        assert_eq!(body, "internal server error");
+    }
+
+    #[tokio::test]
+    async fn reindex_returns_409_when_no_library_path_configured() {
+        let (app, _state, pool) = fixture().await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/reindex")
+                    .method("POST")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 
     // -------------------------------------------------------------------
