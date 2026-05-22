@@ -131,6 +131,150 @@ body.atrium,
 .atrium-nav a:hover { color: var(--ink-0); background: var(--bg-1); }
 .atrium-nav a.on    { color: var(--ink-0); background: var(--bg-2); }
 
+/* ── Search palette (F1.5) ──────────────────────────────────────── */
+.sp-trigger {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 0 14px; height: 36px; border-radius: 999px;
+  background: var(--bg-2); border: 1px solid var(--line-2);
+  color: var(--ink-2); font-size: 13px; cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+  margin-left: auto;
+}
+.sp-trigger:hover { color: var(--ink-0); border-color: var(--line); background: var(--bg-3); }
+.sp-trigger .sp-trigger-icon {
+  width: 14px; height: 14px; position: relative;
+}
+.sp-trigger .sp-trigger-icon::before {
+  content: ''; position: absolute; left: 0; top: 0;
+  width: 10px; height: 10px; border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+.sp-trigger .sp-trigger-icon::after {
+  content: ''; position: absolute; right: 0; bottom: 0;
+  width: 5px; height: 1.5px; background: currentColor;
+  transform: rotate(45deg); transform-origin: right center;
+}
+.sp-trigger-kbd {
+  font-family: var(--mono); font-size: 10px; color: var(--ink-3);
+  padding: 1px 5px; border-radius: 4px;
+  border: 1px solid var(--line-2); background: var(--bg-1);
+}
+
+.sp-scrim {
+  position: fixed; inset: 0;
+  background: color-mix(in oklch, var(--bg-0) 70%, transparent);
+  backdrop-filter: blur(6px);
+  z-index: 50;
+  animation: sp-fade-in .12s ease-out;
+}
+.sp-panel {
+  position: fixed;
+  top: 60px; left: 50%; transform: translateX(-50%);
+  width: min(680px, calc(100vw - 48px));
+  max-height: calc(100vh - 120px);
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: 0 24px 48px color-mix(in oklch, black 40%, transparent),
+              0 0 0 1px var(--line-2);
+  z-index: 51;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  animation: sp-slide-in .15s ease-out;
+}
+.sp-input-wrap {
+  display: flex; align-items: center; gap: 12px;
+  padding: 16px 22px 14px;
+  border-bottom: 1px solid var(--line-2);
+}
+.sp-input-icon {
+  width: 18px; height: 18px; position: relative; flex-shrink: 0;
+  color: var(--ink-2);
+}
+.sp-input-icon::before {
+  content: ''; position: absolute; left: 0; top: 0;
+  width: 12px; height: 12px; border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+.sp-input-icon::after {
+  content: ''; position: absolute; right: 0; bottom: 1px;
+  width: 6px; height: 1.5px; background: currentColor;
+  transform: rotate(45deg); transform-origin: right center;
+}
+.sp-input {
+  flex: 1; min-width: 0;
+  background: transparent; border: none; outline: none;
+  font-family: var(--serif); font-size: 22px; font-style: italic;
+  color: var(--ink-0); letter-spacing: -0.02em;
+}
+.sp-input::placeholder { color: var(--ink-3); font-style: italic; }
+.sp-meta {
+  font-family: var(--mono); font-size: 11px; color: var(--ink-3);
+  white-space: nowrap; flex-shrink: 0;
+}
+.sp-results {
+  overflow-y: auto; flex: 1; padding: 6px 0;
+}
+.sp-group-head {
+  padding: 12px 22px 6px;
+  font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--ink-2); font-weight: 500;
+}
+.sp-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 8px 22px; cursor: pointer; border-radius: 0;
+  transition: background .08s;
+}
+.sp-row:hover, .sp-row.selected { background: var(--bg-2); }
+.sp-row-cover {
+  width: 36px; height: 54px; border-radius: 2px;
+  overflow: hidden; flex-shrink: 0; background: var(--bg-3);
+}
+.sp-row-cover img { width: 100%; height: 100%; object-fit: cover; }
+.sp-row-body { flex: 1; min-width: 0; }
+.sp-row-title {
+  font-size: 14px; color: var(--ink-0); line-height: 1.3;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sp-row-title em { font-style: italic; font-family: var(--serif); }
+.sp-row-sub {
+  font-size: 12px; color: var(--ink-2); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sp-row-meta {
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+  white-space: nowrap; flex-shrink: 0;
+}
+.sp-avatar {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--bg-3); display: flex;
+  align-items: center; justify-content: center;
+  font-family: var(--serif); font-size: 16px;
+  font-style: italic; color: var(--ink-1); flex-shrink: 0;
+}
+.sp-tag-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px; font-size: 12px;
+  background: var(--bg-2); color: var(--ink-1);
+  border: 1px solid var(--line-2);
+}
+.sp-coming-soon {
+  padding: 10px 22px; font-size: 12px; color: var(--ink-3);
+  font-style: italic;
+}
+.sp-footer {
+  padding: 10px 22px;
+  border-top: 1px solid var(--line-2);
+  display: flex; justify-content: space-between;
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+}
+@keyframes sp-fade-in { from { opacity: 0 } to { opacity: 1 } }
+@keyframes sp-slide-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
 /* ── Buttons ────────────────────────────────────────────────────── */
 .btn {
   display: inline-flex; align-items: center; gap: 8px;

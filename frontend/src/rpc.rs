@@ -16,8 +16,8 @@
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
-    AuthorDetail, EbookLibrary, EbookMetadata, LibraryContents, SeriesDetail, Settings, TagWeight,
-    ValueResponse,
+    AuthorDetail, EbookLibrary, EbookMetadata, LibraryContents, PaletteResults, SeriesDetail,
+    Settings, TagWeight, ValueResponse,
 };
 
 #[cfg(feature = "server")]
@@ -209,6 +209,17 @@ pub async fn rpc_search(q: String) -> Result<EbookLibrary> {
         books,
         error: None,
     })
+}
+
+/// Search palette — grouped results (books, authors, series, tags) for the
+/// command-palette overlay (F1.5).
+#[post("/api/rpc/search-palette", pool: PoolExt, _user: AuthUser)]
+pub async fn rpc_search_palette(q: String) -> Result<PaletteResults> {
+    let settings = db::get_settings(&pool.0).await?;
+    let Some(path) = settings.ebook_library_path else {
+        return Ok(PaletteResults::default());
+    };
+    Ok(db::search_palette(&pool.0, &path, &q).await?)
 }
 
 // ---------------------------------------------------------------------------

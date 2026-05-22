@@ -11,7 +11,8 @@
 //!   web stubs so SSR-during-fullstack-render still returns sensible data.
 
 use omnibus_shared::{
-    AuthorDetail, EbookLibrary, EbookMetadata, LibraryContents, SeriesDetail, Settings, TagWeight,
+    AuthorDetail, EbookLibrary, EbookMetadata, LibraryContents, PaletteResults, SeriesDetail,
+    Settings, TagWeight,
 };
 #[cfg(any(feature = "web", feature = "mobile"))]
 use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};
@@ -470,6 +471,33 @@ pub async fn search_ebooks(server_url: &str, q: &str) -> Result<EbookLibrary, St
         .map_err(|e| e.to_string())
 }
 
+/// Search palette — grouped results for the command-palette overlay (F1.5).
+#[cfg(feature = "mobile")]
+pub async fn search_palette(server_url: &str, q: &str) -> Result<PaletteResults, String> {
+    let encoded: String = q
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect();
+    let url = format!("{server_url}/api/search/palette?q={encoded}");
+    let response = with_bearer(http_client().get(&url))
+        .send()
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    response
+        .json::<PaletteResults>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(feature = "mobile")]
 pub async fn get_ebook(server_url: &str, id: i64) -> Result<Option<EbookMetadata>, String> {
     let url = format!("{server_url}/api/ebooks/{id}");
@@ -692,6 +720,14 @@ pub async fn get_ebooks(_server_url: &str) -> Result<EbookLibrary, String> {
 #[cfg(not(feature = "mobile"))]
 pub async fn search_ebooks(_server_url: &str, q: &str) -> Result<EbookLibrary, String> {
     crate::rpc::rpc_search(q.to_string())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Search palette — grouped results for the command-palette overlay (F1.5).
+#[cfg(not(feature = "mobile"))]
+pub async fn search_palette(_server_url: &str, q: &str) -> Result<PaletteResults, String> {
+    crate::rpc::rpc_search_palette(q.to_string())
         .await
         .map_err(|e| e.to_string())
 }

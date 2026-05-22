@@ -54,7 +54,7 @@ Default `cargo build` / `clippy` covers `server`, `shared`, `frontend` only. Mob
 ### shared/src/
 
 ```
-lib.rs              — Settings, ValueResponse, LibraryContents, LibrarySection, EbookMetadata, EbookLibrary, AuthorDetail, SeriesDetail, TagWeight, ViewPrefs, ViewFilters
+lib.rs              — Settings, ValueResponse, LibraryContents, LibrarySection, EbookMetadata, EbookLibrary, PaletteResults + palette hit types (F1.5), AuthorDetail, SeriesDetail, TagWeight, ViewPrefs, ViewFilters
 ```
 
 ### db/src/
@@ -79,6 +79,7 @@ rpc.rs              — #[get]/#[post] server functions (mounted by dioxus::serv
 pages/{landing,settings,book_detail,auth,author,series,tag_cloud}.rs  — auth.rs hosts LoginPage + RegisterPage. Landing is the primary Atrium consumer (cover grid + power-user table) and the source of format-faceted filtering (ViewFilters.formats in shared). Discovery pages (author, series, tag_cloud) are F1.8.
 components/{top_nav,bottom_nav}.rs  — feature = web / mobile respectively
 components/atrium.rs  — F1.7 design-system primitives (AtriumRoot, Cover, ThemeToggle); CSS at frontend/assets/atrium.css
+components/search_palette.rs — F1.5 command-palette search overlay (⌘K trigger, grouped FTS5 results, keyboard nav); web-only (not(mobile))
 ```
 
 ### server/src/
