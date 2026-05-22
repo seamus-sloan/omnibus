@@ -83,6 +83,9 @@ fn is_memory_url(database_url: &str) -> bool {
 // app_state (counter) — unchanged from 0001 baseline.
 // -----------------------------------------------------------------------------
 
+/// Read the placeholder counter from `app_state`. Returns an error if the
+/// singleton row is missing — it's seeded by migration `0001_initial.sql`,
+/// so absence means the schema is broken.
 pub async fn get_value(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
     let value = sqlx::query_scalar::<_, i64>("SELECT value FROM app_state WHERE id = 1")
         .fetch_one(pool)
@@ -90,6 +93,8 @@ pub async fn get_value(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
     Ok(value)
 }
 
+/// Increment the placeholder counter atomically inside a transaction and
+/// return the post-increment value.
 pub async fn increment_value(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
     let mut tx = pool.begin().await?;
     sqlx::query("UPDATE app_state SET value = value + 1 WHERE id = 1")
@@ -109,6 +114,9 @@ pub async fn increment_value(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
 // normalized. F0.6 will replace this with a first-class libraries UI.
 // -----------------------------------------------------------------------------
 
+/// Read the ebook and audiobook library paths from the `settings` KV table.
+/// Missing keys map to `None` rather than an error — the first-run UI relies
+/// on this to detect an unconfigured server.
 pub async fn get_settings(pool: &SqlitePool) -> Result<Settings, sqlx::Error> {
     let ebook_library_path =
         sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
@@ -126,6 +134,12 @@ pub async fn get_settings(pool: &SqlitePool) -> Result<Settings, sqlx::Error> {
     })
 }
 
+/// Persist library paths and reconcile dependent state in a single
+/// transaction: upserts each path into `settings`, prunes orphaned
+/// `libraries` rows (and their books / FTS rows via cascade), then deletes
+/// the matching cover files from disk *after* commit so filesystem
+/// side-effects don't run inside the DB transaction. Callers should kick
+/// off a reindex afterwards — this function does not touch the indexer.
 pub async fn set_settings(pool: &SqlitePool, settings: &Settings) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     upsert_or_clear(
@@ -234,6 +248,11 @@ async fn upsert_or_clear(
     Ok(())
 }
 
+/// Boot-time hook that seeds [`Settings`] from `EBOOK_LIBRARY_PATH` /
+/// `AUDIOBOOK_LIBRARY_PATH` if either is present. No-op when both are
+/// unset, so production deployments that configure libraries through the
+/// UI are unaffected. Delegates writes through [`set_settings`], so
+/// orphan-cleanup runs the same way as a user-initiated save.
 pub async fn seed_settings_from_env(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let ebook_library_path = std::env::var("EBOOK_LIBRARY_PATH").ok();
     let audiobook_library_path = std::env::var("AUDIOBOOK_LIBRARY_PATH").ok();
