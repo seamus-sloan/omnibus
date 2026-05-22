@@ -18,8 +18,8 @@ use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool, Transaction};
 
 pub use omnibus_shared::Settings;
 use omnibus_shared::{
-    Contributor, EbookLibrary, EbookMetadata, Identifier, PaletteAuthorHit, PaletteBookHit,
-    PaletteResults, PaletteSeriesHit, PaletteTagHit, AuthorDetail, SeriesDetail, TagWeight,
+    AuthorDetail, Contributor, EbookLibrary, EbookMetadata, Identifier, PaletteAuthorHit,
+    PaletteBookHit, PaletteResults, PaletteSeriesHit, PaletteTagHit, SeriesDetail, TagWeight,
 };
 
 /// Schema migrations embedded at compile time from `db/migrations/`.

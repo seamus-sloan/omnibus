@@ -657,6 +657,9 @@ async fn async_sleep_ms(ms: u32) {
     tokio::time::sleep(std::time::Duration::from_millis(ms as u64)).await;
 }
 
+#[cfg(all(not(feature = "web"), not(feature = "server")))]
+async fn async_sleep_ms(_ms: u32) {}
+
 // ── Global ⌘K shortcut (web only) ───────────────────────────────
 
 /// Register a global `keydown` listener that toggles the palette on `⌘K`
