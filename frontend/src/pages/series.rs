@@ -134,7 +134,7 @@ fn render_series(s: SeriesDetail) -> Element {
                                     }
                                 }
                                 if let Some(ref desc) = book.description {
-                                    p { class: "series-card-desc",
+                                    div { class: "series-card-desc",
                                         dangerous_inner_html: "{desc}"
                                     }
                                 }
