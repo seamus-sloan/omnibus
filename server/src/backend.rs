@@ -183,19 +183,8 @@ async fn post_settings(
     }
 }
 
-/// Synchronously reindex the currently-configured ebook library and report
-/// the outcome to the caller. Unlike `post_settings`, which hands the scan to
-/// the worker fire-and-forget so the HTTP roundtrip stays fast, this endpoint
-/// awaits the worker's `TaskOutcome` so admin-driven "force reindex" flows
-/// get a real success/failure signal instead of a silent background task.
-///
-/// Returns:
-/// - `200 OK` once the worker reports `TaskOutcome::Ok`.
-/// - `409 Conflict` when no ebook library path is configured (nothing to scan).
-/// - `500 Internal Server Error` on any worker failure — the underlying error
-///   is logged via `tracing::error!` and never leaked to the client (see the
-///   `internal()` helper). Regression target for issue #112: previously this
-///   path `panic!`'d the spawned task instead of returning a structured 500.
+/// Admin-only synchronous reindex: 200 on success, 409 when no library
+/// path is configured, 500 on worker failure. Regression target for #112.
 async fn post_reindex(_admin: AdminUser, State(state): State<AppState>) -> Response {
     let settings = match db::get_settings(&state.pool).await {
         Ok(s) => s,
@@ -211,10 +200,7 @@ async fn post_reindex(_admin: AdminUser, State(state): State<AppState>) -> Respo
     let task_id = state.worker.post(Task::Scan { library_path });
     match state.worker.await_completion(task_id).await {
         TaskOutcome::Ok => axum::http::StatusCode::OK.into_response(),
-        TaskOutcome::Err(e) => {
-            tracing::error!(error = %e, "worker scan failed");
-            internal("reindex", e)
-        }
+        TaskOutcome::Err(e) => internal("reindex", e),
     }
 }
 
@@ -940,6 +926,85 @@ mod tests {
             .await
             .expect("request should succeed");
         assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn reindex_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/reindex")
+                    .method("POST")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn reindex_returns_403_when_not_admin() {
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "reader").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/reindex")
+                    .method("POST")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn reindex_returns_200_when_scan_succeeds() {
+        let (app, _state, pool) = fixture().await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        // Same fixture-copy pattern as `post_settings_triggers_scan_via_worker`
+        // so the scan finds a real EPUB and `Task::Scan` returns `Ok`. We use
+        // a tempdir to keep the reindex from materializing cover sidecars
+        // back into the shared fixtures directory.
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../test_data/epubs/generated")
+            .canonicalize()
+            .expect("fixtures dir should resolve");
+        let scratch = tempfile::tempdir().expect("create scratch dir");
+        for entry in std::fs::read_dir(&source).expect("read fixtures dir") {
+            let entry = entry.expect("fixture entry");
+            if entry.file_type().expect("file type").is_file() {
+                let dest = scratch.path().join(entry.file_name());
+                std::fs::copy(entry.path(), dest).expect("copy fixture");
+            }
+        }
+        let settings = omnibus_shared::Settings {
+            ebook_library_path: Some(scratch.path().to_string_lossy().to_string()),
+            audiobook_library_path: None,
+        };
+        db::set_settings(&pool, &settings)
+            .await
+            .expect("set_settings should persist the fixture path");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/reindex")
+                    .method("POST")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     // -------------------------------------------------------------------
