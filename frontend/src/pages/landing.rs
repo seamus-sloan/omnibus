@@ -355,6 +355,7 @@ struct FacetCounts {
     /// counts. The display label is derived at render time via
     /// [`format_display_label`] so the keys stay canonical.
     formats: Vec<(String, usize)>,
+    tags: Vec<(String, usize)>,
 }
 
 #[component]
@@ -371,10 +372,11 @@ fn FilterSidebar(
         let filters = filters.clone();
         move |group: &'static str, value: String| {
             let mut next = filters.clone();
-            let bucket = if group == "authors" {
-                &mut next.authors
-            } else {
-                &mut next.series
+            let bucket = match group {
+                "authors" => &mut next.authors,
+                "series" => &mut next.series,
+                "tags" => &mut next.tags,
+                _ => &mut next.authors,
             };
             if let Some(pos) = bucket.iter().position(|v| v == &value) {
                 bucket.remove(pos);
@@ -414,6 +416,16 @@ fn FilterSidebar(
                 on_toggle: {
                     let toggle = toggle.clone();
                     move |v: String| toggle("series", v)
+                },
+            }
+            FacetSection {
+                title: "Tags",
+                testid: "lib-facet-tags",
+                items: facets.tags.clone(),
+                selected: filters.tags.clone(),
+                on_toggle: {
+                    let toggle = toggle.clone();
+                    move |v: String| toggle("tags", v)
                 },
             }
         }
@@ -942,6 +954,14 @@ fn matches_filters(book: &EbookMetadata, filters: &ViewFilters) -> bool {
     {
         return false;
     }
+    if !filters.tags.is_empty()
+        && !filters
+            .tags
+            .iter()
+            .any(|t| book.subjects.iter().any(|s| s == t))
+    {
+        return false;
+    }
     true
 }
 
@@ -960,6 +980,7 @@ fn facet_counts(books: &[EbookMetadata]) -> FacetCounts {
     let mut authors: BTreeMap<String, usize> = BTreeMap::new();
     let mut series: BTreeMap<String, usize> = BTreeMap::new();
     let mut formats: BTreeMap<String, usize> = BTreeMap::new();
+    let mut tags: BTreeMap<String, usize> = BTreeMap::new();
     for book in books {
         for c in &book.creators {
             *authors.entry(c.name.clone()).or_default() += 1;
@@ -975,11 +996,17 @@ fn facet_counts(books: &[EbookMetadata]) -> FacetCounts {
                 *formats.entry(key).or_default() += 1;
             }
         }
+        for tag in &book.subjects {
+            if !tag.is_empty() {
+                *tags.entry(tag.clone()).or_default() += 1;
+            }
+        }
     }
     FacetCounts {
         authors: sorted_facet(authors),
         series: sorted_facet(series),
         formats: sorted_facet(formats),
+        tags: sorted_facet(tags),
     }
 }
 
@@ -1117,6 +1144,7 @@ mod tests {
                     name: (*name).into(),
                     role: None,
                     file_as: file_as.map(Into::into),
+                    id: None,
                 })
                 .collect(),
             series: series.map(|(s, _)| s.into()),

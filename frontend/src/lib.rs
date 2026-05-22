@@ -15,7 +15,10 @@ pub mod rpc;
 pub mod view_prefs;
 
 pub use components::Nav;
-pub use pages::{BookDetailPage, LandingPage, LoginPage, RegisterPage, SettingsPage};
+pub use pages::{
+    AuthorPage, BookDetailPage, LandingPage, LoginPage, RegisterPage, SeriesPage, SettingsPage,
+    TagCloudPage,
+};
 
 #[cfg(feature = "mobile")]
 pub use data::ServerUrl;
@@ -29,6 +32,12 @@ pub enum Route {
     Settings {},
     #[route("/books/:id")]
     BookDetail { id: i64 },
+    #[route("/authors/:id")]
+    AuthorDetail { id: i64 },
+    #[route("/series/:id")]
+    SeriesDetail { id: i64 },
+    #[route("/tags")]
+    TagCloud {},
     #[route("/login")]
     Login {},
     #[route("/register")]
@@ -66,6 +75,30 @@ pub fn BookDetail(id: i64) -> Element {
 #[component]
 pub fn Login() -> Element {
     rsx! { LoginPage {} }
+}
+
+/// Route target for `/authors/:id` — single author discovery page.
+#[component]
+pub fn AuthorDetail(id: i64) -> Element {
+    rsx! {
+        ScreenLayout { AuthorPage { id } }
+    }
+}
+
+/// Route target for `/series/:id` — single series discovery page.
+#[component]
+pub fn SeriesDetail(id: i64) -> Element {
+    rsx! {
+        ScreenLayout { SeriesPage { id } }
+    }
+}
+
+/// Route target for `/tags` — tag cloud discovery page.
+#[component]
+pub fn TagCloud() -> Element {
+    rsx! {
+        ScreenLayout { TagCloudPage {} }
+    }
 }
 
 /// Route target for `/register` — account-creation form. Same chrome as

@@ -192,6 +192,7 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
 
             series,
             series_index,
+            series_id: None,
 
             epub_version: Some(format_version(doc.version)),
             unique_identifier: doc.unique_identifier.clone(),
@@ -357,6 +358,7 @@ fn collect_contributors<R: std::io::Read + std::io::Seek>(
                 name,
                 role,
                 file_as,
+                id: None,
             })
         })
         .collect()

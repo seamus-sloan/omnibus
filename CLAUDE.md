@@ -54,7 +54,7 @@ Default `cargo build` / `clippy` covers `server`, `shared`, `frontend` only. Mob
 ### shared/src/
 
 ```
-lib.rs              — Settings, ValueResponse, LibraryContents, LibrarySection, EbookMetadata, EbookLibrary
+lib.rs              — Settings, ValueResponse, LibraryContents, LibrarySection, EbookMetadata, EbookLibrary, AuthorDetail, SeriesDetail, TagWeight, ViewPrefs, ViewFilters
 ```
 
 ### db/src/
@@ -76,7 +76,7 @@ migrations/         — numbered SQL migrations embedded via sqlx::migrate!
 lib.rs              — Route, App, styles, ScreenLayout (feature-gated)
 data.rs             — Feature-gated data transport (mobile=reqwest, web/server=rpc)
 rpc.rs              — #[get]/#[post] server functions (mounted by dioxus::server::router); server bodies call into omnibus_db
-pages/{landing,settings,book_detail,auth}.rs  — auth.rs hosts LoginPage + RegisterPage. Landing is the primary Atrium consumer (cover grid + power-user table) and the source of format-faceted filtering (ViewFilters.formats in shared)
+pages/{landing,settings,book_detail,auth,author,series,tag_cloud}.rs  — auth.rs hosts LoginPage + RegisterPage. Landing is the primary Atrium consumer (cover grid + power-user table) and the source of format-faceted filtering (ViewFilters.formats in shared). Discovery pages (author, series, tag_cloud) are F1.8.
 components/{top_nav,bottom_nav}.rs  — feature = web / mobile respectively
 components/atrium.rs  — F1.7 design-system primitives (AtriumRoot, Cover, ThemeToggle); CSS at frontend/assets/atrium.css
 ```

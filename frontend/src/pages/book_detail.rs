@@ -156,17 +156,23 @@ fn render_loaded(b: EbookMetadata) -> Element {
                     div { class: "bd-title-col",
                         div { class: "label", "{kicker}" }
                         h1 { class: "bd-title", "{title}" }
-                        if !authors_line.is_empty() {
+                        if !b.creators.is_empty() {
                             p {
                                 class: "bd-by",
                                 "data-testid": "book-authors",
                                 "by "
-                                span { class: "bd-author-link",
-                                    "{authors_line}"
-                                    span {
-                                        class: "bd-author-link-hint",
-                                        aria_hidden: "true",
-                                        " view author \u{2192}"
+                                for (i, creator) in b.creators.iter().enumerate() {
+                                    if i > 0 {
+                                        ", "
+                                    }
+                                    if let Some(author_id) = creator.id {
+                                        Link {
+                                            to: Route::AuthorDetail { id: author_id },
+                                            class: "bd-author-link",
+                                            "{creator.name}"
+                                        }
+                                    } else {
+                                        span { class: "bd-author-link", "{creator.name}" }
                                     }
                                 }
                             }
@@ -374,7 +380,15 @@ fn render_loaded(b: EbookMetadata) -> Element {
                     div { class: "card",
                         if let Some(s) = series_label.as_ref() {
                             div { class: "label bd-rail-head", "Series" }
-                            p { class: "bd-rail-body", "{s}" }
+                            if let Some(sid) = b.series_id {
+                                Link {
+                                    to: Route::SeriesDetail { id: sid },
+                                    class: "bd-rail-body bd-series-link",
+                                    "{s}"
+                                }
+                            } else {
+                                p { class: "bd-rail-body", "{s}" }
+                            }
                         } else {
                             div { class: "label bd-rail-head", "Standalone" }
                             p { class: "bd-rail-body", "Not part of a series." }

@@ -111,6 +111,8 @@ Phase 6  Mobile                   (feature parity on native)
 - [F1.7 Atrium design system](1-7-atrium-design-system.md)
 - [F1.8 Discovery pages](1-8-discovery-pages.md)
 - [F1.9 Themes & density](1-9-themes-and-density.md)
+- [F1.11 Author profiles](1-11-author-profiles.md)
+- [F1.12 Browse authors & series](1-12-browse-authors-series.md)
 
 ### Phase 2 — Reading & listening
 
