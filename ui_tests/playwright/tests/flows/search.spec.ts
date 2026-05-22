@@ -88,3 +88,27 @@ test("tag substring shows tag or book results", async ({ page }) => {
     })
     .toBeGreaterThanOrEqual(1);
 });
+
+// ── /search/:query full-page route ────────────────────────────────────
+
+test("renders the /search results page with back link and results", async ({ page }) => {
+  await gotoReady(page, "/search/dracula");
+
+  // Back affordance always present and routes to /.
+  const back = page.getByTestId("search-back");
+  await expect(back).toBeVisible();
+
+  // Result count line shows up once the RPC settles.
+  await expect
+    .poll(async () => page.getByTestId("search-result-count").count())
+    .toBe(1);
+  await expect(page.getByTestId("search-result-count")).toContainText(/result/);
+
+  // At least one book row for "dracula".
+  await expect
+    .poll(async () => page.getByTestId("search-book-row").count())
+    .toBeGreaterThanOrEqual(1);
+
+  await back.click();
+  await expect(page).toHaveURL(/\/$/);
+});

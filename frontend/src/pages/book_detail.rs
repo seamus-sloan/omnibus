@@ -130,11 +130,29 @@ fn render_loaded(b: EbookMetadata) -> Element {
             section { class: "bd-hero",
                 BdCrumb {
                     items: {
-                        let mut crumbs = vec![("Home".to_string(), true)];
+                        let mut crumbs: Vec<BdCrumbItem> = vec![BdCrumbItem {
+                            text: "Home".to_string(),
+                            target: Some(Route::Landing {}),
+                        }];
                         if !primary_author.is_empty() {
-                            crumbs.push((primary_author.clone(), false));
+                            let author_route = b.creators.first().and_then(|c| c.id)
+                                .map(|id| Route::AuthorDetail { id });
+                            crumbs.push(BdCrumbItem {
+                                text: primary_author.clone(),
+                                target: author_route,
+                            });
                         }
-                        crumbs.push((title.clone(), false));
+                        if let Some(label) = series_label.clone() {
+                            let series_route = b.series_id.map(|id| Route::SeriesDetail { id });
+                            crumbs.push(BdCrumbItem {
+                                text: label,
+                                target: series_route,
+                            });
+                        }
+                        crumbs.push(BdCrumbItem {
+                            text: title.clone(),
+                            target: None,
+                        });
                         crumbs
                     },
                 }
@@ -467,24 +485,37 @@ fn render_loaded(b: EbookMetadata) -> Element {
 // rather than nested rsx.
 // ---------------------------------------------------------------------------
 
-/// Atrium-styled breadcrumb. The first item is the "Home" link back to the
-/// library; subsequent items are rendered as plain text segments.
+/// One breadcrumb segment. When `target` is `Some`, the segment renders as a
+/// router `Link`; otherwise it's a plain `<span>` for the current page or a
+/// segment without a resolvable detail route.
+#[derive(Clone, PartialEq, Props)]
+pub struct BdCrumbItem {
+    pub text: String,
+    pub target: Option<Route>,
+}
+
+/// Atrium-styled breadcrumb. Segments with a `target` route render as Links,
+/// otherwise as plain spans. The final segment is always rendered as the
+/// "current page" span regardless of target.
 #[component]
-fn BdCrumb(items: Vec<(String, bool)>) -> Element {
+fn BdCrumb(items: Vec<BdCrumbItem>) -> Element {
     let last_idx = items.len().saturating_sub(1);
     rsx! {
         nav { class: "bd-crumb", "aria-label": "breadcrumb",
-            for (i, (text, is_home)) in items.iter().cloned().enumerate() {
+            for (i, item) in items.iter().cloned().enumerate() {
                 if i > 0 {
                     span { class: "bd-crumb-sep", "\u{203a}" }
                 }
-                if is_home {
-                    Link { to: Route::Landing {}, class: "bd-crumb-home", "{text}" }
-                } else {
-                    span {
-                        class: if i == last_idx { "bd-crumb-curr" } else { "bd-crumb-step" },
-                        "{text}"
+                if i == last_idx {
+                    span { class: "bd-crumb-curr", "{item.text}" }
+                } else if let Some(route) = item.target.clone() {
+                    Link {
+                        to: route,
+                        class: if i == 0 { "bd-crumb-home" } else { "bd-crumb-step" },
+                        "{item.text}"
                     }
+                } else {
+                    span { class: "bd-crumb-step", "{item.text}" }
                 }
             }
         }
