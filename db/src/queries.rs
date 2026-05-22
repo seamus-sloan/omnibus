@@ -17,7 +17,10 @@ use std::path::{Path, PathBuf};
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool, Transaction};
 
 pub use omnibus_shared::Settings;
-use omnibus_shared::{Contributor, EbookLibrary, EbookMetadata, Identifier};
+use omnibus_shared::{
+    Contributor, EbookLibrary, EbookMetadata, Identifier, PaletteAuthorHit, PaletteBookHit,
+    PaletteResults, PaletteSeriesHit, PaletteTagHit,
+};
 
 /// Schema migrations embedded at compile time from `db/migrations/`.
 /// Every schema change ships as a new numbered `.sql` file there; applied
@@ -1296,6 +1299,194 @@ pub async fn search_books(
         });
     }
     Ok(out)
+}
+
+/// Search palette — grouped results for the command-palette overlay (F1.5).
+///
+/// Returns up to 5 results per category (books, authors, series, tags),
+/// with server-side timing in `duration_ms`. Books are matched via FTS5
+/// (`build_fts_match`); taxonomy categories use `LIKE '%q%'` against the
+/// name column. All results are scoped to `library_path`.
+///
+/// Returns `PaletteResults::default()` for empty/whitespace queries.
+pub async fn search_palette(
+    pool: &SqlitePool,
+    library_path: &str,
+    q: &str,
+) -> Result<PaletteResults, sqlx::Error> {
+    let trimmed = q.trim();
+    if trimmed.is_empty() {
+        return Ok(PaletteResults::default());
+    }
+
+    let start = std::time::Instant::now();
+    const LIMIT: i32 = 5;
+
+    // A. Books — FTS5 MATCH with BM25 ranking, slim projection.
+    let books = if let Some(match_expr) = build_fts_match(trimmed) {
+        let rows = sqlx::query(
+            r#"
+            SELECT b.id, b.title, b.has_cover, b.accent_color,
+                   SUBSTR(b.pubdate, 1, 4) AS year,
+
+                   (SELECT GROUP_CONCAT(a.name, ', ')
+                      FROM (SELECT a2.name FROM books_authors_link bal
+                              JOIN authors a2 ON a2.id = bal.author
+                             WHERE bal.book = b.id
+                             ORDER BY bal.position) a)          AS author_display,
+
+                   (SELECT json_group_array(format)
+                      FROM (SELECT format FROM book_files
+                             WHERE book_id = b.id
+                             ORDER BY format))                  AS formats_json
+
+            FROM books_fts
+            JOIN books b ON b.id = books_fts.rowid
+            JOIN libraries l ON l.id = b.library_id
+            WHERE books_fts MATCH ?1 AND l.path = ?2
+            ORDER BY bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0), b.sort, b.id
+            LIMIT ?3
+            "#,
+        )
+        .bind(&match_expr)
+        .bind(library_path)
+        .bind(LIMIT)
+        .fetch_all(pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                let id: i64 = r.get("id");
+                let has_cover: i64 = r.get("has_cover");
+                PaletteBookHit {
+                    id,
+                    title: r.get::<Option<String>, _>("title").unwrap_or_default(),
+                    author_display: r
+                        .get::<Option<String>, _>("author_display")
+                        .unwrap_or_default(),
+                    year: r.get("year"),
+                    formats: parse_json_array(r.get("formats_json")).unwrap_or_default(),
+                    cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
+                    accent: r.get("accent_color"),
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    // Escape the query for LIKE pattern (percent and underscore are LIKE wildcards).
+    let like_q = trimmed.replace('%', "\\%").replace('_', "\\_");
+    let like_pattern = format!("%{like_q}%");
+
+    // B. Authors — substring match, scoped to library, ordered by book count.
+    let authors: Vec<PaletteAuthorHit> = sqlx::query(
+        r#"
+        SELECT a.id, a.name,
+               (SELECT COUNT(*) FROM books_authors_link bal
+                  JOIN books b ON b.id = bal.book
+                  JOIN libraries l ON l.id = b.library_id
+                 WHERE bal.author = a.id AND l.path = ?1) AS book_count
+        FROM authors a
+        WHERE a.name LIKE ?2 ESCAPE '\'
+          AND EXISTS (SELECT 1 FROM books_authors_link bal
+                        JOIN books b ON b.id = bal.book
+                        JOIN libraries l ON l.id = b.library_id
+                       WHERE bal.author = a.id AND l.path = ?1)
+        ORDER BY book_count DESC, a.name
+        LIMIT ?3
+        "#,
+    )
+    .bind(library_path)
+    .bind(&like_pattern)
+    .bind(LIMIT)
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(|r| PaletteAuthorHit {
+        id: r.get("id"),
+        name: r.get("name"),
+        book_count: r.get::<i32, _>("book_count") as u32,
+    })
+    .collect();
+
+    // C. Series — substring match with primary author from first book.
+    let series: Vec<PaletteSeriesHit> = sqlx::query(
+        r#"
+        SELECT s.id, s.name,
+               (SELECT COUNT(*) FROM books_series_link bsl
+                  JOIN books b ON b.id = bsl.book
+                  JOIN libraries l ON l.id = b.library_id
+                 WHERE bsl.series = s.id AND l.path = ?1) AS book_count,
+               (SELECT a.name FROM books_series_link bsl2
+                  JOIN books_authors_link bal ON bal.book = bsl2.book AND bal.position = 0
+                  JOIN authors a ON a.id = bal.author
+                 WHERE bsl2.series = s.id LIMIT 1) AS author_display
+        FROM series s
+        WHERE s.name LIKE ?2 ESCAPE '\'
+          AND EXISTS (SELECT 1 FROM books_series_link bsl
+                        JOIN books b ON b.id = bsl.book
+                        JOIN libraries l ON l.id = b.library_id
+                       WHERE bsl.series = s.id AND l.path = ?1)
+        ORDER BY book_count DESC, s.name
+        LIMIT ?3
+        "#,
+    )
+    .bind(library_path)
+    .bind(&like_pattern)
+    .bind(LIMIT)
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(|r| PaletteSeriesHit {
+        id: r.get("id"),
+        name: r.get("name"),
+        book_count: r.get::<i32, _>("book_count") as u32,
+        author_display: r.get("author_display"),
+    })
+    .collect();
+
+    // D. Tags — substring match, scoped to library.
+    let tags: Vec<PaletteTagHit> = sqlx::query(
+        r#"
+        SELECT t.id, t.name,
+               (SELECT COUNT(*) FROM books_tags_link btl
+                  JOIN books b ON b.id = btl.book
+                  JOIN libraries l ON l.id = b.library_id
+                 WHERE btl.tag = t.id AND l.path = ?1) AS book_count
+        FROM tags t
+        WHERE t.name LIKE ?2 ESCAPE '\'
+          AND EXISTS (SELECT 1 FROM books_tags_link btl
+                        JOIN books b ON b.id = btl.book
+                        JOIN libraries l ON l.id = b.library_id
+                       WHERE btl.tag = t.id AND l.path = ?1)
+        ORDER BY book_count DESC, t.name
+        LIMIT ?3
+        "#,
+    )
+    .bind(library_path)
+    .bind(&like_pattern)
+    .bind(LIMIT)
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(|r| PaletteTagHit {
+        id: r.get("id"),
+        name: r.get("name"),
+        book_count: r.get::<i32, _>("book_count") as u32,
+    })
+    .collect();
+
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    Ok(PaletteResults {
+        query: trimmed.to_string(),
+        books,
+        authors,
+        series,
+        tags,
+        duration_ms,
+    })
 }
 
 /// Build an `EbookLibrary` from whatever is currently in the DB for
@@ -3062,5 +3253,218 @@ mod tests {
         assert!(desc.contains("<p>Brief.</p>"));
         assert!(desc.contains("<b>detail</b>"));
         assert!(!desc.contains("<script"));
+    }
+
+    // ── search_palette ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn palette_books_match_title() {
+        let _covers = CoversTempDir::new("palette_books");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed(
+                    "a.epub",
+                    Some("Dracula"),
+                    &["Bram Stoker"],
+                    &["Horror"],
+                    None,
+                    None,
+                ),
+                indexed(
+                    "b.epub",
+                    Some("Frankenstein"),
+                    &["Mary Shelley"],
+                    &["Horror"],
+                    None,
+                    None,
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let results = search_palette(&pool, "/lib", "dracula").await.unwrap();
+        assert_eq!(results.books.len(), 1);
+        assert_eq!(results.books[0].title, "Dracula");
+        assert_eq!(results.books[0].author_display, "Bram Stoker");
+        assert!(results.books[0].formats.contains(&"EPUB".to_string()));
+    }
+
+    #[tokio::test]
+    async fn palette_authors_match_substring() {
+        let _covers = CoversTempDir::new("palette_authors");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "a.epub",
+                Some("Babel"),
+                &["R. F. Kuang"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let results = search_palette(&pool, "/lib", "kuang").await.unwrap();
+        assert!(!results.authors.is_empty(), "should match author substring");
+        assert_eq!(results.authors[0].name, "R. F. Kuang");
+        assert_eq!(results.authors[0].book_count, 1);
+    }
+
+    #[tokio::test]
+    async fn palette_series_match() {
+        let _covers = CoversTempDir::new("palette_series");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed(
+                    "a.epub",
+                    Some("Book One"),
+                    &["Author"],
+                    &[],
+                    Some(("Poppy War", "1")),
+                    None,
+                ),
+                indexed(
+                    "b.epub",
+                    Some("Book Two"),
+                    &["Author"],
+                    &[],
+                    Some(("Poppy War", "2")),
+                    None,
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let results = search_palette(&pool, "/lib", "poppy").await.unwrap();
+        assert!(!results.series.is_empty(), "should match series substring");
+        assert_eq!(results.series[0].name, "Poppy War");
+        assert_eq!(results.series[0].book_count, 2);
+    }
+
+    #[tokio::test]
+    async fn palette_tags_match() {
+        let _covers = CoversTempDir::new("palette_tags");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "a.epub",
+                Some("A"),
+                &["Author"],
+                &["Dark academia"],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let results = search_palette(&pool, "/lib", "academia").await.unwrap();
+        assert!(!results.tags.is_empty(), "should match tag substring");
+        assert_eq!(results.tags[0].name, "Dark academia");
+        assert_eq!(results.tags[0].book_count, 1);
+    }
+
+    #[tokio::test]
+    async fn palette_empty_query_returns_empty() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let results = search_palette(&pool, "/lib", "   ").await.unwrap();
+        assert!(results.books.is_empty());
+        assert!(results.authors.is_empty());
+        assert!(results.series.is_empty());
+        assert!(results.tags.is_empty());
+        assert_eq!(results.query, "");
+    }
+
+    #[tokio::test]
+    async fn palette_no_results() {
+        let _covers = CoversTempDir::new("palette_no_results");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed("a.epub", Some("A"), &["Author"], &[], None, None)],
+        )
+        .await
+        .unwrap();
+
+        let results = search_palette(&pool, "/lib", "zzzznonexistent")
+            .await
+            .unwrap();
+        assert!(results.books.is_empty());
+        assert!(results.authors.is_empty());
+        assert!(results.series.is_empty());
+        assert!(results.tags.is_empty());
+    }
+
+    #[tokio::test]
+    async fn palette_scoped_to_library() {
+        let _covers = CoversTempDir::new("palette_scoped");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib-a",
+            vec![indexed(
+                "a.epub",
+                Some("Alpha"),
+                &["Tolkien"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+        replace_books(
+            &pool,
+            "/lib-b",
+            vec![indexed(
+                "b.epub",
+                Some("Beta"),
+                &["Tolkien"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let results = search_palette(&pool, "/lib-a", "tolkien").await.unwrap();
+        // Books should only include lib-a
+        assert_eq!(results.books.len(), 1);
+        assert_eq!(results.books[0].title, "Alpha");
+        // Author book_count should be 1 (scoped to lib-a), not 2
+        assert_eq!(results.authors[0].book_count, 1);
+    }
+
+    #[tokio::test]
+    async fn palette_duration_populated() {
+        let _covers = CoversTempDir::new("palette_duration");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed("a.epub", Some("A"), &["Author"], &[], None, None)],
+        )
+        .await
+        .unwrap();
+
+        let results = search_palette(&pool, "/lib", "author").await.unwrap();
+        // duration_ms should be populated (at least 0 — we just check it's set)
+        assert!(results.duration_ms < 10000, "duration should be reasonable");
     }
 }

@@ -128,6 +128,74 @@ pub struct EbookLibrary {
 }
 
 // -----------------------------------------------------------------------------
+// Search palette (F1.5)
+//
+// Grouped results for the command-palette overlay. Slim types — the palette
+// needs display data only, not the full `EbookMetadata` with its N+1 queries.
+// Each category is capped at 5 results server-side.
+// -----------------------------------------------------------------------------
+
+/// Search-palette response — grouped results with server-side timing.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PaletteResults {
+    pub query: String,
+    pub books: Vec<PaletteBookHit>,
+    pub authors: Vec<PaletteAuthorHit>,
+    pub series: Vec<PaletteSeriesHit>,
+    pub tags: Vec<PaletteTagHit>,
+    pub duration_ms: u64,
+}
+
+impl PaletteResults {
+    pub fn total_count(&self) -> usize {
+        self.books.len() + self.authors.len() + self.series.len() + self.tags.len()
+    }
+}
+
+/// Slim book hit for the search palette. No description, no identifiers,
+/// no subjects — just what the result row needs to render.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PaletteBookHit {
+    pub id: i64,
+    pub title: String,
+    /// Pre-joined author names (e.g. "Grace Hopper, Margaret Hamilton").
+    pub author_display: String,
+    /// Four-digit year extracted from `pubdate`, if present.
+    pub year: Option<String>,
+    pub formats: Vec<String>,
+    pub cover_url: Option<String>,
+    pub accent: Option<String>,
+}
+
+/// Author hit for the search palette.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PaletteAuthorHit {
+    pub id: i64,
+    pub name: String,
+    /// Number of books by this author in the active library.
+    pub book_count: u32,
+}
+
+/// Series hit for the search palette.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PaletteSeriesHit {
+    pub id: i64,
+    pub name: String,
+    pub book_count: u32,
+    /// Primary author of the first book in the series, if any.
+    pub author_display: Option<String>,
+}
+
+/// Tag hit for the search palette.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PaletteTagHit {
+    pub id: i64,
+    pub name: String,
+    /// Number of books with this tag in the active library.
+    pub book_count: u32,
+}
+
+// -----------------------------------------------------------------------------
 // Library view preferences (F1.3)
 //
 // These types live here — and not in `frontend/` — so a future server-backed

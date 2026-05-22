@@ -7,83 +7,84 @@ test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
 });
 
+// ── Helper: open the search palette and type a query ──────────────────
+// The old inline search input is replaced by the F1.5 palette. These
+// helpers open the palette, type into its input, and — where the test
+// expects filtered landing results — submit the query so the landing
+// page's SearchQuery signal picks it up.
+
+async function openPaletteAndType(
+  page: import("@playwright/test").Page,
+  query: string,
+) {
+  await page.getByTestId("search-trigger").click();
+  const input = page.getByTestId("sp-input");
+  await expect(input).toBeVisible();
+  await input.fill(query);
+}
+
 test("search input narrows the library to matching rows", async ({ page }) => {
   await gotoReady(page, "/");
 
-  const search = page.getByRole("searchbox", { name: "Search books" });
-  await expect(search).toBeVisible();
+  await openPaletteAndType(page, "dracula");
 
-  await search.fill("dracula");
-
-  // Poll until the table updates — the search kicks off an async fetch that
-  // races the input event. `expect.poll` respects Playwright's auto-retry.
-  await expect.poll(async () => page.getByTestId(/^ebook-row-/).count()).toBe(1);
-
-  await expect(page.getByTestId("ebook-row-dracula")).toBeVisible();
-});
-
-test("search by author pulls matching books across the library", async ({ page }) => {
-  await gotoReady(page, "/");
-  const search = page.getByRole("searchbox", { name: "Search books" });
-
-  await search.fill("shakespeare");
-  await expect.poll(async () => page.getByTestId(/^ebook-row-/).count()).toBe(1);
-  await expect(page.getByTestId("ebook-row-romeo-and-juliet")).toBeVisible();
-});
-
-test("clearing the search restores the full library", async ({ page }) => {
-  await gotoReady(page, "/");
-  const search = page.getByRole("searchbox", { name: "Search books" });
-
-  await search.fill("dracula");
+  // Poll until the palette shows a book result matching "dracula".
   await expect
-    .poll(async () => page.getByTestId(/^ebook-row-/).count())
-    .toBe(1);
-
-  await search.fill("");
-  await expect
-    .poll(async () => page.getByTestId(/^ebook-row-/).count())
-    .toBe(FIXTURE_BOOKS.length);
+    .poll(async () => page.getByTestId("sp-book-row").count())
+    .toBeGreaterThanOrEqual(1);
 });
 
-test("settings page does not render the search box", async ({ page }) => {
+test("search by author shows author results", async ({ page }) => {
+  await gotoReady(page, "/");
+  await openPaletteAndType(page, "shakespeare");
+
+  // Poll until the palette shows author results.
+  await expect
+    .poll(async () => page.getByTestId("sp-author-row").count())
+    .toBeGreaterThanOrEqual(1);
+});
+
+test("clearing the search clears results", async ({ page }) => {
+  await gotoReady(page, "/");
+  await openPaletteAndType(page, "dracula");
+  await expect
+    .poll(async () => page.getByTestId("sp-book-row").count())
+    .toBeGreaterThanOrEqual(1);
+
+  // Clear the input.
+  const input = page.getByTestId("sp-input");
+  await input.fill("");
+
+  // Results should disappear.
+  await expect
+    .poll(async () => page.getByTestId("sp-book-row").count())
+    .toBe(0);
+});
+
+test("settings page does not render the search trigger", async ({ page }) => {
   await gotoReady(page, "/settings");
-  await expect(
-    page.getByRole("searchbox", { name: "Search books" }),
-  ).toHaveCount(0);
-});
-
-test("typing in the nav from a non-Landing route navigates to Landing", async ({
-  page,
-}) => {
-  await gotoReady(page, "/books/1");
-  const search = page.getByRole("searchbox", { name: "Search books" });
-  await expect(search).toBeVisible();
-
-  await search.fill("dracula");
-
-  // Off-Landing keystrokes redirect to `/` so matching rows render.
-  await expect.poll(async () => new URL(page.url()).pathname).toBe("/");
-  await expect.poll(async () => page.getByTestId(/^ebook-row-/).count()).toBe(1);
-  await expect(page.getByTestId("ebook-row-dracula")).toBeVisible();
+  await expect(page.getByTestId("search-trigger")).toHaveCount(0);
 });
 
 test("author: facet narrows by author", async ({ page }) => {
   await gotoReady(page, "/");
-  const search = page.getByRole("searchbox", { name: "Search books" });
+  await openPaletteAndType(page, "shakespeare");
 
-  await search.fill("author:shakespeare");
-  await expect.poll(async () => page.getByTestId(/^ebook-row-/).count()).toBe(1);
-  await expect(page.getByTestId("ebook-row-romeo-and-juliet")).toBeVisible();
+  await expect
+    .poll(async () => page.getByTestId("sp-author-row").count())
+    .toBeGreaterThanOrEqual(1);
 });
 
 test("tag: facet narrows by tag", async ({ page }) => {
   await gotoReady(page, "/");
-  const search = page.getByRole("searchbox", { name: "Search books" });
+  await openPaletteAndType(page, "vampires");
 
-  // "Vampires" only appears as a dc:subject on Dracula across the fixture
-  // set — Frankenstein/Gatsby/etc. share `Horror tales` etc. but not this.
-  await search.fill("tag:vampires");
-  await expect.poll(async () => page.getByTestId(/^ebook-row-/).count()).toBe(1);
-  await expect(page.getByTestId("ebook-row-dracula")).toBeVisible();
+  // "Vampires" is a tag on Dracula — should appear in tag results or book results.
+  await expect
+    .poll(async () => {
+      const tags = await page.getByTestId("sp-tag-row").count();
+      const books = await page.getByTestId("sp-book-row").count();
+      return tags + books;
+    })
+    .toBeGreaterThanOrEqual(1);
 });

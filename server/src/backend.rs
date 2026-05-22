@@ -69,6 +69,7 @@ pub fn rest_router(state: AppState) -> Router {
         .route("/api/ebooks", get(get_ebooks))
         .route("/api/ebooks/{id}", get(get_ebook_by_id))
         .route("/api/search", get(get_search))
+        .route("/api/search/palette", get(get_search_palette))
         .route("/api/covers/{id}", get(get_cover))
         .route("/api/thumbs/{id}/{size}", get(get_thumb))
         .with_state(state)
@@ -227,6 +228,24 @@ async fn get_search(
         })
         .into_response(),
         Err(error) => internal("search books", error),
+    }
+}
+
+async fn get_search_palette(
+    _user: AuthUser,
+    State(state): State<AppState>,
+    Query(params): Query<SearchQuery>,
+) -> Response {
+    let settings = match db::get_settings(&state.pool).await {
+        Ok(s) => s,
+        Err(error) => return internal("read settings", error),
+    };
+    let Some(path) = settings.ebook_library_path else {
+        return Json(omnibus_shared::PaletteResults::default()).into_response();
+    };
+    match db::search_palette(&state.pool, &path, &params.q).await {
+        Ok(results) => Json(results).into_response(),
+        Err(error) => internal("search palette", error),
     }
 }
 
@@ -875,6 +894,36 @@ mod tests {
     async fn api_search_returns_401_when_anonymous() {
         let (app, _, _) = fixture().await;
         let res = app.oneshot(get_anon("/api/search?q=hello")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // -------------------------------------------------------------------
+    // /api/search/palette — search palette (F1.5)
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn api_search_palette_returns_empty_when_path_not_configured() {
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+        let response = app
+            .oneshot(get_with_bearer("/api/search/palette?q=hello", &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let results: omnibus_shared::PaletteResults = serde_json::from_slice(&bytes).unwrap();
+        assert!(results.books.is_empty());
+        assert!(results.authors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn api_search_palette_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let res = app
+            .oneshot(get_anon("/api/search/palette?q=hello"))
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 

@@ -182,6 +182,8 @@ const ATRIUM_CSS: Asset = asset!("/assets/atrium.css");
 #[component]
 pub fn App() -> Element {
     use_context_provider(|| SearchQuery(Signal::new(String::new())));
+    #[cfg(not(feature = "mobile"))]
+    use_context_provider(|| components::search_palette::PaletteOpen(Signal::new(false)));
     components::atrium::init_theme();
     rsx! {
         document::Title { "Omnibus" }
