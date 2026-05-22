@@ -49,7 +49,43 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
         .execute(&pool)
         .await?;
 
+    // Concurrency PRAGMAs (issue #82). The default rollback journal serializes
+    // every reader behind any in-flight writer, which means a bulk indexer
+    // transaction blocks `GET /api/ebooks` and cover requests until it
+    // commits, and without a busy timeout the contending statement returns
+    // `SQLITE_BUSY` immediately and bubbles up as a 500.
+    //
+    // - `journal_mode = WAL`: readers proceed against the last committed
+    //   snapshot while a writer appends to the WAL file, so indexer writes
+    //   don't stall the UI. WAL requires a file-backed database; setting it
+    //   on `sqlite::memory:` is a no-op (the pragma returns `memory` and the
+    //   in-memory journal stays in use), so we skip it there to keep the
+    //   test output free of confusing pragma results.
+    // - `busy_timeout = 5000`: when contention does happen, retry for up to
+    //   five seconds instead of failing the query instantly.
+    // - `synchronous = NORMAL`: safe with WAL — fsync at checkpoint rather
+    //   than at every commit. Trades a small durability window on power loss
+    //   for substantially faster bulk inserts during indexing.
+    if !is_memory_url(database_url) {
+        sqlx::query("PRAGMA journal_mode = WAL")
+            .execute(&pool)
+            .await?;
+    }
+    sqlx::query("PRAGMA busy_timeout = 5000")
+        .execute(&pool)
+        .await?;
+    sqlx::query("PRAGMA synchronous = NORMAL")
+        .execute(&pool)
+        .await?;
+
     Ok(pool)
+}
+
+/// Returns `true` if `database_url` points at an in-memory SQLite database.
+/// WAL mode requires a real file on disk; sqlx still accepts the PRAGMA
+/// against `:memory:` but it's a no-op there.
+fn is_memory_url(database_url: &str) -> bool {
+    database_url.contains(":memory:") || database_url.contains("mode=memory")
 }
 
 // -----------------------------------------------------------------------------
