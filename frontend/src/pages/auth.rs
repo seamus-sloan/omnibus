@@ -544,7 +544,9 @@ mod tests {
     fn classify_register_error_routes_username() {
         match classify_register_error("username already exists") {
             RegisterError::Username(m) => assert_eq!(m, "username already exists"),
-            other => panic!("expected Username variant, got {other:?}"),
+            other => unreachable!(
+                "input contains \"username\", so classify_register_error must return Username, got {other:?}"
+            ),
         }
     }
 
@@ -552,7 +554,9 @@ mod tests {
     fn classify_register_error_routes_password() {
         match classify_register_error("password is too short") {
             RegisterError::Password(m) => assert_eq!(m, "password is too short"),
-            other => panic!("expected Password variant, got {other:?}"),
+            other => unreachable!(
+                "input contains \"password\" and not \"username\", so classify_register_error must return Password, got {other:?}"
+            ),
         }
     }
 
@@ -560,7 +564,9 @@ mod tests {
     fn classify_register_error_falls_back_to_other() {
         match classify_register_error("500: internal server error") {
             RegisterError::Other(m) => assert_eq!(m, "500: internal server error"),
-            other => panic!("expected Other variant, got {other:?}"),
+            other => unreachable!(
+                "input matches neither \"username\" nor \"password\" substrings, so classify_register_error must fall back to Other, got {other:?}"
+            ),
         }
     }
 }
