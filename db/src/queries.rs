@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool, Transaction};
+use sqlx::{sqlite::SqlitePoolOptions, Executor, Row, SqlitePool, Transaction};
 
 pub use omnibus_shared::Settings;
 use omnibus_shared::{
@@ -32,8 +32,33 @@ const EBOOK_LIBRARY_PATH_KEY: &str = "ebook_library_path";
 const AUDIOBOOK_LIBRARY_PATH_KEY: &str = "audiobook_library_path";
 
 pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
+    // PRAGMAs `foreign_keys`, `busy_timeout`, and `synchronous` are
+    // *per-connection* settings — they only apply to the connection that
+    // executed them, and any future connection the pool spins up would
+    // start with SQLite's defaults. Apply them inside `after_connect` so
+    // every pooled connection initializes the same way.
+    //
+    // `journal_mode = WAL` is a database-level setting that lives in the
+    // SQLite header, so it only needs to take effect once; running it on
+    // every connection is cheap (returns the current mode) and keeps the
+    // logic in one place. We still skip it for in-memory databases so the
+    // test output isn't littered with "memory" pragma results.
+    //
+    // See issue #82 for the rationale on each PRAGMA value.
+    let is_memory = is_memory_url(database_url);
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
+        .after_connect(move |conn, _meta| {
+            Box::pin(async move {
+                conn.execute("PRAGMA foreign_keys = ON").await?;
+                conn.execute("PRAGMA busy_timeout = 5000").await?;
+                conn.execute("PRAGMA synchronous = NORMAL").await?;
+                if !is_memory {
+                    conn.execute("PRAGMA journal_mode = WAL").await?;
+                }
+                Ok(())
+            })
+        })
         .connect(database_url)
         .await?;
 
@@ -41,42 +66,6 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
         .run(&pool)
         .await
         .map_err(|e| sqlx::Error::Migrate(Box::new(e)))?;
-
-    // SQLite does not enforce ON DELETE CASCADE unless foreign_keys is on
-    // per-connection. Enable it here so that deleting a `books` row cascades
-    // through every link table.
-    sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(&pool)
-        .await?;
-
-    // Concurrency PRAGMAs (issue #82). The default rollback journal serializes
-    // every reader behind any in-flight writer, which means a bulk indexer
-    // transaction blocks `GET /api/ebooks` and cover requests until it
-    // commits, and without a busy timeout the contending statement returns
-    // `SQLITE_BUSY` immediately and bubbles up as a 500.
-    //
-    // - `journal_mode = WAL`: readers proceed against the last committed
-    //   snapshot while a writer appends to the WAL file, so indexer writes
-    //   don't stall the UI. WAL requires a file-backed database; setting it
-    //   on `sqlite::memory:` is a no-op (the pragma returns `memory` and the
-    //   in-memory journal stays in use), so we skip it there to keep the
-    //   test output free of confusing pragma results.
-    // - `busy_timeout = 5000`: when contention does happen, retry for up to
-    //   five seconds instead of failing the query instantly.
-    // - `synchronous = NORMAL`: safe with WAL — fsync at checkpoint rather
-    //   than at every commit. Trades a small durability window on power loss
-    //   for substantially faster bulk inserts during indexing.
-    if !is_memory_url(database_url) {
-        sqlx::query("PRAGMA journal_mode = WAL")
-            .execute(&pool)
-            .await?;
-    }
-    sqlx::query("PRAGMA busy_timeout = 5000")
-        .execute(&pool)
-        .await?;
-    sqlx::query("PRAGMA synchronous = NORMAL")
-        .execute(&pool)
-        .await?;
 
     Ok(pool)
 }
