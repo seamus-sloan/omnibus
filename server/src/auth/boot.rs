@@ -148,20 +148,28 @@ mod tests {
     impl EnvGuard {
         fn set(key: &'static str, value: &str) -> Self {
             let prev = std::env::var(key).ok();
-            // SAFETY: ENV_LOCK is held exclusively by the caller; no concurrent env mutation can occur.
+            // SAFETY: caller holds `ENV_LOCK` and must keep it held until after
+            // this `EnvGuard` is dropped — i.e. declare `let _lock = ENV_LOCK.lock()`
+            // *before* the `EnvGuard` so reverse-drop order keeps the lock alive
+            // across `Drop` (which also mutates env). No concurrent env mutation
+            // can occur while that contract is upheld.
             unsafe { std::env::set_var(key, value) };
             Self { key, prev }
         }
         fn unset(key: &'static str) -> Self {
             let prev = std::env::var(key).ok();
-            // SAFETY: ENV_LOCK is held exclusively by the caller; no concurrent env mutation can occur.
+            // SAFETY: same contract as `EnvGuard::set` — caller must hold `ENV_LOCK`
+            // across this call *and* the eventual `Drop`.
             unsafe { std::env::remove_var(key) };
             Self { key, prev }
         }
     }
     impl Drop for EnvGuard {
         fn drop(&mut self) {
-            // SAFETY: ENV_LOCK is held exclusively by the caller; no concurrent env mutation can occur.
+            // SAFETY: `ENV_LOCK` is still held by the caller — see the contract
+            // documented on `EnvGuard::set`/`unset`. Because callers declare
+            // `_lock` before `_g`, reverse-drop order guarantees the lock
+            // outlives this `Drop`. No concurrent env mutation can occur.
             unsafe {
                 match &self.prev {
                     Some(v) => std::env::set_var(self.key, v),
