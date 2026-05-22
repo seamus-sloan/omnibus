@@ -89,3 +89,32 @@ test("renders the detail contents for the selected book", async ({ page, request
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByTestId("ebook-table")).toBeVisible();
 });
+
+test("breadcrumb author segment links to the author page", async ({ page, request }) => {
+  // `alpha` has a single author (Ada Lovelace) and no series, so the
+  // breadcrumb shape is Home > Ada Lovelace > Alpha and the author segment
+  // must be a router link to /authors/:id.
+  const id = await fetchBookIdByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${id}`);
+
+  const crumb = page.getByRole("navigation", { name: "breadcrumb" });
+  const authorLink = crumb.getByRole("link", { name: TARGET.authors[0] });
+  await expect(authorLink).toBeVisible();
+  await authorLink.click();
+  await expect(page).toHaveURL(/\/authors\/\d+$/);
+});
+
+test("breadcrumb series segment links to the series page", async ({ page, request }) => {
+  // `beta` is "Beta in the Series" #1 of "Pioneers" — so the breadcrumb is
+  // Home > Grace Hopper > Pioneers #1 > Beta in the Series. The series
+  // segment must be a router link to /series/:id.
+  const beta = FIXTURE_BOOKS.find((b) => b.slug === "beta")!;
+  const id = await fetchBookIdByTitle(request, beta.title);
+  await gotoReady(page, `/books/${id}`);
+
+  const crumb = page.getByRole("navigation", { name: "breadcrumb" });
+  const seriesLink = crumb.getByRole("link", { name: /Pioneers/ });
+  await expect(seriesLink).toBeVisible();
+  await seriesLink.click();
+  await expect(page).toHaveURL(/\/series\/\d+$/);
+});

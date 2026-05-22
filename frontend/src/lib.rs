@@ -16,8 +16,8 @@ pub mod view_prefs;
 
 pub use components::Nav;
 pub use pages::{
-    AuthorPage, BookDetailPage, LandingPage, LoginPage, MetadataEditPage, RegisterPage, SeriesPage,
-    SettingsPage, TagCloudPage,
+    AuthorPage, BookDetailPage, LandingPage, LoginPage, MetadataEditPage, RegisterPage, SearchPage,
+    SeriesPage, SettingsPage, TagCloudPage,
 };
 
 #[cfg(feature = "mobile")]
@@ -40,6 +40,8 @@ pub enum Route {
     SeriesDetail { id: i64 },
     #[route("/tags")]
     TagCloud {},
+    #[route("/search/:query")]
+    Search { query: String },
     #[route("/login")]
     Login {},
     #[route("/register")]
@@ -108,6 +110,14 @@ pub fn SeriesDetail(id: i64) -> Element {
 pub fn TagCloud() -> Element {
     rsx! {
         ScreenLayout { TagCloudPage {} }
+    }
+}
+
+/// Route target for `/search/:query` — full-page search results.
+#[component]
+pub fn Search(query: String) -> Element {
+    rsx! {
+        ScreenLayout { SearchPage { query } }
     }
 }
 
@@ -782,23 +792,6 @@ body {
 h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .subtitle { color: #94a3b8; margin-bottom: 1rem; }
 .value-line { font-size: 1.25rem; margin-bottom: 1rem; }
-
-.btn {
-  display: block;
-  margin-top: 0.75rem;
-  border: 0;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #22d3ee, #3b82f6);
-  color: #031525;
-  font-weight: 600;
-  font-size: 1rem;
-  padding: 0.7rem 1rem;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  transition: filter 0.1s, transform 0.1s;
-}
-.btn:hover { filter: brightness(1.08); }
-.btn:active { filter: brightness(0.85); transform: scale(0.98); }
 
 .settings-form {
   display: flex;

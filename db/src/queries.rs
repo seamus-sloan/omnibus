@@ -1383,6 +1383,20 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
         apply_overrides(&mut book, &ov, has_cover_ov);
     }
 
+    // `apply_overrides` rewrites `book.series` from the JSON blob but
+    // can't touch the relational `books_series_link` row, so a book
+    // whose series exists only as an override ends up with the series
+    // *name* but no `series_id`. Backfill it by looking up the series
+    // by name so the detail-page Link to /series/:id resolves.
+    if book.series_id.is_none() {
+        if let Some(name) = book.series.as_deref().filter(|s| !s.is_empty()) {
+            book.series_id = sqlx::query_scalar::<_, i64>("SELECT id FROM series WHERE name = ?")
+                .bind(name)
+                .fetch_optional(pool)
+                .await?;
+        }
+    }
+
     Ok(Some(book))
 }
 
@@ -4225,6 +4239,118 @@ mod tests {
 
         let merged = get_book(&pool, id).await.unwrap().unwrap();
         assert_eq!(merged.subjects, vec!["sci-fi", "adventure"]);
+    }
+
+    #[tokio::test]
+    async fn get_book_backfills_series_id_from_override_when_series_exists() {
+        // A book whose series was set via overrides (not at scan time)
+        // historically came back with series_id == None even though the
+        // series row existed in the relational table. The detail page's
+        // "Series" rail then fell back to plain text instead of a Link
+        // to /series/:id. Verify the read path now backfills the id.
+        let _covers = CoversTempDir::new("override_series_link");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        // Seed: one book belongs to "Saga" natively (so the series row exists),
+        // one standalone book that we'll later override into the same series.
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed(
+                    "saga1.epub",
+                    Some("Saga: Book One"),
+                    &["Author X"],
+                    &[],
+                    Some(("Saga", "1")),
+                    None,
+                ),
+                indexed("loner.epub", Some("Loner"), &["Author Y"], &[], None, None),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let saga_id = series_id_by_name(&pool, "Saga").await;
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let loner = books.iter().find(|b| b.filename == "loner.epub").unwrap();
+        assert_eq!(loner.series, None);
+        assert_eq!(loner.series_id, None);
+        let loner_uuid = loner.unique_identifier.clone().unwrap();
+        let loner_book_id = loner.id;
+
+        // Override the standalone to be part of "Saga". The overrides path
+        // does not touch books_series_link, so loner.series_id stays unset
+        // in the relational table — get_book must backfill from the series
+        // table by name.
+        let ov = MetadataOverrides {
+            series: Some("Saga".into()),
+            series_index: Some("3".into()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &loner_uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let merged = get_book(&pool, loner_book_id).await.unwrap().unwrap();
+        assert_eq!(merged.series.as_deref(), Some("Saga"));
+        assert_eq!(
+            merged.series_id,
+            Some(saga_id),
+            "override-only series must still resolve series_id so the detail rail can link"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_book_leaves_series_id_none_when_override_series_unknown() {
+        // If the override sets a series name that no other book uses, the
+        // series table won't have a row to point at — backfill must
+        // leave series_id None rather than fabricating one.
+        let _covers = CoversTempDir::new("override_series_unknown");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "alone.epub",
+                Some("Alone"),
+                &["Author"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let book = &books[0];
+        let uuid = book.unique_identifier.clone().unwrap();
+        let id = book.id;
+
+        let ov = MetadataOverrides {
+            series: Some("A Series That Does Not Yet Exist".into()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let merged = get_book(&pool, id).await.unwrap().unwrap();
+        assert_eq!(
+            merged.series.as_deref(),
+            Some("A Series That Does Not Yet Exist")
+        );
+        assert_eq!(merged.series_id, None);
     }
 
     #[tokio::test]
