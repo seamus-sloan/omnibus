@@ -204,6 +204,7 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
             formats: vec![],
             added_at: None,
             error: None,
+            has_override: false,
         },
         cover,
     }

@@ -117,6 +117,63 @@ pub struct EbookMetadata {
     pub added_at: Option<String>,
 
     pub error: Option<String>,
+
+    /// True when user-supplied metadata overrides (F5.1) are active for this
+    /// book. The detail page uses this to show a "has overrides" indicator and
+    /// offer a revert action.
+    #[serde(default)]
+    pub has_override: bool,
+}
+
+/// User-supplied metadata overrides (F5.1). JSON-serialized into the
+/// `metadata_overrides.overrides` column. Each field, when `Some`, replaces
+/// the corresponding scanned value at read time.
+///
+/// M2M fields (`creators`, `subjects`) replace entirely when present — a tag
+/// list override replaces, not appends (per roadmap: "A tag list override
+/// should replace, not append").
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MetadataOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series_index: Option<String>,
+    /// Replaces the entire creators list when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creators: Option<Vec<Contributor>>,
+    /// Replaces the entire subjects (tags) list when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subjects: Option<Vec<String>>,
+}
+
+impl MetadataOverrides {
+    /// Merge `incoming` on top of `self`. Fields that are `Some` in `incoming`
+    /// win; `None` fields in `incoming` preserve `self`'s value. This lets a
+    /// second edit that only touches two fields preserve earlier overrides on
+    /// untouched fields.
+    pub fn merge(&self, incoming: &MetadataOverrides) -> MetadataOverrides {
+        MetadataOverrides {
+            title: incoming.title.clone().or(self.title.clone()),
+            description: incoming.description.clone().or(self.description.clone()),
+            publisher: incoming.publisher.clone().or(self.publisher.clone()),
+            published: incoming.published.clone().or(self.published.clone()),
+            language: incoming.language.clone().or(self.language.clone()),
+            series: incoming.series.clone().or(self.series.clone()),
+            series_index: incoming.series_index.clone().or(self.series_index.clone()),
+            creators: incoming.creators.clone().or(self.creators.clone()),
+            subjects: incoming.subjects.clone().or(self.subjects.clone()),
+        }
+    }
 }
 
 /// Response payload for `GET /api/ebooks` and `rpc_get_ebooks`.

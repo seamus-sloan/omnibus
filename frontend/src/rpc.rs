@@ -15,7 +15,9 @@
 
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
-use omnibus_shared::{EbookLibrary, EbookMetadata, LibraryContents, Settings, ValueResponse};
+use omnibus_shared::{
+    EbookLibrary, EbookMetadata, LibraryContents, MetadataOverrides, Settings, ValueResponse,
+};
 
 #[cfg(feature = "server")]
 use omnibus_db::{self as db, scanner};
@@ -61,6 +63,9 @@ mod server_auth {
     pub struct AuthUser {
         pub id: i64,
         pub is_admin: bool,
+        /// F5.1: metadata edit permission. `true` for the first user (admin)
+        /// and any user explicitly granted `can_edit`.
+        pub can_edit: bool,
     }
 
     /// Admin-only wrapper. Extracting this returns 403 for non-admin users
@@ -108,6 +113,7 @@ mod server_auth {
                 Ok((user, _session)) => Ok(AuthUser {
                     id: user.id,
                     is_admin: user.is_admin,
+                    can_edit: user.can_edit,
                 }),
                 Err(AuthError::SessionNotFound) => Err(unauthorized()),
                 Err(e) => Err(internal(e)),
@@ -206,4 +212,43 @@ pub async fn rpc_search(q: String) -> Result<EbookLibrary> {
         books,
         error: None,
     })
+}
+
+/// Save metadata overrides for a book (F5.1). Requires `can_edit` or admin.
+///
+/// Returns the merged `EbookMetadata` so the client can update its state
+/// without a second round-trip.
+#[post("/api/rpc/ebook/overrides", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_save_overrides(
+    book_id: i64,
+    overrides: MetadataOverrides,
+) -> Result<Option<EbookMetadata>> {
+    if !user.is_admin && !user.can_edit {
+        return Err(ServerFnError::new("forbidden: edit permission required").into());
+    }
+    let Some(uuid) = db::get_book_uuid(&pool.0, book_id).await? else {
+        return Ok(None);
+    };
+    // Merge incoming overrides with any existing ones so that a second edit
+    // that only touches field B doesn't wipe a prior override on field A.
+    let merged = match db::get_metadata_overrides(&pool.0, &uuid).await? {
+        Some((existing, _)) => existing.merge(&overrides),
+        None => overrides,
+    };
+    db::upsert_metadata_overrides(&pool.0, &uuid, &merged, false, user.id).await?;
+    Ok(db::get_book(&pool.0, book_id).await?)
+}
+
+/// Delete metadata overrides for a book, reverting to scanned values (F5.1).
+#[post("/api/rpc/ebook/overrides/delete", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_delete_overrides(book_id: i64) -> Result<Option<EbookMetadata>> {
+    if !user.is_admin && !user.can_edit {
+        return Err(ServerFnError::new("forbidden: edit permission required").into());
+    }
+    let Some(uuid) = db::get_book_uuid(&pool.0, book_id).await? else {
+        return Ok(None);
+    };
+    db::delete_metadata_overrides(&pool.0, &uuid).await?;
+    db::delete_override_cover(&uuid);
+    Ok(db::get_book(&pool.0, book_id).await?)
 }

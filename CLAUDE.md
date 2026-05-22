@@ -54,14 +54,14 @@ Default `cargo build` / `clippy` covers `server`, `shared`, `frontend` only. Mob
 ### shared/src/
 
 ```
-lib.rs              — Settings, ValueResponse, LibraryContents, LibrarySection, EbookMetadata, EbookLibrary
+lib.rs              — Settings, ValueResponse, LibraryContents, LibrarySection, EbookMetadata, EbookLibrary, MetadataOverrides, Contributor, Identifier
 ```
 
 ### db/src/
 
 ```
 lib.rs              — re-exports queries::*; pub mod auth/ebook/indexer/library_layout/queries/scanner/worker
-queries.rs          — pool init, schema, query layer (list_books, settings, covers, taxonomy…)
+queries.rs          — pool init, schema, query layer (list_books, settings, covers, taxonomy, metadata_overrides CRUD + merge…)
 scanner.rs          — library directory scanning
 ebook.rs            — EPUB OPF metadata + cover extraction; sidecar-first cover with opt-in materialization (ScanOptions)
 indexer.rs          — scan → DB indexing, staleness checks (is_stale + reindex); reindex opts into materialize_sidecars
@@ -76,7 +76,7 @@ migrations/         — numbered SQL migrations embedded via sqlx::migrate!
 lib.rs              — Route, App, styles, ScreenLayout (feature-gated)
 data.rs             — Feature-gated data transport (mobile=reqwest, web/server=rpc)
 rpc.rs              — #[get]/#[post] server functions (mounted by dioxus::server::router); server bodies call into omnibus_db
-pages/{landing,settings,book_detail,auth}.rs  — auth.rs hosts LoginPage + RegisterPage. Landing is the primary Atrium consumer (cover grid + power-user table) and the source of format-faceted filtering (ViewFilters.formats in shared)
+pages/{landing,settings,book_detail,metadata_edit,auth}.rs  — auth.rs hosts LoginPage + RegisterPage. Landing is the primary Atrium consumer (cover grid + power-user table) and the source of format-faceted filtering (ViewFilters.formats in shared). metadata_edit.rs is the F5.1 single-book edit form at /books/:id/edit.
 components/{top_nav,bottom_nav}.rs  — feature = web / mobile respectively
 components/atrium.rs  — F1.7 design-system primitives (AtriumRoot, Cover, ThemeToggle); CSS at frontend/assets/atrium.css
 ```
