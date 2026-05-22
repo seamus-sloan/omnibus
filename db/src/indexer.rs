@@ -48,8 +48,8 @@ pub async fn is_stale(pool: &SqlitePool, library_path: &str) -> Result<bool, sql
 /// suppress retries until [`REFRESH_AFTER_SECS`] elapses). Per-book parse
 /// failures are *not* fatal; they land in the DB as rows with `error =
 /// Some(_)`, same as before.
-pub async fn reindex(pool: &SqlitePool, library_path: String) -> anyhow::Result<()> {
-    let path_for_scan = library_path.clone();
+pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()> {
+    let path_for_scan = library_path.to_owned();
     let scan = tokio::task::spawn_blocking(move || {
         // Materialize cover sidecars so future scans skip the zip
         // (F0.6). Best-effort: read-only filesystems fall through to the
@@ -65,6 +65,6 @@ pub async fn reindex(pool: &SqlitePool, library_path: String) -> anyhow::Result<
     if let Some(msg) = scan.error {
         anyhow::bail!("scan of {library_path} failed: {msg}");
     }
-    queries::replace_books(pool, &library_path, scan.books).await?;
+    queries::replace_books(pool, library_path, scan.books).await?;
     Ok(())
 }
