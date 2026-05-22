@@ -665,7 +665,9 @@ async fn async_sleep_ms(ms: u32) {
 #[cfg(feature = "web")]
 fn use_global_shortcut(open: PaletteOpen) {
     let mut open = open;
-    use_effect(move || {
+    // use_hook runs exactly once per component instance (not on re-renders),
+    // so the closure is registered once and leaked once — no duplicate listeners.
+    use_hook(move || {
         use wasm_bindgen::prelude::*;
 
         let closure = Closure::wrap(Box::new(move |evt: web_sys::KeyboardEvent| {
@@ -683,8 +685,8 @@ fn use_global_shortcut(open: PaletteOpen) {
         }
 
         // Leak the closure so it lives for the app lifetime. The shortcut
-        // is registered once and never removed — acceptable for a
-        // single-page app.
+        // is registered once (use_hook guarantees this) and never removed —
+        // acceptable for a single-page app.
         closure.forget();
     });
 }

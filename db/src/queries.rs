@@ -1309,6 +1309,11 @@ pub async fn search_books(
 /// name column. All results are scoped to `library_path`.
 ///
 /// Returns `PaletteResults::default()` for empty/whitespace queries.
+/// Maximum query length (in chars) accepted by `search_palette`. Inputs
+/// beyond this are truncated to bound FTS5 expression size and LIKE
+/// pattern length.
+const MAX_QUERY_LEN: usize = 256;
+
 pub async fn search_palette(
     pool: &SqlitePool,
     library_path: &str,
@@ -1318,6 +1323,10 @@ pub async fn search_palette(
     if trimmed.is_empty() {
         return Ok(PaletteResults::default());
     }
+    // Truncate to cap FTS5 + LIKE expression size. Collect chars to
+    // avoid slicing mid-codepoint.
+    let trimmed: String = trimmed.chars().take(MAX_QUERY_LEN).collect();
+    let trimmed = trimmed.as_str();
 
     let start = std::time::Instant::now();
     const LIMIT: i32 = 5;
@@ -1425,10 +1434,10 @@ pub async fn search_palette(
                (SELECT a.name FROM books_series_link bsl2
                   JOIN books b2 ON b2.id = bsl2.book
                   JOIN libraries l2 ON l2.id = b2.library_id
-                  JOIN books_authors_link bal ON bal.book = bsl2.book AND bal.position = 0
+                  JOIN books_authors_link bal ON bal.book = bsl2.book
                   JOIN authors a ON a.id = bal.author
                  WHERE bsl2.series = s.id AND l2.path = ?1
-                 ORDER BY b2.sort, b2.id LIMIT 1) AS author_display
+                 ORDER BY b2.sort, b2.id, bal.position LIMIT 1) AS author_display
         FROM series s
         WHERE s.name LIKE ?2 ESCAPE '\'
           AND EXISTS (SELECT 1 FROM books_series_link bsl
