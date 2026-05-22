@@ -44,6 +44,11 @@ pub struct PaletteOpen(pub Signal<bool>);
 pub fn SearchPaletteHost() -> Element {
     let open = use_context::<PaletteOpen>();
 
+    // Register global ⌘K / Ctrl+K listener here (always-mounted) so the
+    // shortcut can open the palette from the closed state.
+    #[cfg(feature = "web")]
+    use_global_shortcut(open);
+
     rsx! {
         SpTriggerButton { open }
         if open.0() {
@@ -211,10 +216,6 @@ fn SpOverlay(open: PaletteOpen) -> Element {
             }
         });
     });
-
-    // Register global ⌘K / Ctrl+K listener (web only).
-    #[cfg(feature = "web")]
-    use_global_shortcut(open);
 
     let res = results.read();
     let items = flat_items.read();

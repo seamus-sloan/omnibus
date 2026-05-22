@@ -1375,8 +1375,12 @@ pub async fn search_palette(
         Vec::new()
     };
 
-    // Escape the query for LIKE pattern (percent and underscore are LIKE wildcards).
-    let like_q = trimmed.replace('%', "\\%").replace('_', "\\_");
+    // Escape the query for LIKE pattern: backslash first (it's the ESCAPE char),
+    // then the LIKE wildcards percent and underscore.
+    let like_q = trimmed
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
     let like_pattern = format!("%{like_q}%");
 
     // B. Authors — substring match, scoped to library, ordered by book count.
@@ -1419,9 +1423,12 @@ pub async fn search_palette(
                   JOIN libraries l ON l.id = b.library_id
                  WHERE bsl.series = s.id AND l.path = ?1) AS book_count,
                (SELECT a.name FROM books_series_link bsl2
+                  JOIN books b2 ON b2.id = bsl2.book
+                  JOIN libraries l2 ON l2.id = b2.library_id
                   JOIN books_authors_link bal ON bal.book = bsl2.book AND bal.position = 0
                   JOIN authors a ON a.id = bal.author
-                 WHERE bsl2.series = s.id LIMIT 1) AS author_display
+                 WHERE bsl2.series = s.id AND l2.path = ?1
+                 ORDER BY b2.sort, b2.id LIMIT 1) AS author_display
         FROM series s
         WHERE s.name LIKE ?2 ESCAPE '\'
           AND EXISTS (SELECT 1 FROM books_series_link bsl

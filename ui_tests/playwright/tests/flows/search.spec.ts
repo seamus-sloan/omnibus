@@ -9,9 +9,9 @@ test.beforeAll(async ({ request }) => {
 
 // ── Helper: open the search palette and type a query ──────────────────
 // The old inline search input is replaced by the F1.5 palette. These
-// helpers open the palette, type into its input, and — where the test
-// expects filtered landing results — submit the query so the landing
-// page's SearchQuery signal picks it up.
+// helpers open the palette and type into its input. The palette shows
+// grouped results (books, authors, series, tags) inline — no form
+// submission is needed.
 
 async function openPaletteAndType(
   page: import("@playwright/test").Page,
@@ -66,7 +66,7 @@ test("settings page does not render the search trigger", async ({ page }) => {
   await expect(page.getByTestId("search-trigger")).toHaveCount(0);
 });
 
-test("author: facet narrows by author", async ({ page }) => {
+test("author substring shows author results", async ({ page }) => {
   await gotoReady(page, "/");
   await openPaletteAndType(page, "shakespeare");
 
@@ -75,7 +75,7 @@ test("author: facet narrows by author", async ({ page }) => {
     .toBeGreaterThanOrEqual(1);
 });
 
-test("tag: facet narrows by tag", async ({ page }) => {
+test("tag substring shows tag or book results", async ({ page }) => {
   await gotoReady(page, "/");
   await openPaletteAndType(page, "vampires");
 

@@ -150,9 +150,9 @@ test.describe("with seeded library", () => {
       .poll(async () => page.getByTestId("sp-book-row").count())
       .toBeGreaterThanOrEqual(1);
 
-    // Arrow down should select an item.
+    // Arrow down should select the first book row.
     await page.keyboard.press("ArrowDown");
-    await expect(page.locator(".sp-row.selected")).toHaveCount(1);
+    await expect(page.getByTestId("sp-book-row").first()).toHaveClass(/selected/);
   });
 
   test("inside text shows coming soon", async ({ page }) => {
