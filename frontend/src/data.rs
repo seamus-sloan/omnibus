@@ -495,17 +495,9 @@ pub async fn save_overrides(
     id: i64,
     overrides: &MetadataOverrides,
 ) -> Result<Option<EbookMetadata>, String> {
-    #[derive(serde::Serialize)]
-    struct Body<'a> {
-        book_id: i64,
-        overrides: &'a MetadataOverrides,
-    }
     let url = format!("{server_url}/api/ebooks/{id}/overrides");
     let response = with_bearer(http_client().post(&url))
-        .json(&Body {
-            book_id: id,
-            overrides,
-        })
+        .json(overrides)
         .send()
         .await
         .map_err(|e| format!("{e:#}"))?;
@@ -514,8 +506,9 @@ pub async fn save_overrides(
         return Err(drain_error(response, status).await);
     }
     response
-        .json::<Option<EbookMetadata>>()
+        .json::<EbookMetadata>()
         .await
+        .map(Some)
         .map_err(|e| e.to_string())
 }
 
@@ -531,8 +524,9 @@ pub async fn delete_overrides(server_url: &str, id: i64) -> Result<Option<EbookM
         return Err(drain_error(response, status).await);
     }
     response
-        .json::<Option<EbookMetadata>>()
+        .json::<EbookMetadata>()
         .await
+        .map(Some)
         .map_err(|e| e.to_string())
 }
 

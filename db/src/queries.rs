@@ -622,8 +622,17 @@ async fn load_overrides_bulk(
         }
         let rows = q.fetch_all(pool).await?;
         for (uuid, json, has_cover) in rows {
-            if let Ok(ov) = serde_json::from_str::<MetadataOverrides>(&json) {
-                map.insert(uuid, (ov, has_cover != 0));
+            match serde_json::from_str::<MetadataOverrides>(&json) {
+                Ok(ov) => {
+                    map.insert(uuid, (ov, has_cover != 0));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        book_uuid = %uuid,
+                        error = %e,
+                        "corrupt metadata_overrides JSON — skipping row"
+                    );
+                }
             }
         }
     }
@@ -3317,7 +3326,6 @@ mod tests {
     async fn upsert_and_get_metadata_overrides_roundtrips() {
         let pool = init_db("sqlite::memory:").await.unwrap();
         // Create a user for updated_by.
-        omnibus_shared::MetadataOverrides::default(); // import check
         let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
             .await
             .unwrap()
