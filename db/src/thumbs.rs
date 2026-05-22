@@ -247,7 +247,11 @@ pub fn evict_if_over_cap(cap_bytes: u64) -> Result<(), std::io::Error> {
         // freeing the rest.
         match std::fs::remove_file(path) {
             Ok(()) => total = total.saturating_sub(*size),
-            Err(e) => eprintln!("thumbs: evict {path:?} failed: {e}"),
+            Err(e) => tracing::warn!(
+                error = %e,
+                path = ?path,
+                "thumbs: evict failed"
+            ),
         }
     }
 

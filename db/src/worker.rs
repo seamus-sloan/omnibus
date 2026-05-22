@@ -110,7 +110,11 @@ impl Worker {
         tokio::spawn(async move {
             let outcome = this.run(task).await;
             if let TaskOutcome::Err(ref msg) = outcome {
-                eprintln!("worker: task {id} failed: {msg}");
+                tracing::error!(
+                    task_id = id,
+                    error = %msg,
+                    "worker: task failed"
+                );
             }
             let _ = tx.send(Some(outcome));
         });
