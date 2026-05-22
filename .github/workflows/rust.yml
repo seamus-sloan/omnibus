@@ -21,6 +21,8 @@ jobs:
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -35,6 +37,8 @@ jobs:
   check:
     name: clippy + test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       # Match e2e.yml: pin target dir so rust-cache (keyed on `. -> target`)
       # actually caches anything across runs.
