@@ -3829,6 +3829,7 @@ dependencies = [
  "dioxus",
  "dioxus-router",
  "gloo-net",
+ "gloo-timers",
  "omnibus-db",
  "omnibus-shared",
  "reqwest",
@@ -3837,6 +3838,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "tracing",
+ "wasm-bindgen",
  "web-sys",
 ]
 

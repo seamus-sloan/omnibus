@@ -32,6 +32,9 @@ pub use format_switcher::FormatSwitcher;
 
 pub mod atrium;
 
+#[cfg(not(feature = "mobile"))]
+pub mod search_palette;
+
 // Auth-page primitives — used by the login / register / first-run /
 // recovery screens on every target. Stays platform-agnostic so the same
 // markup ships under web SSR, web WASM, and mobile native.
