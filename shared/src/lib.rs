@@ -117,6 +117,120 @@ pub struct EbookMetadata {
     pub added_at: Option<String>,
 
     pub error: Option<String>,
+
+    /// True when user-supplied metadata overrides (F5.1) are active for this
+    /// book. The detail page uses this to show a "has overrides" indicator and
+    /// offer a revert action.
+    #[serde(default)]
+    pub has_override: bool,
+}
+
+/// User-supplied metadata overrides (F5.1). JSON-serialized into the
+/// `metadata_overrides.overrides` column. Each field, when `Some`, replaces
+/// the corresponding scanned value at read time.
+///
+/// M2M fields (`creators`, `subjects`) replace entirely when present — a tag
+/// list override replaces, not appends (per roadmap: "A tag list override
+/// should replace, not append").
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MetadataOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series_index: Option<String>,
+    /// Replaces the entire creators list when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creators: Option<Vec<Contributor>>,
+    /// Replaces the entire subjects (tags) list when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subjects: Option<Vec<String>>,
+}
+
+impl MetadataOverrides {
+    /// Maximum length for scalar string fields (title, publisher, etc.).
+    const MAX_SCALAR_LEN: usize = 4096;
+    /// Maximum length for the description field.
+    const MAX_DESCRIPTION_LEN: usize = 256 * 1024;
+    /// Maximum number of tags (subjects).
+    const MAX_SUBJECTS: usize = 64;
+    /// Maximum length of a single tag.
+    const MAX_SUBJECT_LEN: usize = 128;
+    /// Maximum number of creators.
+    const MAX_CREATORS: usize = 32;
+    /// Maximum length of a creator name.
+    const MAX_CREATOR_LEN: usize = 256;
+
+    /// Validate field lengths. Returns `Err` with a human-readable message if
+    /// any field exceeds the cap. Call at the handler level before persisting.
+    pub fn validate(&self) -> Result<(), String> {
+        let check_scalar = |name: &str, val: &Option<String>, max: usize| -> Result<(), String> {
+            if let Some(v) = val {
+                if v.len() > max {
+                    return Err(format!("{name} exceeds {max} characters"));
+                }
+            }
+            Ok(())
+        };
+        check_scalar("title", &self.title, Self::MAX_SCALAR_LEN)?;
+        check_scalar("publisher", &self.publisher, Self::MAX_SCALAR_LEN)?;
+        check_scalar("published", &self.published, Self::MAX_SCALAR_LEN)?;
+        check_scalar("language", &self.language, Self::MAX_SCALAR_LEN)?;
+        check_scalar("series", &self.series, Self::MAX_SCALAR_LEN)?;
+        check_scalar("series_index", &self.series_index, Self::MAX_SCALAR_LEN)?;
+        check_scalar("description", &self.description, Self::MAX_DESCRIPTION_LEN)?;
+        if let Some(ref creators) = self.creators {
+            if creators.len() > Self::MAX_CREATORS {
+                return Err(format!("too many creators (max {})", Self::MAX_CREATORS));
+            }
+            for c in creators {
+                if c.name.len() > Self::MAX_CREATOR_LEN {
+                    return Err(format!(
+                        "creator name exceeds {} characters",
+                        Self::MAX_CREATOR_LEN
+                    ));
+                }
+            }
+        }
+        if let Some(ref subjects) = self.subjects {
+            if subjects.len() > Self::MAX_SUBJECTS {
+                return Err(format!("too many tags (max {})", Self::MAX_SUBJECTS));
+            }
+            for s in subjects {
+                if s.len() > Self::MAX_SUBJECT_LEN {
+                    return Err(format!("tag exceeds {} characters", Self::MAX_SUBJECT_LEN));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Merge `incoming` on top of `self`. Fields that are `Some` in `incoming`
+    /// win; `None` fields in `incoming` preserve `self`'s value. This lets a
+    /// second edit that only touches two fields preserve earlier overrides on
+    /// untouched fields.
+    pub fn merge(&self, incoming: &MetadataOverrides) -> MetadataOverrides {
+        MetadataOverrides {
+            title: incoming.title.clone().or(self.title.clone()),
+            description: incoming.description.clone().or(self.description.clone()),
+            publisher: incoming.publisher.clone().or(self.publisher.clone()),
+            published: incoming.published.clone().or(self.published.clone()),
+            language: incoming.language.clone().or(self.language.clone()),
+            series: incoming.series.clone().or(self.series.clone()),
+            series_index: incoming.series_index.clone().or(self.series_index.clone()),
+            creators: incoming.creators.clone().or(self.creators.clone()),
+            subjects: incoming.subjects.clone().or(self.subjects.clone()),
+        }
+    }
 }
 
 /// Response payload for `GET /api/ebooks` and `rpc_get_ebooks`.

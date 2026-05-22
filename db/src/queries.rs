@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool, Transaction};
 
 pub use omnibus_shared::Settings;
-use omnibus_shared::{Contributor, EbookLibrary, EbookMetadata, Identifier};
+use omnibus_shared::{Contributor, EbookLibrary, EbookMetadata, Identifier, MetadataOverrides};
 
 /// Schema migrations embedded at compile time from `db/migrations/`.
 /// Every schema change ships as a new numbered `.sql` file there; applied
@@ -470,6 +470,10 @@ fn delete_cover_files_for(uuids: &[String]) {
 /// Load a book's cover image bytes + mime type from disk. The `id` parameter
 /// is the `books.id` primary key (so the `/api/covers/:id` URL shape stays
 /// stable); internally we look up the book's `uuid` and read the file.
+///
+/// **F5.1:** User-uploaded override covers take precedence. When the
+/// `metadata_overrides` table flags `has_cover_override`, the override file
+/// at `covers_dir()/override-<uuid>.<ext>` is returned first.
 pub async fn get_cover(
     pool: &SqlitePool,
     book_id: i64,
@@ -479,9 +483,24 @@ pub async fn get_cover(
             .bind(book_id)
             .fetch_optional(pool)
             .await?;
-    match row {
-        Some((uuid, has_cover)) if has_cover != 0 => Ok(find_cover_file(&uuid)),
-        _ => Ok(None),
+    let Some((uuid, has_cover)) = row else {
+        return Ok(None);
+    };
+
+    // F5.1: check for override cover first.
+    if let Some((ov, has_cover_ov)) = get_metadata_overrides(pool, &uuid).await? {
+        let _ = ov; // overrides struct not needed here, just the cover flag
+        if has_cover_ov {
+            if let Some(cover) = find_override_cover_file(&uuid) {
+                return Ok(Some(cover));
+            }
+        }
+    }
+
+    if has_cover != 0 {
+        Ok(find_cover_file(&uuid))
+    } else {
+        Ok(None)
     }
 }
 
@@ -497,6 +516,201 @@ pub async fn get_last_modified_epoch(
     .bind(book_id)
     .fetch_optional(pool)
     .await
+}
+
+// -----------------------------------------------------------------------------
+// Metadata overrides (F5.1).
+// -----------------------------------------------------------------------------
+
+/// Upsert user metadata overrides for a book identified by its stable UUID.
+/// The `overrides` are JSON-serialized into the `metadata_overrides` table.
+pub async fn upsert_metadata_overrides(
+    pool: &SqlitePool,
+    book_uuid: &str,
+    overrides: &MetadataOverrides,
+    has_cover_override: bool,
+    user_id: i64,
+) -> Result<(), sqlx::Error> {
+    let json = serde_json::to_string(overrides).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+    sqlx::query(
+        "INSERT INTO metadata_overrides (book_uuid, overrides, has_cover_override, updated_by, updated_at)
+         VALUES (?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(book_uuid) DO UPDATE SET
+           overrides = excluded.overrides,
+           has_cover_override = excluded.has_cover_override,
+           updated_by = excluded.updated_by,
+           updated_at = datetime('now')",
+    )
+    .bind(book_uuid)
+    .bind(&json)
+    .bind(i64::from(has_cover_override))
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Load overrides for a single book UUID. Returns `None` if no overrides
+/// exist.
+pub async fn get_metadata_overrides(
+    pool: &SqlitePool,
+    book_uuid: &str,
+) -> Result<Option<(MetadataOverrides, bool)>, sqlx::Error> {
+    let row: Option<(String, i64)> = sqlx::query_as(
+        "SELECT overrides, has_cover_override FROM metadata_overrides WHERE book_uuid = ?",
+    )
+    .bind(book_uuid)
+    .fetch_optional(pool)
+    .await?;
+
+    match row {
+        Some((json, has_cover)) => {
+            let ov: MetadataOverrides =
+                serde_json::from_str(&json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+            Ok(Some((ov, has_cover != 0)))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Delete overrides for a book UUID (revert to scanned values).
+pub async fn delete_metadata_overrides(
+    pool: &SqlitePool,
+    book_uuid: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM metadata_overrides WHERE book_uuid = ?")
+        .bind(book_uuid)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Look up the UUID for a given `books.id`. Used by the override-save
+/// endpoints to bridge the id-based API with the uuid-keyed overrides table.
+pub async fn get_book_uuid(pool: &SqlitePool, book_id: i64) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
+        .bind(book_id)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Bulk-load overrides for a set of UUIDs. Returns a map from UUID to
+/// `(overrides, has_cover_override)`. Used by `list_books` and `search_books`
+/// to merge overrides without N+1 queries.
+async fn load_overrides_bulk(
+    pool: &SqlitePool,
+    uuids: &[String],
+) -> Result<std::collections::HashMap<String, (MetadataOverrides, bool)>, sqlx::Error> {
+    use std::collections::HashMap;
+
+    if uuids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    // SQLite has a limit on bound parameters (999 by default). For very large
+    // libraries we chunk, but typical libraries have < 10k books.
+    let mut map = HashMap::with_capacity(uuids.len());
+
+    for chunk in uuids.chunks(500) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT book_uuid, overrides, has_cover_override FROM metadata_overrides WHERE book_uuid IN ({placeholders})"
+        );
+        let mut q = sqlx::query_as::<_, (String, String, i64)>(&sql);
+        for uuid in chunk {
+            q = q.bind(uuid);
+        }
+        let rows = q.fetch_all(pool).await?;
+        for (uuid, json, has_cover) in rows {
+            match serde_json::from_str::<MetadataOverrides>(&json) {
+                Ok(ov) => {
+                    map.insert(uuid, (ov, has_cover != 0));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        book_uuid = %uuid,
+                        error = %e,
+                        "corrupt metadata_overrides JSON — skipping row"
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(map)
+}
+
+/// Apply a `MetadataOverrides` to an `EbookMetadata`, mutating it in place.
+/// Scalar fields are replaced when `Some`; m2m fields (`creators`, `subjects`)
+/// replace entirely when present.
+fn apply_overrides(book: &mut EbookMetadata, ov: &MetadataOverrides, has_cover_override: bool) {
+    if let Some(ref t) = ov.title {
+        book.title = Some(t.clone());
+    }
+    if let Some(ref d) = ov.description {
+        book.description = sanitize_description(Some(d.clone()));
+    }
+    if let Some(ref p) = ov.publisher {
+        book.publisher = Some(p.clone());
+    }
+    if let Some(ref d) = ov.published {
+        book.published = Some(d.clone());
+    }
+    if let Some(ref l) = ov.language {
+        book.language = Some(l.clone());
+    }
+    if let Some(ref s) = ov.series {
+        book.series = Some(s.clone());
+    }
+    if let Some(ref si) = ov.series_index {
+        book.series_index = Some(si.clone());
+    }
+    if let Some(ref c) = ov.creators {
+        book.creators = c.clone();
+    }
+    if let Some(ref s) = ov.subjects {
+        book.subjects = s.clone();
+    }
+    if has_cover_override {
+        // Ensure cover_url is set even if the original had no cover.
+        book.cover_url = Some(format!("/api/covers/{}", book.id));
+    }
+    book.has_override = true;
+}
+
+/// Probe for a user-uploaded override cover file for the given UUID.
+fn find_override_cover_file(uuid: &str) -> Option<(String, Vec<u8>)> {
+    let dir = covers_dir();
+    for fmt in ImageFormat::PROBE_ORDER {
+        let path = dir.join(format!("override-{uuid}.{}", fmt.to_ext()));
+        if let Ok(bytes) = std::fs::read(&path) {
+            return Some((fmt.to_mime().to_string(), bytes));
+        }
+    }
+    None
+}
+
+/// Write a user-uploaded override cover to disk.
+pub fn write_override_cover(uuid: &str, mime: &str, bytes: &[u8]) -> std::io::Result<()> {
+    let ext = ImageFormat::from_mime(mime).to_ext();
+    let dir = covers_dir();
+    std::fs::create_dir_all(&dir)?;
+
+    // Remove any existing override cover with a different extension.
+    for fmt in ImageFormat::PROBE_ORDER {
+        let old = dir.join(format!("override-{uuid}.{}", fmt.to_ext()));
+        let _ = std::fs::remove_file(old);
+    }
+
+    std::fs::write(dir.join(format!("override-{uuid}.{ext}")), bytes)
+}
+
+/// Delete override cover files for a UUID.
+pub fn delete_override_cover(uuid: &str) {
+    let dir = covers_dir();
+    for fmt in ImageFormat::PROBE_ORDER {
+        let _ = std::fs::remove_file(dir.join(format!("override-{uuid}.{}", fmt.to_ext())));
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -945,8 +1159,24 @@ pub async fn list_books(
             formats: parse_json_array(r.get("formats_json"))?,
             added_at: r.get("timestamp"),
             error: None,
+            has_override: false,
         });
     }
+
+    // F5.1: bulk-merge metadata overrides.
+    let uuids: Vec<String> = out
+        .iter()
+        .filter_map(|b| b.unique_identifier.clone())
+        .collect();
+    let overrides_map = load_overrides_bulk(pool, &uuids).await?;
+    for book in &mut out {
+        if let Some(uuid) = book.unique_identifier.as_deref() {
+            if let Some((ov, has_cover_ov)) = overrides_map.get(uuid) {
+                apply_overrides(book, ov, *has_cover_ov);
+            }
+        }
+    }
+
     Ok(out)
 }
 
@@ -1067,7 +1297,7 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
 
     let formats: Vec<String> = parse_json_array(r.get("formats_json"))?;
 
-    Ok(Some(EbookMetadata {
+    let mut book = EbookMetadata {
         id: book_id,
         filename,
         title: r.get("title"),
@@ -1089,7 +1319,7 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
         series: r.get("series_name"),
         series_index: series_index.map(format_series_index),
         epub_version: None,
-        unique_identifier: Some(uuid),
+        unique_identifier: Some(uuid.clone()),
         resource_count: 0,
         spine_count: 0,
         toc_count: 0,
@@ -1098,7 +1328,15 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
         formats,
         added_at: r.get("timestamp"),
         error: None,
-    }))
+        has_override: false,
+    };
+
+    // F5.1: merge user-supplied metadata overrides.
+    if let Some((ov, has_cover_ov)) = get_metadata_overrides(pool, &uuid).await? {
+        apply_overrides(&mut book, &ov, has_cover_ov);
+    }
+
+    Ok(Some(book))
 }
 
 #[derive(serde::Deserialize)]
@@ -1293,8 +1531,24 @@ pub async fn search_books(
             formats: parse_json_array(r.get("formats_json"))?,
             added_at: r.get("timestamp"),
             error: None,
+            has_override: false,
         });
     }
+
+    // F5.1: bulk-merge metadata overrides.
+    let uuids: Vec<String> = out
+        .iter()
+        .filter_map(|b| b.unique_identifier.clone())
+        .collect();
+    let overrides_map = load_overrides_bulk(pool, &uuids).await?;
+    for book in &mut out {
+        if let Some(uuid) = book.unique_identifier.as_deref() {
+            if let Some((ov, has_cover_ov)) = overrides_map.get(uuid) {
+                apply_overrides(book, ov, *has_cover_ov);
+            }
+        }
+    }
+
     Ok(out)
 }
 
@@ -3062,5 +3316,437 @@ mod tests {
         assert!(desc.contains("<p>Brief.</p>"));
         assert!(desc.contains("<b>detail</b>"));
         assert!(!desc.contains("<script"));
+    }
+
+    // -----------------------------------------------------------------
+    // F5.1 Metadata overrides
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn upsert_and_get_metadata_overrides_roundtrips() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        // Create a user for updated_by.
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        let ov = MetadataOverrides {
+            title: Some("New Title".into()),
+            description: Some("A new description".into()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, "test-uuid-1", &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let (loaded, has_cover) = get_metadata_overrides(&pool, "test-uuid-1")
+            .await
+            .unwrap()
+            .expect("overrides should exist");
+        assert_eq!(loaded.title, Some("New Title".into()));
+        assert_eq!(loaded.description, Some("A new description".into()));
+        assert_eq!(loaded.publisher, None);
+        assert!(!has_cover);
+    }
+
+    #[tokio::test]
+    async fn get_metadata_overrides_returns_none_when_absent() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let result = get_metadata_overrides(&pool, "nonexistent-uuid")
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_metadata_overrides_removes_row() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+        let ov = MetadataOverrides {
+            title: Some("Override".into()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, "del-uuid", &ov, false, user_id)
+            .await
+            .unwrap();
+        assert!(get_metadata_overrides(&pool, "del-uuid")
+            .await
+            .unwrap()
+            .is_some());
+
+        delete_metadata_overrides(&pool, "del-uuid").await.unwrap();
+        assert!(get_metadata_overrides(&pool, "del-uuid")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn get_book_merges_scalar_overrides() {
+        let _covers = CoversTempDir::new("merge_scalar");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "merge.epub",
+                Some("Original Title"),
+                &["Author A"],
+                &["fiction"],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let book = &books[0];
+        let uuid = book.unique_identifier.clone().unwrap();
+        let id = book.id;
+
+        // Save overrides.
+        let ov = MetadataOverrides {
+            title: Some("Edited Title".into()),
+            publisher: Some("New Publisher".into()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        // get_book should return merged values.
+        let merged = get_book(&pool, id).await.unwrap().unwrap();
+        assert_eq!(merged.title.as_deref(), Some("Edited Title"));
+        assert_eq!(merged.publisher.as_deref(), Some("New Publisher"));
+        assert!(merged.has_override);
+        // Non-overridden fields unchanged.
+        assert_eq!(merged.creators[0].name, "Author A");
+    }
+
+    #[tokio::test]
+    async fn get_book_merges_creators_replaces_entirely() {
+        let _covers = CoversTempDir::new("merge_creators");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "creators.epub",
+                Some("Book"),
+                &["Author A"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let uuid = books[0].unique_identifier.clone().unwrap();
+        let id = books[0].id;
+
+        let ov = MetadataOverrides {
+            creators: Some(vec![
+                Contributor {
+                    name: "Author B".into(),
+                    ..Default::default()
+                },
+                Contributor {
+                    name: "Author C".into(),
+                    ..Default::default()
+                },
+            ]),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let merged = get_book(&pool, id).await.unwrap().unwrap();
+        assert_eq!(merged.creators.len(), 2);
+        assert_eq!(merged.creators[0].name, "Author B");
+        assert_eq!(merged.creators[1].name, "Author C");
+    }
+
+    #[tokio::test]
+    async fn get_book_merges_subjects_replaces_entirely() {
+        let _covers = CoversTempDir::new("merge_subjects");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "subjects.epub",
+                Some("Book"),
+                &["Author"],
+                &["fiction", "classic"],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let uuid = books[0].unique_identifier.clone().unwrap();
+        let id = books[0].id;
+
+        let ov = MetadataOverrides {
+            subjects: Some(vec!["sci-fi".into(), "adventure".into()]),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let merged = get_book(&pool, id).await.unwrap().unwrap();
+        assert_eq!(merged.subjects, vec!["sci-fi", "adventure"]);
+    }
+
+    #[tokio::test]
+    async fn overrides_survive_reindex() {
+        let _covers = CoversTempDir::new("reindex_survive");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        // First index.
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "survive.epub",
+                Some("Original"),
+                &["Author"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let uuid = books[0].unique_identifier.clone().unwrap();
+
+        // Save overrides.
+        let ov = MetadataOverrides {
+            title: Some("Overridden".into()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        // Reindex — replace_books deletes and re-inserts.
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "survive.epub",
+                Some("Original"),
+                &["Author"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        // The new book row has a new id but the same UUID.
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let id = books[0].id;
+        let merged = get_book(&pool, id).await.unwrap().unwrap();
+        assert_eq!(
+            merged.title.as_deref(),
+            Some("Overridden"),
+            "overrides should survive the DELETE/INSERT reindex"
+        );
+        assert!(merged.has_override);
+    }
+
+    #[tokio::test]
+    async fn list_books_merges_overrides_in_bulk() {
+        let _covers = CoversTempDir::new("bulk_merge");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed("a.epub", Some("Book A"), &["Author A"], &[], None, None),
+                indexed("b.epub", Some("Book B"), &["Author B"], &[], None, None),
+                indexed("c.epub", Some("Book C"), &["Author C"], &[], None, None),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let uuid_a = books
+            .iter()
+            .find(|b| b.title.as_deref() == Some("Book A"))
+            .unwrap()
+            .unique_identifier
+            .clone()
+            .unwrap();
+        let uuid_c = books
+            .iter()
+            .find(|b| b.title.as_deref() == Some("Book C"))
+            .unwrap()
+            .unique_identifier
+            .clone()
+            .unwrap();
+
+        // Override A and C only.
+        upsert_metadata_overrides(
+            &pool,
+            &uuid_a,
+            &MetadataOverrides {
+                title: Some("Edited A".into()),
+                ..Default::default()
+            },
+            false,
+            user_id,
+        )
+        .await
+        .unwrap();
+        upsert_metadata_overrides(
+            &pool,
+            &uuid_c,
+            &MetadataOverrides {
+                title: Some("Edited C".into()),
+                ..Default::default()
+            },
+            false,
+            user_id,
+        )
+        .await
+        .unwrap();
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let a = books
+            .iter()
+            .find(|b| b.unique_identifier.as_deref() == Some(&uuid_a))
+            .unwrap();
+        let b = books
+            .iter()
+            .find(|b| b.title.as_deref() == Some("Book B"))
+            .unwrap();
+        let c = books
+            .iter()
+            .find(|b| b.unique_identifier.as_deref() == Some(&uuid_c))
+            .unwrap();
+
+        assert_eq!(a.title.as_deref(), Some("Edited A"));
+        assert!(a.has_override);
+        assert_eq!(b.title.as_deref(), Some("Book B"));
+        assert!(!b.has_override);
+        assert_eq!(c.title.as_deref(), Some("Edited C"));
+        assert!(c.has_override);
+    }
+
+    #[tokio::test]
+    async fn delete_overrides_reverts_to_scanned() {
+        let _covers = CoversTempDir::new("revert");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "revert.epub",
+                Some("Original"),
+                &["Author"],
+                &["fiction"],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let uuid = books[0].unique_identifier.clone().unwrap();
+        let id = books[0].id;
+
+        // Override.
+        upsert_metadata_overrides(
+            &pool,
+            &uuid,
+            &MetadataOverrides {
+                title: Some("Changed".into()),
+                subjects: Some(vec!["sci-fi".into()]),
+                ..Default::default()
+            },
+            false,
+            user_id,
+        )
+        .await
+        .unwrap();
+        let merged = get_book(&pool, id).await.unwrap().unwrap();
+        assert_eq!(merged.title.as_deref(), Some("Changed"));
+
+        // Delete overrides — should revert to scanned.
+        delete_metadata_overrides(&pool, &uuid).await.unwrap();
+        let reverted = get_book(&pool, id).await.unwrap().unwrap();
+        assert_eq!(reverted.title.as_deref(), Some("Original"));
+        assert_eq!(reverted.subjects, vec!["fiction"]);
+        assert!(!reverted.has_override);
+    }
+
+    /// Verify that `MetadataOverrides::merge` correctly layers a second edit
+    /// on top of a first without losing the first edit's fields.
+    #[tokio::test]
+    async fn merge_preserves_prior_overrides() {
+        let first = MetadataOverrides {
+            title: Some("Edited Title".into()),
+            publisher: Some("Edited Publisher".into()),
+            ..Default::default()
+        };
+        let second = MetadataOverrides {
+            description: Some("New description".into()),
+            ..Default::default()
+        };
+        let merged = first.merge(&second);
+        // second's description wins
+        assert_eq!(merged.description.as_deref(), Some("New description"));
+        // first's title and publisher are preserved (not wiped by None)
+        assert_eq!(merged.title.as_deref(), Some("Edited Title"));
+        assert_eq!(merged.publisher.as_deref(), Some("Edited Publisher"));
+        // unset in both stays None
+        assert_eq!(merged.language, None);
     }
 }

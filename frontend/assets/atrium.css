@@ -336,14 +336,33 @@ body.atrium,
 
 /* Title column */
 .bd-title-col { min-width: 0; }
+.bd-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-top: 10px;
+}
 .atrium .bd-title {
   font-size: clamp(44px, 7vw, 76px);
   line-height: 0.95;
   font-style: italic;
-  margin-top: 10px;
+  margin-top: 0;
   font-family: var(--serif);
   letter-spacing: -0.025em;
   text-wrap: balance;
+  flex: 1;
+  min-width: 0;
+}
+/* Hero-level edit button — sits inline with the big title */
+.bd-edit-hero {
+  margin-top: 14px;
+  flex-shrink: 0;
+  gap: 6px;
+}
+/* CSS-only pencil icon (edit glyph) */
+.bd-ico-pencil::before {
+  content: '\270E';
+  font-size: 14px;
 }
 .bd-by {
   margin-top: 12px;
@@ -533,4 +552,296 @@ body.atrium,
   font-size: 13px;
 }
 .bd-footer .btn:hover { background: var(--bg-1); color: var(--ink-0); }
+
+/* ── F5.1 Metadata edit form ────────────────────────────────────────
+ *
+ * Two-column layout: 4-col form grid (left) + sticky sidebar (right,
+ * 320px). Sticky save bar at bottom. Mirrors the design canvas
+ * `screens/metadata.jsx#MetadataEditA`.
+ */
+
+.me-root { width: 100%; padding-bottom: 80px; }
+.me-crumb { padding: 0 clamp(20px, 4vw, 56px); margin-bottom: 8px; }
+
+.me-page-header {
+  padding: 0 clamp(20px, 4vw, 56px) 24px;
+}
+.me-page-title {
+  font-family: var(--serif);
+  font-size: 38px;
+  line-height: 1.05;
+  margin-top: 4px;
+}
+.me-page-title-book { font-style: italic; }
+.me-page-title-author {
+  color: var(--ink-2);
+  font-family: var(--sans);
+  font-style: normal;
+  font-size: 17px;
+  margin-left: 14px;
+  font-weight: 400;
+}
+.me-page-hint {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.me-layout {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 40px;
+  padding: 0 clamp(20px, 4vw, 56px);
+  align-items: flex-start;
+}
+@media (max-width: 900px) {
+  .me-layout { grid-template-columns: 1fr; }
+}
+
+.me-form { min-width: 0; }
+
+.me-field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 18px;
+}
+@media (max-width: 768px) {
+  .me-field-grid { grid-template-columns: 1fr 1fr; }
+}
+
+.me-field { min-width: 0; }
+.me-field-w2 { grid-column: span 2; }
+.me-field-full { grid-column: 1 / -1; }
+
+/* Label row */
+.me-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+.me-label-edited {
+  color: var(--accent);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+.me-label-hint {
+  color: var(--ink-3);
+  font-size: 9px;
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* Inputs */
+.me-input {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  color: var(--ink-0);
+  font-family: var(--sans);
+  font-size: 13.5px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.me-input:focus { border-color: var(--accent); }
+.me-input-big { font-size: 20px; }
+.me-input-serif { font-family: var(--serif); }
+.me-input-mono { font-family: var(--mono); font-size: 12px; }
+.me-input-edited {
+  border-color: color-mix(in oklch, var(--accent) 60%, transparent);
+}
+.me-input:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.me-textarea {
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  color: var(--ink-0);
+  font-family: var(--serif);
+  font-size: 15px;
+  line-height: 1.55;
+  outline: none;
+  resize: vertical;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.me-textarea:focus { border-color: var(--accent); }
+.me-textarea.me-input-edited {
+  border-color: color-mix(in oklch, var(--accent) 60%, transparent);
+}
+
+/* Chip rows (authors, tags) */
+.me-chip-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: var(--bg-1);
+}
+.me-chip-item { background: var(--bg-3); }
+.me-chip-remove {
+  background: none;
+  border: none;
+  color: var(--ink-3);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  line-height: 1;
+}
+.me-chip-remove:hover { color: var(--bad); }
+
+.me-chip-input {
+  flex: 1;
+  min-width: 180px;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  color: var(--ink-1);
+  font-size: 13px;
+  outline: none;
+}
+
+.me-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+/* Tags section */
+.me-tags-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.me-tag-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.me-tag-input {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px dashed var(--line);
+  color: var(--ink-1);
+  font-size: 12px;
+  outline: none;
+  width: 140px;
+}
+.me-tag-input:focus { border-color: var(--accent); }
+
+/* Series sub-grid */
+.me-series-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 14px;
+  margin-top: 10px;
+}
+
+/* Sidebar */
+.me-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  position: sticky;
+  top: 80px;
+}
+.me-sidebar-card { padding: 16px; }
+.me-sidebar-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 12px;
+}
+.me-cover-preview {
+  width: 100%;
+}
+.me-cover-hint {
+  font-size: 10px;
+  color: var(--ink-3);
+  margin-top: 10px;
+}
+
+/* Identifiers */
+.me-ident-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.me-ident-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.me-ident-key { min-width: 78px; }
+.me-ident-val {
+  flex: 1;
+  padding: 6px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--ink-1);
+}
+
+/* Sticky save bar */
+.me-save-bar {
+  position: sticky;
+  bottom: 0;
+  background: color-mix(in oklch, var(--bg-0) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid var(--line-2);
+  padding: 14px clamp(20px, 4vw, 56px);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  z-index: 10;
+}
+.me-dirty-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 25%, transparent);
+  flex-shrink: 0;
+}
+.me-dirty-label {
+  font-size: 12px;
+  color: var(--ink-1);
+}
+.me-dirty-names {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.me-save-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
 

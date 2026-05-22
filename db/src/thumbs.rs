@@ -205,6 +205,15 @@ pub fn ensure_thumbnails_sync(
     Ok(())
 }
 
+/// Delete all cached thumbnails for a book so the next request regenerates
+/// them. Called after a cover override upload (F5.1) so stale thumbs don't
+/// linger.
+pub fn invalidate_thumbs(book_id: i64) {
+    for size in ThumbSize::all() {
+        let _ = std::fs::remove_file(thumb_path_for(book_id, size));
+    }
+}
+
 /// Walk `thumbs_dir()` and delete files in oldest-mtime-first order until the
 /// total cache size is under `cap_bytes`. This is FIFO by file modification
 /// time — not true LRU, since we don't bump `mtime` on read.

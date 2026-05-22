@@ -18,7 +18,7 @@ use omnibus_db::{
     self as db, scanner,
     worker::{Task, Worker, WorkerConfig},
 };
-use omnibus_shared::{Settings, ValueResponse};
+use omnibus_shared::{MetadataOverrides, Settings, ValueResponse};
 use serde::Deserialize;
 use sqlx::SqlitePool;
 
@@ -68,6 +68,16 @@ pub fn rest_router(state: AppState) -> Router {
         .route("/api/library", get(get_library))
         .route("/api/ebooks", get(get_ebooks))
         .route("/api/ebooks/{id}", get(get_ebook_by_id))
+        .route("/api/ebooks/{id}/overrides", post(post_ebook_overrides))
+        .route(
+            "/api/ebooks/{id}/overrides/delete",
+            post(delete_ebook_overrides),
+        )
+        .merge(
+            Router::new()
+                .route("/api/ebooks/{id}/cover", post(post_ebook_cover))
+                .layer(axum::extract::DefaultBodyLimit::max(11 * 1024 * 1024)),
+        )
         .route("/api/search", get(get_search))
         .route("/api/covers/{id}", get(get_cover))
         .route("/api/thumbs/{id}/{size}", get(get_thumb))
@@ -245,6 +255,9 @@ async fn get_cover(
                 // request on the same URL now that the endpoint is gated.
                 (header::CACHE_CONTROL, "private, max-age=86400"),
                 (header::VARY, "Cookie"),
+                // Prevent browsers from MIME-sniffing a cover into an
+                // executable type (e.g. an SVG disguised as JPEG).
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             ],
             bytes,
         )
@@ -286,6 +299,7 @@ async fn get_thumb(
                     (header::CONTENT_TYPE, "image/webp"),
                     (header::CACHE_CONTROL, "private, max-age=86400"),
                     (header::VARY, "Cookie"),
+                    (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
                 ],
                 bytes,
             )
@@ -309,6 +323,7 @@ async fn get_thumb(
                     // Short TTL: browser will re-fetch after ~5 s when the WebP is ready.
                     (header::CACHE_CONTROL, "private, max-age=5"),
                     (header::VARY, "Cookie"),
+                    (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
                 ],
                 bytes,
             )
@@ -329,6 +344,214 @@ async fn get_library(_user: AuthUser, State(state): State<AppState>) -> Response
             Json(contents).into_response()
         }
         Err(error) => internal("read settings", error),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// F5.1 Metadata overrides (REST — mobile client).
+// ---------------------------------------------------------------------------
+
+/// Save metadata overrides for a book. Requires `can_edit` or admin.
+async fn post_ebook_overrides(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(overrides): Json<MetadataOverrides>,
+) -> Response {
+    if !user.is_admin && !user.can_edit {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "edit permission required",
+        )
+            .into_response();
+    }
+    if let Err(msg) = overrides.validate() {
+        return (axum::http::StatusCode::BAD_REQUEST, msg).into_response();
+    }
+    let uuid = match db::get_book_uuid(&state.pool, id).await {
+        Ok(Some(u)) => u,
+        Ok(None) => return (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
+        Err(e) => return internal("get_book_uuid", e),
+    };
+    // Merge incoming overrides with any existing ones so that a second edit
+    // that only touches field B doesn't wipe a prior override on field A.
+    let merged = match db::get_metadata_overrides(&state.pool, &uuid).await {
+        Ok(Some((existing, _))) => existing.merge(&overrides),
+        Ok(None) => overrides,
+        Err(e) => return internal("get_metadata_overrides", e),
+    };
+    if let Err(e) = db::upsert_metadata_overrides(&state.pool, &uuid, &merged, false, user.id).await
+    {
+        return internal("upsert_metadata_overrides", e);
+    }
+    match db::get_book(&state.pool, id).await {
+        Ok(Some(book)) => Json(book).into_response(),
+        Ok(None) => (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
+        Err(e) => internal("get_book", e),
+    }
+}
+
+/// Delete metadata overrides for a book, reverting to scanned values.
+async fn delete_ebook_overrides(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Response {
+    if !user.is_admin && !user.can_edit {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "edit permission required",
+        )
+            .into_response();
+    }
+    let uuid = match db::get_book_uuid(&state.pool, id).await {
+        Ok(Some(u)) => u,
+        Ok(None) => return (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
+        Err(e) => return internal("get_book_uuid", e),
+    };
+    if let Err(e) = db::delete_metadata_overrides(&state.pool, &uuid).await {
+        return internal("delete_metadata_overrides", e);
+    }
+    db::delete_override_cover(&uuid);
+    db::thumbs::invalidate_thumbs(id);
+    match db::get_book(&state.pool, id).await {
+        Ok(Some(book)) => Json(book).into_response(),
+        Ok(None) => (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
+        Err(e) => internal("get_book", e),
+    }
+}
+
+/// Detect image format from magic bytes. Returns the canonical MIME type for
+/// accepted raster formats (JPEG, PNG, GIF, WebP). Returns `None` for
+/// unrecognised or dangerous formats (SVG, arbitrary binaries).
+fn detect_image_format(bytes: &[u8]) -> Option<String> {
+    if bytes.len() < 4 {
+        return None;
+    }
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg".into())
+    } else if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+        Some("image/png".into())
+    } else if bytes.starts_with(b"GIF8") {
+        Some("image/gif".into())
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp".into())
+    } else {
+        None
+    }
+}
+
+/// Upload a replacement cover image for a book. Multipart form with a single
+/// `cover` field containing the image bytes.
+async fn post_ebook_cover(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    if !user.is_admin && !user.can_edit {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "edit permission required",
+        )
+            .into_response();
+    }
+
+    let uuid = match db::get_book_uuid(&state.pool, id).await {
+        Ok(Some(u)) => u,
+        Ok(None) => return (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
+        Err(e) => return internal("get_book_uuid", e),
+    };
+
+    // Extract the cover field from the multipart body.
+    let (mime, bytes) = loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => {
+                let name = field.name().unwrap_or("").to_string();
+                if name != "cover" {
+                    continue;
+                }
+                let content_type = field
+                    .content_type()
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+                if !content_type.starts_with("image/") {
+                    return (
+                        axum::http::StatusCode::BAD_REQUEST,
+                        "cover must be an image",
+                    )
+                        .into_response();
+                }
+                // Reject SVG — contains executable content and can XSS when
+                // opened directly in a browser tab.
+                if content_type.contains("svg") {
+                    return (
+                        axum::http::StatusCode::BAD_REQUEST,
+                        "SVG covers are not accepted",
+                    )
+                        .into_response();
+                }
+                match field.bytes().await {
+                    Ok(b) => {
+                        if b.len() > 10 * 1024 * 1024 {
+                            return (
+                                axum::http::StatusCode::BAD_REQUEST,
+                                "cover must be under 10 MB",
+                            )
+                                .into_response();
+                        }
+                        // Validate magic bytes — don't trust Content-Type alone.
+                        let detected = detect_image_format(&b);
+                        if detected.is_none() {
+                            return (
+                                axum::http::StatusCode::BAD_REQUEST,
+                                "file does not appear to be a valid image",
+                            )
+                                .into_response();
+                        }
+                        // Use the detected MIME so the stored extension matches
+                        // actual content, not the (untrusted) client header.
+                        break (detected.unwrap(), b);
+                    }
+                    Err(e) => return internal("read cover field", e),
+                }
+            }
+            Ok(None) => {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    "missing 'cover' field in multipart body",
+                )
+                    .into_response()
+            }
+            Err(e) => return internal("parse multipart", e),
+        }
+    };
+
+    // Write the override cover to disk.
+    if let Err(e) = db::write_override_cover(&uuid, &mime, &bytes) {
+        return internal("write_override_cover", e);
+    }
+
+    // Mark the overrides table with has_cover_override = 1. Preserve existing
+    // field overrides if any.
+    let existing_overrides = match db::get_metadata_overrides(&state.pool, &uuid).await {
+        Ok(Some((ov, _))) => ov,
+        Ok(None) => MetadataOverrides::default(),
+        Err(e) => return internal("get_metadata_overrides", e),
+    };
+    if let Err(e) =
+        db::upsert_metadata_overrides(&state.pool, &uuid, &existing_overrides, true, user.id).await
+    {
+        return internal("upsert_metadata_overrides", e);
+    }
+
+    // Invalidate thumb cache so next request regenerates from new cover.
+    db::thumbs::invalidate_thumbs(id);
+
+    match db::get_book(&state.pool, id).await {
+        Ok(Some(book)) => Json(book).into_response(),
+        Ok(None) => (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
+        Err(e) => internal("get_book", e),
     }
 }
 

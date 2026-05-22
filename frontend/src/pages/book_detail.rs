@@ -155,7 +155,18 @@ fn render_loaded(b: EbookMetadata) -> Element {
                     // Title + CTAs column
                     div { class: "bd-title-col",
                         div { class: "label", "{kicker}" }
-                        h1 { class: "bd-title", "{title}" }
+                        div { class: "bd-title-row",
+                            h1 { class: "bd-title", "{title}" }
+                            Link {
+                                to: Route::MetadataEdit { id: b.id },
+                                class: "btn ghost sm bd-edit-hero",
+                                "data-testid": "edit-metadata-hero",
+                                title: "Edit metadata\u{2026}",
+                                "aria-label": "Edit metadata",
+                                span { class: "bd-ico-pencil" }
+                                "Edit"
+                            }
+                        }
                         if !authors_line.is_empty() {
                             p {
                                 class: "bd-by",
@@ -362,10 +373,11 @@ fn render_loaded(b: EbookMetadata) -> Element {
                         // Relocated FormatSwitcher — same testids as before.
                         FormatSwitcher { formats: b.formats.clone() }
 
-                        // TODO(F5.1): metadata editor
-                        button {
+                        // F5.1: metadata editor
+                        Link {
+                            to: Route::MetadataEdit { id: b.id },
                             class: "btn ghost sm bd-rail-edit",
-                            disabled: true,
+                            "data-testid": "edit-metadata",
                             "Edit metadata\u{2026}"
                         }
                     }

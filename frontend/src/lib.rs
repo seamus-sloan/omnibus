@@ -15,7 +15,9 @@ pub mod rpc;
 pub mod view_prefs;
 
 pub use components::Nav;
-pub use pages::{BookDetailPage, LandingPage, LoginPage, RegisterPage, SettingsPage};
+pub use pages::{
+    BookDetailPage, LandingPage, LoginPage, MetadataEditPage, RegisterPage, SettingsPage,
+};
 
 #[cfg(feature = "mobile")]
 pub use data::ServerUrl;
@@ -29,6 +31,8 @@ pub enum Route {
     Settings {},
     #[route("/books/:id")]
     BookDetail { id: i64 },
+    #[route("/books/:id/edit")]
+    MetadataEdit { id: i64 },
     #[route("/login")]
     Login {},
     #[route("/register")]
@@ -57,6 +61,14 @@ pub fn Settings() -> Element {
 pub fn BookDetail(id: i64) -> Element {
     rsx! {
         ScreenLayout { BookDetailPage { id } }
+    }
+}
+
+/// Route target for `/books/:id/edit` — metadata edit form.
+#[component]
+pub fn MetadataEdit(id: i64) -> Element {
+    rsx! {
+        ScreenLayout { MetadataEditPage { id } }
     }
 }
 
