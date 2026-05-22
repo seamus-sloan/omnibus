@@ -148,18 +148,20 @@ mod tests {
     impl EnvGuard {
         fn set(key: &'static str, value: &str) -> Self {
             let prev = std::env::var(key).ok();
-            // Safety: we hold ENV_LOCK for the duration of any test using this.
+            // SAFETY: ENV_LOCK is held exclusively by the caller; no concurrent env mutation can occur.
             unsafe { std::env::set_var(key, value) };
             Self { key, prev }
         }
         fn unset(key: &'static str) -> Self {
             let prev = std::env::var(key).ok();
+            // SAFETY: ENV_LOCK is held exclusively by the caller; no concurrent env mutation can occur.
             unsafe { std::env::remove_var(key) };
             Self { key, prev }
         }
     }
     impl Drop for EnvGuard {
         fn drop(&mut self) {
+            // SAFETY: ENV_LOCK is held exclusively by the caller; no concurrent env mutation can occur.
             unsafe {
                 match &self.prev {
                     Some(v) => std::env::set_var(self.key, v),
