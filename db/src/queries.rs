@@ -804,7 +804,11 @@ async fn insert_fts_row(
 fn materialize_new_covers(new_covers: Vec<(String, String, Vec<u8>)>) {
     for (uuid, mime, bytes) in new_covers {
         if let Err(e) = write_cover_file(&uuid, &mime, &bytes) {
-            eprintln!("replace_books: failed to write cover for {uuid}: {e}");
+            tracing::error!(
+                error = %e,
+                uuid = %uuid,
+                "replace_books: failed to write cover"
+            );
         }
     }
 }
