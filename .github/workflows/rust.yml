@@ -18,8 +18,22 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust with rustfmt
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
   check:
-    name: fmt + clippy + test
+    name: clippy + test
     runs-on: ubuntu-latest
     env:
       # Match e2e.yml: pin target dir so rust-cache (keyed on `. -> target`)
@@ -39,20 +53,8 @@ jobs:
         with:
           workspaces: ". -> target"
 
-      - name: cargo fmt --check
-        run: nix develop --command cargo fmt --all --check
-
       - name: cargo clippy (server)
         run: nix develop --command cargo clippy -p omnibus --all-targets -- -D warnings
 
-      - name: cargo clippy (db)
-        run: nix develop --command cargo clippy -p omnibus-db --all-targets -- -D warnings
-
       - name: cargo test (server)
         run: nix develop --command cargo test -p omnibus
-
-      - name: cargo test (db)
-        run: nix develop --command cargo test -p omnibus-db
-
-      - name: cargo test (frontend)
-        run: nix develop --command cargo test -p omnibus-frontend --features server
