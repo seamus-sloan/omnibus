@@ -30,7 +30,7 @@ cd "$REPO_ROOT"
 RUNTIME_DIR=".claude/runtime"
 mkdir -p "$RUNTIME_DIR"
 
-START_PORT="${PORT:-3000}"
+START_PORT="${PORT:-3010}"
 END_PORT=$((START_PORT + 20))
 
 # Tighter timeouts than curl defaults so a misbehaving foreign process

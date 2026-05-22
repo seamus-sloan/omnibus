@@ -10,7 +10,9 @@
 //! - Server-only compiles (`feature = "server"` without `"web"`) reuse the
 //!   web stubs so SSR-during-fullstack-render still returns sensible data.
 
-use omnibus_shared::{EbookLibrary, EbookMetadata, LibraryContents, Settings};
+use omnibus_shared::{
+    AuthorDetail, EbookLibrary, EbookMetadata, LibraryContents, SeriesDetail, Settings, TagWeight,
+};
 #[cfg(any(feature = "web", feature = "mobile"))]
 use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};
 
@@ -489,6 +491,65 @@ pub async fn get_ebook(server_url: &str, id: i64) -> Result<Option<EbookMetadata
         .map_err(|e| e.to_string())
 }
 
+#[cfg(feature = "mobile")]
+pub async fn get_author(server_url: &str, id: i64) -> Result<Option<AuthorDetail>, String> {
+    let url = format!("{server_url}/api/authors/{id}");
+    let response = with_bearer(http_client().get(&url))
+        .send()
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    let status = note_status(response.status());
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    response
+        .json::<AuthorDetail>()
+        .await
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(feature = "mobile")]
+pub async fn get_series(server_url: &str, id: i64) -> Result<Option<SeriesDetail>, String> {
+    let url = format!("{server_url}/api/series/{id}");
+    let response = with_bearer(http_client().get(&url))
+        .send()
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    let status = note_status(response.status());
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    response
+        .json::<SeriesDetail>()
+        .await
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(feature = "mobile")]
+pub async fn get_tag_cloud(server_url: &str) -> Result<Vec<TagWeight>, String> {
+    let url = format!("{server_url}/api/tags");
+    let response = with_bearer(http_client().get(&url))
+        .send()
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    response
+        .json::<Vec<TagWeight>>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // ===== Mobile auth transport: bearer token =====
 //
 // Mobile cannot use cookies (Dioxus Native is not a webview), so login
@@ -638,6 +699,27 @@ pub async fn search_ebooks(_server_url: &str, q: &str) -> Result<EbookLibrary, S
 #[cfg(not(feature = "mobile"))]
 pub async fn get_ebook(_server_url: &str, id: i64) -> Result<Option<EbookMetadata>, String> {
     crate::rpc::rpc_get_ebook(id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "mobile"))]
+pub async fn get_author(_server_url: &str, id: i64) -> Result<Option<AuthorDetail>, String> {
+    crate::rpc::rpc_get_author(id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "mobile"))]
+pub async fn get_series(_server_url: &str, id: i64) -> Result<Option<SeriesDetail>, String> {
+    crate::rpc::rpc_get_series(id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "mobile"))]
+pub async fn get_tag_cloud(_server_url: &str) -> Result<Vec<TagWeight>, String> {
+    crate::rpc::rpc_get_tag_cloud()
         .await
         .map_err(|e| e.to_string())
 }
