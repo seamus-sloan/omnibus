@@ -229,12 +229,20 @@ pub mod token_store {
             match op {
                 Op::Write(token) => {
                     if let Err(e) = write_token_file(&path, token.as_bytes()) {
-                        eprintln!("warning: could not persist bearer token: {e}");
+                        tracing::warn!(
+                            error = %e,
+                            path = %path.display(),
+                            "could not persist bearer token"
+                        );
                     }
                 }
                 Op::Delete => {
                     if let Err(e) = delete_token_file(&path) {
-                        eprintln!("warning: could not delete bearer token: {e}");
+                        tracing::warn!(
+                            error = %e,
+                            path = %path.display(),
+                            "could not delete bearer token"
+                        );
                     }
                 }
             }
