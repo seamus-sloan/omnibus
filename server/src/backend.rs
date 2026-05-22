@@ -72,6 +72,9 @@ pub fn rest_router(state: AppState) -> Router {
         .route("/api/search/palette", get(get_search_palette))
         .route("/api/covers/{id}", get(get_cover))
         .route("/api/thumbs/{id}/{size}", get(get_thumb))
+        .route("/api/authors/{id}", get(get_author_by_id))
+        .route("/api/series/{id}", get(get_series_by_id))
+        .route("/api/tags", get(get_tags))
         .with_state(state)
         // `AuthUser`/`AdminUser` read the pool from `Extension<SqlitePool>`.
         // Layer it here so the router is self-contained for integration
@@ -335,6 +338,37 @@ async fn get_thumb(
         }
         Ok(None) => axum::http::StatusCode::ACCEPTED.into_response(),
         Err(e) => internal("cover fetch for thumb", e),
+    }
+}
+
+async fn get_author_by_id(
+    _user: AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Response {
+    match db::get_author(&state.pool, id).await {
+        Ok(Some(author)) => Json(author).into_response(),
+        Ok(None) => axum::http::StatusCode::NOT_FOUND.into_response(),
+        Err(error) => internal("read author", error),
+    }
+}
+
+async fn get_series_by_id(
+    _user: AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Response {
+    match db::get_series(&state.pool, id).await {
+        Ok(Some(series)) => Json(series).into_response(),
+        Ok(None) => axum::http::StatusCode::NOT_FOUND.into_response(),
+        Err(error) => internal("read series", error),
+    }
+}
+
+async fn get_tags(_user: AuthUser, State(state): State<AppState>) -> Response {
+    match db::get_tag_cloud(&state.pool).await {
+        Ok(tags) => Json(tags).into_response(),
+        Err(error) => internal("read tags", error),
     }
 }
 
@@ -1088,5 +1122,192 @@ mod tests {
             !body.contains("app_state") && !body.contains("sqlx") && !body.contains("SQL"),
             "500 body must not leak internal error details, got {body:?}"
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Discovery endpoints: /api/authors/:id, /api/series/:id, /api/tags
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn api_get_author_returns_200_with_detail() {
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        // Seed a book with an author via replace_books.
+        db::replace_books(
+            &pool,
+            "/lib",
+            vec![db::ebook::IndexedBook {
+                metadata: omnibus_shared::EbookMetadata {
+                    filename: "test.epub".into(),
+                    title: Some("Test Book".into()),
+                    creators: vec![omnibus_shared::Contributor {
+                        name: "Jane Austen".into(),
+                        role: Some("aut".into()),
+                        file_as: Some("Austen, Jane".into()),
+                        id: None,
+                    }],
+                    ..Default::default()
+                },
+                cover: None,
+            }],
+        )
+        .await
+        .unwrap();
+
+        // Look up the author id from the DB.
+        let author_id: i64 =
+            sqlx::query_scalar("SELECT id FROM authors WHERE name = 'Jane Austen'")
+                .fetch_one(&pool)
+                .await
+                .expect("author should exist");
+
+        let response = app
+            .oneshot(get_with_bearer(
+                &format!("/api/authors/{author_id}"),
+                &token,
+            ))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let detail: omnibus_shared::AuthorDetail = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(detail.name, "Jane Austen");
+        assert_eq!(detail.book_count, 1);
+        assert_eq!(detail.books.len(), 1);
+        assert_eq!(detail.books[0].title.as_deref(), Some("Test Book"));
+    }
+
+    #[tokio::test]
+    async fn api_get_author_returns_404_for_unknown_id() {
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        let response = app
+            .oneshot(get_with_bearer("/api/authors/9999", &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn api_get_author_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let res = app.oneshot(get_anon("/api/authors/1")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_get_series_returns_200_with_detail() {
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        // Seed a book with a series.
+        db::replace_books(
+            &pool,
+            "/lib",
+            vec![db::ebook::IndexedBook {
+                metadata: omnibus_shared::EbookMetadata {
+                    filename: "series-book.epub".into(),
+                    title: Some("Dune".into()),
+                    series: Some("Dune Chronicles".into()),
+                    series_index: Some("1".into()),
+                    ..Default::default()
+                },
+                cover: None,
+            }],
+        )
+        .await
+        .unwrap();
+
+        let series_id: i64 =
+            sqlx::query_scalar("SELECT id FROM series WHERE name = 'Dune Chronicles'")
+                .fetch_one(&pool)
+                .await
+                .expect("series should exist");
+
+        let response = app
+            .oneshot(get_with_bearer(&format!("/api/series/{series_id}"), &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let detail: omnibus_shared::SeriesDetail = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(detail.name, "Dune Chronicles");
+        assert_eq!(detail.book_count, 1);
+        assert_eq!(detail.books.len(), 1);
+        assert_eq!(detail.books[0].title.as_deref(), Some("Dune"));
+    }
+
+    #[tokio::test]
+    async fn api_get_series_returns_404_for_unknown_id() {
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        let response = app
+            .oneshot(get_with_bearer("/api/series/9999", &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn api_get_series_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let res = app.oneshot(get_anon("/api/series/1")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_get_tags_returns_200_with_tag_weights() {
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        // Seed a book with subjects (tags).
+        db::replace_books(
+            &pool,
+            "/lib",
+            vec![db::ebook::IndexedBook {
+                metadata: omnibus_shared::EbookMetadata {
+                    filename: "tagged.epub".into(),
+                    title: Some("Tagged Book".into()),
+                    subjects: vec!["Fiction".into(), "Science".into()],
+                    ..Default::default()
+                },
+                cover: None,
+            }],
+        )
+        .await
+        .unwrap();
+
+        let response = app
+            .oneshot(get_with_bearer("/api/tags", &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let tags: Vec<omnibus_shared::TagWeight> = serde_json::from_slice(&bytes).unwrap();
+        assert!(!tags.is_empty());
+        assert!(tags.iter().any(|t| t.name == "Fiction"));
+        assert!(tags.iter().any(|t| t.name == "Science"));
+        // Each tag should have count = 1 since we seeded one book.
+        for tag in &tags {
+            assert_eq!(tag.count, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn api_get_tags_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let res = app.oneshot(get_anon("/api/tags")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 }

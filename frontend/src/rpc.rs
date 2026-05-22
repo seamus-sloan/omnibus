@@ -16,7 +16,8 @@
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
-    EbookLibrary, EbookMetadata, LibraryContents, PaletteResults, Settings, ValueResponse,
+    AuthorDetail, EbookLibrary, EbookMetadata, LibraryContents, PaletteResults, SeriesDetail,
+    Settings, TagWeight, ValueResponse,
 };
 
 #[cfg(feature = "server")]
@@ -219,4 +220,27 @@ pub async fn rpc_search_palette(q: String) -> Result<PaletteResults> {
         return Ok(PaletteResults::default());
     };
     Ok(db::search_palette(&pool.0, &path, &q).await?)
+}
+
+// ---------------------------------------------------------------------------
+// Discovery pages (F1.8)
+// ---------------------------------------------------------------------------
+
+/// Fetch a single author and all their books. POST for the same reason as
+/// `rpc_get_ebook` — needs `id` in the body.
+#[post("/api/rpc/author", pool: PoolExt, _user: AuthUser)]
+pub async fn rpc_get_author(id: i64) -> Result<Option<AuthorDetail>> {
+    Ok(db::get_author(&pool.0, id).await?)
+}
+
+/// Fetch a single series and all its books (ordered by series index).
+#[post("/api/rpc/series", pool: PoolExt, _user: AuthUser)]
+pub async fn rpc_get_series(id: i64) -> Result<Option<SeriesDetail>> {
+    Ok(db::get_series(&pool.0, id).await?)
+}
+
+/// Return all tags with book counts for the tag cloud.
+#[get("/api/rpc/tags", pool: PoolExt, _user: AuthUser)]
+pub async fn rpc_get_tag_cloud() -> Result<Vec<TagWeight>> {
+    Ok(db::get_tag_cloud(&pool.0).await?)
 }

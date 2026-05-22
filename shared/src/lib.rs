@@ -43,11 +43,17 @@ pub struct LibraryContents {
 
 /// A contributor (or creator) with the optional OPF refinements — the MARC
 /// role code (`aut`, `ill`, `edt`, `bkp`, `trl`, …) and the sort-key name.
+///
+/// `id` is the stable `authors.id` primary key from the normalized DB. Set
+/// when the contributor was loaded from a m2m join; `None` for contributors
+/// created by the EPUB parser before indexing.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Contributor {
     pub name: String,
     pub role: Option<String>,
     pub file_as: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
 }
 
 /// A typed identifier from the OPF, e.g. `{ scheme: "ISBN", value: "…" }`.
@@ -90,6 +96,10 @@ pub struct EbookMetadata {
     // Series / collection (Calibre + EPUB3 belongs-to-collection).
     pub series: Option<String>,
     pub series_index: Option<String>,
+    /// Stable `series.id` primary key from the normalized DB. Set when the
+    /// book was loaded from a join; `None` for books not in any series.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series_id: Option<i64>,
 
     // Structural / document-level info.
     pub epub_version: Option<String>,
@@ -195,6 +205,38 @@ pub struct PaletteTagHit {
     pub book_count: u32,
 }
 
+// Discovery pages (F1.8)
+// -----------------------------------------------------------------------------
+
+/// Author detail payload for `GET /api/authors/:id` and `rpc_get_author`.
+/// Contains the author row plus every book by that author.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthorDetail {
+    pub id: i64,
+    pub name: String,
+    pub sort: Option<String>,
+    pub book_count: usize,
+    pub books: Vec<EbookMetadata>,
+}
+
+/// Series detail payload for `GET /api/series/:id` and `rpc_get_series`.
+/// Books are ordered by `series_index`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SeriesDetail {
+    pub id: i64,
+    pub name: String,
+    pub sort: Option<String>,
+    pub book_count: usize,
+    pub books: Vec<EbookMetadata>,
+}
+
+/// Single tag with its book count, for the tag cloud.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TagWeight {
+    pub name: String,
+    pub count: usize,
+}
+
 // -----------------------------------------------------------------------------
 // Library view preferences (F1.3)
 //
@@ -244,12 +286,17 @@ pub struct ViewFilters {
     pub series: Vec<String>,
     #[serde(default)]
     pub formats: Vec<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 impl ViewFilters {
     /// `true` when no facet has any selected value.
     pub fn is_empty(&self) -> bool {
-        self.authors.is_empty() && self.series.is_empty() && self.formats.is_empty()
+        self.authors.is_empty()
+            && self.series.is_empty()
+            && self.formats.is_empty()
+            && self.tags.is_empty()
     }
 }
 

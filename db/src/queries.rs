@@ -19,7 +19,7 @@ use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool, Transaction};
 pub use omnibus_shared::Settings;
 use omnibus_shared::{
     Contributor, EbookLibrary, EbookMetadata, Identifier, PaletteAuthorHit, PaletteBookHit,
-    PaletteResults, PaletteSeriesHit, PaletteTagHit,
+    PaletteResults, PaletteSeriesHit, PaletteTagHit, AuthorDetail, SeriesDetail, TagWeight,
 };
 
 /// Schema migrations embedded at compile time from `db/migrations/`.
@@ -855,8 +855,13 @@ pub async fn list_books(
                  WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
                                                             AS series_name,
 
-               (SELECT json_group_array(json_object('name', name, 'sort', sort))
-                  FROM (SELECT a.name AS name, a.sort AS sort
+               (SELECT s.id FROM books_series_link bsl
+                  JOIN series s ON s.id = bsl.series
+                 WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
+                                                            AS series_link_id,
+
+               (SELECT json_group_array(json_object('id', a_id, 'name', name, 'sort', sort))
+                  FROM (SELECT a.id AS a_id, a.name AS name, a.sort AS sort
                           FROM books_authors_link bal
                           JOIN authors a ON a.id = bal.author
                          WHERE bal.book = b.id
@@ -905,6 +910,7 @@ pub async fn list_books(
                 name: c.name,
                 role: None,
                 file_as: c.sort.filter(|s| !s.is_empty()),
+                id: c.id,
             })
             .collect();
         let subjects: Vec<String> = parse_json_array(r.get("subjects_json"))?;
@@ -938,6 +944,7 @@ pub async fn list_books(
             identifiers,
             series: r.get("series_name"),
             series_index: series_index.map(format_series_index),
+            series_id: r.get("series_link_id"),
             epub_version: None,
             unique_identifier: Some(r.get::<String, _>("uuid")),
             resource_count: 0,
@@ -1000,8 +1007,13 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
              WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
                                                            AS series_name,
 
-            (SELECT json_group_array(json_object('name', name, 'sort', sort))
-               FROM (SELECT a.name AS name, a.sort AS sort
+            (SELECT s.id FROM books_series_link bsl
+              JOIN series s ON s.id = bsl.series
+             WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
+                                                           AS series_link_id,
+
+            (SELECT json_group_array(json_object('id', a_id, 'name', name, 'sort', sort))
+               FROM (SELECT a.id AS a_id, a.name AS name, a.sort AS sort
                        FROM books_authors_link bal
                        JOIN authors a ON a.id = bal.author
                       WHERE bal.book = b.id
@@ -1054,6 +1066,7 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
             name: c.name,
             role: None,
             file_as: c.sort.filter(|s| !s.is_empty()),
+            id: c.id,
         })
         .collect();
 
@@ -1091,6 +1104,7 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
         identifiers,
         series: r.get("series_name"),
         series_index: series_index.map(format_series_index),
+        series_id: r.get("series_link_id"),
         epub_version: None,
         unique_identifier: Some(uuid),
         resource_count: 0,
@@ -1106,6 +1120,8 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
 
 #[derive(serde::Deserialize)]
 struct CreatorRow {
+    #[serde(default)]
+    id: Option<i64>,
     name: String,
     #[serde(default)]
     sort: Option<String>,
@@ -1201,8 +1217,13 @@ pub async fn search_books(
                  WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
                                                             AS series_name,
 
-               (SELECT json_group_array(json_object('name', name, 'sort', sort))
-                  FROM (SELECT a.name AS name, a.sort AS sort
+               (SELECT s.id FROM books_series_link bsl
+                  JOIN series s ON s.id = bsl.series
+                 WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
+                                                            AS series_link_id,
+
+               (SELECT json_group_array(json_object('id', a_id, 'name', name, 'sort', sort))
+                  FROM (SELECT a.id AS a_id, a.name AS name, a.sort AS sort
                           FROM books_authors_link bal
                           JOIN authors a ON a.id = bal.author
                          WHERE bal.book = b.id
@@ -1253,6 +1274,7 @@ pub async fn search_books(
                 name: c.name,
                 role: None,
                 file_as: c.sort.filter(|s| !s.is_empty()),
+                id: c.id,
             })
             .collect();
         let subjects: Vec<String> = parse_json_array(r.get("subjects_json"))?;
@@ -1286,6 +1308,7 @@ pub async fn search_books(
             identifiers,
             series: r.get("series_name"),
             series_index: series_index.map(format_series_index),
+            series_id: r.get("series_link_id"),
             epub_version: None,
             unique_identifier: Some(r.get::<String, _>("uuid")),
             resource_count: 0,
@@ -1505,6 +1528,251 @@ pub async fn search_palette(
     })
 }
 
+// -----------------------------------------------------------------------------
+// Discovery pages (F1.8)
+// -----------------------------------------------------------------------------
+
+/// The shared book-column SELECT for discovery queries. Same scalar-subquery
+/// pattern as `list_books` / `search_books` — one row per `books.id` with
+/// all m2m relations inlined as JSON aggregates.
+const BOOK_COLUMNS: &str = r#"
+    b.id, b.uuid,
+    b.title, b.description, b.series_index, b.has_cover,
+    b.pubdate, b.last_modified, b.timestamp, b.isbn, b.accent_color,
+
+    (SELECT bf.filename FROM book_files bf
+      WHERE bf.book_id = b.id
+      ORDER BY (bf.format != 'EPUB'), bf.format
+      LIMIT 1)                                   AS primary_filename,
+
+    (SELECT bf.format FROM book_files bf
+      WHERE bf.book_id = b.id
+      ORDER BY (bf.format != 'EPUB'), bf.format
+      LIMIT 1)                                   AS primary_format,
+
+    (SELECT pub.name FROM books_publishers_link bpl
+       JOIN publishers pub ON pub.id = bpl.publisher
+      WHERE bpl.book = b.id ORDER BY pub.name LIMIT 1)
+                                                  AS publisher_name,
+
+    (SELECT lang.code FROM books_languages_link bll
+       JOIN languages lang ON lang.id = bll.language
+      WHERE bll.book = b.id ORDER BY lang.code LIMIT 1)
+                                                  AS language_code,
+
+    (SELECT s.name FROM books_series_link bsl
+       JOIN series s ON s.id = bsl.series
+      WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
+                                                  AS series_name,
+
+    (SELECT s.id FROM books_series_link bsl
+       JOIN series s ON s.id = bsl.series
+      WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
+                                                  AS series_link_id,
+
+    (SELECT json_group_array(json_object('id', a_id, 'name', name, 'sort', sort))
+       FROM (SELECT a.id AS a_id, a.name AS name, a.sort AS sort
+               FROM books_authors_link bal
+               JOIN authors a ON a.id = bal.author
+              WHERE bal.book = b.id
+              ORDER BY bal.position))             AS creators_json,
+
+    (SELECT json_group_array(name)
+       FROM (SELECT t.name AS name FROM books_tags_link btl
+               JOIN tags t ON t.id = btl.tag
+              WHERE btl.book = b.id
+              ORDER BY t.name))                   AS subjects_json,
+
+    (SELECT json_group_array(json_object('scheme', scheme, 'value', value))
+       FROM (SELECT scheme, value FROM book_identifiers
+              WHERE book_id = b.id
+              ORDER BY scheme, value))            AS identifiers_json,
+
+    (SELECT json_group_array(format)
+       FROM (SELECT format FROM book_files
+              WHERE book_id = b.id
+              ORDER BY format))                   AS formats_json
+"#;
+
+/// Convert a SQLite row (selected with [`BOOK_COLUMNS`]) into an
+/// [`EbookMetadata`]. Shared across the discovery query functions.
+fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata, sqlx::Error> {
+    let id: i64 = r.get("id");
+    let has_cover: i64 = r.get("has_cover");
+    let primary_filename: Option<String> = r.get("primary_filename");
+    let primary_format: Option<String> = r.get("primary_format");
+    let filename = match (primary_filename, primary_format) {
+        (Some(stem), Some(fmt)) => format!("{stem}.{}", fmt.to_ascii_lowercase()),
+        _ => String::new(),
+    };
+    let series_index: Option<f64> = r.get("series_index");
+
+    let creators: Vec<Contributor> = parse_json_array::<CreatorRow>(r.get("creators_json"))?
+        .into_iter()
+        .map(|c| Contributor {
+            name: c.name,
+            role: None,
+            file_as: c.sort.filter(|s| !s.is_empty()),
+            id: c.id,
+        })
+        .collect();
+    let subjects: Vec<String> = parse_json_array(r.get("subjects_json"))?;
+    let identifiers: Vec<Identifier> =
+        parse_json_array::<IdentifierRow>(r.get("identifiers_json"))?
+            .into_iter()
+            .map(|i| Identifier {
+                value: i.value,
+                scheme: Some(i.scheme),
+            })
+            .collect();
+
+    Ok(EbookMetadata {
+        id,
+        filename,
+        title: r.get("title"),
+        description: sanitize_description(r.get("description")),
+        publisher: r.get("publisher_name"),
+        published: r.get("pubdate"),
+        modified: r.get("last_modified"),
+        language: r.get("language_code"),
+        rights: None,
+        source: None,
+        coverage: None,
+        dc_type: None,
+        dc_format: None,
+        relation: None,
+        creators,
+        contributors: vec![],
+        subjects,
+        identifiers,
+        series: r.get("series_name"),
+        series_index: series_index.map(format_series_index),
+        series_id: r.get("series_link_id"),
+        epub_version: None,
+        unique_identifier: Some(r.get::<String, _>("uuid")),
+        resource_count: 0,
+        spine_count: 0,
+        toc_count: 0,
+        cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
+        accent: r.get("accent_color"),
+        formats: parse_json_array(r.get("formats_json"))?,
+        added_at: r.get("timestamp"),
+        error: None,
+    })
+}
+
+/// Fetch an author by ID with all their books across every library.
+/// Returns `None` if the author ID doesn't exist.
+///
+/// TODO(F4.x): scope by `user_id` once per-user ACLs land — today this
+/// query is single-tenant and any authenticated caller can enumerate
+/// authors by ID.
+pub async fn get_author(
+    pool: &SqlitePool,
+    author_id: i64,
+) -> Result<Option<AuthorDetail>, sqlx::Error> {
+    let author_row = sqlx::query("SELECT id, name, sort FROM authors WHERE id = ?")
+        .bind(author_id)
+        .fetch_optional(pool)
+        .await?;
+    let Some(a) = author_row else {
+        return Ok(None);
+    };
+
+    let sql = format!(
+        r#"SELECT {BOOK_COLUMNS}
+           FROM books b
+           JOIN books_authors_link bal ON bal.book = b.id
+           WHERE bal.author = ?
+           ORDER BY b.series_index NULLS LAST, b.sort, b.id"#
+    );
+    let rows = sqlx::query(&sql).bind(author_id).fetch_all(pool).await?;
+
+    let mut books = Vec::with_capacity(rows.len());
+    for r in &rows {
+        books.push(row_to_ebook(r)?);
+    }
+
+    Ok(Some(AuthorDetail {
+        id: a.get("id"),
+        name: a.get("name"),
+        sort: a.get("sort"),
+        book_count: books.len(),
+        books,
+    }))
+}
+
+/// Fetch a series by ID with all its books, ordered by series index.
+/// Returns `None` if the series ID doesn't exist.
+///
+/// TODO(F4.x): scope by `user_id` once per-user ACLs land — see
+/// [`get_author`] for the same caveat.
+pub async fn get_series(
+    pool: &SqlitePool,
+    series_id: i64,
+) -> Result<Option<SeriesDetail>, sqlx::Error> {
+    let series_row = sqlx::query("SELECT id, name, sort FROM series WHERE id = ?")
+        .bind(series_id)
+        .fetch_optional(pool)
+        .await?;
+    let Some(s) = series_row else {
+        return Ok(None);
+    };
+
+    let sql = format!(
+        r#"SELECT {BOOK_COLUMNS}
+           FROM books b
+           JOIN books_series_link bsl ON bsl.book = b.id
+           WHERE bsl.series = ?
+           ORDER BY b.series_index, b.sort, b.id"#
+    );
+    let rows = sqlx::query(&sql).bind(series_id).fetch_all(pool).await?;
+
+    let mut books = Vec::with_capacity(rows.len());
+    for r in &rows {
+        books.push(row_to_ebook(r)?);
+    }
+
+    Ok(Some(SeriesDetail {
+        id: s.get("id"),
+        name: s.get("name"),
+        sort: s.get("sort"),
+        book_count: books.len(),
+        books,
+    }))
+}
+
+/// Maximum number of tags returned from [`get_tag_cloud`]. Caps the
+/// payload so a Calibre dump with 10k+ unique subjects can't blow up
+/// the client or stall the SQLite pool on serialization.
+const TAG_CLOUD_LIMIT: i64 = 500;
+
+/// Return up to [`TAG_CLOUD_LIMIT`] tags with their book counts, ordered
+/// by count descending then name ascending. Used by the tag cloud page.
+///
+/// TODO(F4.x): scope by `user_id` once per-user ACLs land — currently
+/// returns the global tag distribution.
+pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"SELECT t.name, COUNT(btl.book) AS cnt
+           FROM tags t
+           JOIN books_tags_link btl ON btl.tag = t.id
+           GROUP BY t.id
+           ORDER BY cnt DESC, t.name ASC
+           LIMIT ?"#,
+    )
+    .bind(TAG_CLOUD_LIMIT)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|r| TagWeight {
+            name: r.get("name"),
+            count: r.get::<i64, _>("cnt") as usize,
+        })
+        .collect())
+}
 /// Build an `EbookLibrary` from whatever is currently in the DB for
 /// `library_path`. Returns an empty library (no error, no books) if the path
 /// is `None`.
@@ -3482,5 +3750,197 @@ mod tests {
         let results = search_palette(&pool, "/lib", "author").await.unwrap();
         // duration_ms should be populated (at least 0 — we just check it's set)
         assert!(results.duration_ms < 10000, "duration should be reasonable");
+    }
+
+    // -------------------------------------------------------------------------
+    // Discovery query tests (F1.8)
+    // -------------------------------------------------------------------------
+
+    /// Seed a small multi-author, multi-series, multi-tag fixture for the
+    /// discovery query tests below. Returns the pool and a `CoversTempDir`
+    /// guard the caller must keep alive for the lifetime of the test.
+    async fn seed_discovery_fixture() -> (SqlitePool, CoversTempDir) {
+        let guard = CoversTempDir::new("discovery");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                // Two-author book in Saga #1 with tag "fiction"
+                indexed(
+                    "saga1.epub",
+                    Some("Saga: Book One"),
+                    &["Ada Lovelace", "Grace Hopper"],
+                    &["fiction", "classic"],
+                    Some(("Saga", "1")),
+                    None,
+                ),
+                // Sequel in Saga #2, same primary author + new tag
+                indexed(
+                    "saga2.epub",
+                    Some("Saga: Book Two"),
+                    &["Ada Lovelace"],
+                    &["fiction"],
+                    Some(("Saga", "2")),
+                    None,
+                ),
+                // Standalone by Ada — no series
+                indexed(
+                    "standalone.epub",
+                    Some("Standalone"),
+                    &["Ada Lovelace"],
+                    &["essay"],
+                    None,
+                    None,
+                ),
+                // Different-author, different-series book
+                indexed(
+                    "other.epub",
+                    Some("Other Story"),
+                    &["Niklaus Wirth"],
+                    &["nonfiction"],
+                    Some(("Pioneers", "1")),
+                    None,
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+        (pool, guard)
+    }
+
+    async fn author_id_by_name(pool: &SqlitePool, name: &str) -> i64 {
+        sqlx::query_scalar::<_, i64>("SELECT id FROM authors WHERE name = ?")
+            .bind(name)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn series_id_by_name(pool: &SqlitePool, name: &str) -> i64 {
+        sqlx::query_scalar::<_, i64>("SELECT id FROM series WHERE name = ?")
+            .bind(name)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn get_author_returns_author_with_all_books_ordered_by_series_index() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+        let author = get_author(&pool, id).await.unwrap().expect("author exists");
+
+        assert_eq!(author.name, "Ada Lovelace");
+        assert_eq!(author.book_count, 3);
+        assert_eq!(author.books.len(), 3);
+
+        // Series books come first, ordered by series_index ASC (NULLS LAST
+        // means the standalone trails).
+        let titles: Vec<_> = author
+            .books
+            .iter()
+            .filter_map(|b| b.title.clone())
+            .collect();
+        assert_eq!(
+            titles,
+            vec![
+                "Saga: Book One".to_string(),
+                "Saga: Book Two".to_string(),
+                "Standalone".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn get_author_populates_series_id_on_books() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let id = author_id_by_name(&pool, "Ada Lovelace").await;
+        let expected_sid = series_id_by_name(&pool, "Saga").await;
+
+        let author = get_author(&pool, id).await.unwrap().unwrap();
+        for book in author.books.iter().filter(|b| b.series.is_some()) {
+            assert_eq!(
+                book.series_id,
+                Some(expected_sid),
+                "series book should carry series_id"
+            );
+        }
+        let standalone = author
+            .books
+            .iter()
+            .find(|b| b.series.is_none())
+            .expect("standalone present");
+        assert_eq!(standalone.series_id, None);
+    }
+
+    #[tokio::test]
+    async fn get_author_returns_none_for_missing_id() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let missing = get_author(&pool, 999_999).await.unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_series_returns_books_ordered_by_series_index() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let id = series_id_by_name(&pool, "Saga").await;
+
+        let series = get_series(&pool, id).await.unwrap().expect("series exists");
+        assert_eq!(series.name, "Saga");
+        assert_eq!(series.book_count, 2);
+
+        let titles: Vec<_> = series
+            .books
+            .iter()
+            .filter_map(|b| b.title.clone())
+            .collect();
+        assert_eq!(
+            titles,
+            vec!["Saga: Book One".to_string(), "Saga: Book Two".to_string()]
+        );
+        // Each book should carry the parent series id back out so the
+        // frontend can navigate cross-references without an extra lookup.
+        for book in &series.books {
+            assert_eq!(book.series_id, Some(id));
+        }
+    }
+
+    #[tokio::test]
+    async fn get_series_returns_none_for_missing_id() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let missing = get_series(&pool, 999_999).await.unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_tag_cloud_returns_counts_ordered_by_count_then_name() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let tags = get_tag_cloud(&pool).await.unwrap();
+
+        // Fixture has: fiction × 2, classic × 1, essay × 1, nonfiction × 1.
+        // Order: cnt DESC, then name ASC.
+        let names: Vec<_> = tags.iter().map(|t| t.name.clone()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "fiction".to_string(),
+                "classic".to_string(),
+                "essay".to_string(),
+                "nonfiction".to_string(),
+            ]
+        );
+        assert_eq!(tags[0].count, 2);
+        assert!(tags[1..].iter().all(|t| t.count == 1));
+    }
+
+    #[tokio::test]
+    async fn get_tag_cloud_returns_empty_vec_when_no_tags() {
+        let _guard = CoversTempDir::new("empty_tags");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        // No books, no tags.
+        let tags = get_tag_cloud(&pool).await.unwrap();
+        assert!(tags.is_empty());
     }
 }
