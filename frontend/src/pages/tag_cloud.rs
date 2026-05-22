@@ -68,12 +68,8 @@ pub fn TagCloudPage() -> Element {
                         { render_tag_item(tag, max_count) }
                     }
                 }
-                // Overlap sidebar — placeholder for future tag analysis
-                aside { class: "card", aria_hidden: "true",
-                    // TODO(F1.13): Tag overlap matrix — show related tags when
-                    // one is selected. Stubbed out until the backend supports
-                    // co-occurrence queries.
-                }
+                // TODO(F1.13): Tag overlap matrix — related-tag panel.
+                aside { class: "card", aria_hidden: "true" }
             }
         }
     }

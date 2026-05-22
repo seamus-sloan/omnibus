@@ -376,7 +376,13 @@ fn FilterSidebar(
                 "authors" => &mut next.authors,
                 "series" => &mut next.series,
                 "tags" => &mut next.tags,
-                _ => &mut next.authors,
+                other => {
+                    debug_assert!(
+                        false,
+                        "FilterSidebar::toggle: unknown facet group {other:?}"
+                    );
+                    return;
+                }
             };
             if let Some(pos) = bucket.iter().position(|v| v == &value) {
                 bucket.remove(pos);

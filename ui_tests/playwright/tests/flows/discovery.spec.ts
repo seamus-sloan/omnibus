@@ -17,7 +17,8 @@ async function fetchAuthorIdByName(
   request: APIRequestContext,
   name: string,
 ): Promise<number> {
-  // POST to /api/rpc/ebooks (same as the landing page) and scan creators.
+  // GET /api/rpc/ebooks (same payload the landing page uses) and scan
+  // each book's creators for the named author.
   const resp = await request.get("/api/rpc/ebooks");
   expect(resp.status(), "GET /api/rpc/ebooks failed").toBe(200);
   const body = (await resp.json()) as {
@@ -34,39 +35,19 @@ async function fetchSeriesIdByName(
   request: APIRequestContext,
   name: string,
 ): Promise<number> {
-  // The ebooks list doesn't carry series IDs directly. Instead query the
-  // dedicated tag cloud endpoint which doesn't help either. Use the books
-  // list to find a book in the series, then query the /api/rpc/search for
-  // the series name and use that result's series field to locate the id
-  // via a direct SQL approach — or simpler: just POST to the rpc/series
-  // endpoint after finding via the DB. But we don't have an index endpoint
-  // yet. Instead, use the REST API /api/series/:id by probing.
-  //
-  // Simplest approach: POST to /api/rpc/ebooks to get a book in the series,
-  // then use the books_series_link table. Since we can't do raw SQL from
-  // Playwright, we'll search for the series name in the ebooks response and
-  // then iterate candidate IDs via the REST endpoint.
-  const ebooksResp = await request.get("/api/rpc/ebooks");
-  expect(ebooksResp.status()).toBe(200);
-  const ebooksBody = (await ebooksResp.json()) as {
-    books: { series: string | null; id: number }[];
+  // `EbookMetadata` carries `series_id` directly, so we can resolve the
+  // series ID from any book in the series via the same `/api/rpc/ebooks`
+  // payload the landing page consumes.
+  const resp = await request.get("/api/rpc/ebooks");
+  expect(resp.status(), "GET /api/rpc/ebooks failed").toBe(200);
+  const body = (await resp.json()) as {
+    books: { series: string | null; series_id: number | null }[];
   };
-  const bookInSeries = ebooksBody.books.find((b) => b.series === name);
-  if (!bookInSeries) {
-    throw new Error(`no book in series ${JSON.stringify(name)}`);
+  const match = body.books.find((b) => b.series === name && b.series_id != null);
+  if (!match?.series_id) {
+    throw new Error(`no indexed series named ${JSON.stringify(name)}`);
   }
-
-  // Try IDs 1..100 via the REST endpoint until we find the matching series.
-  for (let id = 1; id <= 100; id++) {
-    const resp = await request.post("/api/rpc/series", {
-      data: { id },
-    });
-    if (resp.status() === 200) {
-      const body = (await resp.json()) as { name: string; id: number } | null;
-      if (body && body.name === name) return body.id;
-    }
-  }
-  throw new Error(`could not resolve series id for ${JSON.stringify(name)}`);
+  return match.series_id;
 }
 
 // ---------------------------------------------------------------------------
