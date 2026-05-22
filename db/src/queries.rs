@@ -1458,6 +1458,10 @@ fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata, sqlx::Erro
 
 /// Fetch an author by ID with all their books across every library.
 /// Returns `None` if the author ID doesn't exist.
+///
+/// TODO(F4.x): scope by `user_id` once per-user ACLs land — today this
+/// query is single-tenant and any authenticated caller can enumerate
+/// authors by ID.
 pub async fn get_author(
     pool: &SqlitePool,
     author_id: i64,
@@ -1495,6 +1499,9 @@ pub async fn get_author(
 
 /// Fetch a series by ID with all its books, ordered by series index.
 /// Returns `None` if the series ID doesn't exist.
+///
+/// TODO(F4.x): scope by `user_id` once per-user ACLs land — see
+/// [`get_author`] for the same caveat.
 pub async fn get_series(
     pool: &SqlitePool,
     series_id: i64,
@@ -1530,16 +1537,26 @@ pub async fn get_series(
     }))
 }
 
-/// Return all tags with their book counts, ordered by count descending
-/// then name ascending. Used by the tag cloud page.
+/// Maximum number of tags returned from [`get_tag_cloud`]. Caps the
+/// payload so a Calibre dump with 10k+ unique subjects can't blow up
+/// the client or stall the SQLite pool on serialization.
+const TAG_CLOUD_LIMIT: i64 = 500;
+
+/// Return up to [`TAG_CLOUD_LIMIT`] tags with their book counts, ordered
+/// by count descending then name ascending. Used by the tag cloud page.
+///
+/// TODO(F4.x): scope by `user_id` once per-user ACLs land — currently
+/// returns the global tag distribution.
 pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, sqlx::Error> {
     let rows = sqlx::query(
         r#"SELECT t.name, COUNT(btl.book) AS cnt
            FROM tags t
            JOIN books_tags_link btl ON btl.tag = t.id
            GROUP BY t.id
-           ORDER BY cnt DESC, t.name ASC"#,
+           ORDER BY cnt DESC, t.name ASC
+           LIMIT ?"#,
     )
+    .bind(TAG_CLOUD_LIMIT)
     .fetch_all(pool)
     .await?;
 
@@ -3316,5 +3333,197 @@ mod tests {
         assert!(desc.contains("<p>Brief.</p>"));
         assert!(desc.contains("<b>detail</b>"));
         assert!(!desc.contains("<script"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Discovery query tests (F1.8)
+    // -------------------------------------------------------------------------
+
+    /// Seed a small multi-author, multi-series, multi-tag fixture for the
+    /// discovery query tests below. Returns the pool and a `CoversTempDir`
+    /// guard the caller must keep alive for the lifetime of the test.
+    async fn seed_discovery_fixture() -> (SqlitePool, CoversTempDir) {
+        let guard = CoversTempDir::new("discovery");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                // Two-author book in Saga #1 with tag "fiction"
+                indexed(
+                    "saga1.epub",
+                    Some("Saga: Book One"),
+                    &["Ada Lovelace", "Grace Hopper"],
+                    &["fiction", "classic"],
+                    Some(("Saga", "1")),
+                    None,
+                ),
+                // Sequel in Saga #2, same primary author + new tag
+                indexed(
+                    "saga2.epub",
+                    Some("Saga: Book Two"),
+                    &["Ada Lovelace"],
+                    &["fiction"],
+                    Some(("Saga", "2")),
+                    None,
+                ),
+                // Standalone by Ada — no series
+                indexed(
+                    "standalone.epub",
+                    Some("Standalone"),
+                    &["Ada Lovelace"],
+                    &["essay"],
+                    None,
+                    None,
+                ),
+                // Different-author, different-series book
+                indexed(
+                    "other.epub",
+                    Some("Other Story"),
+                    &["Niklaus Wirth"],
+                    &["nonfiction"],
+                    Some(("Pioneers", "1")),
+                    None,
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+        (pool, guard)
+    }
+
+    async fn author_id_by_name(pool: &SqlitePool, name: &str) -> i64 {
+        sqlx::query_scalar::<_, i64>("SELECT id FROM authors WHERE name = ?")
+            .bind(name)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn series_id_by_name(pool: &SqlitePool, name: &str) -> i64 {
+        sqlx::query_scalar::<_, i64>("SELECT id FROM series WHERE name = ?")
+            .bind(name)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn get_author_returns_author_with_all_books_ordered_by_series_index() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+        let author = get_author(&pool, id).await.unwrap().expect("author exists");
+
+        assert_eq!(author.name, "Ada Lovelace");
+        assert_eq!(author.book_count, 3);
+        assert_eq!(author.books.len(), 3);
+
+        // Series books come first, ordered by series_index ASC (NULLS LAST
+        // means the standalone trails).
+        let titles: Vec<_> = author
+            .books
+            .iter()
+            .filter_map(|b| b.title.clone())
+            .collect();
+        assert_eq!(
+            titles,
+            vec![
+                "Saga: Book One".to_string(),
+                "Saga: Book Two".to_string(),
+                "Standalone".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn get_author_populates_series_id_on_books() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let id = author_id_by_name(&pool, "Ada Lovelace").await;
+        let expected_sid = series_id_by_name(&pool, "Saga").await;
+
+        let author = get_author(&pool, id).await.unwrap().unwrap();
+        for book in author.books.iter().filter(|b| b.series.is_some()) {
+            assert_eq!(
+                book.series_id,
+                Some(expected_sid),
+                "series book should carry series_id"
+            );
+        }
+        let standalone = author
+            .books
+            .iter()
+            .find(|b| b.series.is_none())
+            .expect("standalone present");
+        assert_eq!(standalone.series_id, None);
+    }
+
+    #[tokio::test]
+    async fn get_author_returns_none_for_missing_id() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let missing = get_author(&pool, 999_999).await.unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_series_returns_books_ordered_by_series_index() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let id = series_id_by_name(&pool, "Saga").await;
+
+        let series = get_series(&pool, id).await.unwrap().expect("series exists");
+        assert_eq!(series.name, "Saga");
+        assert_eq!(series.book_count, 2);
+
+        let titles: Vec<_> = series
+            .books
+            .iter()
+            .filter_map(|b| b.title.clone())
+            .collect();
+        assert_eq!(
+            titles,
+            vec!["Saga: Book One".to_string(), "Saga: Book Two".to_string()]
+        );
+        // Each book should carry the parent series id back out so the
+        // frontend can navigate cross-references without an extra lookup.
+        for book in &series.books {
+            assert_eq!(book.series_id, Some(id));
+        }
+    }
+
+    #[tokio::test]
+    async fn get_series_returns_none_for_missing_id() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let missing = get_series(&pool, 999_999).await.unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_tag_cloud_returns_counts_ordered_by_count_then_name() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let tags = get_tag_cloud(&pool).await.unwrap();
+
+        // Fixture has: fiction × 2, classic × 1, essay × 1, nonfiction × 1.
+        // Order: cnt DESC, then name ASC.
+        let names: Vec<_> = tags.iter().map(|t| t.name.clone()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "fiction".to_string(),
+                "classic".to_string(),
+                "essay".to_string(),
+                "nonfiction".to_string(),
+            ]
+        );
+        assert_eq!(tags[0].count, 2);
+        assert!(tags[1..].iter().all(|t| t.count == 1));
+    }
+
+    #[tokio::test]
+    async fn get_tag_cloud_returns_empty_vec_when_no_tags() {
+        let _guard = CoversTempDir::new("empty_tags");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        // No books, no tags.
+        let tags = get_tag_cloud(&pool).await.unwrap();
+        assert!(tags.is_empty());
     }
 }

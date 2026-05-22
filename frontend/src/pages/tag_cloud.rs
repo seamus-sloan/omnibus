@@ -100,12 +100,20 @@ fn render_tag_item(tag: &TagWeight, max_count: usize) -> Element {
 
     let name = tag.name.clone();
     let count = tag.count;
+    // Font-size + opacity are the visual weight signal. Screen readers
+    // get the same weight info via an explicit aria-label since neither
+    // styling property is exposed to assistive tech.
+    let aria = format!(
+        "{name} — {count} {}",
+        if count == 1 { "book" } else { "books" }
+    );
 
     rsx! {
         Link {
             to: Route::Landing {},
             class: "{class}",
             style: "{style}",
+            aria_label: "{aria}",
             "{name}"
             span { class: "tag-cloud-count mono", "{count}" }
         }
