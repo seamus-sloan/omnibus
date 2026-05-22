@@ -23,7 +23,7 @@ async function openPaletteAndType(
   await input.fill(query);
 }
 
-test("search input narrows the library to matching rows", async ({ page }) => {
+test("search input shows matching book results in palette", async ({ page }) => {
   await gotoReady(page, "/");
 
   await openPaletteAndType(page, "dracula");

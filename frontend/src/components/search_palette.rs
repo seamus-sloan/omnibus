@@ -121,15 +121,15 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                     nav.push(Route::BookDetail { id: *id });
                 }
                 FlatItem::Author { name, .. } => {
-                    search_query.0.set(format!("author:{name}"));
+                    search_query.0.set(facet_query("author", name));
                     nav.push(Route::Landing {});
                 }
                 FlatItem::Series { name, .. } => {
-                    search_query.0.set(format!("series:{name}"));
+                    search_query.0.set(facet_query("series", name));
                     nav.push(Route::Landing {});
                 }
                 FlatItem::Tag { name, .. } => {
-                    search_query.0.set(format!("tag:{name}"));
+                    search_query.0.set(facet_query("tag", name));
                     nav.push(Route::Landing {});
                 }
             }
@@ -629,6 +629,19 @@ fn plural(n: usize) -> &'static str {
     } else {
         "s"
     }
+}
+
+/// Build a facet query string where every whitespace-separated word in
+/// `value` is prefixed with `prefix:`. This ensures `build_fts_match`
+/// routes each token to the correct FTS5 column filter instead of
+/// treating trailing words as free-text (e.g. `tag:Dark tag:academia`
+/// rather than `tag:Dark academia`).
+fn facet_query(prefix: &str, value: &str) -> String {
+    value
+        .split_whitespace()
+        .map(|w| format!("{prefix}:{w}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 // ── Async sleep (platform-gated) ─────────────────────────────────

@@ -1358,19 +1358,19 @@ pub async fn search_palette(
             .map(|r| {
                 let id: i64 = r.get("id");
                 let has_cover: i64 = r.get("has_cover");
-                PaletteBookHit {
+                Ok(PaletteBookHit {
                     id,
                     title: r.get::<Option<String>, _>("title").unwrap_or_default(),
                     author_display: r
                         .get::<Option<String>, _>("author_display")
                         .unwrap_or_default(),
                     year: r.get("year"),
-                    formats: parse_json_array(r.get("formats_json")).unwrap_or_default(),
+                    formats: parse_json_array(r.get("formats_json"))?,
                     cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
                     accent: r.get("accent_color"),
-                }
+                })
             })
-            .collect()
+            .collect::<Result<Vec<_>, sqlx::Error>>()?
     } else {
         Vec::new()
     };
