@@ -318,7 +318,9 @@ log line stable so a future Loki/Tempo query can parse it.
 
 ## Status
 
-Queued.
+In progress — the **search palette** (command-palette / Spotlight pattern) shipped as the first deliverable, replacing the inline nav search input with a floating ⌘K-triggered overlay showing grouped FTS5 results (books, authors, series, tags). This is a lighter, faster surface than the facet-picker modal originally described above. The facet modal's slice-and-dice use case (multi-select facet pickers, structured `AdvancedSearchQuery`, saved filters) moves to [F3.1](3-1-libraries.md).
+
+The palette lives in `frontend/src/components/search_palette.rs` with backing query `db::search_palette` and both RPC (`/api/rpc/search-palette`) and REST (`/api/search/palette`) endpoints. Entity results (author/series/tag) currently navigate to the landing page with a filter; [F1.10](1-10-palette-discovery-link.md) will link them to F1.8 discovery pages once those ship.
 
 ---
 
