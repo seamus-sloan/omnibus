@@ -2112,19 +2112,73 @@ pub async fn get_series(
     let Some(s) = series_row else {
         return Ok(None);
     };
+    let series_name: String = s.get("name");
 
+    // F5.1: membership and ordering follow the merged (override-aware)
+    // view, not the raw `books_series_link` table. `upsert_metadata_overrides`
+    // never writes to the relational link tables, so a book added to a
+    // series purely through the edit form would otherwise be invisible
+    // here even though `apply_overrides` shows it in that series everywhere
+    // else (book detail, landing grid). The effective series for a book is:
+    //   - `overrides.series` if the JSON has that key (including the empty
+    //     string, which means "clear the series"), else
+    //   - the canonical name from `books_series_link`.
+    // Same fallback for `series_index` so the override-set position drives
+    // ordering when present.
     let sql = format!(
-        r#"SELECT {BOOK_COLUMNS}
+        r#"WITH effective AS (
+             SELECT b.id AS book_id,
+                    CASE
+                      WHEN mo.book_uuid IS NOT NULL
+                           AND json_type(mo.overrides, '$.series') IS NOT NULL
+                        THEN json_extract(mo.overrides, '$.series')
+                      ELSE (SELECT s2.name FROM books_series_link bsl
+                              JOIN series s2 ON s2.id = bsl.series
+                             WHERE bsl.book = b.id LIMIT 1)
+                    END AS series_name,
+                    CASE
+                      WHEN mo.book_uuid IS NOT NULL
+                           AND json_type(mo.overrides, '$.series_index') IS NOT NULL
+                        THEN CAST(json_extract(mo.overrides, '$.series_index') AS REAL)
+                      ELSE b.series_index
+                    END AS series_index
+               FROM books b
+               LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+           )
+           SELECT {BOOK_COLUMNS}
            FROM books b
-           JOIN books_series_link bsl ON bsl.book = b.id
-           WHERE bsl.series = ?
-           ORDER BY b.series_index, b.sort, b.id"#
+           JOIN effective e ON e.book_id = b.id
+           WHERE e.series_name = ?
+           ORDER BY e.series_index, b.sort, b.id"#
     );
-    let rows = sqlx::query(&sql).bind(series_id).fetch_all(pool).await?;
+    let rows = sqlx::query(&sql).bind(&series_name).fetch_all(pool).await?;
 
     let mut books = Vec::with_capacity(rows.len());
     for r in &rows {
         books.push(row_to_ebook(r)?);
+    }
+
+    // Merge overrides into each book so the series-card title/description
+    // /cover reflect user edits, matching what `list_books` does for the
+    // landing grid.
+    let uuids: Vec<String> = books
+        .iter()
+        .filter_map(|b| b.unique_identifier.clone())
+        .collect();
+    let overrides_map = load_overrides_bulk(pool, &uuids).await?;
+    for book in &mut books {
+        if let Some(uuid) = book.unique_identifier.as_deref() {
+            if let Some((ov, has_cover_ov)) = overrides_map.get(uuid) {
+                apply_overrides(book, ov, *has_cover_ov);
+            }
+        }
+        // Books matched purely via override have no `books_series_link`
+        // row, so the canonical subquery left `series_id` unset. Pin it
+        // to the parent series so the rendered card carries the link.
+        if book.series_id.is_none() {
+            book.series_id = Some(series_id);
+            book.series = Some(series_name.clone());
+        }
     }
 
     Ok(Some(SeriesDetail {
@@ -5162,6 +5216,103 @@ mod tests {
             merged.series_id,
             Some(saga_id),
             "override-only series must still resolve series_id so the detail rail can link"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_series_includes_books_added_via_override() {
+        // Repro of the bug where editing a book to set its series via the
+        // metadata form left the book invisible on `/series/:id`. The
+        // override path only writes JSON into `metadata_overrides` and
+        // never touches `books_series_link`, so `get_series` must layer
+        // overrides on top of the relational link at read time.
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+        let saga_id = series_id_by_name(&pool, "Saga").await;
+
+        // Loner has no canonical series at all. After the override it
+        // should show up as #3 in Saga, after the two indexed books.
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let standalone = books
+            .iter()
+            .find(|b| b.filename == "standalone.epub")
+            .unwrap();
+        let standalone_uuid = standalone.unique_identifier.clone().unwrap();
+        let standalone_id = standalone.id;
+
+        let ov = MetadataOverrides {
+            series: Some("Saga".into()),
+            series_index: Some("3".into()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &standalone_uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let series = get_series(&pool, saga_id)
+            .await
+            .unwrap()
+            .expect("series exists");
+        assert_eq!(series.book_count, 3);
+
+        let titles: Vec<_> = series
+            .books
+            .iter()
+            .map(|b| b.title.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            titles,
+            vec![
+                "Saga: Book One".to_string(),
+                "Saga: Book Two".to_string(),
+                "Standalone".to_string(),
+            ],
+            "override-set series_index=3 should sort the overridden book last",
+        );
+
+        // The overridden book must carry the parent series id so the card
+        // links back to /series/:id.
+        let overridden = series.books.iter().find(|b| b.id == standalone_id).unwrap();
+        assert_eq!(overridden.series_id, Some(saga_id));
+        assert_eq!(overridden.series.as_deref(), Some("Saga"));
+    }
+
+    #[tokio::test]
+    async fn get_series_excludes_books_whose_override_clears_series() {
+        // A book canonically in Saga whose override clears the series (sets
+        // series to an empty string) should disappear from /series/:id,
+        // matching what the book detail page already shows.
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+        let saga_id = series_id_by_name(&pool, "Saga").await;
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let book_two = books.iter().find(|b| b.filename == "saga2.epub").unwrap();
+        let uuid = book_two.unique_identifier.clone().unwrap();
+
+        let ov = MetadataOverrides {
+            series: Some(String::new()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let series = get_series(&pool, saga_id)
+            .await
+            .unwrap()
+            .expect("series exists");
+        assert_eq!(series.book_count, 1);
+        assert_eq!(
+            series.books[0].title.as_deref(),
+            Some("Saga: Book One"),
+            "the unaffected book stays; the cleared one drops out",
         );
     }
 
