@@ -86,7 +86,6 @@ fn main() {
                 .layer(axum::middleware::from_fn(auth::origin_check))
                 .layer(Extension(pool))
                 .layer(Extension(worker))
-                .layer(tower_http::trace::TraceLayer::new_for_http())
                 // Global request-handling guards. A slow client or oversized
                 // body can otherwise hold a tokio worker indefinitely.
                 //
@@ -103,7 +102,11 @@ fn main() {
                     axum::http::StatusCode::REQUEST_TIMEOUT,
                     std::time::Duration::from_secs(30),
                 ))
-                .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024));
+                .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024))
+                // TraceLayer last so it is the outermost layer and observes
+                // every response — including 408/413 short-circuits from the
+                // timeout and body-limit guards above.
+                .layer(tower_http::trace::TraceLayer::new_for_http());
 
             Ok(router)
         });
