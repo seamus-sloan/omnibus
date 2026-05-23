@@ -51,11 +51,14 @@ pub fn SeriesIndexPage() -> Element {
         };
     }
 
-    let all = series();
+    // Borrow the signal's contents instead of cloning — see authors_index
+    // for the same shape and rationale (up to `INDEX_LIMIT` rows, copied
+    // on every keystroke would be wasted work).
+    let all = series.read();
     let total_series = all.len();
     let total_books: usize = all.iter().map(|s| s.book_count).sum();
 
-    let q = filter().to_lowercase();
+    let q = filter.read().to_lowercase();
     let mut filtered: Vec<&SeriesSummary> = if q.is_empty() {
         all.iter().collect()
     } else {

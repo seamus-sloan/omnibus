@@ -55,12 +55,17 @@ pub fn AuthorsIndexPage() -> Element {
         };
     }
 
-    let all = authors();
+    // Borrow the signal's contents instead of cloning. The list can hold
+    // up to `INDEX_LIMIT` (10k) rows; copying the whole `Vec` on every
+    // re-render (which fires on each keystroke in the filter input) would
+    // be wasted work. `Signal::read` hands back a guard that derefs to
+    // `&Vec<AuthorSummary>` and the rsx! tree only needs borrowed views.
+    let all = authors.read();
     let total_authors = all.len();
     let total_books: usize = all.iter().map(|a| a.book_count).sum();
 
     // Client-side filter + sort.
-    let q = filter().to_lowercase();
+    let q = filter.read().to_lowercase();
     let mut filtered: Vec<&AuthorSummary> = if q.is_empty() {
         all.iter().collect()
     } else {
