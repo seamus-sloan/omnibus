@@ -184,6 +184,14 @@ pub async fn rpc_get_ebooks() -> Result<EbookLibrary> {
     let settings = db::get_settings(&pool.0).await?;
     // Served straight from the DB — the indexer is responsible for keeping
     // it up to date (startup + settings save triggers).
+    //
+    // Issue #81: the underlying `list_books` query is capped at
+    // `db::MAX_BOOKS_RETURNED` rows so a multi-thousand-book install
+    // can't bandwidth-DoS itself on every poll. Dioxus server functions
+    // don't expose response headers, so this path can't currently
+    // surface a "truncated" hint to the web client — the F1.3 spec
+    // constrains the client-side sort/filter UX to ~10k books anyway,
+    // which is well under the cap. Cursor pagination is the next step.
     Ok(db::library_from_db(&pool.0, settings.ebook_library_path.as_deref()).await?)
 }
 
@@ -201,6 +209,10 @@ pub async fn rpc_get_ebook(id: i64) -> Result<Option<EbookMetadata>> {
 /// POST (not GET) so the query string can ride in the JSON body — Dioxus
 /// `#[get]` server functions reject arg bodies because HTTP spec forbids
 /// bodies on GET.
+///
+/// Issue #81: `search_books` is capped server-side at
+/// `db::MAX_BOOKS_RETURNED` hits. See `rpc_get_ebooks` for why this
+/// path can't currently expose a truncation header.
 #[post("/api/rpc/search", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_search(q: String) -> Result<EbookLibrary> {
     let settings = db::get_settings(&pool.0).await?;

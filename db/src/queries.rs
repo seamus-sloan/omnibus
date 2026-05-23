@@ -33,6 +33,23 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 const EBOOK_LIBRARY_PATH_KEY: &str = "ebook_library_path";
 const AUDIOBOOK_LIBRARY_PATH_KEY: &str = "audiobook_library_path";
 
+/// Hard server-side cap on the number of books any single list/search
+/// response returns. The F1.3 spec ([docs/roadmap/1-3-library-views.md])
+/// allows client-side sort/filter "for libraries up to ~10k books", but
+/// nothing previously enforced that — `list_books` / `search_books`
+/// streamed the entire library on every request, so a multi-thousand-book
+/// install paid the serialization cost on every poll. Issue #81.
+///
+/// 50k is well above the spec's client-side ceiling (anything beyond
+/// needs server-side pagination anyway) and small enough that JSON-
+/// encoding the response stays in a sensible memory envelope.
+///
+/// Callers that need the *full* count (for "X books truncated" UI or the
+/// `X-Total-Count` header) should reach for `library_from_db_with_total`
+/// / `count_search_books`, which return the underlying count alongside
+/// the capped vec. Cursor-based pagination is intentionally deferred.
+pub const MAX_BOOKS_RETURNED: i64 = 50_000;
+
 pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     // PRAGMAs `foreign_keys`, `busy_timeout`, and `synchronous` are
     // *per-connection* settings — they only apply to the connection that
@@ -1149,9 +1166,11 @@ pub async fn list_books(
         JOIN libraries l ON l.id = b.library_id
         WHERE l.path = ?
         ORDER BY b.sort, b.id
+        LIMIT ?
         "#,
     )
     .bind(library_path)
+    .bind(MAX_BOOKS_RETURNED)
     .fetch_all(pool)
     .await?;
 
@@ -1237,6 +1256,27 @@ pub async fn list_books(
     }
 
     Ok(out)
+}
+
+/// Total number of books currently indexed under `library_path`.
+///
+/// Companion to `list_books`: `list_books` caps the returned vec at
+/// `MAX_BOOKS_RETURNED`, so callers that need to surface a truncation
+/// hint (UI banner, `X-Total-Count` header) ask the count separately.
+/// Single scalar query — cheaper than re-running the full SELECT just
+/// to count rows. Issue #81.
+pub async fn count_books(pool: &SqlitePool, library_path: &str) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+          FROM books b
+          JOIN libraries l ON l.id = b.library_id
+         WHERE l.path = ?
+        "#,
+    )
+    .bind(library_path)
+    .fetch_one(pool)
+    .await
 }
 
 /// Fetch a single book by its stable `books.id`. Returns `None` if not found.
@@ -1550,10 +1590,12 @@ pub async fn search_books(
         JOIN libraries l ON l.id = b.library_id
         WHERE books_fts MATCH ? AND l.path = ?
         ORDER BY bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0), b.sort, b.id
+        LIMIT ?
         "#,
     )
     .bind(&match_expr)
     .bind(library_path)
+    .bind(MAX_BOOKS_RETURNED)
     .fetch_all(pool)
     .await?;
 
@@ -1639,6 +1681,32 @@ pub async fn search_books(
     }
 
     Ok(out)
+}
+
+/// Total number of FTS5 hits for `q` under `library_path` (before the
+/// `MAX_BOOKS_RETURNED` cap is applied). Empty/whitespace `q` returns 0
+/// to mirror `search_books`. Issue #81.
+pub async fn count_search_books(
+    pool: &SqlitePool,
+    library_path: &str,
+    q: &str,
+) -> Result<i64, sqlx::Error> {
+    let Some(match_expr) = build_fts_match(q) else {
+        return Ok(0);
+    };
+    sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+          FROM books_fts
+          JOIN books b ON b.id = books_fts.rowid
+          JOIN libraries l ON l.id = b.library_id
+         WHERE books_fts MATCH ? AND l.path = ?
+        "#,
+    )
+    .bind(&match_expr)
+    .bind(library_path)
+    .fetch_one(pool)
+    .await
 }
 
 // -----------------------------------------------------------------------------
@@ -2099,19 +2167,39 @@ pub async fn search_palette(
 /// Build an `EbookLibrary` from whatever is currently in the DB for
 /// `library_path`. Returns an empty library (no error, no books) if the path
 /// is `None`.
+///
+/// The returned `books` vec is capped at `MAX_BOOKS_RETURNED` (issue #81);
+/// callers that need to surface a truncation hint should use
+/// [`library_from_db_with_total`] instead.
 pub async fn library_from_db(
     pool: &SqlitePool,
     library_path: Option<&str>,
 ) -> Result<EbookLibrary, sqlx::Error> {
+    let (lib, _total) = library_from_db_with_total(pool, library_path).await?;
+    Ok(lib)
+}
+
+/// Same as `library_from_db` but also returns the *true* book count under
+/// `library_path` (before the `MAX_BOOKS_RETURNED` cap). Used by the REST
+/// handler to set `X-Total-Count` and `X-Total-Cap` response headers so
+/// the client can detect a truncated response. Issue #81.
+pub async fn library_from_db_with_total(
+    pool: &SqlitePool,
+    library_path: Option<&str>,
+) -> Result<(EbookLibrary, i64), sqlx::Error> {
     let Some(path) = library_path else {
-        return Ok(EbookLibrary::default());
+        return Ok((EbookLibrary::default(), 0));
     };
     let books = list_books(pool, path).await?;
-    Ok(EbookLibrary {
-        path: Some(path.to_string()),
-        books,
-        error: None,
-    })
+    let total = count_books(pool, path).await?;
+    Ok((
+        EbookLibrary {
+            path: Some(path.to_string()),
+            books,
+            error: None,
+        },
+        total,
+    ))
 }
 
 // -----------------------------------------------------------------------------
@@ -2818,6 +2906,99 @@ mod tests {
         assert!(lib.path.is_none());
         assert!(lib.books.is_empty());
         assert!(lib.error.is_none());
+    }
+
+    // ---------- Server-side cap (issue #81) ----------
+    //
+    // `list_books` / `search_books` previously had no `LIMIT`, so a single
+    // `/api/ebooks` poll on a multi-thousand-book library serialized the
+    // whole table. The fix is a hard `LIMIT MAX_BOOKS_RETURNED`, plus a
+    // companion count helper so callers can detect truncation.
+
+    /// Seed `count` minimal `books` rows under `/lib` using a recursive CTE.
+    /// Bypasses `replace_books` / the indexer entirely — the cap behavior
+    /// only depends on rows existing, not on full m2m relations being set
+    /// up. Keeps the test runtime down to milliseconds even for 50k+ rows.
+    async fn seed_minimal_books(pool: &SqlitePool, count: i64) {
+        sqlx::query("INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib')")
+            .execute(pool)
+            .await
+            .unwrap();
+        let lib_id: i64 = sqlx::query_scalar("SELECT id FROM libraries WHERE path = '/lib'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"
+            WITH RECURSIVE n(i) AS (
+                SELECT 1
+                UNION ALL
+                SELECT i + 1 FROM n WHERE i < ?
+            )
+            INSERT INTO books (uuid, library_id, path, title, sort)
+            SELECT 'uuid-' || i, ?, '/lib/b' || i, 'Title ' || i,
+                   'Title ' || printf('%010d', i)
+              FROM n
+            "#,
+        )
+        .bind(count)
+        .bind(lib_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_books_caps_response_at_max_books_returned() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let total = MAX_BOOKS_RETURNED + 25;
+        seed_minimal_books(&pool, total).await;
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        assert_eq!(
+            books.len() as i64,
+            MAX_BOOKS_RETURNED,
+            "list_books must cap the returned vec at MAX_BOOKS_RETURNED"
+        );
+
+        let counted = count_books(&pool, "/lib").await.unwrap();
+        assert_eq!(
+            counted, total,
+            "count_books must report the true row count (uncapped)"
+        );
+    }
+
+    #[tokio::test]
+    async fn count_books_returns_zero_for_unknown_library() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        assert_eq!(count_books(&pool, "/nope").await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn library_from_db_with_total_reports_truncation() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let total = MAX_BOOKS_RETURNED + 7;
+        seed_minimal_books(&pool, total).await;
+
+        let (lib, returned_total) = library_from_db_with_total(&pool, Some("/lib"))
+            .await
+            .unwrap();
+        assert_eq!(lib.path.as_deref(), Some("/lib"));
+        assert_eq!(lib.books.len() as i64, MAX_BOOKS_RETURNED);
+        assert_eq!(returned_total, total);
+        assert!(
+            returned_total > MAX_BOOKS_RETURNED,
+            "test must seed strictly more rows than the cap"
+        );
+    }
+
+    #[tokio::test]
+    async fn library_from_db_with_total_reports_zero_for_none_path() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let (lib, total) = library_from_db_with_total(&pool, None).await.unwrap();
+        assert!(lib.path.is_none());
+        assert!(lib.books.is_empty());
+        assert_eq!(total, 0);
     }
 
     // ---------- FTS5 (F0.4) ----------

@@ -220,10 +220,35 @@ async fn get_ebooks(_user: AuthUser, State(state): State<AppState>) -> Response 
         Ok(s) => s,
         Err(error) => return internal("read settings", error),
     };
-    match db::library_from_db(&state.pool, settings.ebook_library_path.as_deref()).await {
-        Ok(library) => Json(library).into_response(),
+    match db::library_from_db_with_total(&state.pool, settings.ebook_library_path.as_deref()).await
+    {
+        Ok((library, total)) => with_pagination_headers(Json(library).into_response(), total),
         Err(error) => internal("read books", error),
     }
+}
+
+/// Attach the issue-#81 pagination hint headers to a list/search response.
+///
+/// * `X-Total-Count` — the true row count of the underlying query, before
+///   the `MAX_BOOKS_RETURNED` server-side cap is applied.
+/// * `X-Total-Cap` — the cap itself, only set when the response was
+///   actually truncated. Clients can branch on its presence to decide
+///   whether to surface a "too large to fully load" hint.
+///
+/// The JSON body shape is intentionally unchanged so older mobile clients
+/// keep parsing the response as `EbookLibrary` without any wire-format
+/// migration.
+fn with_pagination_headers(mut resp: Response, total: i64) -> Response {
+    use axum::http::HeaderValue;
+    if let Ok(v) = HeaderValue::from_str(&total.to_string()) {
+        resp.headers_mut().insert("X-Total-Count", v);
+    }
+    if total > db::MAX_BOOKS_RETURNED {
+        if let Ok(v) = HeaderValue::from_str(&db::MAX_BOOKS_RETURNED.to_string()) {
+            resp.headers_mut().insert("X-Total-Cap", v);
+        }
+    }
+    resp
 }
 
 async fn get_ebook_by_id(
@@ -255,15 +280,24 @@ async fn get_search(
     let Some(path) = settings.ebook_library_path else {
         return Json(omnibus_shared::EbookLibrary::default()).into_response();
     };
-    match db::search_books(&state.pool, &path, &params.q).await {
-        Ok(books) => Json(omnibus_shared::EbookLibrary {
-            path: Some(path),
-            books,
-            error: None,
-        })
-        .into_response(),
-        Err(error) => internal("search books", error),
-    }
+    let books = match db::search_books(&state.pool, &path, &params.q).await {
+        Ok(b) => b,
+        Err(error) => return internal("search books", error),
+    };
+    // Issue #81: return the *full* hit count alongside the (capped) vec
+    // so clients can detect truncation via the `X-Total-Count` /
+    // `X-Total-Cap` headers without changing the JSON body shape.
+    let total = match db::count_search_books(&state.pool, &path, &params.q).await {
+        Ok(t) => t,
+        Err(error) => return internal("count search books", error),
+    };
+    let body = Json(omnibus_shared::EbookLibrary {
+        path: Some(path),
+        books,
+        error: None,
+    })
+    .into_response();
+    with_pagination_headers(body, total)
 }
 
 async fn get_search_palette(
@@ -918,6 +952,69 @@ mod tests {
         assert_eq!(lib.path.as_deref(), Some(path));
         assert!(lib.books.is_empty());
         assert!(lib.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn api_get_ebooks_sets_total_count_header_with_indexed_library() {
+        // Issue #81: every /api/ebooks response carries an X-Total-Count
+        // header. When the result fits under MAX_BOOKS_RETURNED no
+        // X-Total-Cap header is set, so the client knows the response
+        // is complete.
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        db::set_settings(
+            &pool,
+            &Settings {
+                ebook_library_path: Some("/lib".into()),
+                audiobook_library_path: None,
+            },
+        )
+        .await
+        .unwrap();
+        db::replace_books(
+            &pool,
+            "/lib",
+            vec![
+                db::ebook::IndexedBook {
+                    metadata: omnibus_shared::EbookMetadata {
+                        filename: "alpha.epub".into(),
+                        title: Some("A".into()),
+                        ..Default::default()
+                    },
+                    cover: None,
+                },
+                db::ebook::IndexedBook {
+                    metadata: omnibus_shared::EbookMetadata {
+                        filename: "beta.epub".into(),
+                        title: Some("B".into()),
+                        ..Default::default()
+                    },
+                    cover: None,
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+        let response = app
+            .oneshot(get_with_bearer("/api/ebooks", &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("X-Total-Count")
+                .and_then(|v| v.to_str().ok()),
+            Some("2"),
+            "X-Total-Count must reflect the true row count"
+        );
+        assert!(
+            response.headers().get("X-Total-Cap").is_none(),
+            "X-Total-Cap must not be set when the response is not truncated"
+        );
     }
 
     #[tokio::test]
