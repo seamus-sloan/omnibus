@@ -572,6 +572,12 @@ pub async fn get_last_modified_epoch(
 
 /// Upsert user metadata overrides for a book identified by its stable UUID.
 /// The `overrides` are JSON-serialized into the `metadata_overrides` table.
+///
+/// After the upsert, the book's `books_fts` row is rebuilt from the merged
+/// (canonical + override) metadata so that search results stay consistent
+/// with what the UI displays. The FTS rebuild is best-effort: rebuild
+/// failures are logged but do not fail the override save, since the
+/// override write is the user's actual intent.
 pub async fn upsert_metadata_overrides(
     pool: &SqlitePool,
     book_uuid: &str,
@@ -595,6 +601,7 @@ pub async fn upsert_metadata_overrides(
     .bind(user_id)
     .execute(pool)
     .await?;
+    rebuild_fts_for_book(pool, book_uuid).await?;
     Ok(())
 }
 
@@ -622,6 +629,10 @@ pub async fn get_metadata_overrides(
 }
 
 /// Delete overrides for a book UUID (revert to scanned values).
+///
+/// Also rebuilds the book's `books_fts` row so that search reverts to
+/// matching the canonical scanned metadata, mirroring
+/// [`upsert_metadata_overrides`].
 pub async fn delete_metadata_overrides(
     pool: &SqlitePool,
     book_uuid: &str,
@@ -630,6 +641,7 @@ pub async fn delete_metadata_overrides(
         .bind(book_uuid)
         .execute(pool)
         .await?;
+    rebuild_fts_for_book(pool, book_uuid).await?;
     Ok(())
 }
 
@@ -724,6 +736,47 @@ fn apply_overrides(book: &mut EbookMetadata, ov: &MetadataOverrides, has_cover_o
         book.cover_url = Some(format!("/api/covers/{}", book.id));
     }
     book.has_override = true;
+}
+
+/// Rebuild the `books_fts` row for the book identified by `book_uuid` using
+/// the merged metadata returned from [`get_book`] (canonical taxonomy with
+/// overrides applied). Called from the override write paths so search
+/// matches what the UI displays.
+///
+/// Silently returns `Ok(())` if the UUID has no matching book — overrides
+/// for an unknown UUID would only happen if a book row was deleted out from
+/// under us, in which case there is no FTS row to maintain.
+async fn rebuild_fts_for_book(pool: &SqlitePool, book_uuid: &str) -> Result<(), sqlx::Error> {
+    let Some(book_id) = sqlx::query_scalar::<_, i64>("SELECT id FROM books WHERE uuid = ?")
+        .bind(book_uuid)
+        .fetch_optional(pool)
+        .await?
+    else {
+        return Ok(());
+    };
+
+    let Some(merged) = get_book(pool, book_id).await? else {
+        return Ok(());
+    };
+    let title = merged.title.clone().unwrap_or_default();
+    let first_isbn = merged
+        .identifiers
+        .iter()
+        .find(|i| {
+            i.scheme
+                .as_deref()
+                .is_some_and(|s| s.eq_ignore_ascii_case("ISBN"))
+        })
+        .map(|i| i.value.clone());
+
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM books_fts WHERE rowid = ?")
+        .bind(book_id)
+        .execute(&mut *tx)
+        .await?;
+    insert_fts_row(&mut tx, book_id, &title, first_isbn.as_deref(), &merged).await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Probe for a user-uploaded override cover file for the given UUID.
@@ -4229,6 +4282,164 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    /// Bug #1: saving a title override must rebuild `books_fts` so search
+    /// finds the new title and stops matching the original one.
+    #[tokio::test]
+    async fn upsert_metadata_overrides_rebuilds_fts_for_title() {
+        let _covers = CoversTempDir::new("fts_override_title");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "a.epub",
+                Some("Original Title"),
+                &["Author A"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        // Sanity: search finds the original title.
+        let hits = search_books(&pool, "/lib", "Original").await.unwrap();
+        assert_eq!(hits.len(), 1);
+
+        // Save an override that changes the title.
+        let uuid = list_books(&pool, "/lib").await.unwrap()[0]
+            .unique_identifier
+            .clone()
+            .unwrap();
+        let ov = MetadataOverrides {
+            title: Some("Brand New Title".into()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        // Search now matches the overridden title and no longer the original.
+        let new_hits = search_books(&pool, "/lib", "Brand").await.unwrap();
+        assert_eq!(new_hits.len(), 1);
+        assert_eq!(new_hits[0].title.as_deref(), Some("Brand New Title"));
+        let old_hits = search_books(&pool, "/lib", "Original").await.unwrap();
+        assert!(
+            old_hits.is_empty(),
+            "FTS still matches the pre-override title"
+        );
+    }
+
+    /// Bug #1: the palette uses the same `books_fts` table, so the override
+    /// rebuild must also surface there.
+    #[tokio::test]
+    async fn upsert_metadata_overrides_rebuilds_fts_for_palette() {
+        let _covers = CoversTempDir::new("fts_override_palette");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "p.epub",
+                Some("Scanned Title"),
+                &["Author"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let uuid = list_books(&pool, "/lib").await.unwrap()[0]
+            .unique_identifier
+            .clone()
+            .unwrap();
+        let ov = MetadataOverrides {
+            title: Some("Edited Palette Title".into()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let palette = search_palette(&pool, "/lib", "Edited").await.unwrap();
+        assert_eq!(palette.books.len(), 1);
+    }
+
+    /// Bug #1 follow-on: deleting the override should restore the FTS row
+    /// to the canonical scanned values.
+    #[tokio::test]
+    async fn delete_metadata_overrides_restores_fts() {
+        let _covers = CoversTempDir::new("fts_override_revert");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "r.epub",
+                Some("Canonical Title"),
+                &["Author"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let uuid = list_books(&pool, "/lib").await.unwrap()[0]
+            .unique_identifier
+            .clone()
+            .unwrap();
+
+        upsert_metadata_overrides(
+            &pool,
+            &uuid,
+            &MetadataOverrides {
+                title: Some("Temporary Override".into()),
+                ..Default::default()
+            },
+            false,
+            user_id,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            search_books(&pool, "/lib", "Temporary").await.unwrap().len(),
+            1
+        );
+
+        delete_metadata_overrides(&pool, &uuid).await.unwrap();
+
+        // FTS is back to the canonical title; the override token no longer
+        // matches.
+        assert_eq!(
+            search_books(&pool, "/lib", "Canonical").await.unwrap().len(),
+            1
+        );
+        assert!(search_books(&pool, "/lib", "Temporary")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
