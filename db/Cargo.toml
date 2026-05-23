@@ -53,5 +53,15 @@ ammonia = "4"
 # is fixed by RFC 4122.
 uuid = { version = "1", features = ["v5"] }
 
+# F1.11 author profile photos: outbound HTTP for the Open Library resolver
+# (`db::author_photos`). `rustls-tls` matches the rest of our async TLS
+# choices (sqlx uses `runtime-tokio-rustls`) so we don't pull in OpenSSL.
+# `json` is needed to deserialize the `/search/authors.json` response.
+# This is the only outbound HTTP in the codebase — keep it scoped to the
+# resolver module.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+urlencoding = "2"
+
 [dev-dependencies]
 tempfile.workspace = true
+wiremock = "0.6"

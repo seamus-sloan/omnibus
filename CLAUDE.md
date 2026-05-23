@@ -60,13 +60,14 @@ lib.rs              — Settings, ValueResponse, LibraryContents, LibrarySection
 ### db/src/
 
 ```
-lib.rs              — re-exports queries::*; pub mod auth/ebook/indexer/library_layout/queries/scanner/worker
-queries.rs          — pool init, schema, query layer (list_books, settings, covers, taxonomy, metadata_overrides CRUD + merge…)
+lib.rs              — re-exports queries::*; pub mod auth/author_photos/ebook/indexer/library_layout/queries/scanner/worker
+queries.rs          — pool init, schema, query layer (list_books, settings, covers, taxonomy, metadata_overrides CRUD + merge, author_photos CRUD…)
 scanner.rs          — library directory scanning
 ebook.rs            — EPUB OPF metadata + cover extraction; sidecar-first cover with opt-in materialization (ScanOptions)
 indexer.rs          — scan → DB indexing, staleness checks (is_stale + reindex); reindex opts into materialize_sidecars
 library_layout.rs   — F0.6 canonical layout: slugify, canonical_path, sidecar_cover_for, allocate_canonical_path (collision suffix)
-worker.rs           — single-process Worker primitive: per-task-type concurrency cap + per-resource keyed mutex; reindexes route through Task::Scan
+worker.rs           — single-process Worker primitive: per-task-type concurrency cap + per-resource keyed mutex; reindexes route through Task::Scan; F1.11 ResolveAuthorPhoto dispatches into author_photos::resolve
+author_photos.rs    — F1.11 author profile photo cascade (manual → Open Library → letter); injectable `OpenLibraryConfig` for tests (wiremock). First outbound HTTP in the codebase (reqwest, rustls-tls).
 migrations/         — numbered SQL migrations embedded via sqlx::migrate!
 ```
 

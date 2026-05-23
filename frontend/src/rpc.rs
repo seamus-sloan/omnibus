@@ -16,8 +16,9 @@
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
-    AuthorDetail, AuthorSummary, EbookLibrary, EbookMetadata, LibraryContents, MetadataOverrides,
-    PaletteResults, SeriesDetail, SeriesSummary, Settings, TagWeight, ValueResponse,
+    AuthorDetail, AuthorPhotoScanResult, AuthorSummary, EbookLibrary, EbookMetadata,
+    LibraryContents, MetadataOverrides, PaletteResults, SeriesDetail, SeriesSummary, Settings,
+    TagWeight, ValueResponse,
 };
 
 #[cfg(feature = "server")]
@@ -242,6 +243,21 @@ pub async fn rpc_get_author(id: i64) -> Result<Option<AuthorDetail>> {
 #[post("/api/rpc/series", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_get_series(id: i64) -> Result<Option<SeriesDetail>> {
     Ok(db::get_series(&pool.0, id).await?)
+}
+
+/// F1.11: admin-triggered "Scan for picture" for an author. Clears any
+/// cached row (including sticky `letter` markers) and runs the Open Library
+/// resolver inline, so the admin gets a definitive "found / not found"
+/// answer in a single round-trip without polling the worker.
+#[post("/api/rpc/author/scan-photo", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_scan_author_photo(id: i64) -> Result<AuthorPhotoScanResult> {
+    if !user.is_admin {
+        return Err(ServerFnError::new("forbidden: admin required").into());
+    }
+    db::delete_author_photo(&pool.0, id).await?;
+    db::author_photos::resolve(&pool.0, id).await?;
+    let resolved = db::get_author_photo(&pool.0, id).await?.is_some();
+    Ok(AuthorPhotoScanResult { resolved })
 }
 
 /// Return all tags with book counts for the tag cloud.
