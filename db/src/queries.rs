@@ -532,8 +532,8 @@ pub async fn get_cover(
     book_id: i64,
 ) -> Result<Option<(String, Vec<u8>)>, sqlx::Error> {
     // `COALESCE(mo.has_cover_override, 0)` keeps the flag at 0 when no
-    // override row exists (the LEFT JOIN yields NULL in that case), so
-    // we don't need a nullable bind in the row tuple.
+    // override row exists (the LEFT JOIN yields NULL in that case), so the
+    // row tuple can decode into `i64` instead of `Option<i64>`.
     let row: Option<(String, i64, i64)> = sqlx::query_as(
         "SELECT b.uuid, b.has_cover, COALESCE(mo.has_cover_override, 0)
            FROM books b
