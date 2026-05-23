@@ -19,14 +19,14 @@ pub fn SearchPage(query: String) -> Element {
     let mut loading = use_signal(|| true);
     let mut error: Signal<Option<String>> = use_signal(|| None);
 
+    // See `BookDetailPage` for why `query` needs `use_reactive!`.
     let url = server_url.clone();
-    let q = query.clone();
-    use_effect(move || {
+    let query_dep = query.clone();
+    use_effect(use_reactive!(|query_dep| {
         let url = url.clone();
-        let q = q.clone();
         spawn(async move {
             loading.set(true);
-            match data::search_palette(&url, &q).await {
+            match data::search_palette(&url, &query_dep).await {
                 Ok(r) => {
                     results.set(Some(r));
                     error.set(None);
@@ -35,7 +35,7 @@ pub fn SearchPage(query: String) -> Element {
             }
             loading.set(false);
         });
-    });
+    }));
 
     let header = rsx! {
         div { class: "search-page-header",

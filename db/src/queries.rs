@@ -4448,7 +4448,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            search_books(&pool, "/lib", "Temporary").await.unwrap().len(),
+            search_books(&pool, "/lib", "Temporary")
+                .await
+                .unwrap()
+                .len(),
             1
         );
 
@@ -4457,7 +4460,10 @@ mod tests {
         // FTS is back to the canonical title; the override token no longer
         // matches.
         assert_eq!(
-            search_books(&pool, "/lib", "Canonical").await.unwrap().len(),
+            search_books(&pool, "/lib", "Canonical")
+                .await
+                .unwrap()
+                .len(),
             1
         );
         assert!(search_books(&pool, "/lib", "Temporary")
