@@ -717,6 +717,73 @@ async fn post_mobile_auth<T: serde::Serialize>(
         .map_err(|e| e.to_string())
 }
 
+// ===== Web auth state =====
+//
+// #57: web counterpart to `token_store::subscribe()`. The web client uses
+// session cookies (round-tripped automatically by the browser), so there's
+// no client-side token to clear — but we still need a reactive signal so
+// the router can redirect to /login when any data-layer call returns 401
+// (session expired, server restarted, admin revoked). All web data
+// wrappers route their errors through [`note_server_fn_err`] below, which
+// pushes `false` onto this channel on a 401 response; `ScreenLayout`
+// subscribes and `nav.replace`s.
+
+#[cfg(feature = "web")]
+pub mod web_auth_state {
+    use std::sync::OnceLock;
+    use tokio::sync::watch;
+
+    fn channel() -> &'static (watch::Sender<bool>, watch::Receiver<bool>) {
+        static CH: OnceLock<(watch::Sender<bool>, watch::Receiver<bool>)> = OnceLock::new();
+        CH.get_or_init(|| watch::channel(true))
+    }
+
+    /// Returns a receiver that observes auth state. `true` = currently
+    /// believed-authenticated, `false` = a recent request returned 401.
+    pub fn subscribe() -> watch::Receiver<bool> {
+        channel().0.subscribe()
+    }
+
+    /// Signal that the most recent data call returned 401. `send_replace`
+    /// doesn't require active receivers and never errors, so this is safe
+    /// to call from any async context.
+    pub fn notify_unauthorized() {
+        channel().0.send_replace(false);
+    }
+
+    /// Signal that we've just observed an authenticated state — a fresh
+    /// login/register succeeded, or `/api/auth/me` confirmed an existing
+    /// session. Without this, the channel would latch at `false` after
+    /// the first 401 and stay there for the WASM instance's lifetime, so
+    /// a re-login from the redirected-to /login page couldn't reactively
+    /// re-mount protected screens.
+    pub fn notify_authorized() {
+        channel().0.send_replace(true);
+    }
+}
+
+/// Inspect a server-function error (Dioxus wraps it in `CapturedError`,
+/// which holds an `Arc<anyhow::Error>`) and — on the web client — ping
+/// `web_auth_state` if the underlying `ServerFnError` carries a 401
+/// status code. Returns the stringified error the previous
+/// `.map_err(|e| e.to_string())` produced so callers don't need to
+/// change their error type. SSR builds (cfg(not(feature = "web"))) just
+/// stringify — there's no client to redirect.
+#[cfg(not(feature = "mobile"))]
+fn note_server_fn_err(e: dioxus::CapturedError) -> String {
+    if let Some(sfn_err) = e.0.downcast_ref::<dioxus::fullstack::ServerFnError>() {
+        let code = match sfn_err {
+            dioxus::fullstack::ServerFnError::ServerError { code, .. } => *code,
+            _ => 0,
+        };
+        if code == 401 {
+            #[cfg(feature = "web")]
+            web_auth_state::notify_unauthorized();
+        }
+    }
+    e.to_string()
+}
+
 // ===== Web / fullstack-SSR transport: dioxus-fullstack server functions =====
 //
 // `server_url` is unused here — server functions always resolve against the
@@ -726,7 +793,7 @@ async fn post_mobile_auth<T: serde::Serialize>(
 pub async fn get_value(_server_url: &str) -> Result<i64, String> {
     match crate::rpc::rpc_get_value().await {
         Ok(payload) => Ok(payload.value),
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(note_server_fn_err(e)),
     }
 }
 
@@ -734,7 +801,7 @@ pub async fn get_value(_server_url: &str) -> Result<i64, String> {
 pub async fn post_increment(_server_url: &str) -> Result<i64, String> {
     match crate::rpc::rpc_increment_value().await {
         Ok(payload) => Ok(payload.value),
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(note_server_fn_err(e)),
     }
 }
 
@@ -742,35 +809,35 @@ pub async fn post_increment(_server_url: &str) -> Result<i64, String> {
 pub async fn get_settings(_server_url: &str) -> Result<Settings, String> {
     crate::rpc::rpc_get_settings()
         .await
-        .map_err(|e| e.to_string())
+        .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
 pub async fn save_settings(_server_url: &str, settings: Settings) -> Result<Settings, String> {
     crate::rpc::rpc_save_settings(settings)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
 pub async fn get_library(_server_url: &str) -> Result<LibraryContents, String> {
     crate::rpc::rpc_get_library()
         .await
-        .map_err(|e| e.to_string())
+        .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
 pub async fn get_ebooks(_server_url: &str) -> Result<EbookLibrary, String> {
     crate::rpc::rpc_get_ebooks()
         .await
-        .map_err(|e| e.to_string())
+        .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
 pub async fn search_ebooks(_server_url: &str, q: &str) -> Result<EbookLibrary, String> {
     crate::rpc::rpc_search(q.to_string())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(note_server_fn_err)
 }
 
 /// Search palette — grouped results for the command-palette overlay (F1.5).
@@ -778,35 +845,35 @@ pub async fn search_ebooks(_server_url: &str, q: &str) -> Result<EbookLibrary, S
 pub async fn search_palette(_server_url: &str, q: &str) -> Result<PaletteResults, String> {
     crate::rpc::rpc_search_palette(q.to_string())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
 pub async fn get_ebook(_server_url: &str, id: i64) -> Result<Option<EbookMetadata>, String> {
     crate::rpc::rpc_get_ebook(id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
 pub async fn get_author(_server_url: &str, id: i64) -> Result<Option<AuthorDetail>, String> {
     crate::rpc::rpc_get_author(id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
 pub async fn get_series(_server_url: &str, id: i64) -> Result<Option<SeriesDetail>, String> {
     crate::rpc::rpc_get_series(id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
 pub async fn get_tag_cloud(_server_url: &str) -> Result<Vec<TagWeight>, String> {
     crate::rpc::rpc_get_tag_cloud()
         .await
-        .map_err(|e| e.to_string())
+        .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
@@ -817,14 +884,14 @@ pub async fn save_overrides(
 ) -> Result<Option<EbookMetadata>, String> {
     crate::rpc::rpc_save_overrides(id, overrides.clone())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
 pub async fn delete_overrides(_server_url: &str, id: i64) -> Result<Option<EbookMetadata>, String> {
     crate::rpc::rpc_delete_overrides(id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(note_server_fn_err)
 }
 
 // ===== Auth transport (web only) =====
@@ -842,12 +909,18 @@ pub async fn delete_overrides(_server_url: &str, id: i64) -> Result<Option<Ebook
 
 #[cfg(feature = "web")]
 pub async fn login(req: LoginRequest) -> Result<LoginResponse, String> {
-    post_auth_json("/api/auth/login", &req).await
+    let resp = post_auth_json("/api/auth/login", &req).await?;
+    // Reset the auth-state channel so a prior 401 doesn't keep
+    // ScreenLayout in redirect mode after a successful re-login.
+    web_auth_state::notify_authorized();
+    Ok(resp)
 }
 
 #[cfg(feature = "web")]
 pub async fn register(req: RegisterRequest) -> Result<LoginResponse, String> {
-    post_auth_json("/api/auth/register", &req).await
+    let resp = post_auth_json("/api/auth/register", &req).await?;
+    web_auth_state::notify_authorized();
+    Ok(resp)
 }
 
 #[cfg(feature = "web")]
@@ -860,6 +933,9 @@ pub async fn logout() -> Result<(), String> {
     if !res.ok() && res.status() != 204 {
         return Err(format!("logout failed: {}", res.status()));
     }
+    // A successful logout is the unauth path — same signal as a 401, so
+    // ScreenLayout redirects to /login without each caller having to nav.
+    web_auth_state::notify_unauthorized();
     Ok(())
 }
 
@@ -871,15 +947,15 @@ pub async fn current_user() -> Result<Option<UserSummary>, String> {
         .await
         .map_err(|e| e.to_string())?;
     if res.status() == 401 {
+        web_auth_state::notify_unauthorized();
         return Ok(None);
     }
     if !res.ok() {
         return Err(format!("me failed: {}", res.status()));
     }
-    res.json::<UserSummary>()
-        .await
-        .map(Some)
-        .map_err(|e| e.to_string())
+    let user = res.json::<UserSummary>().await.map_err(|e| e.to_string())?;
+    web_auth_state::notify_authorized();
+    Ok(Some(user))
 }
 
 #[cfg(feature = "web")]
