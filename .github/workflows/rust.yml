@@ -38,6 +38,11 @@ jobs:
   check:
     name: clippy + test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required by nix-community/cache-nix-action `purge: true` so it can
+      # delete its own expired cache entries via the Actions cache API.
+      actions: write
     env:
       # Match e2e.yml: pin target dir so rust-cache (keyed on `. -> target`)
       # actually caches anything across runs.
