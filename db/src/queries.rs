@@ -1918,13 +1918,22 @@ fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata, sqlx::Erro
 /// Fetch an author by ID with all their books across every library.
 /// Returns `None` if the author ID doesn't exist.
 ///
-/// TODO(F4.x): scope by `user_id` once per-user ACLs land — today this
-/// query is single-tenant and any authenticated caller can enumerate
-/// authors by ID.
+/// # Multi-tenancy
+///
+/// This function returns all matching rows without filtering by the
+/// requesting user's library access. The app is single-tenant and
+/// single-library today (see Phase 4 in `docs/roadmap/0-0-summary.md`),
+/// so every authenticated caller is implicitly authorised to see every
+/// author. When per-user ACLs land in the F4.x phase this function must
+/// accept a `user_id` parameter and filter both the `authors` row and
+/// the joined `books` via the access-control join. The `TODO(F4.x)`
+/// marker in the body stays in place until that work lands.
 pub async fn get_author(
     pool: &SqlitePool,
     author_id: i64,
 ) -> Result<Option<AuthorDetail>, sqlx::Error> {
+    // TODO(F4.x): scope by `user_id` once per-user ACLs land. See the
+    // function-level rustdoc above for the single-tenant rationale.
     let author_row = sqlx::query("SELECT id, name, sort FROM authors WHERE id = ?")
         .bind(author_id)
         .fetch_optional(pool)
@@ -1959,12 +1968,23 @@ pub async fn get_author(
 /// Fetch a series by ID with all its books, ordered by series index.
 /// Returns `None` if the series ID doesn't exist.
 ///
-/// TODO(F4.x): scope by `user_id` once per-user ACLs land — see
-/// [`get_author`] for the same caveat.
+/// # Multi-tenancy
+///
+/// This function returns all matching rows without filtering by the
+/// requesting user's library access. The app is single-tenant and
+/// single-library today (see Phase 4 in `docs/roadmap/0-0-summary.md`),
+/// so every authenticated caller is implicitly authorised to see every
+/// series. When per-user ACLs land in the F4.x phase this function must
+/// accept a `user_id` parameter and filter both the `series` row and the
+/// joined `books` via the access-control join — same caveat as
+/// [`get_author`]. The `TODO(F4.x)` marker in the body stays in place
+/// until that work lands.
 pub async fn get_series(
     pool: &SqlitePool,
     series_id: i64,
 ) -> Result<Option<SeriesDetail>, sqlx::Error> {
+    // TODO(F4.x): scope by `user_id` once per-user ACLs land. See the
+    // function-level rustdoc above for the single-tenant rationale.
     let series_row = sqlx::query("SELECT id, name, sort FROM series WHERE id = ?")
         .bind(series_id)
         .fetch_optional(pool)
@@ -2004,9 +2024,19 @@ const TAG_CLOUD_LIMIT: i64 = 500;
 /// Return up to [`TAG_CLOUD_LIMIT`] tags with their book counts, ordered
 /// by count descending then name ascending. Used by the tag cloud page.
 ///
-/// TODO(F4.x): scope by `user_id` once per-user ACLs land — currently
-/// returns the global tag distribution.
+/// # Multi-tenancy
+///
+/// This function returns the global tag distribution without filtering
+/// by the requesting user's library access. The app is single-tenant and
+/// single-library today (see Phase 4 in `docs/roadmap/0-0-summary.md`),
+/// so every authenticated caller sees the same tag cloud. When per-user
+/// ACLs land in the F4.x phase this function must accept a `user_id`
+/// parameter and count only books visible to that user via the
+/// access-control join. The `TODO(F4.x)` marker in the body stays in
+/// place until that work lands.
 pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, sqlx::Error> {
+    // TODO(F4.x): scope by `user_id` once per-user ACLs land. See the
+    // function-level rustdoc above for the single-tenant rationale.
     let rows = sqlx::query(
         r#"SELECT t.name, COUNT(btl.book) AS cnt
            FROM tags t
