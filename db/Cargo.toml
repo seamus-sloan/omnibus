@@ -46,5 +46,12 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 # the DB are sanitized without a reindex.
 ammonia = "4"
 
+# Stable, toolchain-independent UUIDv5 derivation for cover ids (issue #94).
+# `std::collections::hash_map::DefaultHasher` is documented as subject to
+# change between Rust versions, so a toolchain bump would silently rotate
+# every cover UUID and orphan the on-disk files. UUIDv5 (SHA-1 namespaced)
+# is fixed by RFC 4122.
+uuid = { version = "1", features = ["v5"] }
+
 [dev-dependencies]
 tempfile.workspace = true

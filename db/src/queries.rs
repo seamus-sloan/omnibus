@@ -86,6 +86,18 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
         .await
         .map_err(|e| sqlx::Error::Migrate(Box::new(e)))?;
 
+    // Issue #94: the previous `stable_uuid` implementation hashed via
+    // `DefaultHasher` and produced toolchain-dependent UUIDs. Switching to
+    // UUIDv5 changes every cover id on the next reindex, so any pre-existing
+    // `<old-uuid>.<ext>` files in the covers directory would be orphaned and
+    // never served again. Purge once on startup, then drop a sentinel so we
+    // don't keep deleting freshly-written covers on every boot. Gated on a
+    // real (non-memory) DB so that the rapid-fire test suite doesn't touch
+    // the developer's actual covers directory.
+    if !is_memory {
+        purge_legacy_covers_once(&covers_dir());
+    }
+
     Ok(pool)
 }
 
@@ -94,6 +106,83 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
 /// against `:memory:` but it's a no-op there.
 fn is_memory_url(database_url: &str) -> bool {
     database_url.contains(":memory:") || database_url.contains("mode=memory")
+}
+
+/// Sentinel filename written into `covers_dir()` after a one-time cleanup of
+/// pre-issue-#94 cover files. Presence of this file marks the directory as
+/// "already on the UUIDv5 scheme" and short-circuits the purge on subsequent
+/// boots. See `purge_legacy_covers_once`.
+const COVERS_SCHEME_SENTINEL: &str = ".omnibus-cover-scheme-v5";
+
+/// One-time cleanup for the cover cache when upgrading across the issue #94
+/// fix. The old `stable_uuid` derived ids from `DefaultHasher`, whose output
+/// changes between Rust toolchains; the new derivation uses RFC 4122 UUIDv5,
+/// which produces different ids for the same `(library_path, filename)`
+/// inputs. Any cover files written under the old scheme are now unreachable
+/// — the `books.uuid` column will be rewritten on the next reindex, but the
+/// orphan files would sit in the covers dir forever.
+///
+/// This is deliberately best-effort: missing dir, permission errors, and
+/// individual unlink failures are all logged-and-swallowed rather than
+/// surfaced. The covers directory is a cache; the worst outcome of failure
+/// is a few stale files, not a broken server. The sentinel file ensures
+/// we only sweep once per install.
+fn purge_legacy_covers_once(dir: &Path) {
+    // No covers dir yet → nothing to clean, and creating it eagerly would
+    // be surprising. The next cover write will create it.
+    if !dir.exists() {
+        return;
+    }
+    let sentinel = dir.join(COVERS_SCHEME_SENTINEL);
+    if sentinel.exists() {
+        return;
+    }
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(err) => {
+            tracing::warn!(
+                covers_dir = %dir.display(),
+                error = %err,
+                "issue #94: could not read covers dir to purge legacy files; skipping",
+            );
+            return;
+        }
+    };
+
+    let mut removed: usize = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // Only touch regular files at the top level. Leave subdirectories
+        // alone — nothing in this layer writes them today, but if a future
+        // version does we'd rather not blow them away.
+        if !path.is_file() {
+            continue;
+        }
+        if let Err(err) = std::fs::remove_file(&path) {
+            tracing::warn!(
+                path = %path.display(),
+                error = %err,
+                "issue #94: failed to remove legacy cover file",
+            );
+        } else {
+            removed += 1;
+        }
+    }
+
+    if let Err(err) = std::fs::write(&sentinel, b"v5\n") {
+        tracing::warn!(
+            sentinel = %sentinel.display(),
+            error = %err,
+            "issue #94: failed to write covers-scheme sentinel; will retry on next boot",
+        );
+    } else {
+        tracing::info!(
+            covers_dir = %dir.display(),
+            removed,
+            "issue #94: purged legacy cover files and wrote v5 sentinel",
+        );
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -2348,28 +2437,26 @@ pub async fn library_from_db_with_total(
 // Helpers
 // -----------------------------------------------------------------------------
 
-/// Deterministic UUIDv5-shaped string derived from (library_path, filename)
-/// so reindexing the same file produces the same uuid. Keeps
-/// `/api/covers/:id` URLs stable across reindex cycles even as the primary
-/// `books.id` renumbers.
+/// Deterministic UUIDv5 derived from `(library_path, filename)` so reindexing
+/// the same file produces the same uuid. Keeps `/api/covers/:id` URLs stable
+/// across reindex cycles even as the primary `books.id` renumbers.
+///
+/// Implemented as `Uuid::new_v5(NAMESPACE_URL, "{library_path}\0{filename}")`.
+/// Issue #94: the previous implementation used
+/// `std::collections::hash_map::DefaultHasher`, whose algorithm is documented
+/// as subject to change between Rust toolchain versions. A toolchain bump
+/// would silently rotate every cover UUID on the next reindex and orphan
+/// every cover file on disk. UUIDv5 (SHA-1 over a namespace + name, per
+/// RFC 4122 §4.3) is fixed across toolchains, sets the proper version/variant
+/// bits, and emits the canonical 8-4-4-4-12 hyphenated form.
 fn stable_uuid(library_path: &str, filename: &str) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    library_path.hash(&mut h);
-    filename.hash(&mut h);
-    let a = h.finish();
-    let mut h2 = DefaultHasher::new();
-    (library_path, filename, a).hash(&mut h2);
-    let b = h2.finish();
-    format!(
-        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-        (a >> 32) as u32,
-        (a >> 16) as u16,
-        a as u16,
-        (b >> 48) as u16,
-        b & 0x0000_ffff_ffff_ffff,
-    )
+    // NUL is the one byte that can't appear inside either side, so it's a
+    // safe, unambiguous separator — no `(library_path, filename)` collision
+    // is reachable from a different split.
+    let key = format!("{library_path}\0{filename}");
+    uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, key.as_bytes())
+        .hyphenated()
+        .to_string()
 }
 
 /// Split `dir/sub/name.epub` into (`dir/sub`, `name`, `EPUB`). If no dir,
@@ -6179,6 +6266,128 @@ mod tests {
         assert!(
             hits.is_empty(),
             "query against a non-existent library must not leak rows from another library"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Issue #94: UUIDv5-based cover ids
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn stable_uuid_is_deterministic() {
+        // Same inputs → same UUID, both within a single run and across calls.
+        let a = stable_uuid("/var/lib/omnibus", "Author/Title.epub");
+        let b = stable_uuid("/var/lib/omnibus", "Author/Title.epub");
+        assert_eq!(a, b, "stable_uuid must be deterministic");
+    }
+
+    #[test]
+    fn stable_uuid_differs_for_distinct_inputs() {
+        // Differing library_path or filename must yield different ids; this
+        // is the property that makes per-book cover URLs stable but unique.
+        let base = stable_uuid("/lib", "a.epub");
+        assert_ne!(base, stable_uuid("/lib", "b.epub"));
+        assert_ne!(base, stable_uuid("/other", "a.epub"));
+        // And the NUL separator must actually separate — splitting the key
+        // at a different boundary should still produce a distinct UUID.
+        assert_ne!(
+            stable_uuid("/lib/a", ".epub"),
+            stable_uuid("/lib", "a.epub")
+        );
+    }
+
+    #[test]
+    fn stable_uuid_matches_namespace_url_v5() {
+        // Cross-check against the uuid crate computing the exact same input
+        // we document. Locks the namespace + key shape so a future refactor
+        // can't quietly change the derivation and rotate every cover id.
+        let library_path = "/var/lib/omnibus";
+        let filename = "Author/Title.epub";
+        let expected = uuid::Uuid::new_v5(
+            &uuid::Uuid::NAMESPACE_URL,
+            format!("{library_path}\0{filename}").as_bytes(),
+        )
+        .hyphenated()
+        .to_string();
+        assert_eq!(stable_uuid(library_path, filename), expected);
+    }
+
+    #[test]
+    fn stable_uuid_is_version_5() {
+        // The hyphenated output must parse as a UUID with version=5 and the
+        // RFC 4122 variant bits set. The pre-issue-#94 implementation set
+        // neither, so this guards against regressing to a bare hex string.
+        let s = stable_uuid("/lib", "x.epub");
+        let parsed = uuid::Uuid::parse_str(&s).expect("stable_uuid must produce a valid UUID");
+        assert_eq!(parsed.get_version_num(), 5, "must be UUIDv5");
+        assert_eq!(
+            parsed.get_variant(),
+            uuid::Variant::RFC4122,
+            "must use RFC 4122 variant bits"
+        );
+    }
+
+    #[test]
+    fn purge_legacy_covers_once_sweeps_then_no_ops() {
+        // Standalone temp dir so we don't depend on CoversTempDir's env var
+        // (purge_legacy_covers_once takes the dir as a parameter, and we
+        // want to assert the function in isolation from init_db).
+        let pid = std::process::id();
+        let seq = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("omnibus_purge_test_{pid}_{seq}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Seed three "legacy" cover files.
+        for name in ["aaaa.jpg", "bbbb.png", "cccc.webp"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+
+        purge_legacy_covers_once(&dir);
+
+        // Legacy files gone, sentinel written.
+        for name in ["aaaa.jpg", "bbbb.png", "cccc.webp"] {
+            assert!(
+                !dir.join(name).exists(),
+                "legacy file {name} should have been purged",
+            );
+        }
+        assert!(
+            dir.join(COVERS_SCHEME_SENTINEL).exists(),
+            "sentinel should be present after first purge",
+        );
+
+        // A freshly-written cover after the purge must survive a second
+        // call — the sentinel short-circuits the sweep.
+        let kept = dir.join("dddd.jpg");
+        std::fs::write(&kept, b"y").unwrap();
+        purge_legacy_covers_once(&dir);
+        assert!(
+            kept.exists(),
+            "post-sentinel cover writes must not be deleted",
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn purge_legacy_covers_once_handles_missing_dir() {
+        // Cold-boot before any covers have ever been written — must not panic
+        // and must not create the directory.
+        let pid = std::process::id();
+        let seq = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("omnibus_purge_missing_{pid}_{seq}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        purge_legacy_covers_once(&dir);
+        assert!(
+            !dir.exists(),
+            "purge must not create the covers dir as a side effect",
         );
     }
 }
