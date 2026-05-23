@@ -264,6 +264,22 @@ pub struct AuthorDetail {
     pub sort: Option<String>,
     pub book_count: usize,
     pub books: Vec<EbookMetadata>,
+    /// F1.11: `true` when a usable profile photo is cached for this author
+    /// (a `manual` or `openlibrary` row in `author_photos`). The frontend
+    /// hero swaps the letter avatar for `<img src="/api/authors/:id/photo">`
+    /// when set. `'letter'` negative-cache rows do not set this flag.
+    #[serde(default)]
+    pub has_photo: bool,
+}
+
+/// Result of an admin-triggered "Scan for picture" run (F1.11). The endpoint
+/// clears any cached row and runs the Open Library cascade inline; a
+/// `false` here means Open Library had nothing to offer for this author
+/// and a sticky `letter` marker has been written to skip future
+/// autoresolution.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthorPhotoScanResult {
+    pub resolved: bool,
 }
 
 /// Series detail payload for `GET /api/series/:id` and `rpc_get_series`.

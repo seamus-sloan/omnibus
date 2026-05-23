@@ -5,6 +5,7 @@
 //! `feature = "server"`).
 
 pub mod auth;
+pub mod author_photos;
 pub mod ebook;
 pub mod indexer;
 pub mod library_layout;

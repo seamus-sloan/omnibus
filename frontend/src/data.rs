@@ -11,8 +11,9 @@
 //!   web stubs so SSR-during-fullstack-render still returns sensible data.
 
 use omnibus_shared::{
-    AuthorDetail, AuthorSummary, EbookLibrary, EbookMetadata, LibraryContents, MetadataOverrides,
-    PaletteResults, SeriesDetail, SeriesSummary, Settings, TagWeight,
+    AuthorDetail, AuthorPhotoScanResult, AuthorSummary, EbookLibrary, EbookMetadata,
+    LibraryContents, MetadataOverrides, PaletteResults, SeriesDetail, SeriesSummary, Settings,
+    TagWeight,
 };
 #[cfg(any(feature = "web", feature = "mobile"))]
 use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};
@@ -548,6 +549,25 @@ pub async fn get_author(server_url: &str, id: i64) -> Result<Option<AuthorDetail
         .map_err(|e| e.to_string())
 }
 
+/// F1.11: admin "Scan for picture" — synchronously re-runs the Open Library
+/// cascade and returns whether a photo was found.
+#[cfg(feature = "mobile")]
+pub async fn scan_author_photo(server_url: &str, id: i64) -> Result<AuthorPhotoScanResult, String> {
+    let url = format!("{server_url}/api/authors/{id}/photo/scan");
+    let response = with_bearer(http_client().post(&url))
+        .send()
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    response
+        .json::<AuthorPhotoScanResult>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(feature = "mobile")]
 pub async fn get_series(server_url: &str, id: i64) -> Result<Option<SeriesDetail>, String> {
     let url = format!("{server_url}/api/series/{id}");
@@ -892,6 +912,16 @@ pub async fn get_ebook(_server_url: &str, id: i64) -> Result<Option<EbookMetadat
 #[cfg(not(feature = "mobile"))]
 pub async fn get_author(_server_url: &str, id: i64) -> Result<Option<AuthorDetail>, String> {
     crate::rpc::rpc_get_author(id)
+        .await
+        .map_err(note_server_fn_err)
+}
+
+#[cfg(not(feature = "mobile"))]
+pub async fn scan_author_photo(
+    _server_url: &str,
+    id: i64,
+) -> Result<AuthorPhotoScanResult, String> {
+    crate::rpc::rpc_scan_author_photo(id)
         .await
         .map_err(note_server_fn_err)
 }

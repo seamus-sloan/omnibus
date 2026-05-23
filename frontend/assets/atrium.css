@@ -790,6 +790,32 @@ body.atrium,
   .disc-avatar { width: 80px; height: 80px; font-size: 36px; }
 }
 
+/* F1.11 — When the avatar is the resolved profile photo, drop the
+   typographic styling and clip the image to the circle. The `img` element
+   shares the `.disc-avatar` class so the size/border tokens stay in sync
+   with the letter variant. */
+.disc-avatar--photo {
+  object-fit: cover;
+  background: var(--bg-2);
+}
+
+/* F1.11 admin "Scan for picture" action row in the author hero. */
+.disc-hero-actions {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+.disc-scan-btn[disabled] {
+  opacity: 0.6;
+  cursor: progress;
+}
+.disc-scan-status {
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+
 /* Stat block */
 .disc-stat-block { text-align: right; }
 .disc-stat-label { display: block; margin-bottom: 6px; }
