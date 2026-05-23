@@ -16,8 +16,9 @@ pub fn AuthorPage(id: i64) -> Element {
     let mut loading = use_signal(|| true);
     let mut error: Signal<Option<String>> = use_signal(|| None);
 
+    // See `BookDetailPage` for why `id` needs `use_reactive!`.
     let url = server_url.clone();
-    use_effect(move || {
+    use_effect(use_reactive!(|id| {
         let url = url.clone();
         spawn(async move {
             loading.set(true);
@@ -30,7 +31,7 @@ pub fn AuthorPage(id: i64) -> Element {
             }
             loading.set(false);
         });
-    });
+    }));
 
     if loading() {
         return rsx! {
