@@ -64,9 +64,16 @@ jobs:
 
       - name: Build, start server, and run Playwright tests
         run: |
+          # Inside this outer single-quoted bash -c block, any embedded
+          # `'` would terminate the string, so the inner trap argument is
+          # escaped with the standard '\'' (close-outer, literal-quote,
+          # reopen-outer) sequence. Without the escape the runner shell
+          # folds the segments into `trap echo ::endgroup:: ERR`, trap
+          # prints usage on the invalid signal, and `set -e` aborts the
+          # whole job before any group runs.
           nix develop --command bash -c '
             set -euo pipefail
-            trap 'echo "::endgroup::"' ERR
+            trap '\''echo "::endgroup::"'\'' ERR
 
             echo "::group::Install Playwright npm deps"
             cd ui_tests/playwright && npm ci && cd ../..
