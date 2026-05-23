@@ -2260,7 +2260,12 @@ pub async fn get_series(
                     CASE
                       WHEN mo.book_uuid IS NOT NULL
                            AND json_type(mo.overrides, '$.series_index') IS NOT NULL
-                        THEN CAST(json_extract(mo.overrides, '$.series_index') AS REAL)
+                        -- NULLIF: an override that explicitly clears the
+                        -- index (`Some("")` from the edit form) would
+                        -- otherwise CAST to 0.0 and sort to the front of
+                        -- the series. Treat empty-string as "no index"
+                        -- and let ORDER BY's NULLS LAST trail it.
+                        THEN CAST(NULLIF(json_extract(mo.overrides, '$.series_index'), '') AS REAL)
                       ELSE b.series_index
                     END AS series_index
                FROM books b
@@ -2270,7 +2275,7 @@ pub async fn get_series(
            FROM books b
            JOIN effective e ON e.book_id = b.id
            WHERE e.series_name = ? COLLATE NOCASE
-           ORDER BY e.series_index, b.sort, b.id"#
+           ORDER BY e.series_index NULLS LAST, b.sort, b.id"#
     );
     let rows = sqlx::query(&sql).bind(&series_name).fetch_all(pool).await?;
 
@@ -2293,13 +2298,17 @@ pub async fn get_series(
                 apply_overrides(book, ov, *has_cover_ov);
             }
         }
-        // Books matched purely via override have no `books_series_link`
-        // row, so the canonical subquery left `series_id` unset. Pin it
-        // to the parent series so the rendered card carries the link.
-        if book.series_id.is_none() {
-            book.series_id = Some(series_id);
-            book.series = Some(series_name.clone());
-        }
+        // Pin `series_id` / `series` to the parent series for every
+        // returned row, not just the override-only ones. A book that was
+        // canonically in series A but overridden into series B would
+        // otherwise come back here with `series_id = Some(A)` (from the
+        // BOOK_COLUMNS subquery, which only reads `books_series_link`)
+        // — so the card on B's page would link back to /series/A. We're
+        // already on B's page by construction (the WHERE filter matched
+        // the effective series name), so unconditionally pinning to the
+        // requested series is correct.
+        book.series_id = Some(series_id);
+        book.series = Some(series_name.clone());
     }
     backfill_creator_ids(pool, &mut books).await?;
 
@@ -5972,6 +5981,117 @@ mod tests {
         assert!(
             titles.contains(&"Standalone".to_string()),
             "lowercase override should still match NOCASE series row, got {titles:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn get_series_empty_string_series_index_sorts_last() {
+        // `Some("")` from the edit form (user cleared the position
+        // field) was sorting to the front because `CAST('' AS REAL)`
+        // returns 0.0. NULLIF on the override value drops it to NULL,
+        // and ORDER BY ... NULLS LAST trails it after positioned books.
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+        let saga_id = series_id_by_name(&pool, "Saga").await;
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let standalone = books
+            .iter()
+            .find(|b| b.filename == "standalone.epub")
+            .unwrap();
+        let uuid = standalone.unique_identifier.clone().unwrap();
+
+        // Add Standalone to Saga but clear its position.
+        let ov = MetadataOverrides {
+            series: Some("Saga".into()),
+            series_index: Some(String::new()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let series = get_series(&pool, saga_id)
+            .await
+            .unwrap()
+            .expect("series exists");
+        let titles: Vec<_> = series
+            .books
+            .iter()
+            .map(|b| b.title.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            titles,
+            vec![
+                "Saga: Book One".to_string(),
+                "Saga: Book Two".to_string(),
+                "Standalone".to_string(),
+            ],
+            "empty-string series_index should trail positioned books, not lead them",
+        );
+    }
+
+    #[tokio::test]
+    async fn get_series_pins_series_id_for_books_moved_between_series() {
+        // A book canonically in Series A overridden into Series B used
+        // to come back from get_series(B) with `series_id = Some(A)`
+        // (BOOK_COLUMNS reads only books_series_link), so the card on
+        // B's page would link back to /series/A. The fix pins
+        // series_id/series unconditionally to the requested parent.
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+        let pioneers_id = series_id_by_name(&pool, "Pioneers").await;
+
+        // "Other Story" is canonically in Pioneers; override moves it
+        // into Saga. Verify that opening Saga's page returns the book
+        // pinned to Saga's id, not Pioneers'.
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let other = books.iter().find(|b| b.filename == "other.epub").unwrap();
+        let uuid = other.unique_identifier.clone().unwrap();
+
+        let saga_id = series_id_by_name(&pool, "Saga").await;
+        let ov = MetadataOverrides {
+            series: Some("Saga".into()),
+            series_index: Some("5".into()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let saga = get_series(&pool, saga_id)
+            .await
+            .unwrap()
+            .expect("Saga exists");
+        let moved = saga
+            .books
+            .iter()
+            .find(|b| b.title.as_deref() == Some("Other Story"))
+            .expect("override moved Other Story into Saga");
+        assert_eq!(
+            moved.series_id,
+            Some(saga_id),
+            "card on Saga's page must link back to Saga, not the canonical Pioneers",
+        );
+        assert_eq!(moved.series.as_deref(), Some("Saga"));
+
+        // And it should be gone from Pioneers' page.
+        let pioneers = get_series(&pool, pioneers_id)
+            .await
+            .unwrap()
+            .expect("Pioneers exists");
+        assert!(
+            !pioneers
+                .books
+                .iter()
+                .any(|b| b.title.as_deref() == Some("Other Story")),
+            "override moved Other Story off Pioneers",
         );
     }
 
