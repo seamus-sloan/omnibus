@@ -137,6 +137,44 @@ pub fn Register() -> Element {
 #[cfg(not(feature = "mobile"))]
 #[component]
 fn ScreenLayout(children: Element) -> Element {
+    // #57: web-side reactive redirect to /login on 401. Mirrors the
+    // mobile ScreenLayout's `token_store::subscribe()` loop, but driven
+    // by `data::web_auth_state` since web auth lives in a session cookie
+    // (no client-side token to clear). Render path stays unconditional
+    // so SSR and WASM produce identical markup — only the effect runs
+    // on the WASM client. `Login` / `Register` routes don't go through
+    // `ScreenLayout`, so they stay reachable for unauthenticated users
+    // and the redirect can't loop.
+    #[cfg(feature = "web")]
+    {
+        let nav = dioxus_router::use_navigator();
+        let mut unauthorized = use_signal(|| false);
+        use_future(move || async move {
+            let mut rx = data::web_auth_state::subscribe();
+            // Sync the initial value once before awaiting changes. The
+            // signal's initial closure ran at scope-creation time, which
+            // can race with a 401 that fired (e.g. during SSR-to-WASM
+            // hydration) between channel creation and this future
+            // starting — without this borrow_and_update the first 401
+            // is lost. Mirrors the mobile ScreenLayout pattern.
+            if !*rx.borrow_and_update() {
+                unauthorized.set(true);
+                return;
+            }
+            while rx.changed().await.is_ok() {
+                if !*rx.borrow_and_update() {
+                    unauthorized.set(true);
+                    break;
+                }
+            }
+        });
+        use_effect(move || {
+            if unauthorized() {
+                nav.replace(Route::Login {});
+            }
+        });
+    }
+
     rsx! {
         div { class: "app-shell",
             Nav {}

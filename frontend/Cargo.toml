@@ -33,7 +33,19 @@ tracing = { workspace = true, optional = true }
 [features]
 default = []
 # Web client (WASM): uses dioxus-fullstack server-function client stubs.
-web = ["dioxus/web", "dep:gloo-net", "dep:gloo-timers", "dep:serde_json", "dep:web-sys", "dep:wasm-bindgen"]
+# tokio/sync (sync-only, WASM-safe) backs `data::web_auth_state` — a watch
+# channel that lets data-layer 401s notify the router to redirect to /login
+# (#57), mirroring the mobile token_store pattern.
+web = [
+    "dioxus/web",
+    "dep:gloo-net",
+    "dep:gloo-timers",
+    "dep:serde_json",
+    "dep:web-sys",
+    "dep:wasm-bindgen",
+    "dep:tokio",
+    "tokio/sync",
+]
 # Native mobile client: talks to `/api/*` REST routes via reqwest.
 # tokio is enabled for `sync::watch` — used by `data::token_store` to
 # notify the UI when auth state changes so screens redirect to /login
