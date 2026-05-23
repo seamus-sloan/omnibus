@@ -153,10 +153,10 @@ fn MetadataEditForm(book: EbookMetadata, id: i64) -> Element {
     let dirty_count = use_memo(move || dirty_fields().len());
 
     let display_title = book.title.clone().unwrap_or_else(|| book.filename.clone());
-    let primary_author = book
+    let (primary_author, primary_author_id) = book
         .creators
         .first()
-        .map(|c| c.name.clone())
+        .map(|c| (c.name.clone(), c.id))
         .unwrap_or_default();
 
     let accent_style = book
@@ -173,7 +173,20 @@ fn MetadataEditForm(book: EbookMetadata, id: i64) -> Element {
                 Link { to: Route::Landing {}, class: "bd-crumb-home", "Home" }
                 span { class: "bd-crumb-sep", "\u{203a}" }
                 if !primary_author.is_empty() {
-                    span { class: "bd-crumb-step", "{primary_author}" }
+                    if let Some(author_id) = primary_author_id {
+                        Link {
+                            to: Route::AuthorDetail { id: author_id },
+                            class: "bd-crumb-step",
+                            "data-testid": "me-crumb-author",
+                            "{primary_author}"
+                        }
+                    } else {
+                        span {
+                            class: "bd-crumb-step",
+                            "data-testid": "me-crumb-author",
+                            "{primary_author}"
+                        }
+                    }
                     span { class: "bd-crumb-sep", "\u{203a}" }
                 }
                 Link { to: Route::BookDetail { id }, class: "bd-crumb-step", "{display_title}" }
