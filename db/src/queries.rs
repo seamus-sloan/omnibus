@@ -4811,11 +4811,7 @@ mod tests {
         assert!(results.duration_ms < 10000, "duration should be reasonable");
     }
 
-    // -----------------------------------------------------------------
-    // Issue #115 — additional coverage for core book query functions.
-    // The library-path filter on list_books and the raw-operator path
-    // through search_books were previously untested end-to-end.
-    // -----------------------------------------------------------------
+    // Additional coverage for core book query functions.
 
     #[tokio::test]
     async fn list_books_filters_by_library_path() {
