@@ -64,11 +64,14 @@ fn render_series(s: SeriesDetail) -> Element {
         .find_map(|b| b.accent.as_deref())
         .unwrap_or("var(--accent)");
 
-    // Primary author from the first book's first creator.
-    let primary_author = s
+    // Primary author from the first book's first creator. Capture the
+    // author id alongside the name so the breadcrumb can render a Link
+    // when the row is resolvable; books whose first creator is an
+    // override-only string (no `authors` row) fall back to a plain span.
+    let (primary_author, primary_author_id) = s
         .books
         .iter()
-        .find_map(|b| b.creators.first().map(|c| c.name.clone()))
+        .find_map(|b| b.creators.first().map(|c| (c.name.clone(), c.id)))
         .unwrap_or_default();
 
     // Split series name for italic styling on key word.
@@ -84,12 +87,20 @@ fn render_series(s: SeriesDetail) -> Element {
         div { class: "disc-page", style: "--accent: {accent}",
             // Header
             div { class: "disc-series-header",
-                nav { class: "breadcrumb",
+                nav { class: "breadcrumb", aria_label: "breadcrumb",
                     Link { to: Route::Landing {}, "Library" }
-                    span { " › " }
+                    span { class: "breadcrumb-sep", " › " }
                     if !primary_author.is_empty() {
-                        span { "{primary_author}" }
-                        span { " › " }
+                        if let Some(author_id) = primary_author_id {
+                            Link {
+                                to: Route::AuthorDetail { id: author_id },
+                                "data-testid": "series-crumb-author",
+                                "{primary_author}"
+                            }
+                        } else {
+                            span { "data-testid": "series-crumb-author", "{primary_author}" }
+                        }
+                        span { class: "breadcrumb-sep", " › " }
                     }
                     span { "{s.name}" }
                 }
