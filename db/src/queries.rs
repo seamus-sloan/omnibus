@@ -1687,6 +1687,12 @@ async fn backfill_creator_ids(
     }
 
     // Bulk lookup in chunks to stay under SQLite's bound-parameter limit.
+    //
+    // `authors.name` is `UNIQUE COLLATE NOCASE`, so the SQL `WHERE name IN (...)`
+    // matches case-insensitively — but the returned row carries the DB casing,
+    // and an override's `Contributor::name` carries the user-supplied casing.
+    // Key the map by `to_lowercase()` on both sides so an override like
+    // "ada lovelace" still resolves to the canonical "Ada Lovelace" row's id.
     let mut name_to_id: HashMap<String, i64> = HashMap::with_capacity(names.len());
     for chunk in names.chunks(500) {
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
@@ -1697,14 +1703,15 @@ async fn backfill_creator_ids(
         }
         let rows = q.fetch_all(pool).await?;
         for r in rows {
-            name_to_id.insert(r.get("name"), r.get("id"));
+            let db_name: String = r.get("name");
+            name_to_id.insert(db_name.to_lowercase(), r.get("id"));
         }
     }
 
     for b in books.iter_mut() {
         for c in &mut b.creators {
             if c.id.is_none() {
-                c.id = name_to_id.get(&c.name).copied();
+                c.id = name_to_id.get(&c.name.to_lowercase()).copied();
             }
         }
     }
@@ -2144,7 +2151,7 @@ pub async fn get_author(
                     AND json_type(mo.overrides, '$.creators') IS NOT NULL
                  THEN EXISTS (
                    SELECT 1 FROM json_each(mo.overrides, '$.creators') je
-                    WHERE json_extract(je.value, '$.name') = ?
+                    WHERE json_extract(je.value, '$.name') = ? COLLATE NOCASE
                  )
                ELSE EXISTS (
                  SELECT 1 FROM books_authors_link bal
@@ -2262,7 +2269,7 @@ pub async fn get_series(
            SELECT {BOOK_COLUMNS}
            FROM books b
            JOIN effective e ON e.book_id = b.id
-           WHERE e.series_name = ?
+           WHERE e.series_name = ? COLLATE NOCASE
            ORDER BY e.series_index, b.sort, b.id"#
     );
     let rows = sqlx::query(&sql).bind(&series_name).fetch_all(pool).await?;
@@ -5493,6 +5500,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_book_backfills_creator_ids_case_insensitively() {
+        // `authors.name` is `UNIQUE COLLATE NOCASE`, so a SQL `IN (...)`
+        // lookup matches case-insensitively — but the returned row carries
+        // the DB casing while the override carries the user-supplied
+        // casing. The HashMap must normalise both sides to lowercase so
+        // an override like "ada lovelace" still resolves to the canonical
+        // "Ada Lovelace" id.
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+        let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let saga_one = books.iter().find(|b| b.filename == "saga1.epub").unwrap();
+        let uuid = saga_one.unique_identifier.clone().unwrap();
+        let book_id = saga_one.id;
+
+        let ov = MetadataOverrides {
+            creators: Some(vec![Contributor {
+                name: "ADA LOVELACE".into(),
+                role: Some("aut".into()),
+                file_as: None,
+                id: None,
+            }]),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let merged = get_book(&pool, book_id).await.unwrap().unwrap();
+        assert_eq!(merged.creators.len(), 1);
+        assert_eq!(merged.creators[0].name, "ADA LOVELACE");
+        assert_eq!(
+            merged.creators[0].id,
+            Some(ada_id),
+            "case-mismatched override should still resolve to the canonical author id",
+        );
+    }
+
+    #[tokio::test]
     async fn get_book_leaves_creator_id_none_when_override_author_unknown() {
         // If the override sets an author name that doesn't exist in the
         // `authors` table, backfill must leave the id None — same shape
@@ -5733,6 +5783,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_author_override_creator_match_is_case_insensitive() {
+        // `authors.name` is `UNIQUE COLLATE NOCASE`, so an override that
+        // differs only by case from the target author's row must still
+        // surface the book on `/author/:id`. The override comparison
+        // gets an explicit `COLLATE NOCASE` because the LHS is a
+        // `json_extract(...)` expression (BINARY by default) and the RHS
+        // is a bound parameter (also no collation).
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+        let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let standalone = books
+            .iter()
+            .find(|b| b.filename == "standalone.epub")
+            .unwrap();
+        let uuid = standalone.unique_identifier.clone().unwrap();
+
+        // Override uses lowercase casing; canonical row is "Ada Lovelace".
+        let ov = MetadataOverrides {
+            creators: Some(vec![Contributor {
+                name: "ada lovelace".into(),
+                role: Some("aut".into()),
+                file_as: None,
+                id: None,
+            }]),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let ada = get_author(&pool, ada_id)
+            .await
+            .unwrap()
+            .expect("author exists");
+        let titles: Vec<_> = ada
+            .books
+            .iter()
+            .map(|b| b.title.clone().unwrap_or_default())
+            .collect();
+        assert!(
+            titles.contains(&"Standalone".to_string()),
+            "lowercase override should still match NOCASE author row, got {titles:?}",
+        );
+    }
+
+    #[tokio::test]
     async fn get_series_includes_books_added_via_override() {
         // Repro of the bug where editing a book to set its series via the
         // metadata form left the book invisible on `/series/:id`. The
@@ -5826,6 +5927,51 @@ mod tests {
             series.books[0].title.as_deref(),
             Some("Saga: Book One"),
             "the unaffected book stays; the cleared one drops out",
+        );
+    }
+
+    #[tokio::test]
+    async fn get_series_override_match_is_case_insensitive() {
+        // The CTE's `series_name` column is BINARY by default — without
+        // `COLLATE NOCASE` on the filter, an override that differs only
+        // by case from the canonical series row fails to match, even
+        // though `series.name` is `UNIQUE COLLATE NOCASE`.
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+        let saga_id = series_id_by_name(&pool, "Saga").await;
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let standalone = books
+            .iter()
+            .find(|b| b.filename == "standalone.epub")
+            .unwrap();
+        let uuid = standalone.unique_identifier.clone().unwrap();
+
+        // Override uses lowercase casing; canonical row is "Saga".
+        let ov = MetadataOverrides {
+            series: Some("saga".into()),
+            series_index: Some("3".into()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let series = get_series(&pool, saga_id)
+            .await
+            .unwrap()
+            .expect("series exists");
+        let titles: Vec<_> = series
+            .books
+            .iter()
+            .map(|b| b.title.clone().unwrap_or_default())
+            .collect();
+        assert!(
+            titles.contains(&"Standalone".to_string()),
+            "lowercase override should still match NOCASE series row, got {titles:?}",
         );
     }
 
