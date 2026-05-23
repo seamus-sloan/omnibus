@@ -40,6 +40,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Required by DeterminateSystems/nix-installer-action so GitHub Actions
+      # provides the OIDC token endpoints it needs to authenticate to FlakeHub.
+      # Without it the installer falls back to anonymous api.github.com fetches
+      # that intermittently 401 ("Bad credentials") during flake evaluation.
+      id-token: write
       # Required by nix-community/cache-nix-action `purge: true` so it can
       # delete its own expired cache entries via the Actions cache API.
       actions: write
