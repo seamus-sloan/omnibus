@@ -86,7 +86,24 @@ fn main() {
                 .layer(axum::middleware::from_fn(auth::origin_check))
                 .layer(Extension(pool))
                 .layer(Extension(worker))
-                .layer(tower_http::trace::TraceLayer::new_for_http());
+                .layer(tower_http::trace::TraceLayer::new_for_http())
+                // Global request-handling guards. A slow client or oversized
+                // body can otherwise hold a tokio worker indefinitely.
+                //
+                // - `TimeoutLayer` aborts any request that takes longer than
+                //   30s end-to-end. Long-running scans run on the background
+                //   `Worker` (not the request task), so 30s is safely above
+                //   any synchronous handler.
+                // - `DefaultBodyLimit` caps request bodies to 1 MiB by
+                //   default. Routes that legitimately need larger payloads
+                //   (e.g. `POST /api/ebooks/{id}/cover`) layer their own
+                //   `DefaultBodyLimit::max(...)` closer to the handler,
+                //   which takes precedence over this outer cap.
+                .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+                    axum::http::StatusCode::REQUEST_TIMEOUT,
+                    std::time::Duration::from_secs(30),
+                ))
+                .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024));
 
             Ok(router)
         });
