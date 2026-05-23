@@ -18,6 +18,11 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       contains(github.event.pull_request.labels.*.name, 'run_ui_tests')
+    permissions:
+      contents: read
+      # Required by nix-community/cache-nix-action `purge: true` so it can
+      # delete its own expired cache entries via the Actions cache API.
+      actions: write
     env:
       CI: "1"
       # Pin target dir so the bundled binary lands at the path "Start server"
