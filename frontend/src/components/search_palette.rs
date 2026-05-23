@@ -24,6 +24,7 @@
 //! when open, so SSR and WASM agree on initial DOM — no hydration mismatch.
 //! The `⌘K` listener fires only in `#[cfg(feature = "web")]`.
 
+use dioxus::core::Task;
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
 use omnibus_shared::{
@@ -100,12 +101,14 @@ fn SpOverlay(open: PaletteOpen) -> Element {
     let mut results = use_signal(|| Option::<PaletteResults>::None);
     let mut selected = use_signal(|| 0_usize);
     let mut loading = use_signal(|| false);
-    // Generation counter for debounce — stale responses are discarded.
-    let mut generation = use_signal(|| 0_u64);
     // Tracks whether the user has driven selection with arrow keys this
     // session. When false, pressing Enter navigates to the full-page
     // search results instead of drilling into `selected`.
     let mut has_navigated = use_signal(|| false);
+    // #126: handle of the in-flight debounce+RPC task so the next keystroke
+    // can `.cancel()` it before spawning a new one (instead of leaving N
+    // sleeping spawns to race past the debounce and burn pool connections).
+    let mut current_task = use_signal(|| Option::<Task>::None);
     let nav = use_navigator();
 
     // Build a flat list of selectable items for keyboard navigation.
@@ -190,21 +193,19 @@ fn SpOverlay(open: PaletteOpen) -> Element {
         }
     };
 
-    // Debounced search effect. Uses gloo_timers on web, tokio::time on
-    // server. The generation counter ensures stale responses are discarded.
+    // Debounced search. Uses gloo_timers on web, tokio::time on server.
+    // Each keystroke cancels the prior task (debounce sleep + RPC) before
+    // spawning a new one — only one task is in flight at a time, so stale
+    // requests don't race past the debounce or hit SQLite.
     let url = server_url.clone();
-    use_effect(move || {
-        let q = query();
-        let gen = generation();
+    let mut spawn_search = move |v: String| {
+        if let Some(prev) = current_task.write().take() {
+            prev.cancel();
+        }
         let url = url.clone();
-        spawn(async move {
-            // 150ms debounce.
+        let task = spawn(async move {
             async_sleep_ms(150).await;
-            // Stale? Skip.
-            if gen != generation() {
-                return;
-            }
-            let trimmed = q.trim().to_string();
+            let trimmed = v.trim().to_string();
             if trimmed.is_empty() {
                 results.set(None);
                 loading.set(false);
@@ -213,23 +214,17 @@ fn SpOverlay(open: PaletteOpen) -> Element {
             loading.set(true);
             match data::search_palette(&url, &trimmed).await {
                 Ok(r) => {
-                    // Only apply if still current generation.
-                    if gen == generation() {
-                        selected.set(0);
-                        results.set(Some(r));
-                    }
+                    selected.set(0);
+                    results.set(Some(r));
                 }
                 Err(_) => {
-                    if gen == generation() {
-                        results.set(None);
-                    }
+                    results.set(None);
                 }
             }
-            if gen == generation() {
-                loading.set(false);
-            }
+            loading.set(false);
         });
-    });
+        current_task.set(Some(task));
+    };
 
     let res = results.read();
     let items = flat_items.read();
@@ -292,8 +287,8 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                         value: "{query}",
                         oninput: move |evt| {
                             let v = evt.value();
-                            query.set(v);
-                            generation += 1;
+                            query.set(v.clone());
+                            spawn_search(v);
                             // Typing reverts to "Enter goes to /search" until
                             // the user re-engages arrow-key navigation.
                             has_navigated.set(false);
