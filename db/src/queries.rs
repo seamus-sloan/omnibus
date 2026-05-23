@@ -4831,6 +4831,131 @@ mod tests {
         assert_eq!(results.tags[0].book_count, 1);
     }
 
+    // #128: lock the wiring between the palette and `build_fts_match`'s
+    // facet prefixes. A regression in the facet parser could otherwise
+    // silently break palette tag:/author:/series: queries without any
+    // palette test failing.
+
+    #[tokio::test]
+    async fn palette_book_matches_tag_facet() {
+        let _covers = CoversTempDir::new("palette_tag_facet");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed(
+                    "a.epub",
+                    Some("Dracula"),
+                    &["Bram Stoker"],
+                    &["vampires"],
+                    None,
+                    None,
+                ),
+                indexed(
+                    "b.epub",
+                    Some("Frankenstein"),
+                    &["Mary Shelley"],
+                    &["monsters"],
+                    None,
+                    None,
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let results = search_palette(&pool, "/lib", "tag:vampires").await.unwrap();
+        let titles: Vec<&str> = results.books.iter().map(|b| b.title.as_str()).collect();
+        assert!(
+            titles.contains(&"Dracula"),
+            "tag:vampires should match Dracula, got {titles:?}"
+        );
+        assert!(
+            !titles.contains(&"Frankenstein"),
+            "tag:vampires should not match Frankenstein"
+        );
+    }
+
+    #[tokio::test]
+    async fn palette_book_matches_author_facet() {
+        let _covers = CoversTempDir::new("palette_author_facet");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed(
+                    "a.epub",
+                    Some("Dracula"),
+                    &["Bram Stoker"],
+                    &["horror"],
+                    None,
+                    None,
+                ),
+                indexed(
+                    "b.epub",
+                    Some("Frankenstein"),
+                    &["Mary Shelley"],
+                    &["horror"],
+                    None,
+                    None,
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let results = search_palette(&pool, "/lib", "author:stoker")
+            .await
+            .unwrap();
+        let titles: Vec<&str> = results.books.iter().map(|b| b.title.as_str()).collect();
+        assert!(
+            titles.contains(&"Dracula"),
+            "author:stoker should match Dracula, got {titles:?}"
+        );
+        assert!(
+            !titles.contains(&"Frankenstein"),
+            "author:stoker should not match Frankenstein"
+        );
+    }
+
+    #[tokio::test]
+    async fn palette_book_matches_series_facet() {
+        let _covers = CoversTempDir::new("palette_series_facet");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed(
+                    "a.epub",
+                    Some("Book One"),
+                    &["Author A"],
+                    &[],
+                    Some(("Dracula Chronicles", "1")),
+                    None,
+                ),
+                indexed("b.epub", Some("Unrelated"), &["Author B"], &[], None, None),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let results = search_palette(&pool, "/lib", "series:dracula")
+            .await
+            .unwrap();
+        let titles: Vec<&str> = results.books.iter().map(|b| b.title.as_str()).collect();
+        assert!(
+            titles.contains(&"Book One"),
+            "series:dracula should match Book One, got {titles:?}"
+        );
+        assert!(
+            !titles.contains(&"Unrelated"),
+            "series:dracula should not match Unrelated"
+        );
+    }
+
     #[tokio::test]
     async fn palette_empty_query_returns_empty() {
         let pool = init_db("sqlite::memory:").await.unwrap();
