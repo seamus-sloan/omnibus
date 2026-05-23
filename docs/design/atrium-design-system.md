@@ -22,7 +22,7 @@ The user mocked **Atrium** in Claude Design, then exported a handoff bundle (HTM
 | Scope | **Foundation first.** Ship Atrium tokens + primitives as a reusable library and reskin one page (Library) as proof. Each remaining screen migrates in its own follow-up PR. |
 | Covers | **Real cover + extracted accent.** Use existing `/api/thumbs/:id`. Extract dominant color server-side during indexing; persist on books table. Stylized templates only as fallback. |
 | CSS arch | **Static `frontend/assets/atrium.css`** served by axum; referenced from index.html. Self-hosted fonts under `assets/fonts/`. |
-| Tweaks | **Dark + light** with a toggle (localStorage on web; disk-persisted on mobile). Sepia / density / type pairing deferred to [F1.9](../roadmap/1-9-themes-and-density.md). |
+| Tweaks | **Dark + light** with a toggle (localStorage on web; disk-persisted on mobile). Sepia / density / type pairing are out of scope (no successor initiative). |
 
 ### In scope (this delivery)
 
@@ -40,7 +40,7 @@ The user mocked **Atrium** in Claude Design, then exported a handoff bundle (HTM
 ### Out of scope (deferred to follow-ups)
 
 - Reskin of Book Detail, Search, Settings, Login. Each is one PR.
-- Sepia / density / type pairing toggles — [F1.9](../roadmap/1-9-themes-and-density.md).
+- Sepia / density / type pairing toggles — out of scope (no successor initiative).
 - All paper screens — see roadmap pages listed in §9.
 
 ---
@@ -212,7 +212,7 @@ N/A — no metrics pipeline yet. Tracked under [F5.2 Observability](../roadmap/5
 - *Scope* → Foundation first; no page reskin in this PR. Library reskin (F1.7-b) is the first page port and lands separately.
 - *Covers* → Real cover image + server-side extracted accent. Stylized templates fallback only.
 - *CSS arch* → Static `frontend/assets/atrium.css` referenced via Dioxus `asset!`. Hashing + serving is handled by the asset pipeline; no hand-written axum static mount.
-- *Theme tweaks* → Dark + light only; sepia/density/type deferred to [F1.9](../roadmap/1-9-themes-and-density.md).
+- *Theme tweaks* → Dark + light only; sepia/density/type are out of scope (no successor initiative).
 - *Theme attribute location* → on the `.atrium` wrapper div emitted by `AtriumRoot`, not on `<html>`. Keeps the swap declarative (Dioxus re-render) instead of imperative (DOM mutation from Rust).
 - *Cover-color algorithm* → Hue-bucket histogram on a 32×48 downsample; pick highest-weighted bucket; OKLab matrix to OKLCH; clamp lightness into a readable band.
 - *Dev port* → 3001 during the parallel-agent phase so we don't collide with the default workspace's 3000.
@@ -263,7 +263,6 @@ N/A — no metrics pipeline yet. Tracked under [F5.2 Observability](../roadmap/5
 |---|---|---|
 | [F1.7 Atrium design system](../roadmap/1-7-atrium-design-system.md) | This delivery — tokens, primitives, Library reskin | In progress |
 | [F1.8 Discovery pages](../roadmap/1-8-discovery-pages.md) | Author / Series / Tag-cloud pages | Planned |
-| [F1.9 Themes & density](../roadmap/1-9-themes-and-density.md) | Sepia theme, density toggle, type pairing toggle, user-preferences table | Planned |
 | [F3.4 Stats](../roadmap/3-4-stats.md) | Year-in-review reading stats | Planned (depends on F2.1) |
 | [F3.5 Shared shelves](../roadmap/3-5-shared-shelves.md) | Multi-user shelves | Planned (depends on F3.1) |
 | [F5.6 Admin health](../roadmap/5-6-admin-health.md) | Server health dashboard | Planned (splits from F5.4) |
@@ -279,4 +278,4 @@ Existing initiatives that gain an Atrium "redesign" sub-task:
 
 1. **F1.7-a Foundation.** Migration + `extract_accent` + atrium.css + fonts + primitives + theme toggle. *No page changes yet.* Reviewable as infra.
 2. **F1.7-b Library reskin.** Port `landing.rs` to Atrium primitives. Updated Playwright.
-3. Follow-ups (in roadmap priority order): F1.4-redesign, F1.1-redesign, F0.3-login-redesign, F1.8, F1.9, then everything else picks up the primitives for free.
+3. Follow-ups (in roadmap priority order): F1.4-redesign, F1.1-redesign, F0.3-login-redesign, F1.8, then everything else picks up the primitives for free.
