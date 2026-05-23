@@ -578,8 +578,18 @@ async fn delete_ebook_overrides(
     if let Err(e) = db::delete_metadata_overrides(&state.pool, &uuid).await {
         return internal("delete_metadata_overrides", e);
     }
-    db::delete_override_cover(&uuid);
-    db::thumbs::invalidate_thumbs(id);
+    // `delete_override_cover` + `invalidate_thumbs` are sync `std::fs`
+    // operations; run them on the blocking pool so the axum runtime stays
+    // responsive under load (#106).
+    let uuid_for_blocking = uuid.clone();
+    if let Err(e) = tokio::task::spawn_blocking(move || {
+        db::delete_override_cover(&uuid_for_blocking);
+        db::thumbs::invalidate_thumbs(id);
+    })
+    .await
+    {
+        return internal("spawn_blocking(delete_override_cover)", e);
+    }
     match db::get_book(&state.pool, id).await {
         Ok(Some(book)) => Json(book).into_response(),
         Ok(None) => (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
@@ -693,9 +703,19 @@ async fn post_ebook_cover(
         }
     };
 
-    // Write the override cover to disk.
-    if let Err(e) = db::write_override_cover(&uuid, &mime, &bytes) {
-        return internal("write_override_cover", e);
+    // Write the override cover to disk. `write_override_cover` is a sync
+    // `std::fs` call — run it on the blocking pool so the axum runtime stays
+    // responsive while we hit disk (#106). `uuid` is needed again below for
+    // the overrides table update, so it's the only value we clone.
+    let uuid_for_write = uuid.clone();
+    let write_result = tokio::task::spawn_blocking(move || {
+        db::write_override_cover(&uuid_for_write, &mime, &bytes)
+    })
+    .await;
+    match write_result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return internal("write_override_cover", e),
+        Err(e) => return internal("spawn_blocking(write_override_cover)", e),
     }
 
     // Mark the overrides table with has_cover_override = 1. Preserve existing
@@ -712,7 +732,10 @@ async fn post_ebook_cover(
     }
 
     // Invalidate thumb cache so next request regenerates from new cover.
-    db::thumbs::invalidate_thumbs(id);
+    // Also sync `std::fs` — run on the blocking pool (#106).
+    if let Err(e) = tokio::task::spawn_blocking(move || db::thumbs::invalidate_thumbs(id)).await {
+        return internal("spawn_blocking(invalidate_thumbs)", e);
+    }
 
     match db::get_book(&state.pool, id).await {
         Ok(Some(book)) => Json(book).into_response(),

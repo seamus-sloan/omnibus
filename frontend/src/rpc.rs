@@ -288,8 +288,16 @@ pub async fn rpc_delete_overrides(book_id: i64) -> Result<Option<EbookMetadata>>
         return Ok(None);
     };
     db::delete_metadata_overrides(&pool.0, &uuid).await?;
-    db::delete_override_cover(&uuid);
-    db::thumbs::invalidate_thumbs(book_id);
+    // `delete_override_cover` + `invalidate_thumbs` are sync `std::fs`
+    // operations; run them on the blocking pool so this server function
+    // doesn't pin a tokio worker thread (#106).
+    let uuid_for_blocking = uuid.clone();
+    tokio::task::spawn_blocking(move || {
+        db::delete_override_cover(&uuid_for_blocking);
+        db::thumbs::invalidate_thumbs(book_id);
+    })
+    .await
+    .map_err(|e| ServerFnError::new(format!("spawn_blocking(delete_override_cover): {e}")))?;
     Ok(db::get_book(&pool.0, book_id).await?)
 }
 
