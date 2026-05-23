@@ -280,8 +280,8 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                         // that isn't yet painted and the caret never
                         // appears (this is the timing reason prior
                         // attempts with `set_focus(true)`/`spawn` failed).
-                        onmounted: move |_evt: MountedEvent| {
-                            focus_palette_input(&_evt);
+                        onmounted: move |evt: MountedEvent| {
+                            focus_palette_input(&evt);
                         },
                         value: "{query}",
                         oninput: move |evt| {
@@ -688,16 +688,15 @@ fn focus_palette_input(evt: &MountedEvent) {
     let Some(window) = web_sys::window() else {
         return;
     };
-    let closure = Closure::wrap(Box::new(move || {
+    // `Closure::once_into_js` hands the callback to JS and frees the Rust
+    // closure (and the captured `element`) after the browser fires it once,
+    // so repeatedly opening/closing the palette doesn't accumulate leaks.
+    let cb = Closure::once_into_js(move || {
         if let Some(html_el) = element.dyn_ref::<web_sys::HtmlElement>() {
             let _ = html_el.focus();
         }
-    }) as Box<dyn FnMut()>);
-    let _ = window.request_animation_frame(closure.as_ref().unchecked_ref());
-    // Leak the closure so it stays alive until the browser fires the
-    // animation-frame callback — without this it would be dropped on
-    // return and the queued callback would point at freed memory.
-    closure.forget();
+    });
+    let _ = window.request_animation_frame(cb.unchecked_ref());
 }
 
 #[cfg(not(feature = "web"))]
