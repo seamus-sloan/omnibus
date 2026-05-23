@@ -15,6 +15,9 @@ pub fn TopNav() -> Element {
     rsx! {
         nav { class: "top-nav",
             Link { to: Route::Landing {}, "Home" }
+            Link { to: Route::AuthorsIndex {}, "Authors" }
+            Link { to: Route::SeriesIndex {}, "Series" }
+            Link { to: Route::TagCloud {}, "Tags" }
             Link { to: Route::Settings {}, "Settings" }
             if !on_settings {
                 SearchPaletteHost {}

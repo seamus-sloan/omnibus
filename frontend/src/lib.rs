@@ -16,8 +16,8 @@ pub mod view_prefs;
 
 pub use components::Nav;
 pub use pages::{
-    AuthorPage, BookDetailPage, LandingPage, LoginPage, MetadataEditPage, RegisterPage, SearchPage,
-    SeriesPage, SettingsPage, TagCloudPage,
+    AuthorPage, AuthorsIndexPage, BookDetailPage, LandingPage, LoginPage, MetadataEditPage,
+    RegisterPage, SearchPage, SeriesIndexPage, SeriesPage, SettingsPage, TagCloudPage,
 };
 
 #[cfg(feature = "mobile")]
@@ -34,8 +34,12 @@ pub enum Route {
     BookDetail { id: i64 },
     #[route("/books/:id/edit")]
     MetadataEdit { id: i64 },
+    #[route("/authors")]
+    AuthorsIndex {},
     #[route("/authors/:id")]
     AuthorDetail { id: i64 },
+    #[route("/series")]
+    SeriesIndex {},
     #[route("/series/:id")]
     SeriesDetail { id: i64 },
     #[route("/tags")]
@@ -97,11 +101,27 @@ pub fn AuthorDetail(id: i64) -> Element {
     }
 }
 
+/// Route target for `/authors` — browse-all authors index (F1.12).
+#[component]
+pub fn AuthorsIndex() -> Element {
+    rsx! {
+        ScreenLayout { AuthorsIndexPage {} }
+    }
+}
+
 /// Route target for `/series/:id` — single series discovery page.
 #[component]
 pub fn SeriesDetail(id: i64) -> Element {
     rsx! {
         ScreenLayout { SeriesPage { id } }
+    }
+}
+
+/// Route target for `/series` — browse-all series index (F1.12).
+#[component]
+pub fn SeriesIndex() -> Element {
+    rsx! {
+        ScreenLayout { SeriesIndexPage {} }
     }
 }
 

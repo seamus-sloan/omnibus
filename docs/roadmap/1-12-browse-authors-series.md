@@ -109,7 +109,14 @@ Unblocks:
 
 ## Status
 
-Queued. Blocked on [F1.8 Discovery pages](1-8-discovery-pages.md).
+Shipped. `/authors` and `/series` index pages live as `AuthorsIndexPage` and
+`SeriesIndexPage` (`frontend/src/pages/authors_index.rs` and
+`series_index.rs`); queries are `db::list_authors` / `db::list_series`;
+shared types `AuthorSummary` / `SeriesSummary`; RPC endpoints
+`/api/rpc/authors` and `/api/rpc/series-list`; REST endpoints `/api/authors`
+and `/api/series`. Nav links added to top and bottom nav. Card-grid layout
+implemented; the design's per-author read/rating stats and the series
+status badges are deferred until those fields exist on the summaries.
 
 ---
 
