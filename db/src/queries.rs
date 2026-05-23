@@ -2062,19 +2062,30 @@ pub async fn search_palette(
     let like_pattern = format!("%{like_q}%");
 
     // B. Authors — substring match, scoped to library, ordered by book count.
+    //
+    // Single JOIN+GROUP BY pass: COUNT(*) replaces the correlated book_count
+    // subquery, and the INNER JOIN chain implicitly enforces "at least one
+    // matching book" (so the previous EXISTS predicate folds away — groups
+    // with zero matches don't appear). Library scoping moves to the WHERE
+    // clause; `l.path = ?1` is applied before grouping so authors whose only
+    // books live in other libraries don't appear and book_count stays
+    // library-correct (see `palette_scoped_to_library` test).
+    //
+    // EXPLAIN QUERY PLAN (sqlite 3.45+): the planner drives from the highly
+    // selective `libraries.path` unique index, then walks `books` via
+    // `idx_books_library_id`, then `books_authors_link` via its PK (`book`),
+    // then `authors` by rowid, with a TEMP B-TREE for GROUP BY/ORDER BY.
+    // The LIKE predicate filters during aggregation. No full scans.
+    // See `palette_taxonomy_query_plans_use_indexes` for the locked-in shape.
     let authors: Vec<PaletteAuthorHit> = sqlx::query(
         r#"
-        SELECT a.id, a.name,
-               (SELECT COUNT(*) FROM books_authors_link bal
-                  JOIN books b ON b.id = bal.book
-                  JOIN libraries l ON l.id = b.library_id
-                 WHERE bal.author = a.id AND l.path = ?1) AS book_count
+        SELECT a.id, a.name, COUNT(*) AS book_count
         FROM authors a
-        WHERE a.name LIKE ?2 ESCAPE '\'
-          AND EXISTS (SELECT 1 FROM books_authors_link bal
-                        JOIN books b ON b.id = bal.book
-                        JOIN libraries l ON l.id = b.library_id
-                       WHERE bal.author = a.id AND l.path = ?1)
+        JOIN books_authors_link bal ON bal.author = a.id
+        JOIN books b ON b.id = bal.book
+        JOIN libraries l ON l.id = b.library_id
+        WHERE a.name LIKE ?2 ESCAPE '\' AND l.path = ?1
+        GROUP BY a.id, a.name
         ORDER BY book_count DESC, a.name
         LIMIT ?3
         "#,
@@ -2093,13 +2104,15 @@ pub async fn search_palette(
     .collect();
 
     // C. Series — substring match with primary author from first book.
+    //
+    // Same single-pass shape as authors. The `author_display` correlated
+    // subquery is intentionally retained: it needs ORDER BY ... LIMIT 1 over
+    // a separate join chain (`books_authors_link` + position) that doesn't
+    // fold cleanly into the grouped row. It only runs for the up-to-LIMIT
+    // outer rows, so its cost is bounded.
     let series: Vec<PaletteSeriesHit> = sqlx::query(
         r#"
-        SELECT s.id, s.name,
-               (SELECT COUNT(*) FROM books_series_link bsl
-                  JOIN books b ON b.id = bsl.book
-                  JOIN libraries l ON l.id = b.library_id
-                 WHERE bsl.series = s.id AND l.path = ?1) AS book_count,
+        SELECT s.id, s.name, COUNT(*) AS book_count,
                (SELECT a.name FROM books_series_link bsl2
                   JOIN books b2 ON b2.id = bsl2.book
                   JOIN libraries l2 ON l2.id = b2.library_id
@@ -2108,11 +2121,11 @@ pub async fn search_palette(
                  WHERE bsl2.series = s.id AND l2.path = ?1
                  ORDER BY b2.sort, b2.id, bal.position LIMIT 1) AS author_display
         FROM series s
-        WHERE s.name LIKE ?2 ESCAPE '\'
-          AND EXISTS (SELECT 1 FROM books_series_link bsl
-                        JOIN books b ON b.id = bsl.book
-                        JOIN libraries l ON l.id = b.library_id
-                       WHERE bsl.series = s.id AND l.path = ?1)
+        JOIN books_series_link bsl ON bsl.series = s.id
+        JOIN books b ON b.id = bsl.book
+        JOIN libraries l ON l.id = b.library_id
+        WHERE s.name LIKE ?2 ESCAPE '\' AND l.path = ?1
+        GROUP BY s.id, s.name
         ORDER BY book_count DESC, s.name
         LIMIT ?3
         "#,
@@ -2132,19 +2145,17 @@ pub async fn search_palette(
     .collect();
 
     // D. Tags — substring match, scoped to library.
+    //
+    // Same single-pass shape; uses `idx_books_tags_tag`.
     let tags: Vec<PaletteTagHit> = sqlx::query(
         r#"
-        SELECT t.id, t.name,
-               (SELECT COUNT(*) FROM books_tags_link btl
-                  JOIN books b ON b.id = btl.book
-                  JOIN libraries l ON l.id = b.library_id
-                 WHERE btl.tag = t.id AND l.path = ?1) AS book_count
+        SELECT t.id, t.name, COUNT(*) AS book_count
         FROM tags t
-        WHERE t.name LIKE ?2 ESCAPE '\'
-          AND EXISTS (SELECT 1 FROM books_tags_link btl
-                        JOIN books b ON b.id = btl.book
-                        JOIN libraries l ON l.id = b.library_id
-                       WHERE btl.tag = t.id AND l.path = ?1)
+        JOIN books_tags_link btl ON btl.tag = t.id
+        JOIN books b ON b.id = btl.book
+        JOIN libraries l ON l.id = b.library_id
+        WHERE t.name LIKE ?2 ESCAPE '\' AND l.path = ?1
+        GROUP BY t.id, t.name
         ORDER BY book_count DESC, t.name
         LIMIT ?3
         "#,
@@ -5370,6 +5381,214 @@ mod tests {
         let results = search_palette(&pool, "/lib", "author").await.unwrap();
         // duration_ms should be populated (at least 0 — we just check it's set)
         assert!(results.duration_ms < 10000, "duration should be reasonable");
+    }
+
+    /// #127 regression coverage: after collapsing the correlated
+    /// `book_count` / `EXISTS` subqueries into a single JOIN+GROUP BY,
+    /// `l.path = ?1` must still be applied **before** the aggregate so the
+    /// scoped library's count doesn't pick up rows from sibling libraries.
+    /// This exercises all three taxonomies (authors, series, tags) plus
+    /// ordering — the seeded set has 3 matching books in /lib-a and 2 in
+    /// /lib-b for the same author/series/tag, and the rare "Sole" author
+    /// only appears in /lib-b, so it must be absent from /lib-a results.
+    #[tokio::test]
+    async fn palette_taxonomy_counts_scoped_per_library() {
+        let _covers = CoversTempDir::new("palette_taxonomy_scoped");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+
+        replace_books(
+            &pool,
+            "/lib-a",
+            vec![
+                indexed(
+                    "a1.epub",
+                    Some("Alpha One"),
+                    &["Shared Author"],
+                    &["Shared Tag"],
+                    Some(("Shared Series", "1")),
+                    None,
+                ),
+                indexed(
+                    "a2.epub",
+                    Some("Alpha Two"),
+                    &["Shared Author"],
+                    &["Shared Tag"],
+                    Some(("Shared Series", "2")),
+                    None,
+                ),
+                indexed(
+                    "a3.epub",
+                    Some("Alpha Three"),
+                    &["Shared Author"],
+                    &["Shared Tag"],
+                    Some(("Shared Series", "3")),
+                    None,
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+        replace_books(
+            &pool,
+            "/lib-b",
+            vec![
+                indexed(
+                    "b1.epub",
+                    Some("Beta One"),
+                    &["Shared Author", "Sole Author"],
+                    &["Shared Tag"],
+                    Some(("Shared Series", "1")),
+                    None,
+                ),
+                indexed(
+                    "b2.epub",
+                    Some("Beta Two"),
+                    &["Shared Author"],
+                    &["Shared Tag"],
+                    Some(("Shared Series", "2")),
+                    None,
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+        // Scope to /lib-a — author/series/tag counts must be 3, not 5.
+        let results = search_palette(&pool, "/lib-a", "Shared").await.unwrap();
+
+        let author = results
+            .authors
+            .iter()
+            .find(|a| a.name == "Shared Author")
+            .expect("Shared Author present in /lib-a results");
+        assert_eq!(
+            author.book_count, 3,
+            "author count must be scoped to /lib-a, got {results:?}"
+        );
+        assert!(
+            !results.authors.iter().any(|a| a.name == "Sole Author"),
+            "Sole Author lives only in /lib-b and must not appear"
+        );
+
+        let series = results
+            .series
+            .iter()
+            .find(|s| s.name == "Shared Series")
+            .expect("Shared Series present in /lib-a results");
+        assert_eq!(
+            series.book_count, 3,
+            "series count must be scoped to /lib-a"
+        );
+
+        let tag = results
+            .tags
+            .iter()
+            .find(|t| t.name == "Shared Tag")
+            .expect("Shared Tag present in /lib-a results");
+        assert_eq!(tag.book_count, 3, "tag count must be scoped to /lib-a");
+
+        // Cross-check /lib-b counts to make sure the same query returns 2.
+        let results_b = search_palette(&pool, "/lib-b", "Shared").await.unwrap();
+        let author_b = results_b
+            .authors
+            .iter()
+            .find(|a| a.name == "Shared Author")
+            .expect("Shared Author present in /lib-b results");
+        assert_eq!(author_b.book_count, 2);
+        let series_b = results_b
+            .series
+            .iter()
+            .find(|s| s.name == "Shared Series")
+            .expect("Shared Series present in /lib-b results");
+        assert_eq!(series_b.book_count, 2);
+        let tag_b = results_b
+            .tags
+            .iter()
+            .find(|t| t.name == "Shared Tag")
+            .expect("Shared Tag present in /lib-b results");
+        assert_eq!(tag_b.book_count, 2);
+    }
+
+    /// #127: capture `EXPLAIN QUERY PLAN` for each of the three rewritten
+    /// taxonomy queries and assert the planner uses the link-table indexes.
+    /// This is a structural check — it doesn't pin the literal plan string
+    /// (SQLite's wording can shift across point releases) but it does fail
+    /// loudly if any of the link tables fall back to a full SCAN, which
+    /// would defeat the whole point of this optimization.
+    #[tokio::test]
+    async fn palette_taxonomy_query_plans_use_indexes() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+
+        async fn plan_text(pool: &SqlitePool, sql: &str) -> String {
+            let rows = sqlx::query(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .bind("/lib")
+                .bind("%x%")
+                .bind(5_i32)
+                .fetch_all(pool)
+                .await
+                .unwrap();
+            rows.iter()
+                .map(|r| r.get::<String, _>("detail"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        // Authors
+        let plan = plan_text(
+            &pool,
+            "SELECT a.id, a.name, COUNT(*) AS book_count \
+             FROM authors a \
+             JOIN books_authors_link bal ON bal.author = a.id \
+             JOIN books b ON b.id = bal.book \
+             JOIN libraries l ON l.id = b.library_id \
+             WHERE a.name LIKE ?2 ESCAPE '\\' AND l.path = ?1 \
+             GROUP BY a.id, a.name \
+             ORDER BY book_count DESC, a.name \
+             LIMIT ?3",
+        )
+        .await;
+        assert!(
+            !plan.contains("SCAN books_authors_link") && !plan.contains("SCAN bal"),
+            "authors plan should not full-scan the link table:\n{plan}"
+        );
+
+        // Series
+        let plan = plan_text(
+            &pool,
+            "SELECT s.id, s.name, COUNT(*) AS book_count \
+             FROM series s \
+             JOIN books_series_link bsl ON bsl.series = s.id \
+             JOIN books b ON b.id = bsl.book \
+             JOIN libraries l ON l.id = b.library_id \
+             WHERE s.name LIKE ?2 ESCAPE '\\' AND l.path = ?1 \
+             GROUP BY s.id, s.name \
+             ORDER BY book_count DESC, s.name \
+             LIMIT ?3",
+        )
+        .await;
+        assert!(
+            !plan.contains("SCAN books_series_link") && !plan.contains("SCAN bsl"),
+            "series plan should not full-scan the link table:\n{plan}"
+        );
+
+        // Tags
+        let plan = plan_text(
+            &pool,
+            "SELECT t.id, t.name, COUNT(*) AS book_count \
+             FROM tags t \
+             JOIN books_tags_link btl ON btl.tag = t.id \
+             JOIN books b ON b.id = btl.book \
+             JOIN libraries l ON l.id = b.library_id \
+             WHERE t.name LIKE ?2 ESCAPE '\\' AND l.path = ?1 \
+             GROUP BY t.id, t.name \
+             ORDER BY book_count DESC, t.name \
+             LIMIT ?3",
+        )
+        .await;
+        assert!(
+            !plan.contains("SCAN books_tags_link") && !plan.contains("SCAN btl"),
+            "tags plan should not full-scan the link table:\n{plan}"
+        );
     }
 
     // Additional coverage for core book query functions.
