@@ -188,3 +188,118 @@ test("book detail page has a working edit metadata link", async ({ page, request
   await expect(page).toHaveURL(new RegExp(`/books/${id}/edit$`));
   await expect(page.getByText("Edit metadata")).toBeVisible();
 });
+
+// ---------------------------------------------------------------------------
+// Error paths — force 500 on the save / delete RPC and assert the UI does
+// not navigate away from the edit form. The metadata edit page renders the
+// `save_error` as visible text near the save bar (no `role=status` /
+// `role=alert` today — see PR body for the missing-error-UX finding), so
+// the most concrete observable state is that the URL still matches
+// `/books/:id/edit` and the save button has come out of its "Saving…"
+// state (re-enabled, label restored).
+// ---------------------------------------------------------------------------
+
+test("surfaces error and stays on edit form when save mutation fails", async ({ page, request }) => {
+  const id = await fetchBookIdByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${id}/edit`);
+
+  // Dirty a field so Save is enabled and a POST will fire.
+  const titleInput = page.getByLabel("Title");
+  await titleInput.clear();
+  await titleInput.fill("Alpha Should Not Persist");
+  await expect(page.getByTestId("me-save")).toBeEnabled();
+
+  // Force-fail the override-save RPC. Match the trailing path explicitly so
+  // we don't accidentally intercept the `/delete` sibling.
+  await page.route("**/api/rpc/ebook/overrides", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
+    }
+    return route.continue();
+  });
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: /\/api\/rpc\/ebook\/overrides$/,
+      expectedStatus: 500,
+    },
+    async () => page.getByTestId("me-save").click(),
+  );
+
+  // URL must not have navigated away from the edit form.
+  await expect(page).toHaveURL(new RegExp(`/books/${id}/edit$`));
+
+  // Edited title is still in the input (state preserved).
+  await expect(titleInput).toHaveValue("Alpha Should Not Persist");
+
+  // Save button has come out of its "Saving…" state and is re-enabled so
+  // the user can retry. `toBeEnabled` auto-retries until the signal settles.
+  await expect(page.getByTestId("me-save")).toBeEnabled();
+});
+
+test("surfaces error and stays on edit form when revert mutation fails", async ({ page, request }) => {
+  // First, create an override on the fixture so the revert button shows up.
+  const id = await fetchBookIdByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${id}/edit`);
+
+  const titleInput = page.getByLabel("Title");
+  await titleInput.clear();
+  await titleInput.fill("Alpha Revert Setup");
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: /\/api\/rpc\/ebook\/overrides$/,
+      expectedStatus: 200,
+    },
+    async () => page.getByTestId("me-save").click(),
+  );
+  await expect(page).toHaveURL(new RegExp(`/books/${id}$`));
+
+  // Re-open the edit form — the revert button should now be visible.
+  const editId = await fetchBookIdByTitle(request, "Alpha Revert Setup");
+  await gotoReady(page, `/books/${editId}/edit`);
+  const revertBtn = page.getByTestId("revert-overrides");
+  await expect(revertBtn).toBeVisible();
+
+  // Force-fail the delete RPC.
+  await page.route("**/api/rpc/ebook/overrides/delete", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
+    }
+    return route.continue();
+  });
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: /\/api\/rpc\/ebook\/overrides\/delete$/,
+      expectedStatus: 500,
+    },
+    async () => revertBtn.click(),
+  );
+
+  // URL must not have navigated away from the edit form.
+  await expect(page).toHaveURL(new RegExp(`/books/${editId}/edit$`));
+
+  // Revert button is still visible (override still active) and re-enabled.
+  await expect(revertBtn).toBeVisible();
+  await expect(revertBtn).toBeEnabled();
+
+  // Clean up: stop intercepting and revert successfully so subsequent runs
+  // start from a clean fixture state. `page.unroute` removes our handler.
+  await page.unroute("**/api/rpc/ebook/overrides/delete");
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: /\/api\/rpc\/ebook\/overrides\/delete$/,
+      expectedStatus: 200,
+    },
+    async () => revertBtn.click(),
+  );
+  await expect(page).toHaveURL(new RegExp(`/books/${editId}$`));
+});
