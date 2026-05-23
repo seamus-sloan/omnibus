@@ -9,7 +9,10 @@
 //! * Timing-safe login with per-account lockout + failure counter.
 //! * Session creation: raw 256-bit token returned once, SHA-256 hash stored.
 //! * Session lookup: exact SHA-256 hash match against the stored value
-//!   (the raw token is never persisted), with absolute + idle expiry.
+//!   (the raw token is never persisted), with absolute expiry
+//!   (`expires_at`, set at create time from the caller's TTL — 30 days for
+//!   cookies, 90 days for bearer tokens) and idle expiry
+//!   (`SESSION_IDLE_TIMEOUT_SECS`, 7 days since `last_used_at`).
 //! * Device registration + listing.
 //! * `OMNIBUS_INITIAL_ADMIN` recovery hook (`promote_to_admin`).
 //! * Session-key secret load/create in `secrets`.
@@ -560,6 +563,12 @@ pub async fn verify_login(pool: &SqlitePool, username: &str, password: &str) -> 
 /// seconds. Avoids write-amplification on every authenticated request.
 const SESSION_TOUCH_THRESHOLD_SECS: i64 = 5 * 60;
 
+/// Idle-expiry threshold. A session whose `last_used_at` is older than this
+/// is treated as expired by `lookup_session`, even if `expires_at` is still
+/// in the future. Caps the blast radius of a stolen or forgotten session
+/// (cookie absolute TTL is 30 days; bearer is 90).
+pub(crate) const SESSION_IDLE_TIMEOUT_SECS: i64 = 7 * 24 * 60 * 60;
+
 pub async fn create_session(
     pool: &SqlitePool,
     user_id: i64,
@@ -631,6 +640,15 @@ pub async fn lookup_session(pool: &SqlitePool, raw_token: &str) -> AuthResult<(U
 
     let session_id: i64 = row.get("s_id");
     let last_used_at: i64 = row.get("last_used_at");
+
+    // Idle expiry: a session that hasn't been touched in
+    // `SESSION_IDLE_TIMEOUT_SECS` is treated as expired regardless of its
+    // absolute `expires_at`. `last_used_at` is updated opportunistically
+    // below (rate-limited by `SESSION_TOUCH_THRESHOLD_SECS`), so this
+    // genuinely tracks user inactivity.
+    if now - last_used_at > SESSION_IDLE_TIMEOUT_SECS {
+        return Err(AuthError::SessionNotFound);
+    }
 
     let user = User {
         id: row.get("u_id"),
@@ -1058,6 +1076,45 @@ mod tests {
             .unwrap();
         let err = lookup_session(&p, &ns.raw_token).await.unwrap_err();
         assert!(matches!(err, AuthError::SessionNotFound));
+    }
+
+    #[tokio::test]
+    async fn session_idle_expired_after_threshold() {
+        // Absolute expiry is still in the future, but `last_used_at` is
+        // older than `SESSION_IDLE_TIMEOUT_SECS` — must be rejected.
+        let p = pool().await;
+        let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+        let ns = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60)
+            .await
+            .unwrap();
+        let stale = now_unix() - SESSION_IDLE_TIMEOUT_SECS - 1;
+        sqlx::query("UPDATE sessions SET last_used_at = ? WHERE id = ?")
+            .bind(stale)
+            .bind(ns.session.id)
+            .execute(&p)
+            .await
+            .unwrap();
+        let err = lookup_session(&p, &ns.raw_token).await.unwrap_err();
+        assert!(matches!(err, AuthError::SessionNotFound));
+    }
+
+    #[tokio::test]
+    async fn session_idle_just_below_threshold_is_accepted() {
+        // A session touched right before the idle cutoff stays valid.
+        let p = pool().await;
+        let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+        let ns = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60)
+            .await
+            .unwrap();
+        let fresh = now_unix() - SESSION_IDLE_TIMEOUT_SECS + 60;
+        sqlx::query("UPDATE sessions SET last_used_at = ? WHERE id = ?")
+            .bind(fresh)
+            .bind(ns.session.id)
+            .execute(&p)
+            .await
+            .unwrap();
+        let (user2, _) = lookup_session(&p, &ns.raw_token).await.unwrap();
+        assert_eq!(user2.id, u.id);
     }
 
     #[tokio::test]

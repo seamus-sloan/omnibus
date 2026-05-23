@@ -77,7 +77,9 @@ Auth core landed across multiple PRs: registration, login, logout endpoints, ses
 
 The 2026-04-26 QA pass ([qa-report](../qa/qa-report-2026-04-26.md), [PR #43](https://github.com/seamus-sloan/omnibus/pull/43)) cleared the cookie-authed-POST regression behind the dx-fullstack proxy and added the missing logout button to TopNav. The same-day audit re-pass spun out F0.7 (per-route authorization), [F5.4](5-4-admin-panel.md) admin-side TODOs for the `registration_enabled` toggle and the device/session list & revoke endpoints, and the `last_seen_at` follow-up captured above.
 
-Out of scope for v1.0 (deliberately): email verification, password reset, account lockout (rate limit only), audit log, session sliding-window expiry. All land later — most under [F5.4](5-4-admin-panel.md).
+Sessions enforce both absolute expiry (30 days cookie / 90 days bearer, set on `expires_at` at create time) and idle expiry (7 days since `last_used_at`, via `SESSION_IDLE_TIMEOUT_SECS` in `db::auth`). `last_used_at` is touched opportunistically on every `lookup_session` (rate-limited to one write per 5 minutes per session).
+
+Out of scope for v1.0 (deliberately): email verification, password reset, account lockout (rate limit only), audit log, sliding-window renewal of the absolute expiry. All land later — most under [F5.4](5-4-admin-panel.md).
 
 ---
 
