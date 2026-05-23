@@ -2477,15 +2477,44 @@ pub async fn search_palette(
     // book_count stays library-correct (covered by `palette_scoped_to_library`
     // and `palette_taxonomy_counts_scoped_per_library`). The join plan is
     // locked in by `palette_taxonomy_query_plans_use_indexes`.
+    //
+    // F5.1: the count uses the effective (override-aware) creator set, not
+    // the raw `books_authors_link` rows — otherwise an author whose books
+    // were all reassigned through the metadata edit form (e.g. "Sanderson,
+    // Brandon" → "Brandon Sanderson") keeps reporting the canonical count
+    // even though `/author/:id` shows zero. Visibility still requires at
+    // least one canonical link row in this library so we don't list
+    // authors that exist only as a string inside override JSON (no
+    // navigable id), matching the rest of the palette's behavior.
     let authors: Vec<PaletteAuthorHit> = sqlx::query(
         r#"
-        SELECT a.id, a.name, COUNT(*) AS book_count
+        SELECT a.id, a.name,
+          (SELECT COUNT(*)
+             FROM books b
+             JOIN libraries l2 ON l2.id = b.library_id
+             LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+            WHERE l2.path = ?1
+              AND CASE
+                    WHEN mo.book_uuid IS NOT NULL
+                         AND json_type(mo.overrides, '$.creators') IS NOT NULL
+                      THEN EXISTS (
+                        SELECT 1 FROM json_each(mo.overrides, '$.creators') je
+                         WHERE json_extract(je.value, '$.name') = a.name
+                      )
+                    ELSE EXISTS (
+                      SELECT 1 FROM books_authors_link bal
+                       WHERE bal.book = b.id AND bal.author = a.id
+                    )
+                  END
+          ) AS book_count
         FROM authors a
-        JOIN books_authors_link bal ON bal.author = a.id
-        JOIN books b ON b.id = bal.book
-        JOIN libraries l ON l.id = b.library_id
-        WHERE a.name LIKE ?2 ESCAPE '\' AND l.path = ?1
-        GROUP BY a.id, a.name
+        WHERE a.name LIKE ?2 ESCAPE '\'
+          AND EXISTS (
+            SELECT 1 FROM books_authors_link bal
+              JOIN books b ON b.id = bal.book
+              JOIN libraries l ON l.id = b.library_id
+             WHERE bal.author = a.id AND l.path = ?1
+          )
         ORDER BY book_count DESC, a.name
         LIMIT ?3
         "#,
@@ -6544,6 +6573,85 @@ mod tests {
         assert_eq!(tag_b.book_count, 2);
     }
 
+    #[tokio::test]
+    async fn palette_author_count_reflects_overrides() {
+        // F5.1: the palette author count must match the merged
+        // (override-aware) view, not the raw `books_authors_link` count.
+        // Repro of the "Sanderson, Brandon still says 4 books" report:
+        // every canonical book for an author was reassigned to a
+        // differently-named author through the metadata edit form, so the
+        // palette must report 0 books for the source name and the full
+        // count for the destination name.
+        let _covers = CoversTempDir::new("palette_author_count_overrides");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        // Two books canonically by "Last, First", plus one book by the
+        // already-correct "First Last" so the destination author has a
+        // canonical anchor (palette visibility requires ≥1 canonical link).
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed("a.epub", Some("A"), &["Last, First"], &[], None, None),
+                indexed("b.epub", Some("B"), &["Last, First"], &[], None, None),
+                indexed("c.epub", Some("C"), &["First Last"], &[], None, None),
+            ],
+        )
+        .await
+        .unwrap();
+
+        // User edits a.epub and b.epub through the metadata form to
+        // rename their author to "First Last" — overrides only, no
+        // change to the relational link table.
+        let books = list_books(&pool, "/lib").await.unwrap();
+        for filename in ["a.epub", "b.epub"] {
+            let book = books.iter().find(|b| b.filename == filename).unwrap();
+            let uuid = book.unique_identifier.clone().unwrap();
+            let ov = MetadataOverrides {
+                creators: Some(vec![Contributor {
+                    name: "First Last".into(),
+                    role: Some("aut".into()),
+                    file_as: None,
+                    id: None,
+                }]),
+                ..Default::default()
+            };
+            upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+                .await
+                .unwrap();
+        }
+
+        let results = search_palette(&pool, "/lib", "Last").await.unwrap();
+
+        // Source author still visible (canonical anchor remains), but
+        // count must reflect the effective view: 0 books.
+        let source = results
+            .authors
+            .iter()
+            .find(|a| a.name == "Last, First")
+            .expect("source author still appears in palette");
+        assert_eq!(
+            source.book_count, 0,
+            "renamed-away author must report effective count 0, got {results:?}",
+        );
+
+        // Destination author picks up the override-renamed books on top
+        // of its own canonical anchor: 1 + 2 = 3.
+        let dest = results
+            .authors
+            .iter()
+            .find(|a| a.name == "First Last")
+            .expect("destination author present");
+        assert_eq!(
+            dest.book_count, 3,
+            "destination author must include override-renamed books, got {results:?}",
+        );
+    }
+
     /// #127: capture `EXPLAIN QUERY PLAN` for each of the three rewritten
     /// taxonomy queries and assert the planner uses the link-table indexes.
     /// This is a structural check — it doesn't pin the literal plan string
@@ -6568,16 +6676,31 @@ mod tests {
                 .join("\n")
         }
 
-        // Authors
+        // Authors — override-aware count, must still drive through the
+        // covering `books_authors_link` index when checking visibility
+        // and when the no-override branch of the CASE runs.
         let plan = plan_text(
             &pool,
-            "SELECT a.id, a.name, COUNT(*) AS book_count \
+            "SELECT a.id, a.name, \
+              (SELECT COUNT(*) FROM books b \
+                 JOIN libraries l2 ON l2.id = b.library_id \
+                 LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
+                WHERE l2.path = ?1 \
+                  AND CASE \
+                        WHEN mo.book_uuid IS NOT NULL \
+                             AND json_type(mo.overrides, '$.creators') IS NOT NULL \
+                          THEN EXISTS (SELECT 1 FROM json_each(mo.overrides, '$.creators') je \
+                                        WHERE json_extract(je.value, '$.name') = a.name) \
+                        ELSE EXISTS (SELECT 1 FROM books_authors_link bal \
+                                      WHERE bal.book = b.id AND bal.author = a.id) \
+                      END \
+              ) AS book_count \
              FROM authors a \
-             JOIN books_authors_link bal ON bal.author = a.id \
-             JOIN books b ON b.id = bal.book \
-             JOIN libraries l ON l.id = b.library_id \
-             WHERE a.name LIKE ?2 ESCAPE '\\' AND l.path = ?1 \
-             GROUP BY a.id, a.name \
+             WHERE a.name LIKE ?2 ESCAPE '\\' \
+               AND EXISTS (SELECT 1 FROM books_authors_link bal \
+                             JOIN books b ON b.id = bal.book \
+                             JOIN libraries l ON l.id = b.library_id \
+                            WHERE bal.author = a.id AND l.path = ?1) \
              ORDER BY book_count DESC, a.name \
              LIMIT ?3",
         )
