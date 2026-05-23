@@ -84,8 +84,8 @@ fn is_memory_url(database_url: &str) -> bool {
 // -----------------------------------------------------------------------------
 
 /// Read the placeholder counter from `app_state`. Returns an error if the
-/// singleton row is missing — it's seeded by migration `0001_initial.sql`,
-/// so absence means the schema is broken.
+/// singleton row is missing — it's seeded by migration `0001`, so absence
+/// means the schema is broken.
 pub async fn get_value(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
     let value = sqlx::query_scalar::<_, i64>("SELECT value FROM app_state WHERE id = 1")
         .fetch_one(pool)
