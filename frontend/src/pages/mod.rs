@@ -1,19 +1,23 @@
 mod auth;
 mod author;
+mod authors_index;
 mod book_detail;
 mod landing;
 mod metadata_edit;
 mod search;
 mod series;
+mod series_index;
 mod settings;
 mod tag_cloud;
 
 pub use auth::{LoginPage, RegisterPage};
 pub use author::AuthorPage;
+pub use authors_index::AuthorsIndexPage;
 pub use book_detail::BookDetailPage;
 pub use landing::LandingPage;
 pub use metadata_edit::MetadataEditPage;
 pub use search::SearchPage;
 pub use series::SeriesPage;
+pub use series_index::SeriesIndexPage;
 pub use settings::SettingsPage;
 pub use tag_cloud::TagCloudPage;

@@ -96,7 +96,9 @@ pub fn rest_router(state: AppState) -> Router {
         .merge(search_router())
         .route("/api/covers/{id}", get(get_cover))
         .route("/api/thumbs/{id}/{size}", get(get_thumb))
+        .route("/api/authors", get(get_authors))
         .route("/api/authors/{id}", get(get_author_by_id))
+        .route("/api/series", get(get_series))
         .route("/api/series/{id}", get(get_series_by_id))
         .route("/api/tags", get(get_tags))
         .with_state(state)
@@ -478,6 +480,39 @@ async fn get_author_by_id(
         Ok(Some(author)) => Json(author).into_response(),
         Ok(None) => axum::http::StatusCode::NOT_FOUND.into_response(),
         Err(error) => internal("read author", error),
+    }
+}
+
+/// F1.12 — `/authors` index. Returns every author in the configured
+/// library with a book count and optional accent. Empty list when no
+/// library is configured.
+async fn get_authors(_user: AuthUser, State(state): State<AppState>) -> Response {
+    let settings = match db::get_settings(&state.pool).await {
+        Ok(s) => s,
+        Err(e) => return internal("read settings", e),
+    };
+    let Some(path) = settings.ebook_library_path else {
+        return Json(Vec::<omnibus_shared::AuthorSummary>::new()).into_response();
+    };
+    match db::list_authors(&state.pool, &path).await {
+        Ok(authors) => Json(authors).into_response(),
+        Err(e) => internal("list authors", e),
+    }
+}
+
+/// F1.12 — `/series` index. Returns every series in the configured
+/// library with a book count, primary author, and optional accent.
+async fn get_series(_user: AuthUser, State(state): State<AppState>) -> Response {
+    let settings = match db::get_settings(&state.pool).await {
+        Ok(s) => s,
+        Err(e) => return internal("read settings", e),
+    };
+    let Some(path) = settings.ebook_library_path else {
+        return Json(Vec::<omnibus_shared::SeriesSummary>::new()).into_response();
+    };
+    match db::list_series(&state.pool, &path).await {
+        Ok(series) => Json(series).into_response(),
+        Err(e) => internal("list series", e),
     }
 }
 
@@ -2086,6 +2121,159 @@ mod tests {
     async fn api_get_tags_returns_401_when_anonymous() {
         let (app, _, _) = fixture().await;
         let res = app.oneshot(get_anon("/api/tags")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // -------------------------------------------------------------------
+    // F1.12 — /api/authors and /api/series index endpoints.
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn api_get_authors_index_returns_summaries_scoped_to_library() {
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        // Point settings at /lib and seed two books with distinct authors.
+        db::set_settings(
+            &pool,
+            &omnibus_shared::Settings {
+                ebook_library_path: Some("/lib".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        db::replace_books(
+            &pool,
+            "/lib",
+            vec![
+                db::ebook::IndexedBook {
+                    metadata: omnibus_shared::EbookMetadata {
+                        filename: "a.epub".into(),
+                        title: Some("A".into()),
+                        creators: vec![omnibus_shared::Contributor {
+                            name: "Aaron Albright".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                    cover: None,
+                },
+                db::ebook::IndexedBook {
+                    metadata: omnibus_shared::EbookMetadata {
+                        filename: "b.epub".into(),
+                        title: Some("B".into()),
+                        creators: vec![omnibus_shared::Contributor {
+                            name: "Zelda Zinn".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                    cover: None,
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+        let response = app
+            .oneshot(get_with_bearer("/api/authors", &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let authors: Vec<omnibus_shared::AuthorSummary> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(authors.len(), 2);
+        let names: Vec<_> = authors.iter().map(|a| a.name.clone()).collect();
+        assert_eq!(
+            names,
+            vec!["Aaron Albright".to_string(), "Zelda Zinn".to_string()],
+            "expected alpha order"
+        );
+        for a in &authors {
+            assert_eq!(a.book_count, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn api_get_authors_index_returns_empty_when_no_library_configured() {
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        let response = app
+            .oneshot(get_with_bearer("/api/authors", &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let authors: Vec<omnibus_shared::AuthorSummary> = serde_json::from_slice(&bytes).unwrap();
+        assert!(authors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn api_get_authors_index_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let res = app.oneshot(get_anon("/api/authors")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_get_series_index_returns_summaries_with_primary_author() {
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        db::set_settings(
+            &pool,
+            &omnibus_shared::Settings {
+                ebook_library_path: Some("/lib".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        db::replace_books(
+            &pool,
+            "/lib",
+            vec![db::ebook::IndexedBook {
+                metadata: omnibus_shared::EbookMetadata {
+                    filename: "dune.epub".into(),
+                    title: Some("Dune".into()),
+                    series: Some("Dune Chronicles".into()),
+                    series_index: Some("1".into()),
+                    creators: vec![omnibus_shared::Contributor {
+                        name: "Frank Herbert".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                cover: None,
+            }],
+        )
+        .await
+        .unwrap();
+
+        let response = app
+            .oneshot(get_with_bearer("/api/series", &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let series: Vec<omnibus_shared::SeriesSummary> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(series.len(), 1);
+        assert_eq!(series[0].name, "Dune Chronicles");
+        assert_eq!(series[0].book_count, 1);
+        assert_eq!(series[0].primary_author.as_deref(), Some("Frank Herbert"));
+    }
+
+    #[tokio::test]
+    async fn api_get_series_index_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let res = app.oneshot(get_anon("/api/series")).await.unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 
