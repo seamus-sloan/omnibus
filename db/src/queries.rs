@@ -2604,17 +2604,42 @@ pub async fn search_palette(
 
     // D. Tags — substring match, scoped to library.
     //
-    // Same single-pass shape as authors: drives from libraries → books →
-    // books_tags_link by PK → tags. See the locked-in plan test.
+    // F5.1: the count uses the effective (override-aware) subject set,
+    // not the raw `books_tags_link` rows. `MetadataOverrides.subjects`
+    // (Option<Vec<String>>) replaces the canonical tag list wholesale
+    // when Some — including the empty array, which clears all tags.
+    // Visibility still requires at least one canonical link in this
+    // library so we don't list tags that exist only inside override
+    // JSON (no navigable id).
     let tags: Vec<PaletteTagHit> = sqlx::query(
         r#"
-        SELECT t.id, t.name, COUNT(*) AS book_count
+        SELECT t.id, t.name,
+          (SELECT COUNT(*)
+             FROM books b
+             JOIN libraries l2 ON l2.id = b.library_id
+             LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+            WHERE l2.path = ?1
+              AND CASE
+                    WHEN mo.book_uuid IS NOT NULL
+                         AND json_type(mo.overrides, '$.subjects') IS NOT NULL
+                      THEN EXISTS (
+                        SELECT 1 FROM json_each(mo.overrides, '$.subjects') je
+                         WHERE je.value = t.name
+                      )
+                    ELSE EXISTS (
+                      SELECT 1 FROM books_tags_link btl
+                       WHERE btl.book = b.id AND btl.tag = t.id
+                    )
+                  END
+          ) AS book_count
         FROM tags t
-        JOIN books_tags_link btl ON btl.tag = t.id
-        JOIN books b ON b.id = btl.book
-        JOIN libraries l ON l.id = b.library_id
-        WHERE t.name LIKE ?2 ESCAPE '\' AND l.path = ?1
-        GROUP BY t.id, t.name
+        WHERE t.name LIKE ?2 ESCAPE '\'
+          AND EXISTS (
+            SELECT 1 FROM books_tags_link btl
+              JOIN books b ON b.id = btl.book
+              JOIN libraries l ON l.id = b.library_id
+             WHERE btl.tag = t.id AND l.path = ?1
+          )
         ORDER BY book_count DESC, t.name
         LIMIT ?3
         "#,
@@ -6682,6 +6707,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn palette_tag_count_reflects_overrides() {
+        // F5.1: same shape for tags. `overrides.subjects` replaces the
+        // canonical tag list wholesale, so a book moved between tags
+        // must shift both counts.
+        let _covers = CoversTempDir::new("palette_tag_count_overrides");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed("a.epub", Some("A"), &["X"], &["tag-source"], None, None),
+                indexed("b.epub", Some("B"), &["X"], &["tag-source"], None, None),
+                indexed("c.epub", Some("C"), &["X"], &["tag-dest"], None, None),
+            ],
+        )
+        .await
+        .unwrap();
+
+        // Move a.epub off tag-source and onto tag-dest via override.
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let a = books.iter().find(|b| b.filename == "a.epub").unwrap();
+        let uuid = a.unique_identifier.clone().unwrap();
+        let ov = MetadataOverrides {
+            subjects: Some(vec!["tag-dest".into()]),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let results = search_palette(&pool, "/lib", "tag-").await.unwrap();
+        let source = results
+            .tags
+            .iter()
+            .find(|t| t.name == "tag-source")
+            .expect("tag-source still visible (canonical anchor remains)");
+        assert_eq!(
+            source.book_count, 1,
+            "tag-source should drop a.epub after override, got {results:?}",
+        );
+        let dest = results
+            .tags
+            .iter()
+            .find(|t| t.name == "tag-dest")
+            .expect("tag-dest present");
+        assert_eq!(
+            dest.book_count, 2,
+            "tag-dest should add the override-tagged a.epub, got {results:?}",
+        );
+    }
+
+    #[tokio::test]
     async fn palette_series_count_reflects_overrides() {
         // F5.1: same shape as palette_author_count_reflects_overrides
         // but for the series tile. Books moved into a series via
@@ -6909,16 +6991,31 @@ mod tests {
             "series plan should not full-scan the link table:\n{plan}"
         );
 
-        // Tags
+        // Tags — override-aware count, must still drive through the
+        // `books_tags_link` index for visibility and the no-override
+        // branch of the CASE.
         let plan = plan_text(
             &pool,
-            "SELECT t.id, t.name, COUNT(*) AS book_count \
+            "SELECT t.id, t.name, \
+              (SELECT COUNT(*) FROM books b \
+                 JOIN libraries l2 ON l2.id = b.library_id \
+                 LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
+                WHERE l2.path = ?1 \
+                  AND CASE \
+                        WHEN mo.book_uuid IS NOT NULL \
+                             AND json_type(mo.overrides, '$.subjects') IS NOT NULL \
+                          THEN EXISTS (SELECT 1 FROM json_each(mo.overrides, '$.subjects') je \
+                                        WHERE je.value = t.name) \
+                        ELSE EXISTS (SELECT 1 FROM books_tags_link btl \
+                                      WHERE btl.book = b.id AND btl.tag = t.id) \
+                      END \
+              ) AS book_count \
              FROM tags t \
-             JOIN books_tags_link btl ON btl.tag = t.id \
-             JOIN books b ON b.id = btl.book \
-             JOIN libraries l ON l.id = b.library_id \
-             WHERE t.name LIKE ?2 ESCAPE '\\' AND l.path = ?1 \
-             GROUP BY t.id, t.name \
+             WHERE t.name LIKE ?2 ESCAPE '\\' \
+               AND EXISTS (SELECT 1 FROM books_tags_link btl \
+                             JOIN books b ON b.id = btl.book \
+                             JOIN libraries l ON l.id = b.library_id \
+                            WHERE btl.tag = t.id AND l.path = ?1) \
              ORDER BY book_count DESC, t.name \
              LIMIT ?3",
         )
