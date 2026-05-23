@@ -323,6 +323,7 @@ fn Toolbar(prefs: ViewPrefs, on_change: EventHandler<ViewPrefs>) -> Element {
                             },
                             for opt in SORT_KEYS.iter().copied() {
                                 option {
+                                    key: "{sort_key_value(opt)}",
                                     value: "{sort_key_value(opt)}",
                                     selected: opt == sort_key,
                                     "{sort_key_label(opt)}"
@@ -456,6 +457,7 @@ fn FacetSection(
             ul { class: "lib-chip-list",
                 for (name, count) in items.iter() {
                     li {
+                        key: "{name}",
                         button {
                             // Layer Atrium's `.chip` look onto the existing
                             // `.lib-chip` class — the Playwright selector
@@ -523,6 +525,7 @@ fn FormatChips(
                     let selected_for_click = selected.clone();
                     rsx! {
                         button {
+                            key: "{key}",
                             class: if is_selected { "chip on" } else { "chip" },
                             "data-format": "{key}",
                             "aria-pressed": "{is_selected}",
