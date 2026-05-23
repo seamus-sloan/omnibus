@@ -628,7 +628,13 @@ pub async fn upsert_metadata_overrides(
     .bind(user_id)
     .execute(pool)
     .await?;
-    rebuild_fts_for_book(pool, book_uuid).await?;
+    // Best-effort FTS rebuild: log and continue on failure. The override
+    // write is the user's actual intent — a stale FTS row gets fixed on the
+    // next reindex, but surfacing a 500 here would make them think their
+    // save was lost. Matches the docstring contract above.
+    if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
+        tracing::warn!(book_uuid, error = %e, "books_fts rebuild after override upsert failed");
+    }
     Ok(())
 }
 
@@ -668,7 +674,10 @@ pub async fn delete_metadata_overrides(
         .bind(book_uuid)
         .execute(pool)
         .await?;
-    rebuild_fts_for_book(pool, book_uuid).await?;
+    // Best-effort FTS rebuild — same rationale as `upsert_metadata_overrides`.
+    if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
+        tracing::warn!(book_uuid, error = %e, "books_fts rebuild after override delete failed");
+    }
     Ok(())
 }
 
@@ -2111,7 +2120,7 @@ pub async fn search_palette(
 
         let overrides_map = load_overrides_bulk(pool, &uuids).await?;
         for (hit, uuid) in hits.iter_mut().zip(uuids.iter()) {
-            if let Some((ov, _)) = overrides_map.get(uuid) {
+            if let Some((ov, has_cover_ov)) = overrides_map.get(uuid) {
                 if let Some(ref t) = ov.title {
                     hit.title = t.clone();
                 }
@@ -2121,6 +2130,11 @@ pub async fn search_palette(
                         .map(|c| c.name.as_str())
                         .collect::<Vec<_>>()
                         .join(", ");
+                }
+                // Mirror `apply_overrides`: surface user-uploaded covers even
+                // when the scanned book had `has_cover = 0`.
+                if *has_cover_ov {
+                    hit.cover_url = Some(format!("/api/covers/{}", hit.id));
                 }
             }
         }
@@ -5505,6 +5519,49 @@ mod tests {
         assert_eq!(
             palette.books[0].author_display,
             "First Override, Second Override"
+        );
+    }
+
+    /// Palette book hits should surface a user-uploaded cover even when the
+    /// scanned book had no cover. Mirrors `apply_overrides` so the palette
+    /// row doesn't go cover-less for an override-only cover.
+    #[tokio::test]
+    async fn palette_book_hit_uses_overridden_cover() {
+        let _covers = CoversTempDir::new("palette_override_cover");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        // Indexed book with no scanned cover.
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "p.epub",
+                Some("Coverless Searchable"),
+                &["Author"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+        let book = list_books(&pool, "/lib").await.unwrap().remove(0);
+        let uuid = book.unique_identifier.clone().unwrap();
+
+        // Set has_cover_override = true with no text edits.
+        upsert_metadata_overrides(&pool, &uuid, &MetadataOverrides::default(), true, user_id)
+            .await
+            .unwrap();
+
+        let palette = search_palette(&pool, "/lib", "Coverless").await.unwrap();
+        assert_eq!(palette.books.len(), 1);
+        assert_eq!(
+            palette.books[0].cover_url,
+            Some(format!("/api/covers/{}", book.id))
         );
     }
 
