@@ -16,8 +16,8 @@
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
-    AuthorDetail, EbookLibrary, EbookMetadata, LibraryContents, MetadataOverrides, PaletteResults,
-    SeriesDetail, Settings, TagWeight, ValueResponse,
+    AuthorDetail, AuthorSummary, EbookLibrary, EbookMetadata, LibraryContents, MetadataOverrides,
+    PaletteResults, SeriesDetail, SeriesSummary, Settings, TagWeight, ValueResponse,
 };
 
 #[cfg(feature = "server")]
@@ -248,6 +248,26 @@ pub async fn rpc_get_series(id: i64) -> Result<Option<SeriesDetail>> {
 #[get("/api/rpc/tags", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_get_tag_cloud() -> Result<Vec<TagWeight>> {
     Ok(db::get_tag_cloud(&pool.0).await?)
+}
+
+/// F1.12 — `/authors` index: every author in the configured library.
+#[get("/api/rpc/authors", pool: PoolExt, _user: AuthUser)]
+pub async fn rpc_list_authors() -> Result<Vec<AuthorSummary>> {
+    let settings = db::get_settings(&pool.0).await?;
+    let Some(path) = settings.ebook_library_path else {
+        return Ok(Vec::new());
+    };
+    Ok(db::list_authors(&pool.0, &path).await?)
+}
+
+/// F1.12 — `/series` index: every series in the configured library.
+#[get("/api/rpc/series-list", pool: PoolExt, _user: AuthUser)]
+pub async fn rpc_list_series() -> Result<Vec<SeriesSummary>> {
+    let settings = db::get_settings(&pool.0).await?;
+    let Some(path) = settings.ebook_library_path else {
+        return Ok(Vec::new());
+    };
+    Ok(db::list_series(&pool.0, &path).await?)
 }
 
 /// Save metadata overrides for a book (F5.1). Requires `can_edit` or admin.

@@ -284,6 +284,40 @@ pub struct TagWeight {
     pub count: usize,
 }
 
+/// Lightweight author row for the `/authors` index (F1.12). Carries only
+/// what the card needs — no joined book list. The detail page
+/// (`AuthorDetail`) is fetched on click.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthorSummary {
+    pub id: i64,
+    pub name: String,
+    pub sort: Option<String>,
+    pub book_count: usize,
+    /// Cover-derived accent color borrowed from the author's first book
+    /// with a non-null `accent_color`. `None` when no owned book has one
+    /// — the UI falls back to the theme accent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+}
+
+/// Lightweight series row for the `/series` index (F1.12). Carries the
+/// primary author of the series (first book's first creator) so the card
+/// can render the by-line without a second fetch.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SeriesSummary {
+    pub id: i64,
+    pub name: String,
+    pub sort: Option<String>,
+    pub book_count: usize,
+    /// Primary author display string (first book's first creator). `None`
+    /// when the series has no books with a linked author.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_author: Option<String>,
+    /// Accent color borrowed from the first book in the series with one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+}
+
 // -----------------------------------------------------------------------------
 // Search palette (F1.5)
 //

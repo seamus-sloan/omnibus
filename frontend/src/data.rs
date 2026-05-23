@@ -11,8 +11,8 @@
 //!   web stubs so SSR-during-fullstack-render still returns sensible data.
 
 use omnibus_shared::{
-    AuthorDetail, EbookLibrary, EbookMetadata, LibraryContents, MetadataOverrides, PaletteResults,
-    SeriesDetail, Settings, TagWeight,
+    AuthorDetail, AuthorSummary, EbookLibrary, EbookMetadata, LibraryContents, MetadataOverrides,
+    PaletteResults, SeriesDetail, SeriesSummary, Settings, TagWeight,
 };
 #[cfg(any(feature = "web", feature = "mobile"))]
 use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};
@@ -570,6 +570,40 @@ pub async fn get_series(server_url: &str, id: i64) -> Result<Option<SeriesDetail
 }
 
 #[cfg(feature = "mobile")]
+pub async fn list_authors(server_url: &str) -> Result<Vec<AuthorSummary>, String> {
+    let url = format!("{server_url}/api/authors");
+    let response = with_bearer(http_client().get(&url))
+        .send()
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    response
+        .json::<Vec<AuthorSummary>>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(feature = "mobile")]
+pub async fn list_series(server_url: &str) -> Result<Vec<SeriesSummary>, String> {
+    let url = format!("{server_url}/api/series");
+    let response = with_bearer(http_client().get(&url))
+        .send()
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    response
+        .json::<Vec<SeriesSummary>>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(feature = "mobile")]
 pub async fn get_tag_cloud(server_url: &str) -> Result<Vec<TagWeight>, String> {
     let url = format!("{server_url}/api/tags");
     let response = with_bearer(http_client().get(&url))
@@ -872,6 +906,20 @@ pub async fn get_series(_server_url: &str, id: i64) -> Result<Option<SeriesDetai
 #[cfg(not(feature = "mobile"))]
 pub async fn get_tag_cloud(_server_url: &str) -> Result<Vec<TagWeight>, String> {
     crate::rpc::rpc_get_tag_cloud()
+        .await
+        .map_err(note_server_fn_err)
+}
+
+#[cfg(not(feature = "mobile"))]
+pub async fn list_authors(_server_url: &str) -> Result<Vec<AuthorSummary>, String> {
+    crate::rpc::rpc_list_authors()
+        .await
+        .map_err(note_server_fn_err)
+}
+
+#[cfg(not(feature = "mobile"))]
+pub async fn list_series(_server_url: &str) -> Result<Vec<SeriesSummary>, String> {
+    crate::rpc::rpc_list_series()
         .await
         .map_err(note_server_fn_err)
 }

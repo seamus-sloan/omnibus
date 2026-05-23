@@ -8,6 +8,8 @@ pub fn BottomNav() -> Element {
     rsx! {
         nav { class: "bottom-nav",
             Link { to: Route::Landing {}, "Home" }
+            Link { to: Route::AuthorsIndex {}, "Authors" }
+            Link { to: Route::SeriesIndex {}, "Series" }
             Link { to: Route::Settings {}, "Settings" }
         }
     }

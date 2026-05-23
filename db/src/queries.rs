@@ -18,9 +18,9 @@ use sqlx::{sqlite::SqlitePoolOptions, Executor, Row, SqlitePool, Transaction};
 
 pub use omnibus_shared::Settings;
 use omnibus_shared::{
-    AuthorDetail, Contributor, EbookLibrary, EbookMetadata, Identifier, MetadataOverrides,
-    PaletteAuthorHit, PaletteBookHit, PaletteResults, PaletteSeriesHit, PaletteTagHit,
-    SeriesDetail, TagWeight,
+    AuthorDetail, AuthorSummary, Contributor, EbookLibrary, EbookMetadata, Identifier,
+    MetadataOverrides, PaletteAuthorHit, PaletteBookHit, PaletteResults, PaletteSeriesHit,
+    PaletteTagHit, SeriesDetail, SeriesSummary, TagWeight,
 };
 
 /// Schema migrations embedded at compile time from `db/migrations/`.
@@ -2385,6 +2385,152 @@ pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, sqlx::Er
         .map(|r| TagWeight {
             name: r.get("name"),
             count: r.get::<i64, _>("cnt") as usize,
+        })
+        .collect())
+}
+
+// -----------------------------------------------------------------------------
+// Index pages (F1.12) — /authors and /series
+// -----------------------------------------------------------------------------
+
+/// Hard cap on rows returned by [`list_authors`] / [`list_series`]. The
+/// F1.12 roadmap notes a 5k+ author library is the upper bound we want to
+/// keep responsive on a single page; 10k leaves headroom while keeping
+/// the JSON envelope under ~1 MB even with the optional accent string.
+const INDEX_LIMIT: i64 = 10_000;
+
+/// Return every author with their book count and an optional cover-derived
+/// accent, scoped to `library_path`. Empty list when `library_path` does
+/// not match a configured library.
+///
+/// Ordered by name ascending. The UI does its own client-side sort/filter,
+/// so this returns the full list up to [`INDEX_LIMIT`] — see
+/// [docs/roadmap/1-12-browse-authors-series.md] for the per-library size
+/// expectations.
+///
+/// Accent: the `accent_color` of the first book by this author with a
+/// non-null value, by book sort/id order. `NULL` is returned when no book
+/// has one, and the UI falls back to the theme accent.
+///
+/// # Multi-tenancy
+///
+/// Single-tenant today — every authenticated caller sees the same list.
+/// When per-user ACLs land in F4.x this function must accept a `user_id`
+/// and join through the access-control table the same way [`get_author`]
+/// will.
+pub async fn list_authors(
+    pool: &SqlitePool,
+    library_path: &str,
+) -> Result<Vec<AuthorSummary>, sqlx::Error> {
+    // TODO(F4.x): scope by `user_id` once per-user ACLs land.
+    //
+    // The accent subquery picks the first book by sort/id rather than
+    // joining + aggregating because there's no portable "first non-null
+    // grouped value" in SQLite. The subquery only fires for the up-to-
+    // INDEX_LIMIT outer rows, so its cost stays bounded.
+    let rows = sqlx::query(
+        r#"
+        SELECT a.id, a.name, a.sort, COUNT(*) AS book_count,
+               (SELECT b2.accent_color
+                  FROM books_authors_link bal2
+                  JOIN books b2 ON b2.id = bal2.book
+                  JOIN libraries l2 ON l2.id = b2.library_id
+                 WHERE bal2.author = a.id
+                   AND l2.path = ?1
+                   AND b2.accent_color IS NOT NULL
+                 ORDER BY b2.sort, b2.id
+                 LIMIT 1) AS accent
+        FROM authors a
+        JOIN books_authors_link bal ON bal.author = a.id
+        JOIN books b ON b.id = bal.book
+        JOIN libraries l ON l.id = b.library_id
+        WHERE l.path = ?1
+        GROUP BY a.id, a.name, a.sort
+        ORDER BY COALESCE(a.sort, a.name) COLLATE NOCASE ASC
+        LIMIT ?2
+        "#,
+    )
+    .bind(library_path)
+    .bind(INDEX_LIMIT)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|r| AuthorSummary {
+            id: r.get("id"),
+            name: r.get("name"),
+            sort: r.get("sort"),
+            book_count: r.get::<i64, _>("book_count") as usize,
+            accent: r.get("accent"),
+        })
+        .collect())
+}
+
+/// Return every series with book count, primary author, and an optional
+/// accent, scoped to `library_path`.
+///
+/// `primary_author` is the first creator of the lowest-`series_index`
+/// book in the series (with `book.sort, book.id` as deterministic
+/// tie-breakers). It can be `None` when every book in the series has only
+/// override-supplied creators that haven't been linked to an `authors`
+/// row yet — surface a plain text by-line in that case.
+///
+/// Ordered by name ascending. Capped at [`INDEX_LIMIT`].
+///
+/// # Multi-tenancy
+///
+/// Same single-tenant caveat as [`list_authors`].
+pub async fn list_series(
+    pool: &SqlitePool,
+    library_path: &str,
+) -> Result<Vec<SeriesSummary>, sqlx::Error> {
+    // TODO(F4.x): scope by `user_id` once per-user ACLs land.
+    let rows = sqlx::query(
+        r#"
+        SELECT s.id, s.name, s.sort, COUNT(*) AS book_count,
+               (SELECT a.name
+                  FROM books_series_link bsl2
+                  JOIN books b2 ON b2.id = bsl2.book
+                  JOIN libraries l2 ON l2.id = b2.library_id
+                  JOIN books_authors_link bal ON bal.book = bsl2.book
+                  JOIN authors a ON a.id = bal.author
+                 WHERE bsl2.series = s.id AND l2.path = ?1
+                 ORDER BY b2.series_index NULLS LAST, b2.sort, b2.id, bal.position
+                 LIMIT 1) AS primary_author,
+               (SELECT b3.accent_color
+                  FROM books_series_link bsl3
+                  JOIN books b3 ON b3.id = bsl3.book
+                  JOIN libraries l3 ON l3.id = b3.library_id
+                 WHERE bsl3.series = s.id
+                   AND l3.path = ?1
+                   AND b3.accent_color IS NOT NULL
+                 ORDER BY b3.series_index NULLS LAST, b3.sort, b3.id
+                 LIMIT 1) AS accent
+        FROM series s
+        JOIN books_series_link bsl ON bsl.series = s.id
+        JOIN books b ON b.id = bsl.book
+        JOIN libraries l ON l.id = b.library_id
+        WHERE l.path = ?1
+        GROUP BY s.id, s.name, s.sort
+        ORDER BY COALESCE(s.sort, s.name) COLLATE NOCASE ASC
+        LIMIT ?2
+        "#,
+    )
+    .bind(library_path)
+    .bind(INDEX_LIMIT)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|r| SeriesSummary {
+            id: r.get("id"),
+            name: r.get("name"),
+            sort: r.get("sort"),
+            book_count: r.get::<i64, _>("book_count") as usize,
+            primary_author: r.get("primary_author"),
+            accent: r.get("accent"),
         })
         .collect())
 }
@@ -5088,6 +5234,97 @@ mod tests {
             essay.count, 2,
             "essay should pick up override-tagged a.epub, got {post:?}",
         );
+    }
+
+    // -----------------------------------------------------------------
+    // F1.12 index pages — list_authors / list_series
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn list_authors_returns_all_with_counts_and_alpha_order() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let authors = list_authors(&pool, "/lib").await.unwrap();
+
+        // Three distinct authors: Ada Lovelace, Grace Hopper, Niklaus Wirth.
+        let names: Vec<_> = authors.iter().map(|a| a.name.clone()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "Ada Lovelace".to_string(),
+                "Grace Hopper".to_string(),
+                "Niklaus Wirth".to_string(),
+            ],
+            "expected NOCASE alphabetical order by sort/name"
+        );
+
+        // Book counts: Ada=3, Grace=1, Niklaus=1.
+        let by_name: std::collections::HashMap<_, _> = authors
+            .iter()
+            .map(|a| (a.name.clone(), a.book_count))
+            .collect();
+        assert_eq!(by_name["Ada Lovelace"], 3);
+        assert_eq!(by_name["Grace Hopper"], 1);
+        assert_eq!(by_name["Niklaus Wirth"], 1);
+
+        // IDs are populated so cards can route to /authors/:id.
+        assert!(authors.iter().all(|a| a.id > 0));
+    }
+
+    #[tokio::test]
+    async fn list_authors_scopes_to_library_path() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let authors = list_authors(&pool, "/no-such-library").await.unwrap();
+        assert!(
+            authors.is_empty(),
+            "unknown library path must yield empty list"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_authors_returns_empty_for_empty_library() {
+        let _guard = CoversTempDir::new("empty_authors");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let authors = list_authors(&pool, "/lib").await.unwrap();
+        assert!(authors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_series_returns_all_with_counts_and_alpha_order() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let series = list_series(&pool, "/lib").await.unwrap();
+
+        // Two series: Pioneers, Saga (NOCASE alpha).
+        let names: Vec<_> = series.iter().map(|s| s.name.clone()).collect();
+        assert_eq!(names, vec!["Pioneers".to_string(), "Saga".to_string()]);
+
+        let by_name: std::collections::HashMap<_, _> = series
+            .iter()
+            .map(|s| (s.name.clone(), s.book_count))
+            .collect();
+        assert_eq!(by_name["Saga"], 2);
+        assert_eq!(by_name["Pioneers"], 1);
+    }
+
+    #[tokio::test]
+    async fn list_series_populates_primary_author_from_first_book() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let series = list_series(&pool, "/lib").await.unwrap();
+
+        let by_name: std::collections::HashMap<_, _> = series
+            .iter()
+            .map(|s| (s.name.clone(), s.primary_author.clone()))
+            .collect();
+        // Saga book one's first creator is "Ada Lovelace" (the two-author
+        // book lists Ada first); Pioneers has Niklaus Wirth as sole author.
+        assert_eq!(by_name["Saga"], Some("Ada Lovelace".to_string()));
+        assert_eq!(by_name["Pioneers"], Some("Niklaus Wirth".to_string()));
+    }
+
+    #[tokio::test]
+    async fn list_series_scopes_to_library_path() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let series = list_series(&pool, "/no-such-library").await.unwrap();
+        assert!(series.is_empty());
     }
 
     // -----------------------------------------------------------------
