@@ -2170,13 +2170,22 @@ pub async fn search_palette(
 ///
 /// The returned `books` vec is capped at `MAX_BOOKS_RETURNED` (issue #81);
 /// callers that need to surface a truncation hint should use
-/// [`library_from_db_with_total`] instead.
+/// [`library_from_db_with_total`] instead. This entrypoint deliberately
+/// avoids the extra `count_books` round-trip — non-REST callers (the RPC
+/// path, internal lookups) don't need the total and shouldn't pay for it.
 pub async fn library_from_db(
     pool: &SqlitePool,
     library_path: Option<&str>,
 ) -> Result<EbookLibrary, sqlx::Error> {
-    let (lib, _total) = library_from_db_with_total(pool, library_path).await?;
-    Ok(lib)
+    let Some(path) = library_path else {
+        return Ok(EbookLibrary::default());
+    };
+    let books = list_books(pool, path).await?;
+    Ok(EbookLibrary {
+        path: Some(path.to_string()),
+        books,
+        error: None,
+    })
 }
 
 /// Same as `library_from_db` but also returns the *true* book count under
