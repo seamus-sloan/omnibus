@@ -4810,4 +4810,172 @@ mod tests {
         // duration_ms should be populated (at least 0 — we just check it's set)
         assert!(results.duration_ms < 10000, "duration should be reasonable");
     }
+
+    // -----------------------------------------------------------------
+    // Issue #115 — additional coverage for core book query functions.
+    // The library-path filter on list_books and the raw-operator path
+    // through search_books were previously untested end-to-end.
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn list_books_filters_by_library_path() {
+        let _covers = CoversTempDir::new("list_books_filter_lib");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+
+        replace_books(
+            &pool,
+            "/lib-a",
+            vec![
+                indexed("a1.epub", Some("Alpha One"), &["Author A"], &[], None, None),
+                indexed("a2.epub", Some("Alpha Two"), &["Author A"], &[], None, None),
+            ],
+        )
+        .await
+        .unwrap();
+        replace_books(
+            &pool,
+            "/lib-b",
+            vec![indexed(
+                "b1.epub",
+                Some("Beta One"),
+                &["Author B"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let lib_a = list_books(&pool, "/lib-a").await.unwrap();
+        let lib_b = list_books(&pool, "/lib-b").await.unwrap();
+
+        assert_eq!(lib_a.len(), 2, "lib-a should return only its two books");
+        let mut titles_a: Vec<String> = lib_a.iter().filter_map(|b| b.title.clone()).collect();
+        titles_a.sort();
+        assert_eq!(titles_a, vec!["Alpha One", "Alpha Two"]);
+
+        assert_eq!(lib_b.len(), 1, "lib-b should return only its one book");
+        assert_eq!(lib_b[0].title.as_deref(), Some("Beta One"));
+    }
+
+    #[tokio::test]
+    async fn list_books_returns_empty_for_unknown_path() {
+        let _covers = CoversTempDir::new("list_books_unknown");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "a.epub",
+                Some("Title"),
+                &["Author"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let hits = list_books(&pool, "/does-not-exist").await.unwrap();
+        assert!(
+            hits.is_empty(),
+            "unknown library path should yield an empty vec (no error)"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_books_returns_empty_for_empty_db() {
+        let _covers = CoversTempDir::new("list_books_empty_db");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let hits = list_books(&pool, "/lib").await.unwrap();
+        assert!(hits.is_empty(), "empty DB should yield an empty vec");
+    }
+
+    #[tokio::test]
+    async fn search_books_handles_bare_asterisk_without_error() {
+        // A raw `*` is an FTS5 operator; the sanitizer must quote it so MATCH
+        // doesn't reject the expression as a syntax error. We assert the call
+        // succeeds — not a particular hit shape — because the goal is "no panic
+        // / no sqlx parse error".
+        let _covers = CoversTempDir::new("fts_asterisk");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "a.epub",
+                Some("Anything"),
+                &["Author"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let hits = search_books(&pool, "/lib", "*")
+            .await
+            .expect("sanitizer should guard MATCH against the bare `*` operator");
+        // `*` alone has no literal token to match; an empty result is fine.
+        assert!(hits.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_books_handles_bare_double_quote_without_error() {
+        // A raw `"` is the FTS5 phrase delimiter. Without sanitization, MATCH
+        // would reject this with a parse error and the call would `Err`.
+        let _covers = CoversTempDir::new("fts_dquote");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "a.epub",
+                Some("Anything"),
+                &["Author"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let hits = search_books(&pool, "/lib", "\"")
+            .await
+            .expect("sanitizer should guard MATCH against a bare `\"` operator");
+        assert!(hits.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_books_returns_empty_for_unknown_library() {
+        // Even with a real match in another library, the WHERE l.path = ?
+        // clause must scope results to the requested library.
+        let _covers = CoversTempDir::new("search_books_unknown_lib");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib-a",
+            vec![indexed(
+                "a.epub",
+                Some("Findable"),
+                &["Author"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let hits = search_books(&pool, "/lib-b", "Findable").await.unwrap();
+        assert!(
+            hits.is_empty(),
+            "query against a non-existent library must not leak rows from another library"
+        );
+    }
 }
