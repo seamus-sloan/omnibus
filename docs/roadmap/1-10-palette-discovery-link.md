@@ -26,4 +26,6 @@ Low — a few lines of route-push logic and a slug join. The majority of the wor
 
 ## Status
 
-Queued — blocked on F1.8.
+Substantively complete. `search_palette.rs` `navigate_to_item` routes `FlatItem::Author` → `Route::AuthorDetail { id }` and `FlatItem::Series` → `Route::SeriesDetail { id }`, matching the F1.10 intent.
+
+Outstanding: the `FlatItem::Tag` arm still pushes `Route::Search { query: "tag:<name>" }` because F1.8 shipped only a tag-cloud page (`Route::TagCloud {}`), not a per-tag detail route. Linking tag hits to a dedicated page is deferred until a `Route::TagDetail { name }` exists — track that as a follow-up under F1.8 or a tag-detail extension rather than blocking F1.10.
