@@ -1148,10 +1148,20 @@ body.atrium,
   display: flex;
   gap: 8px;
   align-items: center;
+  /* Flex items default to `min-width: auto`, which lets a long unbroken
+     value force the row wider than its parent card. Pin to 0 so the value
+     box below can shrink and trigger overflow-wrap. */
+  min-width: 0;
 }
 .me-ident-key { min-width: 78px; }
 .me-ident-val {
   flex: 1;
+  /* Same `min-width: auto` problem as the parent row — without this, a
+     URL-shaped identifier (no whitespace, no hyphens) would push the value
+     box past the card's right edge. `overflow-wrap: anywhere` lets the
+     string break mid-word once the box is shrinkable. */
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 6px 10px;
   background: var(--bg-2);
   border: 1px solid var(--line-2);
