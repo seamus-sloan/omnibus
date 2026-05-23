@@ -1975,11 +1975,15 @@ pub async fn search_palette(
     let start = std::time::Instant::now();
     const LIMIT: i32 = 5;
 
-    // A. Books — FTS5 MATCH with BM25 ranking, slim projection.
+    // A. Books — FTS5 MATCH with BM25 ranking, slim projection. After
+    // hydration we overlay metadata_overrides so the title and author line
+    // shown in the palette match the merged values the rest of the app
+    // displays (FTS already matches on the merged text — see
+    // `rebuild_fts_for_book` in the override write path).
     let books = if let Some(match_expr) = build_fts_match(trimmed) {
         let rows = sqlx::query(
             r#"
-            SELECT b.id, b.title, b.has_cover, b.accent_color,
+            SELECT b.id, b.uuid, b.title, b.has_cover, b.accent_color,
                    SUBSTR(b.pubdate, 1, 4) AS year,
 
                    (SELECT GROUP_CONCAT(a.name, ', ')
@@ -2007,23 +2011,43 @@ pub async fn search_palette(
         .fetch_all(pool)
         .await?;
 
-        rows.iter()
-            .map(|r| {
-                let id: i64 = r.get("id");
-                let has_cover: i64 = r.get("has_cover");
-                Ok(PaletteBookHit {
-                    id,
-                    title: r.get::<Option<String>, _>("title").unwrap_or_default(),
-                    author_display: r
-                        .get::<Option<String>, _>("author_display")
-                        .unwrap_or_default(),
-                    year: r.get("year"),
-                    formats: parse_json_array(r.get("formats_json"))?,
-                    cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
-                    accent: r.get("accent_color"),
-                })
-            })
-            .collect::<Result<Vec<_>, sqlx::Error>>()?
+        let mut uuids: Vec<String> = Vec::with_capacity(rows.len());
+        let mut hits: Vec<PaletteBookHit> = Vec::with_capacity(rows.len());
+        for r in rows.iter() {
+            let id: i64 = r.get("id");
+            let uuid: String = r.get("uuid");
+            let has_cover: i64 = r.get("has_cover");
+            uuids.push(uuid);
+            hits.push(PaletteBookHit {
+                id,
+                title: r.get::<Option<String>, _>("title").unwrap_or_default(),
+                author_display: r
+                    .get::<Option<String>, _>("author_display")
+                    .unwrap_or_default(),
+                year: r.get("year"),
+                formats: parse_json_array(r.get("formats_json"))?,
+                cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
+                accent: r.get("accent_color"),
+            });
+        }
+
+        let overrides_map = load_overrides_bulk(pool, &uuids).await?;
+        for (hit, uuid) in hits.iter_mut().zip(uuids.iter()) {
+            if let Some((ov, _)) = overrides_map.get(uuid) {
+                if let Some(ref t) = ov.title {
+                    hit.title = t.clone();
+                }
+                if let Some(ref creators) = ov.creators {
+                    hit.author_display = creators
+                        .iter()
+                        .map(|c| c.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                }
+            }
+        }
+
+        hits
     } else {
         Vec::new()
     };
@@ -5040,6 +5064,114 @@ mod tests {
         assert!(!results.tags.is_empty(), "should match tag substring");
         assert_eq!(results.tags[0].name, "Dark academia");
         assert_eq!(results.tags[0].book_count, 1);
+    }
+
+    /// Bug #1 (display side): the palette must show the overridden title,
+    /// not the canonical scanned `b.title`, so what the user clicks matches
+    /// what they searched for.
+    #[tokio::test]
+    async fn palette_book_hit_uses_overridden_title() {
+        let _covers = CoversTempDir::new("palette_override_title");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "p.epub",
+                Some("Scanned Title"),
+                &["Author"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+        let uuid = list_books(&pool, "/lib").await.unwrap()[0]
+            .unique_identifier
+            .clone()
+            .unwrap();
+        upsert_metadata_overrides(
+            &pool,
+            &uuid,
+            &MetadataOverrides {
+                title: Some("Edited Title".into()),
+                ..Default::default()
+            },
+            false,
+            user_id,
+        )
+        .await
+        .unwrap();
+
+        let palette = search_palette(&pool, "/lib", "Edited").await.unwrap();
+        assert_eq!(palette.books.len(), 1);
+        assert_eq!(palette.books[0].title, "Edited Title");
+    }
+
+    /// Bug #1 (display side): overriding the creators list rebuilds the
+    /// comma-joined `author_display` so the palette subtitle matches the
+    /// detail page.
+    #[tokio::test]
+    async fn palette_book_hit_uses_overridden_author_display() {
+        let _covers = CoversTempDir::new("palette_override_authors");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "p.epub",
+                Some("Searchable"),
+                &["Original Author"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+        let uuid = list_books(&pool, "/lib").await.unwrap()[0]
+            .unique_identifier
+            .clone()
+            .unwrap();
+        upsert_metadata_overrides(
+            &pool,
+            &uuid,
+            &MetadataOverrides {
+                creators: Some(vec![
+                    Contributor {
+                        name: "First Override".into(),
+                        ..Default::default()
+                    },
+                    Contributor {
+                        name: "Second Override".into(),
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            },
+            false,
+            user_id,
+        )
+        .await
+        .unwrap();
+
+        let palette = search_palette(&pool, "/lib", "Searchable").await.unwrap();
+        assert_eq!(palette.books.len(), 1);
+        assert_eq!(
+            palette.books[0].author_display,
+            "First Override, Second Override"
+        );
     }
 
     // #128: lock the wiring between the palette and `build_fts_match`'s
