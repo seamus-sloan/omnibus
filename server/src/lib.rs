@@ -7,3 +7,5 @@
 pub mod auth;
 #[cfg(feature = "server")]
 pub mod backend;
+#[cfg(feature = "server")]
+pub mod rate_limit;

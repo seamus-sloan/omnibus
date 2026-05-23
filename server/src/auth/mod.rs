@@ -8,11 +8,13 @@
 //! * [`handlers`] — `/api/auth/{register,login,logout,me}` + [`auth_router`].
 //! * [`csrf`] — `origin_check` middleware for cookie-authed state-changing
 //!   requests.
-//! * [`rate_limit`] — per-IP fixed-window counter + `rate_limit_auth` middleware
-//!   scoped to the login/register endpoints.
 //! * [`strategy`] — `AuthStrategy` trait + `PasswordStrategy` impl. OIDC
 //!   and WebAuthn fit the same shape.
 //! * [`boot`] — `OMNIBUS_INITIAL_ADMIN` recovery hook.
+//!
+//! Per-IP rate limiting lives in the top-level [`crate::rate_limit`] module
+//! since it is shared by the auth endpoints and the search endpoints. The
+//! auth router mounts it via `rate_limit_by_ip` in `main.rs`.
 //!
 //! Per-route enforcement (F0.7): every protected handler in
 //! [`crate::backend`] and every server function in `omnibus_frontend::rpc`
@@ -26,7 +28,6 @@ pub mod csrf;
 pub mod extractor;
 pub mod gate;
 pub mod handlers;
-pub mod rate_limit;
 pub mod strategy;
 
 #[cfg(test)]
@@ -36,7 +37,6 @@ pub use csrf::origin_check;
 pub use extractor::{AdminUser, AuthUser};
 pub use gate::require_auth;
 pub use handlers::auth_router;
-pub use rate_limit::{rate_limit_auth, RateLimiter};
 
 /// Name of the session cookie issued to web clients. Re-exported from
 /// `omnibus_db::auth::SESSION_COOKIE_NAME` so cookie issuance

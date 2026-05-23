@@ -23,6 +23,17 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 
 use crate::auth::{AdminUser, AuthUser};
+use crate::rate_limit::{rate_limit_by_ip, RateLimiter};
+
+/// Per-IP rate-limit budget for `/api/search/*` and the `/api/rpc/search-*`
+/// server functions. Each request runs four FTS5 queries plus joins, so the
+/// budget is tighter than the auth-endpoint default (10/60s). 30 requests
+/// per 10 seconds per IP comfortably covers a power user typing into the
+/// command palette without throttling, while still backstopping a runaway
+/// client. Surfaced as a constant so callers / tests share a single source
+/// of truth.
+pub const SEARCH_RATE_LIMIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+pub const SEARCH_RATE_LIMIT_MAX: u32 = 30;
 
 /// Generic 500 response that never leaks internal error details to the wire.
 /// The full error is logged server-side via `tracing::error!` so it remains
@@ -82,8 +93,7 @@ pub fn rest_router(state: AppState) -> Router {
                 // axum picks this larger value for `/api/ebooks/{id}/cover`.
                 .layer(axum::extract::DefaultBodyLimit::max(11 * 1024 * 1024)),
         )
-        .route("/api/search", get(get_search))
-        .route("/api/search/palette", get(get_search_palette))
+        .merge(search_router())
         .route("/api/covers/{id}", get(get_cover))
         .route("/api/thumbs/{id}/{size}", get(get_thumb))
         .route("/api/authors/{id}", get(get_author_by_id))
@@ -105,6 +115,34 @@ pub fn rest_router(state: AppState) -> Router {
             std::time::Duration::from_secs(30),
         ))
         .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024))
+}
+
+/// Sub-router for `/api/search/*` carrying its own per-IP rate-limit layer.
+///
+/// Each handler runs heavy SQL (four FTS5 queries for the palette; full
+/// search for `/api/search`), so we cap each principal at
+/// `SEARCH_RATE_LIMIT_MAX` requests per `SEARCH_RATE_LIMIT_WINDOW`. The
+/// limiter is constructed per-router so each test (which builds a fresh
+/// `rest_router`) gets its own fresh bucket map — production runs through
+/// `main.rs::rest_router` once, so the limiter persists for the lifetime
+/// of the process.
+///
+/// Returns `Router<AppState>` so it can be merged into `rest_router` before
+/// the outer `.with_state(state)` finalizes the state type. The rate-limit
+/// middleware carries its own state (`Arc<RateLimiter>`) via
+/// `from_fn_with_state`, which doesn't propagate to the route handlers.
+fn search_router() -> Router<AppState> {
+    let limiter = std::sync::Arc::new(RateLimiter::with_policy(
+        SEARCH_RATE_LIMIT_WINDOW,
+        SEARCH_RATE_LIMIT_MAX,
+    ));
+    Router::new()
+        .route("/api/search", get(get_search))
+        .route("/api/search/palette", get(get_search_palette))
+        .layer(axum::middleware::from_fn_with_state(
+            limiter,
+            rate_limit_by_ip,
+        ))
 }
 
 /// Process-start build id. Captured once and preserved for the lifetime of
@@ -1633,6 +1671,49 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_search_palette_returns_429_after_budget_exceeded() {
+        // Issue #124: /api/search/* runs four heavy FTS5 queries per request,
+        // so it gets a per-IP fixed-window rate limit. The limit is set to
+        // SEARCH_RATE_LIMIT_MAX requests per SEARCH_RATE_LIMIT_WINDOW; the
+        // (SEARCH_RATE_LIMIT_MAX + 1)th request from the same principal must
+        // be rejected with 429.
+        //
+        // `oneshot` requests carry no `ConnectInfo<SocketAddr>` extension, so
+        // the limiter's IP fallback (`0.0.0.0`) applies — every request in
+        // this test shares one bucket, which is exactly what we want.
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        for i in 0..SEARCH_RATE_LIMIT_MAX {
+            let res = app
+                .clone()
+                .oneshot(get_with_bearer("/api/search/palette?q=hello", &token))
+                .await
+                .expect("request should succeed");
+            assert_eq!(
+                res.status(),
+                StatusCode::OK,
+                "request #{} (1-indexed: {}) should be within budget",
+                i,
+                i + 1
+            );
+        }
+
+        // The (MAX+1)th request must trip the limiter.
+        let over_limit = app
+            .clone()
+            .oneshot(get_with_bearer("/api/search/palette?q=hello", &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(
+            over_limit.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "request beyond SEARCH_RATE_LIMIT_MAX must return 429",
+        );
     }
 
     #[tokio::test]

@@ -1,13 +1,24 @@
-//! Minimal in-memory per-IP rate limiter for the login/register endpoints.
+//! Reusable in-memory per-IP rate limiter and axum middleware.
 //!
 //! Self-hosted scope is small — a single process, ≤ a few dozen users. A
 //! Redis-backed limiter is overkill; a `Mutex<HashMap<IpAddr, Bucket>>` fits
 //! in < 60 lines and is easy to reason about. Swap for `tower_governor` if
 //! the scope ever grows.
 //!
-//! Policy: fixed-window counter, `MAX_REQUESTS` per `WINDOW_SECS`. Default
-//! tuned for `/api/auth/login` and `/api/auth/register`: 10 requests /
-//! minute / IP.
+//! Policy: fixed-window counter, `max` requests per `window` per principal.
+//! The principal is the request's peer IP (via `ConnectInfo<SocketAddr>`),
+//! with an optional opt-in `X-Forwarded-For` fallback when
+//! `OMNIBUS_TRUST_FORWARDED_FOR=1`.
+//!
+//! Mount via `axum::middleware::from_fn_with_state(limiter, rate_limit_by_ip)`
+//! on whichever sub-router needs limiting. The middleware itself does **not**
+//! filter on path — restriction happens at the router level, so the same
+//! primitive serves `/api/auth/{login,register}`, `/api/search/*`, and any
+//! future route that wants the same treatment without copy-paste.
+//!
+//! Default policy (`RateLimiter::new`) is tuned for the auth endpoints:
+//! 10 requests / 60s / IP. Search uses a separate limiter built via
+//! [`RateLimiter::with_policy`] with a tighter budget (30 / 10s).
 
 use axum::{
     extract::{ConnectInfo, Request, State},
@@ -21,7 +32,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
+/// Default window for the auth-endpoint limiter.
 pub const WINDOW_SECS: u64 = 60;
+/// Default max requests per window for the auth-endpoint limiter.
 pub const MAX_REQUESTS: u32 = 10;
 /// Maximum number of tracked IPs before stale buckets are pruned.
 const MAX_BUCKETS: usize = 10_000;
@@ -48,6 +61,7 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
+    /// Default policy: `MAX_REQUESTS` per `WINDOW_SECS`.
     pub fn new() -> Self {
         Self::with_policy(Duration::from_secs(WINDOW_SECS), MAX_REQUESTS)
     }
@@ -92,28 +106,19 @@ impl Default for RateLimiter {
     }
 }
 
-/// Axum middleware scoping the limiter to `/api/auth/login` and
-/// `/api/auth/register`. Prefers `ConnectInfo<SocketAddr>` (wired by the
-/// server's make-service). Only consults `X-Forwarded-For` when the operator
-/// has opted in via `OMNIBUS_TRUST_FORWARDED_FOR=1` — otherwise a client on
-/// a directly-reachable deployment could spoof the header to bypass the
-/// limiter and grow the bucket map without bound. When neither source yields
-/// an IP, falls back to `0.0.0.0` so the limiter still applies process-wide.
-pub async fn rate_limit_auth(
-    State(limiter): State<Arc<RateLimiter>>,
-    req: Request,
-    next: Next,
-) -> Response {
-    let path = req.uri().path();
-    let targeted = matches!(path, "/api/auth/login" | "/api/auth/register");
-    if !targeted {
-        return next.run(req).await;
-    }
+/// Resolve the request principal IP. Prefers `ConnectInfo<SocketAddr>` (wired
+/// by the server's make-service). Only consults `X-Forwarded-For` when the
+/// operator has opted in via `OMNIBUS_TRUST_FORWARDED_FOR=1` — otherwise a
+/// client on a directly-reachable deployment could spoof the header to
+/// bypass the limiter and grow the bucket map without bound. When neither
+/// source yields an IP, falls back to `0.0.0.0` so the limiter still applies
+/// process-wide.
+fn resolve_ip(req: &Request) -> IpAddr {
     let direct = req
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ConnectInfo(a)| a.ip());
-    let ip = direct
+    direct
         .or_else(|| {
             if !trust_forwarded_for() {
                 return None;
@@ -124,7 +129,45 @@ pub async fn rate_limit_auth(
                 .and_then(|s| s.split(',').next())
                 .and_then(|s| s.trim().parse().ok())
         })
-        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+}
+
+/// Generic per-IP rate-limit middleware. Apply to whichever sub-router needs
+/// limiting — the middleware does no path filtering of its own. Returns
+/// `429 Too Many Requests` once the limiter's policy is exceeded; otherwise
+/// passes the request through.
+pub async fn rate_limit_by_ip(
+    State(limiter): State<Arc<RateLimiter>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let ip = resolve_ip(&req);
+    if !limiter.allow(ip).await {
+        return (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded").into_response();
+    }
+    next.run(req).await
+}
+
+/// Path-prefix wrapper around [`rate_limit_by_ip`]. The middleware ignores
+/// (passes through) any request whose path doesn't match one of the given
+/// prefixes — handy when a top-level router contains a mix of routes and
+/// only a subset should be limited (e.g. the dioxus fullstack RPC router,
+/// where we only want to throttle `/api/rpc/search-*`).
+///
+/// Bucket map is shared with whatever limiter is passed in; combine with a
+/// limiter that's also mounted on the REST sub-router via
+/// [`rate_limit_by_ip`] to throttle REST + RPC search traffic from the same
+/// principal against a single budget.
+pub async fn rate_limit_paths(
+    State((limiter, prefixes)): State<(Arc<RateLimiter>, Arc<Vec<&'static str>>)>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let path = req.uri().path();
+    if !prefixes.iter().any(|p| path.starts_with(p)) {
+        return next.run(req).await;
+    }
+    let ip = resolve_ip(&req);
     if !limiter.allow(ip).await {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded").into_response();
     }

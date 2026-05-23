@@ -20,7 +20,7 @@ fn main() {
     {
         dioxus::serve(|| async move {
             use dioxus::server::axum::Extension;
-            use omnibus::{auth, backend};
+            use omnibus::{auth, backend, rate_limit};
             use omnibus_db::{
                 indexer,
                 worker::{Task, Worker},
@@ -68,11 +68,29 @@ fn main() {
                 }
             }
 
-            let limiter = Arc::new(auth::RateLimiter::new());
+            let auth_limiter = Arc::new(rate_limit::RateLimiter::new());
+            // Search RPC limiter: same policy as `backend::search_router`'s
+            // REST-side limiter so the budget is consistent across web (RPC)
+            // and mobile (REST) clients. Separate `RateLimiter` instance
+            // because the two routers are constructed independently; per-IP
+            // budgets are still enforced for each route family.
+            let search_rpc_limiter = Arc::new(rate_limit::RateLimiter::with_policy(
+                backend::SEARCH_RATE_LIMIT_WINDOW,
+                backend::SEARCH_RATE_LIMIT_MAX,
+            ));
+            let search_rpc_prefixes: Arc<Vec<&'static str>> =
+                Arc::new(vec!["/api/rpc/search-palette"]);
             let router = dioxus::server::router(App)
+                .layer(axum::middleware::from_fn_with_state(
+                    (search_rpc_limiter, search_rpc_prefixes),
+                    rate_limit::rate_limit_paths,
+                ))
                 .merge(backend::rest_router(state.clone()))
                 .merge(auth::auth_router(state.clone()).layer(
-                    axum::middleware::from_fn_with_state(limiter, auth::rate_limit_auth),
+                    axum::middleware::from_fn_with_state(
+                        auth_limiter,
+                        rate_limit::rate_limit_by_ip,
+                    ),
                 ))
                 // Apply require_auth and origin_check at the top level so
                 // every cookie-authed /api/* request — not just /api/auth/* —

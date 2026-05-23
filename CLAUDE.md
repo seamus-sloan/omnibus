@@ -86,11 +86,11 @@ components/search_palette.rs — F1.5 command-palette search overlay (⌘K trigg
 
 ```
 main.rs             — dioxus::launch (WASM) / dioxus::serve (native); mounts auth_router + rate-limit + origin-check
-lib.rs              — re-exports backend + auth under `server` feature for tests
-backend.rs          — /api/* REST router (mobile-facing) + integration tests
+lib.rs              — re-exports backend + auth + rate_limit under `server` feature for tests
+backend.rs          — /api/* REST router (mobile-facing) + integration tests; `/api/search/*` sub-router carries its own per-IP rate-limit layer
+rate_limit.rs       — reusable in-memory per-IP fixed-window counter + `rate_limit_by_ip` axum middleware (login/register + search endpoints); `rate_limit_paths` is a path-prefix wrapper used for `/api/rpc/search-palette`
 auth/mod.rs         — /api/auth/{register,login,logout,me} + AuthUser/AdminUser extractors + CSRF origin-check
 auth/gate.rs        — top-level middleware gating /api/* (pass-through for /api/auth/*)
-auth/rate_limit.rs  — in-memory per-IP fixed-window counter for login/register
 auth/strategy.rs    — AuthStrategy trait + PasswordStrategy (OIDC/WebAuthn fit the same shape)
 auth/boot.rs        — OMNIBUS_INITIAL_ADMIN recovery hook (promotes named user to admin)
 ```
