@@ -154,10 +154,12 @@ pub async fn rate_limit_by_ip(
 /// only a subset should be limited (e.g. the dioxus fullstack RPC router,
 /// where we only want to throttle `/api/rpc/search-*`).
 ///
-/// Bucket map is shared with whatever limiter is passed in; combine with a
-/// limiter that's also mounted on the REST sub-router via
-/// [`rate_limit_by_ip`] to throttle REST + RPC search traffic from the same
-/// principal against a single budget.
+/// Bucket map is shared with whatever limiter is passed in. Passing the
+/// *same* `Arc<RateLimiter>` that's also mounted on the REST sub-router via
+/// [`rate_limit_by_ip`] would throttle REST + RPC search traffic from one
+/// principal against a single budget. The current `main.rs` wiring instead
+/// passes a dedicated instance, so REST and RPC enforce independent per-IP
+/// budgets (see the `main.rs` call site for that tradeoff's rationale).
 pub async fn rate_limit_paths(
     State((limiter, prefixes)): State<(Arc<RateLimiter>, Arc<Vec<&'static str>>)>,
     req: Request,
@@ -206,6 +208,62 @@ mod tests {
         assert!(!rl.allow(ip).await);
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert!(rl.allow(ip).await);
+    }
+
+    #[tokio::test]
+    async fn rate_limit_paths_limits_matching_prefix_and_passes_others() {
+        // Mirrors the `main.rs` RPC wiring: `rate_limit_paths` mounted with
+        // the search-palette prefix. Drives the route via `oneshot` to assert
+        // both the over-limit (429) and the pass-through (non-matching path)
+        // cases. `oneshot` carries no `ConnectInfo`, so every request shares
+        // the `0.0.0.0` fallback bucket — exactly one budget under test.
+        use axum::middleware::from_fn_with_state;
+        use axum::{body::Body, routing::get, Router};
+        use tower::ServiceExt;
+
+        let max = 3u32;
+        let limiter = Arc::new(RateLimiter::with_policy(Duration::from_secs(60), max));
+        let prefixes: Arc<Vec<&'static str>> = Arc::new(vec!["/api/rpc/search-palette"]);
+        let app = Router::new()
+            .route("/api/rpc/search-palette", get(|| async { "ok" }))
+            .route("/api/rpc/other", get(|| async { "ok" }))
+            .layer(from_fn_with_state((limiter, prefixes), rate_limit_paths));
+
+        let palette_req = || {
+            Request::builder()
+                .uri("/api/rpc/search-palette?q=hello")
+                .body(Body::empty())
+                .unwrap()
+        };
+
+        // Matching prefix: first `max` requests pass, the next trips the limiter.
+        for i in 0..max {
+            let res = app.clone().oneshot(palette_req()).await.unwrap();
+            assert_eq!(res.status(), StatusCode::OK, "request #{i} within budget");
+        }
+        let over = app.clone().oneshot(palette_req()).await.unwrap();
+        assert_eq!(over.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        // Non-matching `/api/rpc/*` path bypasses the limiter entirely: it still
+        // returns 200 even though the shared bucket is already over budget,
+        // proving the prefix filter short-circuits before `allow()`.
+        for _ in 0..(max + 5) {
+            let res = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/rpc/other")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::OK,
+                "non-matching /api/rpc/* path must bypass the limiter"
+            );
+        }
     }
 
     #[tokio::test]
