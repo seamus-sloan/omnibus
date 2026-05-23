@@ -633,6 +633,11 @@ fn delete_cover_files_for(uuids: &[String]) {
 /// `metadata_overrides` rather than a second `get_metadata_overrides` call.
 /// Covers are fetched per grid tile and per detail page — the hot path
 /// stays at one query regardless of whether overrides exist.
+///
+/// The filesystem probes (`find_override_cover_file` / `find_cover_file`)
+/// are synchronous `std::fs` calls and run on the blocking pool via
+/// [`tokio::task::spawn_blocking`] so a hot cover-fetch loop doesn't pin
+/// tokio worker threads (#106).
 pub async fn get_cover(
     pool: &SqlitePool,
     book_id: i64,
@@ -655,17 +660,43 @@ pub async fn get_cover(
     };
 
     // F5.1: check for override cover first.
-    if has_cover_override != 0 {
-        if let Some(cover) = find_override_cover_file(&uuid) {
-            return Ok(Some(cover));
-        }
-    }
+    let has_cover_override = has_cover_override != 0;
 
-    if has_cover != 0 {
-        Ok(find_cover_file(&uuid))
-    } else {
-        Ok(None)
-    }
+    // Move the sync `std::fs` probes off the runtime. `JoinError` (panic or
+    // cancellation) can't round-trip through `sqlx::Error`, so we fold it
+    // into "no cover" — but log it loudly first so a real panic doesn't get
+    // silently masked into a missing-cover symptom.
+    let uuid_for_blocking = uuid.clone();
+    let result = match tokio::task::spawn_blocking(move || {
+        if has_cover_override {
+            if let Some(cover) = find_override_cover_file(&uuid_for_blocking) {
+                return Some(cover);
+            }
+        }
+        if has_cover != 0 {
+            find_cover_file(&uuid_for_blocking)
+        } else {
+            None
+        }
+    })
+    .await
+    {
+        Ok(cover) => cover,
+        Err(join_err) => {
+            let kind = if join_err.is_panic() {
+                "panicked"
+            } else {
+                "was cancelled"
+            };
+            tracing::error!(
+                book_id,
+                uuid = %uuid,
+                "get_cover spawn_blocking {kind}: {join_err}"
+            );
+            None
+        }
+    };
+    Ok(result)
 }
 
 /// Return `strftime('%s', last_modified)` as epoch seconds for `book_id`,
