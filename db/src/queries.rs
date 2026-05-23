@@ -2534,27 +2534,56 @@ pub async fn search_palette(
 
     // C. Series — substring match with primary author from first book.
     //
-    // Same single-pass shape as authors. The `author_display` correlated
-    // subquery is intentionally retained: it needs ORDER BY ... LIMIT 1 over
-    // a separate join chain (`books_authors_link` + position) that doesn't
-    // fold cleanly into the grouped row. It only runs for the up-to-LIMIT
-    // outer rows, so its cost is bounded.
+    // F5.1: both the count and the `author_display` line use the effective
+    // (override-aware) view, mirroring `get_series` and the palette author
+    // count. `overrides.series` (string) drives membership; if a book's
+    // first creator was renamed through the metadata edit form,
+    // `overrides.creators[0].name` drives the displayed author. Visibility
+    // still requires at least one canonical link in this library so we
+    // don't list series that exist only inside override JSON (no
+    // navigable id).
     let series: Vec<PaletteSeriesHit> = sqlx::query(
         r#"
-        SELECT s.id, s.name, COUNT(*) AS book_count,
-               (SELECT a.name FROM books_series_link bsl2
-                  JOIN books b2 ON b2.id = bsl2.book
-                  JOIN libraries l2 ON l2.id = b2.library_id
-                  JOIN books_authors_link bal ON bal.book = bsl2.book
-                  JOIN authors a ON a.id = bal.author
-                 WHERE bsl2.series = s.id AND l2.path = ?1
-                 ORDER BY b2.sort, b2.id, bal.position LIMIT 1) AS author_display
+        SELECT s.id, s.name,
+          (SELECT COUNT(*)
+             FROM books b
+             JOIN libraries l2 ON l2.id = b.library_id
+             LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+            WHERE l2.path = ?1
+              AND CASE
+                    WHEN mo.book_uuid IS NOT NULL
+                         AND json_type(mo.overrides, '$.series') IS NOT NULL
+                      THEN json_extract(mo.overrides, '$.series') = s.name
+                    ELSE EXISTS (
+                      SELECT 1 FROM books_series_link bsl
+                       WHERE bsl.book = b.id AND bsl.series = s.id
+                    )
+                  END
+          ) AS book_count,
+          (SELECT
+             CASE
+               WHEN mo2.book_uuid IS NOT NULL
+                    AND json_type(mo2.overrides, '$.creators') IS NOT NULL
+                 THEN json_extract(mo2.overrides, '$.creators[0].name')
+               ELSE (SELECT a.name FROM books_authors_link bal
+                       JOIN authors a ON a.id = bal.author
+                      WHERE bal.book = b2.id
+                      ORDER BY bal.position LIMIT 1)
+             END
+           FROM books_series_link bsl2
+             JOIN books b2 ON b2.id = bsl2.book
+             JOIN libraries l2 ON l2.id = b2.library_id
+             LEFT JOIN metadata_overrides mo2 ON mo2.book_uuid = b2.uuid
+            WHERE bsl2.series = s.id AND l2.path = ?1
+            ORDER BY b2.sort, b2.id LIMIT 1) AS author_display
         FROM series s
-        JOIN books_series_link bsl ON bsl.series = s.id
-        JOIN books b ON b.id = bsl.book
-        JOIN libraries l ON l.id = b.library_id
-        WHERE s.name LIKE ?2 ESCAPE '\' AND l.path = ?1
-        GROUP BY s.id, s.name
+        WHERE s.name LIKE ?2 ESCAPE '\'
+          AND EXISTS (
+            SELECT 1 FROM books_series_link bsl
+              JOIN books b ON b.id = bsl.book
+              JOIN libraries l ON l.id = b.library_id
+             WHERE bsl.series = s.id AND l.path = ?1
+          )
         ORDER BY book_count DESC, s.name
         LIMIT ?3
         "#,
@@ -6652,6 +6681,143 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn palette_series_count_reflects_overrides() {
+        // F5.1: same shape as palette_author_count_reflects_overrides
+        // but for the series tile. Books moved into a series via
+        // `overrides.series` must add to the destination count; books
+        // moved out drop from the source count.
+        let _covers = CoversTempDir::new("palette_series_count_overrides");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed(
+                    "a.epub",
+                    Some("A"),
+                    &["X"],
+                    &[],
+                    Some(("Series Source", "1")),
+                    None,
+                ),
+                indexed(
+                    "b.epub",
+                    Some("B"),
+                    &["X"],
+                    &[],
+                    Some(("Series Source", "2")),
+                    None,
+                ),
+                indexed(
+                    "c.epub",
+                    Some("C"),
+                    &["X"],
+                    &[],
+                    Some(("Series Dest", "1")),
+                    None,
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+        // Move a.epub from Series Source to Series Dest via override.
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let a = books.iter().find(|b| b.filename == "a.epub").unwrap();
+        let uuid = a.unique_identifier.clone().unwrap();
+        let ov = MetadataOverrides {
+            series: Some("Series Dest".into()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        // "Series" matches both names.
+        let results = search_palette(&pool, "/lib", "Series").await.unwrap();
+        let source = results
+            .series
+            .iter()
+            .find(|s| s.name == "Series Source")
+            .expect("Series Source still visible (canonical anchor remains)");
+        assert_eq!(
+            source.book_count, 1,
+            "Series Source should count only b.epub after a.epub is overridden away, got {results:?}",
+        );
+        let dest = results
+            .series
+            .iter()
+            .find(|s| s.name == "Series Dest")
+            .expect("Series Dest present");
+        assert_eq!(
+            dest.book_count, 2,
+            "Series Dest should count its canonical c.epub plus the override-moved a.epub, got {results:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn palette_series_author_display_reflects_override() {
+        // F5.1: the "by X" line on a series tile must follow the first
+        // book's effective creator, not the canonical one — otherwise
+        // renaming the author through the metadata edit form leaves the
+        // palette showing the old name.
+        let _covers = CoversTempDir::new("palette_series_author_display");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "k1.epub",
+                Some("K1"),
+                &["Old Name"],
+                &[],
+                Some(("Kingsway", "1")),
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let uuid = books[0].unique_identifier.clone().unwrap();
+
+        let ov = MetadataOverrides {
+            creators: Some(vec![Contributor {
+                name: "New Name".into(),
+                role: Some("aut".into()),
+                file_as: None,
+                id: None,
+            }]),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let results = search_palette(&pool, "/lib", "Kingsway").await.unwrap();
+        let kingsway = results
+            .series
+            .iter()
+            .find(|s| s.name == "Kingsway")
+            .expect("Kingsway present");
+        assert_eq!(
+            kingsway.author_display.as_deref(),
+            Some("New Name"),
+            "palette author line must follow override.creators, got {results:?}",
+        );
+    }
+
     /// #127: capture `EXPLAIN QUERY PLAN` for each of the three rewritten
     /// taxonomy queries and assert the planner uses the link-table indexes.
     /// This is a structural check — it doesn't pin the literal plan string
@@ -6710,16 +6876,30 @@ mod tests {
             "authors plan should not full-scan the link table:\n{plan}"
         );
 
-        // Series
+        // Series — override-aware count + author_display, must still drive
+        // through the `books_series_link` index for visibility and the
+        // no-override branch of the CASE.
         let plan = plan_text(
             &pool,
-            "SELECT s.id, s.name, COUNT(*) AS book_count \
+            "SELECT s.id, s.name, \
+              (SELECT COUNT(*) FROM books b \
+                 JOIN libraries l2 ON l2.id = b.library_id \
+                 LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
+                WHERE l2.path = ?1 \
+                  AND CASE \
+                        WHEN mo.book_uuid IS NOT NULL \
+                             AND json_type(mo.overrides, '$.series') IS NOT NULL \
+                          THEN json_extract(mo.overrides, '$.series') = s.name \
+                        ELSE EXISTS (SELECT 1 FROM books_series_link bsl \
+                                      WHERE bsl.book = b.id AND bsl.series = s.id) \
+                      END \
+              ) AS book_count \
              FROM series s \
-             JOIN books_series_link bsl ON bsl.series = s.id \
-             JOIN books b ON b.id = bsl.book \
-             JOIN libraries l ON l.id = b.library_id \
-             WHERE s.name LIKE ?2 ESCAPE '\\' AND l.path = ?1 \
-             GROUP BY s.id, s.name \
+             WHERE s.name LIKE ?2 ESCAPE '\\' \
+               AND EXISTS (SELECT 1 FROM books_series_link bsl \
+                             JOIN books b ON b.id = bsl.book \
+                             JOIN libraries l ON l.id = b.library_id \
+                            WHERE bsl.series = s.id AND l.path = ?1) \
              ORDER BY book_count DESC, s.name \
              LIMIT ?3",
         )
