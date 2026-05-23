@@ -29,8 +29,20 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
 
-      - name: Enable Nix store cache
-        uses: DeterminateSystems/magic-nix-cache-action@main
+      # Cache the Nix store across runs. Auto-purges caches with the same
+      # prefix that haven't been touched in 7 days so we stay under the 10 GB
+      # per-repo GHA cache quota. Replaces DeterminateSystems/magic-nix-cache-action
+      # (sunset; was uploading unbounded and exceeding the quota).
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-e2e-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-prefixes-first-match: nix-e2e-${{ runner.os }}-
+          purge: true
+          purge-prefixes: nix-e2e-${{ runner.os }}-
+          purge-last-accessed: 604800
+          purge-primary-key: never
+          gc-max-store-size-linux: 5G
 
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
