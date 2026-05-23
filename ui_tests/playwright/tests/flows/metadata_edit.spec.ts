@@ -302,4 +302,11 @@ test("surfaces error and stays on edit form when revert mutation fails", async (
     async () => revertBtn.click(),
   );
   await expect(page).toHaveURL(new RegExp(`/books/${editId}$`));
+
+  // Verify the override was actually removed, not just that the delete
+  // returned 200 — the detail page should now show the original scanned
+  // title, and re-opening /edit should hide the revert button.
+  await expect(page.getByRole("heading", { level: 1, name: TARGET.title })).toBeVisible();
+  await gotoReady(page, `/books/${editId}/edit`);
+  await expect(page.getByTestId("revert-overrides")).toHaveCount(0);
 });
