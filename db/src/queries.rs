@@ -2061,19 +2061,71 @@ pub async fn get_author(
     let Some(a) = author_row else {
         return Ok(None);
     };
+    let author_name: String = a.get("name");
 
+    // F5.1: membership and ordering follow the merged (override-aware)
+    // view, not the raw `books_authors_link` table. `apply_overrides`
+    // replaces creators wholesale when the override JSON has the
+    // `creators` key, so the effective creator set for a book is:
+    //   - `overrides.creators` if the JSON has that key (including the
+    //     empty array, which clears all authors), else
+    //   - the canonical names from `books_authors_link`.
+    // Override creators carry only `name`, so we match by name against
+    // the target author. `series_index` overrides drive ordering the same
+    // way as in `get_series`.
     let sql = format!(
         r#"SELECT {BOOK_COLUMNS}
            FROM books b
-           JOIN books_authors_link bal ON bal.book = b.id
-           WHERE bal.author = ?
-           ORDER BY b.series_index NULLS LAST, b.sort, b.id"#
+           LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+           WHERE
+             CASE
+               WHEN mo.book_uuid IS NOT NULL
+                    AND json_type(mo.overrides, '$.creators') IS NOT NULL
+                 THEN EXISTS (
+                   SELECT 1 FROM json_each(mo.overrides, '$.creators') je
+                    WHERE json_extract(je.value, '$.name') = ?
+                 )
+               ELSE EXISTS (
+                 SELECT 1 FROM books_authors_link bal
+                  WHERE bal.book = b.id AND bal.author = ?
+               )
+             END
+           ORDER BY
+             COALESCE(
+               CASE
+                 WHEN mo.book_uuid IS NOT NULL
+                      AND json_type(mo.overrides, '$.series_index') IS NOT NULL
+                   THEN CAST(json_extract(mo.overrides, '$.series_index') AS REAL)
+                 ELSE NULL
+               END,
+               b.series_index
+             ) NULLS LAST,
+             b.sort, b.id"#
     );
-    let rows = sqlx::query(&sql).bind(author_id).fetch_all(pool).await?;
+    let rows = sqlx::query(&sql)
+        .bind(&author_name)
+        .bind(author_id)
+        .fetch_all(pool)
+        .await?;
 
     let mut books = Vec::with_capacity(rows.len());
     for r in &rows {
         books.push(row_to_ebook(r)?);
+    }
+
+    // Bulk-apply overrides so card titles / descriptions / covers reflect
+    // user edits, matching what `list_books` does for the landing grid.
+    let uuids: Vec<String> = books
+        .iter()
+        .filter_map(|b| b.unique_identifier.clone())
+        .collect();
+    let overrides_map = load_overrides_bulk(pool, &uuids).await?;
+    for book in &mut books {
+        if let Some(uuid) = book.unique_identifier.as_deref() {
+            if let Some((ov, has_cover_ov)) = overrides_map.get(uuid) {
+                apply_overrides(book, ov, *has_cover_ov);
+            }
+        }
     }
 
     Ok(Some(AuthorDetail {
@@ -5216,6 +5268,147 @@ mod tests {
             merged.series_id,
             Some(saga_id),
             "override-only series must still resolve series_id so the detail rail can link"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_author_includes_books_whose_override_names_this_author() {
+        // Repro of the bug where renaming a book's author via the
+        // metadata form (e.g. "Sanderson, Brandon" → "Brandon Sanderson")
+        // left the book invisible on the new author's `/author/:id` page.
+        // The override path writes JSON only — `books_authors_link` keeps
+        // pointing at the canonical author row — so `get_author` must
+        // layer overrides on top of the relational link at read time.
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        // Set up the "Brandon Sanderson" vs "Sanderson, Brandon" shape:
+        // one canonical author and a second name the user prefers, then
+        // override one book to use the preferred name.
+        let canonical_id = author_id_by_name(&pool, "Ada Lovelace").await;
+        let preferred_id = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO authors (name, sort) VALUES (?, ?) RETURNING id",
+        )
+        .bind("Lovelace, Ada")
+        .bind("Lovelace, Ada")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let saga_one = books.iter().find(|b| b.filename == "saga1.epub").unwrap();
+        let uuid = saga_one.unique_identifier.clone().unwrap();
+        let saga_one_id = saga_one.id;
+
+        // saga1.epub canonically lists ["Ada Lovelace", "Grace Hopper"];
+        // the override renames the primary author to "Lovelace, Ada".
+        let ov = MetadataOverrides {
+            creators: Some(vec![
+                Contributor {
+                    name: "Lovelace, Ada".into(),
+                    role: Some("aut".into()),
+                    file_as: None,
+                    id: None,
+                },
+                Contributor {
+                    name: "Grace Hopper".into(),
+                    role: Some("aut".into()),
+                    file_as: None,
+                    id: None,
+                },
+            ]),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        // Visiting the preferred-name author page must now include the
+        // overridden book, even though `books_authors_link` for that book
+        // still points at the canonical "Ada Lovelace" row.
+        let preferred = get_author(&pool, preferred_id)
+            .await
+            .unwrap()
+            .expect("author exists");
+        let titles: Vec<_> = preferred
+            .books
+            .iter()
+            .map(|b| b.title.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            titles,
+            vec!["Saga: Book One".to_string()],
+            "override-named author must surface the book on /author/:id",
+        );
+
+        // And the canonical-name author page must drop it, because the
+        // override replaced the creator list wholesale.
+        let canonical = get_author(&pool, canonical_id)
+            .await
+            .unwrap()
+            .expect("author exists");
+        let canonical_titles: Vec<_> = canonical
+            .books
+            .iter()
+            .map(|b| b.title.clone().unwrap_or_default())
+            .collect();
+        assert!(
+            !canonical_titles.contains(&"Saga: Book One".to_string()),
+            "override moved the book off the canonical author, got {canonical_titles:?}",
+        );
+
+        // The card on the preferred-name page should show the override
+        // creator name, not the canonical one.
+        let card = &preferred.books[0];
+        assert_eq!(card.id, saga_one_id);
+        assert_eq!(
+            card.creators.first().map(|c| c.name.as_str()),
+            Some("Lovelace, Ada")
+        );
+    }
+
+    #[tokio::test]
+    async fn get_author_excludes_books_whose_override_clears_authors() {
+        // A book whose override sets creators to the empty array should
+        // disappear from every author's page, matching what the book
+        // detail page already shows (no breadcrumb author).
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+        let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let standalone = books
+            .iter()
+            .find(|b| b.filename == "standalone.epub")
+            .unwrap();
+        let uuid = standalone.unique_identifier.clone().unwrap();
+
+        let ov = MetadataOverrides {
+            creators: Some(vec![]),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let ada = get_author(&pool, ada_id)
+            .await
+            .unwrap()
+            .expect("author exists");
+        let titles: Vec<_> = ada
+            .books
+            .iter()
+            .map(|b| b.title.clone().unwrap_or_default())
+            .collect();
+        assert!(
+            !titles.contains(&"Standalone".to_string()),
+            "override-cleared creators must drop the book from /author/:id, got {titles:?}",
         );
     }
 
