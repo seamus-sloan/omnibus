@@ -275,14 +275,13 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                         // `onmounted` programmatically focuses the input
                         // when the overlay is dynamically rendered (⌘K).
                         // Uses `requestAnimationFrame` so the browser has
-                        // finished layout before we `.focus()`.
+                        // finished layout before we `.focus()` — without
+                        // that delay the focus call lands on an element
+                        // that isn't yet painted and the caret never
+                        // appears (this is the timing reason prior
+                        // attempts with `set_focus(true)`/`spawn` failed).
                         onmounted: move |_evt: MountedEvent| {
-                            document::eval(r#"
-                                requestAnimationFrame(() => {
-                                    const el = document.querySelector('[data-testid="sp-input"]');
-                                    if (el) el.focus();
-                                });
-                            "#);
+                            focus_palette_input(&_evt);
                         },
                         value: "{query}",
                         oninput: move |evt| {
@@ -664,6 +663,46 @@ async fn async_sleep_ms(ms: u32) {
 #[cfg(all(not(feature = "web"), feature = "server"))]
 async fn async_sleep_ms(ms: u32) {
     tokio::time::sleep(std::time::Duration::from_millis(ms as u64)).await;
+}
+
+// ── Autofocus on overlay mount (platform-gated) ──────────────────
+
+/// Focus the palette input after the browser has painted it.
+///
+/// Replaces a prior `document::eval` + raw JS `requestAnimationFrame` +
+/// `querySelector` workaround with a fully typed `web_sys` path.
+///
+/// The `requestAnimationFrame` indirection is still required. Calling
+/// `.focus()` synchronously inside `onmounted` (or from a `spawn`ed
+/// future) lands before the element is laid out, so the caret never
+/// appears. Scheduling the focus for the next frame matches what the
+/// old eval block did and lets the browser finish layout first.
+#[cfg(feature = "web")]
+fn focus_palette_input(evt: &MountedEvent) {
+    use dioxus::web::WebEventExt;
+    use wasm_bindgen::prelude::*;
+
+    let Some(element) = evt.try_as_web_event() else {
+        return;
+    };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let closure = Closure::wrap(Box::new(move || {
+        if let Some(html_el) = element.dyn_ref::<web_sys::HtmlElement>() {
+            let _ = html_el.focus();
+        }
+    }) as Box<dyn FnMut()>);
+    let _ = window.request_animation_frame(closure.as_ref().unchecked_ref());
+    // Leak the closure so it stays alive until the browser fires the
+    // animation-frame callback — without this it would be dropped on
+    // return and the queued callback would point at freed memory.
+    closure.forget();
+}
+
+#[cfg(not(feature = "web"))]
+fn focus_palette_input(_evt: &MountedEvent) {
+    // No-op on SSR / native: the overlay only opens via web interaction.
 }
 
 // ── Global ⌘K shortcut (web only) ───────────────────────────────
