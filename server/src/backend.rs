@@ -291,7 +291,13 @@ async fn get_search(
         Err(error) => return internal("read settings", error),
     };
     let Some(path) = settings.ebook_library_path else {
-        return Json(omnibus_shared::EbookLibrary::default()).into_response();
+        // Match the `/api/ebooks` contract: even an empty result attaches
+        // `X-Total-Count: 0` so clients can rely on the header always
+        // being present.
+        return with_pagination_headers(
+            Json(omnibus_shared::EbookLibrary::default()).into_response(),
+            0,
+        );
     };
     let books = match db::search_books(&state.pool, &path, &params.q).await {
         Ok(b) => b,
@@ -1027,6 +1033,168 @@ mod tests {
         assert!(
             response.headers().get("X-Total-Cap").is_none(),
             "X-Total-Cap must not be set when the response is not truncated"
+        );
+    }
+
+    #[tokio::test]
+    async fn api_get_ebooks_sets_total_cap_header_when_truncated() {
+        // Issue #81: when the underlying row count exceeds MAX_BOOKS_RETURNED,
+        // the response body is capped and X-Total-Cap is attached so the
+        // client knows the JSON it received isn't the full set.
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        db::set_settings(
+            &pool,
+            &Settings {
+                ebook_library_path: Some("/lib".into()),
+                audiobook_library_path: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        // Bulk-seed > MAX_BOOKS_RETURNED rows directly so the test runtime
+        // stays in milliseconds. The cap behavior only needs rows to exist;
+        // the indexer's full m2m wiring isn't relevant here.
+        let total = db::MAX_BOOKS_RETURNED + 5;
+        let lib_id: i64 = sqlx::query_scalar(
+            "INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            WITH RECURSIVE n(i) AS (
+                SELECT 1
+                UNION ALL
+                SELECT i + 1 FROM n WHERE i < ?
+            )
+            INSERT INTO books (uuid, library_id, path, title, sort)
+            SELECT 'uuid-' || i, ?, '/lib/b' || i, 'Title ' || i,
+                   'Title ' || printf('%010d', i)
+              FROM n
+            "#,
+        )
+        .bind(total)
+        .bind(lib_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let response = app
+            .oneshot(get_with_bearer("/api/ebooks", &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("X-Total-Count")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<i64>().ok()),
+            Some(total),
+            "X-Total-Count must report the uncapped row count"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("X-Total-Cap")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<i64>().ok()),
+            Some(db::MAX_BOOKS_RETURNED),
+            "X-Total-Cap must equal MAX_BOOKS_RETURNED when the response is truncated"
+        );
+    }
+
+    #[tokio::test]
+    async fn api_get_search_sets_total_count_header_with_indexed_library() {
+        // Issue #81: /api/search must attach X-Total-Count on every response,
+        // matching the /api/ebooks contract.
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        db::set_settings(
+            &pool,
+            &Settings {
+                ebook_library_path: Some("/lib".into()),
+                audiobook_library_path: None,
+            },
+        )
+        .await
+        .unwrap();
+        db::replace_books(
+            &pool,
+            "/lib",
+            vec![
+                db::ebook::IndexedBook {
+                    metadata: omnibus_shared::EbookMetadata {
+                        filename: "alpha.epub".into(),
+                        title: Some("Alpha".into()),
+                        ..Default::default()
+                    },
+                    cover: None,
+                },
+                db::ebook::IndexedBook {
+                    metadata: omnibus_shared::EbookMetadata {
+                        filename: "beta.epub".into(),
+                        title: Some("Beta".into()),
+                        ..Default::default()
+                    },
+                    cover: None,
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+        let response = app
+            .oneshot(get_with_bearer("/api/search?q=Alpha", &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("X-Total-Count")
+                .and_then(|v| v.to_str().ok()),
+            Some("1"),
+            "X-Total-Count must reflect the FTS match count"
+        );
+        assert!(
+            response.headers().get("X-Total-Cap").is_none(),
+            "X-Total-Cap must not be set when search results fit under the cap"
+        );
+    }
+
+    #[tokio::test]
+    async fn api_get_search_sets_total_count_zero_when_path_not_configured() {
+        // Issue #81: the early-return path (no library configured) must
+        // still attach X-Total-Count: 0 so the client can rely on the
+        // header always being present.
+        let (app, _state, pool) = fixture().await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        let response = app
+            .oneshot(get_with_bearer("/api/search?q=anything", &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("X-Total-Count")
+                .and_then(|v| v.to_str().ok()),
+            Some("0"),
+            "X-Total-Count must be 0 on the no-library-configured early return"
+        );
+        assert!(
+            response.headers().get("X-Total-Cap").is_none(),
+            "X-Total-Cap must not be set on the early-return path"
         );
     }
 
