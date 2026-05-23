@@ -11,7 +11,7 @@ use axum::{
     extract::{Path, Query, State},
     http::header,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
     Extension, Json, Router,
 };
 use omnibus_db::{
@@ -88,6 +88,14 @@ pub fn rest_router(state: AppState) -> Router {
         .merge(
             Router::new()
                 .route("/api/ebooks/{id}/cover", post(post_ebook_cover))
+                // F1.11: same 10 MiB cap rationale as the book-cover route —
+                // larger than the global 1 MiB so multipart uploads succeed.
+                .route(
+                    "/api/authors/{id}/photo",
+                    put(put_author_photo)
+                        .get(get_author_photo)
+                        .delete(delete_author_photo),
+                )
                 // Per-route body-limit override for image uploads. Layered
                 // closer to the handler than the global 1 MiB cap below, so
                 // axum picks this larger value for `/api/ebooks/{id}/cover`.
@@ -97,6 +105,7 @@ pub fn rest_router(state: AppState) -> Router {
         .route("/api/covers/{id}", get(get_cover))
         .route("/api/thumbs/{id}/{size}", get(get_thumb))
         .route("/api/authors", get(get_authors))
+        .route("/api/authors/{id}/photo/scan", post(post_author_photo_scan))
         .route("/api/authors/{id}", get(get_author_by_id))
         .route("/api/series", get(get_series))
         .route("/api/series/{id}", get(get_series_by_id))
@@ -777,6 +786,192 @@ async fn post_ebook_cover(
         Ok(None) => (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
         Err(e) => internal("get_book", e),
     }
+}
+
+// ---------------------------------------------------------------------------
+// F1.11 Author profile photos.
+// ---------------------------------------------------------------------------
+
+/// Serve a cached author profile photo. Returns 404 when no photo is cached
+/// (including `'letter'` negative-cache markers) — the frontend keeps the
+/// letter avatar in that case. On a miss, enqueues a background resolution
+/// task so a subsequent page view can render the resolved photo.
+async fn get_author_photo(
+    _user: AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Response {
+    match db::get_author_photo(&state.pool, id).await {
+        Ok(Some((mime, bytes))) => (
+            [
+                (header::CONTENT_TYPE, mime.as_str()),
+                // Match `/api/covers/:id` cache semantics.
+                (header::CACHE_CONTROL, "private, max-age=86400"),
+                (header::VARY, "Cookie"),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Ok(None) => {
+            // Only queue resolution if no row exists yet — a `letter` marker
+            // is a sticky miss until an admin DELETEs it. `author_photo_status`
+            // returns the row regardless of source.
+            if let Ok(None) = db::author_photo_status(&state.pool, id).await {
+                state
+                    .worker
+                    .post(Task::ResolveAuthorPhoto { author_id: id });
+            }
+            axum::http::StatusCode::NOT_FOUND.into_response()
+        }
+        Err(error) => internal("read author photo", error),
+    }
+}
+
+/// Admin upload of a manual author profile photo. Multipart with one
+/// `photo` field. Mirrors the `/api/ebooks/{id}/cover` validation
+/// pipeline: 10 MiB cap, magic-byte sniff, SVG rejection.
+async fn put_author_photo(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    // Confirm the author exists before reading multipart so a malformed
+    // upload to a missing id fails fast with 404 (not 400).
+    let author_exists: bool =
+        match sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM authors WHERE id = ?)")
+            .bind(id)
+            .fetch_one(&state.pool)
+            .await
+        {
+            Ok(v) => v != 0,
+            Err(e) => return internal("author exists check", e),
+        };
+    if !author_exists {
+        return (axum::http::StatusCode::NOT_FOUND, "author not found").into_response();
+    }
+
+    let (mime, bytes) = loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => {
+                let name = field.name().unwrap_or("").to_string();
+                if name != "photo" {
+                    continue;
+                }
+                let content_type = field
+                    .content_type()
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+                if !content_type.starts_with("image/") {
+                    return (
+                        axum::http::StatusCode::BAD_REQUEST,
+                        "photo must be an image",
+                    )
+                        .into_response();
+                }
+                if content_type.contains("svg") {
+                    return (
+                        axum::http::StatusCode::BAD_REQUEST,
+                        "SVG photos are not accepted",
+                    )
+                        .into_response();
+                }
+                match field.bytes().await {
+                    Ok(b) => {
+                        if b.len() > 10 * 1024 * 1024 {
+                            return (
+                                axum::http::StatusCode::BAD_REQUEST,
+                                "photo must be under 10 MB",
+                            )
+                                .into_response();
+                        }
+                        let detected = detect_image_format(&b);
+                        if detected.is_none() {
+                            return (
+                                axum::http::StatusCode::BAD_REQUEST,
+                                "file does not appear to be a valid image",
+                            )
+                                .into_response();
+                        }
+                        break (detected.unwrap(), b);
+                    }
+                    Err(e) => return internal("read photo field", e),
+                }
+            }
+            Ok(None) => {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    "missing 'photo' field in multipart body",
+                )
+                    .into_response()
+            }
+            Err(e) => return internal("parse multipart", e),
+        }
+    };
+
+    if let Err(e) = db::upsert_author_photo(
+        &state.pool,
+        id,
+        db::AuthorPhotoSource::Manual,
+        None,
+        Some(&mime),
+        Some(&bytes),
+    )
+    .await
+    {
+        return internal("upsert_author_photo", e);
+    }
+    axum::http::StatusCode::NO_CONTENT.into_response()
+}
+
+/// Admin: drop the cached photo so the next page view re-queues resolution.
+async fn delete_author_photo(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Response {
+    match db::delete_author_photo(&state.pool, id).await {
+        Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
+        Err(e) => internal("delete_author_photo", e),
+    }
+}
+
+/// Admin: synchronously run the Open Library cascade for an author. Clears
+/// any existing row (including sticky `letter` markers) so the resolver
+/// re-queries Open Library, then awaits the resolver inline and returns
+/// `{ "resolved": bool }`. `resolved=false` means Open Library had nothing
+/// (a `letter` marker is now in place to skip future autoresolution).
+async fn post_author_photo_scan(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Response {
+    // Verify the author exists first so a typo on the id gets a 404 instead
+    // of a successful no-op scan.
+    let author_exists: bool =
+        match sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM authors WHERE id = ?)")
+            .bind(id)
+            .fetch_one(&state.pool)
+            .await
+        {
+            Ok(v) => v != 0,
+            Err(e) => return internal("author exists check", e),
+        };
+    if !author_exists {
+        return (axum::http::StatusCode::NOT_FOUND, "author not found").into_response();
+    }
+    if let Err(e) = db::delete_author_photo(&state.pool, id).await {
+        return internal("delete_author_photo (pre-scan)", e);
+    }
+    if let Err(e) = db::author_photos::resolve(&state.pool, id).await {
+        return internal("author_photos::resolve", e);
+    }
+    let resolved = match db::get_author_photo(&state.pool, id).await {
+        Ok(opt) => opt.is_some(),
+        Err(e) => return internal("get_author_photo (post-scan)", e),
+    };
+    Json(omnibus_shared::AuthorPhotoScanResult { resolved }).into_response()
 }
 
 #[cfg(test)]
@@ -2731,5 +2926,318 @@ mod tests {
             body.contains("10 MB"),
             "400 body should explain the size cap, got {body:?}"
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // F1.11 Author profile photos.
+    // ---------------------------------------------------------------------
+
+    async fn seed_author(pool: &sqlx::SqlitePool, name: &str) -> i64 {
+        sqlx::query_scalar::<_, i64>("INSERT INTO authors (name, sort) VALUES (?, ?) RETURNING id")
+            .bind(name)
+            .bind(name)
+            .fetch_one(pool)
+            .await
+            .expect("seed author")
+    }
+
+    /// Multipart body with one `photo` field, matching `build_cover_multipart`
+    /// but using the field name the author-photo handler expects.
+    fn build_photo_multipart(content_type: &str, bytes: &[u8]) -> (String, Vec<u8>) {
+        let boundary = "----omnibus-test-photo-boundary";
+        let mut body: Vec<u8> = Vec::with_capacity(bytes.len() + 256);
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            b"Content-Disposition: form-data; name=\"photo\"; filename=\"photo.png\"\r\n",
+        );
+        body.extend_from_slice(format!("Content-Type: {content_type}\r\n\r\n").as_bytes());
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        (format!("multipart/form-data; boundary={boundary}"), body)
+    }
+
+    #[tokio::test]
+    async fn api_get_author_photo_requires_auth() {
+        let (app, _state, _pool) = fixture().await;
+        let res = app
+            .oneshot(get_anon("/api/authors/1/photo"))
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_get_author_photo_404_when_unset() {
+        let (app, _state, pool) = fixture().await;
+        let id = seed_author(&pool, "Ada Lovelace").await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+        let res = app
+            .oneshot(get_with_bearer(&format!("/api/authors/{id}/photo"), &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn api_put_author_photo_requires_admin() {
+        let (app, _state, pool) = fixture().await;
+        let id = seed_author(&pool, "Ada Lovelace").await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        let (content_type, body) = build_photo_multipart("image/png", TINY_PNG);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/authors/{id}/photo"))
+                    .method("PUT")
+                    .header("content-type", content_type)
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn api_put_author_photo_uploads_and_get_serves() {
+        let (app, _state, pool) = fixture().await;
+        let id = seed_author(&pool, "Ada Lovelace").await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        let (content_type, body) = build_photo_multipart("image/png", TINY_PNG);
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/authors/{id}/photo"))
+                    .method("PUT")
+                    .header("content-type", content_type)
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+        // GET should now return the uploaded bytes with the detected mime.
+        let res = app
+            .clone()
+            .oneshot(get_with_bearer(&format!("/api/authors/{id}/photo"), &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::OK);
+        let ct = res
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        assert_eq!(ct, "image/png");
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(bytes.as_ref(), TINY_PNG);
+
+        // The author detail payload must now flag has_photo = true.
+        let res = app
+            .oneshot(get_with_bearer(&format!("/api/authors/{id}"), &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let author: omnibus_shared::AuthorDetail = serde_json::from_slice(&bytes).unwrap();
+        assert!(author.has_photo, "has_photo should flip after upload");
+    }
+
+    #[tokio::test]
+    async fn api_put_author_photo_404_for_missing_author() {
+        let (app, _state, pool) = fixture().await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        let (content_type, body) = build_photo_multipart("image/png", TINY_PNG);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/authors/9999/photo")
+                    .method("PUT")
+                    .header("content-type", content_type)
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn api_put_author_photo_rejects_non_image() {
+        let (app, _state, pool) = fixture().await;
+        let id = seed_author(&pool, "Ada Lovelace").await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        let (content_type, body) = build_photo_multipart("text/plain", b"not an image");
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/authors/{id}/photo"))
+                    .method("PUT")
+                    .header("content-type", content_type)
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn api_put_author_photo_rejects_bogus_image_bytes() {
+        // Content-Type says image/png but the bytes don't carry the PNG magic
+        // header — the magic-byte check must catch this even when the
+        // declared MIME passes the `image/` prefix guard.
+        let (app, _state, pool) = fixture().await;
+        let id = seed_author(&pool, "Ada Lovelace").await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        let (content_type, body) = build_photo_multipart("image/png", b"not really a png");
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/authors/{id}/photo"))
+                    .method("PUT")
+                    .header("content-type", content_type)
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn api_delete_author_photo_requires_admin() {
+        let (app, _state, pool) = fixture().await;
+        let id = seed_author(&pool, "Ada Lovelace").await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/authors/{id}/photo"))
+                    .method("DELETE")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn api_delete_author_photo_clears_row() {
+        let (app, _state, pool) = fixture().await;
+        let id = seed_author(&pool, "Ada Lovelace").await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        db::upsert_author_photo(
+            &pool,
+            id,
+            db::AuthorPhotoSource::Manual,
+            None,
+            Some("image/png"),
+            Some(TINY_PNG),
+        )
+        .await
+        .unwrap();
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/authors/{id}/photo"))
+                    .method("DELETE")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+        assert!(db::author_photo_status(&pool, id).await.unwrap().is_none());
+    }
+
+    // --- Scan-for-picture admin gate / not-found contract. The resolver
+    // itself is exercised by the wiremock-backed tests in
+    // `omnibus_db::author_photos::tests`; these only cover the wiring so
+    // they don't reach the real Open Library service.
+
+    #[tokio::test]
+    async fn api_scan_author_photo_requires_admin() {
+        let (app, _state, pool) = fixture().await;
+        let id = seed_author(&pool, "Ada Lovelace").await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/authors/{id}/photo/scan"))
+                    .method("POST")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn api_scan_author_photo_404_for_missing_author() {
+        let (app, _state, pool) = fixture().await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/authors/9999/photo/scan")
+                    .method("POST")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn api_scan_author_photo_requires_auth() {
+        let (app, _state, _pool) = fixture().await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/authors/1/photo/scan")
+                    .method("POST")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 }

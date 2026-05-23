@@ -22,6 +22,13 @@ pub enum Task {
         book_id: i64,
         last_modified_epoch: i64,
     },
+    /// F1.11: resolve and cache an author's profile photo. The resolver
+    /// hits Open Library at most once per author per (admin-DELETE-able)
+    /// cache window; a `'letter'` marker is written on any miss so future
+    /// page views skip the network entirely.
+    ResolveAuthorPhoto {
+        author_id: i64,
+    },
     #[cfg(test)]
     Test {
         tag: &'static str,
@@ -38,6 +45,7 @@ impl Task {
         match self {
             Task::Scan { library_path } => Some(library_path.clone()),
             Task::GenerateThumbs { book_id, .. } => Some(format!("thumb:{book_id}")),
+            Task::ResolveAuthorPhoto { author_id } => Some(format!("author-photo:{author_id}")),
             #[cfg(test)]
             Task::Test { resource, .. } => resource.clone(),
         }
@@ -47,6 +55,7 @@ impl Task {
         match self {
             Task::Scan { .. } => true,
             Task::GenerateThumbs { .. } => false,
+            Task::ResolveAuthorPhoto { .. } => false,
             #[cfg(test)]
             Task::Test {
                 route_through_scan_sem,
@@ -172,6 +181,12 @@ impl Worker {
         match task {
             Task::Scan { library_path } => {
                 match crate::indexer::reindex(&self.pool, &library_path).await {
+                    Ok(()) => TaskOutcome::Ok,
+                    Err(e) => TaskOutcome::Err(e.to_string()),
+                }
+            }
+            Task::ResolveAuthorPhoto { author_id } => {
+                match crate::author_photos::resolve(&self.pool, author_id).await {
                     Ok(()) => TaskOutcome::Ok,
                     Err(e) => TaskOutcome::Err(e.to_string()),
                 }

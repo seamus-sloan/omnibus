@@ -15,6 +15,25 @@ pub fn AuthorPage(id: i64) -> Element {
     let mut author: Signal<Option<AuthorDetail>> = use_signal(|| None);
     let mut loading = use_signal(|| true);
     let mut error: Signal<Option<String>> = use_signal(|| None);
+    // F1.11: gate the "Scan for picture" button on admin. SSR renders with
+    // `false` and the web client overwrites after `/api/auth/me` returns —
+    // matches the pattern in `top_nav::AuthControl`.
+    let is_admin = use_signal(|| false);
+    // Scan-button state: idle / scanning / a one-shot status message.
+    let scanning = use_signal(|| false);
+    let scan_status: Signal<Option<String>> = use_signal(|| None);
+
+    #[cfg(feature = "web")]
+    {
+        let mut admin_setter = is_admin;
+        use_effect(move || {
+            spawn(async move {
+                if let Ok(Some(u)) = crate::data::current_user().await {
+                    admin_setter.set(u.is_admin);
+                }
+            });
+        });
+    }
 
     // See `BookDetailPage` for why `id` needs `use_reactive!`.
     let url = server_url.clone();
@@ -51,14 +70,21 @@ pub fn AuthorPage(id: i64) -> Element {
         };
     };
 
-    render_author(a)
+    render_author(a, server_url, is_admin, scanning, scan_status, author)
 }
 
 // ---------------------------------------------------------------------------
 // View
 // ---------------------------------------------------------------------------
 
-fn render_author(a: AuthorDetail) -> Element {
+fn render_author(
+    a: AuthorDetail,
+    server_url: String,
+    is_admin: Signal<bool>,
+    mut scanning: Signal<bool>,
+    mut scan_status: Signal<Option<String>>,
+    mut author: Signal<Option<AuthorDetail>>,
+) -> Element {
     // Derive accent from the first book that has one, or fall back to theme.
     let accent = a
         .books
@@ -115,14 +141,72 @@ fn render_author(a: AuthorDetail) -> Element {
                     span { "{a.name}" }
                 }
                 div { class: "disc-hero-grid",
-                    // Avatar
-                    div { class: "disc-avatar", "{initial}" }
+                    // Avatar — letter fallback by default; F1.11 swaps in
+                    // the cached profile photo when `has_photo` is set.
+                    if a.has_photo {
+                        img {
+                            class: "disc-avatar disc-avatar--photo",
+                            src: "/api/authors/{a.id}/photo",
+                            alt: "{a.name}",
+                        }
+                    } else {
+                        div { class: "disc-avatar", "{initial}" }
+                    }
                     // Name + metadata
                     div { class: "disc-hero-info",
                         h1 { class: "disc-hero-title",
                             "{first} "
                             if !last.is_empty() {
                                 em { "{last}" }
+                            }
+                        }
+                        // F1.11 admin action: re-run the Open Library
+                        // resolver on demand. Hidden on SSR + for non-admins;
+                        // the signal flips after `/api/auth/me` returns.
+                        if is_admin() {
+                            div { class: "disc-hero-actions",
+                                button {
+                                    r#type: "button",
+                                    class: "btn btn-ghost disc-scan-btn",
+                                    disabled: scanning(),
+                                    onclick: {
+                                        let server_url = server_url.clone();
+                                        let author_id = a.id;
+                                        move |_| {
+                                            let server_url = server_url.clone();
+                                            scanning.set(true);
+                                            scan_status.set(None);
+                                            spawn(async move {
+                                                let result = data::scan_author_photo(&server_url, author_id).await;
+                                                match result {
+                                                    Ok(r) if r.resolved => {
+                                                        scan_status.set(Some("Photo found.".into()));
+                                                        // Re-fetch so `has_photo`
+                                                        // flips and the <img>
+                                                        // renders on this view.
+                                                        if let Ok(a2) = data::get_author(&server_url, author_id).await {
+                                                            author.set(a2);
+                                                        }
+                                                    }
+                                                    Ok(_) => scan_status.set(Some(
+                                                        "No photo on Open Library for this author.".into(),
+                                                    )),
+                                                    Err(e) => scan_status.set(Some(format!("Scan failed: {e}"))),
+                                                }
+                                                scanning.set(false);
+                                            });
+                                        }
+                                    },
+                                    if scanning() { "Scanning\u{2026}" } else { "Scan for picture" }
+                                }
+                                if let Some(msg) = scan_status() {
+                                    span {
+                                        class: "disc-scan-status",
+                                        role: "status",
+                                        "data-testid": "scan-status",
+                                        "{msg}"
+                                    }
+                                }
                             }
                         }
                     }

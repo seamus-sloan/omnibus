@@ -2197,13 +2197,147 @@ pub async fn get_author(
     }
     backfill_creator_ids(pool, &mut books).await?;
 
+    // F1.11: surface whether a usable profile photo is cached so the
+    // frontend can render <img> vs the typographic letter avatar in one
+    // round trip. `'letter'` rows are the negative-cache marker and do
+    // not count as a usable photo.
+    let has_photo: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1 FROM author_photos
+              WHERE author_id = ?
+                AND source IN ('manual', 'openlibrary')
+                AND bytes IS NOT NULL
+         )",
+    )
+    .bind(author_id)
+    .fetch_one(pool)
+    .await?;
+
     Ok(Some(AuthorDetail {
         id: a.get("id"),
         name: a.get("name"),
         sort: a.get("sort"),
         book_count: books.len(),
         books,
+        has_photo,
     }))
+}
+
+// -----------------------------------------------------------------------------
+// F1.11 Author profile photos.
+//
+// `author_photos` holds at most one row per author (PK = author_id). The
+// `source` column distinguishes:
+//   - `'manual'`     — admin upload via `PUT /api/authors/:id/photo`.
+//   - `'openlibrary'`— resolved by the background worker.
+//   - `'letter'`     — negative-cache marker: no usable image. `bytes` and
+//                       `mime` are NULL; `get_author_photo` returns `None`
+//                       so the GET handler 404s and the letter avatar
+//                       stays in place.
+// Admin DELETE clears the row to force re-resolution on next view.
+// -----------------------------------------------------------------------------
+
+/// Source-of-truth marker for a cached author photo row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorPhotoSource {
+    Manual,
+    OpenLibrary,
+    Letter,
+}
+
+impl AuthorPhotoSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AuthorPhotoSource::Manual => "manual",
+            AuthorPhotoSource::OpenLibrary => "openlibrary",
+            AuthorPhotoSource::Letter => "letter",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "manual" => Some(Self::Manual),
+            "openlibrary" => Some(Self::OpenLibrary),
+            "letter" => Some(Self::Letter),
+            _ => None,
+        }
+    }
+}
+
+/// Fetch a cached profile photo for the given author. Returns `None` when no
+/// row exists or the row is a `'letter'` negative-cache marker — both cases
+/// should produce a 404 from the GET handler so the frontend keeps rendering
+/// the letter avatar.
+pub async fn get_author_photo(
+    pool: &SqlitePool,
+    author_id: i64,
+) -> Result<Option<(String, Vec<u8>)>, sqlx::Error> {
+    let row: Option<(String, Option<String>, Option<Vec<u8>>)> =
+        sqlx::query_as("SELECT source, mime, bytes FROM author_photos WHERE author_id = ?")
+            .bind(author_id)
+            .fetch_optional(pool)
+            .await?;
+    match row {
+        Some((_, Some(mime), Some(bytes))) if !bytes.is_empty() => Ok(Some((mime, bytes))),
+        _ => Ok(None),
+    }
+}
+
+/// Look up just the cascade-state metadata (source + fetched_at) for an
+/// author. Used by the resolver to decide whether to skip resolution — a
+/// `'letter'` row prevents re-querying Open Library until an admin clears it
+/// via `delete_author_photo`.
+pub async fn author_photo_status(
+    pool: &SqlitePool,
+    author_id: i64,
+) -> Result<Option<(AuthorPhotoSource, String)>, sqlx::Error> {
+    let row: Option<(String, String)> =
+        sqlx::query_as("SELECT source, fetched_at FROM author_photos WHERE author_id = ?")
+            .bind(author_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.and_then(|(s, t)| AuthorPhotoSource::parse(&s).map(|src| (src, t))))
+}
+
+/// Upsert a photo row. Replaces any existing row (PRIMARY KEY conflict on
+/// `author_id`). `bytes` / `mime` are `None` for `'letter'` negative-cache
+/// markers; `url` is `None` for manual uploads.
+pub async fn upsert_author_photo(
+    pool: &SqlitePool,
+    author_id: i64,
+    source: AuthorPhotoSource,
+    url: Option<&str>,
+    mime: Option<&str>,
+    bytes: Option<&[u8]>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO author_photos (author_id, source, url, mime, bytes, fetched_at)
+              VALUES (?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(author_id) DO UPDATE SET
+              source     = excluded.source,
+              url        = excluded.url,
+              mime       = excluded.mime,
+              bytes      = excluded.bytes,
+              fetched_at = excluded.fetched_at",
+    )
+    .bind(author_id)
+    .bind(source.as_str())
+    .bind(url)
+    .bind(mime)
+    .bind(bytes)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Drop the cache row for an author so the next page view re-queues
+/// resolution. Used by admin DELETE.
+pub async fn delete_author_photo(pool: &SqlitePool, author_id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM author_photos WHERE author_id = ?")
+        .bind(author_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Fetch a series by ID with all its books, ordered by series index.
@@ -8133,5 +8267,134 @@ mod tests {
             !dir.exists(),
             "purge must not create the covers dir as a side effect",
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // F1.11 author profile photo tests
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn author_photo_roundtrips_manual_upload() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+        let bytes = b"\xFF\xD8\xFFfake-jpeg".to_vec();
+        upsert_author_photo(
+            &pool,
+            ada_id,
+            AuthorPhotoSource::Manual,
+            None,
+            Some("image/jpeg"),
+            Some(&bytes),
+        )
+        .await
+        .unwrap();
+
+        let (mime, fetched) = get_author_photo(&pool, ada_id).await.unwrap().unwrap();
+        assert_eq!(mime, "image/jpeg");
+        assert_eq!(fetched, bytes);
+    }
+
+    #[tokio::test]
+    async fn author_photo_letter_marker_returns_none() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+        upsert_author_photo(&pool, ada_id, AuthorPhotoSource::Letter, None, None, None)
+            .await
+            .unwrap();
+
+        assert!(get_author_photo(&pool, ada_id).await.unwrap().is_none());
+
+        let (src, _) = author_photo_status(&pool, ada_id).await.unwrap().unwrap();
+        assert_eq!(src, AuthorPhotoSource::Letter);
+    }
+
+    #[tokio::test]
+    async fn author_photo_status_none_when_unset() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;
+        assert!(author_photo_status(&pool, ada_id).await.unwrap().is_none());
+        assert!(get_author_photo(&pool, ada_id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn author_photo_upsert_replaces_existing_row() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+        // Letter marker first, then a manual upload replaces it.
+        upsert_author_photo(&pool, ada_id, AuthorPhotoSource::Letter, None, None, None)
+            .await
+            .unwrap();
+        upsert_author_photo(
+            &pool,
+            ada_id,
+            AuthorPhotoSource::Manual,
+            None,
+            Some("image/png"),
+            Some(b"\x89PNG\r\n\x1a\nfake"),
+        )
+        .await
+        .unwrap();
+
+        let (src, _) = author_photo_status(&pool, ada_id).await.unwrap().unwrap();
+        assert_eq!(src, AuthorPhotoSource::Manual);
+        let (mime, _) = get_author_photo(&pool, ada_id).await.unwrap().unwrap();
+        assert_eq!(mime, "image/png");
+    }
+
+    #[tokio::test]
+    async fn author_photo_delete_clears_row() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+        upsert_author_photo(
+            &pool,
+            ada_id,
+            AuthorPhotoSource::Manual,
+            None,
+            Some("image/jpeg"),
+            Some(b"\xFF\xD8\xFFfoo"),
+        )
+        .await
+        .unwrap();
+        delete_author_photo(&pool, ada_id).await.unwrap();
+
+        assert!(author_photo_status(&pool, ada_id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn get_author_populates_has_photo() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+        // No row → false.
+        let ada = get_author(&pool, ada_id).await.unwrap().unwrap();
+        assert!(!ada.has_photo, "no row should yield has_photo = false");
+
+        // Letter marker → still false (negative-cache shouldn't render an img).
+        upsert_author_photo(&pool, ada_id, AuthorPhotoSource::Letter, None, None, None)
+            .await
+            .unwrap();
+        let ada = get_author(&pool, ada_id).await.unwrap().unwrap();
+        assert!(
+            !ada.has_photo,
+            "letter marker should yield has_photo = false"
+        );
+
+        // Manual upload → true.
+        upsert_author_photo(
+            &pool,
+            ada_id,
+            AuthorPhotoSource::Manual,
+            None,
+            Some("image/jpeg"),
+            Some(b"\xFF\xD8\xFFfake"),
+        )
+        .await
+        .unwrap();
+        let ada = get_author(&pool, ada_id).await.unwrap().unwrap();
+        assert!(ada.has_photo, "manual upload should yield has_photo = true");
     }
 }
