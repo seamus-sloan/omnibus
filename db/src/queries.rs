@@ -902,7 +902,7 @@ async fn insert_book_row(
     .bind(has_cover)
     .bind(&m.description)
     .bind(&first_isbn)
-    .bind(m.accent.as_deref())
+    .bind(sanitize_accent_color(m.accent.as_deref()))
     .fetch_one(&mut **tx)
     .await?;
 
@@ -2165,6 +2165,42 @@ fn parse_series_index(s: &str) -> Option<f64> {
     s.trim().parse::<f64>().ok()
 }
 
+/// Defense-in-depth gate on `books.accent_color` (#125). The indexer's
+/// `extract_accent` emits strings of the exact shape `oklch(L C H)` with
+/// three space-separated decimal floats; consumers (Atrium cover tiles,
+/// palette rows, book detail) inline the value into an HTML `style`
+/// attribute. Reject anything that doesn't match that strict shape so a
+/// future override path or imported value can't smuggle CSS / break out
+/// of the attribute, regardless of consumer escaping.
+fn sanitize_accent_color(raw: Option<&str>) -> Option<String> {
+    let s = raw?.trim();
+    let inner = s.strip_prefix("oklch(")?.strip_suffix(')')?;
+    let parts: Vec<&str> = inner.split(' ').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    for part in &parts {
+        if part.is_empty() || part.matches('.').count() > 1 {
+            return None;
+        }
+        let mut has_digit = false;
+        for c in part.chars() {
+            match c {
+                '0'..='9' => has_digit = true,
+                '.' => {}
+                _ => return None,
+            }
+        }
+        // Reject parts with no digits at all (a bare "." or ".." stripped of
+        // characters). The `extract_accent` formatter always emits at least
+        // one digit on each side per `{l:.3}` / `{c:.3}` / `{h:.1}`.
+        if !has_digit {
+            return None;
+        }
+    }
+    Some(s.to_string())
+}
+
 /// Join an iterator of names into a single whitespace-separated string for
 /// the FTS `authors` / `tags` columns. Empty inputs collapse to "".
 fn join_names<'a, I: IntoIterator<Item = &'a str>>(iter: I) -> String {
@@ -2670,6 +2706,80 @@ mod tests {
         assert_eq!(detail.accent.as_deref(), Some("oklch(0.660 0.130 245.0)"));
         let detail_plain = get_book(&pool, plain.id).await.unwrap().unwrap();
         assert_eq!(detail_plain.accent, None);
+    }
+
+    /// #125: the write-boundary gate must accept the exact `oklch(L C H)`
+    /// shape the indexer emits, and reject anything else — including raw
+    /// hex, CSS keywords, and injection payloads that try to break out of
+    /// the `style="background: {bg}"` attribute used by Atrium consumers.
+    #[test]
+    fn sanitize_accent_color_accepts_indexer_shape() {
+        assert_eq!(
+            sanitize_accent_color(Some("oklch(0.660 0.130 245.0)")).as_deref(),
+            Some("oklch(0.660 0.130 245.0)")
+        );
+        assert_eq!(
+            sanitize_accent_color(Some("oklch(0.780 0.060 12.5)")).as_deref(),
+            Some("oklch(0.780 0.060 12.5)")
+        );
+    }
+
+    #[test]
+    fn sanitize_accent_color_rejects_bad_shapes() {
+        for bad in [
+            "",
+            "red",
+            "#aabbcc",
+            "rgb(1,2,3)",
+            "oklch(0.66, 0.13, 245)",                   // commas, not spaces
+            "oklch(0.66 0.13)",                         // wrong arity
+            "oklch(0.66 0.13 245 extra)",               // wrong arity
+            "oklch(0.66 0.13 245",                      // missing close paren
+            "0.66 0.13 245",                            // missing wrapper
+            "oklch(0.66 0.13 abc)",                     // non-numeric
+            "oklch(0.66 0.13 24.5.0)",                  // multiple dots
+            "oklch(0.66 0.13 245); background: url(x)", // injection
+            "oklch(0.66 0.13 245)\" onload=\"alert(1)", // attribute breakout
+            "oklch(. . .)",                             // dot-only parts (no digits)
+            "oklch(0.66 . 245.0)",                      // one part has no digits
+        ] {
+            assert!(
+                sanitize_accent_color(Some(bad)).is_none(),
+                "expected None for {bad:?}"
+            );
+        }
+        assert_eq!(sanitize_accent_color(None), None);
+    }
+
+    /// End-to-end gate: writing an `IndexedBook` whose `accent` carries an
+    /// injection payload must result in `accent_color = NULL` in the DB,
+    /// not the unsanitized string.
+    #[tokio::test]
+    async fn replace_books_drops_unsafe_accent_color() {
+        let _covers = CoversTempDir::new("accent_unsafe");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let unsafe_book = IndexedBook {
+            metadata: EbookMetadata {
+                filename: "shady.epub".into(),
+                title: Some("Shady".into()),
+                creators: vec![Contributor {
+                    name: "Anon".into(),
+                    ..Default::default()
+                }],
+                accent: Some("red; background: url(x)".into()),
+                ..Default::default()
+            },
+            cover: None,
+        };
+        replace_books(&pool, "/lib", vec![unsafe_book])
+            .await
+            .expect("replace should succeed");
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let shady = books
+            .iter()
+            .find(|b| b.title.as_deref() == Some("Shady"))
+            .unwrap();
+        assert_eq!(shady.accent, None);
     }
 
     #[tokio::test]
