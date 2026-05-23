@@ -267,7 +267,7 @@ fn render_loaded(b: EbookMetadata) -> Element {
                         if !b.subjects.is_empty() {
                             ul { class: "bd-tag-list",
                                 for tag in b.subjects.iter() {
-                                    li { class: "chip", "{tag}" }
+                                    li { key: "{tag}", class: "chip", "{tag}" }
                                 }
                             }
                         }
@@ -384,6 +384,7 @@ fn render_loaded(b: EbookMetadata) -> Element {
                                 }
                                 for ident in b.identifiers.iter() {
                                     BdMetaRow {
+                                        key: "{ident.scheme.as_deref().unwrap_or(ident.value.as_str())}",
                                         k: ident.scheme.clone().unwrap_or_else(|| "ID".into()),
                                         v: ident.value.clone(),
                                     }
