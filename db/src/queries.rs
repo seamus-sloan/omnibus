@@ -2326,11 +2326,37 @@ const TAG_CLOUD_LIMIT: i64 = 500;
 pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, sqlx::Error> {
     // TODO(F4.x): scope by `user_id` once per-user ACLs land. See the
     // function-level rustdoc above for the single-tenant rationale.
+    //
+    // F5.1: counts use the effective (override-aware) subject set, not
+    // the raw `books_tags_link` rows — `overrides.subjects` replaces a
+    // book's canonical tag list wholesale when Some. Visibility still
+    // requires at least one canonical link so tags that exist only as a
+    // string inside override JSON don't surface (no `tags` row to point
+    // at). The single-library, single-tenant scope means the cloud is
+    // global; if/when per-library scoping lands this picks up a path
+    // filter alongside the existing `WHERE EXISTS`.
     let rows = sqlx::query(
-        r#"SELECT t.name, COUNT(btl.book) AS cnt
+        r#"SELECT t.name,
+             (SELECT COUNT(*)
+                FROM books b
+                LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+               WHERE CASE
+                       WHEN mo.book_uuid IS NOT NULL
+                            AND json_type(mo.overrides, '$.subjects') IS NOT NULL
+                         THEN EXISTS (
+                           SELECT 1 FROM json_each(mo.overrides, '$.subjects') je
+                            WHERE je.value = t.name
+                         )
+                       ELSE EXISTS (
+                         SELECT 1 FROM books_tags_link btl
+                          WHERE btl.book = b.id AND btl.tag = t.id
+                       )
+                     END
+             ) AS cnt
            FROM tags t
-           JOIN books_tags_link btl ON btl.tag = t.id
-           GROUP BY t.id
+           WHERE EXISTS (
+             SELECT 1 FROM books_tags_link btl WHERE btl.tag = t.id
+           )
            ORDER BY cnt DESC, t.name ASC
            LIMIT ?"#,
     )
@@ -4981,6 +5007,71 @@ mod tests {
         // No books, no tags.
         let tags = get_tag_cloud(&pool).await.unwrap();
         assert!(tags.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_tag_cloud_counts_reflect_overrides() {
+        // F5.1: per-tag counts in the cloud must follow the merged view.
+        // Without the override-aware count, the cloud kept showing the
+        // canonical totals — over-reporting tags the user had removed
+        // from books and missing books whose tags were reassigned via
+        // override.
+        let _guard = CoversTempDir::new("tag_cloud_overrides");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed("a.epub", Some("A"), &["X"], &["fiction"], None, None),
+                indexed("b.epub", Some("B"), &["X"], &["fiction"], None, None),
+                indexed("c.epub", Some("C"), &["X"], &["essay"], None, None),
+            ],
+        )
+        .await
+        .unwrap();
+
+        // Sanity: canonical counts before any overrides.
+        let pre = get_tag_cloud(&pool).await.unwrap();
+        let fiction_pre = pre
+            .iter()
+            .find(|t| t.name == "fiction")
+            .expect("fiction present pre-override");
+        assert_eq!(fiction_pre.count, 2);
+
+        // Reassign a.epub: drop "fiction", add "essay".
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let a = books.iter().find(|b| b.filename == "a.epub").unwrap();
+        let uuid = a.unique_identifier.clone().unwrap();
+        let ov = MetadataOverrides {
+            subjects: Some(vec!["essay".into()]),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let post = get_tag_cloud(&pool).await.unwrap();
+        let fiction = post
+            .iter()
+            .find(|t| t.name == "fiction")
+            .expect("fiction still visible (canonical anchor remains on b.epub)");
+        assert_eq!(
+            fiction.count, 1,
+            "fiction should drop a.epub after override, got {post:?}",
+        );
+        let essay = post
+            .iter()
+            .find(|t| t.name == "essay")
+            .expect("essay present");
+        assert_eq!(
+            essay.count, 2,
+            "essay should pick up override-tagged a.epub, got {post:?}",
+        );
     }
 
     // -----------------------------------------------------------------
