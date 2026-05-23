@@ -77,6 +77,9 @@ pub fn rest_router(state: AppState) -> Router {
         .merge(
             Router::new()
                 .route("/api/ebooks/{id}/cover", post(post_ebook_cover))
+                // Per-route body-limit override for image uploads. Layered
+                // closer to the handler than the global 1 MiB cap below, so
+                // axum picks this larger value for `/api/ebooks/{id}/cover`.
                 .layer(axum::extract::DefaultBodyLimit::max(11 * 1024 * 1024)),
         )
         .route("/api/search", get(get_search))
@@ -92,6 +95,16 @@ pub fn rest_router(state: AppState) -> Router {
         // tests; in the live server `main.rs` adds the same Extension at
         // the top, which is harmless overlap.
         .layer(Extension(pool))
+        // Global guards against slow / oversized clients. `main.rs` layers
+        // the same protections at the very top so the auth router and
+        // Dioxus server functions are covered too; duplicating them here
+        // means integration tests (which use `rest_router` directly) also
+        // exercise the limits.
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            std::time::Duration::from_secs(30),
+        ))
+        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024))
 }
 
 /// Process-start build id. Captured once and preserved for the lifetime of
@@ -1705,5 +1718,49 @@ mod tests {
         let (app, _, _) = fixture().await;
         let res = app.oneshot(get_anon("/api/tags")).await.unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // -------------------------------------------------------------------
+    // Global request guards — protects against slow clients / oversized
+    // bodies holding a tokio worker indefinitely. See #85.
+    // -------------------------------------------------------------------
+
+    /// POSTing a JSON body well over the 1 MiB global cap should be
+    /// rejected with 413 PAYLOAD_TOO_LARGE before the handler ever sees
+    /// it. We pad the JSON with a long throwaway string so the body
+    /// exceeds the cap while staying syntactically valid.
+    #[tokio::test]
+    async fn api_post_settings_rejects_body_over_1mb_with_413() {
+        let (app, _state, pool) = fixture().await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        // 2 MiB of filler — comfortably over the 1 MiB cap, but small
+        // enough that allocating it in-test is cheap.
+        let filler = "a".repeat(2 * 1024 * 1024);
+        let body = serde_json::json!({
+            "ebook_library_path": filler,
+            "audiobook_library_path": "/books/audio"
+        });
+        let bytes = body.to_string();
+        assert!(
+            bytes.len() > 1024 * 1024,
+            "test body must exceed the 1 MiB cap; got {} bytes",
+            bytes.len()
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/settings")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(bytes))
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }
