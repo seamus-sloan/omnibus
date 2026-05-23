@@ -2063,20 +2063,10 @@ pub async fn search_palette(
 
     // B. Authors — substring match, scoped to library, ordered by book count.
     //
-    // Single JOIN+GROUP BY pass: COUNT(*) replaces the correlated book_count
-    // subquery, and the INNER JOIN chain implicitly enforces "at least one
-    // matching book" (so the previous EXISTS predicate folds away — groups
-    // with zero matches don't appear). Library scoping moves to the WHERE
-    // clause; `l.path = ?1` is applied before grouping so authors whose only
-    // books live in other libraries don't appear and book_count stays
-    // library-correct (see `palette_scoped_to_library` test).
-    //
-    // EXPLAIN QUERY PLAN (sqlite 3.45+): the planner drives from the highly
-    // selective `libraries.path` unique index, then walks `books` via
-    // `idx_books_library_id`, then `books_authors_link` via its PK (`book`),
-    // then `authors` by rowid, with a TEMP B-TREE for GROUP BY/ORDER BY.
-    // The LIKE predicate filters during aggregation. No full scans.
-    // See `palette_taxonomy_query_plans_use_indexes` for the locked-in shape.
+    // Library scoping (`l.path = ?1`) is applied before aggregation so
+    // book_count stays library-correct (covered by `palette_scoped_to_library`
+    // and `palette_taxonomy_counts_scoped_per_library`). The join plan is
+    // locked in by `palette_taxonomy_query_plans_use_indexes`.
     let authors: Vec<PaletteAuthorHit> = sqlx::query(
         r#"
         SELECT a.id, a.name, COUNT(*) AS book_count
@@ -2146,7 +2136,8 @@ pub async fn search_palette(
 
     // D. Tags — substring match, scoped to library.
     //
-    // Same single-pass shape; uses `idx_books_tags_tag`.
+    // Same single-pass shape as authors: drives from libraries → books →
+    // books_tags_link by PK → tags. See the locked-in plan test.
     let tags: Vec<PaletteTagHit> = sqlx::query(
         r#"
         SELECT t.id, t.name, COUNT(*) AS book_count
