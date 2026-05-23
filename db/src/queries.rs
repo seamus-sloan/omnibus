@@ -1446,6 +1446,7 @@ pub async fn list_books(
             }
         }
     }
+    backfill_creator_ids(pool, &mut out).await?;
 
     Ok(out)
 }
@@ -1648,7 +1649,66 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
         }
     }
 
+    // Override Contributors are stored by name only — apply_overrides
+    // therefore leaves `id` unset, which renders the breadcrumb /
+    // "More by …" author link as an unclickable span even when an
+    // `authors` row with that name exists. Backfill the id from the
+    // authors table by name. Mirrors the series_id backfill above.
+    backfill_creator_ids(pool, std::slice::from_mut(&mut book)).await?;
+
     Ok(Some(book))
+}
+
+/// Fill in `Contributor::id` for every creator whose `id` is `None` by
+/// looking up the `authors` table by exact name. Used after the override
+/// merge in `get_book`, `list_books`, `get_author`, and `get_series` so
+/// the UI's `Route::AuthorDetail { id }` link resolves for books whose
+/// authors were renamed (or replaced) through `metadata_overrides`.
+async fn backfill_creator_ids(
+    pool: &SqlitePool,
+    books: &mut [EbookMetadata],
+) -> Result<(), sqlx::Error> {
+    use std::collections::HashMap;
+
+    // Collect every distinct name that still needs an id.
+    let names: Vec<String> = {
+        let mut set = std::collections::HashSet::new();
+        for b in books.iter() {
+            for c in &b.creators {
+                if c.id.is_none() && !c.name.is_empty() {
+                    set.insert(c.name.clone());
+                }
+            }
+        }
+        set.into_iter().collect()
+    };
+    if names.is_empty() {
+        return Ok(());
+    }
+
+    // Bulk lookup in chunks to stay under SQLite's bound-parameter limit.
+    let mut name_to_id: HashMap<String, i64> = HashMap::with_capacity(names.len());
+    for chunk in names.chunks(500) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT id, name FROM authors WHERE name IN ({placeholders})");
+        let mut q = sqlx::query(&sql);
+        for n in chunk {
+            q = q.bind(n);
+        }
+        let rows = q.fetch_all(pool).await?;
+        for r in rows {
+            name_to_id.insert(r.get("name"), r.get("id"));
+        }
+    }
+
+    for b in books.iter_mut() {
+        for c in &mut b.creators {
+            if c.id.is_none() {
+                c.id = name_to_id.get(&c.name).copied();
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(serde::Deserialize)]
@@ -1871,6 +1931,7 @@ pub async fn search_books(
             }
         }
     }
+    backfill_creator_ids(pool, &mut out).await?;
 
     Ok(out)
 }
@@ -2127,6 +2188,7 @@ pub async fn get_author(
             }
         }
     }
+    backfill_creator_ids(pool, &mut books).await?;
 
     Ok(Some(AuthorDetail {
         id: a.get("id"),
@@ -2232,6 +2294,7 @@ pub async fn get_series(
             book.series = Some(series_name.clone());
         }
     }
+    backfill_creator_ids(pool, &mut books).await?;
 
     Ok(Some(SeriesDetail {
         id: s.get("id"),
@@ -5205,6 +5268,89 @@ mod tests {
 
         let merged = get_book(&pool, id).await.unwrap().unwrap();
         assert_eq!(merged.subjects, vec!["sci-fi", "adventure"]);
+    }
+
+    #[tokio::test]
+    async fn get_book_backfills_creator_ids_after_override_replaces_authors() {
+        // Override Contributors carry only a name, so a book whose author
+        // list was edited through the metadata form would otherwise come
+        // back with `creators[*].id == None`, rendering the breadcrumb's
+        // author link as an unclickable span even when the `authors` row
+        // exists. Verify get_book backfills the id by name. Mirrors the
+        // user's report against book 268 (multi-author book where the
+        // user removed all but one canonical author).
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+        let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+        // saga1.epub canonically has ["Ada Lovelace", "Grace Hopper"];
+        // simulate the user dropping the second author through the edit
+        // form. apply_overrides replaces creators wholesale, so the
+        // override Contributor has id = None.
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let saga_one = books.iter().find(|b| b.filename == "saga1.epub").unwrap();
+        let uuid = saga_one.unique_identifier.clone().unwrap();
+        let book_id = saga_one.id;
+
+        let ov = MetadataOverrides {
+            creators: Some(vec![Contributor {
+                name: "Ada Lovelace".into(),
+                role: Some("aut".into()),
+                file_as: None,
+                id: None,
+            }]),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let merged = get_book(&pool, book_id).await.unwrap().unwrap();
+        assert_eq!(merged.creators.len(), 1);
+        assert_eq!(merged.creators[0].name, "Ada Lovelace");
+        assert_eq!(
+            merged.creators[0].id,
+            Some(ada_id),
+            "creator id must be backfilled so the breadcrumb renders as a Link",
+        );
+    }
+
+    #[tokio::test]
+    async fn get_book_leaves_creator_id_none_when_override_author_unknown() {
+        // If the override sets an author name that doesn't exist in the
+        // `authors` table, backfill must leave the id None — same shape
+        // as get_book_leaves_series_id_none_when_override_series_unknown.
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let saga_one = books.iter().find(|b| b.filename == "saga1.epub").unwrap();
+        let uuid = saga_one.unique_identifier.clone().unwrap();
+        let book_id = saga_one.id;
+
+        let ov = MetadataOverrides {
+            creators: Some(vec![Contributor {
+                name: "Nobody Indexed".into(),
+                role: Some("aut".into()),
+                file_as: None,
+                id: None,
+            }]),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let merged = get_book(&pool, book_id).await.unwrap().unwrap();
+        assert_eq!(merged.creators.len(), 1);
+        assert_eq!(merged.creators[0].name, "Nobody Indexed");
+        assert_eq!(merged.creators[0].id, None);
     }
 
     #[tokio::test]
