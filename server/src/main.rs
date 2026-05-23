@@ -69,11 +69,17 @@ fn main() {
             }
 
             let auth_limiter = Arc::new(rate_limit::RateLimiter::new());
-            // Search RPC limiter: same policy as `backend::search_router`'s
-            // REST-side limiter so the budget is consistent across web (RPC)
-            // and mobile (REST) clients. Separate `RateLimiter` instance
-            // because the two routers are constructed independently; per-IP
-            // budgets are still enforced for each route family.
+            // Search RPC limiter. Mirrors the REST-side limiter's policy
+            // (`backend::search_router`, 30 req / 10s) but is a SEPARATE
+            // instance with its own bucket map — the two routers are built
+            // independently. So each route family enforces its own per-IP
+            // budget: REST `/api/search/*` and RPC `/api/rpc/search-*` are
+            // NOT a single shared budget, and a client that hammers both
+            // families can consume up to 2× the per-family budget in total.
+            // Accepted because a real client uses one family (mobile→REST,
+            // web→RPC), and sharing one bucket map would mean threading the
+            // same limiter through both the dioxus router and `rest_router`'s
+            // constructor. Revisit if a true cross-family budget is needed.
             let search_rpc_limiter = Arc::new(rate_limit::RateLimiter::with_policy(
                 backend::SEARCH_RATE_LIMIT_WINDOW,
                 backend::SEARCH_RATE_LIMIT_MAX,
