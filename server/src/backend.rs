@@ -2028,4 +2028,416 @@ mod tests {
             .expect("request should succeed");
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
+
+    // -------------------------------------------------------------------
+    // F5.1 metadata-override REST endpoints (issue #105).
+    //
+    // The RPC variants (`rpc_save_overrides`, `rpc_delete_overrides`) are
+    // covered by DB-level unit tests in `db::queries`; these integration
+    // tests cover the REST entry points the mobile client uses.
+    // -------------------------------------------------------------------
+
+    /// Seed a single book with a known title via `replace_books` and return
+    /// its `id`. The book's stable UUID can be looked up afterwards via
+    /// `list_books` if a test needs to assert against the overrides row
+    /// directly.
+    async fn seed_book(pool: &sqlx::SqlitePool, library: &str, title: &str) -> i64 {
+        db::replace_books(
+            pool,
+            library,
+            vec![db::ebook::IndexedBook {
+                metadata: omnibus_shared::EbookMetadata {
+                    filename: format!("{title}.epub").to_lowercase(),
+                    title: Some(title.to_string()),
+                    ..Default::default()
+                },
+                cover: None,
+            }],
+        )
+        .await
+        .expect("seed_book should succeed");
+        let books = db::list_books(pool, library).await.expect("list_books");
+        books
+            .into_iter()
+            .find(|b| b.title.as_deref() == Some(title))
+            .map(|b| b.id)
+            .expect("seeded book should be present")
+    }
+
+    /// Build a `multipart/form-data` body with a single `cover` field
+    /// carrying `bytes` under the supplied content type. Returns both the
+    /// `Content-Type` header value (with the boundary parameter) and the
+    /// body bytes so the caller can attach them to a `Request::builder()`.
+    fn build_cover_multipart(content_type: &str, bytes: &[u8]) -> (String, Vec<u8>) {
+        let boundary = "----omnibus-test-boundary-XYZ123";
+        let mut body: Vec<u8> = Vec::with_capacity(bytes.len() + 256);
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            b"Content-Disposition: form-data; name=\"cover\"; filename=\"cover.png\"\r\n",
+        );
+        body.extend_from_slice(format!("Content-Type: {content_type}\r\n\r\n").as_bytes());
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        (format!("multipart/form-data; boundary={boundary}"), body)
+    }
+
+    /// Minimal 1x1 transparent PNG used as a stand-in real image payload —
+    /// `detect_image_format` only inspects the leading magic bytes, so this
+    /// is sufficient to flow through the upload path without bundling a
+    /// fixture file.
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00,
+        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    /// Process-global `OMNIBUS_COVERS_DIR` lock — the cover-upload tests
+    /// each install their own scratch dir via `set_var`, so they must
+    /// serialize with each other (and with anything else in this crate
+    /// that swaps the same env var). Mirrors the `COVERS_ENV_LOCK` in
+    /// `db::queries::tests`.
+    static COVER_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// RAII guard that points `OMNIBUS_COVERS_DIR` at a fresh scratch dir
+    /// for the duration of a single test and restores the previous value
+    /// (or removes the var) on drop. Holds the `COVER_DIR_ENV_LOCK` so
+    /// parallel cover tests serialize their env-var writes.
+    struct CoversDirGuard {
+        path: std::path::PathBuf,
+        prev: Option<String>,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl CoversDirGuard {
+        fn new(tag: &str) -> Self {
+            let guard = COVER_DIR_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let pid = std::process::id();
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let path =
+                std::env::temp_dir().join(format!("omnibus_rest_covers_{tag}_{pid}_{nanos}"));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("create covers scratch dir");
+            let prev = std::env::var("OMNIBUS_COVERS_DIR").ok();
+            std::env::set_var("OMNIBUS_COVERS_DIR", &path);
+            Self {
+                path,
+                prev,
+                _guard: guard,
+            }
+        }
+    }
+
+    impl Drop for CoversDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+            match self.prev.take() {
+                Some(v) => std::env::set_var("OMNIBUS_COVERS_DIR", v),
+                None => std::env::remove_var("OMNIBUS_COVERS_DIR"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn api_post_overrides_requires_auth() {
+        let (app, _state, _pool) = fixture().await;
+        let body = serde_json::json!({ "title": "Edited" });
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/ebooks/1/overrides")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_post_overrides_requires_edit_permission() {
+        // A plain user from `create_user` has `can_edit = false`, so the
+        // handler's per-route check must reject them with 403 before the
+        // override row is touched.
+        let (app, _state, pool) = fixture().await;
+        let id = seed_book(&pool, "/lib", "Original").await;
+        let user = test_support::create_user(&pool, "reader").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        let body = serde_json::json!({ "title": "Edited" });
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/ebooks/{id}/overrides"))
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // No override row should have been written.
+        let books = db::list_books(&pool, "/lib").await.unwrap();
+        let uuid = books[0].unique_identifier.clone().unwrap();
+        assert!(
+            db::get_metadata_overrides(&pool, &uuid)
+                .await
+                .unwrap()
+                .is_none(),
+            "403 path must not persist any override"
+        );
+    }
+
+    #[tokio::test]
+    async fn api_post_overrides_saves_and_returns_merged_book() {
+        // Admin (which carries `can_edit = true` via test_support::create_admin)
+        // POSTs an override. The handler must persist it, return the merged
+        // book, and flip `has_override` on the response.
+        let (app, _state, pool) = fixture().await;
+        let id = seed_book(&pool, "/lib", "Original").await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        let body = serde_json::json!({
+            "title": "Edited Title",
+            "publisher": "Edited Publisher",
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/ebooks/{id}/overrides"))
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let book: omnibus_shared::EbookMetadata = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(book.id, id);
+        assert_eq!(book.title.as_deref(), Some("Edited Title"));
+        assert_eq!(book.publisher.as_deref(), Some("Edited Publisher"));
+        assert!(
+            book.has_override,
+            "merged book should advertise has_override = true"
+        );
+
+        // The override row must reflect the saved fields.
+        let books = db::list_books(&pool, "/lib").await.unwrap();
+        let uuid = books[0].unique_identifier.clone().unwrap();
+        let (saved, has_cover) = db::get_metadata_overrides(&pool, &uuid)
+            .await
+            .unwrap()
+            .expect("override row should exist after POST");
+        assert_eq!(saved.title.as_deref(), Some("Edited Title"));
+        assert_eq!(saved.publisher.as_deref(), Some("Edited Publisher"));
+        assert!(!has_cover, "text-only edit must not set has_cover_override");
+    }
+
+    #[tokio::test]
+    async fn api_delete_overrides_reverts() {
+        // Persist an override via the same REST path the client uses, then
+        // delete it and assert the response reflects the canonical scanned
+        // values (no `Option` overrides applied).
+        let (app, _state, pool) = fixture().await;
+        let id = seed_book(&pool, "/lib", "Original").await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        let post_body = serde_json::json!({ "title": "Edited" });
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/ebooks/{id}/overrides"))
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(post_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("POST should succeed");
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/ebooks/{id}/overrides/delete"))
+                    .method("POST")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("DELETE should succeed");
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let book: omnibus_shared::EbookMetadata = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(book.id, id);
+        assert_eq!(
+            book.title.as_deref(),
+            Some("Original"),
+            "delete must revert to the scanned title"
+        );
+        assert!(
+            !book.has_override,
+            "delete must clear the has_override flag on the merged book"
+        );
+
+        // And the override row must be gone from the DB.
+        let books = db::list_books(&pool, "/lib").await.unwrap();
+        let uuid = books[0].unique_identifier.clone().unwrap();
+        assert!(
+            db::get_metadata_overrides(&pool, &uuid)
+                .await
+                .unwrap()
+                .is_none(),
+            "delete must drop the metadata_overrides row"
+        );
+    }
+
+    #[tokio::test]
+    async fn api_post_cover_upload_replaces_cover() {
+        // End-to-end happy path: admin POSTs a valid PNG as multipart and
+        // the handler writes the override cover file, flips
+        // `has_cover_override` on the row, and returns the merged book with
+        // `has_override = true`.
+        let _covers = CoversDirGuard::new("upload_replaces");
+        let (app, _state, pool) = fixture().await;
+        let id = seed_book(&pool, "/lib", "CoverBook").await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        let (content_type, body) = build_cover_multipart("image/png", TINY_PNG);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/ebooks/{id}/cover"))
+                    .method("POST")
+                    .header("content-type", content_type)
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let book: omnibus_shared::EbookMetadata = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(book.id, id);
+        assert!(
+            book.has_override,
+            "uploading a cover must mark the merged book as overridden"
+        );
+
+        // The override row must record `has_cover_override = 1` and the
+        // PNG bytes must be on disk under the scratch covers dir.
+        let books = db::list_books(&pool, "/lib").await.unwrap();
+        let uuid = books[0].unique_identifier.clone().unwrap();
+        let (_, has_cover_override) = db::get_metadata_overrides(&pool, &uuid)
+            .await
+            .unwrap()
+            .expect("override row should exist after cover upload");
+        assert!(
+            has_cover_override,
+            "cover upload must set has_cover_override = 1"
+        );
+        let override_path = db::covers_dir().join(format!("override-{uuid}.png"));
+        let on_disk = std::fs::read(&override_path).expect("override cover file should be on disk");
+        assert_eq!(on_disk, TINY_PNG);
+    }
+
+    #[tokio::test]
+    async fn api_post_cover_rejects_non_image() {
+        // A multipart `cover` field whose Content-Type is `text/plain` must
+        // be rejected at the `starts_with("image/")` guard with 400.
+        let _covers = CoversDirGuard::new("non_image");
+        let (app, _state, pool) = fixture().await;
+        let id = seed_book(&pool, "/lib", "NonImageBook").await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        let (content_type, body) = build_cover_multipart("text/plain", b"not an image");
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/ebooks/{id}/cover"))
+                    .method("POST")
+                    .header("content-type", content_type)
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        // No override row should have been written for the rejected upload.
+        let books = db::list_books(&pool, "/lib").await.unwrap();
+        let uuid = books[0].unique_identifier.clone().unwrap();
+        assert!(
+            db::get_metadata_overrides(&pool, &uuid)
+                .await
+                .unwrap()
+                .is_none(),
+            "rejected non-image upload must not create an override row"
+        );
+    }
+
+    #[tokio::test]
+    async fn api_post_cover_rejects_oversized() {
+        // The per-route layer raises the body cap to 11 MiB so the handler
+        // can enforce its own 10 MB content cap with a clean 400 instead of
+        // the framework's 413. Build a payload just over 10 MB to trip that
+        // handler-level check.
+        let _covers = CoversDirGuard::new("oversized");
+        let (app, _state, pool) = fixture().await;
+        let id = seed_book(&pool, "/lib", "OversizedBook").await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        // 10 MiB + 1 KiB of PNG-prefixed bytes — passes magic-byte
+        // detection so we reach the size check, not the format check.
+        let mut payload = TINY_PNG.to_vec();
+        payload.resize(10 * 1024 * 1024 + 1024, 0);
+        let (content_type, body) = build_cover_multipart("image/png", &payload);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/ebooks/{id}/cover"))
+                    .method("POST")
+                    .header("content-type", content_type)
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body = std::str::from_utf8(&bytes).unwrap_or("");
+        assert!(
+            body.contains("10 MB"),
+            "400 body should explain the size cap, got {body:?}"
+        );
+    }
 }
