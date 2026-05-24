@@ -144,6 +144,28 @@ pub struct Worker {
     next_id: std::sync::atomic::AtomicU64,
 }
 
+/// RAII guard that reclaims a `Worker::completions` slot when dropped.
+/// Used inside [`Worker::post`]'s spawned future so the slot is removed
+/// regardless of whether the future returned normally or unwound through
+/// a panic — keeping the map bounded on the panic path as well as the
+/// happy path.
+struct CompletionsPruneGuard {
+    completions: Arc<StdMutex<HashMap<TaskId, watch::Receiver<Option<TaskOutcome>>>>>,
+    id: TaskId,
+}
+
+impl Drop for CompletionsPruneGuard {
+    fn drop(&mut self) {
+        // `lock()` only fails on poisoning; if we're already unwinding
+        // from a panic we don't want to compound it with a double-panic,
+        // so silently skip on poison. The cap-bounding contract is
+        // preserved on the dominant non-poisoned path.
+        if let Ok(mut map) = self.completions.lock() {
+            map.remove(&self.id);
+        }
+    }
+}
+
 impl Worker {
     /// Build a `Worker` over `pool` with the given `config`, returning it
     /// behind an `Arc` (every method takes `&Arc<Self>` or `&self`, and
@@ -187,7 +209,17 @@ impl Worker {
         self.completions.lock().unwrap().insert(id, rx);
 
         let this = self.clone();
+        let completions = self.completions.clone();
         tokio::spawn(async move {
+            // RAII guard so the slot is reclaimed on the normal happy path
+            // *and* on unwind from a panic inside `run`. Without this, a
+            // panicking handler would leave its slot in the map forever —
+            // one leaked entry per panic for fire-and-forget posts (the
+            // boot / settings-save reindex kicks and the per-author photo
+            // resolutions), which is exactly the unbounded growth this
+            // refactor exists to prevent.
+            let _prune = CompletionsPruneGuard { completions, id };
+
             let outcome = this.run(task).await;
             if let TaskOutcome::Err(ref msg) = outcome {
                 tracing::error!(
@@ -196,18 +228,12 @@ impl Worker {
                     "worker: task failed"
                 );
             }
-            // Publish the terminal outcome, then drop the map slot. A
-            // `watch::Receiver` that `await_completion` took out of the map
-            // *before* this runs keeps observing the final value even after
-            // `tx` drops and the slot is gone, so an in-flight awaiter still
-            // resolves. Cleaning up here (not only in `await_completion`) is
-            // what bounds the map for the fire-and-forget post paths that
-            // never await — e.g. the boot-time and settings-save reindex
-            // kicks, which post a `Task::Scan` and discard the id. Without
-            // this the map grew by one entry per dispatched task for the
-            // process lifetime.
+            // Publish the terminal outcome, then let `_prune` drop the map
+            // slot. A `watch::Receiver` that `await_completion` took out of
+            // the map *before* this runs keeps observing the final value
+            // even after `tx` drops and the slot is gone, so an in-flight
+            // awaiter still resolves.
             let _ = tx.send(Some(outcome));
-            this.completions.lock().unwrap().remove(&id);
         });
 
         id
@@ -637,6 +663,31 @@ mod tests {
             "fire-and-forget tasks must drain completions ({}) and resource_locks ({})",
             w.completions_len(),
             w.resource_locks_len().await,
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn fire_and_forget_panicking_tasks_drain_completions() {
+        // Without an RAII guard on the spawn future, a panic in `run`
+        // skips past the in-line `remove(&id)` and the slot leaks. Post a
+        // batch of panicking fire-and-forget tasks and assert the map
+        // drains anyway.
+        let w = make_worker_default(pool().await);
+        for _ in 0..5 {
+            w.post(Task::Test {
+                tag: "ff-panic",
+                latency_ms: 0,
+                resource: None,
+                route_through_scan_sem: false,
+                on_run: Some(Arc::new(|| panic!("intentional test panic"))),
+                on_done: None,
+            });
+        }
+        let drained = poll_maps_empty(&w).await;
+        assert!(
+            drained,
+            "panicking fire-and-forget must drain completions ({})",
+            w.completions_len()
         );
     }
 
