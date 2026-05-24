@@ -10,13 +10,17 @@ omnibus-shared = { path = "../shared" }
 omnibus-db = { path = "../db", optional = true }
 serde.workspace = true
 serde_json = { workspace = true, optional = true }
-reqwest = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true, features = ["multipart"] }
 gloo-net = { version = "0.6", default-features = false, features = ["http", "json"], optional = true }
 gloo-timers = { version = "0.3", features = ["futures"], optional = true }
 # `web-sys` is enabled only on the WASM client for `Window::local_storage()`.
 # F1.3 view-mode / sort / filter prefs are persisted there per library path.
-web-sys = { version = "0.3", features = ["Window", "Storage", "KeyboardEvent"], optional = true }
+# F1.11: FormData/Blob/BlobPropertyBag are used by `data::upload_author_photo`
+# to build a multipart body for the author profile photo upload — the only
+# path that needs to ship raw bytes from the web client.
+web-sys = { version = "0.3", features = ["Window", "Storage", "KeyboardEvent", "FormData", "Blob", "BlobPropertyBag"], optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
 # sqlx + tokio are needed at the type level by rpc.rs when building server
 # functions (PoolExt = Extension<SqlitePool>, #[tokio::spawn] for reindex).
 # Kept as optional deps enabled only by the `server` feature. Tokio is
@@ -43,6 +47,7 @@ web = [
     "dep:serde_json",
     "dep:web-sys",
     "dep:wasm-bindgen",
+    "dep:js-sys",
     "dep:tokio",
     "tokio/sync",
 ]

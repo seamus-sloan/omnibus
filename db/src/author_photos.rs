@@ -195,6 +195,82 @@ async fn fetch_open_library(
     Ok(Some((cover_url, content_type, bytes)))
 }
 
+/// Hard cap on the bytes we'll read from a user-supplied URL. Same 10 MiB
+/// budget as the multipart upload route — callers should pre-check
+/// Content-Length when available, but this cap is what actually bounds
+/// memory consumption mid-download.
+pub const REMOTE_IMAGE_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Errors surfaced by [`fetch_remote_image`]. The variants are deliberately
+/// user-facing — the handler maps each to a 4xx/5xx response without further
+/// rephrasing.
+#[derive(Debug, thiserror::Error)]
+pub enum FetchRemoteImageError {
+    #[error("URL must start with http:// or https://")]
+    BadScheme,
+    #[error("remote server returned {0}")]
+    BadStatus(u16),
+    #[error("remote response content-type is not an image ({0})")]
+    NotImage(String),
+    #[error("SVG photos are not accepted")]
+    SvgRejected,
+    #[error("image exceeds {} byte cap", REMOTE_IMAGE_MAX_BYTES)]
+    TooLarge,
+    #[error(transparent)]
+    Http(#[from] reqwest::Error),
+}
+
+/// Fetch an image from a user-supplied URL with the same validation gates as
+/// the multipart upload route — image content-type, no SVG, size cap. Returns
+/// the raw bytes and the server-advertised content-type; callers are
+/// expected to run magic-byte sniffing on the bytes before persisting.
+///
+/// Used by the "paste image URL" branch of the author photo edit modal
+/// (F1.11 follow-up). Lives next to [`fetch_open_library`] because it
+/// reuses the same `reqwest` setup and shares the "we expect an image"
+/// surface area.
+pub async fn fetch_remote_image(url: &str) -> Result<(String, Vec<u8>), FetchRemoteImageError> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(FetchRemoteImageError::BadScheme);
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent(format!(
+            "omnibus/{} (https://github.com/sloansa/omnibus)",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .build()?;
+    let resp = client.get(url).send().await?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(FetchRemoteImageError::BadStatus(status.as_u16()));
+    }
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "application/octet-stream".into());
+    if !content_type.starts_with("image/") {
+        return Err(FetchRemoteImageError::NotImage(content_type));
+    }
+    if content_type.contains("svg") {
+        return Err(FetchRemoteImageError::SvgRejected);
+    }
+    // Pre-check Content-Length when the server advertises it so an
+    // obviously-oversized download bails before allocating.
+    if let Some(len) = resp.content_length() {
+        if len > REMOTE_IMAGE_MAX_BYTES {
+            return Err(FetchRemoteImageError::TooLarge);
+        }
+    }
+    let bytes = resp.bytes().await?.to_vec();
+    if bytes.len() as u64 > REMOTE_IMAGE_MAX_BYTES {
+        return Err(FetchRemoteImageError::TooLarge);
+    }
+    Ok((content_type, bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

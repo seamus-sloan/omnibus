@@ -314,6 +314,13 @@ pub struct AuthorSummary {
     /// — the UI falls back to the theme accent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent: Option<String>,
+    /// F1.11: `true` when a usable profile photo is cached for this author
+    /// (a `manual` or `openlibrary` row in `author_photos`). Same semantics
+    /// as `AuthorDetail::has_photo` — `'letter'` negative-cache rows do
+    /// not set this flag. Lets the `/authors` index render a real `<img>`
+    /// in one round trip instead of fetching the detail payload per card.
+    #[serde(default)]
+    pub has_photo: bool,
 }
 
 /// Lightweight series row for the `/series` index (F1.12). Carries the
