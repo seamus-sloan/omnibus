@@ -143,8 +143,10 @@ body.atrium,
 }
 .atrium-nav a:hover { color: var(--ink-0); background: var(--bg-1); }
 .atrium-nav a.on    { color: var(--ink-0); background: var(--bg-2); }
-.atrium-nav a.disabled {
-  color: var(--ink-3); cursor: default; pointer-events: none;
+.atrium-nav .disabled {
+  padding: 6px 12px; border-radius: 999px;
+  color: var(--ink-3); font-size: 13px;
+  cursor: default; pointer-events: none;
 }
 
 /* Right cluster: Add books / theme / Settings / Logout. The auto margin
