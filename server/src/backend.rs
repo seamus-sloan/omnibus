@@ -3302,6 +3302,214 @@ mod tests {
         assert!(db::author_photo_status(&pool, id).await.unwrap().is_none());
     }
 
+    // --- Set-by-URL admin handler. The remote fetch is exercised via a
+    // local `wiremock` server, never the public internet. Covers the
+    // admin gate, the validation paths (404 missing author, 400 empty /
+    // bad-scheme URL, non-image content-type, bogus magic bytes), and the
+    // happy path (204 then GET returns the bytes).
+
+    /// JSON PUT helper for the `/api/authors/:id/photo/url` route.
+    fn put_photo_url(uri: &str, token: &str, url: &str) -> Request<Body> {
+        Request::builder()
+            .uri(uri)
+            .method("PUT")
+            .header("content-type", "application/json")
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::from(serde_json::json!({ "url": url }).to_string()))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn api_put_author_photo_url_requires_admin() {
+        let (app, _state, pool) = fixture().await;
+        let id = seed_author(&pool, "Ada Lovelace").await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        let res = app
+            .oneshot(put_photo_url(
+                &format!("/api/authors/{id}/photo/url"),
+                &token,
+                "http://127.0.0.1:1/never-reached",
+            ))
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn api_put_author_photo_url_404_for_missing_author() {
+        let (app, _state, pool) = fixture().await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        let res = app
+            .oneshot(put_photo_url(
+                "/api/authors/9999/photo/url",
+                &token,
+                "http://127.0.0.1:1/never-reached",
+            ))
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn api_put_author_photo_url_rejects_empty_url() {
+        let (app, _state, pool) = fixture().await;
+        let id = seed_author(&pool, "Ada Lovelace").await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        let res = app
+            .oneshot(put_photo_url(
+                &format!("/api/authors/{id}/photo/url"),
+                &token,
+                "   ",
+            ))
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn api_put_author_photo_url_rejects_bad_scheme() {
+        let (app, _state, pool) = fixture().await;
+        let id = seed_author(&pool, "Ada Lovelace").await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        // ftp:// trips the `fetch_remote_image` scheme guard before any
+        // outbound request fires.
+        let res = app
+            .oneshot(put_photo_url(
+                &format!("/api/authors/{id}/photo/url"),
+                &token,
+                "ftp://example.com/photo.jpg",
+            ))
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn api_put_author_photo_url_uploads_and_get_serves() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/portrait.png"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "image/png")
+                    .set_body_bytes(TINY_PNG),
+            )
+            .mount(&mock)
+            .await;
+
+        let (app, _state, pool) = fixture().await;
+        let id = seed_author(&pool, "Ada Lovelace").await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        let url = format!("{}/portrait.png", mock.uri());
+        let res = app
+            .clone()
+            .oneshot(put_photo_url(
+                &format!("/api/authors/{id}/photo/url"),
+                &token,
+                &url,
+            ))
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+        let res = app
+            .oneshot(get_with_bearer(&format!("/api/authors/{id}/photo"), &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(bytes.as_ref(), TINY_PNG);
+    }
+
+    #[tokio::test]
+    async fn api_put_author_photo_url_rejects_non_image_content_type() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/not-a-photo.html"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/html")
+                    .set_body_string("<html>nope</html>"),
+            )
+            .mount(&mock)
+            .await;
+
+        let (app, _state, pool) = fixture().await;
+        let id = seed_author(&pool, "Ada Lovelace").await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        let url = format!("{}/not-a-photo.html", mock.uri());
+        let res = app
+            .oneshot(put_photo_url(
+                &format!("/api/authors/{id}/photo/url"),
+                &token,
+                &url,
+            ))
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn api_put_author_photo_url_rejects_bogus_image_bytes() {
+        // Server lies — declares image/png but the bytes don't carry the
+        // PNG magic header. The handler-side `detect_image_format` sniff
+        // must catch this even though the content-type passes the
+        // `image/` prefix gate.
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/fake.png"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "image/png")
+                    .set_body_bytes(b"definitely not png bytes" as &[u8]),
+            )
+            .mount(&mock)
+            .await;
+
+        let (app, _state, pool) = fixture().await;
+        let id = seed_author(&pool, "Ada Lovelace").await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        let url = format!("{}/fake.png", mock.uri());
+        let res = app
+            .oneshot(put_photo_url(
+                &format!("/api/authors/{id}/photo/url"),
+                &token,
+                &url,
+            ))
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
     // --- Scan-for-picture admin gate / not-found contract. The resolver
     // itself is exercised by the wiremock-backed tests in
     // `omnibus_db::author_photos::tests`; these only cover the wiring so
