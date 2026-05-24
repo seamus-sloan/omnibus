@@ -796,6 +796,96 @@ pub async fn upsert_metadata_overrides(
     Ok(())
 }
 
+/// Atomically merge `incoming` field overrides on top of any existing
+/// overrides for `book_uuid` and persist the result (#166).
+///
+/// The read-merge-write runs inside a single `BEGIN IMMEDIATE` transaction so
+/// two concurrent edits to the same book cannot interleave (both reading the
+/// same pre-edit row, both merging in Rust, last write wins — silently
+/// dropping one edit). `BEGIN IMMEDIATE` takes the write lock up front rather
+/// than starting deferred and upgrading on first write; that upgrade window is
+/// exactly where two writers collide. Serializing here preserves the
+/// incremental-edit contract that [`MetadataOverrides::merge`] exists for:
+/// saving the title must not clobber a previously saved series or any other
+/// untouched field.
+///
+/// The existing `has_cover_override` flag is carried forward — a text-only
+/// edit must not clear a cover the user uploaded earlier. (The pre-#166
+/// handler passed `has_cover_override = false` to [`upsert_metadata_overrides`]
+/// on every field edit, which reset the flag; folding the read into this
+/// transaction lets us preserve it.)
+///
+/// As with [`upsert_metadata_overrides`], the `books_fts` rebuild runs
+/// best-effort *after* commit so a rebuild failure does not fail the save and
+/// the write lock is released as early as possible.
+pub async fn merge_metadata_overrides(
+    pool: &SqlitePool,
+    book_uuid: &str,
+    incoming: &MetadataOverrides,
+    user_id: i64,
+) -> Result<(), sqlx::Error> {
+    // Mirror `auth::create_user`'s explicit transaction idiom: async drop
+    // isn't stable, so we acquire one connection, run BEGIN IMMEDIATE, and
+    // COMMIT/ROLLBACK by hand based on the inner result.
+    let mut conn = pool.acquire().await?;
+    sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+
+    let result: Result<(), sqlx::Error> = async {
+        let existing: Option<(String, i64)> = sqlx::query_as(
+            "SELECT overrides, has_cover_override FROM metadata_overrides WHERE book_uuid = ?",
+        )
+        .bind(book_uuid)
+        .fetch_optional(&mut *conn)
+        .await?;
+
+        let (merged, has_cover_override) = match existing {
+            Some((json, has_cover)) => {
+                let prior: MetadataOverrides =
+                    serde_json::from_str(&json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+                (prior.merge(incoming), has_cover != 0)
+            }
+            None => (incoming.clone(), false),
+        };
+
+        let json =
+            serde_json::to_string(&merged).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+        sqlx::query(
+            "INSERT INTO metadata_overrides (book_uuid, overrides, has_cover_override, updated_by, updated_at)
+             VALUES (?, ?, ?, ?, datetime('now'))
+             ON CONFLICT(book_uuid) DO UPDATE SET
+               overrides = excluded.overrides,
+               has_cover_override = excluded.has_cover_override,
+               updated_by = excluded.updated_by,
+               updated_at = datetime('now')",
+        )
+        .bind(book_uuid)
+        .bind(&json)
+        .bind(i64::from(has_cover_override))
+        .bind(user_id)
+        .execute(&mut *conn)
+        .await?;
+        Ok(())
+    }
+    .await;
+
+    match &result {
+        Ok(()) => {
+            sqlx::query("COMMIT").execute(&mut *conn).await?;
+        }
+        Err(_) => {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+        }
+    }
+    result?;
+
+    // Best-effort FTS rebuild — same rationale as `upsert_metadata_overrides`.
+    // Kept outside the transaction so the write lock is released first.
+    if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
+        tracing::warn!(book_uuid, error = %e, "books_fts rebuild after override merge failed");
+    }
+    Ok(())
+}
+
 /// Load overrides for a single book UUID. Returns `None` if no overrides
 /// exist.
 pub async fn get_metadata_overrides(
@@ -6079,6 +6169,72 @@ mod tests {
         assert_eq!(loaded.description, Some("A new description".into()));
         assert_eq!(loaded.publisher, None);
         assert!(!has_cover);
+    }
+
+    #[tokio::test]
+    async fn merge_metadata_overrides_accumulates_fields_and_preserves_cover_flag() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        // Seed an existing override carrying a title AND a user-uploaded cover.
+        let initial = MetadataOverrides {
+            title: Some("First Title".into()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, "merge-uuid", &initial, true, user_id)
+            .await
+            .unwrap();
+
+        // A later edit touching only `description` must not clobber the title
+        // (the incremental-edit contract the TOCTOU race nullified) and must
+        // not reset the cover flag (the pre-#166 reset bug).
+        let edit = MetadataOverrides {
+            description: Some("Added later".into()),
+            ..Default::default()
+        };
+        merge_metadata_overrides(&pool, "merge-uuid", &edit, user_id)
+            .await
+            .unwrap();
+
+        let (loaded, has_cover) = get_metadata_overrides(&pool, "merge-uuid")
+            .await
+            .unwrap()
+            .expect("overrides should exist");
+        assert_eq!(
+            loaded.title,
+            Some("First Title".into()),
+            "prior title must survive a description-only merge"
+        );
+        assert_eq!(loaded.description, Some("Added later".into()));
+        assert!(
+            has_cover,
+            "has_cover_override must carry forward across a text-only merge"
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_metadata_overrides_creates_row_when_absent() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+        let edit = MetadataOverrides {
+            title: Some("Fresh".into()),
+            ..Default::default()
+        };
+        merge_metadata_overrides(&pool, "fresh-uuid", &edit, user_id)
+            .await
+            .unwrap();
+        let (loaded, has_cover) = get_metadata_overrides(&pool, "fresh-uuid")
+            .await
+            .unwrap()
+            .expect("overrides should exist");
+        assert_eq!(loaded.title, Some("Fresh".into()));
+        assert!(!has_cover, "a brand-new merged row has no cover override");
     }
 
     #[tokio::test]

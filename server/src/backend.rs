@@ -611,16 +611,13 @@ async fn post_ebook_overrides(
         Ok(None) => return (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
         Err(e) => return internal("get_book_uuid", e),
     };
-    // Merge incoming overrides with any existing ones so that a second edit
-    // that only touches field B doesn't wipe a prior override on field A.
-    let merged = match db::get_metadata_overrides(&state.pool, &uuid).await {
-        Ok(Some((existing, _))) => existing.merge(&overrides),
-        Ok(None) => overrides,
-        Err(e) => return internal("get_metadata_overrides", e),
-    };
-    if let Err(e) = db::upsert_metadata_overrides(&state.pool, &uuid, &merged, false, user.id).await
-    {
-        return internal("upsert_metadata_overrides", e);
+    // Merge incoming overrides with any existing ones so a second edit that
+    // only touches field B doesn't wipe a prior override on field A. The
+    // read-merge-write is serialized inside a single BEGIN IMMEDIATE
+    // transaction in the db layer so two concurrent edits to the same book
+    // can't interleave and drop each other's changes (#166).
+    if let Err(e) = db::merge_metadata_overrides(&state.pool, &uuid, &overrides, user.id).await {
+        return internal("merge_metadata_overrides", e);
     }
     match db::get_book(&state.pool, id).await {
         Ok(Some(book)) => Json(book).into_response(),
