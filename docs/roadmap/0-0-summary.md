@@ -142,6 +142,7 @@ Phase 6  Mobile                   (feature parity on native)
 - [F5.5 Format conversion](5-5-format-conversion.md)
 - [F5.6 Admin server health](5-6-admin-health.md)
 - [F5.7 Journal & quote cards](5-7-journal-quote-cards.md)
+- [F5.9 Library cleanup](5-9-library-cleanup.md)
 
 ### Phase 6 — Mobile
 
