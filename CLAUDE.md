@@ -19,13 +19,10 @@ Numbered rules in [.claude/rules/](.claude/rules/), applied in order. Follow the
 
 ## Skills
 
-Auto-discoverable skills in [.claude/skills/](.claude/skills/) — Claude Code loads each `SKILL.md` automatically, and each is invokable via `/<name>` (e.g. `/jj-basics`).
+Auto-discoverable skills in [.claude/skills/](.claude/skills/) — Claude Code loads each `SKILL.md` automatically, and each is invokable via `/<name>` (e.g. `/ui-validate`).
 
 - [add-backend-route](.claude/skills/add-backend-route/SKILL.md) — adding an Axum page or API endpoint end-to-end.
 - [add-playwright-flow](.claude/skills/add-playwright-flow/SKILL.md) — adding a new E2E spec.
-- [jj-basics](.claude/skills/jj-basics/SKILL.md) — fetch / new / describe / bookmark / push.
-- [jj-workspaces](.claude/skills/jj-workspaces/SKILL.md) — parallel agent work on one repo.
-- [jj-advanced](.claude/skills/jj-advanced/SKILL.md) — squash / rebase / abandon / undo / op log / conflicts.
 - [ui-validate](.claude/skills/ui-validate/SKILL.md) — bring up a port-walking dev server, log in as the seeded admin, drive the browser preview, poll `/api/_health` for rebuild signal.
 
 ## Architecture
