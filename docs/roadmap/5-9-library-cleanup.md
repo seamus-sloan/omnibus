@@ -97,11 +97,151 @@ Book-title renames delegate to the existing `upsert_metadata_overrides` in `db/s
 
 ## TODOs
 
-Detailed step-by-step implementation plan lives at `/Users/seamus/.claude/plans/i-didn-t-want-you-proud-cook.md` and is being executed on branch `gh-159/library-cleanup`.
+### Schema and migration
+
+**What:** Add `db/migrations/NNNN_library_cleanup.sql` creating `dedup_suggestions`, `cleanup_log`, and `entity_aliases`.
+
+**Why:** Persistent queue for review decisions, snapshot-based undo log, and the alias map that stops merges from being silently undone by the next reindex.
+
+**Context:** `dedup_suggestions` is `UNIQUE (kind, action, payload_json)` so re-running detection doesn't insert duplicate rows. `cleanup_log.snapshot_json` is a self-contained JSON blob so undo works even after unrelated schema changes. `entity_aliases` is keyed by `(kind, alias_name)` and consulted at insert time inside `resolve_or_insert_*`.
+
+**Effort:** S
+**Priority:** P0
+**Depends on:** None.
+
+### Shared types
+
+**What:** `CleanupKind`, `CleanupAction`, `Decision`, `CleanupCounts`, `SuggestionCard` in `shared/src/lib.rs`.
+
+**Why:** Travel over RPC, so they need serde derives and no server-only deps. `SuggestionCard` carries hydrated preview data (names, book counts, photo URLs) so the review UI renders in one round-trip.
+
+**Effort:** S
+**Priority:** P0
+**Depends on:** Schema and migration.
+
+### Detection module
+
+**What:** New `db/src/cleanup.rs` with `detect_authors`, `detect_series`, `detect_tags_merge`, `detect_tags_split`, `detect_book_titles`, plus a `detect_all` dispatcher. Re-export from `db/src/lib.rs`.
+
+**Why:** Five domain-specific algorithms feeding one unified queue. Splitting per-kind keeps each algorithm simple to test independently.
+
+**Context:** Tier 0 = `GROUP BY` on a normalized key (authors/series/tags) or regex-match high-cruft patterns (book titles, junk authors). Tier 1 = token-set Jaccard ≥ 0.85, blocked by shared first token. Book-title regex passes match-and-strip `Last, First - `, `[SERIES NN] `, `Series #NN `, `ToG04-`, trailing parenthetical editions. Junk-author regex matches `^calibre \(`, `\[http`, `Smashwords, Inc\.` style tooling artifacts.
+
+**Effort:** M
+**Priority:** P0
+**Depends on:** Schema and migration; Shared types.
+
+### Apply primitives + undo
+
+**What:** Transactional `apply_merge_authors`, `apply_merge_series`, `apply_merge_tags`, `apply_tag_split`, `apply_book_title_override`, and `apply_delete_<kind>` in `db/src/cleanup.rs`. Plus `undo(log_id)` that restores from snapshot.
+
+**Why:** Every accepted suggestion or on-page delete routes through these. Centralizing the transaction is the only way to keep FTS, photos, link tables, and the candidate cache in sync.
+
+**Context:** Each primitive snapshots affected rows into `cleanup_log.snapshot_json` *first*, then mutates. Merges relink the join table (`INSERT OR IGNORE`), refresh `books_fts` for affected book ids, write source names into `entity_aliases`, and delete sources. Author merges additionally reconcile `author_photos` (manual > openlibrary > letter) and backfill `sort` if NULL. Book-title renames delegate to the existing `upsert_metadata_overrides` in `db/src/queries.rs` (the `metadata_overrides` JSON blob is the canonical edit surface for titles, not direct `books.title` mutation).
+
+**Effort:** L
+**Priority:** P0
+**Depends on:** Detection module.
+
+### Reindex-resurrection guard
+
+**What:** Extend `resolve_or_insert_author` (around `db/src/queries.rs:463`), `resolve_or_insert_series`, and the tag insertion site in `insert_book_taxonomy` to consult `entity_aliases` before the existing `INSERT … ON CONFLICT`.
+
+**Why:** Without this, the next `Task::Scan` re-creates the merged-away rows and silently undoes the admin's work. This is non-negotiable — the whole feature breaks without it.
+
+**Context:** One extra `SELECT canonical_id FROM entity_aliases WHERE kind = ? AND alias_name = ?` per resolve site. If hit, return that id; otherwise fall through to the existing insert path.
+
+**Effort:** S
+**Priority:** P0
+**Depends on:** Schema and migration.
+
+### Orphan auto-cleanup helper
+
+**What:** `db::queries::prune_orphans(pool) -> Result<(u64, u64)>` that runs the series + tags orphan sweep, returning the deletion counts.
+
+**Why:** Issue #159's auto-delete-when-empty requirement for series and tags. A single sweep at the end of each write path is cheaper than per-row `DELETE` triggers.
+
+**Context:** Called at the end of `indexer::reindex` (covers book-removed-from-disk → orphaned series/tag) and from every `apply_*` that touches link tables. Authors are deliberately excluded — empty authors are handled via the detection queue's `Action::Delete` path so they get the audit log + alias guard.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** None.
+
+### Worker task + indexer trigger
+
+**What:** Add `Task::DetectCleanup { kind: Option<Kind> }` to `db/src/worker.rs` (variant + dispatch + `resource_key` returning `Some("cleanup")` to serialize). Trigger from `indexer::reindex` on success.
+
+**Why:** Detection runs out of band so the review UI reads from a cache, not a per-request expensive query. Auto-running after reindex means fresh suggestions appear without admin action after an import.
+
+**Context:** Matches the existing `ResolveAuthorPhoto` task shape at `db/src/worker.rs:16-66`. `uses_scan_sem()` returns `false` (cleanup detection doesn't compete with scans).
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** Detection module.
+
+### RPC endpoints + data wrappers
+
+**What:** Six server functions in `frontend/src/rpc.rs` — `cleanup/counts`, `cleanup/queue`, `cleanup/decide`, `cleanup/detect`, `cleanup/undo`, `cleanup/delete-entity`. Typed wrappers in `frontend/src/data.rs` under both web and mobile feature gates (mobile data layer should compile cleanly even though no UI is exposed in v1).
+
+**Why:** Wire the merge primitive to the frontend. Admin-gated via the existing `AdminUser` extractor pattern (or inline `user.is_admin` check matching the F1.11 pattern at `frontend/src/rpc.rs:274`).
+
+**Context:** No new REST `/api/*` routes — cleanup is admin-web only for v1. Mobile parity is a follow-up.
+
+**Effort:** M
+**Priority:** P1
+**Depends on:** Apply primitives.
+
+### Settings page section
+
+**What:** Add a "Library cleanup" `<section>` near the bottom of `frontend/src/pages/settings.rs` (after the existing `settings-field` blocks). Shows per-kind counts + Review buttons + a "Run detection now" button.
+
+**Why:** The entry point. Settings is the natural home for admin hygiene tooling.
+
+**Context:** Settings page is already admin-gated at the RPC level — no extra UI gating needed. Counts auto-refresh on mount via `data::cleanup_counts`.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** RPC endpoints.
+
+### Review page (Tinder card UI)
+
+**What:** New `frontend/src/pages/cleanup_review.rs` at `Route::CleanupReview { kind: String }` (added to the enum in `frontend/src/lib.rs:28-53`). Single-card-at-a-time UI with three actions: Accept (✓ / Y), Reject (✗ / N), Skip (→ / Space).
+
+**Why:** The Yes/No review surface — one decision at a time keeps cognitive load low and lets the admin blast through a large queue.
+
+**Context:** Card content varies by `(kind, action)` — author merge shows side-by-side author cards with photos and book counts; tag split shows source → atom chips; book rename shows current title (struck through) → proposed title. Reuses Atrium card primitives from `frontend/src/components/atrium.rs`. Empty queue state: "No suggestions pending."
+
+**Effort:** M
+**Priority:** P1
+**Depends on:** RPC endpoints.
+
+### On-page delete buttons (issue #159)
+
+**What:** Admin-only "Delete author" button in `frontend/src/pages/author.rs` and "Delete series" button in `frontend/src/pages/series.rs`, each with a confirmation modal.
+
+**Why:** Issue #159's manual-delete requirement. Useful when the admin spots a junk row the detector missed, or wants to delete a real-but-empty author left after a merge.
+
+**Context:** Both route through `POST /api/rpc/cleanup/delete-entity`, which reuses the `apply_delete_<kind>` primitive — so on-page deletes get the audit log + alias guard for free. Modal copy: "Delete '{name}'? This will remove the author from {N} books. The books themselves are not deleted."
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** Apply primitives; RPC endpoints.
+
+### Tests
+
+**What:** Inline `#[cfg(test)]` in `db/src/cleanup.rs` for detection, each apply primitive, undo round-trip, `prune_orphans` (including the "authors are excluded" assertion), and direct on-page delete. Integration tests in `server/src/backend.rs` style. Playwright spec at `ui_tests/playwright/tests/flows/cleanup.spec.ts` covering layout, review flow, on-page delete, error path.
+
+**Why:** Destructive admin operations need end-to-end verification — unit tests alone can't catch FTS / photo reconciliation regressions across the full stack.
+
+**Context:** Per `.claude/rules/03-unit-testing.md` and `.claude/rules/04-playwright.md`. The reindex-resurrection guard needs its own integration test (merge → run a second scan → assert the source row is *not* re-created).
+
+**Effort:** M
+**Priority:** P1
+**Depends on:** Apply primitives; Settings section; Review page; On-page delete buttons.
 
 ## Status
 
-In progress on branch `gh-159/library-cleanup`.
+Queued. Plan drafted at `/Users/seamus/.claude/plans/i-didn-t-want-you-proud-cook.md`; branch `gh-159/library-cleanup` exists with this scoping commit. No implementation yet.
 
 ---
 
