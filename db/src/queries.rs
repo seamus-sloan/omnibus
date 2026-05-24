@@ -50,6 +50,25 @@ const AUDIOBOOK_LIBRARY_PATH_KEY: &str = "audiobook_library_path";
 /// the capped vec. Cursor-based pagination is intentionally deferred.
 pub const MAX_BOOKS_RETURNED: i64 = 50_000;
 
+/// Hard cap on the nested `books` vec returned by the discovery-detail
+/// reads ([`get_author`] / [`get_series`]). Issue #150: these functions
+/// previously serialized *every* book attributed to an author or series
+/// in one payload — a prolific reference author or a giant Calibre series
+/// could nest thousands of `EbookMetadata` structs (each with its own
+/// `Vec<Contributor>` / `Vec` subjects / `Vec<Identifier>`) into a single
+/// response. 1 000 is far above any realistic single-author/series shelf a
+/// client renders in one grid, yet keeps the JSON envelope bounded.
+///
+/// Truncation is surfaced *without* a struct change: `AuthorDetail` /
+/// `SeriesDetail` already carry a `book_count` field. Both reads now set
+/// `book_count` from a dedicated uncapped `COUNT(*)`, so a caller detects
+/// truncation as `book_count > books.len()`. The `X-Total-Count` header
+/// floated in #150 doesn't fit here — these flow through Dioxus server
+/// functions (`frontend/src/rpc.rs`), not raw axum handlers, so there's no
+/// ergonomic place to set a response header. Cursor pagination is the
+/// intended F4.x follow-up; see `docs/roadmap/`.
+pub const MAX_DISCOVERY_BOOKS: i64 = 1_000;
+
 pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     // PRAGMAs `foreign_keys`, `busy_timeout`, and `synchronous` are
     // *per-connection* settings — they only apply to the connection that
@@ -2103,8 +2122,17 @@ fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata, sqlx::Erro
     })
 }
 
-/// Fetch an author by ID with all their books across every library.
-/// Returns `None` if the author ID doesn't exist.
+/// Fetch an author by ID with their books across every library. Returns
+/// `None` if the author ID doesn't exist.
+///
+/// # Bounded reads (issue #150)
+///
+/// The nested `books` vec is hard-capped at [`MAX_DISCOVERY_BOOKS`]; a
+/// prolific reference author no longer serializes thousands of nested
+/// `EbookMetadata` structs in one payload. `book_count` is computed from a
+/// separate uncapped `COUNT(*)`, so it always reports the true shelf size
+/// and callers detect truncation as `book_count > books.len()`. Cursor
+/// pagination is the intended F4.x follow-up.
 ///
 /// # Multi-tenancy
 ///
@@ -2168,11 +2196,13 @@ pub async fn get_author(
                END,
                b.series_index
              ) NULLS LAST,
-             b.sort, b.id"#
+             b.sort, b.id
+           LIMIT ?"#
     );
     let rows = sqlx::query(&sql)
         .bind(&author_name)
         .bind(author_id)
+        .bind(MAX_DISCOVERY_BOOKS)
         .fetch_all(pool)
         .await?;
 
@@ -2180,6 +2210,35 @@ pub async fn get_author(
     for r in &rows {
         books.push(row_to_ebook(r)?);
     }
+
+    // Issue #150: `books` above is capped at `MAX_DISCOVERY_BOOKS`, so its
+    // length can no longer stand in for the author's true shelf size.
+    // Count the (uncapped) effective membership separately using the same
+    // override-aware predicate as the SELECT so `book_count` stays
+    // truthful and callers can detect truncation as
+    // `book_count > books.len()`.
+    let book_count: i64 = sqlx::query_scalar(
+        r#"SELECT COUNT(*)
+           FROM books b
+           LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+           WHERE
+             CASE
+               WHEN mo.book_uuid IS NOT NULL
+                    AND json_type(mo.overrides, '$.creators') IS NOT NULL
+                 THEN EXISTS (
+                   SELECT 1 FROM json_each(mo.overrides, '$.creators') je
+                    WHERE json_extract(je.value, '$.name') = ? COLLATE NOCASE
+                 )
+               ELSE EXISTS (
+                 SELECT 1 FROM books_authors_link bal
+                  WHERE bal.book = b.id AND bal.author = ?
+               )
+             END"#,
+    )
+    .bind(&author_name)
+    .bind(author_id)
+    .fetch_one(pool)
+    .await?;
 
     // Bulk-apply overrides so card titles / descriptions / covers reflect
     // user edits, matching what `list_books` does for the landing grid.
@@ -2217,7 +2276,7 @@ pub async fn get_author(
         id: a.get("id"),
         name: a.get("name"),
         sort: a.get("sort"),
-        book_count: books.len(),
+        book_count: book_count as usize,
         books,
         has_photo,
     }))
@@ -2347,8 +2406,17 @@ pub async fn delete_author_photo(pool: &SqlitePool, author_id: i64) -> Result<()
     Ok(())
 }
 
-/// Fetch a series by ID with all its books, ordered by series index.
-/// Returns `None` if the series ID doesn't exist.
+/// Fetch a series by ID with its books, ordered by series index. Returns
+/// `None` if the series ID doesn't exist.
+///
+/// # Bounded reads (issue #150)
+///
+/// The nested `books` vec is hard-capped at [`MAX_DISCOVERY_BOOKS`]; a
+/// giant Calibre series no longer serializes its entire shelf in one
+/// payload. `book_count` is computed from a separate uncapped `COUNT(*)`,
+/// so it reports the true series size and truncation is detectable as
+/// `book_count > books.len()`. Cursor pagination is the intended F4.x
+/// follow-up.
 ///
 /// # Multi-tenancy
 ///
@@ -2416,14 +2484,46 @@ pub async fn get_series(
            FROM books b
            JOIN effective e ON e.book_id = b.id
            WHERE e.series_name = ? COLLATE NOCASE
-           ORDER BY e.series_index NULLS LAST, b.sort, b.id"#
+           ORDER BY e.series_index NULLS LAST, b.sort, b.id
+           LIMIT ?"#
     );
-    let rows = sqlx::query(&sql).bind(&series_name).fetch_all(pool).await?;
+    let rows = sqlx::query(&sql)
+        .bind(&series_name)
+        .bind(MAX_DISCOVERY_BOOKS)
+        .fetch_all(pool)
+        .await?;
 
     let mut books = Vec::with_capacity(rows.len());
     for r in &rows {
         books.push(row_to_ebook(r)?);
     }
+
+    // Issue #150: `books` is capped at `MAX_DISCOVERY_BOOKS`. Count the
+    // uncapped effective membership separately — reusing the same
+    // override-aware `effective` CTE — so `book_count` reflects the true
+    // series size and truncation is detectable as
+    // `book_count > books.len()`.
+    let book_count: i64 = sqlx::query_scalar(
+        r#"WITH effective AS (
+             SELECT b.id AS book_id,
+                    CASE
+                      WHEN mo.book_uuid IS NOT NULL
+                           AND json_type(mo.overrides, '$.series') IS NOT NULL
+                        THEN json_extract(mo.overrides, '$.series')
+                      ELSE (SELECT s2.name FROM books_series_link bsl
+                              JOIN series s2 ON s2.id = bsl.series
+                             WHERE bsl.book = b.id LIMIT 1)
+                    END AS series_name
+               FROM books b
+               LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+           )
+           SELECT COUNT(*)
+           FROM effective e
+           WHERE e.series_name = ? COLLATE NOCASE"#,
+    )
+    .bind(&series_name)
+    .fetch_one(pool)
+    .await?;
 
     // Merge overrides into each book so the series-card title/description
     // /cover reflect user edits, matching what `list_books` does for the
@@ -2457,7 +2557,7 @@ pub async fn get_series(
         id: s.get("id"),
         name: s.get("name"),
         sort: s.get("sort"),
-        book_count: books.len(),
+        book_count: book_count as usize,
         books,
     }))
 }
@@ -2469,6 +2569,13 @@ const TAG_CLOUD_LIMIT: i64 = 500;
 
 /// Return up to [`TAG_CLOUD_LIMIT`] tags with their book counts, ordered
 /// by count descending then name ascending. Used by the tag cloud page.
+///
+/// # Bounded reads (issue #150)
+///
+/// Unlike [`get_author`] / [`get_series`], this read never nests book
+/// lists — it returns only `TagWeight { name, count }` rows — and the tag
+/// list itself is already capped at [`TAG_CLOUD_LIMIT`]. There is nothing
+/// unbounded to cap here; the #150 work is the discovery-detail reads.
 ///
 /// # Multi-tenancy
 ///
@@ -5351,6 +5458,129 @@ mod tests {
         let (pool, _guard) = seed_discovery_fixture().await;
         let missing = get_series(&pool, 999_999).await.unwrap();
         assert!(missing.is_none());
+    }
+
+    // -------------------------------------------------------------------------
+    // Discovery read caps (issue #150)
+    //
+    // `get_author` / `get_series` previously serialized every attributed book
+    // in one payload. The fix is a hard `LIMIT MAX_DISCOVERY_BOOKS` on the
+    // nested `books` vec plus an uncapped `book_count` so callers can detect
+    // truncation as `book_count > books.len()`.
+    // -------------------------------------------------------------------------
+
+    /// Seed `count` minimal `books` rows under `/lib`, all linked to one
+    /// author ("Prolific") and one series ("Mega"), via recursive CTEs.
+    /// Bypasses `replace_books`/the indexer — the cap only depends on link
+    /// rows existing — keeping the test fast even past the 1k cap. Returns
+    /// `(author_id, series_id)`.
+    async fn seed_books_for_one_author_and_series(pool: &SqlitePool, count: i64) -> (i64, i64) {
+        sqlx::query("INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib')")
+            .execute(pool)
+            .await
+            .unwrap();
+        let lib_id: i64 = sqlx::query_scalar("SELECT id FROM libraries WHERE path = '/lib'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let author_id: i64 = sqlx::query_scalar(
+            "INSERT INTO authors (name, sort) VALUES ('Prolific', 'Prolific') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let series_id: i64 = sqlx::query_scalar(
+            "INSERT INTO series (name, sort) VALUES ('Mega', 'Mega') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            WITH RECURSIVE n(i) AS (
+                SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
+            )
+            INSERT INTO books (uuid, library_id, path, title, sort, series_index)
+            SELECT 'uuid-' || i, ?, '/lib/b' || i, 'Title ' || i,
+                   'Title ' || printf('%010d', i), i
+              FROM n
+            "#,
+        )
+        .bind(count)
+        .bind(lib_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        // Link every seeded book to the author and the series.
+        sqlx::query(
+            "INSERT INTO books_authors_link (book, author, position)
+             SELECT id, ?, 0 FROM books",
+        )
+        .bind(author_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO books_series_link (book, series)
+             SELECT id, ? FROM books",
+        )
+        .bind(series_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        (author_id, series_id)
+    }
+
+    #[tokio::test]
+    async fn get_author_caps_books_at_max_discovery_books() {
+        let _covers = CoversTempDir::new("author_cap");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let total = MAX_DISCOVERY_BOOKS + 25;
+        let (author_id, _series_id) = seed_books_for_one_author_and_series(&pool, total).await;
+
+        let author = get_author(&pool, author_id)
+            .await
+            .unwrap()
+            .expect("author exists");
+        assert_eq!(
+            author.books.len() as i64,
+            MAX_DISCOVERY_BOOKS,
+            "get_author must cap the nested books vec at MAX_DISCOVERY_BOOKS"
+        );
+        assert_eq!(
+            author.book_count as i64, total,
+            "book_count must report the true (uncapped) shelf size"
+        );
+        assert!(
+            author.book_count > author.books.len(),
+            "truncation must be detectable as book_count > books.len()"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_series_caps_books_at_max_discovery_books() {
+        let _covers = CoversTempDir::new("series_cap");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let total = MAX_DISCOVERY_BOOKS + 25;
+        let (_author_id, series_id) = seed_books_for_one_author_and_series(&pool, total).await;
+
+        let series = get_series(&pool, series_id)
+            .await
+            .unwrap()
+            .expect("series exists");
+        assert_eq!(
+            series.books.len() as i64,
+            MAX_DISCOVERY_BOOKS,
+            "get_series must cap the nested books vec at MAX_DISCOVERY_BOOKS"
+        );
+        assert_eq!(
+            series.book_count as i64, total,
+            "book_count must report the true (uncapped) series size"
+        );
+        assert!(
+            series.book_count > series.books.len(),
+            "truncation must be detectable as book_count > books.len()"
+        );
     }
 
     #[tokio::test]
