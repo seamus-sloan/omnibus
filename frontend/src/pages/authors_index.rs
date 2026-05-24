@@ -38,7 +38,7 @@ pub fn AuthorsIndexPage() -> Element {
                     authors.set(a);
                     error.set(None);
                 }
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(e.to_string())),
             }
             loading.set(false);
         });

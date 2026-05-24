@@ -51,7 +51,7 @@ pub fn BookDetailPage(id: i64) -> Element {
                     book.set(b);
                     error.set(None);
                 }
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(e.to_string())),
             }
             loading.set(false);
         });

@@ -10,6 +10,11 @@ omnibus-shared = { path = "../shared" }
 omnibus-db = { path = "../db", optional = true }
 serde.workspace = true
 serde_json = { workspace = true, optional = true }
+# Typed transport errors for the feature-gated `data` layer (#96). Always on:
+# `data::DataError` is referenced by callers under every platform feature, so
+# the derive must be available in all builds (including the no-feature
+# default-members check). Version matches `omnibus-db`.
+thiserror = "1"
 reqwest = { workspace = true, optional = true, features = ["multipart"] }
 gloo-net = { version = "0.6", default-features = false, features = ["http", "json"], optional = true }
 gloo-timers = { version = "0.3", features = ["futures"], optional = true }
