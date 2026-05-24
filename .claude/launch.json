@@ -4,8 +4,8 @@
     {
       "name": "omnibus-fullstack",
       "runtimeExecutable": "nix",
-      "runtimeArgs": ["develop", "--command", "dx", "serve", "--platform", "web", "--fullstack", "--port", "3000", "--package", "omnibus"],
-      "port": 3000
+      "runtimeArgs": ["develop", "--command", "dx", "serve", "--platform", "web", "--fullstack", "--port", "3010", "--package", "omnibus"],
+      "port": 3010
     }
   ]
 }
