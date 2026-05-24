@@ -74,7 +74,19 @@ pub fn AuthorsIndexPage() -> Element {
             .collect()
     };
     match sort() {
-        Sort::Name => filtered.sort_by_key(|a| sort_key(a).to_lowercase()),
+        // Within Sort::Name the primary axis is the sort_key bucket:
+        // alpha first (`is_alpha_bucket` → false sorts before true),
+        // non-alpha (digits, punctuation, accented mononyms, etc.)
+        // trail at the end under the '#' section. Secondary axis is
+        // the lowercased key itself so cards stay alphabetical within
+        // their letter group.
+        Sort::Name => filtered.sort_by(|a, b| {
+            let ka = sort_key(a);
+            let kb = sort_key(b);
+            is_non_alpha_key(&ka)
+                .cmp(&is_non_alpha_key(&kb))
+                .then_with(|| ka.to_lowercase().cmp(&kb.to_lowercase()))
+        }),
         Sort::BookCount => filtered.sort_by(|a, b| {
             b.book_count
                 .cmp(&a.book_count)
@@ -95,7 +107,12 @@ pub fn AuthorsIndexPage() -> Element {
             }
         }
     }
-    let alphabet: Vec<char> = ('A'..='Z').collect();
+    // Alphabet strip: A–Z followed by a single '#' bucket for any
+    // authors whose surname-equivalent doesn't start with an ASCII
+    // letter (digits, punctuation, accented mononyms, …). The '#'
+    // glyph is rendered after Z so the eye lands on the alpha range
+    // first and the long tail of edge cases sits where it expects to.
+    let alphabet: Vec<char> = ('A'..='Z').chain(std::iter::once('#')).collect();
     let present_letters: std::collections::HashSet<char> =
         letters.iter().map(|(l, _)| *l).collect();
 
@@ -257,13 +274,31 @@ fn render_author_card(a: &AuthorSummary) -> Element {
 }
 
 fn first_letter(a: &AuthorSummary) -> char {
-    sort_key(a)
+    let raw = sort_key(a)
         .chars()
         .next()
         .unwrap_or('#')
         .to_uppercase()
         .next()
-        .unwrap_or('#')
+        .unwrap_or('#');
+    // Anything not in A–Z (digits, punctuation, accented mononyms,
+    // CJK, …) collapses into a single '#' bucket rendered after Z so
+    // the alpha range stays uncluttered.
+    if raw.is_ascii_alphabetic() {
+        raw
+    } else {
+        '#'
+    }
+}
+
+/// Whether the given sort key would land in the `#` bucket rather
+/// than under A–Z. Used as the primary sort axis for `Sort::Name` so
+/// the non-alpha tail trails the alphabet.
+fn is_non_alpha_key(key: &str) -> bool {
+    !key.chars()
+        .next()
+        .map(|c| c.is_ascii_alphabetic())
+        .unwrap_or(false)
 }
 
 /// Surname-first key driving both alphabetical ordering and the letter
@@ -365,5 +400,34 @@ mod tests {
         let a = author("Ada Lovelace", Some(""));
         assert_eq!(sort_key(&a), "Lovelace, Ada");
         assert_eq!(first_letter(&a), 'L');
+    }
+
+    #[test]
+    fn first_letter_buckets_non_alpha_under_hash() {
+        // Digits, punctuation, and non-Latin scripts collapse into the
+        // single '#' section after Z. The test names use mononyms so
+        // `sort_key` doesn't pull a Latin surname out of a multi-word
+        // string (e.g. "1984 Editorial" would derive "Editorial, 1984"
+        // and land under E — which is correct, but not what this test
+        // is checking).
+        //
+        // We also avoid Latin diacritics here because their byte form
+        // depends on source-file Unicode normalization — `chars().next()`
+        // on NFD-encoded "Émile" returns plain `E`, which would land
+        // under E. Either bucket is defensible; what matters is that
+        // unambiguously-non-Latin starts land under '#'.
+        assert_eq!(first_letter(&author("1984", None)), '#');
+        assert_eq!(first_letter(&author("[Anonymous]", None)), '#');
+        assert_eq!(first_letter(&author("\u{4E2D}\u{6587}", None)), '#');
+    }
+
+    #[test]
+    fn is_non_alpha_key_classifies_keys() {
+        assert!(!is_non_alpha_key("Alcott, Louisa May"));
+        assert!(!is_non_alpha_key("zZz"));
+        assert!(is_non_alpha_key("1984"));
+        assert!(is_non_alpha_key("[Anonymous]"));
+        assert!(is_non_alpha_key("\u{4E2D}\u{6587}"));
+        assert!(is_non_alpha_key(""));
     }
 }
