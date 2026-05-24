@@ -18,7 +18,7 @@ use dioxus::prelude::*;
 use omnibus_shared::{
     AuthorDetail, AuthorPhotoScanResult, AuthorSummary, EbookLibrary, EbookMetadata,
     LibraryContents, MetadataOverrides, PaletteResults, SeriesDetail, SeriesSummary, Settings,
-    TagWeight, ValueResponse,
+    TagWeight, ValueResponse, WorkerStatus,
 };
 
 #[cfg(feature = "server")]
@@ -169,6 +169,28 @@ pub async fn rpc_save_settings(settings: Settings) -> Result<Settings> {
             .post(omnibus_db::worker::Task::Scan { library_path });
     }
     Ok(updated)
+}
+
+/// Snapshot of every in-flight and recently-completed background-worker
+/// task (F0.5). Polled at 1 Hz by the `WorkerStatusIndicator` component to
+/// surface scan / thumbnail / author-photo / (future) cleanup progress
+/// under the Save button on `/settings`.
+///
+/// Auth-gated as `AuthUser` (not `AdminUser`): scans affect the shared
+/// library and every authed user has a reason to know one is running.
+/// Worker progress snapshot for the in-page indicator.
+///
+/// Modeled on `rpc_save_settings` because both routes need the
+/// `WorkerExt` extension. Empirically the Dioxus fullstack server-fn
+/// macro mounts `#[post]` routes whose extractor list contains
+/// `WorkerExt`, but the `#[get]` variant of the same signature 404s at
+/// runtime (the route string ends up in the binary but never reaches
+/// the axum router). The body is idempotent and read-only; using POST
+/// is purely a framework workaround so the route actually mounts.
+#[post("/api/rpc/worker_status", pool: PoolExt, worker: WorkerExt, _user: AuthUser)]
+pub async fn rpc_worker_status() -> Result<WorkerStatus> {
+    let _ = &pool; // keep the extractor live so the macro emits the route
+    Ok(worker.0.progress_snapshot())
 }
 
 #[get("/api/rpc/library", pool: PoolExt, _user: AuthUser)]

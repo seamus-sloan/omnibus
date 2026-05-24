@@ -1643,3 +1643,84 @@ body.atrium,
   padding-top: 4px;
   border-top: 1px solid var(--line-2);
 }
+
+/* ===== Worker progress indicator (issue #69) ===========================
+ * Mounted on the settings form above the Save button. Inline (not sticky)
+ * so the surrounding form layout stays predictable. One row per active /
+ * recently-finished background task. New TaskKind variants (e.g. F5.9
+ * cleanup detection) inherit the same row styling for free.
+ */
+.worker-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+.worker-status-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  color: var(--ink-1);
+  font-size: 0.875rem;
+}
+.worker-status-active {
+  border-left: 3px solid var(--accent);
+}
+.worker-status-done {
+  border-left: 3px solid var(--ok);
+  color: var(--ink-0);
+}
+.worker-status-failed {
+  border-left: 3px solid var(--bad);
+  background: color-mix(in oklch, var(--bad) 8%, var(--bg-1));
+  color: var(--ink-0);
+  align-items: flex-start;
+}
+.worker-status-label {
+  flex: 1;
+  font-variant-numeric: tabular-nums;
+}
+.worker-status-icon {
+  font-weight: 700;
+  width: 18px;
+  text-align: center;
+}
+.worker-status-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.worker-status-message {
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+}
+.worker-status-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--ink-2);
+  cursor: pointer;
+  font-size: 0.875rem;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.worker-status-dismiss:hover {
+  color: var(--ink-0);
+  background: var(--bg-2);
+}
+.worker-status-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in oklch, var(--accent) 40%, transparent);
+  border-top-color: var(--accent);
+  animation: worker-status-spin 0.9s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes worker-status-spin {
+  to { transform: rotate(360deg); }
+}

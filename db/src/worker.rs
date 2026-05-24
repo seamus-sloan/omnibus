@@ -7,11 +7,21 @@
 //!   same resource key, so e.g. two scans of the same library path queue
 //!   behind each other while different paths run in parallel.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use omnibus_shared::{ProgressState, TaskKind, TaskProgress, WorkerStatus};
 use sqlx::SqlitePool;
 use tokio::sync::{watch, Mutex, Semaphore};
+
+/// How long a terminal ([`ProgressState::Done`] / [`ProgressState::Failed`])
+/// entry sticks around in [`Worker::progress_snapshot`] after its
+/// `terminal_at` timestamp before lazy eviction drops it. Long enough that
+/// a 1 Hz polling client always observes the transition; short enough that
+/// the in-memory map stays bounded by current concurrency + a handful of
+/// recently-finished tasks.
+const TERMINAL_RETENTION: Duration = Duration::from_secs(10);
 
 /// A unit of background work handed to [`Worker::post`].
 ///
@@ -83,6 +93,20 @@ impl Task {
             } => *route_through_scan_sem,
         }
     }
+
+    /// Wire-protocol discriminant exposed to the UI via
+    /// [`Worker::progress_snapshot`]. Tests deliberately collapse onto an
+    /// existing variant so the [`TaskKind`] enum doesn't grow a `Test` arm
+    /// that downstream UIs would have to render.
+    fn kind(&self) -> TaskKind {
+        match self {
+            Task::Scan { .. } => TaskKind::Scan,
+            Task::GenerateThumbs { .. } => TaskKind::GenerateThumbs,
+            Task::ResolveAuthorPhoto { .. } => TaskKind::ResolveAuthorPhoto,
+            #[cfg(test)]
+            Task::Test { .. } => TaskKind::Scan,
+        }
+    }
 }
 
 /// Process-local handle returned by [`Worker::post`], used to look up a
@@ -141,7 +165,23 @@ pub struct Worker {
     scan_sem: Arc<Semaphore>,
     resource_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     completions: Arc<StdMutex<HashMap<TaskId, watch::Receiver<Option<TaskOutcome>>>>>,
+    /// Live snapshot of every posted task's lifecycle state. Holds entries
+    /// from `post` until ~[`TERMINAL_RETENTION`] after the task reaches a
+    /// terminal state. Read path is [`Worker::progress_snapshot`]; write
+    /// paths are `post` (initial Running) and `run` (terminal Done/Failed,
+    /// plus the panic-safety guard).
+    progress: Arc<StdMutex<BTreeMap<TaskId, ProgressEntry>>>,
     next_id: std::sync::atomic::AtomicU64,
+}
+
+/// Internal pairing of the wire-facing [`TaskProgress`] with a monotonic
+/// `terminal_at` timestamp used purely for eviction. We intentionally don't
+/// reuse `TaskProgress.last_update_ms` (wall-clock; can jump under NTP) for
+/// expiry decisions — that field exists only so the UI can render elapsed
+/// time.
+struct ProgressEntry {
+    progress: TaskProgress,
+    terminal_at: Option<Instant>,
 }
 
 /// RAII guard that reclaims a `Worker::completions` slot when dropped.
@@ -166,6 +206,45 @@ impl Drop for CompletionsPruneGuard {
     }
 }
 
+/// RAII guard that records a terminal `Failed { "task panicked" }`
+/// progress entry if the spawned future unwinds before [`Worker::run`]
+/// writes one itself. Mirrors [`CompletionsPruneGuard`]'s shape — the
+/// "happy path completed first" check is the `terminal_at.is_some()`
+/// inspection so a clean run leaves the existing terminal alone.
+struct ProgressTerminalGuard {
+    progress: Arc<StdMutex<BTreeMap<TaskId, ProgressEntry>>>,
+    id: TaskId,
+}
+
+impl Drop for ProgressTerminalGuard {
+    fn drop(&mut self) {
+        if let Ok(mut map) = self.progress.lock() {
+            if let Some(entry) = map.get_mut(&self.id) {
+                if entry.terminal_at.is_none() {
+                    let now_ms = wall_clock_ms();
+                    entry.progress.state = ProgressState::Failed {
+                        message: "task panicked".to_string(),
+                    };
+                    entry.progress.last_update_ms = now_ms;
+                    entry.terminal_at = Some(Instant::now());
+                }
+            }
+        }
+    }
+}
+
+/// Current wall-clock time in milliseconds since the UNIX epoch. Used only
+/// for the `started_at_ms` / `last_update_ms` fields on [`TaskProgress`],
+/// which the UI renders as elapsed-time hints. A backward NTP step would
+/// produce a wonky elapsed-time display for one polling tick — well within
+/// the UI's tolerance.
+fn wall_clock_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 impl Worker {
     /// Build a `Worker` over `pool` with the given `config`, returning it
     /// behind an `Arc` (every method takes `&Arc<Self>` or `&self`, and
@@ -176,6 +255,7 @@ impl Worker {
             scan_sem: Arc::new(Semaphore::new(config.scan_concurrency.max(1))),
             resource_locks: Arc::new(Mutex::new(HashMap::new())),
             completions: Arc::new(StdMutex::new(HashMap::new())),
+            progress: Arc::new(StdMutex::new(BTreeMap::new())),
             next_id: std::sync::atomic::AtomicU64::new(1),
         })
     }
@@ -188,6 +268,11 @@ impl Worker {
     #[cfg(test)]
     async fn resource_locks_len(&self) -> usize {
         self.resource_locks.lock().await.len()
+    }
+
+    #[cfg(test)]
+    fn progress_len(&self) -> usize {
+        self.progress.lock().unwrap().len()
     }
 
     /// Spawn `task` and return its [`TaskId`] immediately, without waiting
@@ -208,8 +293,34 @@ impl Worker {
         let (tx, rx) = watch::channel(None);
         self.completions.lock().unwrap().insert(id, rx);
 
+        // Seed the progress map *before* spawning so a caller polling
+        // `progress_snapshot()` immediately after `post` returns always
+        // observes the task. The entry stays `Running { 0, None }` while
+        // the task queues behind the resource lock or scan semaphore,
+        // which is exactly the "queued behind another scan" state the UI
+        // wants to surface.
+        {
+            let now_ms = wall_clock_ms();
+            let entry = ProgressEntry {
+                progress: TaskProgress {
+                    task_id: id,
+                    kind: task.kind(),
+                    state: ProgressState::Running {
+                        processed: 0,
+                        total: None,
+                    },
+                    resource_key: task.resource_key(),
+                    started_at_ms: now_ms,
+                    last_update_ms: now_ms,
+                },
+                terminal_at: None,
+            };
+            self.progress.lock().unwrap().insert(id, entry);
+        }
+
         let this = self.clone();
         let completions = self.completions.clone();
+        let progress = self.progress.clone();
         tokio::spawn(async move {
             // RAII guard so the slot is reclaimed on the normal happy path
             // *and* on unwind from a panic inside `run`. Without this, a
@@ -219,8 +330,18 @@ impl Worker {
             // resolutions), which is exactly the unbounded growth this
             // refactor exists to prevent.
             let _prune = CompletionsPruneGuard { completions, id };
+            // Sister guard for the progress map: if `run` unwinds before
+            // recording its own terminal state, this writes a synthetic
+            // `Failed { "task panicked" }` so the UI's red-banner path
+            // fires the same way it does for an `Err(_)` outcome. On the
+            // happy path `run` records the real terminal and this drop is
+            // a no-op (terminal_at is already Some).
+            let _progress_guard = ProgressTerminalGuard {
+                progress: progress.clone(),
+                id,
+            };
 
-            let outcome = this.run(task).await;
+            let outcome = this.run(task, id).await;
             if let TaskOutcome::Err(ref msg) = outcome {
                 tracing::error!(
                     task_id = id,
@@ -266,7 +387,7 @@ impl Worker {
         }
     }
 
-    async fn run(self: &Arc<Self>, task: Task) -> TaskOutcome {
+    async fn run(self: &Arc<Self>, task: Task, id: TaskId) -> TaskOutcome {
         // Resource lock first, then the scan semaphore: holding a permit
         // while blocked on a per-resource mutex would let same-resource
         // queueing starve other resources from running concurrently.
@@ -286,13 +407,44 @@ impl Worker {
         let _scan_permit = if task.uses_scan_sem() {
             match self.scan_sem.clone().acquire_owned().await {
                 Ok(p) => Some(p),
-                Err(_) => return TaskOutcome::Err("scan semaphore closed".into()),
+                Err(_) => {
+                    self.write_terminal_progress(
+                        id,
+                        ProgressState::Failed {
+                            message: "scan semaphore closed".into(),
+                        },
+                    );
+                    return TaskOutcome::Err("scan semaphore closed".into());
+                }
             }
         } else {
             None
         };
 
         let outcome = self.execute(task).await;
+        // Project the outcome into the wire-facing terminal state. We pull
+        // the last reported `processed` count out of the progress map so a
+        // Phase-2 in-flight progress report stays reflected in the final
+        // `Done`. Today there is no in-flight reporter so this is always 0.
+        let terminal = match &outcome {
+            TaskOutcome::Ok => {
+                let processed = self
+                    .progress
+                    .lock()
+                    .unwrap()
+                    .get(&id)
+                    .and_then(|e| match e.progress.state {
+                        ProgressState::Running { processed, .. } => Some(processed),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
+                ProgressState::Done { processed }
+            }
+            TaskOutcome::Err(msg) => ProgressState::Failed {
+                message: msg.clone(),
+            },
+        };
+        self.write_terminal_progress(id, terminal);
 
         // Drop the resource guard before pruning so this task no longer
         // counts as a reference to the keyed mutex when we check it. Without
@@ -306,6 +458,77 @@ impl Worker {
         }
 
         outcome
+    }
+
+    /// Phase-2 seam: write the in-flight progress count for `id`. The
+    /// terminal state is written separately at the end of [`Worker::run`]
+    /// so a mid-task report can't accidentally flip a task to `Done`.
+    /// Currently unused — wired up when `indexer::reindex` learns to
+    /// thread a progress callback through its per-EPUB loop.
+    #[allow(dead_code)]
+    pub(crate) fn report_progress(&self, id: TaskId, processed: u32, total: Option<u32>) {
+        let mut map = self.progress.lock().unwrap();
+        if let Some(entry) = map.get_mut(&id) {
+            if entry.terminal_at.is_some() {
+                return; // race: terminal already recorded
+            }
+            entry.progress.state = ProgressState::Running { processed, total };
+            entry.progress.last_update_ms = wall_clock_ms();
+        }
+    }
+
+    /// Internal terminal write. Called from `run` (Ok/Err) and from the
+    /// `ProgressTerminalGuard` (panic). The `terminal_at` Instant is
+    /// monotonic so eviction is robust to wall-clock drift.
+    fn write_terminal_progress(&self, id: TaskId, state: ProgressState) {
+        let mut map = self.progress.lock().unwrap();
+        if let Some(entry) = map.get_mut(&id) {
+            entry.progress.last_update_ms = wall_clock_ms();
+            entry.progress.state = state;
+            entry.terminal_at = Some(Instant::now());
+        }
+    }
+
+    /// Snapshot of every live worker task — non-terminal entries go in
+    /// `active`, terminal entries (`Done` / `Failed`) less than
+    /// [`TERMINAL_RETENTION`] old go in `recent_complete`. Older terminal
+    /// entries are evicted under the same lock. Both vecs are sorted by
+    /// `task_id` so a polling client renders a stable list across ticks.
+    ///
+    /// Auth-gated at the RPC layer; safe to call from any handler that
+    /// already has an `AuthUser`.
+    pub fn progress_snapshot(&self) -> WorkerStatus {
+        let now = Instant::now();
+        let mut map = self.progress.lock().unwrap();
+
+        // First pass: identify expired terminals so we don't hold the
+        // iterator while mutating the map.
+        let expired: Vec<TaskId> = map
+            .iter()
+            .filter_map(|(id, entry)| match entry.terminal_at {
+                Some(at) if now.saturating_duration_since(at) >= TERMINAL_RETENTION => Some(*id),
+                _ => None,
+            })
+            .collect();
+        for id in expired {
+            map.remove(&id);
+        }
+
+        let mut active = Vec::new();
+        let mut recent_complete = Vec::new();
+        for entry in map.values() {
+            if entry.terminal_at.is_some() {
+                recent_complete.push(entry.progress.clone());
+            } else {
+                active.push(entry.progress.clone());
+            }
+        }
+        // BTreeMap iteration is already key-ordered, so both vecs come out
+        // sorted by `task_id` without an explicit sort.
+        WorkerStatus {
+            active,
+            recent_complete,
+        }
     }
 
     /// Reclaim a keyed resource mutex once no other task references it. Held
@@ -721,5 +944,184 @@ mod tests {
             w.resource_locks_len().await
         );
         assert_eq!(w.completions_len(), 0);
+    }
+
+    /// `progress_snapshot` reports every active entry as `recent_complete`
+    /// terminals are evicted lazily on read. Block the run loop with a
+    /// scan-sem-routed task so the snapshot fires before `execute` returns.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn queued_task_shows_as_running_immediately() {
+        let w = make_worker_default(pool().await);
+        let id = w.post(Task::Test {
+            tag: "queued",
+            latency_ms: 50,
+            resource: Some("queued".into()),
+            route_through_scan_sem: false,
+            on_run: None,
+            on_done: None,
+        });
+        // Snapshot before the task finishes: the entry is the initial Running.
+        let snap = w.progress_snapshot();
+        assert!(snap.recent_complete.is_empty(), "no terminals yet");
+        let entry = snap
+            .active
+            .iter()
+            .find(|p| p.task_id == id)
+            .expect("active entry seeded by post()");
+        assert!(matches!(
+            entry.state,
+            ProgressState::Running {
+                processed: 0,
+                total: None
+            }
+        ));
+        assert_eq!(entry.kind, TaskKind::Scan); // Test variant maps to Scan
+        let _ = w.await_completion(id).await;
+    }
+
+    /// Two concurrent posts both surface in the snapshot. Uses non-overlapping
+    /// resource keys so neither queues behind the other.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_tasks_show_two_active() {
+        let w = make_worker_default(pool().await);
+        let mk = |key: &'static str| {
+            w.post(Task::Test {
+                tag: key,
+                latency_ms: 80,
+                resource: Some(key.into()),
+                route_through_scan_sem: false,
+                on_run: None,
+                on_done: None,
+            })
+        };
+        let id1 = mk("aa");
+        let id2 = mk("bb");
+
+        // Briefly wait for both tasks to start. The map is seeded by `post`
+        // synchronously so this is purely guarding against a stray race where
+        // `await_completion` resolves between `post` and the snapshot below.
+        let snap = w.progress_snapshot();
+        assert_eq!(snap.active.len(), 2, "two queued tasks should be active");
+        assert!(snap.active.iter().any(|p| p.task_id == id1));
+        assert!(snap.active.iter().any(|p| p.task_id == id2));
+
+        let _ = tokio::join!(w.await_completion(id1), w.await_completion(id2));
+    }
+
+    /// A handler that returns `TaskOutcome::Err` (or panics) surfaces in
+    /// `recent_complete` with the `Failed` state and the error message.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn panic_emits_failed_state() {
+        let w = make_worker_default(pool().await);
+        let id = w.post(Task::Test {
+            tag: "panicker",
+            latency_ms: 0,
+            resource: None,
+            route_through_scan_sem: false,
+            on_run: Some(Arc::new(|| panic!("intentional test panic"))),
+            on_done: None,
+        });
+        let _ = w.await_completion(id).await;
+
+        // The spawned future has unwound and our terminal guard wrote the
+        // `Failed` state; the entry now sits in `recent_complete`.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let snap = w.progress_snapshot();
+            if let Some(p) = snap.recent_complete.iter().find(|p| p.task_id == id) {
+                match &p.state {
+                    ProgressState::Failed { message } => {
+                        assert!(
+                            message.contains("panic"),
+                            "expected panic message, got {message:?}"
+                        );
+                        return;
+                    }
+                    other => panic!("expected Failed, got {other:?}"),
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timeout waiting for failed terminal"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    /// Terminal entries get GC'd by `progress_snapshot` after the retention
+    /// window. We can't pause tokio time here because the worker uses real
+    /// `Instant::now()` for `terminal_at`, so the test cheats by sleeping
+    /// for `TERMINAL_RETENTION + a beat`. Keep the constant short in tests
+    /// — 10s is fine; bumping it would slow CI for no value.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn progress_snapshot_evicts_terminals_after_retention() {
+        let w = make_worker_default(pool().await);
+        let id = w.post(Task::Test {
+            tag: "evict",
+            latency_ms: 0,
+            resource: None,
+            route_through_scan_sem: false,
+            on_run: None,
+            on_done: None,
+        });
+        let _ = w.await_completion(id).await;
+
+        // Right after completion: present in recent_complete.
+        let snap = w.progress_snapshot();
+        assert!(snap.recent_complete.iter().any(|p| p.task_id == id));
+
+        // Sleep just past the retention window. 10s + a beat — test takes
+        // ~10s real time, which is the price of monotonic-clock GC; mock
+        // time would require threading a clock through the worker.
+        tokio::time::sleep(TERMINAL_RETENTION + Duration::from_millis(200)).await;
+        let snap2 = w.progress_snapshot();
+        assert!(
+            !snap2.recent_complete.iter().any(|p| p.task_id == id),
+            "terminal entry should be evicted after retention"
+        );
+        assert_eq!(w.progress_len(), 0, "progress map should be empty");
+    }
+
+    /// `report_progress` is the phase-2 seam used to surface per-EPUB
+    /// counts mid-scan. Exercising it here keeps it from being dropped
+    /// as dead code and pins down the "ignored after terminal" invariant.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn report_progress_updates_running_count() {
+        let w = make_worker_default(pool().await);
+        let id = w.post(Task::Test {
+            tag: "report",
+            latency_ms: 50,
+            resource: Some("report".into()),
+            route_through_scan_sem: false,
+            on_run: None,
+            on_done: None,
+        });
+        // Pretend we're mid-scan and have processed 3 of 10.
+        w.report_progress(id, 3, Some(10));
+        let snap = w.progress_snapshot();
+        let entry = snap
+            .active
+            .iter()
+            .find(|p| p.task_id == id)
+            .expect("running entry");
+        assert!(matches!(
+            entry.state,
+            ProgressState::Running {
+                processed: 3,
+                total: Some(10)
+            }
+        ));
+        let _ = w.await_completion(id).await;
+
+        // After completion, the entry is terminal and further reports are
+        // ignored (the run loop's terminal write is authoritative).
+        w.report_progress(id, 99, Some(10));
+        let snap2 = w.progress_snapshot();
+        let entry2 = snap2
+            .recent_complete
+            .iter()
+            .find(|p| p.task_id == id)
+            .expect("terminal entry");
+        assert!(matches!(entry2.state, ProgressState::Done { .. }));
     }
 }
