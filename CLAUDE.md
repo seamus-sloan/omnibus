@@ -75,7 +75,7 @@ migrations/         — numbered SQL migrations embedded via sqlx::migrate!
 
 ```
 lib.rs              — Route, App, styles, ScreenLayout (feature-gated)
-data.rs             — Feature-gated data transport (mobile=reqwest, web/server=rpc)
+data.rs             — Feature-gated data transport (mobile=reqwest, web/server=rpc); transport fns return Result<T, DataError> (thiserror enum: Network/Http/Decode/Unauthorized/Other) so the 401 path pattern-matches DataError::Unauthorized instead of re-inspecting raw status codes
 rpc.rs              — #[get]/#[post] server functions (mounted by dioxus::server::router); server bodies call into omnibus_db
 pages/{landing,settings,book_detail,metadata_edit,auth,author,authors_index,series,series_index,tag_cloud,search}.rs  — auth.rs hosts LoginPage + RegisterPage. Landing is the primary Atrium consumer (cover grid + power-user table) and the source of format-faceted filtering (ViewFilters.formats in shared). metadata_edit.rs is the F5.1 single-book edit form at /books/:id/edit. Discovery pages (author, series, tag_cloud) are F1.8. authors_index.rs and series_index.rs are the F1.12 `/authors` and `/series` browse-all index surfaces. search.rs is the full-page /search/:query results view that the F1.5 palette routes into when the user presses Enter without arrow-key navigation, or when a Tag row is selected.
 components/{top_nav,bottom_nav}.rs  — feature = web / mobile respectively

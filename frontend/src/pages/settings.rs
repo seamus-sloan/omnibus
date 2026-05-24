@@ -26,7 +26,7 @@ pub fn SettingsPage() -> Element {
                     audiobook_path.set(settings.audiobook_library_path.unwrap_or_default());
                 }
                 Err(e) => {
-                    status.set(Some(e));
+                    status.set(Some(e.to_string()));
                     status_is_error.set(true);
                 }
             }

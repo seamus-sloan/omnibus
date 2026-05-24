@@ -43,7 +43,7 @@ pub fn LandingPage() -> Element {
                     library.set(lib);
                     error.set(None);
                 }
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(e.to_string())),
             }
             loading.set(false);
         });

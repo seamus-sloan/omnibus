@@ -18,6 +18,56 @@ use omnibus_shared::{
 #[cfg(any(feature = "web", feature = "mobile"))]
 use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};
 
+// ===== Typed transport error (#96) =====
+//
+// Replaces the previous `Result<T, String>` everywhere in this module so
+// callers can distinguish failure modes by type — most importantly
+// `Unauthorized`, which the mobile 401 handler and the web router both key
+// on. The variants that carry a foreign error type (`reqwest`, `serde_json`)
+// are feature-gated to match the optional deps that provide them: `reqwest`
+// is mobile-only, `serde_json` is web+mobile. `Unauthorized`, `Http`, and
+// the `Other` catch-all are always present so the enum's public shape is
+// stable across every build that compiles the callers.
+
+/// Errors surfaced by the feature-gated data transport.
+#[derive(Debug, thiserror::Error)]
+pub enum DataError {
+    /// Transport-level failure (connect/timeout/TLS). Mobile-only because
+    /// `reqwest` is only linked under `feature = "mobile"`.
+    #[cfg(feature = "mobile")]
+    #[error("network error: {0}")]
+    Network(#[from] reqwest::Error),
+    /// The server responded with a non-success status (other than 401, which
+    /// maps to [`DataError::Unauthorized`]). `body` carries the server's
+    /// diagnostic text so callers that surface it — e.g. the register-error
+    /// classifier — keep working.
+    #[error("server returned {status}")]
+    Http { status: u16, body: String },
+    /// Response body could not be deserialized into the expected type.
+    #[cfg(any(feature = "mobile", feature = "web"))]
+    #[error("response deserialization failed: {0}")]
+    Decode(#[from] serde_json::Error),
+    /// Authentication failed (HTTP 401). Distinct variant so the 401 →
+    /// clear-token → redirect-to-/login flow can pattern-match instead of
+    /// re-inspecting a raw status code.
+    #[error("unauthorized")]
+    Unauthorized,
+    /// Catch-all for transport paths that don't carry a typed source —
+    /// the web server-function client (whose error is already stringified
+    /// by `note_server_fn_err`), the `gloo-net` web/SSR stubs, and a couple
+    /// of protocol invariants (missing JSON field, absent bearer token).
+    #[error("{0}")]
+    Other(String),
+}
+
+impl DataError {
+    /// `true` when this represents an authentication failure. Lets callers
+    /// branch on auth without depending on a specific HTTP code.
+    pub fn is_unauthorized(&self) -> bool {
+        matches!(self, DataError::Unauthorized)
+    }
+}
+
 // ===== Mobile transport: reqwest =====
 
 #[cfg(feature = "mobile")]
@@ -342,118 +392,103 @@ fn note_status(status: reqwest::StatusCode) -> reqwest::StatusCode {
     status
 }
 
-/// Drain the response body and format an error string. Always reading the
-/// body — even on the error path — lets reqwest return the underlying TCP
+/// Map a non-success response into a typed [`DataError`]. A 401 becomes
+/// [`DataError::Unauthorized`] (so callers can pattern-match the auth path);
+/// everything else drains the body into [`DataError::Http`]. Always reading
+/// the body — even on the error path — lets reqwest return the underlying TCP
 /// connection to its pool instead of dropping it mid-stream, and folds the
-/// server's diagnostic text into the user-visible error.
+/// server's diagnostic text into the structured error.
+///
+/// Precondition: only call on a non-success status. `note_status` has already
+/// cleared the bearer token by the time we land here on a 401.
 #[cfg(feature = "mobile")]
-async fn drain_error(response: reqwest::Response, status: reqwest::StatusCode) -> String {
+async fn drain_error(response: reqwest::Response, status: reqwest::StatusCode) -> DataError {
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return DataError::Unauthorized;
+    }
     let body = response.text().await.unwrap_or_default();
-    if body.is_empty() {
-        format!("Server error: {status}")
-    } else {
-        format!("Server error {status}: {body}")
+    DataError::Http {
+        status: status.as_u16(),
+        body,
     }
 }
 
 #[cfg(feature = "mobile")]
-pub async fn get_value(server_url: &str) -> Result<i64, String> {
+pub async fn get_value(server_url: &str) -> Result<i64, DataError> {
     let url = format!("{server_url}/api/value");
-    let response = with_bearer(http_client().get(&url))
-        .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    let payload: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    let payload: serde_json::Value = response.json().await?;
     payload["value"]
         .as_i64()
-        .ok_or_else(|| "missing value field".into())
+        .ok_or_else(|| DataError::Other("missing value field".into()))
 }
 
 #[cfg(feature = "mobile")]
-pub async fn post_increment(server_url: &str) -> Result<i64, String> {
+pub async fn post_increment(server_url: &str) -> Result<i64, DataError> {
     let url = format!("{server_url}/api/value/increment");
-    let response = with_bearer(http_client().post(&url))
-        .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let response = with_bearer(http_client().post(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    let payload: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    let payload: serde_json::Value = response.json().await?;
     payload["value"]
         .as_i64()
-        .ok_or_else(|| "missing value field".into())
+        .ok_or_else(|| DataError::Other("missing value field".into()))
 }
 
 #[cfg(feature = "mobile")]
-pub async fn get_settings(server_url: &str) -> Result<Settings, String> {
+pub async fn get_settings(server_url: &str) -> Result<Settings, DataError> {
     let url = format!("{server_url}/api/settings");
-    let response = with_bearer(http_client().get(&url))
-        .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    response.json::<Settings>().await.map_err(|e| e.to_string())
+    Ok(response.json::<Settings>().await?)
 }
 
 #[cfg(feature = "mobile")]
-pub async fn save_settings(server_url: &str, settings: Settings) -> Result<Settings, String> {
+pub async fn save_settings(server_url: &str, settings: Settings) -> Result<Settings, DataError> {
     let url = format!("{server_url}/api/settings");
     let response = with_bearer(http_client().post(&url).json(&settings))
         .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+        .await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    response.json::<Settings>().await.map_err(|e| e.to_string())
+    Ok(response.json::<Settings>().await?)
 }
 
 #[cfg(feature = "mobile")]
-pub async fn get_library(server_url: &str) -> Result<LibraryContents, String> {
+pub async fn get_library(server_url: &str) -> Result<LibraryContents, DataError> {
     let url = format!("{server_url}/api/library");
-    let response = with_bearer(http_client().get(&url))
-        .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    response
-        .json::<LibraryContents>()
-        .await
-        .map_err(|e| e.to_string())
+    Ok(response.json::<LibraryContents>().await?)
 }
 
 #[cfg(feature = "mobile")]
-pub async fn get_ebooks(server_url: &str) -> Result<EbookLibrary, String> {
+pub async fn get_ebooks(server_url: &str) -> Result<EbookLibrary, DataError> {
     let url = format!("{server_url}/api/ebooks");
-    let response = with_bearer(http_client().get(&url))
-        .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    response
-        .json::<EbookLibrary>()
-        .await
-        .map_err(|e| e.to_string())
+    Ok(response.json::<EbookLibrary>().await?)
 }
 
 #[cfg(feature = "mobile")]
-pub async fn search_ebooks(server_url: &str, q: &str) -> Result<EbookLibrary, String> {
+pub async fn search_ebooks(server_url: &str, q: &str) -> Result<EbookLibrary, DataError> {
     // Percent-encode the query so FTS5 operators and whitespace survive the
     // URL.
     let encoded: String = q
@@ -466,23 +501,17 @@ pub async fn search_ebooks(server_url: &str, q: &str) -> Result<EbookLibrary, St
         })
         .collect();
     let url = format!("{server_url}/api/search?q={encoded}");
-    let response = with_bearer(http_client().get(&url))
-        .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    response
-        .json::<EbookLibrary>()
-        .await
-        .map_err(|e| e.to_string())
+    Ok(response.json::<EbookLibrary>().await?)
 }
 
 /// Search palette — grouped results for the command-palette overlay (F1.5).
 #[cfg(feature = "mobile")]
-pub async fn search_palette(server_url: &str, q: &str) -> Result<PaletteResults, String> {
+pub async fn search_palette(server_url: &str, q: &str) -> Result<PaletteResults, DataError> {
     let encoded: String = q
         .bytes()
         .map(|b| match b {
@@ -493,27 +522,18 @@ pub async fn search_palette(server_url: &str, q: &str) -> Result<PaletteResults,
         })
         .collect();
     let url = format!("{server_url}/api/search/palette?q={encoded}");
-    let response = with_bearer(http_client().get(&url))
-        .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    response
-        .json::<PaletteResults>()
-        .await
-        .map_err(|e| e.to_string())
+    Ok(response.json::<PaletteResults>().await?)
 }
 
 #[cfg(feature = "mobile")]
-pub async fn get_ebook(server_url: &str, id: i64) -> Result<Option<EbookMetadata>, String> {
+pub async fn get_ebook(server_url: &str, id: i64) -> Result<Option<EbookMetadata>, DataError> {
     let url = format!("{server_url}/api/ebooks/{id}");
-    let response = with_bearer(http_client().get(&url))
-        .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
     if status == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
@@ -521,20 +541,13 @@ pub async fn get_ebook(server_url: &str, id: i64) -> Result<Option<EbookMetadata
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    response
-        .json::<EbookMetadata>()
-        .await
-        .map(Some)
-        .map_err(|e| e.to_string())
+    Ok(Some(response.json::<EbookMetadata>().await?))
 }
 
 #[cfg(feature = "mobile")]
-pub async fn get_author(server_url: &str, id: i64) -> Result<Option<AuthorDetail>, String> {
+pub async fn get_author(server_url: &str, id: i64) -> Result<Option<AuthorDetail>, DataError> {
     let url = format!("{server_url}/api/authors/{id}");
-    let response = with_bearer(http_client().get(&url))
-        .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
     if status == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
@@ -542,23 +555,18 @@ pub async fn get_author(server_url: &str, id: i64) -> Result<Option<AuthorDetail
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    response
-        .json::<AuthorDetail>()
-        .await
-        .map(Some)
-        .map_err(|e| e.to_string())
+    Ok(Some(response.json::<AuthorDetail>().await?))
 }
 
 /// F1.11 follow-up: persist an author photo by URL. Server fetches and
 /// validates the URL — see `db::author_photos::fetch_remote_image`.
 #[cfg(feature = "mobile")]
-pub async fn set_author_photo_url(server_url: &str, id: i64, url: String) -> Result<(), String> {
+pub async fn set_author_photo_url(server_url: &str, id: i64, url: String) -> Result<(), DataError> {
     let endpoint = format!("{server_url}/api/authors/{id}/photo/url");
     let response = with_bearer(http_client().put(&endpoint))
         .json(&serde_json::json!({ "url": url }))
         .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+        .await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
@@ -575,18 +583,16 @@ pub async fn upload_author_photo(
     filename: String,
     mime: String,
     bytes: Vec<u8>,
-) -> Result<(), String> {
+) -> Result<(), DataError> {
     let endpoint = format!("{server_url}/api/authors/{id}/photo");
     let part = reqwest::multipart::Part::bytes(bytes)
         .file_name(filename)
-        .mime_str(&mime)
-        .map_err(|e| format!("{e:#}"))?;
+        .mime_str(&mime)?;
     let form = reqwest::multipart::Form::new().part("photo", part);
     let response = with_bearer(http_client().put(&endpoint))
         .multipart(form)
         .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+        .await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
@@ -597,29 +603,23 @@ pub async fn upload_author_photo(
 /// F1.11: admin "Scan for picture" — synchronously re-runs the Open Library
 /// cascade and returns whether a photo was found.
 #[cfg(feature = "mobile")]
-pub async fn scan_author_photo(server_url: &str, id: i64) -> Result<AuthorPhotoScanResult, String> {
+pub async fn scan_author_photo(
+    server_url: &str,
+    id: i64,
+) -> Result<AuthorPhotoScanResult, DataError> {
     let url = format!("{server_url}/api/authors/{id}/photo/scan");
-    let response = with_bearer(http_client().post(&url))
-        .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let response = with_bearer(http_client().post(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    response
-        .json::<AuthorPhotoScanResult>()
-        .await
-        .map_err(|e| e.to_string())
+    Ok(response.json::<AuthorPhotoScanResult>().await?)
 }
 
 #[cfg(feature = "mobile")]
-pub async fn get_series(server_url: &str, id: i64) -> Result<Option<SeriesDetail>, String> {
+pub async fn get_series(server_url: &str, id: i64) -> Result<Option<SeriesDetail>, DataError> {
     let url = format!("{server_url}/api/series/{id}");
-    let response = with_bearer(http_client().get(&url))
-        .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
     if status == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
@@ -627,62 +627,40 @@ pub async fn get_series(server_url: &str, id: i64) -> Result<Option<SeriesDetail
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    response
-        .json::<SeriesDetail>()
-        .await
-        .map(Some)
-        .map_err(|e| e.to_string())
+    Ok(Some(response.json::<SeriesDetail>().await?))
 }
 
 #[cfg(feature = "mobile")]
-pub async fn list_authors(server_url: &str) -> Result<Vec<AuthorSummary>, String> {
+pub async fn list_authors(server_url: &str) -> Result<Vec<AuthorSummary>, DataError> {
     let url = format!("{server_url}/api/authors");
-    let response = with_bearer(http_client().get(&url))
-        .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    response
-        .json::<Vec<AuthorSummary>>()
-        .await
-        .map_err(|e| e.to_string())
+    Ok(response.json::<Vec<AuthorSummary>>().await?)
 }
 
 #[cfg(feature = "mobile")]
-pub async fn list_series(server_url: &str) -> Result<Vec<SeriesSummary>, String> {
+pub async fn list_series(server_url: &str) -> Result<Vec<SeriesSummary>, DataError> {
     let url = format!("{server_url}/api/series");
-    let response = with_bearer(http_client().get(&url))
-        .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    response
-        .json::<Vec<SeriesSummary>>()
-        .await
-        .map_err(|e| e.to_string())
+    Ok(response.json::<Vec<SeriesSummary>>().await?)
 }
 
 #[cfg(feature = "mobile")]
-pub async fn get_tag_cloud(server_url: &str) -> Result<Vec<TagWeight>, String> {
+pub async fn get_tag_cloud(server_url: &str) -> Result<Vec<TagWeight>, DataError> {
     let url = format!("{server_url}/api/tags");
-    let response = with_bearer(http_client().get(&url))
-        .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    response
-        .json::<Vec<TagWeight>>()
-        .await
-        .map_err(|e| e.to_string())
+    Ok(response.json::<Vec<TagWeight>>().await?)
 }
 
 #[cfg(feature = "mobile")]
@@ -690,40 +668,31 @@ pub async fn save_overrides(
     server_url: &str,
     id: i64,
     overrides: &MetadataOverrides,
-) -> Result<Option<EbookMetadata>, String> {
+) -> Result<Option<EbookMetadata>, DataError> {
     let url = format!("{server_url}/api/ebooks/{id}/overrides");
     let response = with_bearer(http_client().post(&url))
         .json(overrides)
         .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+        .await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    response
-        .json::<EbookMetadata>()
-        .await
-        .map(Some)
-        .map_err(|e| e.to_string())
+    Ok(Some(response.json::<EbookMetadata>().await?))
 }
 
 #[cfg(feature = "mobile")]
-pub async fn delete_overrides(server_url: &str, id: i64) -> Result<Option<EbookMetadata>, String> {
+pub async fn delete_overrides(
+    server_url: &str,
+    id: i64,
+) -> Result<Option<EbookMetadata>, DataError> {
     let url = format!("{server_url}/api/ebooks/{id}/overrides/delete");
-    let response = with_bearer(http_client().post(&url))
-        .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let response = with_bearer(http_client().post(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    response
-        .json::<EbookMetadata>()
-        .await
-        .map(Some)
-        .map_err(|e| e.to_string())
+    Ok(Some(response.json::<EbookMetadata>().await?))
 }
 
 // ===== Mobile auth transport: bearer token =====
@@ -740,7 +709,7 @@ pub async fn mobile_login(
     username: String,
     password: String,
     device_name: Option<String>,
-) -> Result<UserSummary, String> {
+) -> Result<UserSummary, DataError> {
     let req = LoginRequest {
         username,
         password,
@@ -757,7 +726,7 @@ pub async fn mobile_register(
     username: String,
     password: String,
     device_name: Option<String>,
-) -> Result<UserSummary, String> {
+) -> Result<UserSummary, DataError> {
     let req = RegisterRequest {
         username,
         password,
@@ -774,16 +743,18 @@ pub async fn mobile_register(
 /// `client_kind` discriminator was missed server-side, which we want to
 /// fail loudly rather than silently degrade to a no-auth state.
 #[cfg(feature = "mobile")]
-fn finish_bearer_auth(resp: LoginResponse) -> Result<UserSummary, String> {
+fn finish_bearer_auth(resp: LoginResponse) -> Result<UserSummary, DataError> {
     let Some(token) = resp.token else {
-        return Err("server did not issue a bearer token".into());
+        return Err(DataError::Other(
+            "server did not issue a bearer token".into(),
+        ));
     };
     token_store::set(token);
     Ok(resp.user)
 }
 
 #[cfg(feature = "mobile")]
-pub async fn mobile_logout(server_url: &str) -> Result<(), String> {
+pub async fn mobile_logout(server_url: &str) -> Result<(), DataError> {
     // Best-effort server revocation, then always clear the local token so a
     // network failure can't leave the device wedged in a "logged in" state.
     let url = format!("{server_url}/api/auth/logout");
@@ -797,23 +768,19 @@ async fn post_mobile_auth<T: serde::Serialize>(
     server_url: &str,
     path: &str,
     body: &T,
-) -> Result<LoginResponse, String> {
+) -> Result<LoginResponse, DataError> {
     let url = format!("{server_url}{path}");
-    let response = http_client()
-        .post(&url)
-        .json(body)
-        .send()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let response = http_client().post(&url).json(body).send().await?;
     let status = response.status();
     if !status.is_success() {
-        let msg = response.text().await.unwrap_or_default();
-        return Err(format!("{status}: {msg}"));
+        // Auth failures arrive here as the server's chosen status (400 bad
+        // credentials, 409 duplicate username, …); 401 maps to the typed
+        // `Unauthorized` variant for symmetry with `drain_error`. The body
+        // is preserved in `Http` so the register-error classifier can still
+        // route "username"/"password" diagnostics to the right field.
+        return Err(drain_error(response, status).await);
     }
-    response
-        .json::<LoginResponse>()
-        .await
-        .map_err(|e| e.to_string())
+    Ok(response.json::<LoginResponse>().await?)
 }
 
 // ===== Web auth state =====
@@ -864,12 +831,13 @@ pub mod web_auth_state {
 /// Inspect a server-function error (Dioxus wraps it in `CapturedError`,
 /// which holds an `Arc<anyhow::Error>`) and — on the web client — ping
 /// `web_auth_state` if the underlying `ServerFnError` carries a 401
-/// status code. Returns the stringified error the previous
-/// `.map_err(|e| e.to_string())` produced so callers don't need to
-/// change their error type. SSR builds (cfg(not(feature = "web"))) just
-/// stringify — there's no client to redirect.
+/// status code. Maps the error into a [`DataError`]: a 401 becomes
+/// [`DataError::Unauthorized`] (so the web side can pattern-match the auth
+/// path the same way mobile does), and any other failure is preserved as a
+/// stringified [`DataError::Other`]. SSR builds (cfg(not(feature = "web")))
+/// skip the redirect ping — there's no client to redirect.
 #[cfg(not(feature = "mobile"))]
-fn note_server_fn_err(e: dioxus::CapturedError) -> String {
+fn note_server_fn_err(e: dioxus::CapturedError) -> DataError {
     if let Some(sfn_err) = e.0.downcast_ref::<dioxus::fullstack::ServerFnError>() {
         let code = match sfn_err {
             dioxus::fullstack::ServerFnError::ServerError { code, .. } => *code,
@@ -878,9 +846,10 @@ fn note_server_fn_err(e: dioxus::CapturedError) -> String {
         if code == 401 {
             #[cfg(feature = "web")]
             web_auth_state::notify_unauthorized();
+            return DataError::Unauthorized;
         }
     }
-    e.to_string()
+    DataError::Other(e.to_string())
 }
 
 // ===== Web / fullstack-SSR transport: dioxus-fullstack server functions =====
@@ -889,7 +858,7 @@ fn note_server_fn_err(e: dioxus::CapturedError) -> String {
 // page origin. We keep the parameter so the call sites stay platform-agnostic.
 
 #[cfg(not(feature = "mobile"))]
-pub async fn get_value(_server_url: &str) -> Result<i64, String> {
+pub async fn get_value(_server_url: &str) -> Result<i64, DataError> {
     match crate::rpc::rpc_get_value().await {
         Ok(payload) => Ok(payload.value),
         Err(e) => Err(note_server_fn_err(e)),
@@ -897,7 +866,7 @@ pub async fn get_value(_server_url: &str) -> Result<i64, String> {
 }
 
 #[cfg(not(feature = "mobile"))]
-pub async fn post_increment(_server_url: &str) -> Result<i64, String> {
+pub async fn post_increment(_server_url: &str) -> Result<i64, DataError> {
     match crate::rpc::rpc_increment_value().await {
         Ok(payload) => Ok(payload.value),
         Err(e) => Err(note_server_fn_err(e)),
@@ -905,35 +874,35 @@ pub async fn post_increment(_server_url: &str) -> Result<i64, String> {
 }
 
 #[cfg(not(feature = "mobile"))]
-pub async fn get_settings(_server_url: &str) -> Result<Settings, String> {
+pub async fn get_settings(_server_url: &str) -> Result<Settings, DataError> {
     crate::rpc::rpc_get_settings()
         .await
         .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
-pub async fn save_settings(_server_url: &str, settings: Settings) -> Result<Settings, String> {
+pub async fn save_settings(_server_url: &str, settings: Settings) -> Result<Settings, DataError> {
     crate::rpc::rpc_save_settings(settings)
         .await
         .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
-pub async fn get_library(_server_url: &str) -> Result<LibraryContents, String> {
+pub async fn get_library(_server_url: &str) -> Result<LibraryContents, DataError> {
     crate::rpc::rpc_get_library()
         .await
         .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
-pub async fn get_ebooks(_server_url: &str) -> Result<EbookLibrary, String> {
+pub async fn get_ebooks(_server_url: &str) -> Result<EbookLibrary, DataError> {
     crate::rpc::rpc_get_ebooks()
         .await
         .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
-pub async fn search_ebooks(_server_url: &str, q: &str) -> Result<EbookLibrary, String> {
+pub async fn search_ebooks(_server_url: &str, q: &str) -> Result<EbookLibrary, DataError> {
     crate::rpc::rpc_search(q.to_string())
         .await
         .map_err(note_server_fn_err)
@@ -941,21 +910,21 @@ pub async fn search_ebooks(_server_url: &str, q: &str) -> Result<EbookLibrary, S
 
 /// Search palette — grouped results for the command-palette overlay (F1.5).
 #[cfg(not(feature = "mobile"))]
-pub async fn search_palette(_server_url: &str, q: &str) -> Result<PaletteResults, String> {
+pub async fn search_palette(_server_url: &str, q: &str) -> Result<PaletteResults, DataError> {
     crate::rpc::rpc_search_palette(q.to_string())
         .await
         .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
-pub async fn get_ebook(_server_url: &str, id: i64) -> Result<Option<EbookMetadata>, String> {
+pub async fn get_ebook(_server_url: &str, id: i64) -> Result<Option<EbookMetadata>, DataError> {
     crate::rpc::rpc_get_ebook(id)
         .await
         .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
-pub async fn get_author(_server_url: &str, id: i64) -> Result<Option<AuthorDetail>, String> {
+pub async fn get_author(_server_url: &str, id: i64) -> Result<Option<AuthorDetail>, DataError> {
     crate::rpc::rpc_get_author(id)
         .await
         .map_err(note_server_fn_err)
@@ -965,7 +934,7 @@ pub async fn get_author(_server_url: &str, id: i64) -> Result<Option<AuthorDetai
 pub async fn scan_author_photo(
     _server_url: &str,
     id: i64,
-) -> Result<AuthorPhotoScanResult, String> {
+) -> Result<AuthorPhotoScanResult, DataError> {
     crate::rpc::rpc_scan_author_photo(id)
         .await
         .map_err(note_server_fn_err)
@@ -975,7 +944,11 @@ pub async fn scan_author_photo(
 /// `#[post]` server function in `rpc.rs`, which performs the server-side
 /// fetch + validation and writes a `manual` row.
 #[cfg(not(feature = "mobile"))]
-pub async fn set_author_photo_url(_server_url: &str, id: i64, url: String) -> Result<(), String> {
+pub async fn set_author_photo_url(
+    _server_url: &str,
+    id: i64,
+    url: String,
+) -> Result<(), DataError> {
     crate::rpc::rpc_set_author_photo_url(id, url)
         .await
         .map_err(note_server_fn_err)
@@ -996,12 +969,13 @@ pub async fn upload_author_photo(
     filename: String,
     mime: String,
     bytes: Vec<u8>,
-) -> Result<(), String> {
+) -> Result<(), DataError> {
     use gloo_net::http::Request;
     use wasm_bindgen::JsCast;
 
     let endpoint = format!("/api/authors/{id}/photo");
-    let form = web_sys::FormData::new().map_err(|e| format!("FormData::new: {e:?}"))?;
+    let form =
+        web_sys::FormData::new().map_err(|e| DataError::Other(format!("FormData::new: {e:?}")))?;
     // `Blob` ctor wants a `&Array` of `BufferSource | BlobPart` parts —
     // build a one-element Uint8Array, drop it into a JS Array, then hand
     // that to `Blob::new_with_u8_array_sequence_and_options`.
@@ -1011,27 +985,27 @@ pub async fn upload_author_photo(
     let mut opts = web_sys::BlobPropertyBag::new();
     opts.type_(&mime);
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts)
-        .map_err(|e| format!("Blob::new: {e:?}"))?;
+        .map_err(|e| DataError::Other(format!("Blob::new: {e:?}")))?;
     form.append_with_blob_and_filename("photo", &blob, &filename)
-        .map_err(|e| format!("FormData::append: {e:?}"))?;
+        .map_err(|e| DataError::Other(format!("FormData::append: {e:?}")))?;
 
     let res = Request::put(&endpoint)
         // gloo-net's `body` takes anything `Into<JsValue>` — FormData
         // satisfies that via its JsCast impl. Don't set Content-Type:
         // the browser fills it in with the multipart boundary.
         .body(form.unchecked_into::<wasm_bindgen::JsValue>())
-        .map_err(|e| e.to_string())?
+        .map_err(|e| DataError::Other(e.to_string()))?
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| DataError::Other(e.to_string()))?;
     if res.status() == 401 {
         web_auth_state::notify_unauthorized();
-        return Err("unauthorized".into());
+        return Err(DataError::Unauthorized);
     }
     if !res.ok() {
         let status = res.status();
-        let msg = res.text().await.unwrap_or_default();
-        return Err(format!("upload failed ({status}): {msg}"));
+        let body = res.text().await.unwrap_or_default();
+        return Err(DataError::Http { status, body });
     }
     Ok(())
 }
@@ -1047,33 +1021,35 @@ pub async fn upload_author_photo(
     _filename: String,
     _mime: String,
     _bytes: Vec<u8>,
-) -> Result<(), String> {
-    Err("upload not available in this build".into())
+) -> Result<(), DataError> {
+    Err(DataError::Other(
+        "upload not available in this build".into(),
+    ))
 }
 
 #[cfg(not(feature = "mobile"))]
-pub async fn get_series(_server_url: &str, id: i64) -> Result<Option<SeriesDetail>, String> {
+pub async fn get_series(_server_url: &str, id: i64) -> Result<Option<SeriesDetail>, DataError> {
     crate::rpc::rpc_get_series(id)
         .await
         .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
-pub async fn get_tag_cloud(_server_url: &str) -> Result<Vec<TagWeight>, String> {
+pub async fn get_tag_cloud(_server_url: &str) -> Result<Vec<TagWeight>, DataError> {
     crate::rpc::rpc_get_tag_cloud()
         .await
         .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
-pub async fn list_authors(_server_url: &str) -> Result<Vec<AuthorSummary>, String> {
+pub async fn list_authors(_server_url: &str) -> Result<Vec<AuthorSummary>, DataError> {
     crate::rpc::rpc_list_authors()
         .await
         .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
-pub async fn list_series(_server_url: &str) -> Result<Vec<SeriesSummary>, String> {
+pub async fn list_series(_server_url: &str) -> Result<Vec<SeriesSummary>, DataError> {
     crate::rpc::rpc_list_series()
         .await
         .map_err(note_server_fn_err)
@@ -1084,14 +1060,17 @@ pub async fn save_overrides(
     _server_url: &str,
     id: i64,
     overrides: &MetadataOverrides,
-) -> Result<Option<EbookMetadata>, String> {
+) -> Result<Option<EbookMetadata>, DataError> {
     crate::rpc::rpc_save_overrides(id, overrides.clone())
         .await
         .map_err(note_server_fn_err)
 }
 
 #[cfg(not(feature = "mobile"))]
-pub async fn delete_overrides(_server_url: &str, id: i64) -> Result<Option<EbookMetadata>, String> {
+pub async fn delete_overrides(
+    _server_url: &str,
+    id: i64,
+) -> Result<Option<EbookMetadata>, DataError> {
     crate::rpc::rpc_delete_overrides(id)
         .await
         .map_err(note_server_fn_err)
@@ -1179,4 +1158,34 @@ async fn post_auth_json<T: serde::Serialize>(
         return Err(format!("{status}: {msg}"));
     }
     res.json::<LoginResponse>().await.map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unauthorized_reports_is_unauthorized() {
+        assert!(DataError::Unauthorized.is_unauthorized());
+        assert_eq!(DataError::Unauthorized.to_string(), "unauthorized");
+    }
+
+    #[test]
+    fn http_carries_status_and_is_not_unauthorized() {
+        let err = DataError::Http {
+            status: 400,
+            body: "bad request".into(),
+        };
+        assert!(!err.is_unauthorized());
+        // Display intentionally omits the body — callers that need it match
+        // on the `Http { body, .. }` variant directly.
+        assert_eq!(err.to_string(), "server returned 400");
+    }
+
+    #[test]
+    fn other_round_trips_its_message() {
+        let err = DataError::Other("missing value field".into());
+        assert!(!err.is_unauthorized());
+        assert_eq!(err.to_string(), "missing value field");
+    }
 }

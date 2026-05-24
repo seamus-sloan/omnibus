@@ -37,7 +37,7 @@ pub fn MetadataEditPage(id: i64) -> Element {
                     book.set(b);
                     error.set(None);
                 }
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(e.to_string())),
             }
             loading.set(false);
         });
@@ -465,7 +465,7 @@ fn MetadataEditForm(book: EbookMetadata, id: i64) -> Element {
                                                     let nav = navigator();
                                                     nav.push(Route::BookDetail { id });
                                                 }
-                                                Err(e) => save_error.set(Some(e)),
+                                                Err(e) => save_error.set(Some(e.to_string())),
                                             }
                                             saving.set(false);
                                         });
@@ -541,7 +541,7 @@ fn MetadataEditForm(book: EbookMetadata, id: i64) -> Element {
                                             let nav = navigator();
                                             nav.push(Route::BookDetail { id });
                                         }
-                                        Err(e) => save_error.set(Some(e)),
+                                        Err(e) => save_error.set(Some(e.to_string())),
                                     }
                                     saving.set(false);
                                 });

@@ -470,6 +470,7 @@ async fn submit_login(server_url: &str, username: String, password: String) -> R
     crate::data::mobile_login(server_url, username, password, default_device_name())
         .await
         .map(|_| ())
+        .map_err(data_error_message)
 }
 
 #[cfg(feature = "mobile")]
@@ -481,6 +482,23 @@ async fn submit_register(
     crate::data::mobile_register(server_url, username, password, default_device_name())
         .await
         .map(|_| ())
+        .map_err(data_error_message)
+}
+
+/// Flatten a [`crate::data::DataError`] into the user-facing string the auth
+/// pages surface. For an HTTP failure we splice the server's diagnostic body
+/// back in — `DataError`'s own `Display` deliberately omits it, but the
+/// register-error classifier keys on "username"/"password" substrings, so the
+/// mobile path must keep the body to route field errors correctly (mirrors
+/// the pre-#96 `"{status}: {body}"` string).
+#[cfg(feature = "mobile")]
+fn data_error_message(err: crate::data::DataError) -> String {
+    match err {
+        crate::data::DataError::Http { status, body } if !body.is_empty() => {
+            format!("{status}: {body}")
+        }
+        other => other.to_string(),
+    }
 }
 
 /// Best-effort device name for the bearer-login `device_name` field. The
@@ -596,5 +614,39 @@ mod tests {
             RegisterError::Other(m) => assert_eq!(m, "500: internal server error"),
             other => panic!("expected Other variant, got {other:?}"),
         }
+    }
+
+    // `data_error_message` must keep the HTTP body so the register-error
+    // classifier can still route field errors on the mobile path. Without
+    // the body, `DataError`'s own Display ("server returned 400") would
+    // strand every server diagnostic in the `Other` bucket.
+    #[cfg(feature = "mobile")]
+    #[test]
+    fn data_error_message_preserves_http_body_for_classification() {
+        let msg = data_error_message(crate::data::DataError::Http {
+            status: 409,
+            body: "username already exists".into(),
+        });
+        assert_eq!(msg, "409: username already exists");
+        assert!(matches!(
+            classify_register_error(&msg),
+            RegisterError::Username(_)
+        ));
+    }
+
+    #[cfg(feature = "mobile")]
+    #[test]
+    fn data_error_message_falls_back_to_display_without_body() {
+        assert_eq!(
+            data_error_message(crate::data::DataError::Unauthorized),
+            "unauthorized"
+        );
+        assert_eq!(
+            data_error_message(crate::data::DataError::Http {
+                status: 500,
+                body: String::new(),
+            }),
+            "server returned 500"
+        );
     }
 }
