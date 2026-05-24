@@ -321,30 +321,49 @@ async fn prune_orphan_libraries(
         return Ok(Vec::new());
     }
 
+    let orphan_ids: Vec<i64> = orphans.iter().map(|(id, _)| *id).collect();
+
+    // Collect every orphaned book's cover UUID in a single `IN (...)` query
+    // instead of one `SELECT` per library — the cleanup branch runs on every
+    // reindex (via `set_settings`/`replace_books`), so the per-library
+    // round-trip was an N+1 that degrades linearly with the number of
+    // accumulated orphans (#149). We chunk on SQLite's 999-parameter bind
+    // limit, matching the `load_overrides_bulk` batching introduced in #77.
     let mut orphan_uuids: Vec<String> = Vec::new();
-    for (id, _) in &orphans {
-        let mut uuids: Vec<String> =
-            sqlx::query_scalar("SELECT uuid FROM books WHERE library_id = ?")
-                .bind(id)
-                .fetch_all(&mut **tx)
-                .await?;
+    for chunk in orphan_ids.chunks(500) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+
+        let select_sql = format!("SELECT uuid FROM books WHERE library_id IN ({placeholders})");
+        let mut select = sqlx::query_scalar::<_, String>(&select_sql);
+        for id in chunk {
+            select = select.bind(id);
+        }
+        let mut uuids = select.fetch_all(&mut **tx).await?;
         orphan_uuids.append(&mut uuids);
 
-        sqlx::query(
+        let fts_sql = format!(
             "DELETE FROM books_fts WHERE rowid IN
-                (SELECT id FROM books WHERE library_id = ?)",
-        )
-        .bind(id)
-        .execute(&mut **tx)
-        .await?;
-        sqlx::query("DELETE FROM books WHERE library_id = ?")
-            .bind(id)
-            .execute(&mut **tx)
-            .await?;
-        sqlx::query("DELETE FROM libraries WHERE id = ?")
-            .bind(id)
-            .execute(&mut **tx)
-            .await?;
+                (SELECT id FROM books WHERE library_id IN ({placeholders}))"
+        );
+        let mut fts_delete = sqlx::query(&fts_sql);
+        for id in chunk {
+            fts_delete = fts_delete.bind(id);
+        }
+        fts_delete.execute(&mut **tx).await?;
+
+        let books_sql = format!("DELETE FROM books WHERE library_id IN ({placeholders})");
+        let mut books_delete = sqlx::query(&books_sql);
+        for id in chunk {
+            books_delete = books_delete.bind(id);
+        }
+        books_delete.execute(&mut **tx).await?;
+
+        let libraries_sql = format!("DELETE FROM libraries WHERE id IN ({placeholders})");
+        let mut libraries_delete = sqlx::query(&libraries_sql);
+        for id in chunk {
+            libraries_delete = libraries_delete.bind(id);
+        }
+        libraries_delete.execute(&mut **tx).await?;
     }
 
     Ok(orphan_uuids)
@@ -5012,6 +5031,84 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(library_count, 0);
+    }
+
+    /// Exercises the batched (#149) `prune_orphan_libraries` path with more
+    /// orphaned libraries than `set_settings` can ever configure (it caps at
+    /// one ebook + one audiobook path). Seeds several libraries — each with a
+    /// book and an on-disk cover — then prunes them all in one transaction and
+    /// asserts every cover UUID is collected (so the single `IN (...)` lookup
+    /// is verified to span all libraries) and every row is gone.
+    #[tokio::test]
+    async fn prune_orphan_libraries_batches_across_many_libraries() {
+        let _covers = CoversTempDir::new("prune-batch");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+
+        // Seed several orphaned libraries directly. `keep = []` below marks
+        // all of them as orphans regardless of path.
+        let mut expected_uuids: Vec<String> = Vec::new();
+        for i in 0..5 {
+            let path = format!("/orphan-{i}");
+            let library_id: i64 = sqlx::query_scalar(
+                "INSERT INTO libraries (path, display_name) VALUES (?, ?) RETURNING id",
+            )
+            .bind(&path)
+            .bind(format!("Orphan {i}"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+            let uuid = format!("uuid-{i}");
+            sqlx::query(
+                "INSERT INTO books (uuid, library_id, path, title, has_cover)
+                 VALUES (?, ?, ?, ?, 1)",
+            )
+            .bind(&uuid)
+            .bind(library_id)
+            .bind(format!("{path}/book.epub"))
+            .bind(format!("Book {i}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+            // Materialize a cover file so deletion is observable on disk.
+            write_cover_file(&uuid, "image/jpeg", b"fake-jpeg").unwrap();
+            assert!(cover_path_for(&uuid, "jpg").exists());
+
+            expected_uuids.push(uuid);
+        }
+
+        let mut tx = pool.begin().await.unwrap();
+        let mut orphan_uuids = prune_orphan_libraries(&mut tx, &[]).await.unwrap();
+        tx.commit().await.unwrap();
+
+        orphan_uuids.sort();
+        expected_uuids.sort();
+        assert_eq!(
+            orphan_uuids, expected_uuids,
+            "every orphaned book's cover UUID should be collected in one batch"
+        );
+
+        let library_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM libraries")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(library_count, 0);
+        let book_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(book_count, 0);
+
+        // The caller deletes cover files post-commit; verify the collected
+        // UUIDs drive removal of every materialized cover.
+        delete_cover_files_for(&orphan_uuids);
+        for uuid in &orphan_uuids {
+            assert!(
+                !cover_path_for(uuid, "jpg").exists(),
+                "cover for {uuid} should be deleted"
+            );
+        }
     }
 
     #[tokio::test]
