@@ -18,7 +18,12 @@ Today taxonomy is a filter — applied from the toolbar, leaves no shareable URL
 - New server functions: `rpc_get_author(slug)`, `rpc_get_series(slug)`, `rpc_get_tag_cloud()` returning aggregated counts. All read-only — no schema changes.
 - Tag cloud weights computed in SQL via `SELECT tag, COUNT(*) FROM book_tags GROUP BY tag`. Cache result in-process for 5 min (tags rarely change between scans).
 - Slug resolution at the DB layer: an `authors.slug` column (already proposed in [F0.1](0-1-schema-refactor.md)) is the join key. If F0.1 hasn't landed it, this initiative depends on adding it.
-- **Bounded reads** (issue #150): `get_author` / `get_series` originally returned *every* attributed book in one payload — a prolific reference author or a giant Calibre series could nest thousands of `EbookMetadata` structs into a single response. They are now hard-capped at `db::queries::MAX_DISCOVERY_BOOKS` (1 000 rows). Truncation is surfaced through the existing `book_count` field on `AuthorDetail` / `SeriesDetail`, computed from a separate uncapped `COUNT(*)`: a caller detects truncation as `book_count > books.len()`. No `X-Total-Count` header (as floated in #150) is added — these flow through Dioxus server functions (`frontend/src/rpc.rs`), not raw axum handlers, so there is no ergonomic place to set a response header. `get_tag_cloud` was already bounded (it nests no book lists and its tag list is capped at `TAG_CLOUD_LIMIT`). Cursor-based keyset pagination on `(series_index, sort, id)` is the planned long-term fix as the F4.x phase matures.
+- **Bounded reads** (issue #150): `get_author` / `get_series` originally returned *every* attributed book in one payload — a prolific reference author or a giant Calibre series could nest thousands of `EbookMetadata` structs into a single response.
+  - They are now hard-capped at `db::queries::MAX_DISCOVERY_BOOKS` (1 000 rows).
+  - Truncation is surfaced through the existing `book_count` field on `AuthorDetail` / `SeriesDetail`, computed from a separate uncapped `COUNT(*)`: a caller detects truncation as `book_count > books.len()`.
+  - No `X-Total-Count` header (as floated in #150) is added — these flow through Dioxus server functions (`frontend/src/rpc.rs`), not raw axum handlers, so there is no ergonomic place to set a response header.
+  - `get_tag_cloud` was already bounded (it nests no book lists and its tag list is capped at `TAG_CLOUD_LIMIT`).
+  - Cursor-based keyset pagination on `(series_index, sort, id)` is the planned long-term fix as the F4.x phase matures.
 
 ## Dependencies
 
