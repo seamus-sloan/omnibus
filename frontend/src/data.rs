@@ -549,6 +549,51 @@ pub async fn get_author(server_url: &str, id: i64) -> Result<Option<AuthorDetail
         .map_err(|e| e.to_string())
 }
 
+/// F1.11 follow-up: persist an author photo by URL. Server fetches and
+/// validates the URL — see `db::author_photos::fetch_remote_image`.
+#[cfg(feature = "mobile")]
+pub async fn set_author_photo_url(server_url: &str, id: i64, url: String) -> Result<(), String> {
+    let endpoint = format!("{server_url}/api/authors/{id}/photo/url");
+    let response = with_bearer(http_client().put(&endpoint))
+        .json(&serde_json::json!({ "url": url }))
+        .send()
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(())
+}
+
+/// F1.11 follow-up: multipart upload of an author photo. Mobile mirrors the
+/// web FormData path — the same `/api/authors/:id/photo` PUT endpoint.
+#[cfg(feature = "mobile")]
+pub async fn upload_author_photo(
+    server_url: &str,
+    id: i64,
+    filename: String,
+    mime: String,
+    bytes: Vec<u8>,
+) -> Result<(), String> {
+    let endpoint = format!("{server_url}/api/authors/{id}/photo");
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(filename)
+        .mime_str(&mime)
+        .map_err(|e| format!("{e:#}"))?;
+    let form = reqwest::multipart::Form::new().part("photo", part);
+    let response = with_bearer(http_client().put(&endpoint))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(())
+}
+
 /// F1.11: admin "Scan for picture" — synchronously re-runs the Open Library
 /// cascade and returns whether a photo was found.
 #[cfg(feature = "mobile")]
@@ -924,6 +969,86 @@ pub async fn scan_author_photo(
     crate::rpc::rpc_scan_author_photo(id)
         .await
         .map_err(note_server_fn_err)
+}
+
+/// F1.11 follow-up: persist an author photo by URL. Web routes through the
+/// `#[post]` server function in `rpc.rs`, which performs the server-side
+/// fetch + validation and writes a `manual` row.
+#[cfg(not(feature = "mobile"))]
+pub async fn set_author_photo_url(_server_url: &str, id: i64, url: String) -> Result<(), String> {
+    crate::rpc::rpc_set_author_photo_url(id, url)
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// F1.11 follow-up: multipart upload of an author photo on the web client.
+///
+/// Server functions can't carry binary file uploads (they JSON-serialize
+/// their arguments), so this bypasses RPC and POSTs the bytes directly to
+/// the REST endpoint via `gloo-net`. The browser auto-attaches the
+/// `omnibus_session` cookie on a same-origin request, so no manual auth
+/// plumbing is needed. SSR doesn't call this — it only fires from a user
+/// `onchange` handler after hydration.
+#[cfg(feature = "web")]
+pub async fn upload_author_photo(
+    _server_url: &str,
+    id: i64,
+    filename: String,
+    mime: String,
+    bytes: Vec<u8>,
+) -> Result<(), String> {
+    use gloo_net::http::Request;
+    use wasm_bindgen::JsCast;
+
+    let endpoint = format!("/api/authors/{id}/photo");
+    let form = web_sys::FormData::new().map_err(|e| format!("FormData::new: {e:?}"))?;
+    // `Blob` ctor wants a `&Array` of `BufferSource | BlobPart` parts —
+    // build a one-element Uint8Array, drop it into a JS Array, then hand
+    // that to `Blob::new_with_u8_array_sequence_and_options`.
+    let u8 = js_sys::Uint8Array::from(bytes.as_slice());
+    let parts = js_sys::Array::new();
+    parts.push(&u8);
+    let mut opts = web_sys::BlobPropertyBag::new();
+    opts.type_(&mime);
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts)
+        .map_err(|e| format!("Blob::new: {e:?}"))?;
+    form.append_with_blob_and_filename("photo", &blob, &filename)
+        .map_err(|e| format!("FormData::append: {e:?}"))?;
+
+    let res = Request::put(&endpoint)
+        // gloo-net's `body` takes anything `Into<JsValue>` — FormData
+        // satisfies that via its JsCast impl. Don't set Content-Type:
+        // the browser fills it in with the multipart boundary.
+        .body(form.unchecked_into::<wasm_bindgen::JsValue>())
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if res.status() == 401 {
+        web_auth_state::notify_unauthorized();
+        return Err("unauthorized".into());
+    }
+    if !res.ok() {
+        let status = res.status();
+        let msg = res.text().await.unwrap_or_default();
+        return Err(format!("upload failed ({status}): {msg}"));
+    }
+    Ok(())
+}
+
+/// Fallback stub for the non-web, non-mobile build (cargo check on the
+/// default workspace members compiles the frontend with no platform
+/// feature so type-checking still passes). The author detail page only
+/// invokes upload after a user `onchange`, which never fires under SSR.
+#[cfg(not(any(feature = "web", feature = "mobile")))]
+pub async fn upload_author_photo(
+    _server_url: &str,
+    _id: i64,
+    _filename: String,
+    _mime: String,
+    _bytes: Vec<u8>,
+) -> Result<(), String> {
+    Err("upload not available in this build".into())
 }
 
 #[cfg(not(feature = "mobile"))]

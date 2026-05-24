@@ -754,7 +754,11 @@ body.atrium,
   display: grid;
   grid-template-columns: 120px 1fr auto;
   gap: 32px;
-  align-items: flex-end;
+  /* `center` keeps the heading visually on the same line as the avatar
+     after the inline Scan button row moved into the edit modal. Bottom
+     alignment looked correct when the info column carried both the
+     title and the actions row, but with just the title it sat low. */
+  align-items: center;
   margin-top: 24px;
 }
 @media (max-width: 720px) {
@@ -1122,6 +1126,14 @@ body.atrium,
   color: var(--ink-1);
 }
 
+/* F1.11 — When the index card avatar is the cached profile photo
+   (`<img>` instead of letter `<div>`), clip the image to the circle and
+   drop the typographic styling. */
+.idx-card-avatar--photo {
+  object-fit: cover;
+  display: block;
+}
+
 .idx-card-body { min-width: 0; }
 .idx-card-title {
   font-family: var(--serif);
@@ -1484,3 +1496,114 @@ body.atrium,
   gap: 8px;
 }
 
+
+/* ============================================================================
+   F1.11 follow-up — Author photo edit overlay + modal.
+
+   Wraps the existing letter / photo avatar; the pencil overlay sits on top
+   and only fades in on hover or keyboard focus inside the wrapper. The
+   modal is a centered card with a darkened backdrop and three sections
+   (URL, file upload, scan).
+   ============================================================================ */
+
+.author-photo-edit {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+
+.author-photo-edit__overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in oklch, var(--bg-0) 60%, transparent);
+  color: var(--ink-0);
+  border: none;
+  border-radius: inherit;
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+/* The avatar inside is a circle (border-radius: 999px on .idx-card-avatar
+   and .disc-avatar). Match that so the overlay tint clips correctly. */
+.author-photo-edit .idx-card-avatar,
+.author-photo-edit .disc-avatar,
+.author-photo-edit__overlay {
+  border-radius: 999px;
+}
+.author-photo-edit:hover .author-photo-edit__overlay,
+.author-photo-edit:focus-within .author-photo-edit__overlay {
+  opacity: 1;
+}
+
+.author-photo-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in oklch, #000 55%, transparent);
+  display: grid;
+  place-items: center;
+  z-index: 100;
+  padding: 20px;
+}
+.author-photo-modal {
+  background: var(--bg-0);
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+  padding: 24px;
+  width: min(440px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  box-shadow: 0 24px 48px color-mix(in oklch, #000 35%, transparent);
+}
+.author-photo-modal__head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.author-photo-modal__title {
+  font-family: var(--serif);
+  font-size: 22px;
+  margin: 0;
+}
+.author-photo-modal__sub {
+  margin: 0;
+  font-size: 13px;
+}
+.author-photo-modal__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.author-photo-modal__url-row {
+  display: flex;
+  gap: 8px;
+}
+.author-photo-modal__url-row input {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--bg-1);
+  color: var(--ink-0);
+  font-size: 14px;
+}
+.author-photo-modal__status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-1);
+}
+.author-photo-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}

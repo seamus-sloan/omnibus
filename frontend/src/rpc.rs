@@ -284,6 +284,70 @@ pub async fn rpc_scan_author_photo(id: i64) -> Result<AuthorPhotoScanResult> {
     Ok(AuthorPhotoScanResult { resolved })
 }
 
+/// F1.11 follow-up: persist an author photo by URL. Admin-gated server-side
+/// (the `user.is_admin` check below mirrors `rpc_scan_author_photo`). The
+/// server fetches the URL via `db::author_photos::fetch_remote_image`,
+/// validates the bytes with the same magic-byte sniff as the multipart
+/// upload path, and stores it as a `manual` row.
+#[post("/api/rpc/author/photo-url", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_set_author_photo_url(id: i64, url: String) -> Result<()> {
+    if !user.is_admin {
+        return Err(ServerFnError::new("forbidden: admin required").into());
+    }
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err(ServerFnError::new("url is required").into());
+    }
+    let author_exists: bool =
+        sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM authors WHERE id = ?)")
+            .bind(id)
+            .fetch_one(&pool.0)
+            .await
+            .map_err(|e| ServerFnError::new(format!("author exists check: {e}")))?
+            != 0;
+    if !author_exists {
+        return Err(ServerFnError::new("author not found").into());
+    }
+    let (_mime_hint, bytes) = db::author_photos::fetch_remote_image(trimmed)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let mime = detect_image_format(&bytes)
+        .ok_or_else(|| ServerFnError::new("file at URL does not appear to be a valid image"))?;
+    db::upsert_author_photo(
+        &pool.0,
+        id,
+        db::AuthorPhotoSource::Manual,
+        Some(trimmed),
+        Some(&mime),
+        Some(&bytes),
+    )
+    .await
+    .map_err(|e| ServerFnError::new(format!("upsert_author_photo: {e}")))?;
+    Ok(())
+}
+
+/// Magic-byte image format sniff. Duplicates `server::backend::detect_image_format`
+/// because the `frontend` crate can't depend on `server` (cycle) and the
+/// function is four lines of pattern matching. Keep the two implementations
+/// in sync — both must recognise the same formats.
+#[cfg(feature = "server")]
+fn detect_image_format(bytes: &[u8]) -> Option<String> {
+    if bytes.len() < 4 {
+        return None;
+    }
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg".into())
+    } else if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+        Some("image/png".into())
+    } else if bytes.starts_with(b"GIF8") {
+        Some("image/gif".into())
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp".into())
+    } else {
+        None
+    }
+}
+
 /// Return all tags with book counts for the tag cloud.
 #[get("/api/rpc/tags", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_get_tag_cloud() -> Result<Vec<TagWeight>> {

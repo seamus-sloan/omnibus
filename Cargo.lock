@@ -3878,6 +3878,7 @@ dependencies = [
  "dioxus-router",
  "gloo-net",
  "gloo-timers",
+ "js-sys",
  "omnibus-db",
  "omnibus-shared",
  "reqwest",
