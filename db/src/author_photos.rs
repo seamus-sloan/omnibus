@@ -45,19 +45,23 @@ fn default_user_agent() -> String {
 /// "paste image URL" endpoint — shares one pool. The per-request timeout
 /// differs between call sites, so it's applied on the `RequestBuilder`
 /// rather than baked into the client.
-fn shared_client() -> reqwest::Client {
+///
+/// Fallible: `reqwest::Client::builder().build()` can fail at runtime (TLS
+/// backend init, platform config). Callers propagate the error via `?`
+/// rather than panicking; a transient failure is then logged the same as
+/// any other HTTP error and the next call retries.
+fn shared_client() -> reqwest::Result<reqwest::Client> {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .user_agent(default_user_agent())
-                .build()
-                // A client with no custom config is infallible to build; the
-                // only failure mode is TLS backend init, which would also
-                // fail every per-call builder we previously used.
-                .expect("build shared reqwest client")
-        })
-        .clone()
+    if let Some(c) = CLIENT.get() {
+        return Ok(c.clone());
+    }
+    let new = reqwest::Client::builder()
+        .user_agent(default_user_agent())
+        .build()?;
+    // First-write wins. A concurrent caller may have built its own client
+    // already; in that case `set` returns Err and we discard ours.
+    let _ = CLIENT.set(new.clone());
+    Ok(CLIENT.get().cloned().unwrap_or(new))
 }
 
 /// Injection points for tests. Production builds construct `default()` and
@@ -73,12 +77,6 @@ pub struct OpenLibraryConfig {
     pub base_covers_url: String,
     pub timeout: Duration,
     pub user_agent: String,
-    /// Shared HTTP client (connection pool + TLS session cache). Cloned from
-    /// the process-wide [`shared_client`] so every resolution reuses the
-    /// same pool. The `user_agent` field above remains the canonical UA; it
-    /// is applied per-request so a test-supplied UA still takes effect even
-    /// though the client itself carries the production default.
-    pub client: reqwest::Client,
 }
 
 impl Default for OpenLibraryConfig {
@@ -88,7 +86,6 @@ impl Default for OpenLibraryConfig {
             base_covers_url: "https://covers.openlibrary.org".into(),
             timeout: OPEN_LIBRARY_TIMEOUT,
             user_agent: default_user_agent(),
-            client: shared_client(),
         }
     }
 }
@@ -187,7 +184,7 @@ async fn fetch_open_library(
     name: &str,
     config: &OpenLibraryConfig,
 ) -> Result<Option<(String, String, Vec<u8>)>, reqwest::Error> {
-    let client = &config.client;
+    let client = shared_client()?;
 
     // Step 1: search for an OLID by name.
     let search_url = format!(
@@ -291,7 +288,7 @@ pub async fn fetch_remote_image(url: &str) -> Result<(String, Vec<u8>), FetchRem
     // Reuse the process-wide client so this on-demand admin fetch shares the
     // connection pool / TLS session cache with the Worker's Open Library
     // resolutions. The longer per-request timeout is applied on the builder.
-    let resp = shared_client()
+    let resp = shared_client()?
         .get(url)
         .timeout(REMOTE_IMAGE_TIMEOUT)
         .send()
@@ -363,7 +360,6 @@ mod tests {
             base_covers_url: server.uri(),
             timeout: Duration::from_secs(2),
             user_agent: "omnibus-test".into(),
-            ..Default::default()
         }
     }
 
@@ -553,7 +549,6 @@ mod tests {
             base_covers_url: "http://127.0.0.1:1".into(),
             timeout: Duration::from_millis(500),
             user_agent: "omnibus-test".into(),
-            ..Default::default()
         };
         let (pool, id) = pool_with_author("Ada Lovelace").await;
         resolve_with(&pool, id, &cfg).await.unwrap();
