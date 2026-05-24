@@ -33,7 +33,7 @@ pub fn SeriesIndexPage() -> Element {
                     series.set(s);
                     error.set(None);
                 }
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(e.to_string())),
             }
             loading.set(false);
         });

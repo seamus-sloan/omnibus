@@ -24,7 +24,7 @@ pub fn TagCloudPage() -> Element {
                     tags.set(t);
                     error.set(None);
                 }
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(e.to_string())),
             }
             loading.set(false);
         });
