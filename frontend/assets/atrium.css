@@ -35,6 +35,10 @@
   --accent-soft:   oklch(0.30 0.07 65);
   --accent-ink:    oklch(0.16 0.02 65);
 
+  /* Missing-cover plate ground (issue #92): neutral grey, never the accent. */
+  --cover-fallback-bg:  oklch(0.30 0.004 70);
+  --cover-fallback-ink: oklch(0.92 0.004 70);
+
   --ok:   oklch(0.78 0.13 150);
   --warn: oklch(0.78 0.13 75);
   --bad:  oklch(0.72 0.16 25);
@@ -62,6 +66,8 @@
   --ink-2: oklch(0.52 0.010 70);
   --ink-3: oklch(0.66 0.010 70);
   --accent-ink: oklch(0.99 0 0);
+  --cover-fallback-bg:  oklch(0.86 0.004 70);
+  --cover-fallback-ink: oklch(0.28 0.006 70);
   color-scheme: light;
 }
 
@@ -371,7 +377,10 @@ body.atrium,
 }
 .cover {
   position: absolute; inset: 0;
-  background: var(--accent); color: var(--accent-ink);
+  /* Neutral grey ground (issue #92): the missing-cover plate must never be
+     the accent colour. Real images fill `.cover` via object-fit, so this
+     only shows behind the typographic fallback / before an image paints. */
+  background: var(--cover-fallback-bg); color: var(--cover-fallback-ink);
   border-radius: 2px 4px 4px 2px;
   overflow: hidden; font-family: var(--serif);
   box-shadow:
@@ -414,12 +423,6 @@ body.atrium,
   font-family: var(--sans); font-size: clamp(6.5px, 5.5cqi, 12px);
   letter-spacing: 0.22em; text-transform: uppercase;
   opacity: .82; font-weight: 600;
-}
-.cover .imprint {
-  position: absolute; bottom: 6%; left: 0; right: 0;
-  text-align: center; font-family: var(--sans);
-  font-size: clamp(5.5px, 4cqi, 10px);
-  letter-spacing: 0.32em; opacity: .55; text-transform: uppercase;
 }
 
 /* Cover-as-link: lift on hover */
