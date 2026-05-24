@@ -494,7 +494,9 @@ async fn get_author_by_id(
             if !author.has_photo {
                 match db::author_photo_status(&state.pool, id).await {
                     Ok(None) => {
-                        state.worker.post(Task::ResolveAuthorPhoto { author_id: id });
+                        state
+                            .worker
+                            .post(Task::ResolveAuthorPhoto { author_id: id });
                     }
                     Ok(Some(_)) => {}
                     Err(e) => {
@@ -993,8 +995,7 @@ async fn post_author_photo_scan(
     // and report resolved=true so the UI keeps the existing photo.
     match db::author_photo_status(&state.pool, id).await {
         Ok(Some((db::AuthorPhotoSource::Manual, _))) => {
-            return Json(omnibus_shared::AuthorPhotoScanResult { resolved: true })
-                .into_response();
+            return Json(omnibus_shared::AuthorPhotoScanResult { resolved: true }).into_response();
         }
         Ok(_) => {}
         Err(e) => return internal("author_photo_status (pre-scan)", e),
@@ -3313,9 +3314,11 @@ mod tests {
             .expect("request should succeed");
         assert_eq!(res.status(), StatusCode::OK);
         let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
-        let body: omnibus_shared::AuthorPhotoScanResult =
-            serde_json::from_slice(&bytes).unwrap();
-        assert!(body.resolved, "scan on manual upload should report resolved=true");
+        let body: omnibus_shared::AuthorPhotoScanResult = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            body.resolved,
+            "scan on manual upload should report resolved=true"
+        );
 
         // Manual row must still be intact (same source, same bytes).
         let (src, _) = db::author_photo_status(&pool, id).await.unwrap().unwrap();

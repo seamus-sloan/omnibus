@@ -275,9 +275,7 @@ pub async fn rpc_scan_author_photo(id: i64) -> Result<AuthorPhotoScanResult> {
         return Err(ServerFnError::new("forbidden: admin required").into());
     }
     // Manual uploads win — don't delete or overwrite.
-    if let Some((db::AuthorPhotoSource::Manual, _)) =
-        db::author_photo_status(&pool.0, id).await?
-    {
+    if let Some((db::AuthorPhotoSource::Manual, _)) = db::author_photo_status(&pool.0, id).await? {
         return Ok(AuthorPhotoScanResult { resolved: true });
     }
     db::delete_author_photo(&pool.0, id).await?;
