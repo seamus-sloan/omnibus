@@ -113,11 +113,23 @@ body.atrium,
   background: color-mix(in oklch, var(--bg-0) 92%, transparent);
   backdrop-filter: blur(10px); z-index: 5;
 }
-.atrium-brand { display: flex; align-items: center; gap: 10px; }
+.atrium-brand {
+  display: flex; align-items: center; gap: 10px;
+  text-decoration: none; color: inherit; cursor: pointer;
+}
 .atrium-brand-mark {
   width: 24px; height: 24px; border-radius: 6px;
   background: var(--ink-0); position: relative;
+  display: grid; place-items: center;
 }
+.atrium-brand-mark::before,
+.atrium-brand-mark::after {
+  content: ''; position: absolute;
+  inset: 5px 7px;
+  border: 1.5px solid var(--bg-0); border-radius: 1px;
+  border-top: 0; border-bottom: 0;
+}
+.atrium-brand-mark::after { inset: 5px 6px; transform: rotate(-6deg); opacity: 0.35; }
 .atrium-brand-word {
   font-family: var(--serif); font-size: 22px; letter-spacing: -0.02em;
   font-style: italic; line-height: 1; padding-top: 3px;
@@ -126,10 +138,21 @@ body.atrium,
 .atrium-nav a {
   padding: 6px 12px; border-radius: 999px;
   color: var(--ink-1); font-size: 13px;
+  text-decoration: none;
   transition: color .15s, background .15s; cursor: pointer;
 }
 .atrium-nav a:hover { color: var(--ink-0); background: var(--bg-1); }
 .atrium-nav a.on    { color: var(--ink-0); background: var(--bg-2); }
+.atrium-nav a.disabled {
+  color: var(--ink-3); cursor: default; pointer-events: none;
+}
+
+/* Right cluster: Add books / theme / Settings / Logout. The auto margin
+   pushes the cluster to the far right of the topbar. */
+.atrium-actions {
+  display: flex; align-items: center; gap: 6px;
+  margin-left: auto;
+}
 
 /* ── Search palette (F1.5) ──────────────────────────────────────── */
 .sp-trigger {
@@ -138,7 +161,6 @@ body.atrium,
   background: var(--bg-2); border: 1px solid var(--line-2);
   color: var(--ink-2); font-size: 13px; cursor: pointer;
   transition: color .15s, border-color .15s, background .15s;
-  margin-left: auto;
 }
 .sp-trigger:hover { color: var(--ink-0); border-color: var(--line); background: var(--bg-3); }
 .sp-trigger .sp-trigger-icon {
