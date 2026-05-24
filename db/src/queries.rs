@@ -2187,15 +2187,17 @@ pub async fn get_author(
                )
              END
            ORDER BY
-             COALESCE(
-               CASE
-                 WHEN mo.book_uuid IS NOT NULL
-                      AND json_type(mo.overrides, '$.series_index') IS NOT NULL
-                   THEN CAST(json_extract(mo.overrides, '$.series_index') AS REAL)
-                 ELSE NULL
-               END,
-               b.series_index
-             ) NULLS LAST,
+             CASE
+               WHEN mo.book_uuid IS NOT NULL
+                    AND json_type(mo.overrides, '$.series_index') IS NOT NULL
+                 -- NULLIF: an override that explicitly clears the index
+                 -- (`Some("")` from the edit form) would otherwise CAST to
+                 -- 0.0 and sort to the front. Treat empty-string as "no
+                 -- index" so ORDER BY's NULLS LAST trails it — matching
+                 -- get_series.
+                 THEN CAST(NULLIF(json_extract(mo.overrides, '$.series_index'), '') AS REAL)
+               ELSE b.series_index
+             END NULLS LAST,
              b.sort, b.id
            LIMIT ?"#
     );
@@ -6825,6 +6827,54 @@ mod tests {
         assert!(
             titles.contains(&"Standalone".to_string()),
             "lowercase override should still match NOCASE series row, got {titles:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn get_author_empty_string_series_index_sorts_last() {
+        // Mirror of get_series: clearing the position field (`Some("")`)
+        // used to CAST('') to 0.0 in get_author's ORDER BY and sort the
+        // book to the front of the author's shelf. NULLIF drops it to NULL
+        // so NULLS LAST trails it behind positioned books.
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+        let author_id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let book_one = books.iter().find(|b| b.filename == "saga1.epub").unwrap();
+        let uuid = book_one.unique_identifier.clone().unwrap();
+
+        // Keep Book One (canonical Saga #1) but clear its position.
+        let ov = MetadataOverrides {
+            series: Some("Saga".into()),
+            series_index: Some(String::new()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let author = get_author(&pool, author_id)
+            .await
+            .unwrap()
+            .expect("author exists");
+        let titles: Vec<_> = author
+            .books
+            .iter()
+            .map(|b| b.title.clone().unwrap_or_default())
+            .collect();
+        let pos = |t: &str| titles.iter().position(|x| x == t).unwrap();
+        assert!(
+            pos("Saga: Book Two") < pos("Saga: Book One"),
+            "cleared series_index should trail the positioned book, got {titles:?}",
+        );
+        assert_ne!(
+            titles.first().map(String::as_str),
+            Some("Saga: Book One"),
+            "cleared series_index must not sort to the front, got {titles:?}",
         );
     }
 
