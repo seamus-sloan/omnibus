@@ -13,11 +13,28 @@ use std::sync::{Arc, Mutex as StdMutex};
 use sqlx::SqlitePool;
 use tokio::sync::{watch, Mutex, Semaphore};
 
+/// A unit of background work handed to [`Worker::post`].
+///
+/// Each variant carries the inputs its handler needs and determines two
+/// scheduling properties via the private `resource_key` / `uses_scan_sem`
+/// helpers: which per-resource keyed mutex (if any) serializes it against
+/// peers, and whether it counts against the scan-concurrency semaphore.
+/// See [`Worker`] for how those interact.
+///
+/// `#[non_exhaustive]` so adding a variant is not a breaking change for
+/// downstream `match`es; new variants must wire up both scheduling helpers
+/// and the `execute` dispatch arm.
 #[non_exhaustive]
 pub enum Task {
-    Scan {
-        library_path: String,
-    },
+    /// Reindex the library rooted at `library_path` (full scan → DB upsert
+    /// via `indexer::reindex`). Keyed on the path, so two scans of the same
+    /// library serialize while different libraries scan in parallel; counts
+    /// against the scan-concurrency semaphore.
+    Scan { library_path: String },
+    /// (Re)generate cached WebP thumbnails for `book_id`'s cover.
+    /// `last_modified_epoch` lets the handler skip work when the cached
+    /// thumbnails are already current. Keyed on `thumb:{book_id}` and does
+    /// not consume the scan semaphore, so thumbnailing runs alongside scans.
     GenerateThumbs {
         book_id: i64,
         last_modified_epoch: i64,
@@ -25,10 +42,13 @@ pub enum Task {
     /// F1.11: resolve and cache an author's profile photo. The resolver
     /// hits Open Library at most once per author per (admin-DELETE-able)
     /// cache window; a `'letter'` marker is written on any miss so future
-    /// page views skip the network entirely.
-    ResolveAuthorPhoto {
-        author_id: i64,
-    },
+    /// page views skip the network entirely. Keyed on
+    /// `author-photo:{author_id}` and does not consume the scan semaphore.
+    ResolveAuthorPhoto { author_id: i64 },
+    /// Test-only synthetic task: sleeps `latency_ms` and invokes the
+    /// optional `on_run` / `on_done` hooks, with `resource` and
+    /// `route_through_scan_sem` letting a test exercise the keyed mutex and
+    /// scan semaphore directly. Compiled out of non-test builds.
     #[cfg(test)]
     Test {
         tag: &'static str,
@@ -65,16 +85,28 @@ impl Task {
     }
 }
 
+/// Process-local handle returned by [`Worker::post`], used to look up a
+/// task's completion via [`Worker::await_completion`]. Monotonically
+/// assigned per `Worker`; not stable across restarts and not a DB id.
 pub type TaskId = u64;
 
+/// Terminal result of a task, delivered to awaiters of its [`TaskId`].
 #[derive(Clone, Debug)]
 pub enum TaskOutcome {
+    /// The handler ran to completion successfully.
     Ok,
+    /// The handler failed; the string is the stringified underlying error.
+    /// Also produced when the spawned task is dropped or panics before
+    /// reporting (see [`Worker::await_completion`]).
     Err(String),
 }
 
+/// Construction-time tuning for a [`Worker`].
 #[derive(Clone, Debug)]
 pub struct WorkerConfig {
+    /// Maximum number of scan-semaphore tasks (currently [`Task::Scan`])
+    /// allowed to run concurrently. Clamped to at least 1 by
+    /// [`Worker::new`]. Other task types are unaffected by this cap.
     pub scan_concurrency: usize,
 }
 
@@ -86,6 +118,23 @@ impl Default for WorkerConfig {
     }
 }
 
+/// Single-process background-task runner shared behind an `Arc`.
+///
+/// Posting a [`Task`] spawns it on the tokio runtime and returns a
+/// [`TaskId`] immediately ([`post`](Worker::post) never blocks). Two
+/// fairness mechanisms shape execution:
+///
+/// * **Per-resource keyed mutex** — tasks reporting the same resource key
+///   (e.g. two scans of the same library path) serialize behind one
+///   another, while tasks on different keys run concurrently.
+/// * **Scan-concurrency semaphore** — scan-class tasks additionally
+///   contend for a fixed pool of permits sized by
+///   [`WorkerConfig::scan_concurrency`], capping how many run at once
+///   regardless of resource key.
+///
+/// The resource lock is always acquired before the scan permit so a task
+/// queued behind a same-resource peer never holds a permit while idle.
+/// Owns the [`SqlitePool`] its handlers run against.
 pub struct Worker {
     pool: SqlitePool,
     scan_sem: Arc<Semaphore>,
@@ -95,6 +144,9 @@ pub struct Worker {
 }
 
 impl Worker {
+    /// Build a `Worker` over `pool` with the given `config`, returning it
+    /// behind an `Arc` (every method takes `&Arc<Self>` or `&self`, and
+    /// posted tasks clone the `Arc` into their spawned future).
     pub fn new(pool: SqlitePool, config: WorkerConfig) -> Arc<Self> {
         Arc::new(Self {
             pool,
@@ -105,6 +157,14 @@ impl Worker {
         })
     }
 
+    /// Spawn `task` and return its [`TaskId`] immediately, without waiting
+    /// for it to run. The id can later be passed to
+    /// [`await_completion`](Worker::await_completion) to retrieve the
+    /// [`TaskOutcome`]. Scheduling (resource lock + scan semaphore) and
+    /// execution happen inside the spawned future, so a posted task may
+    /// queue behind same-resource or scan-capped peers before running. A
+    /// failed task is logged via `tracing` in addition to being reported to
+    /// awaiters.
     pub fn post(self: &Arc<Self>, task: Task) -> TaskId {
         let id = self
             .next_id
@@ -131,6 +191,10 @@ impl Worker {
         id
     }
 
+    /// Wait for the task identified by `id` to finish and return its
+    /// [`TaskOutcome`]. Returns `Err` if `id` was never posted (or already
+    /// pruned) or if the spawned task was dropped before reporting an
+    /// outcome (e.g. it panicked, which closes the watch channel).
     pub async fn await_completion(&self, id: TaskId) -> TaskOutcome {
         let mut rx = {
             let map = self.completions.lock().unwrap();
