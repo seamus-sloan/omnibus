@@ -40,7 +40,9 @@ pub fn TopNav() -> Element {
                     class: if is_series { "on" } else { "" },
                     "Series"
                 }
-                a { class: "disabled", aria_disabled: "true", "Stats" }
+                // Inert placeholder until the Stats page lands. `<span>` (not
+                // `<a>`) so assistive tech doesn't announce it as a link.
+                span { class: "disabled", aria_disabled: "true", "Stats" }
             }
             if !on_settings {
                 SearchPaletteHost {}
