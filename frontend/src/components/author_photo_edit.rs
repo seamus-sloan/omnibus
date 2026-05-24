@@ -121,6 +121,7 @@ fn AuthorPhotoEditModal(
                     div { class: "author-photo-modal__url-row",
                         input {
                             id: "author-photo-url",
+                            class: "me-input",
                             r#type: "url",
                             placeholder: "https://example.com/photo.jpg",
                             "data-testid": "author-photo-url-input",
@@ -167,6 +168,7 @@ fn AuthorPhotoEditModal(
                     }
                     input {
                         id: "author-photo-file",
+                        class: "author-photo-modal__file",
                         r#type: "file",
                         accept: "image/jpeg,image/png,image/webp,image/gif",
                         "data-testid": "author-photo-file-input",
@@ -219,7 +221,7 @@ fn AuthorPhotoEditModal(
                     label { class: "label", "Or fetch automatically" }
                     button {
                         r#type: "button",
-                        class: "btn btn-ghost",
+                        class: "btn ghost",
                         disabled: busy(),
                         "data-testid": "author-photo-scan",
                         onclick: {
@@ -259,7 +261,7 @@ fn AuthorPhotoEditModal(
                 div { class: "author-photo-modal__actions",
                     button {
                         r#type: "button",
-                        class: "btn btn-ghost",
+                        class: "btn ghost",
                         onclick: move |_| on_close.call(()),
                         "Close"
                     }
