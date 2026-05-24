@@ -68,14 +68,10 @@ fn main() {
                 }
             }
 
-            // Periodically prune sessions that can never authenticate again:
-            // those past their absolute expiry, or soft-revoked. Revocation
-            // marks rows rather than deleting them, so without this the
-            // sessions table grows unbounded — a permanent row per
-            // login/logout for the process lifetime, which compounds with the
-            // F4.x multi-user expansion. The first `interval` tick fires
-            // immediately, so this also runs once at boot; thereafter every
-            // 24h. The idx_sessions_expires_at index keeps the DELETE cheap.
+            // Prune sessions that can never authenticate again (revoked,
+            // absolute-expired, or idle-expired) so the table doesn't grow
+            // without bound. The first interval tick fires immediately, so
+            // this also runs at boot; thereafter daily.
             {
                 let pool = pool.clone();
                 tokio::spawn(async move {
@@ -85,7 +81,7 @@ fn main() {
                         interval.tick().await;
                         match omnibus_db::auth::prune_expired_sessions(&pool).await {
                             Ok(n) if n > 0 => {
-                                tracing::info!(pruned = n, "pruned expired/revoked sessions");
+                                tracing::info!(pruned = n, "pruned expired/revoked/idle sessions");
                             }
                             Ok(_) => {}
                             Err(e) => {
