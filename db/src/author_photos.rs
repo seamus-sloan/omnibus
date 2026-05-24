@@ -75,8 +75,14 @@ struct AuthorSearchHit {
 ///      previous resolution wins).
 ///   2. If a `letter` row exists, no-op (sticky negative cache).
 ///   3. Look up the author's name and query Open Library.
-///   4. Persist either an `openlibrary` row with bytes, or a `letter`
-///      marker on any miss.
+///   4. On a hit: persist an `openlibrary` row with bytes.
+///      On a clean miss (search returned no docs, cover endpoint 404,
+///      image smaller than [`MIN_IMAGE_BYTES`], non-image MIME): write a
+///      sticky `letter` marker.
+///      On a transient error (network failure, JSON decode error, etc.):
+///      leave the row absent so the next page view can retry. Otherwise a
+///      single Open Library outage would permanently brick resolution for
+///      that author until an admin cleared it.
 pub async fn resolve(pool: &SqlitePool, author_id: i64) -> Result<(), sqlx::Error> {
     resolve_with(pool, author_id, &OpenLibraryConfig::default()).await
 }
@@ -113,17 +119,20 @@ pub async fn resolve_with(
             .await?;
         }
         Ok(None) => {
+            // Clean miss — Open Library has nothing for this name. Record
+            // a sticky `letter` marker so we don't re-query on every view.
             upsert_author_photo(pool, author_id, AuthorPhotoSource::Letter, None, None, None)
                 .await?;
         }
         Err(e) => {
+            // Transient network / decode failure — leave the row absent so a
+            // later page view (or scan) can retry. Logged so an outage is
+            // still visible in the worker log.
             tracing::warn!(
                 author_id,
                 error = %e,
-                "open library resolution failed; writing letter marker"
+                "open library resolution failed (transient); leaving row absent for retry"
             );
-            upsert_author_photo(pool, author_id, AuthorPhotoSource::Letter, None, None, None)
-                .await?;
         }
     }
     Ok(())
@@ -366,5 +375,26 @@ mod tests {
 
         let (src, _) = author_photo_status(&pool, id).await.unwrap().unwrap();
         assert_eq!(src, AuthorPhotoSource::Manual);
+    }
+
+    #[tokio::test]
+    async fn resolve_leaves_row_absent_on_transient_network_error() {
+        // Point the resolver at a TCP port that nothing is listening on so
+        // every request errors at the transport layer. A transient outage
+        // must NOT cache a `letter` marker — the next call should be free
+        // to retry, not stuck for an admin to manually clear.
+        let cfg = OpenLibraryConfig {
+            base_search_url: "http://127.0.0.1:1".into(),
+            base_covers_url: "http://127.0.0.1:1".into(),
+            timeout: Duration::from_millis(500),
+            user_agent: "omnibus-test".into(),
+        };
+        let (pool, id) = pool_with_author("Ada Lovelace").await;
+        resolve_with(&pool, id, &cfg).await.unwrap();
+
+        assert!(
+            author_photo_status(&pool, id).await.unwrap().is_none(),
+            "transient network error must leave the row absent for retry"
+        );
     }
 }
