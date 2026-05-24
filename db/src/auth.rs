@@ -708,6 +708,24 @@ pub async fn revoke_all_sessions_for_user(pool: &SqlitePool, user_id: i64) -> Au
     Ok(r.rows_affected())
 }
 
+/// Hard-delete sessions that can never authenticate again: those past their
+/// absolute `expires_at`, or any that have been soft-revoked (`revoked_at IS
+/// NOT NULL`). Revocation marks rows rather than deleting them (see
+/// `revoke_session`), so without this prune the `sessions` table grows
+/// unboundedly on busy multi-user deployments — every login/logout leaves a
+/// permanent row that slows `lookup_session` and `revoke_all_sessions_for_user`.
+///
+/// The `idx_sessions_expires_at` index keeps the expiry half of the predicate
+/// cheap. Returns the number of rows deleted. Intended to run on a periodic
+/// schedule (see the prune task in `server::main`).
+pub async fn prune_expired_sessions(pool: &SqlitePool) -> AuthResult<u64> {
+    let r = sqlx::query("DELETE FROM sessions WHERE expires_at < ? OR revoked_at IS NOT NULL")
+        .bind(now_unix())
+        .execute(pool)
+        .await?;
+    Ok(r.rows_affected())
+}
+
 // -----------------------------------------------------------------------------
 // Devices
 // -----------------------------------------------------------------------------
@@ -1134,6 +1152,50 @@ mod tests {
         let p = pool().await;
         let err = lookup_session(&p, "not-a-real-token").await.unwrap_err();
         assert!(matches!(err, AuthError::SessionNotFound));
+    }
+
+    #[tokio::test]
+    async fn prune_removes_expired_and_revoked_keeps_live() {
+        let p = pool().await;
+        let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+
+        // (a) Expired: still un-revoked, but past its absolute expiry.
+        let expired = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE sessions SET expires_at = 1 WHERE id = ?")
+            .bind(expired.session.id)
+            .execute(&p)
+            .await
+            .unwrap();
+
+        // (b) Revoked: still within its expiry window, but soft-revoked.
+        let revoked = create_session(&p, u.id, None, SessionKind::Bearer, 3600)
+            .await
+            .unwrap();
+        revoke_session(&p, revoked.session.id).await.unwrap();
+
+        // (c) Live: un-revoked and well within its expiry window.
+        let live = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60)
+            .await
+            .unwrap();
+
+        let deleted = prune_expired_sessions(&p).await.unwrap();
+        assert_eq!(deleted, 2, "expired + revoked rows should be deleted");
+
+        let remaining: Vec<i64> = sqlx::query_scalar("SELECT id FROM sessions ORDER BY id")
+            .fetch_all(&p)
+            .await
+            .unwrap();
+        assert_eq!(
+            remaining,
+            vec![live.session.id],
+            "only the live session should survive the prune"
+        );
+
+        // Idempotent: a second prune with nothing to remove deletes zero rows.
+        let again = prune_expired_sessions(&p).await.unwrap();
+        assert_eq!(again, 0);
     }
 
     // ---- devices --------------------------------------------------------------
