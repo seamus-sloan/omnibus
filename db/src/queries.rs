@@ -5033,21 +5033,33 @@ mod tests {
         assert_eq!(library_count, 0);
     }
 
-    /// Exercises the batched (#149) `prune_orphan_libraries` path with more
-    /// orphaned libraries than `set_settings` can ever configure (it caps at
-    /// one ebook + one audiobook path). Seeds several libraries — each with a
-    /// book and an on-disk cover — then prunes them all in one transaction and
-    /// asserts every cover UUID is collected (so the single `IN (...)` lookup
-    /// is verified to span all libraries) and every row is gone.
+    /// Exercises the batched (#149) `prune_orphan_libraries` path across more
+    /// than one chunk. The IN-list is chunked at 500 ids to stay under
+    /// SQLite's bind-parameter cap, so seeding more orphaned libraries than a
+    /// single chunk holds is what actually verifies the chunking loop iterates
+    /// (a regression that dropped or mis-bound a later chunk would otherwise go
+    /// undetected). Seeds 1001 libraries — three chunks of 500 / 500 / 1 — each
+    /// with a book, then prunes them all in one transaction and asserts every
+    /// cover UUID is collected (so the lookup is verified to span all chunks)
+    /// and every row is gone. Only a handful of rows get an on-disk cover:
+    /// materializing 1001 files would be slow, and cover deletion is exercised
+    /// by the tracked subset, which straddles the chunk boundaries.
     #[tokio::test]
     async fn prune_orphan_libraries_batches_across_many_libraries() {
+        // > 2 full chunks of 500 → the chunk loop runs three times.
+        const LIBRARY_COUNT: usize = 1001;
+        // Indices spanning every chunk: first row, the first row of the second
+        // chunk, a mid-chunk row, and the final (third-chunk) row.
+        const MATERIALIZED_COVER_INDICES: [usize; 4] = [0, 500, 750, LIBRARY_COUNT - 1];
+
         let _covers = CoversTempDir::new("prune-batch");
         let pool = init_db("sqlite::memory:").await.unwrap();
 
-        // Seed several orphaned libraries directly. `keep = []` below marks
-        // all of them as orphans regardless of path.
-        let mut expected_uuids: Vec<String> = Vec::new();
-        for i in 0..5 {
+        // Seed the orphaned libraries directly. `keep = []` below marks all of
+        // them as orphans regardless of path.
+        let mut expected_uuids: Vec<String> = Vec::with_capacity(LIBRARY_COUNT);
+        let mut materialized_uuids: Vec<String> = Vec::new();
+        for i in 0..LIBRARY_COUNT {
             let path = format!("/orphan-{i}");
             let library_id: i64 = sqlx::query_scalar(
                 "INSERT INTO libraries (path, display_name) VALUES (?, ?) RETURNING id",
@@ -5071,9 +5083,13 @@ mod tests {
             .await
             .unwrap();
 
-            // Materialize a cover file so deletion is observable on disk.
-            write_cover_file(&uuid, "image/jpeg", b"fake-jpeg").unwrap();
-            assert!(cover_path_for(&uuid, "jpg").exists());
+            // Materialize an on-disk cover for a few rows spanning the chunk
+            // boundaries so deletion is observable without writing 1001 files.
+            if MATERIALIZED_COVER_INDICES.contains(&i) {
+                write_cover_file(&uuid, "image/jpeg", b"fake-jpeg").unwrap();
+                assert!(cover_path_for(&uuid, "jpg").exists());
+                materialized_uuids.push(uuid.clone());
+            }
 
             expected_uuids.push(uuid);
         }
@@ -5086,7 +5102,7 @@ mod tests {
         expected_uuids.sort();
         assert_eq!(
             orphan_uuids, expected_uuids,
-            "every orphaned book's cover UUID should be collected in one batch"
+            "every orphaned book's cover UUID should be collected across all chunks"
         );
 
         let library_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM libraries")
@@ -5101,9 +5117,9 @@ mod tests {
         assert_eq!(book_count, 0);
 
         // The caller deletes cover files post-commit; verify the collected
-        // UUIDs drive removal of every materialized cover.
+        // UUIDs drive removal of every materialized cover (one per chunk).
         delete_cover_files_for(&orphan_uuids);
-        for uuid in &orphan_uuids {
+        for uuid in &materialized_uuids {
             assert!(
                 !cover_path_for(uuid, "jpg").exists(),
                 "cover for {uuid} should be deleted"
