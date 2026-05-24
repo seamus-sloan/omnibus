@@ -1551,59 +1551,92 @@ body.atrium,
   z-index: 100;
   padding: 20px;
 }
+/* Match the `.card` / `.me-input` rhythm used by the metadata edit form
+   so the modal feels like an inline editor rather than a tight popover.
+   `--r-lg` (14px) for the shell, 28px outer padding, 22px between
+   sections, 10px between label and field — mirrors the page-level
+   spacing tokens. */
 .author-photo-modal {
-  background: var(--bg-0);
+  background: var(--bg-1);
   border: 1px solid var(--line-2);
-  border-radius: 14px;
-  padding: 24px;
-  width: min(440px, 100%);
+  border-radius: var(--r-lg);
+  padding: 28px;
+  width: min(460px, 100%);
   max-height: calc(100vh - 40px);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 22px;
   box-shadow: 0 24px 48px color-mix(in oklch, #000 35%, transparent);
 }
 .author-photo-modal__head {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line-2);
 }
 .author-photo-modal__title {
   font-family: var(--serif);
-  font-size: 22px;
+  font-size: 26px;
+  line-height: 1.1;
   margin: 0;
 }
 .author-photo-modal__sub {
   margin: 0;
   font-size: 13px;
+  color: var(--ink-2);
 }
 .author-photo-modal__section {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 .author-photo-modal__url-row {
   display: flex;
-  gap: 8px;
+  gap: 10px;
+  align-items: stretch;
 }
-.author-photo-modal__url-row input {
+.author-photo-modal__url-row .me-input {
   flex: 1;
-  padding: 8px 10px;
-  border: 1px solid var(--line-2);
-  border-radius: 8px;
+  min-width: 0;
+}
+/* Lift the native file input to roughly match `.me-input` so the upload
+   field aligns with the URL field's height and rounded outline. The
+   browser-rendered "Choose File" button stays native but sits inside a
+   themed container. */
+.author-photo-modal__file {
+  width: 100%;
+  padding: 10px 14px;
   background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
   color: var(--ink-0);
-  font-size: 14px;
+  font-family: var(--sans);
+  font-size: 13px;
+  cursor: pointer;
+}
+.author-photo-modal__file:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.author-photo-modal__file:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
 }
 .author-photo-modal__status {
   margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
   font-size: 13px;
   color: var(--ink-1);
 }
 .author-photo-modal__actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 4px;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line-2);
 }
