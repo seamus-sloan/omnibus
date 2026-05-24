@@ -158,6 +158,16 @@ impl Worker {
         })
     }
 
+    #[cfg(test)]
+    fn completions_len(&self) -> usize {
+        self.completions.lock().unwrap().len()
+    }
+
+    #[cfg(test)]
+    async fn resource_locks_len(&self) -> usize {
+        self.resource_locks.lock().await.len()
+    }
+
     /// Spawn `task` and return its [`TaskId`] immediately, without waiting
     /// for it to run. The id can later be passed to
     /// [`await_completion`](Worker::await_completion) to retrieve the
@@ -186,7 +196,18 @@ impl Worker {
                     "worker: task failed"
                 );
             }
+            // Publish the terminal outcome, then drop the map slot. A
+            // `watch::Receiver` that `await_completion` took out of the map
+            // *before* this runs keeps observing the final value even after
+            // `tx` drops and the slot is gone, so an in-flight awaiter still
+            // resolves. Cleaning up here (not only in `await_completion`) is
+            // what bounds the map for the fire-and-forget post paths that
+            // never await — e.g. the boot-time and settings-save reindex
+            // kicks, which post a `Task::Scan` and discard the id. Without
+            // this the map grew by one entry per dispatched task for the
+            // process lifetime.
             let _ = tx.send(Some(outcome));
+            this.completions.lock().unwrap().remove(&id);
         });
 
         id
@@ -197,10 +218,15 @@ impl Worker {
     /// (or already pruned) or if the spawned task was dropped before reporting
     /// an outcome (e.g. it panicked, which closes the watch channel).
     pub async fn await_completion(&self, id: TaskId) -> TaskOutcome {
+        // Take ownership of the receiver out of the map rather than cloning
+        // it. The held receiver observes the channel's final value regardless
+        // of whether the spawned task has already dropped its sender, so the
+        // outcome is never missed; removing the slot here bounds the map even
+        // when the run loop's own cleanup hasn't fired yet.
         let mut rx = {
-            let map = self.completions.lock().unwrap();
-            match map.get(&id) {
-                Some(rx) => rx.clone(),
+            let mut map = self.completions.lock().unwrap();
+            match map.remove(&id) {
+                Some(rx) => rx,
                 None => return TaskOutcome::Err("unknown task id".into()),
             }
         };
@@ -218,7 +244,8 @@ impl Worker {
         // Resource lock first, then the scan semaphore: holding a permit
         // while blocked on a per-resource mutex would let same-resource
         // queueing starve other resources from running concurrently.
-        let _resource_guard = if let Some(key) = task.resource_key() {
+        let resource_key = task.resource_key();
+        let _resource_guard = if let Some(key) = resource_key.clone() {
             let inner = {
                 let mut map = self.resource_locks.lock().await;
                 map.entry(key)
@@ -239,7 +266,36 @@ impl Worker {
             None
         };
 
-        self.execute(task).await
+        let outcome = self.execute(task).await;
+
+        // Drop the resource guard before pruning so this task no longer
+        // counts as a reference to the keyed mutex when we check it. Without
+        // this the map would grow by one `Arc<Mutex<()>>` per distinct
+        // resource key for the process lifetime (thumbnails key per-book,
+        // author photos per-author, scans per-path) — the same
+        // unbounded-growth class as the completions map.
+        drop(_resource_guard);
+        if let Some(key) = resource_key {
+            self.prune_resource_lock(&key).await;
+        }
+
+        outcome
+    }
+
+    /// Reclaim a keyed resource mutex once no other task references it. Held
+    /// under the `resource_locks` map lock so a concurrent `run` can't be
+    /// mid-`entry()` for the same key: the map's own `Arc` plus any live
+    /// runner (each holds a clone before/while awaiting the keyed mutex) each
+    /// count as one strong reference, so a count of 1 — only the map — means
+    /// the slot is free to drop. A later task for the same key just
+    /// re-inserts a fresh mutex via `or_insert_with`.
+    async fn prune_resource_lock(&self, key: &str) {
+        let mut map = self.resource_locks.lock().await;
+        if let Some(inner) = map.get(key) {
+            if Arc::strong_count(inner) == 1 {
+                map.remove(key);
+            }
+        }
     }
 
     async fn execute(&self, task: Task) -> TaskOutcome {
@@ -503,5 +559,116 @@ mod tests {
             TaskOutcome::Err(_) => {}
             other => panic!("expected Err on task panic, got {other:?}"),
         }
+    }
+
+    /// Poll until both worker maps are empty or a deadline elapses, so
+    /// fire-and-forget assertions don't hinge on a fixed sleep. Returns
+    /// whether the maps drained in time.
+    async fn poll_maps_empty(w: &Arc<Worker>) -> bool {
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if w.completions_len() == 0 && w.resource_locks_len().await == 0 {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+
+    /// Like [`poll_maps_empty`] but waits only on `resource_locks`.
+    async fn poll_resource_locks_empty(w: &Arc<Worker>) -> bool {
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if w.resource_locks_len().await == 0 {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn await_completion_prunes_completions_entry() {
+        let w = make_worker_default(pool().await);
+        for _ in 0..5 {
+            let id = w.post(Task::Test {
+                tag: "prune",
+                latency_ms: 5,
+                resource: None,
+                route_through_scan_sem: false,
+                on_run: None,
+                on_done: None,
+            });
+            let _ = w.await_completion(id).await;
+        }
+        // Each awaited task removes its own slot before returning, so the map
+        // stays bounded no matter how many tasks have run.
+        assert_eq!(
+            w.completions_len(),
+            0,
+            "completions map should be empty after awaiting every task"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn fire_and_forget_tasks_drain_both_maps() {
+        // Mirrors the boot / settings-save reindex kicks (server::main,
+        // rpc::save_settings): post and discard the id, never awaiting. The
+        // run loop must still reclaim both map slots.
+        let w = make_worker_default(pool().await);
+        for i in 0..5 {
+            // Distinct resource keys exercise the `resource_locks` prune path.
+            w.post(Task::Test {
+                tag: "ff",
+                latency_ms: 5,
+                resource: Some(format!("k{i}")),
+                route_through_scan_sem: false,
+                on_run: None,
+                on_done: None,
+            });
+        }
+        let drained = poll_maps_empty(&w).await;
+        assert!(
+            drained,
+            "fire-and-forget tasks must drain completions ({}) and resource_locks ({})",
+            w.completions_len(),
+            w.resource_locks_len().await,
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn same_resource_serialized_tasks_leave_no_lock_behind() {
+        // Two tasks share a key, so the second clones the keyed mutex `Arc`
+        // and waits while the first runs. The prune must not pull the lock
+        // out from under the waiter, and once both finish the slot is gone.
+        let w = make_worker_default(pool().await);
+        let mk = |w: &Arc<Worker>, tag: &'static str| {
+            w.post(Task::Test {
+                tag,
+                latency_ms: 30,
+                resource: Some("shared".into()),
+                route_through_scan_sem: false,
+                on_run: None,
+                on_done: None,
+            })
+        };
+        let id1 = mk(&w, "s1");
+        let id2 = mk(&w, "s2");
+        let (o1, o2) = tokio::join!(w.await_completion(id1), w.await_completion(id2));
+        assert!(matches!(o1, TaskOutcome::Ok));
+        assert!(matches!(o2, TaskOutcome::Ok));
+        // The run loop prunes after dropping its guard; allow the second
+        // task's cleanup to land after its outcome was observed.
+        let drained = poll_resource_locks_empty(&w).await;
+        assert!(
+            drained,
+            "shared resource lock should be reclaimed once both tasks finish, got {}",
+            w.resource_locks_len().await
+        );
+        assert_eq!(w.completions_len(), 0);
     }
 }
