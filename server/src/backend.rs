@@ -96,10 +96,11 @@ pub fn rest_router(state: AppState) -> Router {
             "/api/ebooks/{id}/overrides/delete",
             post(delete_ebook_overrides),
         )
-        // GET/DELETE for author photos are cheap reads with no request body,
-        // so they stay outside the rate-limited `upload_router`. Only the
-        // binary uploads (cover POST, photo PUT, photo-url PUT) carry the
-        // per-IP frequency cap — see `upload_router` (#168).
+        // GET/DELETE for author photos carry no upload body (DELETE mutates,
+        // but cheaply — it clears photo state, it doesn't ingest one), so
+        // they stay outside the rate-limited `upload_router`. Only the binary
+        // uploads (cover POST, photo PUT, photo-url PUT) carry the per-IP
+        // frequency cap — see `upload_router` (#168).
         .route(
             "/api/authors/{id}/photo",
             get(get_author_photo).delete(delete_author_photo),
@@ -166,8 +167,9 @@ fn search_router() -> Router<AppState> {
 /// to the handlers), merged into [`rest_router`]. The three routes — cover
 /// `POST`, author-photo `PUT`, author-photo-URL `PUT` — each accept a
 /// multi-MiB payload and drive disk I/O, WebP transcoding, and SQLite
-/// writes, so they share a per-IP budget (#168). Read-only `GET`/`DELETE`
-/// for author photos stay in `rest_router` since they carry no upload body.
+/// writes, so they share a per-IP budget (#168). The `GET`/`DELETE` author-
+/// photo routes carry no upload body (DELETE mutates but cheaply), so they
+/// stay in `rest_router`, outside this limiter.
 fn upload_router() -> Router<AppState> {
     let limiter = std::sync::Arc::new(RateLimiter::with_policy(
         UPLOAD_RATE_LIMIT_WINDOW,
@@ -2123,22 +2125,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn api_upload_endpoints_return_429_after_budget_exceeded() {
-        // #168: the binary-upload endpoints (cover POST, author-photo PUT,
-        // photo-URL PUT) drive disk I/O, WebP transcoding, and SQLite writes,
-        // so `upload_router` gives them a per-IP fixed-window budget of
-        // UPLOAD_RATE_LIMIT_MAX per UPLOAD_RATE_LIMIT_WINDOW. The (MAX+1)th
-        // request from the same principal must be rejected with 429. As in
-        // the search test, oneshot requests carry no ConnectInfo<SocketAddr>,
-        // so they all share the limiter's 0.0.0.0 fallback bucket.
+    async fn api_upload_endpoints_share_per_ip_budget_and_exclude_reads() {
+        // #168: the three binary-upload routes (cover POST, author-photo PUT,
+        // photo-URL PUT) share ONE per-IP fixed-window limiter
+        // (UPLOAD_RATE_LIMIT_MAX per UPLOAD_RATE_LIMIT_WINDOW) in
+        // `upload_router`; the GET/DELETE photo routes live outside it and
+        // carry no limiter. The limiter runs before the handler, so a
+        // handler's own status doesn't matter — we only assert 429 vs not.
+        // oneshot requests carry no ConnectInfo<SocketAddr>, so they all
+        // share the limiter's 0.0.0.0 fallback bucket.
         let (app, _state, pool) = fixture().await;
         let admin = test_support::create_admin(&pool, "admin").await;
         let token = test_support::bearer_token(&pool, admin.id).await;
 
-        // Drive `PUT /api/authors/{id}/photo/url`. Within budget the handler
-        // returns some non-429 status (author absent / URL refused on a dead
-        // loopback port); we only assert the limiter does not trip early.
-        let put_photo_url = || {
+        let cover_post = || {
+            Request::builder()
+                .uri("/api/ebooks/1/cover")
+                .method("POST")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from("x"))
+                .unwrap()
+        };
+        let photo_put = || {
+            Request::builder()
+                .uri("/api/authors/1/photo")
+                .method("PUT")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from("x"))
+                .unwrap()
+        };
+        let photo_url_put = || {
             Request::builder()
                 .uri("/api/authors/1/photo/url")
                 .method("PUT")
@@ -2148,30 +2164,67 @@ mod tests {
                 .unwrap()
         };
 
+        // Spend the shared budget. Each is within budget, so none should 429.
         for i in 0..UPLOAD_RATE_LIMIT_MAX {
             let res = app
                 .clone()
-                .oneshot(put_photo_url())
+                .oneshot(photo_url_put())
                 .await
                 .expect("request should succeed");
             assert_ne!(
                 res.status(),
                 StatusCode::TOO_MANY_REQUESTS,
-                "request #{} (1-indexed: {}) should be within the upload budget",
-                i,
+                "request #{} should be within the shared upload budget",
                 i + 1
             );
         }
 
-        // The (MAX+1)th request must trip the limiter.
-        let over_limit = app
-            .oneshot(put_photo_url())
+        // Budget is now spent: every upload route trips the shared limiter,
+        // proving the cap covers all three (not just photo-url).
+        for (label, req) in [
+            ("POST /api/ebooks/{id}/cover", cover_post()),
+            ("PUT /api/authors/{id}/photo", photo_put()),
+            ("PUT /api/authors/{id}/photo/url", photo_url_put()),
+        ] {
+            let res = app
+                .clone()
+                .oneshot(req)
+                .await
+                .expect("request should succeed");
+            assert_eq!(
+                res.status(),
+                StatusCode::TOO_MANY_REQUESTS,
+                "{label} must return 429 once the shared upload budget is spent",
+            );
+        }
+
+        // The read/non-upload photo routes are outside upload_router, so they
+        // stay unthrottled even after the upload budget is exhausted.
+        let get = app
+            .clone()
+            .oneshot(get_with_bearer("/api/authors/1/photo", &token))
             .await
             .expect("request should succeed");
-        assert_eq!(
-            over_limit.status(),
+        assert_ne!(
+            get.status(),
             StatusCode::TOO_MANY_REQUESTS,
-            "request beyond UPLOAD_RATE_LIMIT_MAX must return 429",
+            "GET author photo must not be rate-limited by the upload limiter",
+        );
+        let del = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/authors/1/photo")
+                    .method("DELETE")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_ne!(
+            del.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "DELETE author photo must not be rate-limited by the upload limiter",
         );
     }
 
