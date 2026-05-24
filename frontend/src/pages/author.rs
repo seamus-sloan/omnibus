@@ -146,7 +146,11 @@ fn render_author(
                     if a.has_photo {
                         img {
                             class: "disc-avatar disc-avatar--photo",
-                            src: "/api/authors/{a.id}/photo",
+                            // Prefix with `server_url` so mobile WebViews
+                            // hit the configured backend origin instead of
+                            // the in-app document origin. `server_url` is
+                            // empty on web, so this is a no-op there.
+                            src: "{server_url}/api/authors/{a.id}/photo",
                             alt: "{a.name}",
                         }
                     } else {
@@ -179,19 +183,22 @@ fn render_author(
                                             spawn(async move {
                                                 let result = data::scan_author_photo(&server_url, author_id).await;
                                                 match result {
-                                                    Ok(r) if r.resolved => {
-                                                        scan_status.set(Some("Photo found.".into()));
-                                                        // Re-fetch so `has_photo`
-                                                        // flips and the <img>
-                                                        // renders on this view.
-                                                        if let Ok(a2) = data::get_author(&server_url, author_id).await {
-                                                            author.set(a2);
-                                                        }
-                                                    }
-                                                    Ok(_) => scan_status.set(Some(
-                                                        "No photo on Open Library for this author.".into(),
-                                                    )),
+                                                    Ok(r) => scan_status.set(Some(if r.resolved {
+                                                        "Photo found.".into()
+                                                    } else {
+                                                        "No photo on Open Library for this author.".into()
+                                                    })),
                                                     Err(e) => scan_status.set(Some(format!("Scan failed: {e}"))),
+                                                }
+                                                // Re-fetch on every outcome so the hero
+                                                // matches server state. Scan deletes the
+                                                // existing row before resolving, so a miss
+                                                // (or even a transient error) means the
+                                                // photo we used to show may no longer
+                                                // exist and the letter needs to come
+                                                // back.
+                                                if let Ok(a2) = data::get_author(&server_url, author_id).await {
+                                                    author.set(a2);
                                                 }
                                                 scanning.set(false);
                                             });

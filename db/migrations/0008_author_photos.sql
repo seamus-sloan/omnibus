@@ -15,5 +15,13 @@ CREATE TABLE author_photos (
     url         TEXT,
     bytes       BLOB,
     mime        TEXT,
-    fetched_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    fetched_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Invariant: a 'letter' marker is a negative-cache hit and carries no
+    -- image bytes; non-letter sources must carry both bytes and mime. Enforced
+    -- at the schema level so `get_author_photo` / `AuthorDetail.has_photo` can
+    -- trust the row shape without special-casing malformed rows.
+    CHECK (
+        (source =  'letter' AND bytes IS NULL     AND mime IS NULL)
+     OR (source <> 'letter' AND bytes IS NOT NULL AND mime IS NOT NULL)
+    )
 );
