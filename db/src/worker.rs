@@ -121,8 +121,9 @@ impl Default for WorkerConfig {
 /// Single-process background-task runner shared behind an `Arc`.
 ///
 /// Posting a [`Task`] spawns it on the tokio runtime and returns a
-/// [`TaskId`] immediately ([`post`](Worker::post) never blocks). Two
-/// fairness mechanisms shape execution:
+/// [`TaskId`] immediately ([`post`](Worker::post) returns as soon as the
+/// task is spawned; it does not wait for the task to run to completion).
+/// Two fairness mechanisms shape execution:
 ///
 /// * **Per-resource keyed mutex** — tasks reporting the same resource key
 ///   (e.g. two scans of the same library path) serialize behind one
@@ -192,9 +193,9 @@ impl Worker {
     }
 
     /// Wait for the task identified by `id` to finish and return its
-    /// [`TaskOutcome`]. Returns `Err` if `id` was never posted (or already
-    /// pruned) or if the spawned task was dropped before reporting an
-    /// outcome (e.g. it panicked, which closes the watch channel).
+    /// [`TaskOutcome`]. Returns [`TaskOutcome::Err`] if `id` was never posted
+    /// (or already pruned) or if the spawned task was dropped before reporting
+    /// an outcome (e.g. it panicked, which closes the watch channel).
     pub async fn await_completion(&self, id: TaskId) -> TaskOutcome {
         let mut rx = {
             let map = self.completions.lock().unwrap();
