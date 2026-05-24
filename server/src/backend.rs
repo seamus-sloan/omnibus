@@ -35,6 +35,17 @@ use crate::rate_limit::{rate_limit_by_ip, RateLimiter};
 pub const SEARCH_RATE_LIMIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
 pub const SEARCH_RATE_LIMIT_MAX: u32 = 30;
 
+/// Per-IP rate-limit budget for the binary-upload endpoints
+/// (`POST /api/ebooks/{id}/cover`, `PUT /api/authors/{id}/photo`,
+/// `PUT /api/authors/{id}/photo/url`). Each accepts a multi-MiB image and
+/// drives disk I/O, WebP transcoding CPU, and SQLite writes, so a tight loop
+/// from a single principal could exhaust resources (#168). 10 uploads per
+/// 60 seconds per IP is generous for legitimate editing while still
+/// backstopping abuse. Surfaced as constants so callers / tests share a
+/// single source of truth.
+pub const UPLOAD_RATE_LIMIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+pub const UPLOAD_RATE_LIMIT_MAX: u32 = 10;
+
 /// Generic 500 response that never leaks internal error details to the wire.
 /// The full error is logged server-side via `tracing::error!` so it remains
 /// available in structured logs; the client sees only the boilerplate body.
@@ -85,31 +96,20 @@ pub fn rest_router(state: AppState) -> Router {
             "/api/ebooks/{id}/overrides/delete",
             post(delete_ebook_overrides),
         )
-        .merge(
-            Router::new()
-                .route("/api/ebooks/{id}/cover", post(post_ebook_cover))
-                // F1.11: same 10 MiB cap rationale as the book-cover route —
-                // larger than the global 1 MiB so multipart uploads succeed.
-                .route(
-                    "/api/authors/{id}/photo",
-                    put(put_author_photo)
-                        .get(get_author_photo)
-                        .delete(delete_author_photo),
-                )
-                // Per-route body-limit override for image uploads. Layered
-                // closer to the handler than the global 1 MiB cap below, so
-                // axum picks this larger value for `/api/ebooks/{id}/cover`.
-                .layer(axum::extract::DefaultBodyLimit::max(11 * 1024 * 1024)),
+        // GET/DELETE for author photos are cheap reads with no request body,
+        // so they stay outside the rate-limited `upload_router`. Only the
+        // binary uploads (cover POST, photo PUT, photo-url PUT) carry the
+        // per-IP frequency cap — see `upload_router` (#168).
+        .route(
+            "/api/authors/{id}/photo",
+            get(get_author_photo).delete(delete_author_photo),
         )
+        .merge(upload_router())
         .merge(search_router())
         .route("/api/covers/{id}", get(get_cover))
         .route("/api/thumbs/{id}/{size}", get(get_thumb))
         .route("/api/authors", get(get_authors))
         .route("/api/authors/{id}/photo/scan", post(post_author_photo_scan))
-        // F1.11 follow-up: "Paste image URL" branch of the photo edit
-        // modal. Server-side fetches the URL, validates it, persists as
-        // a `manual` row (same as a multipart upload).
-        .route("/api/authors/{id}/photo/url", put(put_author_photo_url))
         .route("/api/authors/{id}", get(get_author_by_id))
         .route("/api/series", get(get_series))
         .route("/api/series/{id}", get(get_series_by_id))
@@ -154,6 +154,36 @@ fn search_router() -> Router<AppState> {
     Router::new()
         .route("/api/search", get(get_search))
         .route("/api/search/palette", get(get_search_palette))
+        .layer(axum::middleware::from_fn_with_state(
+            limiter,
+            rate_limit_by_ip,
+        ))
+}
+
+/// Per-IP rate-limited router for the binary-upload endpoints. Mirrors
+/// [`search_router`]: a dedicated sub-router carrying its own
+/// `Arc<RateLimiter>` via `from_fn_with_state` (state that doesn't propagate
+/// to the handlers), merged into [`rest_router`]. The three routes — cover
+/// `POST`, author-photo `PUT`, author-photo-URL `PUT` — each accept a
+/// multi-MiB payload and drive disk I/O, WebP transcoding, and SQLite
+/// writes, so they share a per-IP budget (#168). Read-only `GET`/`DELETE`
+/// for author photos stay in `rest_router` since they carry no upload body.
+fn upload_router() -> Router<AppState> {
+    let limiter = std::sync::Arc::new(RateLimiter::with_policy(
+        UPLOAD_RATE_LIMIT_WINDOW,
+        UPLOAD_RATE_LIMIT_MAX,
+    ));
+    Router::new()
+        .route("/api/ebooks/{id}/cover", post(post_ebook_cover))
+        .route("/api/authors/{id}/photo", put(put_author_photo))
+        .route("/api/authors/{id}/photo/url", put(put_author_photo_url))
+        // Image uploads need more than the global 1 MiB cap; layered closer
+        // to the handler than the global limit in `main.rs`, so axum picks
+        // this larger value for these routes (preserves the prior 11 MiB cap
+        // that was on the cover/photo routes).
+        .layer(axum::extract::DefaultBodyLimit::max(11 * 1024 * 1024))
+        // Rate-limit layer added last so it is outermost: an over-budget
+        // request is rejected before the body is buffered or the handler runs.
         .layer(axum::middleware::from_fn_with_state(
             limiter,
             rate_limit_by_ip,
@@ -2089,6 +2119,59 @@ mod tests {
             over_limit.status(),
             StatusCode::TOO_MANY_REQUESTS,
             "request beyond SEARCH_RATE_LIMIT_MAX must return 429",
+        );
+    }
+
+    #[tokio::test]
+    async fn api_upload_endpoints_return_429_after_budget_exceeded() {
+        // #168: the binary-upload endpoints (cover POST, author-photo PUT,
+        // photo-URL PUT) drive disk I/O, WebP transcoding, and SQLite writes,
+        // so `upload_router` gives them a per-IP fixed-window budget of
+        // UPLOAD_RATE_LIMIT_MAX per UPLOAD_RATE_LIMIT_WINDOW. The (MAX+1)th
+        // request from the same principal must be rejected with 429. As in
+        // the search test, oneshot requests carry no ConnectInfo<SocketAddr>,
+        // so they all share the limiter's 0.0.0.0 fallback bucket.
+        let (app, _state, pool) = fixture().await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        // Drive `PUT /api/authors/{id}/photo/url`. Within budget the handler
+        // returns some non-429 status (author absent / URL refused on a dead
+        // loopback port); we only assert the limiter does not trip early.
+        let put_photo_url = || {
+            Request::builder()
+                .uri("/api/authors/1/photo/url")
+                .method("PUT")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(r#"{"url":"http://127.0.0.1:1/x.jpg"}"#))
+                .unwrap()
+        };
+
+        for i in 0..UPLOAD_RATE_LIMIT_MAX {
+            let res = app
+                .clone()
+                .oneshot(put_photo_url())
+                .await
+                .expect("request should succeed");
+            assert_ne!(
+                res.status(),
+                StatusCode::TOO_MANY_REQUESTS,
+                "request #{} (1-indexed: {}) should be within the upload budget",
+                i,
+                i + 1
+            );
+        }
+
+        // The (MAX+1)th request must trip the limiter.
+        let over_limit = app
+            .oneshot(put_photo_url())
+            .await
+            .expect("request should succeed");
+        assert_eq!(
+            over_limit.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "request beyond UPLOAD_RATE_LIMIT_MAX must return 429",
         );
     }
 
