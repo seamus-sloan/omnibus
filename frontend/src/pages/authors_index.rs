@@ -266,19 +266,104 @@ fn first_letter(a: &AuthorSummary) -> char {
         .unwrap_or('#')
 }
 
-/// Sort key for the author: prefers the persisted `sort` value (already
-/// last-name-first when available) and falls back to a derived "Last,
-/// First" form so display names like "Ada Lovelace" still group under L.
+/// Surname-first key driving both alphabetical ordering and the letter
+/// glyph above each section.
+///
+/// Three-stage derivation, in order:
+///
+/// 1. If `sort` follows the OPF "Surname, Given" convention (carries a
+///    comma), use it verbatim — that's what the source metadata says.
+/// 2. Else if the display `name` is already in "Surname, Given" form
+///    (some Calibre dumps store it that way), use it verbatim too.
+/// 3. Otherwise, treat the display name as "Given Surname" and
+///    construct "Surname, Given" from `name.rsplitn(2, ' ')`.
+///
+/// We deliberately do **not** trust a comma-less `sort` value. A few
+/// real-world dumps store just a surname (or an unrelated string like
+/// a pseudonym) there, and using it blindly groups authors under the
+/// wrong letter — e.g. "Erin A. Craig" with `sort = "Underwood"`
+/// appearing under the U section. The order/letter stay coupled so
+/// cards within a section sort the same way the section glyph reads.
 fn sort_key(a: &AuthorSummary) -> String {
     if let Some(s) = a.sort.as_deref().filter(|s| !s.is_empty()) {
-        return s.to_string();
+        if s.contains(',') {
+            return s.to_string();
+        }
     }
-    // Heuristic fallback: split on last space; treat the tail as the
-    // surname. Names without a space (mononyms) fall through unchanged.
+    if a.name.contains(',') {
+        return a.name.clone();
+    }
     let parts: Vec<&str> = a.name.rsplitn(2, ' ').collect();
     if parts.len() == 2 {
         format!("{}, {}", parts[0], parts[1])
     } else {
         a.name.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn author(name: &str, sort: Option<&str>) -> AuthorSummary {
+        AuthorSummary {
+            id: 0,
+            name: name.into(),
+            sort: sort.map(Into::into),
+            book_count: 0,
+            accent: None,
+        }
+    }
+
+    #[test]
+    fn sort_key_uses_comma_form_sort_verbatim() {
+        let a = author("Louisa May Alcott", Some("Alcott, Louisa May"));
+        assert_eq!(sort_key(&a), "Alcott, Louisa May");
+        assert_eq!(first_letter(&a), 'A');
+    }
+
+    #[test]
+    fn sort_key_ignores_commaless_sort_and_falls_back_to_name() {
+        // Regression: a comma-less `sort` value (some real-world dumps
+        // stuff a pseudonym or bare surname here, e.g. "Underwood" for
+        // an author whose display name is "Erin A. Craig") used to win,
+        // grouping Erin under U. Now we treat it as garbage and derive
+        // the surname from the display name instead.
+        let a = author("Erin A. Craig", Some("Underwood"));
+        assert_eq!(sort_key(&a), "Craig, Erin A.");
+        assert_eq!(first_letter(&a), 'C');
+    }
+
+    #[test]
+    fn sort_key_falls_back_to_name_when_sort_missing() {
+        let a = author("Ada Lovelace", None);
+        assert_eq!(sort_key(&a), "Lovelace, Ada");
+        assert_eq!(first_letter(&a), 'L');
+    }
+
+    #[test]
+    fn sort_key_treats_lastname_first_display_name_verbatim() {
+        // Some Calibre dumps store the display name itself as
+        // "Surname, Given". Keep it as-is — `rsplitn(2, ' ')` would
+        // otherwise treat "Olivia" as the surname.
+        let a = author("Atwater, Olivia", None);
+        assert_eq!(sort_key(&a), "Atwater, Olivia");
+        assert_eq!(first_letter(&a), 'A');
+    }
+
+    #[test]
+    fn sort_key_handles_mononym() {
+        let a = author("Plato", None);
+        assert_eq!(sort_key(&a), "Plato");
+        assert_eq!(first_letter(&a), 'P');
+    }
+
+    #[test]
+    fn sort_key_handles_empty_sort_string() {
+        // Explicit empty string in `sort` should be ignored the same
+        // way as `None`.
+        let a = author("Ada Lovelace", Some(""));
+        assert_eq!(sort_key(&a), "Lovelace, Ada");
+        assert_eq!(first_letter(&a), 'L');
     }
 }
