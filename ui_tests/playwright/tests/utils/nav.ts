@@ -13,10 +13,12 @@ export async function gotoReady(page: Page, path: string): Promise<void> {
 }
 
 // Asserts the shared top-nav is present with the expected links. Used by every
-// flow's layout test so we catch nav regressions in one place.
+// flow's layout test so we catch nav regressions in one place. Settings now
+// lives inside the user-menu dropdown, so we assert the user-menu trigger is
+// present instead of a top-level Settings link.
 export async function expectNavVisible(page: Page): Promise<void> {
   const nav = page.getByRole("navigation", { name: "Primary" });
   await expect(nav).toBeVisible();
   await expect(nav.getByRole("link", { name: "Library" })).toBeVisible();
-  await expect(nav.getByRole("link", { name: "Settings" })).toBeVisible();
+  await expect(nav.getByTestId("user-menu-trigger")).toBeVisible();
 }
