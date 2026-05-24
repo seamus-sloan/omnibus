@@ -708,21 +708,31 @@ pub async fn revoke_all_sessions_for_user(pool: &SqlitePool, user_id: i64) -> Au
     Ok(r.rows_affected())
 }
 
-/// Hard-delete sessions that can never authenticate again: those past their
-/// absolute `expires_at`, or any that have been soft-revoked (`revoked_at IS
-/// NOT NULL`). Revocation marks rows rather than deleting them (see
-/// `revoke_session`), so without this prune the `sessions` table grows
-/// unboundedly on busy multi-user deployments — every login/logout leaves a
-/// permanent row that slows `lookup_session` and `revoke_all_sessions_for_user`.
+/// Hard-delete every session [`lookup_session`] would reject: revoked
+/// (`revoked_at IS NOT NULL`), past its absolute `expires_at`, or idle-expired
+/// (`last_used_at` older than [`SESSION_IDLE_TIMEOUT_SECS`]). Revocation marks
+/// rows rather than deleting them (see `revoke_session`), so without this
+/// prune the `sessions` table grows unboundedly — a permanent row per
+/// login/logout that slows `lookup_session` and `revoke_all_sessions_for_user`.
 ///
-/// The `idx_sessions_expires_at` index keeps the expiry half of the predicate
-/// cheap. Returns the number of rows deleted. Intended to run on a periodic
-/// schedule (see the prune task in `server::main`).
+/// The predicate is kept in lockstep with `lookup_session` (same `<=` absolute
+/// boundary, same idle cutoff) so the table only ever retains rows that can
+/// still authenticate. Returns the number of rows deleted; intended to run on
+/// a periodic schedule (see the prune task in `server::main`).
+/// `idx_sessions_expires_at` covers the absolute-expiry term; the revoked and
+/// idle terms are not separately indexed.
 pub async fn prune_expired_sessions(pool: &SqlitePool) -> AuthResult<u64> {
-    let r = sqlx::query("DELETE FROM sessions WHERE expires_at < ? OR revoked_at IS NOT NULL")
-        .bind(now_unix())
-        .execute(pool)
-        .await?;
+    let now = now_unix();
+    let r = sqlx::query(
+        "DELETE FROM sessions
+         WHERE revoked_at IS NOT NULL
+            OR expires_at <= ?
+            OR last_used_at < ?",
+    )
+    .bind(now)
+    .bind(now - SESSION_IDLE_TIMEOUT_SECS)
+    .execute(pool)
+    .await?;
     Ok(r.rows_affected())
 }
 
@@ -1155,7 +1165,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prune_removes_expired_and_revoked_keeps_live() {
+    async fn prune_removes_expired_revoked_and_idle_keeps_live() {
         let p = pool().await;
         let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
 
@@ -1175,13 +1185,28 @@ mod tests {
             .unwrap();
         revoke_session(&p, revoked.session.id).await.unwrap();
 
-        // (c) Live: un-revoked and well within its expiry window.
+        // (c) Idle-expired: un-revoked and inside its absolute window, but
+        // `last_used_at` is older than SESSION_IDLE_TIMEOUT_SECS, so
+        // lookup_session would reject it. The prune must match that.
+        let idle = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE sessions SET last_used_at = 1 WHERE id = ?")
+            .bind(idle.session.id)
+            .execute(&p)
+            .await
+            .unwrap();
+
+        // (d) Live: un-revoked, inside its absolute window, recently used.
         let live = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60)
             .await
             .unwrap();
 
         let deleted = prune_expired_sessions(&p).await.unwrap();
-        assert_eq!(deleted, 2, "expired + revoked rows should be deleted");
+        assert_eq!(
+            deleted, 3,
+            "expired + revoked + idle rows should be deleted"
+        );
 
         let remaining: Vec<i64> = sqlx::query_scalar("SELECT id FROM sessions ORDER BY id")
             .fetch_all(&p)
