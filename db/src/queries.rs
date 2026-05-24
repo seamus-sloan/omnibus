@@ -2272,11 +2272,18 @@ pub async fn get_author_photo(
     pool: &SqlitePool,
     author_id: i64,
 ) -> Result<Option<(String, Vec<u8>)>, sqlx::Error> {
-    let row: Option<(String, Option<String>, Option<Vec<u8>>)> =
-        sqlx::query_as("SELECT source, mime, bytes FROM author_photos WHERE author_id = ?")
-            .bind(author_id)
-            .fetch_optional(pool)
-            .await?;
+    // Filter `letter` rows in SQL as well as via the schema CHECK constraint
+    // so a malformed row (e.g. left over from a future migration drift)
+    // can never accidentally serve `letter` bytes as a real image. Belt +
+    // suspenders alongside the table-level invariant.
+    let row: Option<(String, Option<String>, Option<Vec<u8>>)> = sqlx::query_as(
+        "SELECT source, mime, bytes
+           FROM author_photos
+          WHERE author_id = ? AND source <> 'letter'",
+    )
+    .bind(author_id)
+    .fetch_optional(pool)
+    .await?;
     match row {
         Some((_, Some(mime), Some(bytes))) if !bytes.is_empty() => Ok(Some((mime, bytes))),
         _ => Ok(None),

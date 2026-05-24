@@ -486,7 +486,29 @@ async fn get_author_by_id(
     Path(id): Path<i64>,
 ) -> Response {
     match db::get_author(&state.pool, id).await {
-        Ok(Some(author)) => Json(author).into_response(),
+        Ok(Some(author)) => {
+            // F1.11: queue a background resolution when the author has no
+            // `author_photos` row yet so first-time visits trigger Open
+            // Library resolution. A subsequent visit picks up the resolved
+            // photo (or the `letter` negative-cache marker).
+            if !author.has_photo {
+                match db::author_photo_status(&state.pool, id).await {
+                    Ok(None) => {
+                        state.worker.post(Task::ResolveAuthorPhoto { author_id: id });
+                    }
+                    Ok(Some(_)) => {}
+                    Err(e) => {
+                        // Don't fail the read — just skip the queue and log.
+                        tracing::warn!(
+                            author_id = id,
+                            error = %e,
+                            "author_photo_status check failed; skipping autoresolution"
+                        );
+                    }
+                }
+            }
+            Json(author).into_response()
+        }
         Ok(None) => axum::http::StatusCode::NOT_FOUND.into_response(),
         Err(error) => internal("read author", error),
     }
@@ -938,10 +960,16 @@ async fn delete_author_photo(
 }
 
 /// Admin: synchronously run the Open Library cascade for an author. Clears
-/// any existing row (including sticky `letter` markers) so the resolver
-/// re-queries Open Library, then awaits the resolver inline and returns
+/// any sticky `letter` negative-cache marker so the resolver re-queries Open
+/// Library, then awaits the resolver inline and returns
 /// `{ "resolved": bool }`. `resolved=false` means Open Library had nothing
 /// (a `letter` marker is now in place to skip future autoresolution).
+///
+/// Manual uploads are treated as overrides: a `source = 'manual'` row is
+/// preserved (the F1.11 roadmap explicitly calls this out — "skips if a
+/// manual override exists"). Scan returns `resolved=true` in that case
+/// without touching the row, so admins can't accidentally wipe a manual
+/// upload by clicking the button.
 async fn post_author_photo_scan(
     _admin: AdminUser,
     State(state): State<AppState>,
@@ -960,6 +988,16 @@ async fn post_author_photo_scan(
         };
     if !author_exists {
         return (axum::http::StatusCode::NOT_FOUND, "author not found").into_response();
+    }
+    // Manual uploads win — don't delete or overwrite. Treat scan as a no-op
+    // and report resolved=true so the UI keeps the existing photo.
+    match db::author_photo_status(&state.pool, id).await {
+        Ok(Some((db::AuthorPhotoSource::Manual, _))) => {
+            return Json(omnibus_shared::AuthorPhotoScanResult { resolved: true })
+                .into_response();
+        }
+        Ok(_) => {}
+        Err(e) => return internal("author_photo_status (pre-scan)", e),
     }
     if let Err(e) = db::delete_author_photo(&state.pool, id).await {
         return internal("delete_author_photo (pre-scan)", e);
@@ -3239,5 +3277,75 @@ mod tests {
             .await
             .expect("request should succeed");
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_scan_author_photo_preserves_manual_upload() {
+        // Roadmap: manual override wins over the resolver. An admin clicking
+        // "Scan for picture" on an author who already has a manual upload
+        // must not wipe that upload — the scan handler treats the row as a
+        // sticky override and returns resolved=true without deleting.
+        let (app, _state, pool) = fixture().await;
+        let id = seed_author(&pool, "Ada Lovelace").await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+        db::upsert_author_photo(
+            &pool,
+            id,
+            db::AuthorPhotoSource::Manual,
+            None,
+            Some("image/png"),
+            Some(TINY_PNG),
+        )
+        .await
+        .unwrap();
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/authors/{id}/photo/scan"))
+                    .method("POST")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body: omnibus_shared::AuthorPhotoScanResult =
+            serde_json::from_slice(&bytes).unwrap();
+        assert!(body.resolved, "scan on manual upload should report resolved=true");
+
+        // Manual row must still be intact (same source, same bytes).
+        let (src, _) = db::author_photo_status(&pool, id).await.unwrap().unwrap();
+        assert_eq!(src, db::AuthorPhotoSource::Manual);
+        let (_, served) = db::get_author_photo(&pool, id).await.unwrap().unwrap();
+        assert_eq!(served, TINY_PNG, "manual photo bytes must be preserved");
+    }
+
+    #[tokio::test]
+    async fn api_get_author_response_carries_has_photo_flag() {
+        // F1.11 autoresolution wiring lives behind the GET handler — the
+        // worker call itself is fire-and-forget so we can't deterministically
+        // observe it from a test without a network. What we can verify is
+        // that the handler still returns the expected `AuthorDetail` shape
+        // with `has_photo = false` when no row exists, and `true` after a
+        // manual upload (covered by `api_put_author_photo_uploads_and_get_serves`
+        // for the positive case).
+        let (app, _state, pool) = fixture().await;
+        let id = seed_author(&pool, "Brandon Sanderson").await;
+        let user = test_support::create_user(&pool, "alice").await;
+        let token = test_support::bearer_token(&pool, user.id).await;
+
+        let res = app
+            .oneshot(get_with_bearer(&format!("/api/authors/{id}"), &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let author: omnibus_shared::AuthorDetail = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(author.id, id);
+        assert!(!author.has_photo, "no row yet means has_photo = false");
     }
 }
