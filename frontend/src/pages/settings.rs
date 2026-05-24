@@ -133,6 +133,7 @@ pub fn SettingsPage() -> Element {
 
             p {
                 id: "settings-status",
+                "data-testid": "settings-status",
                 role: "status",
                 class: if status_is_error() { "settings-status error" } else { "settings-status success" },
                 if let Some(msg) = status() { "{msg}" }

@@ -6,7 +6,11 @@ import { expectNavVisible, gotoReady } from "../utils/nav";
 const ebookInput = (page: Page) => page.getByLabel("Ebook Library Path");
 const audiobookInput = (page: Page) => page.getByLabel("Audiobook Library Path");
 const saveButton = (page: Page) => page.getByRole("button", { name: "Save" });
-const settingsStatus = (page: Page) => page.getByRole("status");
+// The settings page now has two `role=status` regions — the inline form
+// status (this locator) and the worker-progress indicator above the Save
+// button (`data-testid="worker-status"`, issue #69). Target by testid so
+// the assertions stay specific to the form's "Settings saved." line.
+const settingsStatus = (page: Page) => page.getByTestId("settings-status");
 
 test("renders the settings page layout", async ({ page }) => {
   await page.goto("/settings");

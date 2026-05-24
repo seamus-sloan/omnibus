@@ -187,9 +187,12 @@ pub async fn rpc_save_settings(settings: Settings) -> Result<Settings> {
 /// runtime (the route string ends up in the binary but never reaches
 /// the axum router). The body is idempotent and read-only; using POST
 /// is purely a framework workaround so the route actually mounts.
-#[post("/api/rpc/worker_status", pool: PoolExt, worker: WorkerExt, _user: AuthUser)]
+///
+/// `_pool: PoolExt` is kept in the extractor list to put the macro on
+/// the same code path every other `/api/rpc/*` route uses (all of
+/// which take a `PoolExt`), but is unused — no DB calls run.
+#[post("/api/rpc/worker_status", _pool: PoolExt, worker: WorkerExt, _user: AuthUser)]
 pub async fn rpc_worker_status() -> Result<WorkerStatus> {
-    let _ = &pool; // keep the extractor live so the macro emits the route
     Ok(worker.0.progress_snapshot())
 }
 

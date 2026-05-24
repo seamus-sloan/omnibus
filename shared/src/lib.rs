@@ -615,7 +615,7 @@ pub struct TaskProgress {
     pub last_update_ms: i64,
 }
 
-/// Aggregate progress feed served from `GET /api/rpc/worker_status`.
+/// Aggregate progress feed served from `POST /api/rpc/worker_status`.
 ///
 /// Two-vec split mirrors the F0.5 design doc shape: callers can short-circuit
 /// the "do I need a fade timer?" check by inspecting `recent_complete.is_empty()`

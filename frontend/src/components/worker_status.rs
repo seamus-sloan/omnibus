@@ -27,13 +27,6 @@ use crate::{data, use_server_url};
 /// surface (when does it un-throttle?) for no measurable benefit.
 const POLL_INTERVAL_MS: u32 = 1_000;
 
-/// How long to keep a dismissed terminal task suppressed client-side. The
-/// server's own eviction (10s — see `TERMINAL_RETENTION` in the worker)
-/// kicks in shortly after, so this only has to outlast a couple of
-/// polling ticks. Longer would risk re-surfacing a still-resident
-/// terminal if the user dismissed it just before the server evicted.
-const DISMISS_GRACE_MS: u32 = 12_000;
-
 /// 1 Hz-polled worker progress strip. Renders nothing when the worker is
 /// idle so consumers can mount it inline without leaving dead space.
 #[component]
@@ -42,6 +35,9 @@ pub fn WorkerStatusIndicator() -> Element {
     let mut status = use_signal(WorkerStatus::default);
     // Client-suppressed terminal task ids — the user dismissed the
     // "Library updated" / red banner before the server evicted it.
+    // Pruned on every render to ids still present in `recent_complete`
+    // so the set can't grow past the server's own ~10 s retention
+    // window (see snapshot loop below).
     let mut dismissed = use_signal(std::collections::HashSet::<u64>::new);
 
     let url_for_poll = server_url.clone();
@@ -62,6 +58,21 @@ pub fn WorkerStatusIndicator() -> Element {
     });
 
     let snap = status();
+    // Drop any dismissed ids that the server has already evicted, so the
+    // set stays bounded by `len(recent_complete)` rather than growing
+    // monotonically across the session. Only writes when something
+    // actually changed to avoid signal-write churn on every poll.
+    {
+        let current = dismissed();
+        let live: std::collections::HashSet<u64> = current
+            .iter()
+            .copied()
+            .filter(|id| snap.recent_complete.iter().any(|p| p.task_id == *id))
+            .collect();
+        if live.len() != current.len() {
+            dismissed.set(live);
+        }
+    }
     let visible_terminals: Vec<TaskProgress> = snap
         .recent_complete
         .iter()
@@ -82,7 +93,7 @@ pub fn WorkerStatusIndicator() -> Element {
             // Active tasks first — these have no dismiss affordance since
             // the user can't make them go away by clicking.
             for task in snap.active.iter() {
-                ActiveRow { task: task.clone() }
+                ActiveRow { key: "{task.task_id}", task: task.clone() }
             }
             // Recently-finished tasks. Done → inline success row that
             // fades client-side; Failed → red banner with dismiss.
@@ -212,13 +223,6 @@ fn kind_label(kind: TaskKind, running: bool) -> &'static str {
         (_, false) => "Background task",
     }
 }
-
-// `DISMISS_GRACE_MS` is currently consulted only by tests / future
-// drift-detection code; the server-side eviction window does the heavy
-// lifting. Reference it so dead-code lints don't trip while the seam
-// stays available for a later "auto-fade after N ms" tweak.
-#[allow(dead_code)]
-const _DISMISS_GRACE_MS_TOUCH: u32 = DISMISS_GRACE_MS;
 
 // ── Platform-gated 1 Hz poll sleeper ─────────────────────────────
 //

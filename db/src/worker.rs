@@ -498,6 +498,15 @@ impl Worker {
     /// Auth-gated at the RPC layer; safe to call from any handler that
     /// already has an `AuthUser`.
     pub fn progress_snapshot(&self) -> WorkerStatus {
+        self.progress_snapshot_with_retention(TERMINAL_RETENTION)
+    }
+
+    /// Test-friendly variant of [`Worker::progress_snapshot`] that lets
+    /// callers supply a custom retention window. Production code always
+    /// uses [`TERMINAL_RETENTION`]; the unit-test suite passes a much
+    /// shorter window so the eviction assertion doesn't have to sleep
+    /// for the full 10 s of wall-clock time.
+    fn progress_snapshot_with_retention(&self, retention: Duration) -> WorkerStatus {
         let now = Instant::now();
         let mut map = self.progress.lock().unwrap();
 
@@ -506,7 +515,7 @@ impl Worker {
         let expired: Vec<TaskId> = map
             .iter()
             .filter_map(|(id, entry)| match entry.terminal_at {
-                Some(at) if now.saturating_duration_since(at) >= TERMINAL_RETENTION => Some(*id),
+                Some(at) if now.saturating_duration_since(at) >= retention => Some(*id),
                 _ => None,
             })
             .collect();
@@ -1049,10 +1058,9 @@ mod tests {
     }
 
     /// Terminal entries get GC'd by `progress_snapshot` after the retention
-    /// window. We can't pause tokio time here because the worker uses real
-    /// `Instant::now()` for `terminal_at`, so the test cheats by sleeping
-    /// for `TERMINAL_RETENTION + a beat`. Keep the constant short in tests
-    /// — 10s is fine; bumping it would slow CI for no value.
+    /// window. Uses the test-only `progress_snapshot_with_retention` so we
+    /// can exercise the eviction path with a 100 ms window instead of
+    /// sleeping for the full production 10 s.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn progress_snapshot_evicts_terminals_after_retention() {
         let w = make_worker_default(pool().await);
@@ -1066,15 +1074,15 @@ mod tests {
         });
         let _ = w.await_completion(id).await;
 
-        // Right after completion: present in recent_complete.
-        let snap = w.progress_snapshot();
+        // Right after completion: present in recent_complete with a
+        // generous retention window so eviction is opt-in.
+        let test_retention = Duration::from_millis(100);
+        let snap = w.progress_snapshot_with_retention(Duration::from_secs(60));
         assert!(snap.recent_complete.iter().any(|p| p.task_id == id));
 
-        // Sleep just past the retention window. 10s + a beat — test takes
-        // ~10s real time, which is the price of monotonic-clock GC; mock
-        // time would require threading a clock through the worker.
-        tokio::time::sleep(TERMINAL_RETENTION + Duration::from_millis(200)).await;
-        let snap2 = w.progress_snapshot();
+        // Cross the configured window and re-snapshot.
+        tokio::time::sleep(test_retention + Duration::from_millis(50)).await;
+        let snap2 = w.progress_snapshot_with_retention(test_retention);
         assert!(
             !snap2.recent_complete.iter().any(|p| p.task_id == id),
             "terminal entry should be evicted after retention"
