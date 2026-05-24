@@ -68,6 +68,34 @@ fn main() {
                 }
             }
 
+            // Periodically prune sessions that can never authenticate again:
+            // those past their absolute expiry, or soft-revoked. Revocation
+            // marks rows rather than deleting them, so without this the
+            // sessions table grows unbounded — a permanent row per
+            // login/logout for the process lifetime, which compounds with the
+            // F4.x multi-user expansion. The first `interval` tick fires
+            // immediately, so this also runs once at boot; thereafter every
+            // 24h. The idx_sessions_expires_at index keeps the DELETE cheap.
+            {
+                let pool = pool.clone();
+                tokio::spawn(async move {
+                    let mut interval =
+                        tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60));
+                    loop {
+                        interval.tick().await;
+                        match omnibus_db::auth::prune_expired_sessions(&pool).await {
+                            Ok(n) if n > 0 => {
+                                tracing::info!(pruned = n, "pruned expired/revoked sessions");
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                tracing::warn!(error = %e, "session prune failed");
+                            }
+                        }
+                    }
+                });
+            }
+
             let auth_limiter = Arc::new(rate_limit::RateLimiter::new());
             // Search RPC limiter. Mirrors the REST-side limiter's policy
             // (`backend::search_router`, 30 req / 10s) but is a SEPARATE
