@@ -40,6 +40,10 @@ tower = "0.5"
 # copies under /tmp. Already a transitive dep elsewhere — explicit here only
 # for the backend integration tests.
 tempfile.workspace = true
+# Mock HTTP server for tests that exercise the remote-image fetcher in
+# `db::author_photos::fetch_remote_image`. Already pinned at this version
+# in `db`'s dev-deps so cargo unifies on one build.
+wiremock = "0.6"
 
 [features]
 default = ["server"]

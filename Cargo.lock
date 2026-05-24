@@ -3841,6 +3841,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "wiremock",
 ]
 
 [[package]]

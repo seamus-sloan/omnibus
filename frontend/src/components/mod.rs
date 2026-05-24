@@ -33,10 +33,11 @@ pub use format_switcher::FormatSwitcher;
 pub mod atrium;
 
 // F1.11 follow-up: hover-overlay "edit photo" affordance + modal with
-// three actions (paste URL, upload file, scan Open Library). Reused by
-// the author detail hero and the /authors index cards. Lives in
-// components/ rather than pages/ so both surfaces share the same
-// component instance and styling.
+// three actions (paste URL, upload file, scan Open Library). Mounted by
+// the author detail hero only — the `/authors` index renders cached
+// photos read-only. Lives in components/ rather than pages/ so the
+// modal can be lifted to other surfaces (e.g. an admin bulk-edit view)
+// without duplicating the form.
 pub mod author_photo_edit;
 
 #[cfg(not(feature = "mobile"))]

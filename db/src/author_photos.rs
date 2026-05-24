@@ -264,11 +264,21 @@ pub async fn fetch_remote_image(url: &str) -> Result<(String, Vec<u8>), FetchRem
             return Err(FetchRemoteImageError::TooLarge);
         }
     }
-    let bytes = resp.bytes().await?.to_vec();
-    if bytes.len() as u64 > REMOTE_IMAGE_MAX_BYTES {
-        return Err(FetchRemoteImageError::TooLarge);
+    // Stream the body and abort the moment we'd cross the cap. A hostile
+    // (or buggy) server may advertise no `Content-Length`, or chunk past
+    // the cap, or lie about its size — `resp.bytes()` would have
+    // happily allocated whatever it sent. Cap memory at
+    // `REMOTE_IMAGE_MAX_BYTES + 1` bytes worst case (one chunk overshoot
+    // before the check fires).
+    let mut buf: Vec<u8> = Vec::new();
+    let mut stream = resp;
+    while let Some(chunk) = stream.chunk().await? {
+        if buf.len() as u64 + chunk.len() as u64 > REMOTE_IMAGE_MAX_BYTES {
+            return Err(FetchRemoteImageError::TooLarge);
+        }
+        buf.extend_from_slice(&chunk);
     }
-    Ok((content_type, bytes))
+    Ok((content_type, buf))
 }
 
 #[cfg(test)]
