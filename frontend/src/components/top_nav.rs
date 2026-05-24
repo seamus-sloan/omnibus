@@ -7,23 +7,59 @@ use crate::Route;
 
 #[component]
 pub fn TopNav() -> Element {
+    let route = use_route::<Route>();
     // Hide the search trigger on `/settings` — the page has its own dense
     // form layout and a search button wedged into the nav above it just
     // clutters the chrome.
-    let on_settings = matches!(use_route::<Route>(), Route::Settings {});
+    let on_settings = matches!(route, Route::Settings {});
+    let is_library = matches!(route, Route::Landing {});
+    let is_authors = matches!(route, Route::AuthorsIndex {} | Route::AuthorDetail { .. });
+    let is_series = matches!(route, Route::SeriesIndex {} | Route::SeriesDetail { .. });
 
     rsx! {
-        nav { class: "top-nav",
-            Link { to: Route::Landing {}, "Home" }
-            Link { to: Route::AuthorsIndex {}, "Authors" }
-            Link { to: Route::SeriesIndex {}, "Series" }
-            Link { to: Route::TagCloud {}, "Tags" }
-            Link { to: Route::Settings {}, "Settings" }
+        nav { class: "atrium-topbar", aria_label: "Primary",
+            Link {
+                to: Route::Landing {},
+                class: "atrium-brand",
+                div { class: "atrium-brand-mark" }
+                div { class: "atrium-brand-word", "Omnibus" }
+            }
+            div { class: "atrium-nav",
+                Link {
+                    to: Route::Landing {},
+                    class: if is_library { "on" } else { "" },
+                    "Library"
+                }
+                Link {
+                    to: Route::AuthorsIndex {},
+                    class: if is_authors { "on" } else { "" },
+                    "Authors"
+                }
+                Link {
+                    to: Route::SeriesIndex {},
+                    class: if is_series { "on" } else { "" },
+                    "Series"
+                }
+                a { class: "disabled", aria_disabled: "true", "Stats" }
+            }
             if !on_settings {
                 SearchPaletteHost {}
             }
-            ThemeToggle {}
-            AuthControl {}
+            div { class: "atrium-actions",
+                button {
+                    class: "btn primary sm",
+                    r#type: "button",
+                    "data-testid": "add-books-button",
+                    "Add books"
+                }
+                ThemeToggle {}
+                Link {
+                    to: Route::Settings {},
+                    class: "btn ghost sm",
+                    "Settings"
+                }
+                AuthControl {}
+            }
         }
     }
 }
@@ -76,7 +112,7 @@ fn AuthControl() -> Element {
     match authed() {
         Some(true) => rsx! {
             button {
-                class: "top-nav-btn",
+                class: "btn ghost sm",
                 "data-testid": "logout-button",
                 r#type: "button",
                 onclick: on_logout,
@@ -84,7 +120,11 @@ fn AuthControl() -> Element {
             }
         },
         Some(false) => rsx! {
-            Link { to: Route::Login {}, "Log in" }
+            Link {
+                to: Route::Login {},
+                class: "btn ghost sm",
+                "Log in"
+            }
         },
         None => rsx! {},
     }
