@@ -14,12 +14,51 @@
 //! This keeps a single page-view from costing two HTTP round-trips on
 //! every refresh for authors who genuinely have no Open Library entry.
 
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde::Deserialize;
 use sqlx::SqlitePool;
 
 use crate::queries::{author_photo_status, upsert_author_photo, AuthorPhotoSource};
+
+/// Default request timeout for the Open Library search + cover calls.
+const OPEN_LIBRARY_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn default_user_agent() -> String {
+    format!(
+        "omnibus/{} (https://github.com/sloansa/omnibus)",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+/// Process-wide shared `reqwest::Client`.
+///
+/// `reqwest::Client` is designed to be cloned and reused: a clone shares the
+/// underlying connection pool and TLS session cache. Building one per call
+/// (the previous behaviour) paid a fresh TLS handshake on every request and
+/// reused no connections across the search + cover-download pair, or across
+/// the many author-photo resolutions a deployment fires in sequence.
+///
+/// We hand out clones of this single client so all outbound HTTP in
+/// `db::author_photos` — the Worker's cascade resolutions *and* the admin
+/// "paste image URL" endpoint — shares one pool. The per-request timeout
+/// differs between call sites, so it's applied on the `RequestBuilder`
+/// rather than baked into the client.
+fn shared_client() -> reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .user_agent(default_user_agent())
+                .build()
+                // A client with no custom config is infallible to build; the
+                // only failure mode is TLS backend init, which would also
+                // fail every per-call builder we previously used.
+                .expect("build shared reqwest client")
+        })
+        .clone()
+}
 
 /// Injection points for tests. Production builds construct `default()` and
 /// hit the real Open Library endpoints.
@@ -34,6 +73,12 @@ pub struct OpenLibraryConfig {
     pub base_covers_url: String,
     pub timeout: Duration,
     pub user_agent: String,
+    /// Shared HTTP client (connection pool + TLS session cache). Cloned from
+    /// the process-wide [`shared_client`] so every resolution reuses the
+    /// same pool. The `user_agent` field above remains the canonical UA; it
+    /// is applied per-request so a test-supplied UA still takes effect even
+    /// though the client itself carries the production default.
+    pub client: reqwest::Client,
 }
 
 impl Default for OpenLibraryConfig {
@@ -41,11 +86,9 @@ impl Default for OpenLibraryConfig {
         Self {
             base_search_url: "https://openlibrary.org".into(),
             base_covers_url: "https://covers.openlibrary.org".into(),
-            timeout: Duration::from_secs(5),
-            user_agent: format!(
-                "omnibus/{} (https://github.com/sloansa/omnibus)",
-                env!("CARGO_PKG_VERSION")
-            ),
+            timeout: OPEN_LIBRARY_TIMEOUT,
+            user_agent: default_user_agent(),
+            client: shared_client(),
         }
     }
 }
@@ -144,10 +187,7 @@ async fn fetch_open_library(
     name: &str,
     config: &OpenLibraryConfig,
 ) -> Result<Option<(String, String, Vec<u8>)>, reqwest::Error> {
-    let client = reqwest::Client::builder()
-        .timeout(config.timeout)
-        .user_agent(&config.user_agent)
-        .build()?;
+    let client = &config.client;
 
     // Step 1: search for an OLID by name.
     let search_url = format!(
@@ -155,7 +195,12 @@ async fn fetch_open_library(
         config.base_search_url.trim_end_matches('/'),
         urlencoding::encode(name)
     );
-    let resp = client.get(&search_url).send().await?;
+    let resp = client
+        .get(&search_url)
+        .timeout(config.timeout)
+        .header(reqwest::header::USER_AGENT, &config.user_agent)
+        .send()
+        .await?;
     if !resp.status().is_success() {
         return Ok(None);
     }
@@ -175,7 +220,12 @@ async fn fetch_open_library(
         config.base_covers_url.trim_end_matches('/'),
         olid
     );
-    let resp = client.get(&cover_url).send().await?;
+    let resp = client
+        .get(&cover_url)
+        .timeout(config.timeout)
+        .header(reqwest::header::USER_AGENT, &config.user_agent)
+        .send()
+        .await?;
     if !resp.status().is_success() {
         return Ok(None);
     }
@@ -200,6 +250,11 @@ async fn fetch_open_library(
 /// Content-Length when available, but this cap is what actually bounds
 /// memory consumption mid-download.
 pub const REMOTE_IMAGE_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Per-request timeout for a user-supplied "paste image URL" download. More
+/// generous than the Open Library timeout because the user is waiting
+/// synchronously on an arbitrary remote host.
+const REMOTE_IMAGE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Errors surfaced by [`fetch_remote_image`]. The variants are deliberately
 /// user-facing — the handler maps each to a 4xx/5xx response without further
@@ -233,14 +288,14 @@ pub async fn fetch_remote_image(url: &str) -> Result<(String, Vec<u8>), FetchRem
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err(FetchRemoteImageError::BadScheme);
     }
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .user_agent(format!(
-            "omnibus/{} (https://github.com/sloansa/omnibus)",
-            env!("CARGO_PKG_VERSION")
-        ))
-        .build()?;
-    let resp = client.get(url).send().await?;
+    // Reuse the process-wide client so this on-demand admin fetch shares the
+    // connection pool / TLS session cache with the Worker's Open Library
+    // resolutions. The longer per-request timeout is applied on the builder.
+    let resp = shared_client()
+        .get(url)
+        .timeout(REMOTE_IMAGE_TIMEOUT)
+        .send()
+        .await?;
     let status = resp.status();
     if !status.is_success() {
         return Err(FetchRemoteImageError::BadStatus(status.as_u16()));
@@ -308,6 +363,7 @@ mod tests {
             base_covers_url: server.uri(),
             timeout: Duration::from_secs(2),
             user_agent: "omnibus-test".into(),
+            ..Default::default()
         }
     }
 
@@ -464,6 +520,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fetch_open_library_sends_configured_user_agent() {
+        // The shared client carries the production UA, but each request must
+        // override it with the config's `user_agent` so test injection (and
+        // any future per-call UA) still takes effect.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/search/authors.json"))
+            .and(wiremock::matchers::header("user-agent", "omnibus-test"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "docs": []
+            })))
+            .mount(&server)
+            .await;
+
+        let cfg = config_for(&server);
+        let result = fetch_open_library("Ada Lovelace", &cfg).await.unwrap();
+        assert!(result.is_none());
+        // The header matcher above only matches when the UA is correct, so a
+        // single received request confirms the override fired.
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
     async fn resolve_leaves_row_absent_on_transient_network_error() {
         // Point the resolver at a TCP port that nothing is listening on so
         // every request errors at the transport layer. A transient outage
@@ -474,6 +553,7 @@ mod tests {
             base_covers_url: "http://127.0.0.1:1".into(),
             timeout: Duration::from_millis(500),
             user_agent: "omnibus-test".into(),
+            ..Default::default()
         };
         let (pool, id) = pool_with_author("Ada Lovelace").await;
         resolve_with(&pool, id, &cfg).await.unwrap();
