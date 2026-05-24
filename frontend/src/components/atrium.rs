@@ -101,7 +101,9 @@ pub fn AtriumRoot(children: Element) -> Element {
 // ── Cover ─────────────────────────────────────────────────────────
 
 /// Book cover. Renders the real image when one exists, otherwise a stylized
-/// "plate" template using the book's title + author + year metadata.
+/// "plate" template using the book's title + author metadata on a neutral
+/// grey ground (the per-book accent only tints real-image theming, never the
+/// missing-cover plate — see issue #92).
 ///
 /// The `--accent` custom property is set inline from the book's extracted
 /// accent color (or left to inherit the page-level default). Consumers who
@@ -129,18 +131,16 @@ pub fn Cover(
         .as_deref()
         .map(|a| format!("--accent: {a};"))
         .unwrap_or_default();
-    let title = book.title.clone().unwrap_or_else(|| book.filename.clone());
+    // Fall back to the filename when the title is absent *or* an empty /
+    // whitespace-only string. Without this, books whose `title` is
+    // `Some("")` rendered a blank plate (issue #92): `unwrap_or_else` only
+    // fires on `None`, so an empty string slipped through as the title.
+    let title = fallback_title(book.title.as_deref(), &book.filename);
     let author = book
         .creators
         .first()
         .map(|c| c.name.clone())
         .unwrap_or_default();
-    let year = book
-        .published
-        .as_deref()
-        .and_then(|p| p.get(0..4))
-        .unwrap_or("")
-        .to_string();
     let author_label = author
         .split(',')
         .next()
@@ -171,12 +171,19 @@ pub fn Cover(
                 } else {
                     div { class: "ca", "{author_label}" }
                     div { class: "ct", "{title}" }
-                    if !year.is_empty() {
-                        div { class: "imprint", "{year} · Omnibus" }
-                    }
                 }
             }
         }
+    }
+}
+
+/// Pick the text for the typographic cover plate: the book's `title` when it
+/// carries non-blank content, otherwise the on-disk `filename`. Guards the
+/// `Some("")` / whitespace-only case that otherwise renders a blank plate.
+fn fallback_title(title: Option<&str>, filename: &str) -> String {
+    match title {
+        Some(t) if !t.trim().is_empty() => t.to_string(),
+        _ => filename.to_string(),
     }
 }
 
@@ -236,4 +243,30 @@ fn read_persisted_theme() -> Option<Theme> {
     let storage = web_sys::window().and_then(|w| w.local_storage().ok().flatten())?;
     let value = storage.get_item("omn.theme").ok().flatten()?;
     Theme::from_attr(&value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fallback_title_prefers_a_present_title() {
+        assert_eq!(fallback_title(Some("Dune"), "dune.epub"), "Dune");
+    }
+
+    #[test]
+    fn fallback_title_uses_filename_when_title_is_none() {
+        assert_eq!(fallback_title(None, "dune.epub"), "dune.epub");
+    }
+
+    #[test]
+    fn fallback_title_uses_filename_for_empty_title() {
+        // Regression for issue #92: a `Some("")` title rendered a blank plate.
+        assert_eq!(fallback_title(Some(""), "dune.epub"), "dune.epub");
+    }
+
+    #[test]
+    fn fallback_title_uses_filename_for_whitespace_only_title() {
+        assert_eq!(fallback_title(Some("   "), "dune.epub"), "dune.epub");
+    }
 }
