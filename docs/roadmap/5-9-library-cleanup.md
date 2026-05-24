@@ -43,7 +43,7 @@ Runs as `Task::DetectCleanup { kind: Option<Kind> }` in the existing [F0.5 worke
 
 ### Schema
 
-Three new tables: `dedup_suggestions` (queue + decision), `cleanup_log` (snapshot-based undo), `entity_aliases` (merged-name → canonical-id map consulted by `resolve_or_insert_*`). See the plan in `/Users/seamus/.claude/plans/i-didn-t-want-you-proud-cook.md` for full DDL.
+Three new tables: `dedup_suggestions` (queue + decision), `cleanup_log` (snapshot-based undo), `entity_aliases` (merged-name → canonical-id map consulted by `resolve_or_insert_*`). Full DDL lands with the numbered migration under [`db/migrations/`](../../db/migrations/) that introduces these tables.
 
 ### Apply primitives
 
@@ -241,7 +241,7 @@ Book-title renames delegate to the existing `upsert_metadata_overrides` in `db/s
 
 ## Status
 
-Queued. Plan drafted at `/Users/seamus/.claude/plans/i-didn-t-want-you-proud-cook.md`; branch `gh-159/library-cleanup` exists with this scoping commit. No implementation yet.
+Queued. Scoped in this doc; branch `gh-159/library-cleanup` exists with this scoping commit. No implementation yet.
 
 ---
 
