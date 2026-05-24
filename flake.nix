@@ -79,8 +79,8 @@
             # Keep target/ out of the repo so flake evaluations don't snapshot
             # ~12GB of build artifacts into /nix/store on every direnv reload.
             # Resolve the repo root so `nix develop` from a subdir lands in the
-            # same target dir; basename keeps it per-worktree so parallel jj
-            # workspaces don't race.
+            # same target dir; basename keeps it per-worktree so parallel
+            # worktrees don't race.
             # Skip if the caller already pinned CARGO_TARGET_DIR (CI sets it
             # to ./target so workflow paths and rust-cache stay valid).
             if [ -z "''${CARGO_TARGET_DIR:-}" ]; then
