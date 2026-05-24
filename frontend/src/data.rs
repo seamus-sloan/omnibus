@@ -32,8 +32,14 @@ use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};
 /// Errors surfaced by the feature-gated data transport.
 #[derive(Debug, thiserror::Error)]
 pub enum DataError {
-    /// Transport-level failure (connect/timeout/TLS). Mobile-only because
-    /// `reqwest` is only linked under `feature = "mobile"`.
+    /// `reqwest`-level failure on the mobile transport: connect / timeout /
+    /// TLS **and** response-body decode errors. The mobile calls deserialize
+    /// via `response.json()`, which surfaces a malformed body as a
+    /// `reqwest::Error` (`reqwest::Error::is_decode()`), not a
+    /// `serde_json::Error` — so a decode failure on mobile lands here rather
+    /// than in [`DataError::Decode`]. That `Decode` variant is produced only
+    /// by the web/SSR path, which deserializes through `serde_json` directly.
+    /// Mobile-only because `reqwest` is only linked under `feature = "mobile"`.
     #[cfg(feature = "mobile")]
     #[error("network error: {0}")]
     Network(#[from] reqwest::Error),
@@ -399,8 +405,10 @@ fn note_status(status: reqwest::StatusCode) -> reqwest::StatusCode {
 /// connection to its pool instead of dropping it mid-stream, and folds the
 /// server's diagnostic text into the structured error.
 ///
-/// Precondition: only call on a non-success status. `note_status` has already
-/// cleared the bearer token by the time we land here on a 401.
+/// Precondition: only call on a non-success status. The authenticated data
+/// calls run `note_status` first, so the bearer token is already cleared by
+/// the time we land here on a 401. The pre-auth `post_mobile_auth` path does
+/// not call `note_status`, but a pre-auth 401 has no stored token to clear.
 #[cfg(feature = "mobile")]
 async fn drain_error(response: reqwest::Response, status: reqwest::StatusCode) -> DataError {
     if status == reqwest::StatusCode::UNAUTHORIZED {
