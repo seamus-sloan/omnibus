@@ -2608,7 +2608,13 @@ pub async fn list_authors(
                    AND l2.path = ?1
                    AND b2.accent_color IS NOT NULL
                  ORDER BY b2.sort, b2.id
-                 LIMIT 1) AS accent
+                 LIMIT 1) AS accent,
+               EXISTS(
+                 SELECT 1 FROM author_photos ap
+                  WHERE ap.author_id = a.id
+                    AND ap.source IN ('manual', 'openlibrary')
+                    AND ap.bytes IS NOT NULL
+               ) AS has_photo
         FROM authors a
         WHERE EXISTS (
             SELECT 1 FROM books_authors_link bal
@@ -2633,6 +2639,7 @@ pub async fn list_authors(
             sort: r.get("sort"),
             book_count: r.get::<i64, _>("book_count") as usize,
             accent: r.get("accent"),
+            has_photo: r.get::<i64, _>("has_photo") != 0,
         })
         .collect())
 }
@@ -8402,6 +8409,44 @@ mod tests {
         .await
         .unwrap();
         let ada = get_author(&pool, ada_id).await.unwrap().unwrap();
+        assert!(ada.has_photo, "manual upload should yield has_photo = true");
+    }
+
+    /// `list_authors` mirrors the `get_author` has_photo semantics so the
+    /// /authors index can pick the right avatar without a per-card detail
+    /// fetch. Same three-state matrix: no row → false, `letter` marker →
+    /// false, `manual` upload → true.
+    #[tokio::test]
+    async fn list_authors_populates_has_photo() {
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+        let initial = list_authors(&pool, "/lib").await.unwrap();
+        let ada = initial.iter().find(|a| a.id == ada_id).unwrap();
+        assert!(!ada.has_photo, "no row should yield has_photo = false");
+
+        upsert_author_photo(&pool, ada_id, AuthorPhotoSource::Letter, None, None, None)
+            .await
+            .unwrap();
+        let after_letter = list_authors(&pool, "/lib").await.unwrap();
+        let ada = after_letter.iter().find(|a| a.id == ada_id).unwrap();
+        assert!(
+            !ada.has_photo,
+            "letter marker should yield has_photo = false"
+        );
+
+        upsert_author_photo(
+            &pool,
+            ada_id,
+            AuthorPhotoSource::Manual,
+            None,
+            Some("image/jpeg"),
+            Some(b"\xFF\xD8\xFFfake"),
+        )
+        .await
+        .unwrap();
+        let after_upload = list_authors(&pool, "/lib").await.unwrap();
+        let ada = after_upload.iter().find(|a| a.id == ada_id).unwrap();
         assert!(ada.has_photo, "manual upload should yield has_photo = true");
     }
 }

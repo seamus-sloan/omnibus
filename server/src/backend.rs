@@ -106,6 +106,10 @@ pub fn rest_router(state: AppState) -> Router {
         .route("/api/thumbs/{id}/{size}", get(get_thumb))
         .route("/api/authors", get(get_authors))
         .route("/api/authors/{id}/photo/scan", post(post_author_photo_scan))
+        // F1.11 follow-up: "Paste image URL" branch of the photo edit
+        // modal. Server-side fetches the URL, validates it, persists as
+        // a `manual` row (same as a multipart upload).
+        .route("/api/authors/{id}/photo/url", put(put_author_photo_url))
         .route("/api/authors/{id}", get(get_author_by_id))
         .route("/api/series", get(get_series))
         .route("/api/series/{id}", get(get_series_by_id))
@@ -1011,6 +1015,86 @@ async fn post_author_photo_scan(
         Err(e) => return internal("get_author_photo (post-scan)", e),
     };
     Json(omnibus_shared::AuthorPhotoScanResult { resolved }).into_response()
+}
+
+/// JSON body for [`put_author_photo_url`]. Kept inline because the shape is
+/// trivial and not shared with any other call site (the RPC server function
+/// passes the URL as a positional arg).
+#[derive(Debug, Deserialize)]
+struct AuthorPhotoUrlBody {
+    url: String,
+}
+
+/// Admin: persist an author photo by URL. Server-side fetches the URL,
+/// validates content-type/size/magic-bytes, and stores it as a `manual`
+/// row — the same source as a multipart upload, so it wins over Open
+/// Library resolution and survives a "Scan for picture" click.
+async fn put_author_photo_url(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<AuthorPhotoUrlBody>,
+) -> Response {
+    let author_exists: bool =
+        match sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM authors WHERE id = ?)")
+            .bind(id)
+            .fetch_one(&state.pool)
+            .await
+        {
+            Ok(v) => v != 0,
+            Err(e) => return internal("author exists check", e),
+        };
+    if !author_exists {
+        return (axum::http::StatusCode::NOT_FOUND, "author not found").into_response();
+    }
+
+    let url = body.url.trim();
+    if url.is_empty() {
+        return (axum::http::StatusCode::BAD_REQUEST, "url is required").into_response();
+    }
+
+    let (advertised_mime, bytes) = match db::author_photos::fetch_remote_image(url).await {
+        Ok(pair) => pair,
+        Err(db::author_photos::FetchRemoteImageError::Http(e)) => {
+            return internal("fetch remote image", e);
+        }
+        Err(e) => {
+            // All other variants are validation errors (bad scheme, non-image
+            // content-type, too-large, …) — map to 400 with the user-facing
+            // message from `#[error]`.
+            return (axum::http::StatusCode::BAD_REQUEST, e.to_string()).into_response();
+        }
+    };
+
+    // Magic-byte sniff — don't trust the remote Content-Type header.
+    let mime = match detect_image_format(&bytes) {
+        Some(m) => m,
+        None => {
+            tracing::warn!(
+                advertised_mime,
+                "remote URL returned image content-type but bytes are not a recognized image"
+            );
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                "file at URL does not appear to be a valid image",
+            )
+                .into_response();
+        }
+    };
+
+    if let Err(e) = db::upsert_author_photo(
+        &state.pool,
+        id,
+        db::AuthorPhotoSource::Manual,
+        Some(url),
+        Some(&mime),
+        Some(&bytes),
+    )
+    .await
+    {
+        return internal("upsert_author_photo (url)", e);
+    }
+    axum::http::StatusCode::NO_CONTENT.into_response()
 }
 
 #[cfg(test)]

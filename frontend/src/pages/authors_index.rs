@@ -21,6 +21,7 @@ enum Sort {
 #[component]
 pub fn AuthorsIndexPage() -> Element {
     let server_url = use_server_url();
+    let server_url_for_cards = server_url.clone();
     let mut authors: Signal<Vec<AuthorSummary>> = use_signal(Vec::new);
     let mut loading = use_signal(|| true);
     let mut error: Signal<Option<String>> = use_signal(|| None);
@@ -211,7 +212,7 @@ pub fn AuthorsIndexPage() -> Element {
                             }
                             div { class: "idx-card-grid",
                                 for a in group.iter() {
-                                    {render_author_card(a)}
+                                    {render_author_card(a, &server_url_for_cards)}
                                 }
                             }
                         }
@@ -219,7 +220,7 @@ pub fn AuthorsIndexPage() -> Element {
                 } else {
                     div { class: "idx-card-grid idx-card-grid--flat",
                         for a in filtered.iter() {
-                            {render_author_card(a)}
+                            {render_author_card(a, &server_url_for_cards)}
                         }
                     }
                 }
@@ -228,7 +229,7 @@ pub fn AuthorsIndexPage() -> Element {
     }
 }
 
-fn render_author_card(a: &AuthorSummary) -> Element {
+fn render_author_card(a: &AuthorSummary, server_url: &str) -> Element {
     let accent = a.accent.clone().unwrap_or_else(|| "var(--accent)".into());
     let name = a.name.clone();
     let id = a.id;
@@ -254,7 +255,20 @@ fn render_author_card(a: &AuthorSummary) -> Element {
             class: "idx-card idx-card-author",
             style: "--accent: {accent}",
             "data-testid": "author-card",
-            div { class: "idx-card-avatar", "{initial}" }
+            // F1.11: swap the letter glyph for the cached profile photo
+            // when one exists. `server_url` is empty on web (same-origin
+            // fetch) and the configured backend URL on mobile so the
+            // markup is portable. Editing the photo lives on the author
+            // detail page — the index is read-only.
+            if a.has_photo {
+                img {
+                    class: "idx-card-avatar idx-card-avatar--photo",
+                    src: "{server_url}/api/authors/{id}/photo",
+                    alt: "{name}",
+                }
+            } else {
+                div { class: "idx-card-avatar", "{initial}" }
+            }
             div { class: "idx-card-body",
                 div { class: "idx-card-title",
                     if !rest.is_empty() {
@@ -347,6 +361,7 @@ mod tests {
             sort: sort.map(Into::into),
             book_count: 0,
             accent: None,
+            has_photo: false,
         }
     }
 
