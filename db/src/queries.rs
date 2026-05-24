@@ -763,14 +763,21 @@ pub async fn get_last_modified_epoch(
 /// with what the UI displays. The FTS rebuild is best-effort: rebuild
 /// failures are logged but do not fail the override save, since the
 /// override write is the user's actual intent.
-pub async fn upsert_metadata_overrides(
-    pool: &SqlitePool,
+/// Execute the `metadata_overrides` INSERT…ON CONFLICT against any executor —
+/// a `&SqlitePool` for the fire-and-forget [`upsert_metadata_overrides`] path,
+/// or a transaction connection for the serialized [`merge_metadata_overrides`]
+/// path — so the upsert statement lives in exactly one place and the two
+/// callers can't drift (e.g. when a column or default changes).
+async fn upsert_overrides_row<'e, E>(
+    executor: E,
     book_uuid: &str,
-    overrides: &MetadataOverrides,
+    overrides_json: &str,
     has_cover_override: bool,
     user_id: i64,
-) -> Result<(), sqlx::Error> {
-    let json = serde_json::to_string(overrides).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+) -> Result<(), sqlx::Error>
+where
+    E: Executor<'e, Database = sqlx::Sqlite>,
+{
     sqlx::query(
         "INSERT INTO metadata_overrides (book_uuid, overrides, has_cover_override, updated_by, updated_at)
          VALUES (?, ?, ?, ?, datetime('now'))
@@ -781,11 +788,23 @@ pub async fn upsert_metadata_overrides(
            updated_at = datetime('now')",
     )
     .bind(book_uuid)
-    .bind(&json)
+    .bind(overrides_json)
     .bind(i64::from(has_cover_override))
     .bind(user_id)
-    .execute(pool)
+    .execute(executor)
     .await?;
+    Ok(())
+}
+
+pub async fn upsert_metadata_overrides(
+    pool: &SqlitePool,
+    book_uuid: &str,
+    overrides: &MetadataOverrides,
+    has_cover_override: bool,
+    user_id: i64,
+) -> Result<(), sqlx::Error> {
+    let json = serde_json::to_string(overrides).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+    upsert_overrides_row(pool, book_uuid, &json, has_cover_override, user_id).await?;
     // Best-effort FTS rebuild: log and continue on failure. The override
     // write is the user's actual intent — a stale FTS row gets fixed on the
     // next reindex, but surfacing a 500 here would make them think their
@@ -796,28 +815,12 @@ pub async fn upsert_metadata_overrides(
     Ok(())
 }
 
-/// Atomically merge `incoming` field overrides on top of any existing
-/// overrides for `book_uuid` and persist the result (#166).
-///
-/// The read-merge-write runs inside a single `BEGIN IMMEDIATE` transaction so
-/// two concurrent edits to the same book cannot interleave (both reading the
-/// same pre-edit row, both merging in Rust, last write wins — silently
-/// dropping one edit). `BEGIN IMMEDIATE` takes the write lock up front rather
-/// than starting deferred and upgrading on first write; that upgrade window is
-/// exactly where two writers collide. Serializing here preserves the
-/// incremental-edit contract that [`MetadataOverrides::merge`] exists for:
-/// saving the title must not clobber a previously saved series or any other
-/// untouched field.
-///
-/// The existing `has_cover_override` flag is carried forward — a text-only
-/// edit must not clear a cover the user uploaded earlier. (The pre-#166
-/// handler passed `has_cover_override = false` to [`upsert_metadata_overrides`]
-/// on every field edit, which reset the flag; folding the read into this
-/// transaction lets us preserve it.)
-///
-/// As with [`upsert_metadata_overrides`], the `books_fts` rebuild runs
-/// best-effort *after* commit so a rebuild failure does not fail the save and
-/// the write lock is released as early as possible.
+/// Merge `incoming` field overrides on top of any existing overrides for
+/// `book_uuid` and persist the result inside one `BEGIN IMMEDIATE`
+/// transaction, so two concurrent edits to the same book can't interleave and
+/// silently drop each other's changes (#166). The existing `has_cover_override`
+/// flag is carried forward — a text-only edit must not clear a cover the user
+/// uploaded earlier. The `books_fts` rebuild runs best-effort after commit.
 pub async fn merge_metadata_overrides(
     pool: &SqlitePool,
     book_uuid: &str,
@@ -847,23 +850,8 @@ pub async fn merge_metadata_overrides(
             None => (incoming.clone(), false),
         };
 
-        let json =
-            serde_json::to_string(&merged).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
-        sqlx::query(
-            "INSERT INTO metadata_overrides (book_uuid, overrides, has_cover_override, updated_by, updated_at)
-             VALUES (?, ?, ?, ?, datetime('now'))
-             ON CONFLICT(book_uuid) DO UPDATE SET
-               overrides = excluded.overrides,
-               has_cover_override = excluded.has_cover_override,
-               updated_by = excluded.updated_by,
-               updated_at = datetime('now')",
-        )
-        .bind(book_uuid)
-        .bind(&json)
-        .bind(i64::from(has_cover_override))
-        .bind(user_id)
-        .execute(&mut *conn)
-        .await?;
+        let json = serde_json::to_string(&merged).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+        upsert_overrides_row(&mut *conn, book_uuid, &json, has_cover_override, user_id).await?;
         Ok(())
     }
     .await;
