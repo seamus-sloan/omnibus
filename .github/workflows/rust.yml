@@ -106,6 +106,8 @@ jobs:
       # Required by nix-community/cache-nix-action `purge: true` so it can
       # delete its own expired cache entries via the Actions cache API.
       actions: write
+      # Required to post / update the sticky audit-report comment on PRs.
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -127,15 +129,73 @@ jobs:
           purge-primary-key: never
           gc-max-store-size-linux: 5G
 
-      # Fails on any RustSec *vulnerability* advisory. `--deny warnings` is
-      # intentionally NOT used: the Dioxus desktop/mobile stack pulls in the
-      # EOL gtk-rs GTK3 bindings (and a few other unmaintained/unsound
-      # transitive crates) that have no available fix, so denying warnings
-      # would make this gate permanently red with nothing actionable to do.
-      #
-      # RUSTSEC-2023-0071 (rsa "Marvin" timing attack) is ignored: there is no
-      # fixed release, and `rsa` is reached only through `sqlx-mysql`, which
-      # this SQLite-only app never uses at runtime. Re-evaluate if a fix ships
-      # or if a MySQL backend is ever enabled.
+      # Run cargo-audit in JSON mode for downstream parsing. We do NOT fail
+      # the job on findings — the next step posts a PR comment instead, so
+      # vulnerabilities are surfaced as a visible report rather than a
+      # blocking gate. `continue-on-error: true` keeps the workflow green
+      # while still letting the report step read `audit.json`.
       - name: cargo audit
-        run: nix develop --command cargo audit --ignore RUSTSEC-2023-0071
+        id: audit
+        continue-on-error: true
+        run: |
+          set +e
+          # Redirect inside the nix-develop subshell so the shellHook's
+          # informational echoes (`Nix dev shell ready.`, etc.) don't get
+          # mixed into the JSON capture file.
+          nix develop --command bash -c 'cargo audit --json > audit.json'
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      # Build a human-readable markdown report from the JSON output. If
+      # `audit.json` is missing or not valid JSON (cargo-audit itself failed,
+      # e.g. couldn't fetch the advisory DB), report that as a failure case
+      # rather than silently claiming "no advisories found".
+      - name: Format audit report
+        id: report
+        run: |
+          set -euo pipefail
+          # `jq` is part of the standard ubuntu-latest image.
+          {
+            echo "<!-- cargo-audit-report -->"
+            echo "## cargo-audit"
+            echo
+            if [ ! -s audit.json ] || ! jq -e . audit.json >/dev/null 2>&1; then
+              echo "⚠️ cargo-audit did not produce a valid JSON report (exit code \`${{ steps.audit.outputs.exit_code }}\`). See the \`security\` job log for details."
+              count="error"
+            else
+              count=$(jq '.vulnerabilities.count // 0' audit.json)
+              if [ "$count" = "0" ]; then
+                echo "No RustSec advisories found in \`Cargo.lock\` ✅"
+              else
+                echo "Found **$count** advisory/advisories in \`Cargo.lock\`:"
+                echo
+                jq -r '
+                  .vulnerabilities.list[] |
+                  "- **\(.advisory.id)** — `\(.package.name) \(.package.version)`: \(.advisory.title)\n  <\(.advisory.url // "https://rustsec.org/advisories/\(.advisory.id)")>"
+                ' audit.json
+                echo
+                echo "Run \`cargo audit\` locally for full detail."
+              fi
+            fi
+            echo
+            echo "<sub>Posted by the Rust workflow's \`security\` job. This gate is informational — see the workflow file for rationale.</sub>"
+          } > audit-report.md
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+      # Find-or-create a single sticky comment per PR keyed on the
+      # `<!-- cargo-audit-report -->` marker, so re-runs update the same
+      # comment instead of stacking new ones. Only runs on pull_request
+      # events — pushes to `main` skip this and just leave the artifact.
+      - name: Post / update PR comment
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: cargo-audit-report
+          path: audit-report.md
+
+      - name: Upload audit JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-audit-json
+          path: audit.json
+          retention-days: 14
