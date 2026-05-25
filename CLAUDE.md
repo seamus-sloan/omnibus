@@ -57,10 +57,12 @@ lib.rs              — Settings, ValueResponse, LibraryContents, LibrarySection
 ### db/src/
 
 ```
-lib.rs              — re-exports queries::*; pub mod auth/author_photos/ebook/indexer/library_layout/queries/scanner/worker
+lib.rs              — re-exports queries::* and thumbs::{ThumbSize, thumb_path_for, thumbs_dir, ThumbError}; pub mod auth/author_photos/ebook/indexer/library_layout/queries/scanner/thumbs/worker
 queries.rs          — pool init, schema, query layer (list_books, settings, covers, taxonomy, metadata_overrides CRUD + merge, author_photos CRUD…)
+auth.rs             — F0.3 auth data layer (users/devices/sessions): Argon2id hash + verify with PHC rotation, password-policy validation, race-free first-user-admin (BEGIN IMMEDIATE), per-account lockout, SHA-256-hashed session tokens with absolute + idle expiry, `promote_to_admin` recovery hook. Pure SQL + hashing — cookies/axum live in `server/src/auth/`. Schema: migrations/0004_auth.sql
 scanner.rs          — library directory scanning
 ebook.rs            — EPUB OPF metadata + cover extraction; sidecar-first cover with opt-in materialization (ScanOptions)
+thumbs.rs           — F1.2 thumbnail pipeline: decode cover → resize to Sm/Md/Lg (2:3) → atomic per-(book,size) WebP writes under OMNIBUS_THUMBS_DIR; FIFO-by-mtime eviction once total cache exceeds OMNIBUS_THUMBS_CAP_BYTES (default 5 GiB). Backs backend.rs's cover-to-WebP serving path
 indexer.rs          — scan → DB indexing, staleness checks (is_stale + reindex); reindex opts into materialize_sidecars
 library_layout.rs   — F0.6 canonical layout: slugify, canonical_path, sidecar_cover_for, allocate_canonical_path (collision suffix)
 worker.rs           — single-process Worker primitive: per-task-type concurrency cap + per-resource keyed mutex; reindexes route through Task::Scan; F1.11 ResolveAuthorPhoto dispatches into author_photos::resolve
@@ -73,11 +75,15 @@ migrations/         — numbered SQL migrations embedded via sqlx::migrate!
 ```
 lib.rs              — Route, App, styles, ScreenLayout (feature-gated)
 data.rs             — Feature-gated data transport (mobile=reqwest, web/server=rpc); transport fns return Result<T, DataError> (thiserror enum: Network/Http/Decode/Unauthorized/Other) so the 401 path pattern-matches DataError::Unauthorized instead of re-inspecting raw status codes
+view_prefs.rs       — F1.3 per-library ViewPrefs/ViewFilters persistence for the landing page (sort/filter/facet state); web → localStorage keyed by library path, mobile → in-memory map (resets on cold launch), server (SSR) → defaults so first-hydration markup matches. Shape lives in omnibus-shared for a future server-backed endpoint
 rpc.rs              — #[get]/#[post] server functions (mounted by dioxus::server::router); server bodies call into omnibus_db
 pages/{landing,settings,book_detail,metadata_edit,auth,author,authors_index,series,series_index,tag_cloud,search}.rs  — auth.rs hosts LoginPage + RegisterPage. Landing is the primary Atrium consumer (cover grid + power-user table) and the source of format-faceted filtering (ViewFilters.formats in shared). metadata_edit.rs is the F5.1 single-book edit form at /books/:id/edit. Discovery pages (author, series, tag_cloud) are F1.8. authors_index.rs and series_index.rs are the F1.12 `/authors` and `/series` browse-all index surfaces. search.rs is the full-page /search/:query results view that the F1.5 palette routes into when the user presses Enter without arrow-key navigation, or when a Tag row is selected.
 components/{top_nav,bottom_nav}.rs  — feature = web / mobile respectively
 components/atrium.rs  — F1.7 design-system primitives (AtriumRoot, Cover, ThemeToggle); CSS at frontend/assets/atrium.css
 components/search_palette.rs — F1.5 command-palette search overlay (⌘K trigger, grouped FTS5 results, keyboard nav); web-only (not(mobile))
+components/format_switcher.rs — F1.4 per-format CTA rows on the book detail page (Read/Listen/Send-to-Kindle, all disabled in Phase 1); the UI contract for the F0.1 books/book_files split
+components/author_photo_edit.rs — F1.11 admin photo-edit overlay (web-only): hover-revealed pencil button over the avatar opening a modal with paste-URL / file-upload (→ PUT /api/authors/:id/photo) / re-scan-Open-Library actions. Wraps avatars on the author detail and authors-index pages
+components/auth/{mod,shell,banner,field,strength}.rs — F1.6 auth-UI primitives (purely presentational, SSR/WASM identical for hydration) used by pages/auth.rs: AuthShell split-pane wrapper, Banner callout (err/warn/info/ok), Field label+input+hint/error/success slots, StrengthMeter four-segment password bar
 ```
 
 ### server/src/
