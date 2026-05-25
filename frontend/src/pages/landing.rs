@@ -4,10 +4,34 @@ use std::collections::{BTreeMap, HashSet};
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
 use omnibus_shared::{
-    Contributor, EbookLibrary, EbookMetadata, SortDir, SortKey, ViewFilters, ViewMode, ViewPrefs,
+    Contributor, EbookLibrary, EbookMetadata, MetadataOverrides, SortDir, SortKey, TagWeight,
+    ViewFilters, ViewMode, ViewPrefs,
 };
 
+use crate::components::chip_editor::{collect_suggestions, ChipEditor, SuggestionItem};
 use crate::{data, use_search_query, use_server_url, view_prefs, Route};
+
+/// Inline-editable field on a power-user-table row (F5.9-lite admin
+/// surface). Used by `EbookRow` to track which of its cells (if any) is
+/// in edit mode at any given time — single-cell-at-a-time keeps the
+/// keyboard/blur lifecycle simple and avoids fighting the row's
+/// click-to-navigate handler.
+///
+/// `Series` edits the series *name* only — the series index ("#N")
+/// stays in the F5.1 metadata edit page on `/books/:uuid/edit` for v1
+/// to avoid adding a separate Series Index column to the power-user
+/// table. The user's stated cleanup pain (stripping series-prefix
+/// cruft from titles, renaming author/series variants) is satisfied
+/// by Title + Series + Authors.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum EditField {
+    Title,
+    Series,
+    Publisher,
+    Published,
+    Language,
+    Authors,
+}
 
 /// Landing page — primary library surface.
 ///
@@ -24,6 +48,58 @@ pub fn LandingPage() -> Element {
     let mut prefs = use_signal(ViewPrefs::default);
     // Search box lives in the top nav; the query is shared via context.
     let query = use_search_query().0;
+
+    // F5.9-lite: admin-only inline-edit affordances on the power-user
+    // table. Non-admins see the existing read-only cells; the
+    // `current_user` effect resolves async and gates the click handlers
+    // server-side anyway via `rpc_save_overrides`, but hiding the
+    // affordance is the UX contract. Web-only (mobile keeps the
+    // read-only landing for now per the F5.9-lite plan; admin can edit
+    // via the per-book detail page).
+    #[cfg_attr(not(feature = "web"), allow(unused_mut))]
+    let mut is_admin = use_signal(|| false);
+    #[cfg(feature = "web")]
+    use_effect(move || {
+        spawn(async move {
+            if let Ok(Some(user)) = data::current_user().await {
+                is_admin.set(user.is_admin);
+            }
+        });
+    });
+
+    // Suggestion pools for the inline Authors chip editor and the
+    // (currently future-reserved) Tags pool. Each item carries the
+    // book-count the ChipEditor dropdown renders next to the name —
+    // mirrors the fetch done by the F5.1 metadata edit page.
+    let mut author_suggestions: Signal<Vec<SuggestionItem>> = use_signal(Vec::new);
+    let mut tag_suggestions: Signal<Vec<SuggestionItem>> = use_signal(Vec::new);
+    {
+        let url = server_url.clone();
+        use_effect(move || {
+            // Only admins ever see the dropdown, so skip the round-trip
+            // entirely until we know we're admin.
+            if !is_admin() {
+                return;
+            }
+            let url = url.clone();
+            spawn(async move {
+                if let Ok(authors) = data::list_authors(&url).await {
+                    let items: Vec<SuggestionItem> = authors
+                        .into_iter()
+                        .map(|a| SuggestionItem::new(a.name, a.book_count))
+                        .collect();
+                    author_suggestions.set(collect_suggestions(items));
+                }
+                if let Ok(tags) = data::get_tag_cloud(&url).await {
+                    let items: Vec<SuggestionItem> = tags
+                        .into_iter()
+                        .map(|t: TagWeight| SuggestionItem::new(t.name, t.count))
+                        .collect();
+                    tag_suggestions.set(collect_suggestions(items));
+                }
+            });
+        });
+    }
 
     // Fetch the library when the search query changes.
     let url_for_fetch = server_url.clone();
@@ -187,6 +263,9 @@ pub fn LandingPage() -> Element {
                                     }
                                 },
                                 server_url: server_url_for_row.clone(),
+                                is_admin: is_admin(),
+                                author_suggestions,
+                                tag_suggestions,
                             }
                         },
                         ViewMode::Grid => rsx! {
@@ -578,6 +657,12 @@ fn BookTable(
     prefs: ViewPrefs,
     on_sort: EventHandler<SortKey>,
     server_url: String,
+    is_admin: bool,
+    // Forwarded by reference (ReadSignal) all the way down so the
+    // suggestion pool isn't cloned at any intermediate layer — even on
+    // libraries with thousands of authors.
+    author_suggestions: ReadSignal<Vec<SuggestionItem>>,
+    tag_suggestions: ReadSignal<Vec<SuggestionItem>>,
 ) -> Element {
     rsx! {
         div {
@@ -635,6 +720,9 @@ fn BookTable(
                             key: "{book.filename}",
                             book: book,
                             server_url: server_url.clone(),
+                            is_admin,
+                            author_suggestions,
+                            tag_suggestions,
                         }
                     }
                 }
@@ -676,84 +764,404 @@ fn SortableHeader(
 }
 
 #[component]
-fn EbookRow(book: EbookMetadata, server_url: String) -> Element {
+fn EbookRow(
+    book: EbookMetadata,
+    server_url: String,
+    is_admin: bool,
+    author_suggestions: ReadSignal<Vec<SuggestionItem>>,
+    tag_suggestions: ReadSignal<Vec<SuggestionItem>>,
+) -> Element {
     // Stable per-book uuid drives both the detail-route URL and the
     // thumbnail URL — see `Route::BookDetail` for why it's keyed on the
     // uuid instead of `books.id`.
     let uuid = book.unique_identifier.clone().unwrap_or_default();
-    let display_title = book.title.as_deref().unwrap_or(&book.filename).to_string();
     let row_testid = format!("ebook-row-{}", row_slug(&book.filename));
     let has_cover = book.cover_url.is_some();
     let thumb_base = format!("{server_url}/api/thumbs/{uuid}");
-    let series_line = match (book.series.as_deref(), book.series_index.as_deref()) {
-        (Some(s), Some(i)) => format!("{s} #{i}"),
-        (Some(s), None) => s.to_string(),
-        _ => String::new(),
-    };
-    let authors = contributor_names(&book.creators);
-    let updated = book.modified.as_deref().unwrap_or("").to_string();
-    let added = book.added_at.as_deref().unwrap_or("").to_string();
+    let _ = tag_suggestions; // reserved for a future inline-tag editor
+
+    // Optimistic per-row state: we render from `book_state` rather than
+    // the raw `book` prop so a successful inline save updates the row
+    // immediately, without a full library refetch. The server-side
+    // merge in `rpc_save_overrides` returns the canonical merged
+    // EbookMetadata which we install verbatim.
+    let mut book_state: Signal<EbookMetadata> = use_signal(|| book.clone());
+    let mut editing: Signal<Option<EditField>> = use_signal(|| None);
 
     let nav = use_navigator();
     let uuid_click = uuid.clone();
     let uuid_key = uuid.clone();
+    let uuid_for_save = uuid.clone();
+    let url_for_save = server_url.clone();
 
-    rsx! {
-        tr {
-            class: "ebook-row",
-            "data-testid": "{row_testid}",
-            id: "{row_testid}",
-            role: "button",
-            tabindex: "0",
-            aria_label: "Open details for {display_title}",
-            onclick: move |_| {
-                nav.push(Route::BookDetail { uuid: uuid_click.clone() });
-            },
-            onkeydown: move |evt: Event<KeyboardData>| {
-                let key = evt.key();
-                if key == Key::Enter || key == Key::Character(" ".to_string()) {
-                    evt.prevent_default();
-                    nav.push(Route::BookDetail { uuid: uuid_key.clone() });
-                }
-            },
-            td { class: "ebook-col-cover", "data-testid": "ebook-cell-cover",
-                if has_cover {
-                    img {
-                        class: "ebook-thumb",
-                        src: "{thumb_base}/md",
-                        srcset: "{thumb_base}/sm 160w, {thumb_base}/md 320w, {thumb_base}/lg 640w",
-                        sizes: "(max-width: 640px) 160px, (max-width: 1280px) 320px, 640px",
-                        alt: "Cover of {display_title}",
-                        loading: "lazy",
-                        width: "320",
-                        height: "480",
-                    }
-                } else {
-                    div { class: "ebook-thumb ebook-thumb-fallback", "—" }
+    // Common save callback used by every inline cell. Builds a sparse
+    // `MetadataOverrides`, POSTs to the existing F5.1 endpoint, then
+    // installs the server-returned merged metadata into `book_state`.
+    // Empty strings clear the override for the field (None — the
+    // scanned value re-surfaces); non-empty strings persist as
+    // `Some(value)`.
+    let save_field = move |field: EditField, value: String| {
+        let uuid = uuid_for_save.clone();
+        let url = url_for_save.clone();
+        spawn(async move {
+            let mut overrides = MetadataOverrides::default();
+            let trimmed = value.trim();
+            let value = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
+            match field {
+                EditField::Title => overrides.title = value,
+                EditField::Series => overrides.series = value,
+                EditField::Publisher => overrides.publisher = value,
+                EditField::Published => overrides.published = value,
+                EditField::Language => overrides.language = value,
+                EditField::Authors => {
+                    // Authors is handled below — this branch is reserved
+                    // for the chip-editor on_change path which sets
+                    // `creators` instead.
+                    return;
                 }
             }
-            td { class: "ebook-col-title", "data-testid": "ebook-cell-title",
-                div { class: "ebook-title-cell", "{display_title}" }
-                if let Some(err) = book.error.as_ref() {
+            if overrides.validate().is_err() {
+                // Validation rejects payloads that exceed the F5.1
+                // length caps. The display reverts on the next
+                // refetch; a toast / inline error message ships in a
+                // follow-up PR.
+                return;
+            }
+            if let Ok(Some(merged)) = data::save_overrides(&url, &uuid, &overrides).await {
+                book_state.set(merged);
+            }
+        });
+    };
+    // Authors chip editor lifts the canonical creator list out of the
+    // optimistic row state into a Signal so ChipEditor can drive it
+    // directly. Edits go through `save_authors` (separate callback so
+    // it can build the `creators` override; the text-cell path is
+    // scalar-only).
+    let initial_authors: Vec<String> = book_state
+        .read()
+        .creators
+        .iter()
+        .map(|c| c.name.clone())
+        .collect();
+    let authors_draft: Signal<Vec<String>> = use_signal(|| initial_authors);
+    let uuid_for_authors = uuid.clone();
+    let url_for_authors = server_url.clone();
+    let save_authors = move |new_names: Vec<String>| {
+        let uuid = uuid_for_authors.clone();
+        let url = url_for_authors.clone();
+        spawn(async move {
+            let creators: Vec<Contributor> = new_names
+                .iter()
+                .map(|name| Contributor {
+                    name: name.clone(),
+                    ..Default::default()
+                })
+                .collect();
+            let overrides = MetadataOverrides {
+                creators: Some(creators),
+                ..Default::default()
+            };
+            if overrides.validate().is_err() {
+                return;
+            }
+            if let Ok(Some(merged)) = data::save_overrides(&url, &uuid, &overrides).await {
+                book_state.set(merged);
+            }
+        });
+    };
+
+    // Pull values from the optimistic state so a save's returned
+    // merged metadata is what we render.
+    let display_book = book_state.read().clone();
+    let display_title = display_book
+        .title
+        .as_deref()
+        .unwrap_or(&display_book.filename)
+        .to_string();
+    let series_line = match (
+        display_book.series.as_deref(),
+        display_book.series_index.as_deref(),
+    ) {
+        (Some(s), Some(i)) => format!("{s} #{i}"),
+        (Some(s), None) => s.to_string(),
+        _ => String::new(),
+    };
+    let authors_text = contributor_names(&display_book.creators);
+    let updated = display_book.modified.as_deref().unwrap_or("").to_string();
+    let added = display_book.added_at.as_deref().unwrap_or("").to_string();
+    let publisher = display_book.publisher.clone().unwrap_or_default();
+    let published = display_book.published.clone().unwrap_or_default();
+    let language = display_book.language.clone().unwrap_or_default();
+    let series_text = display_book.series.clone().unwrap_or_default();
+
+    let editing_authors = editing() == Some(EditField::Authors);
+
+    rsx! {
+        Fragment {
+            tr {
+                class: "ebook-row",
+                "data-testid": "{row_testid}",
+                id: "{row_testid}",
+                role: "button",
+                tabindex: "0",
+                aria_label: "Open details for {display_title}",
+                onclick: move |_| {
+                    // Row-level click navigates only when no cell-level
+                    // edit is in progress. Each editable cell stops
+                    // propagation on click already, so this only fires
+                    // when the user clicked a non-editable area (cover,
+                    // formats, dates).
+                    nav.push(Route::BookDetail { uuid: uuid_click.clone() });
+                },
+                onkeydown: move |evt: Event<KeyboardData>| {
+                    let key = evt.key();
+                    if key == Key::Enter || key == Key::Character(" ".to_string()) {
+                        evt.prevent_default();
+                        nav.push(Route::BookDetail { uuid: uuid_key.clone() });
+                    }
+                },
+                td { class: "ebook-col-cover", "data-testid": "ebook-cell-cover",
+                    if has_cover {
+                        img {
+                            class: "ebook-thumb",
+                            src: "{thumb_base}/md",
+                            srcset: "{thumb_base}/sm 160w, {thumb_base}/md 320w, {thumb_base}/lg 640w",
+                            sizes: "(max-width: 640px) 160px, (max-width: 1280px) 320px, 640px",
+                            alt: "Cover of {display_title}",
+                            loading: "lazy",
+                            width: "320",
+                            height: "480",
+                        }
+                    } else {
+                        div { class: "ebook-thumb ebook-thumb-fallback", "—" }
+                    }
+                }
+                EditableCell {
+                    col_class: "ebook-col-title".to_string(),
+                    cell_testid: "ebook-cell-title".to_string(),
+                    field: EditField::Title,
+                    display_value: display_title.clone(),
+                    is_admin,
+                    editing,
+                    placeholder: "Title".to_string(),
+                    on_save: { let save = save_field.clone(); move |v: String| save(EditField::Title, v) },
+                    error: display_book.error.clone(),
+                }
+                EditableCell {
+                    // Authors cell — clicking expands a chip-editor row
+                    // below this <tr> rather than swapping to an input
+                    // in place, so the wide chip layout doesn't fight
+                    // the narrow column.
+                    col_class: "ebook-col-author".to_string(),
+                    cell_testid: "ebook-cell-author".to_string(),
+                    field: EditField::Authors,
+                    display_value: authors_text.clone(),
+                    is_admin,
+                    editing,
+                    placeholder: String::new(),
+                    on_save: move |_: String| {}, // chip editor handles save
+                    error: None,
+                    suppress_inline_input: true,
+                }
+                EditableCell {
+                    col_class: "ebook-col-series".to_string(),
+                    cell_testid: "ebook-cell-series".to_string(),
+                    field: EditField::Series,
+                    display_value: if editing() == Some(EditField::Series) {
+                        series_text.clone()
+                    } else {
+                        series_line.clone()
+                    },
+                    is_admin,
+                    editing,
+                    placeholder: "Series".to_string(),
+                    on_save: { let save = save_field.clone(); move |v: String| save(EditField::Series, v) },
+                    error: None,
+                }
+                EditableCell {
+                    col_class: "ebook-col-publisher".to_string(),
+                    cell_testid: "ebook-cell-publisher".to_string(),
+                    field: EditField::Publisher,
+                    display_value: publisher.clone(),
+                    is_admin,
+                    editing,
+                    placeholder: "Publisher".to_string(),
+                    on_save: { let save = save_field.clone(); move |v: String| save(EditField::Publisher, v) },
+                    error: None,
+                }
+                EditableCell {
+                    col_class: "ebook-col-published".to_string(),
+                    cell_testid: "ebook-cell-published".to_string(),
+                    field: EditField::Published,
+                    display_value: published.clone(),
+                    is_admin,
+                    editing,
+                    placeholder: "YYYY-MM-DD".to_string(),
+                    on_save: { let save = save_field.clone(); move |v: String| save(EditField::Published, v) },
+                    error: None,
+                }
+                td { class: "ebook-col-formats", "data-testid": "ebook-cell-formats",
+                    if display_book.formats.is_empty() {
+                        span { class: "ebook-cell-formats-empty", "—" }
+                    } else {
+                        for fmt in display_book.formats.iter() {
+                            span { class: "format-badge", "{format_badge_label(fmt)}" }
+                        }
+                    }
+                }
+                td { class: "ebook-col-updated", "data-testid": "ebook-cell-updated", "{updated}" }
+                td { class: "ebook-col-added", "data-testid": "ebook-cell-added", "{added}" }
+                EditableCell {
+                    col_class: "ebook-col-language".to_string(),
+                    cell_testid: "ebook-cell-language".to_string(),
+                    field: EditField::Language,
+                    display_value: language.clone(),
+                    is_admin,
+                    editing,
+                    placeholder: "en".to_string(),
+                    on_save: { let save = save_field.clone(); move |v: String| save(EditField::Language, v) },
+                    error: None,
+                }
+            }
+            // Authors edit row — spans the full table width when the
+            // Author cell is active. Renders the F5.9-lite ChipEditor
+            // with the library-wide author suggestion pool so admins
+            // can re-attribute books to an existing canonical name in
+            // one click.
+            if editing_authors && is_admin {
+                tr {
+                    class: "ebook-edit-row",
+                    "data-testid": "ebook-authors-edit-row",
+                    td {
+                        colspan: "10",
+                        class: "ebook-edit-cell",
+                        div { class: "ebook-edit-bar",
+                            span { class: "ebook-edit-label", "Edit authors" }
+                            div { class: "me-chip-row ebook-edit-chips",
+                                ChipEditor {
+                                    values: authors_draft,
+                                    placeholder: "+ add author\u{2026}".to_string(),
+                                    on_change: {
+                                        let save = save_authors;
+                                        move |names: Vec<String>| save(names)
+                                    },
+                                    suggestions: author_suggestions,
+                                    show_avatar: true,
+                                    aria_remove_prefix: "Remove".to_string(),
+                                    testid_prefix: "ebook-authors-edit".to_string(),
+                                }
+                            }
+                            button {
+                                class: "btn",
+                                "data-testid": "ebook-authors-edit-close",
+                                onclick: move |e| {
+                                    e.stop_propagation();
+                                    editing.set(None);
+                                },
+                                "Done"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Inline-editable text cell used by [`EbookRow`]. Renders a span of
+/// text by default; in admin mode, a click swaps to a text input that
+/// commits via [`EditField::on_save`] on Enter or blur and cancels on
+/// Escape. The input's `onclick` stops propagation so the row-level
+/// navigate handler doesn't fire while the user is editing.
+///
+/// `suppress_inline_input` is the Authors-cell escape hatch: the click
+/// still toggles `editing` (so the expansion row appears) but the
+/// in-cell input never renders.
+#[component]
+fn EditableCell(
+    col_class: String,
+    cell_testid: String,
+    field: EditField,
+    display_value: String,
+    is_admin: bool,
+    editing: Signal<Option<EditField>>,
+    placeholder: String,
+    on_save: EventHandler<String>,
+    error: Option<String>,
+    #[props(default = false)] suppress_inline_input: bool,
+) -> Element {
+    let mut editing = editing;
+    let mut draft = use_signal(String::new);
+    let is_editing = editing() == Some(field);
+    let active_class = if is_editing {
+        " ebook-cell-editing"
+    } else {
+        ""
+    };
+    let admin_class = if is_admin { " ebook-cell-editable" } else { "" };
+    let combined_class = format!("{col_class}{admin_class}{active_class}");
+    let initial_for_click = display_value.clone();
+    let initial_for_cancel = display_value.clone();
+    let testid_input = format!("{cell_testid}-input");
+
+    rsx! {
+        td {
+            class: "{combined_class}",
+            "data-testid": "{cell_testid}",
+            onclick: move |e| {
+                if !is_admin {
+                    return;
+                }
+                e.stop_propagation();
+                if !is_editing {
+                    draft.set(initial_for_click.clone());
+                    editing.set(Some(field));
+                }
+            },
+            if is_editing && !suppress_inline_input {
+                input {
+                    class: "ebook-cell-edit",
+                    "data-testid": "{testid_input}",
+                    autofocus: true,
+                    value: "{draft}",
+                    placeholder: "{placeholder}",
+                    onclick: move |e| { e.stop_propagation(); },
+                    oninput: move |e| { draft.set(e.value()); },
+                    onkeydown: move |e: Event<KeyboardData>| {
+                        match e.key() {
+                            Key::Enter => {
+                                e.prevent_default();
+                                on_save.call(draft());
+                                editing.set(None);
+                            }
+                            Key::Escape => {
+                                e.prevent_default();
+                                draft.set(initial_for_cancel.clone());
+                                editing.set(None);
+                            }
+                            _ => {}
+                        }
+                    },
+                    onblur: move |_| {
+                        // Save on blur — mirrors typical
+                        // contenteditable patterns; cheap because the
+                        // server's merge skips unchanged fields and
+                        // the network failure path silently leaves
+                        // the prior display value alone.
+                        on_save.call(draft());
+                        editing.set(None);
+                    },
+                }
+            } else {
+                div { class: "ebook-title-cell", "{display_value}" }
+                if let Some(err) = error.as_ref() {
                     div { class: "error", "⚠ {err}" }
                 }
             }
-            td { class: "ebook-col-author", "data-testid": "ebook-cell-author", "{authors}" }
-            td { class: "ebook-col-series", "data-testid": "ebook-cell-series", "{series_line}" }
-            td { class: "ebook-col-publisher", "data-testid": "ebook-cell-publisher", {book.publisher.as_deref().unwrap_or("")} }
-            td { class: "ebook-col-published", "data-testid": "ebook-cell-published", {book.published.as_deref().unwrap_or("")} }
-            td { class: "ebook-col-formats", "data-testid": "ebook-cell-formats",
-                if book.formats.is_empty() {
-                    span { class: "ebook-cell-formats-empty", "—" }
-                } else {
-                    for fmt in book.formats.iter() {
-                        span { class: "format-badge", "{format_badge_label(fmt)}" }
-                    }
-                }
-            }
-            td { class: "ebook-col-updated", "data-testid": "ebook-cell-updated", "{updated}" }
-            td { class: "ebook-col-added", "data-testid": "ebook-cell-added", "{added}" }
-            td { class: "ebook-col-language", "data-testid": "ebook-cell-language", {book.language.as_deref().unwrap_or("")} }
         }
     }
 }
