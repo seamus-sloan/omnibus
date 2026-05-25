@@ -677,11 +677,14 @@ fn SortableHeader(
 
 #[component]
 fn EbookRow(book: EbookMetadata, server_url: String) -> Element {
-    let id = book.id;
+    // Stable per-book uuid drives both the detail-route URL and the
+    // thumbnail URL — see `Route::BookDetail` for why it's keyed on the
+    // uuid instead of `books.id`.
+    let uuid = book.unique_identifier.clone().unwrap_or_default();
     let display_title = book.title.as_deref().unwrap_or(&book.filename).to_string();
     let row_testid = format!("ebook-row-{}", row_slug(&book.filename));
     let has_cover = book.cover_url.is_some();
-    let thumb_base = format!("{server_url}/api/thumbs/{}", book.id);
+    let thumb_base = format!("{server_url}/api/thumbs/{uuid}");
     let series_line = match (book.series.as_deref(), book.series_index.as_deref()) {
         (Some(s), Some(i)) => format!("{s} #{i}"),
         (Some(s), None) => s.to_string(),
@@ -692,6 +695,8 @@ fn EbookRow(book: EbookMetadata, server_url: String) -> Element {
     let added = book.added_at.as_deref().unwrap_or("").to_string();
 
     let nav = use_navigator();
+    let uuid_click = uuid.clone();
+    let uuid_key = uuid.clone();
 
     rsx! {
         tr {
@@ -702,13 +707,13 @@ fn EbookRow(book: EbookMetadata, server_url: String) -> Element {
             tabindex: "0",
             aria_label: "Open details for {display_title}",
             onclick: move |_| {
-                nav.push(Route::BookDetail { id });
+                nav.push(Route::BookDetail { uuid: uuid_click.clone() });
             },
             onkeydown: move |evt: Event<KeyboardData>| {
                 let key = evt.key();
                 if key == Key::Enter || key == Key::Character(" ".to_string()) {
                     evt.prevent_default();
-                    nav.push(Route::BookDetail { id });
+                    nav.push(Route::BookDetail { uuid: uuid_key.clone() });
                 }
             },
             td { class: "ebook-col-cover", "data-testid": "ebook-cell-cover",
@@ -774,19 +779,22 @@ fn BookGrid(books: Vec<EbookMetadata>, server_url: String) -> Element {
 
 #[component]
 fn GridTile(book: EbookMetadata, server_url: String) -> Element {
-    let id = book.id;
+    // Stable per-book uuid drives both detail-route URL and thumb URL
+    // (see `Route::BookDetail`).
+    let uuid = book.unique_identifier.clone().unwrap_or_default();
     let display_title = book.title.as_deref().unwrap_or(&book.filename).to_string();
     let tile_testid = format!("ebook-tile-{}", row_slug(&book.filename));
     let authors = contributor_names(&book.creators);
     let book_for_cover = book.clone();
     let nav = use_navigator();
 
-    // Prefer the responsive `/api/thumbs/:id/{sm,md,lg}` endpoint over the
-    // raw `/api/covers/:id`: smaller payload (WebP, resized per slot) and
-    // the URL is server-prefixed so mobile picks up the right origin.
-    // Books with no cover fall back to the Atrium plate template.
+    // Prefer the responsive `/api/thumbs/:uuid/{sm,md,lg}` endpoint over
+    // the raw `/api/covers/:uuid`: smaller payload (WebP, resized per
+    // slot) and the URL is server-prefixed so mobile picks up the right
+    // origin. Books with no cover fall back to the Atrium plate
+    // template.
     let (thumb_src, thumb_srcset) = if book.cover_url.is_some() {
-        let base = format!("{server_url}/api/thumbs/{id}");
+        let base = format!("{server_url}/api/thumbs/{uuid}");
         (
             Some(format!("{base}/md")),
             Some(format!("{base}/sm 160w, {base}/md 320w, {base}/lg 640w")),
@@ -795,6 +803,9 @@ fn GridTile(book: EbookMetadata, server_url: String) -> Element {
         (None, None)
     };
 
+    let uuid_click = uuid.clone();
+    let uuid_key = uuid.clone();
+
     rsx! {
         a {
             class: "cover-link lib-tile",
@@ -802,12 +813,12 @@ fn GridTile(book: EbookMetadata, server_url: String) -> Element {
             role: "listitem",
             tabindex: "0",
             aria_label: "Open details for {display_title}",
-            onclick: move |_| { nav.push(Route::BookDetail { id }); },
+            onclick: move |_| { nav.push(Route::BookDetail { uuid: uuid_click.clone() }); },
             onkeydown: move |evt: Event<KeyboardData>| {
                 let key = evt.key();
                 if key == Key::Enter || key == Key::Character(" ".to_string()) {
                     evt.prevent_default();
-                    nav.push(Route::BookDetail { id });
+                    nav.push(Route::BookDetail { uuid: uuid_key.clone() });
                 }
             },
             crate::components::atrium::Cover {

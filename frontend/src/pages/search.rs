@@ -95,7 +95,7 @@ pub fn SearchPage(query: String) -> Element {
                     for book in r.books.iter().cloned() {
                         li {
                             Link {
-                                to: Route::BookDetail { id: book.id },
+                                to: Route::BookDetail { uuid: book.uuid.clone() },
                                 class: "search-result-row",
                                 "data-testid": "search-book-row",
                                 div { class: "search-row-title", "{book.title}" }

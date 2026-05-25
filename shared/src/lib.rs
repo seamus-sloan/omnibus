@@ -371,6 +371,10 @@ impl PaletteResults {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PaletteBookHit {
     pub id: i64,
+    /// Stable UUID — what the frontend should use to construct
+    /// `/books/:uuid` and `/api/covers/:uuid` URLs.
+    #[serde(default)]
+    pub uuid: String,
     pub title: String,
     /// Pre-joined author names (e.g. "Grace Hopper, Margaret Hamilton").
     pub author_display: String,

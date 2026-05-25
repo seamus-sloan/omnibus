@@ -2,8 +2,8 @@
 //!
 //! The web and mobile list endpoints read from the `books` table instead of
 //! walking the filesystem on every request. This module owns the write side:
-//! scan the configured library, then atomically replace the DB rows for
-//! that path.
+//! scan the configured library, diff the result against the DB, and apply
+//! only the per-book changes that the on-disk state demands.
 //!
 //! Two triggers fire a reindex (both routed through
 //! [`crate::worker::Worker`] so concurrency and per-path serialization are
@@ -15,6 +15,26 @@
 //!
 //! Scans run on the blocking pool via `spawn_blocking` so the hot axum
 //! runtime stays responsive while the walk + OPF parse + cover reads go.
+//!
+//! ## Diff classification
+//!
+//! [`diff_library`] takes the Phase-A stat output and the DB's current
+//! state and buckets each file:
+//!
+//! - **Unchanged** — on disk, in DB, `(mtime_epoch, size_bytes)` matches.
+//!   No work. `books.id` preserved.
+//! - **New** — on disk, not in DB. Full Phase-B parse + insert.
+//! - **Changed** — on disk, in DB, stat differs. Full Phase-B parse, then
+//!   UPDATE in place (preserves `books.id`).
+//! - **Removed** — in DB, not on disk. DELETE (cascades clean).
+//! - **Backfill** — in DB, in disk, DB has the migration default
+//!   `(mtime_epoch=0, size_bytes=0)`. Treated as the sentinel for "fs
+//!   metadata never observed" (post-migration), so the writer only
+//!   updates the stat columns; the OPF is not re-parsed. Without this,
+//!   the first reindex after the migration would treat every existing
+//!   row as Changed.
+
+use std::path::{Path, PathBuf};
 
 use sqlx::SqlitePool;
 
@@ -38,33 +58,291 @@ pub async fn is_stale(pool: &SqlitePool, library_path: &str) -> Result<bool, sql
     Ok(now - last >= REFRESH_AFTER_SECS)
 }
 
-/// Scan `library_path` and replace the DB index for it. Runs the scan on
-/// the blocking pool so callers can `await` it from a normal async context
-/// without blocking the runtime.
+/// Result of [`diff_library`]. Each bucket is what the writer should do
+/// for the corresponding subset of files.
+#[derive(Debug, Default)]
+pub struct ReindexDiff {
+    /// Already in the DB and the on-disk stat matches. Writer does
+    /// nothing — `books.id` is preserved by definition.
+    pub unchanged: Vec<String>,
+    /// Not in the DB. Writer parses + inserts.
+    pub new: Vec<ebook::ParseTarget>,
+    /// In the DB but the stat differs. Writer parses + UPDATEs in place
+    /// (`books.id` preserved).
+    pub changed: Vec<ebook::ParseTarget>,
+    /// In the DB but not on disk. Writer deletes; cascades clear the link
+    /// tables; cover files on disk get cleaned up post-commit.
+    pub removed: Vec<String>,
+    /// In the DB and on disk, but the DB row carries the post-migration
+    /// `(mtime_epoch=0, size_bytes=0)` sentinel. Writer fills in the stat
+    /// values without re-parsing the OPF — the one-time upgrade fast path.
+    pub backfill: Vec<(String, i64, i64)>,
+}
+
+/// Pure classifier — no I/O. Compares a Phase-A stat output against the
+/// current DB state and routes each file into one of the five buckets.
+/// `library_root` is the absolute path the scanner walked; we join it
+/// with each `filename` to fill `ParseTarget.absolute` so Phase B can
+/// open files directly without re-walking.
+pub fn diff_library(
+    disk: &[ebook::StatEntry],
+    db: &[queries::IndexedRow],
+    library_root: &Path,
+) -> ReindexDiff {
+    use std::collections::HashMap;
+
+    // Skip the synthetic "unreadable subdir" placeholders the stat walk
+    // emits with an empty uuid (`scan_ebook_library_with` lifts those
+    // into error rows for the legacy wrapper, but the diff treats them
+    // as not-present).
+    let disk_by_uuid: HashMap<&str, &ebook::StatEntry> = disk
+        .iter()
+        .filter(|e| !e.uuid.is_empty())
+        .map(|e| (e.uuid.as_str(), e))
+        .collect();
+    let db_by_uuid: HashMap<&str, &queries::IndexedRow> =
+        db.iter().map(|r| (r.uuid.as_str(), r)).collect();
+
+    let mut out = ReindexDiff::default();
+
+    for (uuid, entry) in &disk_by_uuid {
+        match db_by_uuid.get(uuid) {
+            None => out.new.push(ebook::ParseTarget {
+                filename: entry.filename.clone(),
+                absolute: library_root.join(&entry.filename),
+                mtime_epoch: entry.mtime_epoch,
+                size_bytes: entry.size_bytes,
+            }),
+            Some(row) => {
+                let never_observed = row.mtime_epoch == 0 && row.size_bytes == 0;
+                let matches =
+                    row.mtime_epoch == entry.mtime_epoch && row.size_bytes == entry.size_bytes;
+                if never_observed {
+                    out.backfill
+                        .push(((*uuid).to_string(), entry.mtime_epoch, entry.size_bytes));
+                } else if matches {
+                    out.unchanged.push((*uuid).to_string());
+                } else {
+                    out.changed.push(ebook::ParseTarget {
+                        filename: entry.filename.clone(),
+                        absolute: library_root.join(&entry.filename),
+                        mtime_epoch: entry.mtime_epoch,
+                        size_bytes: entry.size_bytes,
+                    });
+                }
+            }
+        }
+    }
+
+    for row in db {
+        if !disk_by_uuid.contains_key(row.uuid.as_str()) {
+            out.removed.push(row.uuid.clone());
+        }
+    }
+
+    // Stable order keeps the writer's behavior predictable across runs
+    // (matters for the cover-file post-commit step, and for tests).
+    out.new.sort_by(|a, b| a.filename.cmp(&b.filename));
+    out.changed.sort_by(|a, b| a.filename.cmp(&b.filename));
+    out.unchanged.sort();
+    out.removed.sort();
+    out.backfill.sort_by(|a, b| a.0.cmp(&b.0));
+
+    out
+}
+
+/// Scan `library_path`, diff against the existing index, and apply only
+/// the per-book changes the diff demands. Runs the scan on the blocking
+/// pool so callers can `await` it from a normal async context without
+/// blocking the runtime.
 ///
-/// A fatal scan error (missing or unreadable root) is returned as `Err` and
-/// the existing index is **not** touched — we'd rather serve stale-but-good
-/// data than wipe the table and mark the index "fresh" (which would also
-/// suppress retries until [`REFRESH_AFTER_SECS`] elapses). Per-book parse
-/// failures are *not* fatal; they land in the DB as rows with `error =
-/// Some(_)`, same as before.
+/// A fatal scan error (missing or unreadable root) is returned as `Err`
+/// and the existing index is **not** touched — we'd rather serve
+/// stale-but-good data than wipe the table and mark the index "fresh"
+/// (which would also suppress retries until [`REFRESH_AFTER_SECS`]
+/// elapses). Per-book parse failures are *not* fatal; they land in the
+/// DB as rows with `error = Some(_)`, same as before.
 pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()> {
     let path_for_scan = library_path.to_owned();
-    let scan = tokio::task::spawn_blocking(move || {
+    let library_key_for_scan = library_path.to_owned();
+    let stat = tokio::task::spawn_blocking(move || {
+        ebook::stat_ebook_library(Some(&path_for_scan), &library_key_for_scan)
+    })
+    .await?;
+    if let Some(msg) = stat.error {
+        anyhow::bail!("scan of {library_path} failed: {msg}");
+    }
+
+    let db_rows = queries::list_indexed_rows(pool, library_path).await?;
+    let library_root: PathBuf = PathBuf::from(library_path);
+    let diff = diff_library(&stat.entries, &db_rows, &library_root);
+
+    // Parse Phase B only for the buckets that need it.
+    let new_targets = diff.new.clone();
+    let changed_targets = diff.changed.clone();
+    let parsed = tokio::task::spawn_blocking(move || {
         // Materialize cover sidecars so future scans skip the zip
         // (F0.6). Best-effort: read-only filesystems fall through to the
         // in-memory bytes for the current scan and retry next time.
-        ebook::scan_ebook_library_with(
-            Some(&path_for_scan),
-            ebook::ScanOptions {
-                materialize_sidecars: true,
-            },
-        )
+        let opts = ebook::ScanOptions {
+            materialize_sidecars: true,
+        };
+        let new_books = ebook::parse_ebook_targets(new_targets, opts.clone());
+        let changed_books = ebook::parse_ebook_targets(changed_targets, opts);
+        (new_books, changed_books)
     })
     .await?;
-    if let Some(msg) = scan.error {
-        anyhow::bail!("scan of {library_path} failed: {msg}");
-    }
-    queries::replace_books(pool, library_path, scan.books).await?;
+
+    let plan = queries::SyncPlan {
+        new_books: parsed.0,
+        changed_books: parsed.1,
+        removed_uuids: diff.removed,
+        backfill: diff.backfill,
+    };
+    queries::sync_books(pool, library_path, plan).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ebook::StatEntry;
+    use crate::queries::IndexedRow;
+
+    fn entry(name: &str, uuid: &str, mtime: i64, size: i64) -> StatEntry {
+        StatEntry {
+            filename: name.into(),
+            uuid: uuid.into(),
+            mtime_epoch: mtime,
+            size_bytes: size,
+        }
+    }
+    fn row(uuid: &str, mtime: i64, size: i64) -> IndexedRow {
+        IndexedRow {
+            uuid: uuid.into(),
+            mtime_epoch: mtime,
+            size_bytes: size,
+        }
+    }
+
+    #[test]
+    fn diff_classifies_new_file_as_new() {
+        let disk = vec![entry("a.epub", "uuid-a", 100, 1000)];
+        let db: Vec<IndexedRow> = vec![];
+        let d = diff_library(&disk, &db, Path::new("/lib"));
+        assert_eq!(d.new.len(), 1);
+        assert_eq!(d.new[0].filename, "a.epub");
+        assert_eq!(d.new[0].mtime_epoch, 100);
+        assert_eq!(d.new[0].size_bytes, 1000);
+        assert!(d.changed.is_empty());
+        assert!(d.unchanged.is_empty());
+        assert!(d.removed.is_empty());
+        assert!(d.backfill.is_empty());
+    }
+
+    #[test]
+    fn diff_classifies_missing_file_as_removed() {
+        let disk: Vec<StatEntry> = vec![];
+        let db = vec![row("uuid-a", 100, 1000)];
+        let d = diff_library(&disk, &db, Path::new("/lib"));
+        assert_eq!(d.removed, vec!["uuid-a".to_string()]);
+        assert!(d.new.is_empty());
+        assert!(d.changed.is_empty());
+        assert!(d.unchanged.is_empty());
+    }
+
+    #[test]
+    fn diff_classifies_matching_stat_as_unchanged() {
+        let disk = vec![entry("a.epub", "uuid-a", 100, 1000)];
+        let db = vec![row("uuid-a", 100, 1000)];
+        let d = diff_library(&disk, &db, Path::new("/lib"));
+        assert_eq!(d.unchanged, vec!["uuid-a".to_string()]);
+        assert!(d.new.is_empty());
+        assert!(d.changed.is_empty());
+        assert!(d.removed.is_empty());
+        assert!(d.backfill.is_empty());
+    }
+
+    #[test]
+    fn diff_classifies_mtime_drift_as_changed() {
+        let disk = vec![entry("a.epub", "uuid-a", 200, 1000)];
+        let db = vec![row("uuid-a", 100, 1000)];
+        let d = diff_library(&disk, &db, Path::new("/lib"));
+        assert_eq!(d.changed.len(), 1);
+        assert_eq!(d.changed[0].mtime_epoch, 200);
+        assert!(d.unchanged.is_empty());
+    }
+
+    #[test]
+    fn diff_classifies_size_drift_as_changed() {
+        let disk = vec![entry("a.epub", "uuid-a", 100, 2000)];
+        let db = vec![row("uuid-a", 100, 1000)];
+        let d = diff_library(&disk, &db, Path::new("/lib"));
+        assert_eq!(d.changed.len(), 1);
+        assert_eq!(d.changed[0].size_bytes, 2000);
+    }
+
+    #[test]
+    fn diff_routes_zero_zero_sentinel_to_backfill_not_changed() {
+        // Migration default: existing rows look like (0, 0). The disk
+        // has real values — that combination must NOT trigger a full
+        // re-parse on the first post-migration reindex.
+        let disk = vec![entry("a.epub", "uuid-a", 100, 1000)];
+        let db = vec![row("uuid-a", 0, 0)];
+        let d = diff_library(&disk, &db, Path::new("/lib"));
+        assert_eq!(d.backfill, vec![("uuid-a".into(), 100, 1000)]);
+        assert!(d.changed.is_empty());
+        assert!(d.new.is_empty());
+        assert!(d.unchanged.is_empty());
+    }
+
+    #[test]
+    fn diff_handles_mixed_buckets_in_one_call() {
+        let disk = vec![
+            entry("keep.epub", "uuid-keep", 100, 1000),
+            entry("edit.epub", "uuid-edit", 250, 1100),
+            entry("add.epub", "uuid-add", 300, 500),
+            entry("backfill.epub", "uuid-bf", 400, 600),
+        ];
+        let db = vec![
+            row("uuid-keep", 100, 1000),
+            row("uuid-edit", 200, 1000),
+            row("uuid-bf", 0, 0),
+            row("uuid-gone", 50, 200),
+        ];
+        let d = diff_library(&disk, &db, Path::new("/lib"));
+        assert_eq!(d.unchanged, vec!["uuid-keep".to_string()]);
+        assert_eq!(d.changed.len(), 1);
+        assert_eq!(d.changed[0].filename, "edit.epub");
+        assert_eq!(d.new.len(), 1);
+        assert_eq!(d.new[0].filename, "add.epub");
+        assert_eq!(d.removed, vec!["uuid-gone".to_string()]);
+        assert_eq!(d.backfill, vec![("uuid-bf".into(), 400, 600)]);
+    }
+
+    #[test]
+    fn diff_ignores_empty_uuid_placeholders_from_stat_walk() {
+        // `stat_ebook_library` emits a synthetic empty-uuid entry for
+        // unreadable subdirs. The diff must not treat those as books.
+        let disk = vec![
+            entry("good.epub", "uuid-good", 100, 1000),
+            StatEntry {
+                filename: "bad/".into(),
+                uuid: String::new(),
+                mtime_epoch: 0,
+                size_bytes: 0,
+            },
+        ];
+        let db: Vec<IndexedRow> = vec![];
+        let d = diff_library(&disk, &db, Path::new("/lib"));
+        assert_eq!(d.new.len(), 1);
+        assert_eq!(d.new[0].filename, "good.epub");
+    }
+
+    #[test]
+    fn diff_builds_absolute_paths_for_parse_targets() {
+        let disk = vec![entry("sub/a.epub", "uuid-a", 100, 1000)];
+        let d = diff_library(&disk, &[], Path::new("/srv/library"));
+        assert_eq!(d.new[0].absolute, Path::new("/srv/library/sub/a.epub"));
+    }
 }

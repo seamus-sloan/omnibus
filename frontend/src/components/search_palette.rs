@@ -125,8 +125,8 @@ fn SpOverlay(open: PaletteOpen) -> Element {
     let navigate_to_item = {
         move |item: &FlatItem| {
             match item {
-                FlatItem::Book { id, .. } => {
-                    nav.push(Route::BookDetail { id: *id });
+                FlatItem::Book { uuid, .. } => {
+                    nav.push(Route::BookDetail { uuid: uuid.clone() });
                 }
                 FlatItem::Author { id, .. } => {
                     nav.push(Route::AuthorDetail { id: *id });
@@ -315,11 +315,11 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                             for book in r.books.iter() {
                                 SpBookRow {
                                     book: book.clone(),
-                                    selected: is_selected(&items, sel, &FlatItem::Book { id: book.id, title: book.title.clone() }),
+                                    selected: is_selected(&items, sel, &FlatItem::Book { uuid: book.uuid.clone(), title: book.title.clone() }),
                                     on_click: {
-                                        let id = book.id;
+                                        let uuid = book.uuid.clone();
                                         move |_| {
-                                            nav.push(Route::BookDetail { id });
+                                            nav.push(Route::BookDetail { uuid: uuid.clone() });
                                             open.0.set(false);
                                         }
                                     },
@@ -584,9 +584,12 @@ fn SpFooter() -> Element {
 // ── Flat item model for keyboard nav ─────────────────────────────
 
 /// A single selectable item in the flat list used for arrow-key navigation.
+/// Books carry the stable `uuid` so the palette can build `/books/:uuid`
+/// URLs without a second round-trip — [`PaletteBookHit`] now includes
+/// the uuid alongside `id`.
 #[derive(Clone, Debug, PartialEq)]
 enum FlatItem {
-    Book { id: i64, title: String },
+    Book { uuid: String, title: String },
     Author { id: i64, name: String },
     Series { id: i64, name: String },
     Tag { id: i64, name: String },
@@ -600,7 +603,7 @@ fn build_flat_items(results: &Option<PaletteResults>) -> Vec<FlatItem> {
     let mut items = Vec::new();
     for b in &r.books {
         items.push(FlatItem::Book {
-            id: b.id,
+            uuid: b.uuid.clone(),
             title: b.title.clone(),
         });
     }

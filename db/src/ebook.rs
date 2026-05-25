@@ -29,7 +29,7 @@ use crate::library_layout;
 /// `mtime_epoch` and `size_bytes` are the filesystem stat values captured
 /// during the walk, used by the incremental reindex diff to detect changes
 /// and by the writer to persist on `book_files`.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct IndexedBook {
     pub metadata: EbookMetadata,
     pub cover: Option<(String, Vec<u8>)>,

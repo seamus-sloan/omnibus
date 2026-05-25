@@ -125,7 +125,7 @@ fn render_series(s: SeriesDetail) -> Element {
                         article { class: "card series-card",
                             div { class: "series-card-cover",
                                 Link {
-                                    to: Route::BookDetail { id: book.id },
+                                    to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
                                     Cover { book: book.clone() }
                                 }
                             }
@@ -140,7 +140,7 @@ fn render_series(s: SeriesDetail) -> Element {
                                 }
                                 h3 { class: "series-card-title",
                                     Link {
-                                        to: Route::BookDetail { id: book.id },
+                                        to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
                                         "{book.title.as_deref().unwrap_or(&book.filename)}"
                                     }
                                 }

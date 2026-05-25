@@ -28,7 +28,9 @@ test("renders book grid with srcset cover images", async ({ page }) => {
 
   const srcset = await coverImg.getAttribute("srcset");
   expect(srcset, "srcset attribute must be present").not.toBeNull();
-  expect(srcset).toMatch(/\/api\/thumbs\/\d+\/sm/);
+  // Thumb URLs are uuid-keyed (UUIDv5, 8-4-4-4-12 hyphenated form) —
+  // see `/api/thumbs/:uuid/:size` in the router.
+  expect(srcset).toMatch(/\/api\/thumbs\/[0-9a-fA-F-]{36}\/sm/);
   expect(srcset).toContain("160w");
   expect(srcset).toContain("320w");
   expect(srcset).toContain("640w");
@@ -49,22 +51,25 @@ test("thumb endpoint serves an image", async ({ page, request }) => {
   const srcset = await coverImg.getAttribute("srcset");
   expect(srcset).not.toBeNull();
 
-  // Parse the book ID out of the srcset (e.g. "/api/thumbs/3/sm 160w, ...").
-  const match = srcset!.match(/\/api\/thumbs\/(\d+)\/sm/);
-  expect(match, "could not parse book id from srcset").not.toBeNull();
-  const bookId = match![1];
+  // Parse the book UUID out of the srcset
+  // (e.g. "/api/thumbs/ad8d591f-546b-59d0-bfff-0a4de6fc7e55/sm 160w, ...").
+  // The route is uuid-keyed (not id-keyed) for the same URL-stability
+  // reason `/books/:uuid` uses — see `db::queries::stable_uuid`.
+  const match = srcset!.match(/\/api\/thumbs\/([0-9a-fA-F-]{36})\/sm/);
+  expect(match, "could not parse book uuid from srcset").not.toBeNull();
+  const bookUuid = match![1];
 
   // On first request the endpoint may return the original cover (image/jpeg);
   // poll until the background WebP generation has finished (up to 10 s).
   await expect
     .poll(
       async () => {
-        const resp = await request.get(`/api/thumbs/${bookId}/md`);
+        const resp = await request.get(`/api/thumbs/${bookUuid}/md`);
         if (resp.status() !== 200) return `status:${resp.status()}`;
         return resp.headers()["content-type"] ?? "missing";
       },
       {
-        message: "expected /api/thumbs/{id}/md to return image/webp",
+        message: "expected /api/thumbs/{uuid}/md to return image/webp",
         timeout: 10_000,
         intervals: [200, 500, 1_000],
       },

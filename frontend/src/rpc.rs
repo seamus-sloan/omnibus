@@ -198,10 +198,12 @@ pub async fn rpc_get_ebooks() -> Result<EbookLibrary> {
 
 /// POST (not GET) for the same reason as `rpc_search`: Dioxus `#[get]`
 /// server functions can't carry an argument body, so anything that needs
-/// `id` rides as a JSON-bodied POST.
+/// `uuid` rides as a JSON-bodied POST. The argument is the stable
+/// `books.uuid` rather than the renumbering `books.id` so bookmarked
+/// `/books/:uuid` URLs survive reindexes.
 #[post("/api/rpc/ebook", pool: PoolExt, _user: AuthUser)]
-pub async fn rpc_get_ebook(id: i64) -> Result<Option<EbookMetadata>> {
-    Ok(db::get_book(&pool.0, id).await?)
+pub async fn rpc_get_ebook(uuid: String) -> Result<Option<EbookMetadata>> {
+    Ok(db::get_book_by_uuid(&pool.0, &uuid).await?)
 }
 
 /// FTS5-backed search across the configured ebook library. Empty or
@@ -380,7 +382,7 @@ pub async fn rpc_list_series() -> Result<Vec<SeriesSummary>> {
 /// without a second round-trip.
 #[post("/api/rpc/ebook/overrides", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_save_overrides(
-    book_id: i64,
+    uuid: String,
     overrides: MetadataOverrides,
 ) -> Result<Option<EbookMetadata>> {
     if !user.is_admin && !user.can_edit {
@@ -389,9 +391,6 @@ pub async fn rpc_save_overrides(
     if let Err(msg) = overrides.validate() {
         return Err(ServerFnError::new(msg).into());
     }
-    let Some(uuid) = db::get_book_uuid(&pool.0, book_id).await? else {
-        return Ok(None);
-    };
     // Merge incoming overrides with any existing ones so that a second edit
     // that only touches field B doesn't wipe a prior override on field A.
     let merged = match db::get_metadata_overrides(&pool.0, &uuid).await? {
@@ -399,16 +398,18 @@ pub async fn rpc_save_overrides(
         None => overrides,
     };
     db::upsert_metadata_overrides(&pool.0, &uuid, &merged, false, user.id).await?;
-    Ok(db::get_book(&pool.0, book_id).await?)
+    Ok(db::get_book_by_uuid(&pool.0, &uuid).await?)
 }
 
 /// Delete metadata overrides for a book, reverting to scanned values (F5.1).
 #[post("/api/rpc/ebook/overrides/delete", pool: PoolExt, user: AuthUser)]
-pub async fn rpc_delete_overrides(book_id: i64) -> Result<Option<EbookMetadata>> {
+pub async fn rpc_delete_overrides(uuid: String) -> Result<Option<EbookMetadata>> {
     if !user.is_admin && !user.can_edit {
         return Err(ServerFnError::new("forbidden: edit permission required").into());
     }
-    let Some(uuid) = db::get_book_uuid(&pool.0, book_id).await? else {
+    // Resolve uuid → id once so the `invalidate_thumbs` call (id-keyed by
+    // the thumbnail pipeline's file layout) stays accurate.
+    let Some(book_id) = db::resolve_book_id_by_uuid(&pool.0, &uuid).await? else {
         return Ok(None);
     };
     db::delete_metadata_overrides(&pool.0, &uuid).await?;
@@ -422,7 +423,7 @@ pub async fn rpc_delete_overrides(book_id: i64) -> Result<Option<EbookMetadata>>
     })
     .await
     .map_err(|e| ServerFnError::new(format!("spawn_blocking(delete_override_cover): {e}")))?;
-    Ok(db::get_book(&pool.0, book_id).await?)
+    Ok(db::get_book_by_uuid(&pool.0, &uuid).await?)
 }
 
 /// Search palette — grouped results (books, authors, series, tags) for the

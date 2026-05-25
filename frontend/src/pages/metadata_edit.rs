@@ -1,6 +1,6 @@
 //! Metadata edit page — F5.1 Screen A (single-book edit form).
 //!
-//! Full-page route at `/books/:id/edit`. Two-column layout: a 4-column
+//! Full-page route at `/books/:uuid/edit`. Two-column layout: a 4-column
 //! form grid (left) and a sticky sidebar with cover preview and
 //! identifiers (right). A sticky save bar at the bottom shows the dirty
 //! field count and provides Save / Discard buttons.
@@ -18,21 +18,22 @@ use omnibus_shared::{Contributor, EbookMetadata, MetadataOverrides};
 use crate::components::atrium::Cover;
 use crate::{data, use_server_url, Route};
 
-/// Top-level metadata edit page component, mounted at `/books/:id/edit`.
+/// Top-level metadata edit page component, mounted at `/books/:uuid/edit`.
 #[component]
-pub fn MetadataEditPage(id: i64) -> Element {
+pub fn MetadataEditPage(uuid: String) -> Element {
     let server_url = use_server_url();
     let mut book: Signal<Option<EbookMetadata>> = use_signal(|| None);
     let mut loading = use_signal(|| true);
     let mut error: Signal<Option<String>> = use_signal(|| None);
 
-    // See `BookDetailPage` for why `id` needs `use_reactive!`.
+    // See `BookDetailPage` for why `uuid` needs `use_reactive!`.
     let url = server_url.clone();
-    use_effect(use_reactive!(|id| {
+    use_effect(use_reactive!(|uuid| {
         let url = url.clone();
+        let uuid = uuid.clone();
         spawn(async move {
             loading.set(true);
-            match data::get_ebook(&url, id).await {
+            match data::get_ebook(&url, &uuid).await {
                 Ok(b) => {
                     book.set(b);
                     error.set(None);
@@ -51,7 +52,7 @@ pub fn MetadataEditPage(id: i64) -> Element {
     if let Some(msg) = error() {
         return rsx! {
             p { role: "alert", class: "subtitle", "{msg}" }
-            Link { to: Route::BookDetail { id }, class: "btn", "Back to book" }
+            Link { to: Route::BookDetail { uuid: uuid.clone() }, class: "btn", "Back to book" }
         };
     }
     let Some(b) = book() else {
@@ -62,7 +63,7 @@ pub fn MetadataEditPage(id: i64) -> Element {
     };
 
     rsx! {
-        MetadataEditForm { book: b, id }
+        MetadataEditForm { book: b, uuid }
     }
 }
 
@@ -72,7 +73,7 @@ pub fn MetadataEditPage(id: i64) -> Element {
 // ---------------------------------------------------------------------------
 
 #[component]
-fn MetadataEditForm(book: EbookMetadata, id: i64) -> Element {
+fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
     let server_url = use_server_url();
 
     // Original values — frozen snapshot for dirty comparison.
@@ -190,7 +191,7 @@ fn MetadataEditForm(book: EbookMetadata, id: i64) -> Element {
                     }
                     span { class: "bd-crumb-sep", "\u{203a}" }
                 }
-                Link { to: Route::BookDetail { id }, class: "bd-crumb-step", "{display_title}" }
+                Link { to: Route::BookDetail { uuid: uuid.clone() }, class: "bd-crumb-step", "{display_title}" }
                 span { class: "bd-crumb-sep", "\u{203a}" }
                 span { class: "bd-crumb-curr", "Edit metadata" }
             }
@@ -454,16 +455,18 @@ fn MetadataEditForm(book: EbookMetadata, id: i64) -> Element {
                                 disabled: saving(),
                                 onclick: {
                                     let url = server_url.clone();
+                                    let uuid = uuid.clone();
                                     move |_| {
                                         let url = url.clone();
+                                        let uuid = uuid.clone();
                                         spawn(async move {
                                             saving.set(true);
                                             save_error.set(None);
-                                            match data::delete_overrides(&url, id).await {
+                                            match data::delete_overrides(&url, &uuid).await {
                                                 Ok(_) => {
                                                     // Navigate back to the detail page
                                                     let nav = navigator();
-                                                    nav.push(Route::BookDetail { id });
+                                                    nav.push(Route::BookDetail { uuid: uuid.clone() });
                                                 }
                                                 Err(e) => save_error.set(Some(e.to_string())),
                                             }
@@ -503,7 +506,7 @@ fn MetadataEditForm(book: EbookMetadata, id: i64) -> Element {
                 div { class: "me-save-actions",
                     // Discard — navigates back without saving
                     Link {
-                        to: Route::BookDetail { id },
+                        to: Route::BookDetail { uuid: uuid.clone() },
                         class: "btn ghost",
                         "data-testid": "me-discard",
                         "Discard"
@@ -516,8 +519,10 @@ fn MetadataEditForm(book: EbookMetadata, id: i64) -> Element {
                         disabled: dirty_count() == 0 || saving(),
                         onclick: {
                             let url = server_url.clone();
+                            let uuid = uuid.clone();
                             move |_| {
                                 let url = url.clone();
+                                let uuid = uuid.clone();
                                 spawn(async move {
                                     saving.set(true);
                                     save_error.set(None);
@@ -536,10 +541,10 @@ fn MetadataEditForm(book: EbookMetadata, id: i64) -> Element {
                                         &tags(),
                                     );
 
-                                    match data::save_overrides(&url, id, &overrides).await {
+                                    match data::save_overrides(&url, &uuid, &overrides).await {
                                         Ok(_) => {
                                             let nav = navigator();
-                                            nav.push(Route::BookDetail { id });
+                                            nav.push(Route::BookDetail { uuid: uuid.clone() });
                                         }
                                         Err(e) => save_error.set(Some(e.to_string())),
                                     }

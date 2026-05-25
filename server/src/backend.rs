@@ -90,10 +90,10 @@ pub fn rest_router(state: AppState) -> Router {
         .route("/api/reindex", post(post_reindex))
         .route("/api/library", get(get_library))
         .route("/api/ebooks", get(get_ebooks))
-        .route("/api/ebooks/{id}", get(get_ebook_by_id))
-        .route("/api/ebooks/{id}/overrides", post(post_ebook_overrides))
+        .route("/api/ebooks/{uuid}", get(get_ebook_by_uuid))
+        .route("/api/ebooks/{uuid}/overrides", post(post_ebook_overrides))
         .route(
-            "/api/ebooks/{id}/overrides/delete",
+            "/api/ebooks/{uuid}/overrides/delete",
             post(delete_ebook_overrides),
         )
         // GET/DELETE for author photos carry no upload body (DELETE mutates,
@@ -107,8 +107,8 @@ pub fn rest_router(state: AppState) -> Router {
         )
         .merge(upload_router())
         .merge(search_router())
-        .route("/api/covers/{id}", get(get_cover))
-        .route("/api/thumbs/{id}/{size}", get(get_thumb))
+        .route("/api/covers/{uuid}", get(get_cover))
+        .route("/api/thumbs/{uuid}/{size}", get(get_thumb))
         .route("/api/authors", get(get_authors))
         .route("/api/authors/{id}/photo/scan", post(post_author_photo_scan))
         .route("/api/authors/{id}", get(get_author_by_id))
@@ -176,7 +176,7 @@ fn upload_router() -> Router<AppState> {
         UPLOAD_RATE_LIMIT_MAX,
     ));
     Router::new()
-        .route("/api/ebooks/{id}/cover", post(post_ebook_cover))
+        .route("/api/ebooks/{uuid}/cover", post(post_ebook_cover))
         .route("/api/authors/{id}/photo", put(put_author_photo))
         .route("/api/authors/{id}/photo/url", put(put_author_photo_url))
         // Image uploads need more than the global 1 MiB cap; layered closer
@@ -349,12 +349,12 @@ fn with_pagination_headers(mut resp: Response, total: i64) -> Response {
     resp
 }
 
-async fn get_ebook_by_id(
+async fn get_ebook_by_uuid(
     _user: AuthUser,
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(uuid): Path<String>,
 ) -> Response {
-    match db::get_book(&state.pool, id).await {
+    match db::get_book_by_uuid(&state.pool, &uuid).await {
         Ok(Some(book)) => Json(book).into_response(),
         Ok(None) => axum::http::StatusCode::NOT_FOUND.into_response(),
         Err(error) => internal("read book", error),
@@ -425,8 +425,18 @@ async fn get_search_palette(
 async fn get_cover(
     _user: AuthUser,
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(uuid): Path<String>,
 ) -> Response {
+    // Resolve uuid → id so the existing id-keyed `db::get_cover` (which
+    // reads cover bytes from `<covers_dir>/<uuid>.<ext>` by way of the
+    // books row) stays unchanged. The route surface is uuid-keyed so
+    // bookmarked URLs survive reindexes; the storage layer keeps using
+    // the autoincrement id internally for join performance.
+    let id = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return internal("resolve_book_id_by_uuid", e),
+    };
     match db::get_cover(&state.pool, id).await {
         Ok(Some((mime, bytes))) => (
             [
@@ -452,7 +462,7 @@ async fn get_cover(
 async fn get_thumb(
     _user: AuthUser,
     State(state): State<AppState>,
-    Path((id, size_str)): Path<(i64, String)>,
+    Path((uuid, size_str)): Path<(String, String)>,
 ) -> Response {
     let size: db::ThumbSize = match size_str.parse() {
         Ok(s) => s,
@@ -463,6 +473,14 @@ async fn get_thumb(
             )
                 .into_response();
         }
+    };
+    // uuid → id translation: see the comment in `get_cover` for why we
+    // resolve at the edge rather than rewriting the thumbnail pipeline
+    // to be uuid-keyed end-to-end.
+    let id = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return internal("resolve_book_id_by_uuid", e),
     };
 
     let last_modified_epoch = match db::get_last_modified_epoch(&state.pool, id).await {
@@ -625,7 +643,7 @@ async fn get_library(_user: AuthUser, State(state): State<AppState>) -> Response
 async fn post_ebook_overrides(
     user: AuthUser,
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(uuid): Path<String>,
     Json(overrides): Json<MetadataOverrides>,
 ) -> Response {
     if !user.is_admin && !user.can_edit {
@@ -638,10 +656,13 @@ async fn post_ebook_overrides(
     if let Err(msg) = overrides.validate() {
         return (axum::http::StatusCode::BAD_REQUEST, msg).into_response();
     }
-    let uuid = match db::get_book_uuid(&state.pool, id).await {
-        Ok(Some(u)) => u,
+    // Resolve uuid → id so the thumbnail/cover invalidate calls stay
+    // id-keyed. Returns 404 for unknown uuids — same behavior the old
+    // `get_book_uuid(id)` -> 404 had for unknown ids.
+    let id = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
+        Ok(Some(id)) => id,
         Ok(None) => return (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
-        Err(e) => return internal("get_book_uuid", e),
+        Err(e) => return internal("resolve_book_id_by_uuid", e),
     };
     // Merge incoming overrides with any existing ones so a second edit that
     // only touches field B doesn't wipe a prior override on field A. The
@@ -662,7 +683,7 @@ async fn post_ebook_overrides(
 async fn delete_ebook_overrides(
     user: AuthUser,
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(uuid): Path<String>,
 ) -> Response {
     if !user.is_admin && !user.can_edit {
         return (
@@ -671,10 +692,10 @@ async fn delete_ebook_overrides(
         )
             .into_response();
     }
-    let uuid = match db::get_book_uuid(&state.pool, id).await {
-        Ok(Some(u)) => u,
+    let id = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
+        Ok(Some(id)) => id,
         Ok(None) => return (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
-        Err(e) => return internal("get_book_uuid", e),
+        Err(e) => return internal("resolve_book_id_by_uuid", e),
     };
     if let Err(e) = db::delete_metadata_overrides(&state.pool, &uuid).await {
         return internal("delete_metadata_overrides", e);
@@ -723,7 +744,7 @@ fn detect_image_format(bytes: &[u8]) -> Option<String> {
 async fn post_ebook_cover(
     user: AuthUser,
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(uuid): Path<String>,
     mut multipart: axum::extract::Multipart,
 ) -> Response {
     if !user.is_admin && !user.can_edit {
@@ -734,10 +755,13 @@ async fn post_ebook_cover(
             .into_response();
     }
 
-    let uuid = match db::get_book_uuid(&state.pool, id).await {
-        Ok(Some(u)) => u,
+    // uuid → id for the thumb-invalidate + `get_book` calls that still
+    // use the internal autoincrement key. Returns 404 for unknown uuids,
+    // matching the prior `get_book_uuid(id)` → 404 behavior.
+    let id = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
+        Ok(Some(id)) => id,
         Ok(None) => return (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
-        Err(e) => return internal("get_book_uuid", e),
+        Err(e) => return internal("resolve_book_id_by_uuid", e),
     };
 
     // Extract the cover field from the multipart body.
@@ -1674,9 +1698,10 @@ mod tests {
 
         let books = db::list_books(&pool, "/lib").await.unwrap();
         let id = books[0].id;
+        let uuid = books[0].unique_identifier.clone().unwrap();
 
         let response = app
-            .oneshot(get_with_bearer(&format!("/api/ebooks/{id}"), &token))
+            .oneshot(get_with_bearer(&format!("/api/ebooks/{uuid}"), &token))
             .await
             .expect("request should succeed");
         assert_eq!(response.status(), StatusCode::OK);
@@ -2302,15 +2327,14 @@ mod tests {
     #[tokio::test]
     async fn api_thumbs_returns_202_for_book_without_cover() {
         let (_, _, pool) = fixture().await;
-        let book_id = seed_book_no_cover(&pool).await;
+        // seed_book_no_cover uses this fixed uuid; route is uuid-keyed now.
+        let _ = seed_book_no_cover(&pool).await;
+        let uuid = "00000000-0000-0000-0000-000000000001";
         let user = test_support::create_user(&pool, "alice").await;
         let token = test_support::bearer_token(&pool, user.id).await;
         let app = rest_router(AppState::new(pool));
         let res = app
-            .oneshot(get_with_bearer(
-                &format!("/api/thumbs/{book_id}/md"),
-                &token,
-            ))
+            .oneshot(get_with_bearer(&format!("/api/thumbs/{uuid}/md"), &token))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::ACCEPTED);
@@ -2807,6 +2831,16 @@ mod tests {
     /// `list_books` if a test needs to assert against the overrides row
     /// directly.
     async fn seed_book(pool: &sqlx::SqlitePool, library: &str, title: &str) -> i64 {
+        seed_book_with_uuid(pool, library, title).await.0
+    }
+
+    /// Same as `seed_book` but returns `(id, uuid)`. New tests that build
+    /// uuid-keyed URLs (covers, thumbs, ebooks, overrides) use this.
+    async fn seed_book_with_uuid(
+        pool: &sqlx::SqlitePool,
+        library: &str,
+        title: &str,
+    ) -> (i64, String) {
         db::replace_books(
             pool,
             library,
@@ -2824,11 +2858,11 @@ mod tests {
         .await
         .expect("seed_book should succeed");
         let books = db::list_books(pool, library).await.expect("list_books");
-        books
+        let book = books
             .into_iter()
             .find(|b| b.title.as_deref() == Some(title))
-            .map(|b| b.id)
-            .expect("seeded book should be present")
+            .expect("seeded book should be present");
+        (book.id, book.unique_identifier.clone().unwrap())
     }
 
     /// Build a `multipart/form-data` body with a single `cover` field
@@ -2972,7 +3006,7 @@ mod tests {
         // POSTs an override. The handler must persist it, return the merged
         // book, and flip `has_override` on the response.
         let (app, _state, pool) = fixture().await;
-        let id = seed_book(&pool, "/lib", "Original").await;
+        let (id, uuid) = seed_book_with_uuid(&pool, "/lib", "Original").await;
         let admin = test_support::create_admin(&pool, "admin").await;
         let token = test_support::bearer_token(&pool, admin.id).await;
 
@@ -2983,7 +3017,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("/api/ebooks/{id}/overrides"))
+                    .uri(format!("/api/ebooks/{uuid}/overrides"))
                     .method("POST")
                     .header("content-type", "application/json")
                     .header(AUTHORIZATION, format!("Bearer {token}"))
@@ -3022,7 +3056,7 @@ mod tests {
         // delete it and assert the response reflects the canonical scanned
         // values (no `Option` overrides applied).
         let (app, _state, pool) = fixture().await;
-        let id = seed_book(&pool, "/lib", "Original").await;
+        let (id, uuid) = seed_book_with_uuid(&pool, "/lib", "Original").await;
         let admin = test_support::create_admin(&pool, "admin").await;
         let token = test_support::bearer_token(&pool, admin.id).await;
 
@@ -3031,7 +3065,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/api/ebooks/{id}/overrides"))
+                    .uri(format!("/api/ebooks/{uuid}/overrides"))
                     .method("POST")
                     .header("content-type", "application/json")
                     .header(AUTHORIZATION, format!("Bearer {token}"))
@@ -3045,7 +3079,7 @@ mod tests {
         let res = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("/api/ebooks/{id}/overrides/delete"))
+                    .uri(format!("/api/ebooks/{uuid}/overrides/delete"))
                     .method("POST")
                     .header(AUTHORIZATION, format!("Bearer {token}"))
                     .body(Body::empty())
@@ -3088,7 +3122,7 @@ mod tests {
         // `has_override = true`.
         let _covers = CoversDirGuard::new("upload_replaces");
         let (app, _state, pool) = fixture().await;
-        let id = seed_book(&pool, "/lib", "CoverBook").await;
+        let (id, uuid) = seed_book_with_uuid(&pool, "/lib", "CoverBook").await;
         let admin = test_support::create_admin(&pool, "admin").await;
         let token = test_support::bearer_token(&pool, admin.id).await;
 
@@ -3096,7 +3130,7 @@ mod tests {
         let res = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("/api/ebooks/{id}/cover"))
+                    .uri(format!("/api/ebooks/{uuid}/cover"))
                     .method("POST")
                     .header("content-type", content_type)
                     .header(AUTHORIZATION, format!("Bearer {token}"))
@@ -3138,7 +3172,7 @@ mod tests {
         // be rejected at the `starts_with("image/")` guard with 400.
         let _covers = CoversDirGuard::new("non_image");
         let (app, _state, pool) = fixture().await;
-        let id = seed_book(&pool, "/lib", "NonImageBook").await;
+        let (_id, uuid) = seed_book_with_uuid(&pool, "/lib", "NonImageBook").await;
         let admin = test_support::create_admin(&pool, "admin").await;
         let token = test_support::bearer_token(&pool, admin.id).await;
 
@@ -3146,7 +3180,7 @@ mod tests {
         let res = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("/api/ebooks/{id}/cover"))
+                    .uri(format!("/api/ebooks/{uuid}/cover"))
                     .method("POST")
                     .header("content-type", content_type)
                     .header(AUTHORIZATION, format!("Bearer {token}"))
@@ -3177,7 +3211,7 @@ mod tests {
         // handler-level check.
         let _covers = CoversDirGuard::new("oversized");
         let (app, _state, pool) = fixture().await;
-        let id = seed_book(&pool, "/lib", "OversizedBook").await;
+        let (_id, uuid) = seed_book_with_uuid(&pool, "/lib", "OversizedBook").await;
         let admin = test_support::create_admin(&pool, "admin").await;
         let token = test_support::bearer_token(&pool, admin.id).await;
 
@@ -3189,7 +3223,7 @@ mod tests {
         let res = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("/api/ebooks/{id}/cover"))
+                    .uri(format!("/api/ebooks/{uuid}/cover"))
                     .method("POST")
                     .header("content-type", content_type)
                     .header(AUTHORIZATION, format!("Bearer {token}"))
