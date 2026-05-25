@@ -983,6 +983,56 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .ebook-cell-formats-empty { color: var(--ink-3); }
 
+/* F5.9-lite inline edit. Admin-only — `.ebook-cell-editable` is added
+   by the EditableCell component when `is_admin = true`, so non-admins
+   never see the hover/cursor affordance.
+   The focused cell carries a thin accent-colored inset outline (via
+   box-shadow so it doesn't shift the table's column widths). Hover
+   surfaces a quieter ghost of the same outline so admins can spot
+   which cells are editable without committing to one. The inner
+   `<input>` is borderless and transparent — the cell IS the editor. */
+.ebook-cell-editable {
+  cursor: text;
+  transition: box-shadow 0.1s ease;
+}
+.ebook-cell-editable:hover {
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) 35%, transparent);
+}
+.ebook-cell-editing,
+.ebook-cell-editable.ebook-cell-editing:hover {
+  background: var(--bg-0);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.ebook-cell-edit {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  color: var(--ink-0);
+  background: transparent;
+  border: none;
+  padding: 0;
+  outline: none;
+}
+.ebook-edit-row td.ebook-edit-cell {
+  background: var(--bg-1);
+  padding: 10px 12px;
+}
+.ebook-edit-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.ebook-edit-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  flex-shrink: 0;
+}
+.ebook-edit-chips {
+  flex: 1;
+}
+
 @media (max-width: 1100px) {
   .ebook-table .ebook-col-language { display: none; }
 }
