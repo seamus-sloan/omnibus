@@ -1141,8 +1141,7 @@ pub async fn sync_books(
 
     // --- Removed ---------------------------------------------------------
     if !plan.removed_uuids.is_empty() {
-        let placeholders = std::iter::repeat("?")
-            .take(plan.removed_uuids.len())
+        let placeholders = std::iter::repeat_n("?", plan.removed_uuids.len())
             .collect::<Vec<_>>()
             .join(", ");
 
