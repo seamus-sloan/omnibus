@@ -4,7 +4,19 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [labeled, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled]
+    # Only run E2E when a PR touches UI-relevant code, so pure-Rust DB PRs
+    # don't pay the Playwright cost. This replaces the old `run_ui_tests`
+    # label opt-in: UI PRs now get Playwright coverage automatically.
+    # `.github/workflows/e2e.yml` is included so workflow edits self-test.
+    # To force E2E on a PR that touches none of these paths, use the
+    # `workflow_dispatch` escape hatch below.
+    paths:
+      - "frontend/**"
+      - "shared/**"
+      - "server/**"
+      - "ui_tests/**"
+      - ".github/workflows/e2e.yml"
   workflow_dispatch:
 
 concurrency:
@@ -15,9 +27,6 @@ jobs:
   playwright:
     name: playwright
     runs-on: ubuntu-latest
-    if: >-
-      github.event_name != 'pull_request' ||
-      contains(github.event.pull_request.labels.*.name, 'run_ui_tests')
     permissions:
       contents: read
       # Required by nix-community/cache-nix-action `purge: true` so it can
