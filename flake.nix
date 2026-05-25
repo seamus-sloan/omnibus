@@ -59,7 +59,7 @@
             pkgs.pkg-config
             pkgs.openssl
             rust
-            pkgs.cargo-audit
+            pkgs-unstable.cargo-audit
             pkgs.jdk21
             wasm-bindgen-cli-0_2_118
             pkgs-unstable.dioxus-cli
