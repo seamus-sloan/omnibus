@@ -43,6 +43,13 @@ pub mod author_photo_edit;
 #[cfg(not(feature = "mobile"))]
 pub mod search_palette;
 
+// F0.5 / issue #69 worker-progress indicator. Mounted on the settings
+// page today; the data plane is generic so future surfaces (e.g. the
+// F5.9 library-cleanup detection trigger) can mount the same primitive
+// without changes here.
+#[cfg(not(feature = "mobile"))]
+pub mod worker_status;
+
 // Auth-page primitives — used by the login / register / first-run /
 // recovery screens on every target. Stays platform-agnostic so the same
 // markup ships under web SSR, web WASM, and mobile native.
