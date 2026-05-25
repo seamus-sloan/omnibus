@@ -92,3 +92,110 @@ jobs:
 
       - name: cargo test (frontend)
         run: nix develop --command cargo test -p omnibus-frontend --features server
+
+  security:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required by DeterminateSystems/nix-installer-action so GitHub Actions
+      # provides the OIDC token endpoints it needs to authenticate to FlakeHub.
+      # Without it the installer falls back to anonymous api.github.com fetches
+      # that intermittently 401 ("Bad credentials") during flake evaluation.
+      id-token: write
+      # Required by nix-community/cache-nix-action `purge: true` so it can
+      # delete its own expired cache entries via the Actions cache API.
+      actions: write
+      # Required to post / update the sticky audit-report comment on PRs.
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+
+      # Cache the Nix store across runs. Auto-purges caches with the same
+      # prefix that haven't been touched in 7 days so we stay under the 10 GB
+      # per-repo GHA cache quota. Distinct prefix from the `check` job so the
+      # two jobs don't clobber each other's cache entries.
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-audit-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-prefixes-first-match: nix-audit-${{ runner.os }}-
+          purge: true
+          purge-prefixes: nix-audit-${{ runner.os }}-
+          purge-last-accessed: 604800
+          purge-primary-key: never
+          gc-max-store-size-linux: 5G
+
+      # Run cargo-audit in JSON mode for downstream parsing. We do NOT fail
+      # the job on findings — the next step posts a PR comment instead, so
+      # vulnerabilities are surfaced as a visible report rather than a
+      # blocking gate. `continue-on-error: true` keeps the workflow green
+      # while still letting the report step read `audit.json`.
+      - name: cargo audit
+        id: audit
+        continue-on-error: true
+        run: |
+          set +e
+          # Redirect inside the nix-develop subshell so the shellHook's
+          # informational echoes (`Nix dev shell ready.`, etc.) don't get
+          # mixed into the JSON capture file.
+          nix develop --command bash -c 'cargo audit --json > audit.json'
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      # Build a human-readable markdown report from the JSON output. If
+      # `audit.json` is missing or not valid JSON (cargo-audit itself failed,
+      # e.g. couldn't fetch the advisory DB), report that as a failure case
+      # rather than silently claiming "no advisories found".
+      - name: Format audit report
+        id: report
+        run: |
+          set -euo pipefail
+          # `jq` is part of the standard ubuntu-latest image.
+          {
+            echo "<!-- cargo-audit-report -->"
+            echo "## cargo-audit"
+            echo
+            if [ ! -s audit.json ] || ! jq -e . audit.json >/dev/null 2>&1; then
+              echo "⚠️ cargo-audit did not produce a valid JSON report (exit code \`${{ steps.audit.outputs.exit_code }}\`). See the \`security\` job log for details."
+              count="error"
+            else
+              count=$(jq '.vulnerabilities.count // 0' audit.json)
+              if [ "$count" = "0" ]; then
+                echo "No RustSec advisories found in \`Cargo.lock\` ✅"
+              else
+                echo "Found **$count** advisory/advisories in \`Cargo.lock\`:"
+                echo
+                jq -r '
+                  .vulnerabilities.list[] |
+                  "- **\(.advisory.id)** — `\(.package.name) \(.package.version)`: \(.advisory.title)\n  <\(.advisory.url // "https://rustsec.org/advisories/\(.advisory.id)")>"
+                ' audit.json
+                echo
+                echo "Run \`cargo audit\` locally for full detail."
+              fi
+            fi
+            echo
+            echo "<sub>Posted by the Rust workflow's \`security\` job. This gate is informational — see the workflow file for rationale.</sub>"
+          } > audit-report.md
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+      # Find-or-create a single sticky comment per PR keyed on the
+      # `<!-- cargo-audit-report -->` marker, so re-runs update the same
+      # comment instead of stacking new ones. Only runs on pull_request
+      # events — pushes to `main` skip this and just leave the artifact.
+      - name: Post / update PR comment
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: cargo-audit-report
+          path: audit-report.md
+
+      - name: Upload audit JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-audit-json
+          path: audit.json
+          retention-days: 14
