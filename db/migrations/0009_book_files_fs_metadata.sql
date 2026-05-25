@@ -1,0 +1,15 @@
+-- Track filesystem mtime for incremental reindex change detection.
+--
+-- The existing `mtime TEXT` column holds the OPF `dcterms:modified` value
+-- (Dublin Core, not filesystem state) and is preserved as-is. The new
+-- `mtime_epoch INTEGER` column is the filesystem stat in seconds since the
+-- unix epoch, populated by the scanner. `size_bytes` already exists on
+-- `book_files` (previously hardcoded to 0 on insert); the new write path
+-- populates it with the real file size.
+--
+-- The default `0` is a sentinel meaning "never observed". The incremental
+-- reindex diff classifies any row with `mtime_epoch = 0 AND size_bytes = 0`
+-- as Backfill and updates the stat values without re-parsing the OPF, so
+-- the first reindex after this migration is cheap rather than treating
+-- every existing row as Changed.
+ALTER TABLE book_files ADD COLUMN mtime_epoch INTEGER NOT NULL DEFAULT 0;

@@ -24,10 +24,17 @@ use omnibus_shared::{Contributor, EbookMetadata, Identifier};
 use crate::library_layout;
 
 /// A single scanner output row — metadata plus the raw cover image bytes
-/// (and mime), if the epub included one. Consumed by [`crate::queries::replace_books`].
+/// (and mime), if the epub included one. Consumed by [`crate::queries::sync_books`].
+///
+/// `mtime_epoch` and `size_bytes` are the filesystem stat values captured
+/// during the walk, used by the incremental reindex diff to detect changes
+/// and by the writer to persist on `book_files`.
+#[derive(Default)]
 pub struct IndexedBook {
     pub metadata: EbookMetadata,
     pub cover: Option<(String, Vec<u8>)>,
+    pub mtime_epoch: i64,
+    pub size_bytes: i64,
 }
 
 /// Result of scanning an ebook library directory. Separate from
@@ -37,6 +44,45 @@ pub struct ScanResult {
     pub path: Option<String>,
     pub books: Vec<IndexedBook>,
     pub error: Option<String>,
+}
+
+/// Phase A output: a single filesystem stat row, with no zip open or OPF
+/// parse. The incremental diff compares these against `book_files` to
+/// classify entries as Unchanged / New / Changed / Removed / Backfill.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StatEntry {
+    /// Path relative to the library root — same shape used everywhere else
+    /// as the per-book "filename" string.
+    pub filename: String,
+    /// Stable UUIDv5 of `(library_path, filename)`. Computed here so the
+    /// diff branch never needs to thread `library_path` around again.
+    pub uuid: String,
+    /// Filesystem mtime in seconds since the unix epoch, or `0` if
+    /// `entry.metadata().modified()` failed.
+    pub mtime_epoch: i64,
+    /// Filesystem byte size, or `0` if stat failed.
+    pub size_bytes: i64,
+}
+
+/// Phase A result. Mirrors `ScanResult` for the no-path / unreadable-root
+/// failure modes.
+pub struct StatScanResult {
+    pub path: Option<String>,
+    pub entries: Vec<StatEntry>,
+    pub error: Option<String>,
+}
+
+/// Phase B input: one entry per file the diff says needs a full OPF parse
+/// (the New + Changed buckets). The absolute path lets the parser open the
+/// file directly without re-walking; the stat values carry forward into
+/// the resulting `IndexedBook` so the writer persists the same values the
+/// diff observed.
+#[derive(Debug, Clone)]
+pub struct ParseTarget {
+    pub filename: String,
+    pub absolute: PathBuf,
+    pub mtime_epoch: i64,
+    pub size_bytes: i64,
 }
 
 /// Knobs that change how a scan touches the filesystem. Default keeps the
@@ -56,91 +102,195 @@ pub fn scan_ebook_library(path: Option<&str>) -> ScanResult {
     scan_ebook_library_with(path, ScanOptions::default())
 }
 
+/// Full-walk-and-parse scan, kept for non-indexer callers (server bootstrap
+/// probes, existing tests). Now a thin wrapper over the two phases —
+/// `stat_ebook_library` → build all-entries target list → `parse_ebook_targets`.
+///
+/// The incremental reindex path in [`crate::indexer::reindex`] uses the two
+/// phases directly so it can skip Phase B for unchanged files.
 pub fn scan_ebook_library_with(path: Option<&str>, opts: ScanOptions) -> ScanResult {
-    let Some(path_str) = path else {
+    // For this legacy callpath, the library_path string is the input path
+    // verbatim — same key the indexer uses, so stable_uuid stays consistent
+    // whether you arrive via `scan_ebook_library_with` or the two-phase API.
+    let library_path_key = path.unwrap_or_default();
+    let stat = stat_ebook_library(path, library_path_key);
+    let Some(root) = path else {
         return ScanResult {
-            path: None,
+            path: stat.path,
             books: vec![],
+            error: stat.error,
+        };
+    };
+    let dir = Path::new(root);
+    let targets: Vec<ParseTarget> = stat
+        .entries
+        .iter()
+        .map(|e| ParseTarget {
+            filename: e.filename.clone(),
+            absolute: dir.join(&e.filename),
+            mtime_epoch: e.mtime_epoch,
+            size_bytes: e.size_bytes,
+        })
+        .collect();
+    let mut books = parse_ebook_targets(targets, opts);
+    // Surface unreadable subdirectory placeholders captured during the
+    // stat walk so the legacy contract (one error row per unreadable
+    // subdir) is preserved.
+    for placeholder in stat.entries.into_iter().filter(|e| e.uuid.is_empty()) {
+        books.push(IndexedBook {
+            metadata: EbookMetadata {
+                filename: placeholder.filename.clone(),
+                error: Some("could not read directory".to_string()),
+                ..Default::default()
+            },
+            cover: None,
+            mtime_epoch: 0,
+            size_bytes: 0,
+        });
+    }
+    books.sort_by(|a, b| a.metadata.filename.cmp(&b.metadata.filename));
+    ScanResult {
+        path: stat.path,
+        books,
+        error: stat.error,
+    }
+}
+
+/// Phase A: walk the library and `stat` every `.epub` without opening the
+/// zip. Returns one `StatEntry` per file plus a synthetic entry (empty
+/// `uuid`) for any unreadable subdirectory — the legacy
+/// `scan_ebook_library_with` shape surfaces these as error rows.
+///
+/// `library_path_key` is what `stable_uuid` hashes; callers pass the same
+/// string they'd use as the `books.library_path` so the uuids line up with
+/// any rows already in the DB.
+pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatScanResult {
+    let Some(path_str) = path else {
+        return StatScanResult {
+            path: None,
+            entries: vec![],
             error: None,
         };
     };
 
     let dir = Path::new(path_str);
     if !dir.exists() {
-        return ScanResult {
+        return StatScanResult {
             path: Some(path_str.to_string()),
-            books: vec![],
+            entries: vec![],
             error: Some(format!("path not found: {path_str}")),
         };
     }
 
-    let mut books: Vec<IndexedBook> = Vec::new();
-    let mut stack: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];
+    let mut entries: Vec<StatEntry> = Vec::new();
+    let mut stack: Vec<PathBuf> = vec![dir.to_path_buf()];
     while let Some(current) = stack.pop() {
-        let entries = match std::fs::read_dir(&current) {
+        let read = match std::fs::read_dir(&current) {
             Ok(e) => e,
             Err(e) => {
-                // Root failure is fatal (no library to surface at all). A
-                // failure below the root is recorded as a synthetic entry
-                // and we continue — one unreadable subfolder must not hide
-                // the rest of the library, same as a single broken epub.
                 if current == dir {
-                    return ScanResult {
+                    // Root unreadable: fatal — match legacy behavior.
+                    return StatScanResult {
                         path: Some(path_str.to_string()),
-                        books: vec![],
+                        entries: vec![],
                         error: Some(format!("could not read directory: {e}")),
                     };
                 }
+                // Sub-dir unreadable: record a placeholder with an empty
+                // uuid so the legacy wrapper can lift it into an error
+                // row. The incremental indexer ignores empty-uuid entries.
                 let relative = current
                     .strip_prefix(dir)
                     .unwrap_or(&current)
                     .to_string_lossy()
                     .to_string();
-                books.push(IndexedBook {
-                    metadata: EbookMetadata {
-                        filename: relative,
-                        error: Some(format!("could not read directory: {e}")),
-                        ..Default::default()
-                    },
-                    cover: None,
+                entries.push(StatEntry {
+                    filename: relative,
+                    uuid: String::new(),
+                    mtime_epoch: 0,
+                    size_bytes: 0,
                 });
                 continue;
             }
         };
-        for entry in entries.flatten() {
+        for entry in read.flatten() {
             let Ok(file_type) = entry.file_type() else {
                 continue;
             };
             let entry_path = entry.path();
             if file_type.is_dir() {
                 stack.push(entry_path);
-            } else if file_type.is_file()
-                && entry_path
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.eq_ignore_ascii_case("epub"))
-                    .unwrap_or(false)
-            {
-                // Use the path relative to the library root as the display
-                // identifier so nested files with duplicate names don't
-                // collide as component keys / error tags.
-                let relative = entry_path
-                    .strip_prefix(dir)
-                    .unwrap_or(&entry_path)
-                    .to_string_lossy()
-                    .to_string();
-                books.push(extract_metadata(&entry_path, relative, &opts));
+                continue;
             }
+            if !file_type.is_file() {
+                continue;
+            }
+            let is_epub = entry_path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case("epub"))
+                .unwrap_or(false);
+            if !is_epub {
+                continue;
+            }
+            let relative = entry_path
+                .strip_prefix(dir)
+                .unwrap_or(&entry_path)
+                .to_string_lossy()
+                .to_string();
+            let (mtime_epoch, size_bytes) = stat_file(&entry_path);
+            let uuid = crate::queries::stable_uuid(library_path_key, &relative);
+            entries.push(StatEntry {
+                filename: relative,
+                uuid,
+                mtime_epoch,
+                size_bytes,
+            });
         }
     }
 
-    books.sort_by(|a, b| a.metadata.filename.cmp(&b.metadata.filename));
+    entries.sort_by(|a, b| a.filename.cmp(&b.filename));
 
-    ScanResult {
+    StatScanResult {
         path: Some(path_str.to_string()),
-        books,
+        entries,
         error: None,
     }
+}
+
+/// Phase B: parse the full OPF + cover for the subset of files the diff
+/// said are new or changed. Each target carries the absolute path so we
+/// don't re-walk, and the Phase-A stat values so the resulting
+/// `IndexedBook` ships them straight through to the writer.
+pub fn parse_ebook_targets(targets: Vec<ParseTarget>, opts: ScanOptions) -> Vec<IndexedBook> {
+    targets
+        .into_iter()
+        .map(|t| {
+            let mut book = extract_metadata(&t.absolute, t.filename, &opts);
+            book.mtime_epoch = t.mtime_epoch;
+            book.size_bytes = t.size_bytes;
+            book
+        })
+        .collect()
+}
+
+/// `entry.metadata()` + `modified()` → epoch seconds. Anything we can't
+/// stat returns `(0, 0)`, which the diff treats as the "Backfill" sentinel
+/// — same as a freshly migrated row. That's fine: if we couldn't stat it
+/// now, the next run will either succeed (and the row updates) or keep
+/// failing (and the row stays in the same Backfill-ish state). No data loss.
+fn stat_file(path: &Path) -> (i64, i64) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return (0, 0);
+    };
+    let size = meta.len() as i64;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    (mtime, size)
 }
 
 fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> IndexedBook {
@@ -154,6 +304,10 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
                     ..Default::default()
                 },
                 cover: None,
+                // Stat values get overwritten by `parse_ebook_targets`
+                // before the writer sees this struct.
+                mtime_epoch: 0,
+                size_bytes: 0,
             };
         }
     };
@@ -208,6 +362,10 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
             has_override: false,
         },
         cover,
+        // Stat values get overwritten by `parse_ebook_targets` before the
+        // writer sees this struct.
+        mtime_epoch: 0,
+        size_bytes: 0,
     }
 }
 

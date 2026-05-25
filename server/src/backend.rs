@@ -1446,6 +1446,8 @@ mod tests {
                         ..Default::default()
                     },
                     cover: None,
+                    mtime_epoch: 0,
+                    size_bytes: 0,
                 },
                 db::ebook::IndexedBook {
                     metadata: omnibus_shared::EbookMetadata {
@@ -1454,6 +1456,8 @@ mod tests {
                         ..Default::default()
                     },
                     cover: None,
+                    mtime_epoch: 0,
+                    size_bytes: 0,
                 },
             ],
         )
@@ -1580,6 +1584,8 @@ mod tests {
                         ..Default::default()
                     },
                     cover: None,
+                    mtime_epoch: 0,
+                    size_bytes: 0,
                 },
                 db::ebook::IndexedBook {
                     metadata: omnibus_shared::EbookMetadata {
@@ -1588,6 +1594,8 @@ mod tests {
                         ..Default::default()
                     },
                     cover: None,
+                    mtime_epoch: 0,
+                    size_bytes: 0,
                 },
             ],
         )
@@ -1657,6 +1665,8 @@ mod tests {
                     ..Default::default()
                 },
                 cover: None,
+                mtime_epoch: 0,
+                size_bytes: 0,
             }],
         )
         .await
@@ -2415,6 +2425,8 @@ mod tests {
                     ..Default::default()
                 },
                 cover: None,
+                mtime_epoch: 0,
+                size_bytes: 0,
             }],
         )
         .await
@@ -2483,6 +2495,8 @@ mod tests {
                     ..Default::default()
                 },
                 cover: None,
+                mtime_epoch: 0,
+                size_bytes: 0,
             }],
         )
         .await
@@ -2546,6 +2560,8 @@ mod tests {
                     ..Default::default()
                 },
                 cover: None,
+                mtime_epoch: 0,
+                size_bytes: 0,
             }],
         )
         .await
@@ -2610,6 +2626,8 @@ mod tests {
                         ..Default::default()
                     },
                     cover: None,
+                    mtime_epoch: 0,
+                    size_bytes: 0,
                 },
                 db::ebook::IndexedBook {
                     metadata: omnibus_shared::EbookMetadata {
@@ -2622,6 +2640,8 @@ mod tests {
                         ..Default::default()
                     },
                     cover: None,
+                    mtime_epoch: 0,
+                    size_bytes: 0,
                 },
             ],
         )
@@ -2702,6 +2722,8 @@ mod tests {
                     ..Default::default()
                 },
                 cover: None,
+                mtime_epoch: 0,
+                size_bytes: 0,
             }],
         )
         .await
@@ -2795,6 +2817,8 @@ mod tests {
                     ..Default::default()
                 },
                 cover: None,
+                mtime_epoch: 0,
+                size_bytes: 0,
             }],
         )
         .await

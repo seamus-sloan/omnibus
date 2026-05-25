@@ -3338,7 +3338,7 @@ pub async fn library_from_db_with_total(
 /// every cover file on disk. UUIDv5 (SHA-1 over a namespace + name, per
 /// RFC 4122 §4.3) is fixed across toolchains, sets the proper version/variant
 /// bits, and emits the canonical 8-4-4-4-12 hyphenated form.
-fn stable_uuid(library_path: &str, filename: &str) -> String {
+pub(crate) fn stable_uuid(library_path: &str, filename: &str) -> String {
     // NUL is the one byte that can't appear inside either side, so it's a
     // safe, unambiguous separator — no `(library_path, filename)` collision
     // is reachable from a different split.
@@ -3782,6 +3782,8 @@ mod tests {
                 ..Default::default()
             },
             cover: cover.map(|(m, b)| (m.into(), b.to_vec())),
+            mtime_epoch: 0,
+            size_bytes: 0,
         }
     }
 
@@ -3876,6 +3878,8 @@ mod tests {
                 ..Default::default()
             },
             cover: None,
+            mtime_epoch: 0,
+            size_bytes: 0,
         };
         let no_accent = IndexedBook {
             metadata: EbookMetadata {
@@ -3889,6 +3893,8 @@ mod tests {
                 ..Default::default()
             },
             cover: None,
+            mtime_epoch: 0,
+            size_bytes: 0,
         };
         replace_books(&pool, "/lib", vec![with_accent, no_accent])
             .await
@@ -3976,6 +3982,8 @@ mod tests {
                 ..Default::default()
             },
             cover: None,
+            mtime_epoch: 0,
+            size_bytes: 0,
         };
         replace_books(&pool, "/lib", vec![unsafe_book])
             .await
@@ -4580,6 +4588,8 @@ mod tests {
             vec![IndexedBook {
                 metadata: meta,
                 cover: None,
+                mtime_epoch: 0,
+                size_bytes: 0,
             }],
         )
         .await
@@ -4942,6 +4952,8 @@ mod tests {
                     ..Default::default()
                 },
                 cover: None,
+                mtime_epoch: 0,
+                size_bytes: 0,
             }],
         )
         .await
@@ -5478,6 +5490,8 @@ mod tests {
                     ..Default::default()
                 },
                 cover: None,
+                mtime_epoch: 0,
+                size_bytes: 0,
             }],
         )
         .await
