@@ -60,7 +60,9 @@ test("thumb endpoint serves an image", async ({ page, request }) => {
   const bookUuid = match![1];
 
   // On first request the endpoint may return the original cover (image/jpeg);
-  // poll until the background WebP generation has finished (up to 10 s).
+  // poll until the background WebP generation has finished. The CI worker
+  // competes with index/scan jobs on a cold runner, so 10 s was empirically
+  // too tight; allow up to 30 s.
   await expect
     .poll(
       async () => {
@@ -70,8 +72,8 @@ test("thumb endpoint serves an image", async ({ page, request }) => {
       },
       {
         message: "expected /api/thumbs/{uuid}/md to return image/webp",
-        timeout: 10_000,
-        intervals: [200, 500, 1_000],
+        timeout: 30_000,
+        intervals: [200, 500, 1_000, 2_000, 3_000],
       },
     )
     .toContain("image/webp");

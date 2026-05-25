@@ -158,7 +158,14 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                 evt.prevent_default();
                 let len = items_for_key.read().len();
                 if len > 0 {
-                    selected.set((selected() + 1) % len);
+                    // First arrow press is a "begin navigation" gesture — it
+                    // should highlight the first item, not increment past it.
+                    // Subsequent presses wrap around as usual.
+                    if !has_navigated() {
+                        selected.set(0);
+                    } else {
+                        selected.set((selected() + 1) % len);
+                    }
                     has_navigated.set(true);
                 }
             }
@@ -166,11 +173,17 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                 evt.prevent_default();
                 let len = items_for_key.read().len();
                 if len > 0 {
-                    selected.set(if selected() == 0 {
-                        len - 1
+                    // Symmetric with ArrowDown: first press lands on the
+                    // last item; subsequent presses walk backward.
+                    if !has_navigated() {
+                        selected.set(len - 1);
                     } else {
-                        selected() - 1
-                    });
+                        selected.set(if selected() == 0 {
+                            len - 1
+                        } else {
+                            selected() - 1
+                        });
+                    }
                     has_navigated.set(true);
                 }
             }
@@ -229,6 +242,12 @@ fn SpOverlay(open: PaletteOpen) -> Element {
     let res = results.read();
     let items = flat_items.read();
     let sel = selected();
+    // Only project `selected` into row class names once the user has driven
+    // selection with arrow keys. Otherwise the first row would render with
+    // the "selected" highlight on every fresh query (since `selected`
+    // resets to 0 after each search response), and pressing ArrowDown
+    // would visually jump to index 1 instead of 0.
+    let has_nav = has_navigated();
     let is_loading = loading();
 
     let total = res.as_ref().map(|r| r.total_count()).unwrap_or(0);
@@ -315,7 +334,7 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                             for book in r.books.iter() {
                                 SpBookRow {
                                     book: book.clone(),
-                                    selected: is_selected(&items, sel, &FlatItem::Book { uuid: book.uuid.clone(), title: book.title.clone() }),
+                                    selected: has_nav && is_selected(&items, sel, &FlatItem::Book { uuid: book.uuid.clone(), title: book.title.clone() }),
                                     on_click: {
                                         let uuid = book.uuid.clone();
                                         move |_| {
@@ -333,7 +352,7 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                             for author in r.authors.iter() {
                                 SpAuthorRow {
                                     author: author.clone(),
-                                    selected: is_selected(&items, sel, &FlatItem::Author { id: author.id, name: author.name.clone() }),
+                                    selected: has_nav && is_selected(&items, sel, &FlatItem::Author { id: author.id, name: author.name.clone() }),
                                     on_click: {
                                         let id = author.id;
                                         move |_| {
@@ -351,7 +370,7 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                             for s in r.series.iter() {
                                 SpSeriesRow {
                                     series: s.clone(),
-                                    selected: is_selected(&items, sel, &FlatItem::Series { id: s.id, name: s.name.clone() }),
+                                    selected: has_nav && is_selected(&items, sel, &FlatItem::Series { id: s.id, name: s.name.clone() }),
                                     on_click: {
                                         let id = s.id;
                                         move |_| {
@@ -369,7 +388,7 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                             for tag in r.tags.iter() {
                                 SpTagRow {
                                     tag: tag.clone(),
-                                    selected: is_selected(&items, sel, &FlatItem::Tag { id: tag.id, name: tag.name.clone() }),
+                                    selected: has_nav && is_selected(&items, sel, &FlatItem::Tag { id: tag.id, name: tag.name.clone() }),
                                     on_click: {
                                         let name = tag.name.clone();
                                         move |_| {
