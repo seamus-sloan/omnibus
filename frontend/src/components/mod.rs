@@ -30,6 +30,12 @@ pub use bottom_nav::BottomNav as Nav;
 mod format_switcher;
 pub use format_switcher::FormatSwitcher;
 
+// F5.9-lite generic chip editor with prefix-match autocomplete. Used by
+// the F5.1 metadata edit page (authors + tags) and reserved for the
+// landing-page inline Authors cell (PR 4 of the F5.9-lite stack).
+pub mod chip_editor;
+pub use chip_editor::ChipEditor;
+
 pub mod atrium;
 
 // F1.11 follow-up: hover-overlay "edit photo" affordance + modal with

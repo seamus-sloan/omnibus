@@ -16,6 +16,7 @@ use dioxus_router::{navigator, Link};
 use omnibus_shared::{Contributor, EbookMetadata, MetadataOverrides};
 
 use crate::components::atrium::Cover;
+use crate::components::chip_editor::{collect_suggestions, ChipEditor};
 use crate::{data, use_server_url, Route};
 
 /// Top-level metadata edit page component, mounted at `/books/:uuid/edit`.
@@ -89,7 +90,7 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
     let mut series_index = use_signal(|| book.series_index.clone().unwrap_or_default());
 
     // Authors as a signal of Vec<String> (names only for v1).
-    let mut authors = use_signal(|| {
+    let authors = use_signal(|| {
         book.creators
             .iter()
             .map(|c| c.name.clone())
@@ -97,7 +98,7 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
     });
 
     // Tags (subjects) as a signal of Vec<String>.
-    let mut tags = use_signal(|| book.subjects.clone());
+    let tags = use_signal(|| book.subjects.clone());
 
     // Read-only field signals — hoisted here so `use_signal` isn't called
     // inside the `rsx!` body on every render.
@@ -109,9 +110,30 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
     });
     let filename = use_signal(|| book.filename.clone());
 
-    // Inline-add input states for chips.
-    let mut new_author = use_signal(String::new);
-    let mut new_tag = use_signal(String::new);
+    // F5.9-lite: suggestion pools for the ChipEditor dropdowns. We
+    // hit /api/rpc/list-authors and /api/rpc/tag-cloud once on mount —
+    // both are already cached endpoints used by the discovery surfaces
+    // (F1.8 / F1.12) so this is a cheap addition. Loading failures fall
+    // through to empty pools (no dropdown), which is the existing
+    // free-text-entry UX.
+    let mut author_suggestions: Signal<Vec<String>> = use_signal(Vec::new);
+    let mut tag_suggestions: Signal<Vec<String>> = use_signal(Vec::new);
+    {
+        let url = server_url.clone();
+        use_effect(move || {
+            let url = url.clone();
+            spawn(async move {
+                if let Ok(authors) = data::list_authors(&url).await {
+                    let names: Vec<String> = authors.iter().map(|a| a.name.clone()).collect();
+                    author_suggestions.set(collect_suggestions(names.iter()));
+                }
+                if let Ok(tags) = data::get_tag_cloud(&url).await {
+                    let names: Vec<String> = tags.iter().map(|t| t.name.clone()).collect();
+                    tag_suggestions.set(collect_suggestions(names.iter()));
+                }
+            });
+        });
+    }
 
     // Save / error state.
     let mut saving = use_signal(|| false);
@@ -286,42 +308,14 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
                                 hint: "primary author first",
                             }
                             div { class: "me-chip-row",
-                                for (i, author) in authors().iter().cloned().enumerate() {
-                                    div {
-                                        class: "chip me-chip-item",
-                                        key: "{i}-{author}",
-                                        span { class: "me-avatar",
-                                            {author.chars().filter(|c| c.is_uppercase()).take(2).collect::<String>()}
-                                        }
-                                        "{author}"
-                                        button {
-                                            class: "me-chip-remove",
-                                            "aria-label": "Remove {author}",
-                                            onclick: move |_| {
-                                                let mut a = authors();
-                                                a.remove(i);
-                                                authors.set(a);
-                                            },
-                                            "\u{2715}"
-                                        }
-                                    }
-                                }
-                                input {
-                                    class: "me-chip-input",
-                                    placeholder: "+ add author\u{2026}",
-                                    value: "{new_author}",
-                                    oninput: move |e| new_author.set(e.value()),
-                                    onkeydown: move |e| {
-                                        if e.key() == Key::Enter {
-                                            let name = new_author().trim().to_string();
-                                            if !name.is_empty() {
-                                                let mut a = authors();
-                                                a.push(name);
-                                                authors.set(a);
-                                                new_author.set(String::new());
-                                            }
-                                        }
-                                    },
+                                ChipEditor {
+                                    values: authors,
+                                    placeholder: "+ add author\u{2026}".to_string(),
+                                    on_change: move |_| {},
+                                    suggestions: author_suggestions(),
+                                    show_avatar: true,
+                                    aria_remove_prefix: "Remove".to_string(),
+                                    testid_prefix: "me-authors".to_string(),
                                 }
                             }
                         }
@@ -343,39 +337,15 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
                         div { class: "label", "Tags" }
                     }
                     div { class: "me-tag-chips",
-                        for (i, tag) in tags().iter().cloned().enumerate() {
-                            div {
-                                class: "chip me-chip-item",
-                                key: "{i}-{tag}",
-                                "{tag}"
-                                button {
-                                    class: "me-chip-remove",
-                                    "aria-label": "Remove tag {tag}",
-                                    onclick: move |_| {
-                                        let mut t = tags();
-                                        t.remove(i);
-                                        tags.set(t);
-                                    },
-                                    "\u{2715}"
-                                }
-                            }
-                        }
-                        input {
-                            class: "me-tag-input",
-                            placeholder: "+ add tag\u{2026}",
-                            value: "{new_tag}",
-                            oninput: move |e| new_tag.set(e.value()),
-                            onkeydown: move |e| {
-                                if e.key() == Key::Enter {
-                                    let tag = new_tag().trim().to_string();
-                                    if !tag.is_empty() {
-                                        let mut t = tags();
-                                        t.push(tag);
-                                        tags.set(t);
-                                        new_tag.set(String::new());
-                                    }
-                                }
-                            },
+                        ChipEditor {
+                            values: tags,
+                            placeholder: "+ add tag\u{2026}".to_string(),
+                            on_change: move |_| {},
+                            suggestions: tag_suggestions(),
+                            show_avatar: false,
+                            input_class: "me-tag-input".to_string(),
+                            aria_remove_prefix: "Remove tag".to_string(),
+                            testid_prefix: "me-tags".to_string(),
                         }
                     }
 
