@@ -1,11 +1,11 @@
 import { expect, test } from "../fixtures/test";
 import { gotoReady } from "../utils/nav";
 
-// F1.6 Atrium theme toggle. Lives on the top-nav (web) and flips the
-// `data-theme` attribute on the `.atrium` wrapper div emitted by
-// `AtriumRoot`. The web build persists the choice under `omn.theme` in
-// localStorage and applies it in a post-hydration `use_effect` so SSR
-// markup stays deterministic.
+// F1.6 Atrium theme toggle. The theme controls now live inside the user-menu
+// dropdown (Dark / Light / Sepia segmented control). Sepia is stubbed —
+// disabled until a Sepia theme variant lands. The web build persists the
+// choice under `omn.theme` in localStorage and applies it in a
+// post-hydration `use_effect` so SSR markup stays deterministic.
 //
 // Notes for future test authors:
 //   - Each Playwright test gets a fresh storage state (only the auth cookie
@@ -16,6 +16,10 @@ import { gotoReady } from "../utils/nav";
 //     specific computed style. The attribute is the contract; the variable
 //     values are an implementation detail tested at the CSS level.
 
+async function openUserMenu(page: import("@playwright/test").Page) {
+  await page.getByTestId("user-menu-trigger").click();
+}
+
 test("renders the dark theme on first paint", async ({ page }) => {
   await gotoReady(page, "/");
 
@@ -23,9 +27,9 @@ test("renders the dark theme on first paint", async ({ page }) => {
   await expect(root).toBeVisible();
   await expect(root).toHaveAttribute("data-theme", "dark");
 
-  const toggle = page.getByTestId("theme-toggle");
-  await expect(toggle).toBeVisible();
-  await expect(toggle).toHaveAttribute("aria-label", "Toggle theme");
+  await openUserMenu(page);
+  await expect(page.getByTestId("theme-dark")).toBeVisible();
+  await expect(page.getByTestId("theme-light")).toBeVisible();
 });
 
 test("toggles dark to light, persists across reload", async ({ page }) => {
@@ -34,7 +38,8 @@ test("toggles dark to light, persists across reload", async ({ page }) => {
   const root = page.locator("div.atrium").first();
   await expect(root).toHaveAttribute("data-theme", "dark");
 
-  await page.getByTestId("theme-toggle").click();
+  await openUserMenu(page);
+  await page.getByTestId("theme-light").click();
   await expect(root).toHaveAttribute("data-theme", "light");
 
   const stored = await page.evaluate(() => window.localStorage.getItem("omn.theme"));
@@ -48,15 +53,18 @@ test("toggles dark to light, persists across reload", async ({ page }) => {
   await expect.poll(async () => root.getAttribute("data-theme")).toBe("light");
 });
 
-test("clicking twice flips back to dark and clears divergence from default", async ({ page }) => {
+test("clicking light then dark flips back and clears divergence from default", async ({ page }) => {
   await gotoReady(page, "/");
 
   const root = page.locator("div.atrium").first();
-  const toggle = page.getByTestId("theme-toggle");
 
-  await toggle.click();
+  // Menu stays open between clicks — selecting a theme does not auto-close
+  // the panel (the user might want to toggle multiple settings in sequence).
+  await openUserMenu(page);
+  await page.getByTestId("theme-light").click();
   await expect(root).toHaveAttribute("data-theme", "light");
-  await toggle.click();
+
+  await page.getByTestId("theme-dark").click();
   await expect(root).toHaveAttribute("data-theme", "dark");
 
   const stored = await page.evaluate(() => window.localStorage.getItem("omn.theme"));
