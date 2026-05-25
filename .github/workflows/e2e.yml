@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened]
     # Only run E2E when a PR touches UI-relevant code, so pure-Rust DB PRs
     # don't pay the Playwright cost. This replaces the old `run_ui_tests`
     # label opt-in: UI PRs now get Playwright coverage automatically.
