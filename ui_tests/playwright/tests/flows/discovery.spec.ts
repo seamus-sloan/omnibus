@@ -1,5 +1,6 @@
 import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { fetchBookIdByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 import type { APIRequestContext } from "@playwright/test";
@@ -86,6 +87,47 @@ test("author page shows books by the author", async ({ page, request }) => {
 
   // At least the first book title should be visible
   await expect(page.getByText("Quartet I: Lexer")).toBeVisible();
+});
+
+test("author series section heading links to the series page", async ({ page, request }) => {
+  // Niklaus Wirth's four books all belong to "Code Quartet", so the author
+  // page renders a single series section whose heading is a router Link to
+  // /series/:id. The author-page breadcrumb only carries a "Library" link, so
+  // the "Code Quartet" link role is unambiguous on this page.
+  const authorId = await fetchAuthorIdByName(request, "Niklaus Wirth");
+  await gotoReady(page, `/authors/${authorId}`);
+
+  const seriesLink = page.getByRole("link", { name: "Code Quartet" });
+  await expect(seriesLink).toBeVisible();
+  await seriesLink.click();
+
+  await expect(page).toHaveURL(/\/series\/\d+$/);
+  // Destination renders: series page H1 + book-count label.
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Code Quartet");
+  await expect(page.getByText(/in library/)).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// Book detail → series
+// ---------------------------------------------------------------------------
+
+test("book detail series rail link navigates to the series page", async ({ page, request }) => {
+  // `beta` ("Beta in the Series") is Pioneers #1, so the book detail rail
+  // renders a Series card whose body is a Link to /series/:id. Both the rail
+  // link and the breadcrumb series segment share the "Pioneers #1" text, so
+  // scope to the rail link's dedicated `.bd-series-link` class to target the
+  // rail specifically (the contract this test covers).
+  const beta = FIXTURE_BOOKS.find((b) => b.slug === "beta")!;
+  const id = await fetchBookIdByTitle(request, beta.title);
+  await gotoReady(page, `/books/${id}`);
+
+  const railLink = page.locator(".bd-series-link");
+  await expect(railLink).toHaveText("Pioneers #1");
+  await railLink.click();
+
+  await expect(page).toHaveURL(/\/series\/\d+$/);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Pioneers");
+  await expect(page.getByText(/in library/)).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
