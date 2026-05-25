@@ -967,6 +967,20 @@ pub async fn scan_author_photo(
         .map_err(note_server_fn_err)
 }
 
+/// F5.9-lite: admin "Delete author" (issue #159). Removes the author
+/// taxonomy row, drops every `books_authors_link` for it, and adds the
+/// name to `ignored_authors` so the next `indexer::reindex` does not
+/// silently resurrect the row. Returns the number of books that were
+/// un-linked (used by the confirmation modal's "this affects N books"
+/// copy). Web-only — mobile parity is a deliberate follow-up per the
+/// F5.9-lite plan.
+#[cfg(not(feature = "mobile"))]
+pub async fn delete_author(_server_url: &str, id: i64) -> Result<u64, DataError> {
+    crate::rpc::rpc_delete_author(id)
+        .await
+        .map_err(note_server_fn_err)
+}
+
 /// F1.11 follow-up: persist an author photo by URL. Web routes through the
 /// `#[post]` server function in `rpc.rs`, which performs the server-side
 /// fetch + validation and writes a `manual` row.
