@@ -133,9 +133,9 @@ test.describe("with seeded library", () => {
 
     await page.getByTestId("sp-book-row").first().click();
 
-    // Should navigate to /books/:id
+    // Should navigate to /books/:uuid
     await expect.poll(async () => new URL(page.url()).pathname).toMatch(
-      /^\/books\/\d+$/,
+      /^\/books\/[0-9a-fA-F-]{36}$/,
     );
   });
 
@@ -235,7 +235,7 @@ test.describe("with seeded library", () => {
     await page.keyboard.press("Enter");
 
     await expect.poll(async () => new URL(page.url()).pathname).toMatch(
-      /^\/books\/\d+$/,
+      /^\/books\/[0-9a-fA-F-]{36}$/,
     );
   });
 });
