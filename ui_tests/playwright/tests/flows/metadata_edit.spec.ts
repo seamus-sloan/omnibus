@@ -21,8 +21,14 @@ test("renders the metadata edit form with pre-populated fields", async ({ page, 
   await gotoReady(page, `/books/${id}/edit`);
 
   // Page header renders with the book title and "Edit metadata" label.
-  await expect(page.getByText("Edit metadata")).toBeVisible();
-  await expect(page.getByText(TARGET.title)).toBeVisible();
+  // Disambiguated by testid: "Edit metadata" also appears in the breadcrumb tail.
+  await expect(page.getByTestId("me-page-title-label")).toBeVisible();
+  // Title text appears in the breadcrumb link, the page heading, and the
+  // identifier "urn:omnibus-test:alpha" — substring-match it under the h2 so
+  // strict mode resolves to a single element.
+  await expect(
+    page.getByRole("heading", { level: 2 }).getByText(TARGET.title),
+  ).toBeVisible();
 
   // Breadcrumb navigation is present with "Home" link.
   await expect(
@@ -34,8 +40,11 @@ test("renders the metadata edit form with pre-populated fields", async ({ page, 
   await expect(titleInput).toBeVisible();
   await expect(titleInput).toHaveValue(TARGET.title);
 
-  // Author chip is visible.
-  await expect(page.getByText(TARGET.authors[0])).toBeVisible();
+  // Author chip is visible. "Ada Lovelace" appears in the breadcrumb,
+  // page heading, and chip — scope to the chip via its enclosing class.
+  await expect(
+    page.locator(".me-chip-item").getByText(TARGET.authors[0]),
+  ).toBeVisible();
 
   // Save bar is present.
   await expect(page.getByTestId("me-save")).toBeVisible();
@@ -186,7 +195,7 @@ test("book detail page has a working edit metadata link", async ({ page, request
   // Clicking it should navigate to the edit page.
   await editLink.click();
   await expect(page).toHaveURL(new RegExp(`/books/${id}/edit$`));
-  await expect(page.getByText("Edit metadata")).toBeVisible();
+  await expect(page.getByTestId("me-page-title-label")).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------

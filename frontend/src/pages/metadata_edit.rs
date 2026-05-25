@@ -199,7 +199,11 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
             // ── Page header ────────────────────────────────────────
             div { class: "me-page-header",
                 div {
-                    div { class: "label", "Edit metadata" }
+                    div {
+                        class: "label",
+                        "data-testid": "me-page-title-label",
+                        "Edit metadata"
+                    }
                     h2 { class: "me-page-title",
                         span { class: "me-page-title-book", "{display_title}" }
                         if !primary_author.is_empty() {
