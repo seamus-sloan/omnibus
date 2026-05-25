@@ -451,6 +451,16 @@ pub async fn rpc_delete_overrides(uuid: String) -> Result<Option<EbookMetadata>>
     Ok(db::get_book_by_uuid(&pool.0, &uuid).await?)
 }
 
+/// F5.9-lite: admin "Delete author" (issue #159). Removes the author row,
+/// drops every `books_authors_link` for it, and adds the name to
+/// `ignored_authors` so the next `indexer::reindex` does not silently
+/// resurrect the row. Returns the number of books that were un-linked
+/// (used by the confirmation modal in PR 5).
+#[post("/api/rpc/author/delete", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_delete_author(id: i64) -> Result<u64> {
+    Ok(db::delete_author(&pool.0, id).await?)
+}
+
 /// Search palette — grouped results (books, authors, series, tags) for the
 /// command-palette overlay (F1.5).
 #[post("/api/rpc/search-palette", pool: PoolExt, _user: AuthUser)]
