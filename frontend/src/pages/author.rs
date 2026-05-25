@@ -3,6 +3,8 @@
 //! `screens/discovery.jsx`.
 
 use dioxus::prelude::*;
+#[cfg(not(feature = "mobile"))]
+use dioxus_router::use_navigator;
 use dioxus_router::Link;
 use omnibus_shared::AuthorDetail;
 
@@ -16,6 +18,21 @@ pub fn AuthorPage(id: i64) -> Element {
     let mut author: Signal<Option<AuthorDetail>> = use_signal(|| None);
     let mut loading = use_signal(|| true);
     let mut error: Signal<Option<String>> = use_signal(|| None);
+
+    // F5.9-lite admin gating for the Delete button. Web-only — the
+    // mobile build never renders the Delete affordance per the plan's
+    // admin-web-only v1 scope. The server-side `AdminUser` extractor
+    // on `rpc_delete_author` is the actual security boundary.
+    #[cfg(feature = "web")]
+    let mut is_admin = use_signal(|| false);
+    #[cfg(feature = "web")]
+    use_effect(move || {
+        spawn(async move {
+            if let Ok(Some(user)) = data::current_user().await {
+                is_admin.set(user.is_admin);
+            }
+        });
+    });
 
     // See `BookDetailPage` for why `id` needs `use_reactive!`.
     let url = server_url.clone();
@@ -52,7 +69,11 @@ pub fn AuthorPage(id: i64) -> Element {
         };
     };
 
-    render_author(a, server_url, author)
+    #[cfg(feature = "web")]
+    let is_admin_flag = is_admin();
+    #[cfg(not(feature = "web"))]
+    let is_admin_flag = false;
+    render_author(a, server_url, author, is_admin_flag)
 }
 
 // ---------------------------------------------------------------------------
@@ -63,6 +84,7 @@ fn render_author(
     a: AuthorDetail,
     server_url: String,
     mut author: Signal<Option<AuthorDetail>>,
+    #[cfg_attr(feature = "mobile", allow(unused_variables))] is_admin: bool,
 ) -> Element {
     // Derive accent from the first book that has one, or fall back to theme.
     let accent = a
@@ -108,6 +130,18 @@ fn render_author(
     let bg_style = format!(
         "radial-gradient(50% 80% at 80% 20%, color-mix(in oklch, {accent} 14%, transparent), transparent 70%)"
     );
+
+    // F5.9-lite (issue #159) admin Delete-author state. The button is
+    // gated by `is_admin` server-side via `AdminUser` on
+    // `rpc_delete_author`, but we also hide the affordance entirely
+    // for non-admin viewers. Web-only — the mobile build never
+    // references these signals so we don't allocate them at all.
+    #[cfg(not(feature = "mobile"))]
+    let show_confirm = use_signal(|| false);
+    #[cfg(not(feature = "mobile"))]
+    let deleting = use_signal(|| false);
+    #[cfg(not(feature = "mobile"))]
+    let delete_error: Signal<Option<String>> = use_signal(|| None);
 
     rsx! {
         div { class: "disc-page", style: "--accent: {accent}",
@@ -167,6 +201,33 @@ fn render_author(
                                 em { "{last}" }
                             }
                         }
+                        // F5.9-lite admin Delete affordance is web-only —
+                        // the matching `data::delete_author` server fn
+                        // is gated `not(feature = "mobile")` per the
+                        // F5.9-lite plan's "admin-web only" v1 scope.
+                        {
+                            #[cfg(not(feature = "mobile"))]
+                            let admin_actions = is_admin.then(|| rsx! {
+                                div { class: "author-admin-actions",
+                                    button {
+                                        class: "btn author-delete-btn",
+                                        "data-testid": "author-delete-btn",
+                                        onclick: {
+                                            let mut show_confirm = show_confirm;
+                                            let mut delete_error = delete_error;
+                                            move |_| {
+                                                delete_error.set(None);
+                                                show_confirm.set(true);
+                                            }
+                                        },
+                                        "Delete author"
+                                    }
+                                }
+                            });
+                            #[cfg(feature = "mobile")]
+                            let admin_actions: Option<Element> = None;
+                            admin_actions
+                        }
                     }
                     // Book count stat
                     div { class: "disc-stat-block",
@@ -174,6 +235,24 @@ fn render_author(
                         span { class: "disc-stat", "{a.book_count}" }
                     }
                 }
+            }
+
+            {
+                #[cfg(not(feature = "mobile"))]
+                let modal = show_confirm().then(|| rsx! {
+                    AuthorDeleteModal {
+                        author_id: a.id,
+                        author_name: a.name.clone(),
+                        book_count: a.book_count,
+                        server_url: server_url.clone(),
+                        show_confirm,
+                        deleting,
+                        delete_error,
+                    }
+                });
+                #[cfg(feature = "mobile")]
+                let modal: Option<Element> = None;
+                modal
             }
 
             // Body: books grouped by series
@@ -228,6 +307,103 @@ fn render_author(
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// F5.9-lite (issue #159) confirmation modal for the admin "Delete
+/// author" action. On confirm, hits the `rpc_delete_author` server fn
+/// (which un-links every book, inserts the name into
+/// `ignored_authors`, and refreshes FTS) then navigates back to
+/// `/authors`. The blocklist insert is what makes the delete durable
+/// across reindexes — without it the next `Task::Scan` would silently
+/// recreate the row from the OPF metadata.
+///
+/// Web-only — the matching `data::delete_author` is gated
+/// `not(feature = "mobile")` per the F5.9-lite plan's admin-web-only v1
+/// scope. Mobile admins can fall back to the F5.1 detail page for
+/// per-book edits.
+#[cfg(not(feature = "mobile"))]
+#[component]
+fn AuthorDeleteModal(
+    author_id: i64,
+    author_name: String,
+    book_count: usize,
+    server_url: String,
+    show_confirm: Signal<bool>,
+    deleting: Signal<bool>,
+    delete_error: Signal<Option<String>>,
+) -> Element {
+    let mut show_confirm = show_confirm;
+    let mut deleting = deleting;
+    let mut delete_error = delete_error;
+    let nav = use_navigator();
+    let busy = deleting();
+    let book_count_label = if book_count == 1 { "book" } else { "books" };
+
+    rsx! {
+        div {
+            class: "author-delete-modal-backdrop",
+            role: "dialog",
+            aria_modal: "true",
+            aria_label: "Delete {author_name}",
+            "data-testid": "author-delete-modal",
+            onclick: move |_| {
+                if !busy {
+                    show_confirm.set(false);
+                }
+            },
+            div {
+                class: "author-delete-modal",
+                onclick: move |evt| evt.stop_propagation(),
+                h2 { class: "author-delete-modal__title", "Delete \"{author_name}\"?" }
+                p { class: "author-delete-modal__body",
+                    "This will un-link the author from {book_count} {book_count_label} "
+                    "and prevent the name from being re-added on future library scans. "
+                    "The books themselves are not deleted."
+                }
+                if let Some(msg) = delete_error() {
+                    p { role: "alert", class: "error author-delete-modal__error", "⚠ {msg}" }
+                }
+                div { class: "author-delete-modal__actions",
+                    button {
+                        class: "btn",
+                        "data-testid": "author-delete-cancel",
+                        disabled: busy,
+                        onclick: move |_| {
+                            show_confirm.set(false);
+                        },
+                        "Cancel"
+                    }
+                    button {
+                        class: "btn primary author-delete-confirm",
+                        "data-testid": "author-delete-confirm",
+                        disabled: busy,
+                        onclick: {
+                            let server_url = server_url.clone();
+                            move |_| {
+                                let server_url = server_url.clone();
+                                let nav = nav;
+                                spawn(async move {
+                                    deleting.set(true);
+                                    delete_error.set(None);
+                                    match data::delete_author(&server_url, author_id).await {
+                                        Ok(_) => {
+                                            show_confirm.set(false);
+                                            nav.push(Route::AuthorsIndex {});
+                                        }
+                                        Err(e) => {
+                                            delete_error.set(Some(e.to_string()));
+                                        }
+                                    }
+                                    deleting.set(false);
+                                });
+                            }
+                        },
+                        if busy { "Deleting\u{2026}" } else { "Delete" }
                     }
                 }
             }
