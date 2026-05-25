@@ -239,6 +239,75 @@ test("surfaces error and stays on edit form when save mutation fails", async ({ 
   await expect(page.getByTestId("me-save")).toBeEnabled();
 });
 
+// ---------------------------------------------------------------------------
+// ChipEditor autocomplete (F5.9-lite PR 3)
+//
+// The author and tag chip inputs now consult `data::list_authors` /
+// `data::get_tag_cloud` on mount and surface up to 5 case-insensitive
+// substring matches in a dropdown anchored under the input. ↓ + Enter
+// commits the highlighted suggestion. Typing a string with no match
+// suppresses the dropdown but Enter still commits the raw text.
+// ---------------------------------------------------------------------------
+
+test("surfaces existing authors as chip-editor suggestions and adds via ↓+Enter", async ({
+  page,
+  request,
+}) => {
+  const id = await fetchBookIdByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${id}/edit`);
+
+  const authorInput = page.getByTestId("me-authors-input");
+  await expect(authorInput).toBeVisible();
+
+  // "Niklaus Wirth" is one of the Code Quartet fixture authors — typing a
+  // prefix should surface it.
+  await authorInput.fill("Nik");
+
+  const dropdown = page.getByTestId("me-authors-suggestions");
+  await expect(dropdown).toBeVisible();
+  await expect(dropdown.getByRole("option", { name: /Niklaus Wirth/ })).toBeVisible();
+  // Five-row cap is enforced — even a single-char prefix never returns more.
+  await expect(dropdown.getByRole("option")).toHaveCount(
+    await dropdown.getByRole("option").count(),
+  );
+  expect(await dropdown.getByRole("option").count()).toBeLessThanOrEqual(5);
+
+  await authorInput.press("ArrowDown");
+  await authorInput.press("Enter");
+
+  // Chip rendered. Use the chip's me-avatar host (the chip container) so we
+  // don't accidentally match the original "Ada Lovelace" chip text.
+  await expect(page.getByText("Niklaus Wirth", { exact: true })).toBeVisible();
+  // Input cleared; dropdown gone.
+  await expect(authorInput).toHaveValue("");
+  await expect(dropdown).toHaveCount(0);
+
+  // Discard so the test doesn't leak an override into subsequent runs.
+  await page.getByTestId("me-discard").click();
+});
+
+test("chip-editor dropdown stays hidden when no suggestion matches", async ({
+  page,
+  request,
+}) => {
+  const id = await fetchBookIdByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${id}/edit`);
+
+  const authorInput = page.getByTestId("me-authors-input");
+  await authorInput.fill("ZzzMatchesNothing");
+
+  // No dropdown when nothing matches.
+  await expect(page.getByTestId("me-authors-suggestions")).toHaveCount(0);
+
+  // Enter still adds the raw typed value as a new chip (free-text fallback).
+  await authorInput.press("Enter");
+  await expect(page.getByText("ZzzMatchesNothing", { exact: true })).toBeVisible();
+  await expect(authorInput).toHaveValue("");
+
+  // Discard the unsaved chip so we don't drift fixture state.
+  await page.getByTestId("me-discard").click();
+});
+
 test("surfaces error and stays on edit form when revert mutation fails", async ({ page, request }) => {
   // First, create an override on the fixture so the revert button shows up.
   const id = await fetchBookIdByTitle(request, TARGET.title);
