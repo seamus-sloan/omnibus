@@ -33,22 +33,22 @@
           fenix.packages.${system}.targets.aarch64-apple-ios-sim.latest.rust-std
         ]);
 
-        # `dioxus-cli` from nixpkgs-unstable bundles `wasm-bindgen-cli 0.2.114`
-        # (appended to PATH via `--suffix`), but `dioxus-fullstack 0.7.5` pulls
-        # in `wasm-bindgen 0.2.118` transitively (js-sys 0.3.95 hard-pins it).
-        # Build the matching CLI ourselves and put it earlier in PATH so dx
-        # picks it up first.
-        wasm-bindgen-cli-0_2_118 = pkgs-unstable.wasm-bindgen-cli.overrideAttrs (old: rec {
-          version = "0.2.118";
+        # `dioxus-cli` from nixpkgs-unstable bundles its own `wasm-bindgen-cli`
+        # (appended to PATH via `--suffix`), but the `dioxus` git pin in
+        # Cargo.toml (v0.7.9 monorepo tag) pulls in `wasm-bindgen 0.2.122`
+        # transitively. Build the matching CLI ourselves and put it earlier
+        # in PATH so dx picks it up first.
+        wasm-bindgen-cli-0_2_122 = pkgs-unstable.wasm-bindgen-cli.overrideAttrs (old: rec {
+          version = "0.2.122";
           src = pkgs.fetchCrate {
             pname = "wasm-bindgen-cli";
             inherit version;
-            hash = "sha256-ve783oYH0TGv8Z8lIPdGjItzeLDQLOT5uv/jbFOlZpI=";
+            hash = "sha256-vO4RSxi/sMWxmsEs3GuljdMfIRSu75A+Q+c5wgYToRU=";
           };
           cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
             inherit src;
             name = "wasm-bindgen-cli-${version}-vendor";
-            hash = "sha256-EYDfuBlH3zmTxACBL+sjicRna84CvoesKSQVcYiG9P0=";
+            hash = "sha256-Inup6vvJSG5ghNyeDPyZbfZo4d0LsMG2OJfStoaeDBs=";
           };
         });
       in {
@@ -61,7 +61,7 @@
             rust
             pkgs-unstable.cargo-audit
             pkgs.jdk21
-            wasm-bindgen-cli-0_2_118
+            wasm-bindgen-cli-0_2_122
             pkgs-unstable.dioxus-cli
             pkgs-unstable.nodejs_22
             pkgs-unstable.playwright-driver.browsers
