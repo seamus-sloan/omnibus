@@ -13,7 +13,7 @@
 use omnibus_shared::{
     AuthorDetail, AuthorPhotoScanResult, AuthorSummary, EbookLibrary, EbookMetadata,
     LibraryContents, MetadataOverrides, PaletteResults, SeriesDetail, SeriesSummary, Settings,
-    TagWeight,
+    TagWeight, WorkerStatus,
 };
 #[cfg(any(feature = "web", feature = "mobile"))]
 use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};
@@ -900,6 +900,25 @@ pub async fn get_library(_server_url: &str) -> Result<LibraryContents, DataError
     crate::rpc::rpc_get_library()
         .await
         .map_err(note_server_fn_err)
+}
+
+/// Snapshot of the worker progress feed. Web calls the RPC; mobile returns
+/// an empty status because the corresponding REST endpoint doesn't exist
+/// yet (issue #69 keeps the mobile UI out of scope for v1, and the data
+/// stub keeps callers' types lined up across feature gates).
+#[cfg(not(feature = "mobile"))]
+pub async fn worker_status(_server_url: &str) -> Result<WorkerStatus, DataError> {
+    crate::rpc::rpc_worker_status()
+        .await
+        .map_err(note_server_fn_err)
+}
+
+#[cfg(feature = "mobile")]
+pub async fn worker_status(_server_url: &str) -> Result<WorkerStatus, DataError> {
+    // Mobile REST mirror is a follow-up; return an empty status so any
+    // future mobile caller compiles against the same signature the web
+    // build uses.
+    Ok(WorkerStatus::default())
 }
 
 #[cfg(not(feature = "mobile"))]

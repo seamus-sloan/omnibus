@@ -1,6 +1,8 @@
 use dioxus::prelude::*;
 use omnibus_shared::{LibraryContents, LibrarySection, Settings};
 
+#[cfg(not(feature = "mobile"))]
+use crate::components::worker_status::WorkerStatusIndicator;
 use crate::{data, use_server_url};
 
 /// Library paths settings form + live recursive file-count summaries.
@@ -43,6 +45,17 @@ pub fn SettingsPage() -> Element {
             }
         });
     });
+
+    let worker_status_slot: Element = {
+        #[cfg(not(feature = "mobile"))]
+        {
+            rsx! { WorkerStatusIndicator {} }
+        }
+        #[cfg(feature = "mobile")]
+        {
+            rsx! {}
+        }
+    };
 
     rsx! {
         section { class: "card",
@@ -105,11 +118,22 @@ pub fn SettingsPage() -> Element {
                         section: library().audiobooks,
                     }
                 }
+                // Background-worker progress (scan / thumbs / author
+                // photos / future cleanup actions). Mounted above the Save
+                // button so the user sees the post-save scan kick in
+                // without leaving the page. Web-only; the mobile build
+                // omits the indicator entirely until issue #69 follow-up
+                // ships a REST mirror. `cfg` attrs aren't legal directly
+                // on rsx component calls, so the slot is bound as an
+                // Element outside the macro and embedded by reference.
+                {worker_status_slot}
+
                 button { r#type: "submit", class: "btn", "Save" }
             }
 
             p {
                 id: "settings-status",
+                "data-testid": "settings-status",
                 role: "status",
                 class: if status_is_error() { "settings-status error" } else { "settings-status success" },
                 if let Some(msg) = status() { "{msg}" }
