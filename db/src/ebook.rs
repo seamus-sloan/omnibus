@@ -49,6 +49,12 @@ pub struct ScanResult {
 /// Phase A output: a single filesystem stat row, with no zip open or OPF
 /// parse. The incremental diff compares these against `book_files` to
 /// classify entries as Unchanged / New / Changed / Removed / Backfill.
+///
+/// An entry with an empty `uuid` is a synthetic placeholder for an
+/// unreadable subdirectory — `error` carries the underlying io message
+/// (e.g. "permission denied" vs. "no such file") so the legacy
+/// [`scan_ebook_library_with`] wrapper can surface it verbatim. The
+/// incremental diff ignores empty-uuid entries.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StatEntry {
     /// Path relative to the library root — same shape used everywhere else
@@ -56,12 +62,17 @@ pub struct StatEntry {
     pub filename: String,
     /// Stable UUIDv5 of `(library_path, filename)`. Computed here so the
     /// diff branch never needs to thread `library_path` around again.
+    /// Empty string for placeholder rows (see struct doc).
     pub uuid: String,
     /// Filesystem mtime in seconds since the unix epoch, or `0` if
     /// `entry.metadata().modified()` failed.
     pub mtime_epoch: i64,
     /// Filesystem byte size, or `0` if stat failed.
     pub size_bytes: i64,
+    /// Only populated for placeholder rows — the original io::Error
+    /// message string from the failed `read_dir`. `None` for real epub
+    /// entries.
+    pub error: Option<String>,
 }
 
 /// Phase A result. Mirrors `ScanResult` for the no-path / unreadable-root
@@ -122,9 +133,15 @@ pub fn scan_ebook_library_with(path: Option<&str>, opts: ScanOptions) -> ScanRes
         };
     };
     let dir = Path::new(root);
+    // Skip the synthetic placeholders the stat walk emits for unreadable
+    // subdirectories — Phase B should only see real `.epub` files.
+    // Without this filter, parse_ebook_targets calls extract_metadata on
+    // the directory path (wasted work + bogus parse-error row), and the
+    // explicit error-row append below produces a duplicate.
     let targets: Vec<ParseTarget> = stat
         .entries
         .iter()
+        .filter(|e| !e.uuid.is_empty())
         .map(|e| ParseTarget {
             filename: e.filename.clone(),
             absolute: dir.join(&e.filename),
@@ -135,12 +152,20 @@ pub fn scan_ebook_library_with(path: Option<&str>, opts: ScanOptions) -> ScanRes
     let mut books = parse_ebook_targets(targets, opts);
     // Surface unreadable subdirectory placeholders captured during the
     // stat walk so the legacy contract (one error row per unreadable
-    // subdir) is preserved.
+    // subdir) is preserved. The placeholder carries the original
+    // io::Error string so callers can distinguish "permission denied"
+    // from "no such file" — same diagnostic detail the pre-split
+    // implementation surfaced.
     for placeholder in stat.entries.into_iter().filter(|e| e.uuid.is_empty()) {
+        let msg = placeholder
+            .error
+            .as_deref()
+            .map(|e| format!("could not read directory: {e}"))
+            .unwrap_or_else(|| "could not read directory".to_string());
         books.push(IndexedBook {
             metadata: EbookMetadata {
                 filename: placeholder.filename.clone(),
-                error: Some("could not read directory".to_string()),
+                error: Some(msg),
                 ..Default::default()
             },
             cover: None,
@@ -198,7 +223,9 @@ pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatSca
                 }
                 // Sub-dir unreadable: record a placeholder with an empty
                 // uuid so the legacy wrapper can lift it into an error
-                // row. The incremental indexer ignores empty-uuid entries.
+                // row. Carry the io::Error string so callers can
+                // distinguish "permission denied" from "no such file" —
+                // the incremental indexer ignores empty-uuid entries.
                 let relative = current
                     .strip_prefix(dir)
                     .unwrap_or(&current)
@@ -209,6 +236,7 @@ pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatSca
                     uuid: String::new(),
                     mtime_epoch: 0,
                     size_bytes: 0,
+                    error: Some(e.to_string()),
                 });
                 continue;
             }
@@ -245,6 +273,7 @@ pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatSca
                 uuid,
                 mtime_epoch,
                 size_bytes,
+                error: None,
             });
         }
     }
@@ -888,11 +917,30 @@ mod tests {
         // Good epub still surfaces.
         assert!(out.books.iter().any(|b| b.metadata.filename == "good.epub"));
         // Locked subdir surfaces as a synthetic error entry, not silently
-        // dropped.
-        assert!(out
+        // dropped, and exactly once — Phase B must skip the empty-uuid
+        // placeholder so it doesn't get parsed as a fake epub AND appended
+        // as an error row (which would produce two rows for the same dir).
+        let locked_rows: Vec<_> = out
             .books
             .iter()
-            .any(|b| b.metadata.filename == "locked" && b.metadata.error.is_some()));
+            .filter(|b| b.metadata.filename == "locked")
+            .collect();
+        assert_eq!(
+            locked_rows.len(),
+            1,
+            "exactly one error row per unreadable subdir, got {locked_rows:?}",
+        );
+        let msg = locked_rows[0].metadata.error.as_deref().unwrap_or("");
+        assert!(
+            msg.contains("could not read directory"),
+            "error message should keep the legacy prefix, got {msg:?}",
+        );
+        // Underlying io::Error detail (e.g. "permission denied") must be
+        // carried through so callers can distinguish failure modes.
+        assert!(
+            msg.len() > "could not read directory".len(),
+            "error message should include the io detail, got {msg:?}",
+        );
     }
 
     // ---------- Sidecar cover (F0.6) ----------

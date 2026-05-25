@@ -215,6 +215,7 @@ mod tests {
             uuid: uuid.into(),
             mtime_epoch: mtime,
             size_bytes: size,
+            error: None,
         }
     }
     fn row(uuid: &str, mtime: i64, size: i64) -> IndexedRow {
@@ -331,6 +332,7 @@ mod tests {
                 uuid: String::new(),
                 mtime_epoch: 0,
                 size_bytes: 0,
+                error: Some("permission denied".into()),
             },
         ];
         let db: Vec<IndexedRow> = vec![];
