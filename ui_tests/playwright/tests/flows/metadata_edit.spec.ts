@@ -267,10 +267,13 @@ test("surfaces existing authors as chip-editor suggestions and adds via ↓+Ente
   await expect(dropdown).toBeVisible();
   await expect(dropdown.getByRole("option", { name: /Niklaus Wirth/ })).toBeVisible();
   // Five-row cap is enforced — even a single-char prefix never returns more.
-  await expect(dropdown.getByRole("option")).toHaveCount(
-    await dropdown.getByRole("option").count(),
-  );
-  expect(await dropdown.getByRole("option").count()).toBeLessThanOrEqual(5);
+  // Wrap the count check in `expect.poll` so it auto-retries while the
+  // dropdown is still rendering (avoids the flaky `count()`-then-assert race).
+  await expect
+    .poll(async () => dropdown.getByRole("option").count(), {
+      message: "ChipEditor dropdown must cap at MAX_SUGGESTIONS=5 rows",
+    })
+    .toBeLessThanOrEqual(5);
 
   await authorInput.press("ArrowDown");
   await authorInput.press("Enter");

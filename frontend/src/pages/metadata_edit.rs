@@ -110,12 +110,8 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
     });
     let filename = use_signal(|| book.filename.clone());
 
-    // F5.9-lite: suggestion pools for the ChipEditor dropdowns. We
-    // hit /api/rpc/list-authors and /api/rpc/tag-cloud once on mount —
-    // both are already cached endpoints used by the discovery surfaces
-    // (F1.8 / F1.12) so this is a cheap addition. Loading failures fall
-    // through to empty pools (no dropdown), which is the existing
-    // free-text-entry UX.
+    // Suggestion pools for the ChipEditor dropdowns. Empty until the
+    // mount-time fetches resolve; an empty signal renders no dropdown.
     let mut author_suggestions: Signal<Vec<String>> = use_signal(Vec::new);
     let mut tag_suggestions: Signal<Vec<String>> = use_signal(Vec::new);
     {
@@ -312,7 +308,7 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
                                     values: authors,
                                     placeholder: "+ add author\u{2026}".to_string(),
                                     on_change: move |_| {},
-                                    suggestions: author_suggestions(),
+                                    suggestions: author_suggestions,
                                     show_avatar: true,
                                     aria_remove_prefix: "Remove".to_string(),
                                     testid_prefix: "me-authors".to_string(),
@@ -341,7 +337,7 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
                             values: tags,
                             placeholder: "+ add tag\u{2026}".to_string(),
                             on_change: move |_| {},
-                            suggestions: tag_suggestions(),
+                            suggestions: tag_suggestions,
                             show_avatar: false,
                             input_class: "me-tag-input".to_string(),
                             aria_remove_prefix: "Remove tag".to_string(),

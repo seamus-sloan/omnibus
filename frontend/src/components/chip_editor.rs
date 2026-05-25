@@ -1,4 +1,4 @@
-//! Generic add/remove chip editor with a prefix-match suggestion dropdown.
+//! Generic add/remove chip editor with a substring-match suggestion dropdown.
 //!
 //! Used by the F5.1 metadata edit page for authors and tags, and by the
 //! F5.9-lite landing-table inline editor for the Authors column. The
@@ -11,11 +11,14 @@
 //! substring matches against `suggestions`, excluding values already
 //! present in `values`. Keyboard: ↓/↑ moves the highlight, Enter
 //! commits (highlighted suggestion when present, raw input otherwise),
-//! Escape clears the highlight. Pass `suggestions: vec![]` to disable
-//! the dropdown entirely and fall back to plain free-text entry.
+//! Escape clears the highlight. Pass an empty signal to disable the
+//! dropdown entirely and fall back to plain free-text entry.
 //!
-//! Consumers compute their own candidate pool — usually a flat-uniq
-//! of names from the already-loaded book list, so no extra RPC fires.
+//! Suggestions are passed in as a [`ReadSignal`] so the component
+//! reads them by reference each render instead of taking ownership of a
+//! cloned `Vec` on every keystroke. The consumer owns the candidate pool
+//! — usually derived from a fetched list (`data::list_authors`,
+//! `data::get_tag_cloud`) or a flat-uniq of an already-loaded book list.
 
 use dioxus::prelude::*;
 
@@ -35,10 +38,11 @@ pub struct ChipEditorProps {
     /// the consumer can persist on change (e.g. POST overrides) without
     /// having to re-subscribe to the signal.
     pub on_change: EventHandler<Vec<String>>,
-    /// Candidate pool. Empty (the default) suppresses the dropdown
-    /// entirely.
-    #[props(default)]
-    pub suggestions: Vec<String>,
+    /// Candidate pool, read by reference each render via the wrapping
+    /// `ReadSignal`. An empty signal suppresses the dropdown
+    /// entirely. Callers usually own a `Signal<Vec<String>>` and pass
+    /// it directly — `From<Signal<T>>` does the wrap.
+    pub suggestions: ReadSignal<Vec<String>>,
     /// When true, each chip is prefixed with an uppercase-initials
     /// avatar. Used by author chips (`me-avatar`); off for tags.
     #[props(default = false)]
@@ -53,8 +57,11 @@ pub struct ChipEditorProps {
     #[props(default = "Remove".to_string())]
     pub aria_remove_prefix: String,
     /// Per-instance testid prefix so multiple ChipEditors on one page
-    /// don't collide. The suggestions `<ul>` gets `<prefix>-suggestions`,
-    /// each `<li>` gets `<prefix>-suggestion-{name}`.
+    /// don't collide. The `<input>` gets `<prefix>-input` and the
+    /// suggestions `<ul>` gets `<prefix>-suggestions`. Suggestion
+    /// `<li>`s use `role="option"` with the suggestion as accessible
+    /// name (no per-row testid) so Playwright resolves them via
+    /// `getByRole("option", { name })`.
     #[props(default = "chip-editor".to_string())]
     pub testid_prefix: String,
 }
@@ -64,21 +71,27 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
     let mut input = use_signal(String::new);
     let mut highlight = use_signal::<Option<usize>>(|| None);
 
-    // Filter on every render. Cheap — bounded by `suggestions.len()`,
-    // typically under a few hundred entries even on a giant library.
+    // Filter on every render. Reads the suggestion pool via the
+    // ReadSignal so we never clone the underlying Vec — only the
+    // ≤5 matches that actually make it into the dropdown get cloned
+    // out.
     let filtered: Vec<String> = {
         let query = input().trim().to_lowercase();
-        if query.is_empty() || props.suggestions.is_empty() {
+        let suggestions = props.suggestions.read();
+        if query.is_empty() || suggestions.is_empty() {
             Vec::new()
         } else {
+            // Normalize both sides with `to_lowercase()` (Unicode-aware)
+            // so the dedup check matches what we use in `commit()`. The
+            // old `eq_ignore_ascii_case` path could let non-ASCII
+            // variants ("Maas"/"Máas") slip past the dedup.
             let current: std::collections::HashSet<String> = props
                 .values
                 .read()
                 .iter()
                 .map(|s| s.to_lowercase())
                 .collect();
-            props
-                .suggestions
+            suggestions
                 .iter()
                 .filter(|s| {
                     let lc = s.to_lowercase();
@@ -98,15 +111,17 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
         if trimmed.is_empty() {
             return;
         }
+        // Dedup uses the same Unicode-aware `to_lowercase()` comparison
+        // the filter loop above runs against the suggestion pool, so a
+        // dropdown-surfaced duplicate and a duplicate typed-in by hand
+        // are treated identically (the old `eq_ignore_ascii_case` would
+        // let through case-variant duplicates that contain non-ASCII).
+        let trimmed_lc = trimmed.to_lowercase();
         if values_sig
             .read()
             .iter()
-            .any(|v| v.eq_ignore_ascii_case(&trimmed))
+            .any(|v| v.to_lowercase() == trimmed_lc)
         {
-            // Dedup: silently drop a duplicate add (same UX as before
-            // the extraction — the old inline path also pushed without
-            // checking, but the user never typed the same string twice
-            // because the dropdown surfaces existing values).
             input.set(String::new());
             highlight.set(None);
             return;

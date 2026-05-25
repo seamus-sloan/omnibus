@@ -30,9 +30,8 @@ pub use bottom_nav::BottomNav as Nav;
 mod format_switcher;
 pub use format_switcher::FormatSwitcher;
 
-// F5.9-lite generic chip editor with prefix-match autocomplete. Used by
-// the F5.1 metadata edit page (authors + tags) and reserved for the
-// landing-page inline Authors cell (PR 4 of the F5.9-lite stack).
+// Reusable add/remove chip editor with a substring-match suggestion
+// dropdown. See `chip_editor.rs` for the full API.
 pub mod chip_editor;
 pub use chip_editor::ChipEditor;
 
