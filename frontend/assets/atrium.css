@@ -1647,6 +1647,62 @@ body.atrium,
   z-index: 100;
   padding: 20px;
 }
+
+/* F5.9-lite (issue #159) admin delete-author affordance. The button
+   sits inline with the hero title; the modal mirrors the photo-edit
+   modal's shell so admins get one consistent confirmation pattern. */
+.author-admin-actions {
+  margin-top: 10px;
+}
+.author-delete-btn {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.author-delete-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in oklch, #000 55%, transparent);
+  display: grid;
+  place-items: center;
+  z-index: 110;
+  padding: 20px;
+}
+.author-delete-modal {
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  padding: 28px;
+  width: min(460px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  box-shadow: 0 24px 48px color-mix(in oklch, #000 35%, transparent);
+}
+.author-delete-modal__title {
+  font-family: var(--serif);
+  font-size: 22px;
+  line-height: 1.2;
+  margin: 0;
+}
+.author-delete-modal__body {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.author-delete-modal__error {
+  margin: 0;
+}
+.author-delete-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.author-delete-confirm {
+  background: var(--bad);
+  border-color: var(--bad);
+  color: white;
+}
 /* Match the `.card` / `.me-input` rhythm used by the metadata edit form
    so the modal feels like an inline editor rather than a tight popover.
    `--r-lg` (14px) for the shell, 28px outer padding, 22px between
