@@ -24,3 +24,42 @@ tokio = { version = "1", default-features = false }
 tracing = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tempfile = "3"
+
+# Pin every dioxus-* crate to the v0.7.9 monorepo tag. The `dx` CLI we ship via
+# nixpkgs-unstable (see flake.nix) ships 0.7.6–0.7.9 point releases without
+# matching crates.io publishes for the libraries (last published lib version is
+# 0.7.5), so `dx serve` refuses to start with an "incompatible versions" banner.
+# Patching to the matching git tag keeps the lib + CLI in lockstep until the
+# next coordinated crates.io release.
+[patch.crates-io]
+dioxus = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-asset-resolver = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-cli-config = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-config-macro = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-config-macros = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-core = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-core-macro = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-core-types = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-desktop = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-devtools = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-devtools-types = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-document = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-fullstack = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-fullstack-core = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-fullstack-macro = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-history = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-hooks = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-html = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-html-internal-macro = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-interpreter-js = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-liveview = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-logger = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-router = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-router-macro = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-rsx = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-server = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-signals = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-ssr = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-stores = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-stores-macro = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
+dioxus-web = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
