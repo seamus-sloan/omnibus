@@ -50,6 +50,9 @@ pub mod search_palette;
 #[cfg(not(feature = "mobile"))]
 pub mod worker_status;
 
+#[cfg(not(feature = "mobile"))]
+mod user_menu;
+
 // Auth-page primitives — used by the login / register / first-run /
 // recovery screens on every target. Stays platform-agnostic so the same
 // markup ships under web SSR, web WASM, and mobile native.

@@ -221,14 +221,14 @@ pub fn ThemeToggle() -> Element {
 // ── Persistence ───────────────────────────────────────────────────
 
 #[cfg(feature = "web")]
-fn persist_theme(t: Theme) {
+pub(crate) fn persist_theme(t: Theme) {
     if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
         let _ = storage.set_item("omn.theme", t.as_attr());
     }
 }
 
 #[cfg(not(feature = "web"))]
-fn persist_theme(_t: Theme) {
+pub(crate) fn persist_theme(_t: Theme) {
     // TODO(F1.7-mobile): persist to $HOME/.omnibus-theme in debug builds,
     // analogous to data::token_store.
 }
