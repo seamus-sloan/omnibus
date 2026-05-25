@@ -30,10 +30,10 @@ pub enum Route {
     Landing {},
     #[route("/settings")]
     Settings {},
-    #[route("/books/:id")]
-    BookDetail { id: i64 },
-    #[route("/books/:id/edit")]
-    MetadataEdit { id: i64 },
+    #[route("/books/:uuid")]
+    BookDetail { uuid: String },
+    #[route("/books/:uuid/edit")]
+    MetadataEdit { uuid: String },
     #[route("/authors")]
     AuthorsIndex {},
     #[route("/authors/:id")]
@@ -68,20 +68,24 @@ pub fn Settings() -> Element {
     }
 }
 
-/// Route target for `/books/:id` — stub detail page. Replace the id shape
-/// once the backend exposes stable book ids.
+/// Route target for `/books/:uuid` — the detail page is uuid-keyed so
+/// bookmarked URLs survive reindexes (`books.id` is `AUTOINCREMENT` and
+/// the indexer's DELETE+INSERT path renumbers it on every run;
+/// `books.uuid` is a deterministic UUIDv5 of `(library_path, filename)`
+/// that stays stable across reindexes and re-installs).
 #[component]
-pub fn BookDetail(id: i64) -> Element {
+pub fn BookDetail(uuid: String) -> Element {
     rsx! {
-        ScreenLayout { BookDetailPage { id } }
+        ScreenLayout { BookDetailPage { uuid } }
     }
 }
 
-/// Route target for `/books/:id/edit` — metadata edit form.
+/// Route target for `/books/:uuid/edit` — metadata edit form. Same
+/// stability rationale as [`BookDetail`].
 #[component]
-pub fn MetadataEdit(id: i64) -> Element {
+pub fn MetadataEdit(uuid: String) -> Element {
     rsx! {
-        ScreenLayout { MetadataEditPage { id } }
+        ScreenLayout { MetadataEditPage { uuid } }
     }
 }
 

@@ -19,7 +19,8 @@ test("navigates from a landing row to the detail page and back", async ({ page }
 
   // Click the row for our target book and follow the SPA navigation.
   await getRow(page, TARGET.slug).click();
-  await expect(page).toHaveURL(/\/books\/\d+$/);
+  // `/books/:uuid` — UUIDv5 in canonical 8-4-4-4-12 hyphenated form.
+  await expect(page).toHaveURL(/\/books\/[0-9a-fA-F-]{36}$/);
 
   // The detail page should render the standard "Book #<id>" heading and the
   // shared back-to-library affordance.

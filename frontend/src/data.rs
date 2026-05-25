@@ -539,8 +539,8 @@ pub async fn search_palette(server_url: &str, q: &str) -> Result<PaletteResults,
 }
 
 #[cfg(feature = "mobile")]
-pub async fn get_ebook(server_url: &str, id: i64) -> Result<Option<EbookMetadata>, DataError> {
-    let url = format!("{server_url}/api/ebooks/{id}");
+pub async fn get_ebook(server_url: &str, uuid: &str) -> Result<Option<EbookMetadata>, DataError> {
+    let url = format!("{server_url}/api/ebooks/{uuid}");
     let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
     if status == reqwest::StatusCode::NOT_FOUND {
@@ -674,10 +674,10 @@ pub async fn get_tag_cloud(server_url: &str) -> Result<Vec<TagWeight>, DataError
 #[cfg(feature = "mobile")]
 pub async fn save_overrides(
     server_url: &str,
-    id: i64,
+    uuid: &str,
     overrides: &MetadataOverrides,
 ) -> Result<Option<EbookMetadata>, DataError> {
-    let url = format!("{server_url}/api/ebooks/{id}/overrides");
+    let url = format!("{server_url}/api/ebooks/{uuid}/overrides");
     let response = with_bearer(http_client().post(&url))
         .json(overrides)
         .send()
@@ -692,9 +692,9 @@ pub async fn save_overrides(
 #[cfg(feature = "mobile")]
 pub async fn delete_overrides(
     server_url: &str,
-    id: i64,
+    uuid: &str,
 ) -> Result<Option<EbookMetadata>, DataError> {
-    let url = format!("{server_url}/api/ebooks/{id}/overrides/delete");
+    let url = format!("{server_url}/api/ebooks/{uuid}/overrides/delete");
     let response = with_bearer(http_client().post(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
@@ -944,8 +944,8 @@ pub async fn search_palette(_server_url: &str, q: &str) -> Result<PaletteResults
 }
 
 #[cfg(not(feature = "mobile"))]
-pub async fn get_ebook(_server_url: &str, id: i64) -> Result<Option<EbookMetadata>, DataError> {
-    crate::rpc::rpc_get_ebook(id)
+pub async fn get_ebook(_server_url: &str, uuid: &str) -> Result<Option<EbookMetadata>, DataError> {
+    crate::rpc::rpc_get_ebook(uuid.to_string())
         .await
         .map_err(note_server_fn_err)
 }
@@ -1085,10 +1085,10 @@ pub async fn list_series(_server_url: &str) -> Result<Vec<SeriesSummary>, DataEr
 #[cfg(not(feature = "mobile"))]
 pub async fn save_overrides(
     _server_url: &str,
-    id: i64,
+    uuid: &str,
     overrides: &MetadataOverrides,
 ) -> Result<Option<EbookMetadata>, DataError> {
-    crate::rpc::rpc_save_overrides(id, overrides.clone())
+    crate::rpc::rpc_save_overrides(uuid.to_string(), overrides.clone())
         .await
         .map_err(note_server_fn_err)
 }
@@ -1096,9 +1096,9 @@ pub async fn save_overrides(
 #[cfg(not(feature = "mobile"))]
 pub async fn delete_overrides(
     _server_url: &str,
-    id: i64,
+    uuid: &str,
 ) -> Result<Option<EbookMetadata>, DataError> {
-    crate::rpc::rpc_delete_overrides(id)
+    crate::rpc::rpc_delete_overrides(uuid.to_string())
         .await
         .map_err(note_server_fn_err)
 }

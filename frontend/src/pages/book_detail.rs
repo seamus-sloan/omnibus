@@ -30,23 +30,25 @@ use crate::components::FormatSwitcher;
 use crate::{data, use_server_url, Route};
 
 #[component]
-pub fn BookDetailPage(id: i64) -> Element {
+pub fn BookDetailPage(uuid: String) -> Element {
     let server_url = use_server_url();
     let mut book: Signal<Option<EbookMetadata>> = use_signal(|| None);
     let mut loading = use_signal(|| true);
     let mut error: Signal<Option<String>> = use_signal(|| None);
 
-    // `use_reactive!` declares `id` as an explicit dependency so the effect
-    // re-runs when the router swaps the route param in place. Without this,
-    // navigating `/books/A` → `/books/B` reuses the same component instance
-    // and leaves the page rendering the stale book — Dioxus' implicit
-    // subscription tracking only covers signals, not plain props.
+    // `use_reactive!` declares `uuid` as an explicit dependency so the
+    // effect re-runs when the router swaps the route param in place.
+    // Without this, navigating `/books/A` → `/books/B` reuses the same
+    // component instance and leaves the page rendering the stale book —
+    // Dioxus' implicit subscription tracking only covers signals, not
+    // plain props.
     let url = server_url.clone();
-    use_effect(use_reactive!(|id| {
+    use_effect(use_reactive!(|uuid| {
         let url = url.clone();
+        let uuid = uuid.clone();
         spawn(async move {
             loading.set(true);
-            match data::get_ebook(&url, id).await {
+            match data::get_ebook(&url, &uuid).await {
                 Ok(b) => {
                     book.set(b);
                     error.set(None);
@@ -181,7 +183,7 @@ fn render_loaded(b: EbookMetadata) -> Element {
                         div { class: "bd-title-row",
                             h1 { class: "bd-title", "{title}" }
                             Link {
-                                to: Route::MetadataEdit { id: b.id },
+                                to: Route::MetadataEdit { uuid: b.unique_identifier.clone().unwrap_or_default() },
                                 class: "btn ghost sm bd-edit-hero",
                                 "data-testid": "edit-metadata-hero",
                                 title: "Edit metadata\u{2026}",
@@ -405,7 +407,7 @@ fn render_loaded(b: EbookMetadata) -> Element {
 
                         // F5.1: metadata editor
                         Link {
-                            to: Route::MetadataEdit { id: b.id },
+                            to: Route::MetadataEdit { uuid: b.unique_identifier.clone().unwrap_or_default() },
                             class: "btn ghost sm bd-rail-edit",
                             "data-testid": "edit-metadata",
                             "Edit metadata\u{2026}"

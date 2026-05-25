@@ -1090,52 +1090,188 @@ pub fn delete_override_cover(uuid: &str) {
 // Indexer write path.
 // -----------------------------------------------------------------------------
 
-/// Atomically replace every book under `library_path` with `books` and stamp
-/// the last-indexed time. Upserts a matching `libraries` row if one doesn't
-/// exist yet. The cascade from `books` → link tables + `book_files` runs
-/// automatically thanks to the `PRAGMA foreign_keys = ON` set in `init_db`.
-pub async fn replace_books(
+/// Per-bucket payload for [`sync_books`]. Built by
+/// `crate::indexer::diff_library` (plus the Phase-B parse for new + changed).
+///
+/// The four buckets are mutually exclusive — a given uuid appears in at
+/// most one of them per sync — and the diff already ordered them
+/// deterministically.
+#[derive(Debug, Default)]
+pub struct SyncPlan {
+    pub new_books: Vec<crate::ebook::IndexedBook>,
+    pub changed_books: Vec<crate::ebook::IndexedBook>,
+    pub removed_uuids: Vec<String>,
+    /// `(uuid, mtime_epoch, size_bytes)` — see the Backfill section of
+    /// the [`crate::indexer`] module doc for why this exists.
+    pub backfill: Vec<(String, i64, i64)>,
+}
+
+/// Apply a per-bucket sync plan atomically. Unchanged books are not in
+/// the plan, so their `books.id` is preserved by definition; Changed
+/// books are UPDATEd in place so their `books.id` is preserved too.
+///
+/// Inside a single transaction, in this order:
+/// 1. Upsert the `libraries` row.
+/// 2. Delete Removed: explicit FTS clear + cascade DELETE from `books`.
+/// 3. Update Changed in place (preserves `books.id`); wipe-and-rewrite
+///    link rows + FTS row for each.
+/// 4. Insert New (autoincrement assigns a fresh id).
+/// 5. Backfill: UPDATE `book_files.(mtime_epoch, size_bytes)` only — no
+///    OPF re-parse, no link writes, no FTS write. See the Backfill rule
+///    in the [`crate::indexer`] module doc.
+/// 6. Stamp `libraries.last_indexed`.
+///
+/// Post-commit (best-effort, logged on failure — covers are a
+/// rebuildable cache):
+/// - Delete cover files for Removed uuids only.
+/// - Write cover files for New + Changed (overwrites the old file in
+///   place; mime change sweeps the stale-extension orphan).
+///
+/// `metadata_overrides` is intentionally not touched — keyed by
+/// `book_uuid` with no FK to `books.id` (see `0007_metadata_overrides.sql`).
+/// User edits survive Changed UPDATEs and even Removed→New cycles for
+/// the same filename.
+pub async fn sync_books(
     pool: &SqlitePool,
     library_path: &str,
-    books: Vec<crate::ebook::IndexedBook>,
+    plan: SyncPlan,
 ) -> Result<(), sqlx::Error> {
-    // Collect uuids of books we're about to delete so we can clean up their
-    // cover files on disk. Happens before the transaction so a mid-txn
-    // failure doesn't leave orphaned files, at the cost of a tiny window
-    // where disk + DB disagree on rollback (acceptable; covers are a
-    // rebuildable cache).
-    let old_uuids: Vec<String> = sqlx::query_scalar(
-        "SELECT b.uuid FROM books b
-         JOIN libraries l ON l.id = b.library_id
-         WHERE l.path = ?",
-    )
-    .bind(library_path)
-    .fetch_all(pool)
-    .await?;
-
     let mut tx = pool.begin().await?;
     let library_id = upsert_library(&mut tx, library_path).await?;
 
-    // `books_fts` is a standalone FTS5 table with no FK/cascade to `books`,
-    // so we must clear its rows explicitly before the cascade delete below.
-    // Scoped to this library via the books.id → books_fts.rowid mapping.
-    sqlx::query(
-        "DELETE FROM books_fts WHERE rowid IN
-            (SELECT id FROM books WHERE library_id = ?)",
-    )
-    .bind(library_id)
-    .execute(&mut *tx)
-    .await?;
+    // --- Removed ---------------------------------------------------------
+    if !plan.removed_uuids.is_empty() {
+        let placeholders = std::iter::repeat_n("?", plan.removed_uuids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
 
-    sqlx::query("DELETE FROM books WHERE library_id = ?")
-        .bind(library_id)
+        // FTS5 is standalone (no FK to `books`), so we must clear it
+        // explicitly before the cascade DELETE on `books` runs.
+        let fts_sql = format!(
+            "DELETE FROM books_fts WHERE rowid IN
+                (SELECT id FROM books WHERE library_id = ? AND uuid IN ({placeholders}))"
+        );
+        let mut q = sqlx::query(&fts_sql).bind(library_id);
+        for uuid in &plan.removed_uuids {
+            q = q.bind(uuid);
+        }
+        q.execute(&mut *tx).await?;
+
+        let books_sql =
+            format!("DELETE FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
+        let mut q = sqlx::query(&books_sql).bind(library_id);
+        for uuid in &plan.removed_uuids {
+            q = q.bind(uuid);
+        }
+        q.execute(&mut *tx).await?;
+    }
+
+    // --- Changed ---------------------------------------------------------
+    //
+    // Wipe-and-rewrite the per-book link rows for each Changed entry,
+    // then UPDATE the `books` row and re-insert FTS. This trades two
+    // small per-book deletes for the much simpler "compute the link
+    // diff" alternative, while preserving `books.id` — which is the
+    // only invariant any external caller depends on.
+    let mut changed_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
+    for b in &plan.changed_books {
+        let uuid = stable_uuid(library_path, &b.metadata.filename);
+        let Some(book_id) =
+            sqlx::query_scalar::<_, i64>("SELECT id FROM books WHERE library_id = ? AND uuid = ?")
+                .bind(library_id)
+                .bind(&uuid)
+                .fetch_optional(&mut *tx)
+                .await?
+        else {
+            // The diff said this uuid existed in the DB, but a concurrent
+            // process removed it between Phase A and the write. Promote
+            // to a New insert so the file still gets indexed; cleaner
+            // than failing the whole sync over a TOCTOU.
+            let inserted = insert_book_row(&mut tx, library_id, library_path, b).await?;
+            insert_metadata_links(&mut tx, inserted.book_id, &b.metadata).await?;
+            insert_fts_row(
+                &mut tx,
+                inserted.book_id,
+                &inserted.title,
+                inserted.first_isbn.as_deref(),
+                &b.metadata,
+            )
+            .await?;
+            if let Some((mime, bytes)) = &b.cover {
+                changed_covers.push((inserted.uuid, mime.clone(), bytes.clone()));
+            }
+            continue;
+        };
+
+        update_book_row(&mut tx, book_id, b).await?;
+        // Cascade delete on FK isn't an option here (the `books` row
+        // stays), so wipe the per-book join rows explicitly. All these
+        // tables have UNIQUE(book, ...) constraints, so a re-insert
+        // without the wipe would fail.
+        for table in &[
+            "book_files",
+            "book_identifiers",
+            "books_authors_link",
+            "books_tags_link",
+            "books_publishers_link",
+            "books_series_link",
+            "books_languages_link",
+        ] {
+            // Note: the link tables use `book` (not `book_id`) as the
+            // FK column, but `book_files` and `book_identifiers` use
+            // `book_id`. Switch on the table name.
+            let col = if *table == "book_files" || *table == "book_identifiers" {
+                "book_id"
+            } else {
+                "book"
+            };
+            let sql = format!("DELETE FROM {table} WHERE {col} = ?");
+            sqlx::query(&sql).bind(book_id).execute(&mut *tx).await?;
+        }
+        // Re-insert the book_files row with the fresh fs metadata. The
+        // INSERT body matches `insert_book_row` exactly.
+        let m = &b.metadata;
+        let (_, file_stem, file_ext) = split_filename(&m.filename);
+        let mtime = m.modified.clone().unwrap_or_default();
+        sqlx::query(
+            "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime, mtime_epoch)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(book_id)
+        .bind(&file_ext)
+        .bind(&file_stem)
+        .bind(b.size_bytes)
+        .bind(&mtime)
+        .bind(b.mtime_epoch)
         .execute(&mut *tx)
         .await?;
+        insert_metadata_links(&mut tx, book_id, &b.metadata).await?;
+        // FTS5 row is keyed by rowid = book_id; delete + re-insert.
+        sqlx::query("DELETE FROM books_fts WHERE rowid = ?")
+            .bind(book_id)
+            .execute(&mut *tx)
+            .await?;
+        let title = m.title.clone().unwrap_or_else(|| m.filename.clone());
+        let first_isbn = m
+            .identifiers
+            .iter()
+            .find(|id| {
+                id.scheme
+                    .as_deref()
+                    .is_some_and(|s| s.eq_ignore_ascii_case("isbn"))
+            })
+            .map(|id| id.value.clone());
+        insert_fts_row(&mut tx, book_id, &title, first_isbn.as_deref(), &b.metadata).await?;
 
+        if let Some((mime, bytes)) = &b.cover {
+            changed_covers.push((uuid, mime.clone(), bytes.clone()));
+        }
+    }
+
+    // --- New -------------------------------------------------------------
     let mut new_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
-
-    for b in books {
-        let inserted = insert_book_row(&mut tx, library_id, library_path, &b).await?;
+    for b in &plan.new_books {
+        let inserted = insert_book_row(&mut tx, library_id, library_path, b).await?;
         insert_metadata_links(&mut tx, inserted.book_id, &b.metadata).await?;
         insert_fts_row(
             &mut tx,
@@ -1145,10 +1281,23 @@ pub async fn replace_books(
             &b.metadata,
         )
         .await?;
-
-        if let Some((mime, bytes)) = b.cover {
-            new_covers.push((inserted.uuid, mime, bytes));
+        if let Some((mime, bytes)) = &b.cover {
+            new_covers.push((inserted.uuid, mime.clone(), bytes.clone()));
         }
+    }
+
+    // --- Backfill --------------------------------------------------------
+    for (uuid, mtime_epoch, size_bytes) in &plan.backfill {
+        sqlx::query(
+            "UPDATE book_files SET mtime_epoch = ?, size_bytes = ?
+             WHERE book_id = (SELECT id FROM books WHERE library_id = ? AND uuid = ?)",
+        )
+        .bind(mtime_epoch)
+        .bind(size_bytes)
+        .bind(library_id)
+        .bind(uuid)
+        .execute(&mut *tx)
+        .await?;
     }
 
     let now = std::time::SystemTime::now()
@@ -1163,12 +1312,98 @@ pub async fn replace_books(
 
     tx.commit().await?;
 
-    // DB commit succeeded — now reconcile the covers directory. Delete the
-    // files for every book that was replaced, then write out the new covers.
-    delete_cover_files_for(&old_uuids);
+    // DB commit succeeded — reconcile the covers directory.
+    delete_cover_files_for(&plan.removed_uuids);
     materialize_new_covers(new_covers);
+    materialize_new_covers(changed_covers);
 
     Ok(())
+}
+
+/// UPDATE the `books` row for a Changed entry in place (preserving id).
+/// All scalar columns that `insert_book_row` writes get refreshed; the
+/// link tables and FTS row are handled by the caller.
+async fn update_book_row(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    b: &crate::ebook::IndexedBook,
+) -> Result<(), sqlx::Error> {
+    let m = &b.metadata;
+    let (book_path, _, _) = split_filename(&m.filename);
+    let title = m.title.clone().unwrap_or_else(|| m.filename.clone());
+    let series_index_num = m.series_index.as_deref().and_then(parse_series_index);
+    let author_sort = m
+        .creators
+        .first()
+        .and_then(|c| c.file_as.clone())
+        .or_else(|| m.creators.first().map(|c| c.name.clone()));
+    let first_isbn = m
+        .identifiers
+        .iter()
+        .find(|id| {
+            id.scheme
+                .as_deref()
+                .is_some_and(|s| s.eq_ignore_ascii_case("isbn"))
+        })
+        .map(|id| id.value.clone());
+    let has_cover = i64::from(b.cover.is_some());
+
+    sqlx::query(
+        "UPDATE books SET
+            path = ?, title = ?, sort = ?, author_sort = ?, series_index = ?,
+            pubdate = ?, has_cover = ?, description = ?, isbn = ?, accent_color = ?,
+            last_modified = datetime('now')
+         WHERE id = ?",
+    )
+    .bind(&book_path)
+    .bind(&title)
+    .bind(&title)
+    .bind(&author_sort)
+    .bind(series_index_num)
+    .bind(&m.published)
+    .bind(has_cover)
+    .bind(&m.description)
+    .bind(&first_isbn)
+    .bind(sanitize_accent_color(m.accent.as_deref()))
+    .bind(book_id)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
+/// Atomically replace every book under `library_path` with `books` and stamp
+/// the last-indexed time. Thin compatibility shim over [`sync_books`]: it
+/// computes the diff implicitly by treating every existing book as
+/// Removed and every passed-in book as New. Kept for tests and any
+/// caller that still wants the nuke-and-pave semantics; production
+/// reindex goes through [`sync_books`] directly via
+/// `crate::indexer::reindex`.
+pub async fn replace_books(
+    pool: &SqlitePool,
+    library_path: &str,
+    books: Vec<crate::ebook::IndexedBook>,
+) -> Result<(), sqlx::Error> {
+    let removed_uuids: Vec<String> = sqlx::query_scalar(
+        "SELECT b.uuid FROM books b
+         JOIN libraries l ON l.id = b.library_id
+         WHERE l.path = ?",
+    )
+    .bind(library_path)
+    .fetch_all(pool)
+    .await?;
+
+    sync_books(
+        pool,
+        library_path,
+        SyncPlan {
+            new_books: books,
+            changed_books: vec![],
+            removed_uuids,
+            backfill: vec![],
+        },
+    )
+    .await
 }
 
 /// Fields the per-book outer loop needs after the canonical `books` /
@@ -1231,17 +1466,21 @@ async fn insert_book_row(
     .fetch_one(&mut **tx)
     .await?;
 
-    let size_bytes = 0i64;
+    // The legacy `mtime TEXT` column holds the OPF `dcterms:modified` value
+    // (Dublin Core, not filesystem state) — kept for backward compat. The
+    // new `mtime_epoch INTEGER` column holds the filesystem stat the
+    // incremental diff compares against (migration 0009).
     let mtime = m.modified.clone().unwrap_or_default();
     sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime)
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime, mtime_epoch)
+         VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(book_id)
     .bind(&file_ext)
     .bind(&file_stem)
-    .bind(size_bytes)
+    .bind(b.size_bytes)
     .bind(&mtime)
+    .bind(b.mtime_epoch)
     .execute(&mut **tx)
     .await?;
 
@@ -1513,6 +1752,7 @@ pub async fn list_books(
                 })
                 .collect();
 
+        let uuid: String = r.get("uuid");
         out.push(EbookMetadata {
             id,
             filename,
@@ -1536,11 +1776,11 @@ pub async fn list_books(
             series_index: series_index.map(format_series_index),
             series_id: r.get("series_link_id"),
             epub_version: None,
-            unique_identifier: Some(r.get::<String, _>("uuid")),
+            unique_identifier: Some(uuid.clone()),
             resource_count: 0,
             spine_count: 0,
             toc_count: 0,
-            cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
+            cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
             accent: r.get("accent_color"),
             formats: parse_json_array(r.get("formats_json"))?,
             added_at: r.get("timestamp"),
@@ -1565,6 +1805,57 @@ pub async fn list_books(
     backfill_creator_ids(pool, &mut out).await?;
 
     Ok(out)
+}
+
+/// One row per book under `library_path`, carrying just the bits the
+/// incremental reindex diff needs to classify a filesystem stat against
+/// the existing index.
+///
+/// `mtime_epoch` / `size_bytes` come from the matching `book_files` row.
+/// Today the scanner only writes `.epub` files, so there's one
+/// `book_files` row per book; the `MAX(...)` aggregation is defensive in
+/// case a future audiobook scanner adds a sibling format row for the
+/// same `books.id`. The diff treats `(mtime_epoch=0, size_bytes=0)` as a
+/// "never observed" sentinel (the migration default) and routes those
+/// rows through the Backfill branch — no OPF re-parse on first run.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexedRow {
+    pub uuid: String,
+    pub mtime_epoch: i64,
+    pub size_bytes: i64,
+}
+
+/// Read every indexed book under `library_path`, projecting just the
+/// columns the incremental diff needs. Single query; the diff itself is
+/// pure CPU on the returned `Vec`.
+pub async fn list_indexed_rows(
+    pool: &SqlitePool,
+    library_path: &str,
+) -> Result<Vec<IndexedRow>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT b.uuid                                  AS uuid,
+               COALESCE(MAX(bf.mtime_epoch), 0)        AS mtime_epoch,
+               COALESCE(MAX(bf.size_bytes), 0)         AS size_bytes
+          FROM books b
+          JOIN libraries l   ON l.id = b.library_id
+          LEFT JOIN book_files bf ON bf.book_id = b.id
+         WHERE l.path = ?
+         GROUP BY b.id, b.uuid
+        "#,
+    )
+    .bind(library_path)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| IndexedRow {
+            uuid: r.get("uuid"),
+            mtime_epoch: r.get("mtime_epoch"),
+            size_bytes: r.get("size_bytes"),
+        })
+        .collect())
 }
 
 /// Total number of books currently indexed under `library_path`.
@@ -1738,7 +2029,7 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
         resource_count: 0,
         spine_count: 0,
         toc_count: 0,
-        cover_url: (has_cover != 0).then(|| format!("/api/covers/{book_id}")),
+        cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
         accent: r.get("accent_color"),
         formats,
         added_at: r.get("timestamp"),
@@ -1773,6 +2064,39 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
     backfill_creator_ids(pool, std::slice::from_mut(&mut book)).await?;
 
     Ok(Some(book))
+}
+
+/// Look up a book by its stable `books.uuid` and return the same merged
+/// metadata `get_book` produces. Delegates to `get_book` after resolving
+/// the uuid to an id so the body stays a single source of truth.
+///
+/// This is the read path for `/books/:uuid` and `/api/ebooks/:uuid` —
+/// the URL-stable counterparts to the renumbering `:id` routes.
+pub async fn get_book_by_uuid(
+    pool: &SqlitePool,
+    uuid: &str,
+) -> Result<Option<EbookMetadata>, sqlx::Error> {
+    let Some(id) = resolve_book_id_by_uuid(pool, uuid).await? else {
+        return Ok(None);
+    };
+    get_book(pool, id).await
+}
+
+/// Map a `books.uuid` to its current `books.id`. `books.uuid` is
+/// `UNIQUE`, so this is one indexed lookup. Returns `None` if the uuid
+/// is unknown — handlers translate to a 404.
+///
+/// The covers / thumbs / mobile-ebooks routes use this to keep their
+/// URLs uuid-keyed externally while reusing the existing id-keyed
+/// internal helpers (`get_cover`, the thumbnail pipeline) unchanged.
+pub async fn resolve_book_id_by_uuid(
+    pool: &SqlitePool,
+    uuid: &str,
+) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>("SELECT id FROM books WHERE uuid = ?")
+        .bind(uuid)
+        .fetch_optional(pool)
+        .await
 }
 
 /// Fill in `Contributor::id` for every creator whose `id` is `None` by
@@ -2005,6 +2329,7 @@ pub async fn search_books(
                 })
                 .collect();
 
+        let uuid: String = r.get("uuid");
         out.push(EbookMetadata {
             id,
             filename,
@@ -2028,11 +2353,11 @@ pub async fn search_books(
             series_index: series_index.map(format_series_index),
             series_id: r.get("series_link_id"),
             epub_version: None,
-            unique_identifier: Some(r.get::<String, _>("uuid")),
+            unique_identifier: Some(uuid.clone()),
             resource_count: 0,
             spine_count: 0,
             toc_count: 0,
-            cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
+            cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
             accent: r.get("accent_color"),
             formats: parse_json_array(r.get("formats_json"))?,
             added_at: r.get("timestamp"),
@@ -2155,6 +2480,7 @@ const BOOK_COLUMNS: &str = r#"
 /// [`EbookMetadata`]. Shared across the discovery query functions.
 fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata, sqlx::Error> {
     let id: i64 = r.get("id");
+    let uuid: String = r.get("uuid");
     let has_cover: i64 = r.get("has_cover");
     let primary_filename: Option<String> = r.get("primary_filename");
     let primary_format: Option<String> = r.get("primary_format");
@@ -2206,11 +2532,11 @@ fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata, sqlx::Erro
         series_index: series_index.map(format_series_index),
         series_id: r.get("series_link_id"),
         epub_version: None,
-        unique_identifier: Some(r.get::<String, _>("uuid")),
+        unique_identifier: Some(uuid.clone()),
         resource_count: 0,
         spine_count: 0,
         toc_count: 0,
-        cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
+        cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
         accent: r.get("accent_color"),
         formats: parse_json_array(r.get("formats_json"))?,
         added_at: r.get("timestamp"),
@@ -3029,16 +3355,17 @@ pub async fn search_palette(
             let id: i64 = r.get("id");
             let uuid: String = r.get("uuid");
             let has_cover: i64 = r.get("has_cover");
-            uuids.push(uuid);
+            uuids.push(uuid.clone());
             hits.push(PaletteBookHit {
                 id,
+                uuid: uuid.clone(),
                 title: r.get::<Option<String>, _>("title").unwrap_or_default(),
                 author_display: r
                     .get::<Option<String>, _>("author_display")
                     .unwrap_or_default(),
                 year: r.get("year"),
                 formats: parse_json_array(r.get("formats_json"))?,
-                cover_url: (has_cover != 0).then(|| format!("/api/covers/{id}")),
+                cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
                 accent: r.get("accent_color"),
             });
         }
@@ -3059,7 +3386,7 @@ pub async fn search_palette(
                 // Mirror `apply_overrides`: surface user-uploaded covers even
                 // when the scanned book had `has_cover = 0`.
                 if *has_cover_ov {
-                    hit.cover_url = Some(format!("/api/covers/{}", hit.id));
+                    hit.cover_url = Some(format!("/api/covers/{}", hit.uuid));
                 }
             }
         }
@@ -3338,7 +3665,7 @@ pub async fn library_from_db_with_total(
 /// every cover file on disk. UUIDv5 (SHA-1 over a namespace + name, per
 /// RFC 4122 §4.3) is fixed across toolchains, sets the proper version/variant
 /// bits, and emits the canonical 8-4-4-4-12 hyphenated form.
-fn stable_uuid(library_path: &str, filename: &str) -> String {
+pub(crate) fn stable_uuid(library_path: &str, filename: &str) -> String {
     // NUL is the one byte that can't appear inside either side, so it's a
     // safe, unambiguous separator — no `(library_path, filename)` collision
     // is reachable from a different split.
@@ -3782,6 +4109,8 @@ mod tests {
                 ..Default::default()
             },
             cover: cover.map(|(m, b)| (m.into(), b.to_vec())),
+            mtime_epoch: 0,
+            size_bytes: 0,
         }
     }
 
@@ -3827,9 +4156,10 @@ mod tests {
         assert_eq!(a.series.as_deref(), Some("Saga"));
         assert_eq!(a.series_index.as_deref(), Some("1"));
 
+        let a_uuid = a.unique_identifier.clone().unwrap();
         assert_eq!(
             a.cover_url.as_deref(),
-            Some(format!("/api/covers/{}", a.id).as_str())
+            Some(format!("/api/covers/{a_uuid}").as_str())
         );
         assert_eq!(b.cover_url, None);
 
@@ -3876,6 +4206,8 @@ mod tests {
                 ..Default::default()
             },
             cover: None,
+            mtime_epoch: 0,
+            size_bytes: 0,
         };
         let no_accent = IndexedBook {
             metadata: EbookMetadata {
@@ -3889,6 +4221,8 @@ mod tests {
                 ..Default::default()
             },
             cover: None,
+            mtime_epoch: 0,
+            size_bytes: 0,
         };
         replace_books(&pool, "/lib", vec![with_accent, no_accent])
             .await
@@ -3976,6 +4310,8 @@ mod tests {
                 ..Default::default()
             },
             cover: None,
+            mtime_epoch: 0,
+            size_bytes: 0,
         };
         replace_books(&pool, "/lib", vec![unsafe_book])
             .await
@@ -3986,6 +4322,439 @@ mod tests {
             .find(|b| b.title.as_deref() == Some("Shady"))
             .unwrap();
         assert_eq!(shady.accent, None);
+    }
+
+    // ------------------------------------------------------------------
+    // sync_books — incremental write path. Each test seeds an initial
+    // state via `replace_books` (the legacy nuke-and-pave wrapper), then
+    // applies a hand-built `SyncPlan` to exercise one or more diff
+    // buckets and asserts the post-state.
+    // ------------------------------------------------------------------
+
+    /// Build an `IndexedBook` matching `indexed(...)` but with the
+    /// supplied (mtime_epoch, size_bytes). Used to drive the New +
+    /// Changed branches of sync_books with realistic fs metadata.
+    fn indexed_with_stat(
+        filename: &str,
+        title: Option<&str>,
+        mtime_epoch: i64,
+        size_bytes: i64,
+    ) -> IndexedBook {
+        IndexedBook {
+            metadata: EbookMetadata {
+                filename: filename.into(),
+                title: title.map(Into::into),
+                ..Default::default()
+            },
+            cover: None,
+            mtime_epoch,
+            size_bytes,
+        }
+    }
+
+    /// Seed two books via `replace_books`, then `sync_books` with no
+    /// diff buckets at all. Both ids must survive — that's the whole
+    /// point of the refactor.
+    #[tokio::test]
+    async fn sync_preserves_book_id_for_unchanged() {
+        let _covers = CoversTempDir::new("sync_unchanged");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed("a.epub", Some("A"), &[], &[], None, None),
+                indexed("b.epub", Some("B"), &[], &[], None, None),
+            ],
+        )
+        .await
+        .unwrap();
+        let before: Vec<_> = list_books(&pool, "/lib")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|b| (b.filename.clone(), b.id))
+            .collect();
+
+        sync_books(&pool, "/lib", SyncPlan::default())
+            .await
+            .unwrap();
+
+        let after: Vec<_> = list_books(&pool, "/lib")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|b| (b.filename.clone(), b.id))
+            .collect();
+        assert_eq!(before, after, "ids must be preserved across a no-op sync");
+    }
+
+    #[tokio::test]
+    async fn sync_preserves_book_id_for_changed() {
+        let _covers = CoversTempDir::new("sync_changed");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "a.epub",
+                Some("Old Title"),
+                &["Old Author"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+        let original_id = list_books(&pool, "/lib").await.unwrap()[0].id;
+
+        // One Changed entry — same filename so same uuid, new title + author.
+        let plan = SyncPlan {
+            changed_books: vec![IndexedBook {
+                metadata: EbookMetadata {
+                    filename: "a.epub".into(),
+                    title: Some("New Title".into()),
+                    creators: vec![Contributor {
+                        name: "New Author".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                cover: None,
+                mtime_epoch: 999,
+                size_bytes: 42,
+            }],
+            ..Default::default()
+        };
+        sync_books(&pool, "/lib", plan).await.unwrap();
+
+        let after = list_books(&pool, "/lib").await.unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].id, original_id, "books.id must be preserved");
+        assert_eq!(after[0].title.as_deref(), Some("New Title"));
+        assert_eq!(after[0].creators.len(), 1);
+        assert_eq!(after[0].creators[0].name, "New Author");
+    }
+
+    /// A user-supplied metadata override (keyed by `book_uuid`, no FK to
+    /// `books.id`) must still apply after a Changed UPDATE — proving
+    /// that the in-place UPDATE doesn't accidentally rotate the uuid
+    /// and that the overrides table isn't touched by sync_books.
+    #[tokio::test]
+    async fn sync_overrides_survive_changed() {
+        let _covers = CoversTempDir::new("sync_overrides");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed("a.epub", Some("Scanned"), &[], &[], None, None)],
+        )
+        .await
+        .unwrap();
+        let book_uuid = list_indexed_rows(&pool, "/lib").await.unwrap()[0]
+            .uuid
+            .clone();
+
+        // Write a user override that renames the title.
+        let overrides = MetadataOverrides {
+            title: Some("User Title".into()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &book_uuid, &overrides, false, user_id)
+            .await
+            .unwrap();
+
+        // Now Change the book — the scan would happily say "Scanned"
+        // again, but the override should still surface "User Title".
+        let plan = SyncPlan {
+            changed_books: vec![indexed_with_stat("a.epub", Some("Scanned v2"), 100, 100)],
+            ..Default::default()
+        };
+        sync_books(&pool, "/lib", plan).await.unwrap();
+
+        let after = list_books(&pool, "/lib").await.unwrap();
+        assert_eq!(after[0].title.as_deref(), Some("User Title"));
+    }
+
+    /// A Removed uuid must wipe books_fts, book_files,
+    /// books_authors_link, etc. — the cascade plus our explicit FTS
+    /// clear should leave no orphans.
+    #[tokio::test]
+    async fn sync_removes_book_cascades_links_and_fts() {
+        let _covers = CoversTempDir::new("sync_removed_cascade");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "doomed.epub",
+                Some("Doomed"),
+                &["Anon"],
+                &["fic"],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+        let book_id = list_books(&pool, "/lib").await.unwrap()[0].id;
+        let uuid = list_indexed_rows(&pool, "/lib").await.unwrap()[0]
+            .uuid
+            .clone();
+
+        let plan = SyncPlan {
+            removed_uuids: vec![uuid],
+            ..Default::default()
+        };
+        sync_books(&pool, "/lib", plan).await.unwrap();
+
+        let books_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books WHERE id = ?")
+            .bind(book_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let files_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM book_files WHERE book_id = ?")
+                .bind(book_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let link_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM books_authors_link WHERE book = ?")
+                .bind(book_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let fts_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books_fts WHERE rowid = ?")
+            .bind(book_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(books_count, 0);
+        assert_eq!(files_count, 0);
+        assert_eq!(link_count, 0);
+        assert_eq!(fts_count, 0);
+    }
+
+    /// One sync covering all four mutating branches at once. Unchanged
+    /// ids stay put; Changed id stays put; New gets a fresh id;
+    /// Removed disappears.
+    #[tokio::test]
+    async fn sync_mixed_diff_in_one_transaction() {
+        let _covers = CoversTempDir::new("sync_mixed");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed("keep.epub", Some("Keep"), &[], &[], None, None),
+                indexed("edit.epub", Some("Old Edit"), &[], &[], None, None),
+                indexed("gone.epub", Some("Gone"), &[], &[], None, None),
+            ],
+        )
+        .await
+        .unwrap();
+        let before: std::collections::HashMap<String, i64> = list_books(&pool, "/lib")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|b| (b.filename.clone(), b.id))
+            .collect();
+        let gone_uuid = stable_uuid("/lib", "gone.epub");
+
+        let plan = SyncPlan {
+            new_books: vec![indexed_with_stat("add.epub", Some("Added"), 100, 100)],
+            changed_books: vec![indexed_with_stat("edit.epub", Some("New Edit"), 200, 200)],
+            removed_uuids: vec![gone_uuid],
+            backfill: vec![],
+        };
+        sync_books(&pool, "/lib", plan).await.unwrap();
+
+        let after: std::collections::HashMap<String, i64> = list_books(&pool, "/lib")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|b| (b.filename.clone(), b.id))
+            .collect();
+
+        assert_eq!(after.len(), 3);
+        assert_eq!(after.get("keep.epub"), before.get("keep.epub"));
+        assert_eq!(after.get("edit.epub"), before.get("edit.epub"));
+        assert!(after.contains_key("add.epub"));
+        assert!(!after.contains_key("gone.epub"));
+    }
+
+    /// Removed books should lose their cover files; survivors' covers
+    /// must stay intact. Catches "delete every cover on every sync"
+    /// regressions if anyone ever short-circuits the bucket logic.
+    #[tokio::test]
+    async fn sync_cover_sidecar_lifecycle_on_remove() {
+        let covers = CoversTempDir::new("sync_cover_remove");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed(
+                    "keep.epub",
+                    Some("Keep"),
+                    &[],
+                    &[],
+                    None,
+                    Some(("image/jpeg", b"KEEP_BYTES")),
+                ),
+                indexed(
+                    "gone.epub",
+                    Some("Gone"),
+                    &[],
+                    &[],
+                    None,
+                    Some(("image/jpeg", b"GONE_BYTES")),
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+        let keep_uuid = stable_uuid("/lib", "keep.epub");
+        let gone_uuid = stable_uuid("/lib", "gone.epub");
+        let keep_path = covers.path.join(format!("{keep_uuid}.jpg"));
+        let gone_path = covers.path.join(format!("{gone_uuid}.jpg"));
+        assert!(keep_path.exists(), "cover for keep should exist");
+        assert!(gone_path.exists(), "cover for gone should exist");
+
+        sync_books(
+            &pool,
+            "/lib",
+            SyncPlan {
+                removed_uuids: vec![gone_uuid],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(keep_path.exists(), "survivor cover must remain");
+        assert!(!gone_path.exists(), "removed cover must be deleted");
+    }
+
+    /// FTS5 row carries `rowid = books.id`. After a Changed UPDATE the
+    /// rowid must still equal the preserved id, and the index content
+    /// must reflect the new title.
+    #[tokio::test]
+    async fn sync_fts_row_consistent_after_changed() {
+        let _covers = CoversTempDir::new("sync_fts");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed("a.epub", Some("Antarctica"), &[], &[], None, None)],
+        )
+        .await
+        .unwrap();
+        let original_id = list_books(&pool, "/lib").await.unwrap()[0].id;
+
+        sync_books(
+            &pool,
+            "/lib",
+            SyncPlan {
+                changed_books: vec![indexed_with_stat("a.epub", Some("Borealis"), 200, 200)],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let stale = search_books(&pool, "/lib", "Antarctica").await.unwrap();
+        let fresh = search_books(&pool, "/lib", "Borealis").await.unwrap();
+        assert!(stale.is_empty(), "old title must not match after change");
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh[0].id, original_id, "FTS rowid stable across change");
+    }
+
+    /// The Backfill bucket fills in the post-migration sentinel stat
+    /// values without touching any metadata columns. Confirm both
+    /// invariants: stat populated, OPF-derived fields untouched.
+    #[tokio::test]
+    async fn sync_backfill_writes_stat_without_touching_metadata() {
+        let _covers = CoversTempDir::new("sync_backfill");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed("a.epub", Some("Original"), &[], &[], None, None)],
+        )
+        .await
+        .unwrap();
+        let uuid = list_indexed_rows(&pool, "/lib").await.unwrap()[0]
+            .uuid
+            .clone();
+        // Confirm the row started at the (0, 0) sentinel — replace_books
+        // wrote the IndexedBook stats (which the test fixture defaults
+        // to 0).
+        let pre = list_indexed_rows(&pool, "/lib").await.unwrap();
+        assert_eq!(pre[0].mtime_epoch, 0);
+        assert_eq!(pre[0].size_bytes, 0);
+
+        sync_books(
+            &pool,
+            "/lib",
+            SyncPlan {
+                backfill: vec![(uuid, 1234, 5678)],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let post = list_indexed_rows(&pool, "/lib").await.unwrap();
+        assert_eq!(post[0].mtime_epoch, 1234);
+        assert_eq!(post[0].size_bytes, 5678);
+        // Title is untouched — backfill must not have triggered any
+        // metadata writes.
+        let books = list_books(&pool, "/lib").await.unwrap();
+        assert_eq!(books[0].title.as_deref(), Some("Original"));
+    }
+
+    /// Empty disk → diff says "remove all" → sync_books wipes the
+    /// library cleanly. Stress test for the Removed branch.
+    #[tokio::test]
+    async fn sync_empty_plan_with_full_removed_clears_library() {
+        let _covers = CoversTempDir::new("sync_empty");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed("a.epub", Some("A"), &[], &[], None, None),
+                indexed("b.epub", Some("B"), &[], &[], None, None),
+            ],
+        )
+        .await
+        .unwrap();
+        let all_uuids: Vec<String> = list_indexed_rows(&pool, "/lib")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.uuid)
+            .collect();
+
+        sync_books(
+            &pool,
+            "/lib",
+            SyncPlan {
+                removed_uuids: all_uuids,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(list_books(&pool, "/lib").await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -4580,6 +5349,8 @@ mod tests {
             vec![IndexedBook {
                 metadata: meta,
                 cover: None,
+                mtime_epoch: 0,
+                size_bytes: 0,
             }],
         )
         .await
@@ -4942,6 +5713,8 @@ mod tests {
                     ..Default::default()
                 },
                 cover: None,
+                mtime_epoch: 0,
+                size_bytes: 0,
             }],
         )
         .await
@@ -5478,6 +6251,8 @@ mod tests {
                     ..Default::default()
                 },
                 cover: None,
+                mtime_epoch: 0,
+                size_bytes: 0,
             }],
         )
         .await
@@ -7790,7 +8565,7 @@ mod tests {
         assert_eq!(palette.books.len(), 1);
         assert_eq!(
             palette.books[0].cover_url,
-            Some(format!("/api/covers/{}", book.id))
+            Some(format!("/api/covers/{uuid}"))
         );
     }
 

@@ -3,26 +3,44 @@ import { expect } from "../fixtures/test";
 import type { ExpectedBook } from "../fixtures/epubs";
 
 /**
- * Look up the backend `id` for a fixture book by exact title. Hits the same
- * RPC the landing page reads, so the id matches what `/books/:id` would
- * receive on a real click. Throws if the seeded library does not contain a
- * book with that title.
+ * Look up the backend `uuid` for a fixture book by exact title. Hits the
+ * same RPC the landing page reads, so the uuid matches what
+ * `/books/:uuid` would receive on a real click. Throws if the seeded
+ * library does not contain a book with that title.
+ *
+ * The route is uuid-keyed (not id-keyed) so bookmarked URLs survive
+ * reindexes — `books.id` is `AUTOINCREMENT` and renumbers on every
+ * `replace_books` run, while `books.uuid` is deterministic UUIDv5 of
+ * `(library_path, filename)` and stays stable across reindexes and
+ * re-installs. See `db::queries::stable_uuid`.
  */
-export async function fetchBookIdByTitle(
+export async function fetchBookUuidByTitle(
   request: APIRequestContext,
   title: string,
-): Promise<number> {
+): Promise<string> {
   const resp = await request.get("/api/rpc/ebooks");
   expect(resp.status(), "GET /api/rpc/ebooks failed").toBe(200);
-  const body = (await resp.json()) as { books: { id: number; title: string | null }[] };
+  const body = (await resp.json()) as {
+    books: { unique_identifier: string | null; title: string | null }[];
+  };
   const match = body.books.find((b) => b.title === title);
   if (!match) {
     throw new Error(
       `no seeded book with title ${JSON.stringify(title)} (got ${body.books.length} books)`,
     );
   }
-  return match.id;
+  if (!match.unique_identifier) {
+    throw new Error(`book ${JSON.stringify(title)} is missing its uuid`);
+  }
+  return match.unique_identifier;
 }
+
+/**
+ * @deprecated — kept as a compatibility shim for older specs. New tests
+ * should use {@link fetchBookUuidByTitle}, since `/books/:id` was
+ * replaced by `/books/:uuid` for URL stability across reindexes.
+ */
+export const fetchBookIdByTitle = fetchBookUuidByTitle;
 
 /** Locate the row for a fixture by its slug — matches `data-testid="ebook-row-${slug}"`. */
 export function getRow(page: Page, slug: string): Locator {
