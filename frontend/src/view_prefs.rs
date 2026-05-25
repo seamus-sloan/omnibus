@@ -142,15 +142,19 @@ mod tests {
     #[test]
     fn round_trips_and_isolates_per_library() {
         mobile_store::clear();
-        let mut a = ViewPrefs::default();
-        a.view_mode = ViewMode::Grid;
-        a.sort_key = SortKey::Author;
-        a.sort_dir = SortDir::Desc;
+        let a = ViewPrefs {
+            view_mode: ViewMode::Grid,
+            sort_key: SortKey::Author,
+            sort_dir: SortDir::Desc,
+            ..Default::default()
+        };
         save("/library/a", &a);
 
-        let mut b = ViewPrefs::default();
-        b.view_mode = ViewMode::Table;
-        b.sort_key = SortKey::NewestAdded;
+        let b = ViewPrefs {
+            view_mode: ViewMode::Table,
+            sort_key: SortKey::NewestAdded,
+            ..Default::default()
+        };
         save("/library/b", &b);
 
         assert_eq!(load("/library/a"), a);
