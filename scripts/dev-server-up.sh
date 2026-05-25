@@ -113,10 +113,15 @@ EOF
 
     # Export overrides for the child server. PORT and OMNIBUS_PUBLIC_ORIGIN
     # need to match the chosen port so origin_check accepts cookie POSTs
-    # from the browser. OMNIBUS_DEV_SEED_USER is inherited from the dev
-    # shell (.env via flake.nix shellHook).
+    # from the browser. Allow both `localhost` (humans typing into a
+    # browser) and `127.0.0.1` (Playwright's PLAYWRIGHT_BASE_URL, which
+    # this same script writes a few lines below) — without the IP form,
+    # the dx serve --fullstack proxy rewrites Host: away from the
+    # Origin: localhost the spec sent, and every cookie-authed POST 403s.
+    # OMNIBUS_DEV_SEED_USER is inherited from the dev shell (.env via
+    # flake.nix shellHook).
     export PORT="$port"
-    export OMNIBUS_PUBLIC_ORIGIN="http://localhost:$port"
+    export OMNIBUS_PUBLIC_ORIGIN="http://localhost:$port,http://127.0.0.1:$port"
 
     echo "dev-up: starting dx serve on port $port (log: $RUNTIME_DIR/server.log)" >&2
     # nohup detaches from this script's process group so `just dev-up` can
