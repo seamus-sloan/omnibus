@@ -2889,11 +2889,21 @@ pub async fn delete_author(pool: &SqlitePool, author_id: i64) -> Result<u64, sql
         return Ok(0);
     };
 
-    let affected_book_ids: Vec<i64> =
-        sqlx::query_scalar("SELECT book FROM books_authors_link WHERE author = ?")
-            .bind(author_id)
-            .fetch_all(&mut *tx)
-            .await?;
+    // Snapshot the affected book UUIDs *inside* the transaction by
+    // joining link → books. Doing the lookup as a uuid join (one bind
+    // parameter) instead of post-commit `WHERE id IN (?, ?, …)` keeps
+    // the post-commit FTS refresh from hitting SQLite's 999 bind-
+    // parameter cap on authors linked to >999 books — without that
+    // cap a giant-author delete would silently skip its FTS rebuild
+    // and leave the index stale.
+    let affected_uuids: Vec<String> = sqlx::query_scalar(
+        "SELECT b.uuid FROM books b
+         JOIN books_authors_link l ON l.book = b.id
+         WHERE l.author = ?",
+    )
+    .bind(author_id)
+    .fetch_all(&mut *tx)
+    .await?;
 
     sqlx::query("DELETE FROM books_authors_link WHERE author = ?")
         .bind(author_id)
@@ -2912,28 +2922,13 @@ pub async fn delete_author(pool: &SqlitePool, author_id: i64) -> Result<u64, sql
 
     tx.commit().await?;
 
-    if !affected_book_ids.is_empty() {
-        let placeholders = vec!["?"; affected_book_ids.len()].join(",");
-        let query = format!("SELECT uuid FROM books WHERE id IN ({placeholders})");
-        let mut q = sqlx::query_scalar::<_, String>(&query);
-        for id in &affected_book_ids {
-            q = q.bind(id);
-        }
-        match q.fetch_all(pool).await {
-            Ok(uuids) => {
-                for uuid in uuids {
-                    if let Err(e) = rebuild_fts_for_book(pool, &uuid).await {
-                        tracing::warn!(uuid, error = %e, "books_fts rebuild after delete_author failed");
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "uuid lookup for FTS refresh after delete_author failed");
-            }
+    for uuid in &affected_uuids {
+        if let Err(e) = rebuild_fts_for_book(pool, uuid).await {
+            tracing::warn!(uuid = uuid.as_str(), error = %e, "books_fts rebuild after delete_author failed");
         }
     }
 
-    Ok(affected_book_ids.len() as u64)
+    Ok(affected_uuids.len() as u64)
 }
 
 /// Fetch a series by ID with its books, ordered by series index. Returns
