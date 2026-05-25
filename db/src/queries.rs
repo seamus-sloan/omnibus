@@ -1517,10 +1517,13 @@ async fn insert_metadata_links(
     m: &EbookMetadata,
 ) -> Result<(), sqlx::Error> {
     // Authors + contributors both land in `authors` — role/file_as are
-    // flattened. The first creator gets position 0. Names matching the
-    // `ignored_authors` blocklist resolve to `None` and are skipped
-    // entirely; we leave a gap in `position` rather than renumbering, so
-    // the surviving creators keep their original ordinal.
+    // flattened. Positions follow the OPF's source order
+    // (`creators.iter().enumerate()`) so the primary author stays
+    // primary. Names matching the `ignored_authors` blocklist resolve
+    // to `None` and are skipped entirely; we leave a gap in `position`
+    // rather than renumbering, so a blocklisted leading contributor
+    // can produce a row whose first link is at position 1 — the
+    // surviving creators keep their original ordinal either way.
     for (pos, c) in m.creators.iter().enumerate() {
         let Some(author_id) = resolve_or_insert_author(tx, &c.name, c.file_as.as_deref()).await?
         else {
