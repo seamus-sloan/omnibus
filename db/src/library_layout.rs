@@ -83,6 +83,29 @@ pub fn canonical_path(library_root: &Path, author: &str, title: &str, ext: &str)
 /// falls back to a folder-level `cover.{jpg,jpeg,png}`. All filename matches
 /// are case-insensitive. Within each tier, priority order is `.jpg` > `.jpeg`
 /// > `.png`.
+///
+/// Lookup order, highest priority first:
+/// 1. direct-path probe, per-stem (`<stem>.{jpg,jpeg,png}` via `is_file()`)
+/// 2. case-insensitive per-stem (`read_dir` scan)
+/// 3. direct-path probe, folder-level (`cover.{jpg,jpeg,png}` via `is_file()`)
+/// 4. case-insensitive folder-level (`read_dir` scan)
+///
+/// The direct-path probes are a cheap fast path: on the canonical Omnibus
+/// layout (and any library whose sidecars use lowercase names) they resolve
+/// the cover with a few `stat` syscalls and skip `read_dir` entirely. This
+/// matters on flat-dump libraries with thousands of files in one folder,
+/// where each `read_dir` is O(files-in-folder). The case-insensitive
+/// `read_dir` scans remain as fallbacks so the matching contract is unchanged
+/// — the only observable difference is fewer syscalls on the common case
+/// (F0.6 / #52).
+///
+/// Note: "direct-path probe" rather than "exact-case lookup" because
+/// `is_file()` on a case-insensitive filesystem (APFS, NTFS) will match a
+/// differently-cased file too. That's fine here — any match still satisfies
+/// the documented case-insensitive contract — but the returned `PathBuf`
+/// preserves the *probed* casing, not the on-disk entry casing. Callers
+/// that need the on-disk casing should fall through to `find_with_extensions`,
+/// which carries the entry casing back from `read_dir`.
 pub fn sidecar_cover_for(ebook_path: &Path) -> Option<PathBuf> {
     let parent = ebook_path.parent()?;
 
@@ -91,15 +114,49 @@ pub fn sidecar_cover_for(ebook_path: &Path) -> Option<PathBuf> {
     // Per-stem matching needs UTF-8 for the case-insensitive compare; if the
     // filename isn't UTF-8 we skip the per-stem tier but still fall back to
     // `cover.*` since that lookup doesn't depend on the ebook's name.
+    //
+    // Within the per-stem tier the direct-path `is_file()` probe runs before
+    // the case-insensitive `read_dir` scan, so a lowercase `<stem>.jpg`
+    // resolves without ever listing the folder. The folder-level `cover.*`
+    // tier only runs after the per-stem tier has been exhausted (both its
+    // direct-path and case-insensitive halves), preserving the
+    // per-stem-over-folder precedence.
     if let Some(stem) = ebook_path.file_stem().and_then(|s| s.to_str()) {
+        // Fast path: probe the direct paths before scanning the folder.
+        if let Some(found) = probe_direct_path(parent, stem) {
+            return Some(found);
+        }
         if let Some(found) = find_with_extensions(parent, stem) {
             return Some(found);
         }
+    }
+    if let Some(found) = probe_direct_path(parent, "cover") {
+        return Some(found);
     }
     find_with_extensions(parent, "cover")
 }
 
 const COVER_EXTS: &[&str] = &["jpg", "jpeg", "png"];
+
+/// Direct-path probe: stat `<base>.{jpg,jpeg,png}` directly with `is_file()`
+/// in `COVER_EXTS` priority order, avoiding a `read_dir` of the whole folder.
+/// Returns the first match, or `None` if no probed path is a regular file
+/// (caller then falls back to the case-insensitive `read_dir` scan).
+///
+/// "Direct-path" rather than "exact-case" because `is_file()` follows the
+/// host filesystem's casing rules — on case-insensitive filesystems (APFS,
+/// NTFS) the probe will succeed against a differently-cased on-disk entry.
+/// That's fine: the caller's contract is already case-insensitive, and any
+/// match returned here satisfies it.
+fn probe_direct_path(dir: &Path, base: &str) -> Option<PathBuf> {
+    for ext in COVER_EXTS {
+        let candidate = dir.join(format!("{base}.{ext}"));
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
 
 fn find_with_extensions(dir: &Path, base: &str) -> Option<PathBuf> {
     let entries = std::fs::read_dir(dir).ok()?;
@@ -416,14 +473,24 @@ mod tests {
 
     #[test]
     fn sidecar_cover_for_case_insensitive() {
+        // The case-insensitive matching contract: a `Cover.JPG` on disk is
+        // resolved even though the probed/canonical name is lowercase.
+        // We compare via `canonicalize` rather than path strings because on
+        // case-insensitive filesystems (APFS, NTFS) the direct-path fast path
+        // returns the probed lowercase casing while on case-sensitive
+        // filesystems (ext4) the `read_dir` fallback returns the original
+        // `Cover.JPG` casing. Both spellings resolve to the same inode and
+        // are functionally equivalent — see the `sidecar_cover_for` docstring.
         let dir = temp_dir("case");
         let epub = dir.join("book.epub");
         std::fs::write(&epub, b"").unwrap();
         let upper = dir.join("Cover.JPG");
         std::fs::write(&upper, b"x").unwrap();
-        let got = sidecar_cover_for(&epub);
+        let got = sidecar_cover_for(&epub).expect("cover should be found");
+        let got_canon = std::fs::canonicalize(&got).expect("canonicalize got");
+        let upper_canon = std::fs::canonicalize(&upper).expect("canonicalize upper");
         std::fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(got, Some(upper));
+        assert_eq!(got_canon, upper_canon);
     }
 
     #[test]
@@ -437,6 +504,62 @@ mod tests {
         let got = sidecar_cover_for(&epub);
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(got, Some(jpg));
+    }
+
+    #[test]
+    fn sidecar_cover_for_direct_path_fast_path() {
+        // The common canonical-layout case: a lowercase per-stem `<stem>.jpg`
+        // resolves via the direct-path `is_file()` fast path. We can't observe
+        // the syscall count from here, but we can assert the contract still
+        // returns the lowercase file.
+        let dir = temp_dir("direct_path");
+        let epub = dir.join("book.epub");
+        std::fs::write(&epub, b"").unwrap();
+        let jpg = dir.join("book.jpg");
+        std::fs::write(&jpg, b"x").unwrap();
+        let got = sidecar_cover_for(&epub);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(got, Some(jpg));
+    }
+
+    #[test]
+    fn sidecar_cover_for_direct_path_per_stem_beats_ci_folder_cover() {
+        // Ordering invariant: a direct-path per-stem sidecar must win over a
+        // case-insensitive folder-level `Cover.JPG`. The direct-path fast path
+        // is per-stem-first, so the folder `cover.*` (whether probed directly
+        // or via the `read_dir` fallback) must never preempt a per-stem match.
+        let dir = temp_dir("direct_stem_vs_ci_folder");
+        let epub = dir.join("book.epub");
+        std::fs::write(&epub, b"").unwrap();
+        let stem = dir.join("book.jpg");
+        std::fs::write(&stem, b"stem").unwrap();
+        std::fs::write(dir.join("Cover.JPG"), b"folder").unwrap();
+        let got = sidecar_cover_for(&epub);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(got, Some(stem));
+    }
+
+    #[test]
+    fn sidecar_cover_for_ci_per_stem_beats_direct_folder_cover() {
+        // Ordering invariant in the other direction: a per-stem sidecar
+        // (uppercase `Book.JPG`) must still beat the folder-level `cover.jpg`.
+        // The per-stem direct-path probe runs first against lowercase
+        // `book.jpg` — on case-sensitive filesystems that probe misses and
+        // the read_dir fallback finds `Book.JPG`; on case-insensitive ones
+        // the probe succeeds and resolves to the same inode. In both cases
+        // the returned path's contents must be the per-stem sidecar, not
+        // the folder cover. We compare via file contents rather than path
+        // strings to be filesystem-casing-agnostic.
+        let dir = temp_dir("ci_stem_vs_direct_folder");
+        let epub = dir.join("book.epub");
+        std::fs::write(&epub, b"").unwrap();
+        let stem = dir.join("Book.JPG");
+        std::fs::write(&stem, b"stem").unwrap();
+        std::fs::write(dir.join("cover.jpg"), b"folder").unwrap();
+        let got = sidecar_cover_for(&epub).expect("cover should be found");
+        let got_bytes = std::fs::read(&got).expect("read got");
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(got_bytes, b"stem");
     }
 
     #[test]
