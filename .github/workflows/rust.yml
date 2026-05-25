@@ -92,3 +92,40 @@ jobs:
 
       - name: cargo test (frontend)
         run: nix develop --command cargo test -p omnibus-frontend --features server
+
+  security:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required by DeterminateSystems/nix-installer-action so GitHub Actions
+      # provides the OIDC token endpoints it needs to authenticate to FlakeHub.
+      # Without it the installer falls back to anonymous api.github.com fetches
+      # that intermittently 401 ("Bad credentials") during flake evaluation.
+      id-token: write
+      # Required by nix-community/cache-nix-action `purge: true` so it can
+      # delete its own expired cache entries via the Actions cache API.
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+
+      # Cache the Nix store across runs. Auto-purges caches with the same
+      # prefix that haven't been touched in 7 days so we stay under the 10 GB
+      # per-repo GHA cache quota. Distinct prefix from the `check` job so the
+      # two jobs don't clobber each other's cache entries.
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-audit-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-prefixes-first-match: nix-audit-${{ runner.os }}-
+          purge: true
+          purge-prefixes: nix-audit-${{ runner.os }}-
+          purge-last-accessed: 604800
+          purge-primary-key: never
+          gc-max-store-size-linux: 5G
+
+      - name: cargo audit
+        run: nix develop --command cargo audit --deny warnings
