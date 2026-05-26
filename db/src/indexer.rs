@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 
 use sqlx::SqlitePool;
 
-use crate::{books, ebook, queries};
+use crate::{books, ebook, queries, sync};
 
 /// Reindex if the last successful index is older than this. One hour is a
 /// compromise between responsiveness to on-disk changes and avoiding
@@ -193,13 +193,13 @@ pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()
     })
     .await?;
 
-    let plan = queries::SyncPlan {
+    let plan = sync::SyncPlan {
         new_books: parsed.0,
         changed_books: parsed.1,
         removed_uuids: diff.removed,
         backfill: diff.backfill,
     };
-    queries::sync_books(pool, library_path, plan).await?;
+    sync::sync_books(pool, library_path, plan).await?;
     Ok(())
 }
 

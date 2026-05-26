@@ -24,7 +24,7 @@ use omnibus_shared::{Contributor, EbookMetadata, Identifier};
 use crate::library_layout;
 
 /// A single scanner output row — metadata plus the raw cover image bytes
-/// (and mime), if the epub included one. Consumed by [`crate::queries::sync_books`].
+/// (and mime), if the epub included one. Consumed by [`crate::sync::sync_books`].
 ///
 /// `mtime_epoch` and `size_bytes` are the filesystem stat values captured
 /// during the walk, used by the incremental reindex diff to detect changes

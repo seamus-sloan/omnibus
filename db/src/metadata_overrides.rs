@@ -304,8 +304,7 @@ pub(crate) async fn rebuild_fts_for_book(
         .bind(book_id)
         .execute(&mut *tx)
         .await?;
-    crate::queries::insert_fts_row(&mut tx, book_id, &title, first_isbn.as_deref(), &merged)
-        .await?;
+    crate::sync::insert_fts_row(&mut tx, book_id, &title, first_isbn.as_deref(), &merged).await?;
     tx.commit().await?;
     Ok(())
 }
