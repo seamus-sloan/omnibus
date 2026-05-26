@@ -346,11 +346,11 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                         for (i, item) in filtered.iter().cloned().enumerate() {
                             li {
                                 key: "{i}-{item.name}",
-                                class: if Some(i) == highlight() {
-                                    "chip-editor-suggestion is-active"
-                                } else {
-                                    "chip-editor-suggestion"
-                                },
+                                // Single-line if/else avoids nightly
+                                // clippy's `suspicious_else_formatting`
+                                // lint, which trips on the multi-line
+                                // form inside rsx attribute slots.
+                                class: if Some(i) == highlight() { "chip-editor-suggestion is-active" } else { "chip-editor-suggestion" },
                                 role: "option",
                                 aria_selected: if Some(i) == highlight() { "true" } else { "false" },
                                 // mousedown (not click) fires before the
@@ -376,11 +376,7 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                         if show_create_row {
                             li {
                                 key: "__create__-{typed}",
-                                class: if Some(create_row_index) == highlight() {
-                                    "chip-editor-suggestion chip-editor-suggestion--create is-active"
-                                } else {
-                                    "chip-editor-suggestion chip-editor-suggestion--create"
-                                },
+                                class: if Some(create_row_index) == highlight() { "chip-editor-suggestion chip-editor-suggestion--create is-active" } else { "chip-editor-suggestion chip-editor-suggestion--create" },
                                 role: "option",
                                 aria_selected: if Some(create_row_index) == highlight() { "true" } else { "false" },
                                 onmousedown: {
