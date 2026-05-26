@@ -66,7 +66,16 @@ pub async fn set_settings(pool: &SqlitePool, settings: &Settings) -> Result<(), 
     .await?;
     tx.commit().await?;
 
-    crate::covers::delete_cover_files_for(&orphan_uuids);
+    // Unlinking the orphaned cover files is synchronous `std::fs` that scales
+    // with the orphan count, so move it off the runtime. A `JoinError` (panic
+    // in the unlink loop) is logged and swallowed — covers are a rebuildable
+    // cache, so a failed cleanup must not fail the settings save.
+    if let Err(join_err) =
+        tokio::task::spawn_blocking(move || crate::covers::delete_cover_files_for(&orphan_uuids))
+            .await
+    {
+        tracing::error!("set_settings: cover cleanup spawn_blocking failed: {join_err}");
+    }
     Ok(())
 }
 
@@ -231,9 +240,22 @@ pub async fn last_indexed_at(
 }
 
 #[cfg(test)]
+pub(crate) mod test_helpers {
+    //! Serialization guard for the `seed_settings_from_env_*` tests. They
+    //! `set_var` / `remove_var` on `EBOOK_LIBRARY_PATH` /
+    //! `AUDIOBOOK_LIBRARY_PATH`, which is process-global; under `cargo test`'s
+    //! default parallel execution two tests racing those vars can observe a
+    //! torn state. Mirrors `covers::test_helpers::COVERS_ENV_LOCK` — every
+    //! test that touches these vars must hold this lock for its duration.
+
+    pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::pool::init_db;
+    use crate::settings::test_helpers::ENV_LOCK;
 
     #[tokio::test]
     async fn get_settings_returns_none_for_empty_db() {
@@ -307,7 +329,12 @@ mod tests {
     }
 
     #[tokio::test]
+    // The guard must stay held across the awaits below: it serializes the
+    // process-global env-var mutation against the other `seed_settings_from_env`
+    // test, which is exactly what holding it for the test's duration achieves.
+    #[allow(clippy::await_holding_lock)]
     async fn seed_settings_from_env_writes_env_vars_to_db() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let pool = init_db("sqlite::memory:").await.unwrap();
         std::env::set_var("EBOOK_LIBRARY_PATH", "/env/books");
         std::env::set_var("AUDIOBOOK_LIBRARY_PATH", "/env/audio");
@@ -320,7 +347,12 @@ mod tests {
     }
 
     #[tokio::test]
+    // The guard must stay held across the awaits below: it serializes the
+    // process-global env-var mutation against the other `seed_settings_from_env`
+    // test, which is exactly what holding it for the test's duration achieves.
+    #[allow(clippy::await_holding_lock)]
     async fn seed_settings_from_env_is_noop_when_vars_unset() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let pool = init_db("sqlite::memory:").await.unwrap();
         std::env::remove_var("EBOOK_LIBRARY_PATH");
         std::env::remove_var("AUDIOBOOK_LIBRARY_PATH");

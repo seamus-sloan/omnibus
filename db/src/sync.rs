@@ -239,10 +239,23 @@ pub async fn sync_books(
 
     tx.commit().await?;
 
-    // DB commit succeeded — reconcile the covers directory.
-    delete_cover_files_for(&plan.removed_uuids);
-    materialize_new_covers(new_covers);
-    materialize_new_covers(changed_covers);
+    // DB commit succeeded — reconcile the covers directory. All three steps
+    // are synchronous `std::fs` (unlink orphans, write new/changed covers)
+    // and scale with the diff size — thousands of files on a fresh library —
+    // so run them together on the blocking pool rather than pinning a tokio
+    // worker. A `JoinError` (panic in the reconcile) is logged and swallowed:
+    // covers are a rebuildable cache, so a failed reconcile must not fail the
+    // committed sync.
+    let removed_uuids = plan.removed_uuids;
+    if let Err(join_err) = tokio::task::spawn_blocking(move || {
+        delete_cover_files_for(&removed_uuids);
+        materialize_new_covers(new_covers);
+        materialize_new_covers(changed_covers);
+    })
+    .await
+    {
+        tracing::error!("sync_books: cover reconcile spawn_blocking failed: {join_err}");
+    }
 
     Ok(())
 }
