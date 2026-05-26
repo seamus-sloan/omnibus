@@ -9,6 +9,7 @@ pub mod auth;
 pub mod author_photos;
 pub mod books;
 pub mod covers;
+pub mod discovery;
 pub mod ebook;
 pub mod helpers;
 pub mod indexer;
@@ -33,6 +34,7 @@ pub use books::{
     search_books, IndexedRow, MAX_BOOKS_RETURNED,
 };
 pub use covers::{covers_dir, get_cover, get_last_modified_epoch};
+pub use discovery::*;
 pub use helpers::{build_fts_match, sanitize_fts_query};
 pub use metadata_overrides::*;
 pub use pool::*;
