@@ -46,6 +46,3 @@ pub use pool::*;
 pub use settings::*;
 pub use sync::*;
 pub use thumbs::{thumb_path_for, thumbs_dir, ThumbError, ThumbSize};
-
-#[cfg(test)]
-mod queries_tests;

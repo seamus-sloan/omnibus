@@ -223,11 +223,10 @@ pub async fn list_series(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discovery::test_helpers::*;
-    use crate::sync::test_helpers::indexed;
-    use crate::author_photos_data::{AuthorPhotoSource, upsert_author_photo};
+    use crate::author_photos_data::{upsert_author_photo, AuthorPhotoSource};
     use crate::books::list_books;
     use crate::covers::test_helpers::CoversTempDir;
+    use crate::discovery::test_helpers::*;
     use crate::metadata_overrides::upsert_metadata_overrides;
     use crate::pool::init_db;
     use omnibus_shared::{Contributor, MetadataOverrides};

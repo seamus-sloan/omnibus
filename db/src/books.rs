@@ -977,12 +977,14 @@ pub async fn library_from_db_with_total(
 mod tests {
     use super::*;
     use crate::covers::test_helpers::CoversTempDir;
-    use crate::discovery::test_helpers::{author_id_by_name, seed_discovery_fixture, series_id_by_name};
+    use crate::discovery::test_helpers::{
+        author_id_by_name, seed_discovery_fixture, series_id_by_name,
+    };
     use crate::ebook::IndexedBook;
     use crate::metadata_overrides::upsert_metadata_overrides;
     use crate::pool::init_db;
     use crate::sync::replace_books;
-    use crate::sync::test_helpers::{indexed, indexed_with_stat};
+    use crate::sync::test_helpers::indexed;
     use omnibus_shared::{Contributor, EbookMetadata, Identifier, MetadataOverrides};
     use sqlx::SqlitePool;
 

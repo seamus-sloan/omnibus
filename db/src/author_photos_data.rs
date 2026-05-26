@@ -204,12 +204,12 @@ pub async fn delete_author(pool: &SqlitePool, author_id: i64) -> Result<u64, sql
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discovery::test_helpers::*;
-    use crate::sync::test_helpers::indexed;
     use crate::books::list_books;
     use crate::covers::test_helpers::CoversTempDir;
+    use crate::discovery::test_helpers::*;
     use crate::pool::init_db;
     use crate::sync::replace_books;
+    use crate::sync::test_helpers::indexed;
 
     // -------------------------------------------------------------------------
     // F1.11 author profile photo tests

@@ -518,7 +518,10 @@ pub(crate) mod test_helpers {
     /// Bypasses `replace_books`/the indexer — the cap only depends on link
     /// rows existing — keeping the test fast even past the 1k cap. Returns
     /// `(author_id, series_id)`.
-    pub(crate) async fn seed_books_for_one_author_and_series(pool: &SqlitePool, count: i64) -> (i64, i64) {
+    pub(crate) async fn seed_books_for_one_author_and_series(
+        pool: &SqlitePool,
+        count: i64,
+    ) -> (i64, i64) {
         sqlx::query("INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib')")
             .execute(pool)
             .await
@@ -578,9 +581,9 @@ pub(crate) mod test_helpers {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::test_helpers::*;
-    use crate::author_photos_data::{AuthorPhotoSource, upsert_author_photo};
+    use super::*;
+    use crate::author_photos_data::{upsert_author_photo, AuthorPhotoSource};
     use crate::books::list_books;
     use crate::covers::test_helpers::CoversTempDir;
     use crate::metadata_overrides::upsert_metadata_overrides;

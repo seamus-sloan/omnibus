@@ -299,12 +299,12 @@ pub(crate) mod test_helpers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sync::test_helpers::indexed;
     use crate::books::list_books;
     use crate::covers::test_helpers::CoversTempDir;
     use crate::metadata_overrides::{upsert_metadata_overrides, write_override_cover};
     use crate::pool::init_db;
     use crate::sync::replace_books;
+    use crate::sync::test_helpers::indexed;
     use omnibus_shared::MetadataOverrides;
 
     #[tokio::test]
