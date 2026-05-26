@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 
 use sqlx::SqlitePool;
 
-use crate::{ebook, queries};
+use crate::{books, ebook, sync};
 
 /// Reindex if the last successful index is older than this. One hour is a
 /// compromise between responsiveness to on-disk changes and avoiding
@@ -48,7 +48,7 @@ pub const REFRESH_AFTER_SECS: i64 = 60 * 60;
 /// True when a refresh should be kicked off: no state at all, or state
 /// older than [`REFRESH_AFTER_SECS`].
 pub async fn is_stale(pool: &SqlitePool, library_path: &str) -> Result<bool, sqlx::Error> {
-    let Some(last) = queries::last_indexed_at(pool, library_path).await? else {
+    let Some(last) = crate::settings::last_indexed_at(pool, library_path).await? else {
         return Ok(true);
     };
     let now = std::time::SystemTime::now()
@@ -86,7 +86,7 @@ pub struct ReindexDiff {
 /// open files directly without re-walking.
 pub fn diff_library(
     disk: &[ebook::StatEntry],
-    db: &[queries::IndexedRow],
+    db: &[books::IndexedRow],
     library_root: &Path,
 ) -> ReindexDiff {
     use std::collections::HashMap;
@@ -100,7 +100,7 @@ pub fn diff_library(
         .filter(|e| !e.uuid.is_empty())
         .map(|e| (e.uuid.as_str(), e))
         .collect();
-    let db_by_uuid: HashMap<&str, &queries::IndexedRow> =
+    let db_by_uuid: HashMap<&str, &books::IndexedRow> =
         db.iter().map(|r| (r.uuid.as_str(), r)).collect();
 
     let mut out = ReindexDiff::default();
@@ -173,7 +173,7 @@ pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()
         anyhow::bail!("scan of {library_path} failed: {msg}");
     }
 
-    let db_rows = queries::list_indexed_rows(pool, library_path).await?;
+    let db_rows = books::list_indexed_rows(pool, library_path).await?;
     let library_root: PathBuf = PathBuf::from(library_path);
     let diff = diff_library(&stat.entries, &db_rows, &library_root);
 
@@ -193,21 +193,21 @@ pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()
     })
     .await?;
 
-    let plan = queries::SyncPlan {
+    let plan = sync::SyncPlan {
         new_books: parsed.0,
         changed_books: parsed.1,
         removed_uuids: diff.removed,
         backfill: diff.backfill,
     };
-    queries::sync_books(pool, library_path, plan).await?;
+    sync::sync_books(pool, library_path, plan).await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::books::IndexedRow;
     use crate::ebook::StatEntry;
-    use crate::queries::IndexedRow;
 
     fn entry(name: &str, uuid: &str, mtime: i64, size: i64) -> StatEntry {
         StatEntry {

@@ -24,7 +24,7 @@ use omnibus_shared::{Contributor, EbookMetadata, Identifier};
 use crate::library_layout;
 
 /// A single scanner output row — metadata plus the raw cover image bytes
-/// (and mime), if the epub included one. Consumed by [`crate::queries::sync_books`].
+/// (and mime), if the epub included one. Consumed by [`crate::sync::sync_books`].
 ///
 /// `mtime_epoch` and `size_bytes` are the filesystem stat values captured
 /// during the walk, used by the incremental reindex diff to detect changes
@@ -267,7 +267,7 @@ pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatSca
                 .to_string_lossy()
                 .to_string();
             let (mtime_epoch, size_bytes) = stat_file(&entry_path);
-            let uuid = crate::queries::stable_uuid(library_path_key, &relative);
+            let uuid = crate::helpers::stable_uuid(library_path_key, &relative);
             entries.push(StatEntry {
                 filename: relative,
                 uuid,
