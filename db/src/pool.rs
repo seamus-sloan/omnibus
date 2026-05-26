@@ -61,9 +61,12 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
         // The purge walks the covers dir and unlinks every legacy file with
         // synchronous `std::fs`. On the worst-case first boot after the #94
         // upgrade that directory can be large, so run it on the blocking pool
-        // rather than stalling server startup. `JoinError` (a panic in the
-        // sweep) is logged and swallowed — the covers dir is a rebuildable
-        // cache, so a failed purge must not abort boot.
+        // rather than tying up an async runtime worker for the whole sweep.
+        // Boot still awaits completion here — this keeps the runtime's other
+        // tasks schedulable during the sweep, it does not make startup
+        // non-blocking. `JoinError` (a panic in the sweep) is logged and
+        // swallowed — the covers dir is a rebuildable cache, so a failed
+        // purge must not abort boot.
         let dir = covers_dir();
         if let Err(join_err) = tokio::task::spawn_blocking(move || {
             purge_legacy_covers_once(&dir);
