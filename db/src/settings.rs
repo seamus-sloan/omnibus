@@ -66,7 +66,16 @@ pub async fn set_settings(pool: &SqlitePool, settings: &Settings) -> Result<(), 
     .await?;
     tx.commit().await?;
 
-    crate::covers::delete_cover_files_for(&orphan_uuids);
+    // Unlinking the orphaned cover files is synchronous `std::fs` that scales
+    // with the orphan count, so move it off the runtime. A `JoinError` (panic
+    // in the unlink loop) is logged and swallowed — covers are a rebuildable
+    // cache, so a failed cleanup must not fail the settings save.
+    if let Err(join_err) =
+        tokio::task::spawn_blocking(move || crate::covers::delete_cover_files_for(&orphan_uuids))
+            .await
+    {
+        tracing::error!("set_settings: cover cleanup spawn_blocking failed: {join_err}");
+    }
     Ok(())
 }
 
@@ -231,9 +240,58 @@ pub async fn last_indexed_at(
 }
 
 #[cfg(test)]
+pub(crate) mod test_helpers {
+    //! Serialization + restore guard for the `seed_settings_from_env_*`
+    //! tests. They mutate `EBOOK_LIBRARY_PATH` / `AUDIOBOOK_LIBRARY_PATH`,
+    //! which is process-global; under `cargo test`'s default parallel
+    //! execution two tests racing those vars can observe a torn state.
+    //! Mirrors `covers::test_helpers::CoversTempDir`: acquiring the guard
+    //! locks `ENV_LOCK` and snapshots both vars, and dropping it restores
+    //! their prior values (so the rest of the test run — and local dev — sees
+    //! them unchanged) before releasing the lock. Keeping the `MutexGuard` in
+    //! a struct field (rather than a bare `let _g`) also keeps it off the
+    //! await points in the async tests.
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// RAII guard that serializes and restores the library-path env vars.
+    pub(crate) struct LibraryEnvGuard {
+        prev_ebook: Option<String>,
+        prev_audiobook: Option<String>,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl LibraryEnvGuard {
+        pub(crate) fn acquire() -> Self {
+            let guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            Self {
+                prev_ebook: std::env::var("EBOOK_LIBRARY_PATH").ok(),
+                prev_audiobook: std::env::var("AUDIOBOOK_LIBRARY_PATH").ok(),
+                _guard: guard,
+            }
+        }
+    }
+
+    impl Drop for LibraryEnvGuard {
+        fn drop(&mut self) {
+            for (key, prev) in [
+                ("EBOOK_LIBRARY_PATH", self.prev_ebook.take()),
+                ("AUDIOBOOK_LIBRARY_PATH", self.prev_audiobook.take()),
+            ] {
+                match prev {
+                    Some(v) => std::env::set_var(key, v),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::pool::init_db;
+    use crate::settings::test_helpers::LibraryEnvGuard;
 
     #[tokio::test]
     async fn get_settings_returns_none_for_empty_db() {
@@ -308,12 +366,15 @@ mod tests {
 
     #[tokio::test]
     async fn seed_settings_from_env_writes_env_vars_to_db() {
+        // The guard serializes the process-global env mutation against the
+        // other `seed_settings_from_env` test and restores prior values on
+        // drop, so this test can't leak `EBOOK_LIBRARY_PATH` into the rest of
+        // the run.
+        let _env = LibraryEnvGuard::acquire();
         let pool = init_db("sqlite::memory:").await.unwrap();
         std::env::set_var("EBOOK_LIBRARY_PATH", "/env/books");
         std::env::set_var("AUDIOBOOK_LIBRARY_PATH", "/env/audio");
         seed_settings_from_env(&pool).await.unwrap();
-        std::env::remove_var("EBOOK_LIBRARY_PATH");
-        std::env::remove_var("AUDIOBOOK_LIBRARY_PATH");
         let result = get_settings(&pool).await.unwrap();
         assert_eq!(result.ebook_library_path, Some("/env/books".into()));
         assert_eq!(result.audiobook_library_path, Some("/env/audio".into()));
@@ -321,6 +382,9 @@ mod tests {
 
     #[tokio::test]
     async fn seed_settings_from_env_is_noop_when_vars_unset() {
+        // Guard restores prior values on drop. We still clear the vars here to
+        // establish the "unset" precondition this test exercises.
+        let _env = LibraryEnvGuard::acquire();
         let pool = init_db("sqlite::memory:").await.unwrap();
         std::env::remove_var("EBOOK_LIBRARY_PATH");
         std::env::remove_var("AUDIOBOOK_LIBRARY_PATH");
