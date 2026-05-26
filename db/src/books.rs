@@ -7,7 +7,7 @@ use sqlx::{Row, SqlitePool};
 
 use omnibus_shared::{Contributor, EbookLibrary, EbookMetadata, Identifier};
 
-use crate::helpers::{build_fts_match, format_series_index, MAX_QUERY_LEN};
+use crate::helpers::{build_fts_match, cap_query_len, format_series_index};
 use crate::metadata_overrides::{apply_overrides, get_metadata_overrides, load_overrides_bulk};
 
 /// Hard server-side cap on the number of books any single list/search
@@ -743,9 +743,9 @@ pub async fn search_books(
     q: &str,
 ) -> Result<Vec<EbookMetadata>, sqlx::Error> {
     // Cap query length before parsing to bound the FTS5 MATCH expression size,
-    // matching `search_palette` (issue #189). Collect chars (not bytes) to
-    // avoid slicing mid-codepoint. Normal/short queries are unaffected.
-    let capped: String = q.trim().chars().take(MAX_QUERY_LEN).collect();
+    // matching `search_palette` (issue #189). Normal/short queries are
+    // unaffected; see `cap_query_len`.
+    let capped = cap_query_len(q);
     let Some(match_expr) = build_fts_match(&capped) else {
         return Ok(Vec::new());
     };
@@ -921,9 +921,9 @@ pub async fn count_search_books(
     q: &str,
 ) -> Result<i64, sqlx::Error> {
     // Cap query length before parsing to mirror `search_books` /
-    // `search_palette` (issue #189). Collect chars to avoid mid-codepoint
-    // slicing; normal/short queries are unaffected.
-    let capped: String = q.trim().chars().take(MAX_QUERY_LEN).collect();
+    // `search_palette` (issue #189). Normal/short queries are unaffected;
+    // see `cap_query_len`.
+    let capped = cap_query_len(q);
     let Some(match_expr) = build_fts_match(&capped) else {
         return Ok(0);
     };
@@ -997,6 +997,7 @@ mod tests {
         author_id_by_name, seed_discovery_fixture, series_id_by_name,
     };
     use crate::ebook::IndexedBook;
+    use crate::helpers::MAX_QUERY_LEN;
     use crate::metadata_overrides::upsert_metadata_overrides;
     use crate::pool::init_db;
     use crate::sync::replace_books;

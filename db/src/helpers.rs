@@ -12,6 +12,15 @@ use std::path::Path;
 /// one place across every search path.
 pub(crate) const MAX_QUERY_LEN: usize = 256;
 
+/// Trim surrounding whitespace and cap a user query to [`MAX_QUERY_LEN`]
+/// chars before it reaches [`build_fts_match`] / `LIKE`. Collecting chars
+/// (not bytes) guarantees the truncation never lands mid-codepoint. Shared
+/// by every search entrypoint (`search_books`, `count_search_books`,
+/// `search_palette`) so the cap is applied identically everywhere (#189).
+pub(crate) fn cap_query_len(q: &str) -> String {
+    q.trim().chars().take(MAX_QUERY_LEN).collect()
+}
+
 /// Deterministic UUIDv5 derived from `(library_path, filename)` so reindexing
 /// the same file produces the same uuid. Keeps `/api/covers/{uuid}` URLs
 /// stable across reindex cycles even as the primary `books.id` renumbers.
@@ -267,6 +276,34 @@ mod tests {
             );
         }
         assert_eq!(sanitize_accent_color(None), None);
+    }
+
+    // ---------- query-length cap (#189) ----------
+
+    #[test]
+    fn cap_query_len_passes_short_input_through_trimmed() {
+        // Under the cap: only surrounding whitespace is stripped.
+        assert_eq!(cap_query_len("  harry potter  "), "harry potter");
+    }
+
+    #[test]
+    fn cap_query_len_truncates_oversized_input_to_the_cap() {
+        let oversized = "a".repeat(MAX_QUERY_LEN * 10);
+        let capped = cap_query_len(&oversized);
+        // Observable effect: the tail is dropped, leaving exactly the cap.
+        assert_eq!(capped.chars().count(), MAX_QUERY_LEN);
+        assert!(capped.chars().all(|c| c == 'a'));
+        assert!(capped.len() < oversized.len());
+    }
+
+    #[test]
+    fn cap_query_len_truncates_on_a_char_boundary() {
+        // A multibyte char repeated past the cap must slice cleanly — never
+        // panic and never split a codepoint.
+        let multibyte = "é".repeat(MAX_QUERY_LEN * 2);
+        let capped = cap_query_len(&multibyte);
+        assert_eq!(capped.chars().count(), MAX_QUERY_LEN);
+        assert!(capped.chars().all(|c| c == 'é'));
     }
 
     // ---------- FTS5 (F0.4) ----------
