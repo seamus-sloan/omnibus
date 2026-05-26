@@ -171,7 +171,7 @@ fn render_loaded(b: EbookMetadata) -> Element {
                         if !b.formats.is_empty() {
                             div { class: "bd-format-badges",
                                 for f in b.formats.iter() {
-                                    BdFormatBadge { fmt: f.clone() }
+                                    BdFormatBadge { key: "{f}", fmt: f.clone() }
                                 }
                             }
                         }
