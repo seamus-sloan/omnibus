@@ -241,39 +241,63 @@ pub async fn get_series(
     //   - the canonical name from `books_series_link`.
     // Same fallback for `series_index` so the override-set position drives
     // ordering when present.
+    //
+    // Issue #154: the membership set is built as a single-pass UNION over
+    // (1) canonical link rows for *this* series whose book has no `series`
+    // override, and (2) override rows whose `overrides.series` matches this
+    // series' name. Both arms are scoped to the target series up front, so
+    // arm (1) drives through the `books_series_link(series)` index instead
+    // of scanning every book and computing a per-row correlated subquery.
+    // The empty-string clear-all case is handled naturally: a `Some("")`
+    // override removes the book from arm (1) (override IS NOT NULL) and the
+    // `'' = name` filter excludes it from arm (2). Case-insensitivity is
+    // preserved by the `COLLATE NOCASE` on arm (2)'s name comparison
+    // (canonical arm (1) needs none — it joins on `series.id`).
     let sql = format!(
         r#"WITH effective AS (
-             SELECT b.id AS book_id,
-                    CASE
-                      WHEN mo.book_uuid IS NOT NULL
-                           AND json_type(mo.overrides, '$.series') IS NOT NULL
-                        THEN json_extract(mo.overrides, '$.series')
-                      ELSE (SELECT s2.name FROM books_series_link bsl
-                              JOIN series s2 ON s2.id = bsl.series
-                             WHERE bsl.book = b.id LIMIT 1)
-                    END AS series_name,
+             -- (1) Canonical members of this series with no series override.
+             -- A `series_index` override still drives ordering here even
+             -- when the series itself is canonical (the original `effective`
+             -- CTE computed the index independently of the name), so a user
+             -- who only repositions a book they didn't move keeps that order.
+             SELECT bsl.book AS book_id,
                     CASE
                       WHEN mo.book_uuid IS NOT NULL
                            AND json_type(mo.overrides, '$.series_index') IS NOT NULL
-                        -- NULLIF: an override that explicitly clears the
-                        -- index (`Some("")` from the edit form) would
-                        -- otherwise CAST to 0.0 and sort to the front of
-                        -- the series. Treat empty-string as "no index"
-                        -- and let ORDER BY's NULLS LAST trail it.
+                        THEN CAST(NULLIF(json_extract(mo.overrides, '$.series_index'), '') AS REAL)
+                      ELSE b.series_index
+                    END AS series_index
+               FROM books_series_link bsl
+               JOIN books b ON b.id = bsl.book
+               LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+              WHERE bsl.series = ?1
+                AND (mo.book_uuid IS NULL
+                     OR json_type(mo.overrides, '$.series') IS NULL)
+             UNION
+             -- (2) Books whose `overrides.series` names this series.
+             SELECT b.id AS book_id,
+                    -- NULLIF: an override that explicitly clears the index
+                    -- (`Some("")` from the edit form) would otherwise CAST
+                    -- to 0.0 and sort to the front of the series. Treat
+                    -- empty-string as "no index" and let NULLS LAST trail it.
+                    CASE
+                      WHEN json_type(mo.overrides, '$.series_index') IS NOT NULL
                         THEN CAST(NULLIF(json_extract(mo.overrides, '$.series_index'), '') AS REAL)
                       ELSE b.series_index
                     END AS series_index
                FROM books b
-               LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+               JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+              WHERE json_type(mo.overrides, '$.series') IS NOT NULL
+                AND json_extract(mo.overrides, '$.series') = ?2 COLLATE NOCASE
            )
            SELECT {BOOK_COLUMNS}
            FROM books b
            JOIN effective e ON e.book_id = b.id
-           WHERE e.series_name = ? COLLATE NOCASE
            ORDER BY e.series_index NULLS LAST, b.sort, b.id
-           LIMIT ?"#
+           LIMIT ?3"#
     );
     let rows = sqlx::query(&sql)
+        .bind(series_id)
         .bind(&series_name)
         .bind(MAX_DISCOVERY_BOOKS)
         .fetch_all(pool)
@@ -286,27 +310,28 @@ pub async fn get_series(
 
     // Issue #150: `books` is capped at `MAX_DISCOVERY_BOOKS`. Count the
     // uncapped effective membership separately — reusing the same
-    // override-aware `effective` CTE — so `book_count` reflects the true
-    // series size and truncation is detectable as
-    // `book_count > books.len()`.
+    // single-pass effective-membership UNION as the SELECT (issue #154) —
+    // so `book_count` reflects the true series size and truncation is
+    // detectable as `book_count > books.len()`.
     let book_count: i64 = sqlx::query_scalar(
         r#"WITH effective AS (
-             SELECT b.id AS book_id,
-                    CASE
-                      WHEN mo.book_uuid IS NOT NULL
-                           AND json_type(mo.overrides, '$.series') IS NOT NULL
-                        THEN json_extract(mo.overrides, '$.series')
-                      ELSE (SELECT s2.name FROM books_series_link bsl
-                              JOIN series s2 ON s2.id = bsl.series
-                             WHERE bsl.book = b.id LIMIT 1)
-                    END AS series_name
-               FROM books b
+             SELECT bsl.book AS book_id
+               FROM books_series_link bsl
+               JOIN books b ON b.id = bsl.book
                LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+              WHERE bsl.series = ?1
+                AND (mo.book_uuid IS NULL
+                     OR json_type(mo.overrides, '$.series') IS NULL)
+             UNION
+             SELECT b.id AS book_id
+               FROM books b
+               JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+              WHERE json_type(mo.overrides, '$.series') IS NOT NULL
+                AND json_extract(mo.overrides, '$.series') = ?2 COLLATE NOCASE
            )
-           SELECT COUNT(*)
-           FROM effective e
-           WHERE e.series_name = ? COLLATE NOCASE"#,
+           SELECT COUNT(*) FROM effective"#,
     )
+    .bind(series_id)
     .bind(&series_name)
     .fetch_one(pool)
     .await?;
@@ -386,24 +411,42 @@ pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, sqlx::Er
     // at). The single-library, single-tenant scope means the cloud is
     // global; if/when per-library scoping lands this picks up a path
     // filter alongside the existing `WHERE EXISTS`.
+    //
+    // Issue #154: the per-row `COUNT(*)` correlated subquery (O(tags ×
+    // books)) is replaced with a single-pass `effective` membership CTE —
+    // the UNION of (1) canonical `books_tags_link` rows whose book has no
+    // `subjects` override and (2) override-extracted `(tag_name, book_id)`
+    // pairs from `json_each(mo.overrides, '$.subjects')`. The per-tag count
+    // is then a single scan of that union. The empty-array clear-all case
+    // falls out naturally: a `Some([])` override drops the book from arm
+    // (1) and yields no rows from `json_each` in arm (2). The override
+    // match stays BINARY (`je.value = t.name`, no COLLATE) to match the
+    // prior behavior. Visibility still requires ≥1 canonical link (the
+    // `EXISTS`), so a tag that exists only inside override JSON never
+    // surfaces.
     let rows = sqlx::query(
-        r#"SELECT t.name,
-             (SELECT COUNT(*)
-                FROM books b
-                LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-               WHERE CASE
-                       WHEN mo.book_uuid IS NOT NULL
-                            AND json_type(mo.overrides, '$.subjects') IS NOT NULL
-                         THEN EXISTS (
-                           SELECT 1 FROM json_each(mo.overrides, '$.subjects') je
-                            WHERE je.value = t.name
-                         )
-                       ELSE EXISTS (
-                         SELECT 1 FROM books_tags_link btl
-                          WHERE btl.book = b.id AND btl.tag = t.id
-                       )
-                     END
-             ) AS cnt
+        r#"WITH effective AS (
+             -- (1) Canonical tag memberships with no subjects override.
+             SELECT btl.tag AS tag_id, NULL AS tag_name, btl.book AS book_id
+               FROM books_tags_link btl
+               JOIN books b ON b.id = btl.book
+               LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+              WHERE mo.book_uuid IS NULL
+                 OR json_type(mo.overrides, '$.subjects') IS NULL
+             UNION
+             -- (2) Override-extracted subject memberships. UNION (not ALL)
+             -- dedupes duplicate subject strings within one override array
+             -- so a book with `["fiction","fiction"]` still counts once,
+             -- matching the prior `EXISTS` semantics.
+             SELECT NULL AS tag_id, je.value AS tag_name, b.id AS book_id
+               FROM books b
+               JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+               JOIN json_each(mo.overrides, '$.subjects') je
+              WHERE json_type(mo.overrides, '$.subjects') IS NOT NULL
+           )
+           SELECT t.name,
+             (SELECT COUNT(*) FROM effective e
+               WHERE e.tag_id = t.id OR e.tag_name = t.name) AS cnt
            FROM tags t
            WHERE EXISTS (
              SELECT 1 FROM books_tags_link btl WHERE btl.tag = t.id
@@ -1068,6 +1111,54 @@ mod tests {
         let overridden = series.books.iter().find(|b| b.id == standalone_id).unwrap();
         assert_eq!(overridden.series_id, Some(saga_id));
         assert_eq!(overridden.series.as_deref(), Some("Saga"));
+    }
+    #[tokio::test]
+    async fn get_series_reorders_canonical_member_via_index_only_override() {
+        // Issue #154 guard: a `series_index` override on a book that is
+        // *already canonically* in this series (no `series` override) must
+        // still drive ordering. The pre-#154 `effective` CTE computed the
+        // index independently of the name; the single-pass UNION rewrite
+        // must preserve that — otherwise repositioning a book you didn't
+        // move silently no-ops on the series page.
+        let (pool, _guard) = seed_discovery_fixture().await;
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+        let saga_id = series_id_by_name(&pool, "Saga").await;
+
+        // "Saga: Book One" is canonically index 1, "Book Two" index 2.
+        // Override Book One's index to 5 (no series change) so it now
+        // trails Book Two.
+        let books = list_books(&pool, "/lib").await.unwrap();
+        let book_one = books.iter().find(|b| b.filename == "saga1.epub").unwrap();
+        let uuid = book_one.unique_identifier.clone().unwrap();
+        let ov = MetadataOverrides {
+            series_index: Some("5".into()),
+            ..Default::default()
+        };
+        upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+            .await
+            .unwrap();
+
+        let series = get_series(&pool, saga_id)
+            .await
+            .unwrap()
+            .expect("series exists");
+        assert_eq!(
+            series.book_count, 2,
+            "membership is unchanged by an index-only override"
+        );
+        let titles: Vec<_> = series
+            .books
+            .iter()
+            .map(|b| b.title.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            titles,
+            vec!["Saga: Book Two".to_string(), "Saga: Book One".to_string()],
+            "index-only override on a canonical member must re-sort it",
+        );
     }
     #[tokio::test]
     async fn get_series_excludes_books_whose_override_clears_series() {

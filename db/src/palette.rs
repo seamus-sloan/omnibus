@@ -151,27 +151,43 @@ pub async fn search_palette(
     // least one canonical link row in this library so we don't list
     // authors that exist only as a string inside override JSON (no
     // navigable id), matching the rest of the palette's behavior.
+    //
+    // Issue #154: the per-author correlated `COUNT(*)` is replaced with a
+    // single-pass `effective` membership CTE (scoped to the library up
+    // front) — the UNION of (1) canonical `books_authors_link` rows whose
+    // book has no `creators` override and (2) override-extracted creator
+    // names from `json_each(mo.overrides, '$.creators')`. Each visible
+    // author's count is then a single scan of that union. UNION (not ALL)
+    // dedupes a creator repeated within one override array, matching the
+    // prior `EXISTS` semantics. The override name match stays BINARY
+    // (`= a.name`, no COLLATE) exactly as before. The empty-array clear-all
+    // case falls out: a `Some([])` override drops the book from arm (1) and
+    // yields no `json_each` rows in arm (2).
     let authors: Vec<PaletteAuthorHit> = sqlx::query(
         r#"
+        WITH effective AS (
+          SELECT bal.author AS author_id, NULL AS author_name, bal.book AS book_id
+            FROM books_authors_link bal
+            JOIN books b ON b.id = bal.book
+            JOIN libraries l2 ON l2.id = b.library_id
+            LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+           WHERE l2.path = ?1
+             AND (mo.book_uuid IS NULL
+                  OR json_type(mo.overrides, '$.creators') IS NULL)
+          UNION
+          SELECT NULL AS author_id,
+                 json_extract(je.value, '$.name') AS author_name,
+                 b.id AS book_id
+            FROM books b
+            JOIN libraries l2 ON l2.id = b.library_id
+            JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+            JOIN json_each(mo.overrides, '$.creators') je
+           WHERE l2.path = ?1
+             AND json_type(mo.overrides, '$.creators') IS NOT NULL
+        )
         SELECT a.id, a.name,
-          (SELECT COUNT(*)
-             FROM books b
-             JOIN libraries l2 ON l2.id = b.library_id
-             LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-            WHERE l2.path = ?1
-              AND CASE
-                    WHEN mo.book_uuid IS NOT NULL
-                         AND json_type(mo.overrides, '$.creators') IS NOT NULL
-                      THEN EXISTS (
-                        SELECT 1 FROM json_each(mo.overrides, '$.creators') je
-                         WHERE json_extract(je.value, '$.name') = a.name
-                      )
-                    ELSE EXISTS (
-                      SELECT 1 FROM books_authors_link bal
-                       WHERE bal.book = b.id AND bal.author = a.id
-                    )
-                  END
-          ) AS book_count
+          (SELECT COUNT(*) FROM effective e
+            WHERE e.author_id = a.id OR e.author_name = a.name) AS book_count
         FROM authors a
         WHERE a.name LIKE ?2 ESCAPE '\'
           AND EXISTS (
@@ -207,24 +223,44 @@ pub async fn search_palette(
     // still requires at least one canonical link in this library so we
     // don't list series that exist only inside override JSON (no
     // navigable id).
+    //
+    // Issue #154: the per-series correlated `COUNT(*)` is replaced with a
+    // single-pass `effective` membership CTE (scoped to the library up
+    // front) — the UNION of (1) canonical `books_series_link` rows whose
+    // book has no `series` override and (2) the scalar `overrides.series`
+    // string for books that do. Each visible series' count is then a single
+    // scan of that union. The override match stays BINARY
+    // (`json_extract(...) = s.name`, no COLLATE) exactly as before. The
+    // clear-all case (`Some("")`) falls out: it drops the book from arm (1)
+    // and the empty string won't equal any real series name in arm (2). The
+    // `author_display` subquery below is unchanged (not a count — out of
+    // scope for #154). UNION (not ALL) is harmless here (a book has one
+    // scalar series override) but keeps the shape uniform with the other
+    // sites.
     let series: Vec<PaletteSeriesHit> = sqlx::query(
         r#"
+        WITH effective AS (
+          SELECT bsl.series AS series_id, NULL AS series_name, bsl.book AS book_id
+            FROM books_series_link bsl
+            JOIN books b ON b.id = bsl.book
+            JOIN libraries l2 ON l2.id = b.library_id
+            LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+           WHERE l2.path = ?1
+             AND (mo.book_uuid IS NULL
+                  OR json_type(mo.overrides, '$.series') IS NULL)
+          UNION
+          SELECT NULL AS series_id,
+                 json_extract(mo.overrides, '$.series') AS series_name,
+                 b.id AS book_id
+            FROM books b
+            JOIN libraries l2 ON l2.id = b.library_id
+            JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+           WHERE l2.path = ?1
+             AND json_type(mo.overrides, '$.series') IS NOT NULL
+        )
         SELECT s.id, s.name,
-          (SELECT COUNT(*)
-             FROM books b
-             JOIN libraries l2 ON l2.id = b.library_id
-             LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-            WHERE l2.path = ?1
-              AND CASE
-                    WHEN mo.book_uuid IS NOT NULL
-                         AND json_type(mo.overrides, '$.series') IS NOT NULL
-                      THEN json_extract(mo.overrides, '$.series') = s.name
-                    ELSE EXISTS (
-                      SELECT 1 FROM books_series_link bsl
-                       WHERE bsl.book = b.id AND bsl.series = s.id
-                    )
-                  END
-          ) AS book_count,
+          (SELECT COUNT(*) FROM effective e
+            WHERE e.series_id = s.id OR e.series_name = s.name) AS book_count,
           (SELECT
              CASE
                WHEN mo2.book_uuid IS NOT NULL
@@ -276,27 +312,40 @@ pub async fn search_palette(
     // Visibility still requires at least one canonical link in this
     // library so we don't list tags that exist only inside override
     // JSON (no navigable id).
+    //
+    // Issue #154: the per-tag correlated `COUNT(*)` is replaced with a
+    // single-pass `effective` membership CTE (scoped to the library up
+    // front) — the UNION of (1) canonical `books_tags_link` rows whose book
+    // has no `subjects` override and (2) override-extracted subject strings
+    // from `json_each(mo.overrides, '$.subjects')`. UNION (not ALL) dedupes
+    // duplicate subject strings within one override array, matching the
+    // prior `EXISTS` semantics. The override match stays BINARY
+    // (`je.value = t.name`, no COLLATE). The empty-array clear-all case
+    // falls out: a `Some([])` override drops the book from arm (1) and
+    // yields no `json_each` rows in arm (2).
     let tags: Vec<PaletteTagHit> = sqlx::query(
         r#"
+        WITH effective AS (
+          SELECT btl.tag AS tag_id, NULL AS tag_name, btl.book AS book_id
+            FROM books_tags_link btl
+            JOIN books b ON b.id = btl.book
+            JOIN libraries l2 ON l2.id = b.library_id
+            LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+           WHERE l2.path = ?1
+             AND (mo.book_uuid IS NULL
+                  OR json_type(mo.overrides, '$.subjects') IS NULL)
+          UNION
+          SELECT NULL AS tag_id, je.value AS tag_name, b.id AS book_id
+            FROM books b
+            JOIN libraries l2 ON l2.id = b.library_id
+            JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+            JOIN json_each(mo.overrides, '$.subjects') je
+           WHERE l2.path = ?1
+             AND json_type(mo.overrides, '$.subjects') IS NOT NULL
+        )
         SELECT t.id, t.name,
-          (SELECT COUNT(*)
-             FROM books b
-             JOIN libraries l2 ON l2.id = b.library_id
-             LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-            WHERE l2.path = ?1
-              AND CASE
-                    WHEN mo.book_uuid IS NOT NULL
-                         AND json_type(mo.overrides, '$.subjects') IS NOT NULL
-                      THEN EXISTS (
-                        SELECT 1 FROM json_each(mo.overrides, '$.subjects') je
-                         WHERE je.value = t.name
-                      )
-                    ELSE EXISTS (
-                      SELECT 1 FROM books_tags_link btl
-                       WHERE btl.book = b.id AND btl.tag = t.id
-                    )
-                  END
-          ) AS book_count
+          (SELECT COUNT(*) FROM effective e
+            WHERE e.tag_id = t.id OR e.tag_name = t.name) AS book_count
         FROM tags t
         WHERE t.name LIKE ?2 ESCAPE '\'
           AND EXISTS (
@@ -1237,25 +1286,31 @@ mod tests {
                 .join("\n")
         }
 
-        // Authors — override-aware count, must still drive through the
-        // covering `books_authors_link` index when checking visibility
-        // and when the no-override branch of the CASE runs.
+        // Authors — single-pass effective-membership CTE (issue #154).
+        // Canonical arm (1) of the union must still drive through the
+        // `books_authors_link` index (the library-scoped join), not a full
+        // scan, and the visibility `EXISTS` must too.
         let plan = plan_text(
             &pool,
-            "SELECT a.id, a.name, \
-              (SELECT COUNT(*) FROM books b \
+            "WITH effective AS ( \
+               SELECT bal.author AS author_id, NULL AS author_name, bal.book AS book_id \
+                 FROM books_authors_link bal \
+                 JOIN books b ON b.id = bal.book \
                  JOIN libraries l2 ON l2.id = b.library_id \
                  LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
                 WHERE l2.path = ?1 \
-                  AND CASE \
-                        WHEN mo.book_uuid IS NOT NULL \
-                             AND json_type(mo.overrides, '$.creators') IS NOT NULL \
-                          THEN EXISTS (SELECT 1 FROM json_each(mo.overrides, '$.creators') je \
-                                        WHERE json_extract(je.value, '$.name') = a.name) \
-                        ELSE EXISTS (SELECT 1 FROM books_authors_link bal \
-                                      WHERE bal.book = b.id AND bal.author = a.id) \
-                      END \
-              ) AS book_count \
+                  AND (mo.book_uuid IS NULL OR json_type(mo.overrides, '$.creators') IS NULL) \
+               UNION \
+               SELECT NULL AS author_id, json_extract(je.value, '$.name') AS author_name, b.id AS book_id \
+                 FROM books b \
+                 JOIN libraries l2 ON l2.id = b.library_id \
+                 JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
+                 JOIN json_each(mo.overrides, '$.creators') je \
+                WHERE l2.path = ?1 AND json_type(mo.overrides, '$.creators') IS NOT NULL \
+             ) \
+             SELECT a.id, a.name, \
+               (SELECT COUNT(*) FROM effective e \
+                 WHERE e.author_id = a.id OR e.author_name = a.name) AS book_count \
              FROM authors a \
              WHERE a.name LIKE ?2 ESCAPE '\\' \
                AND EXISTS (SELECT 1 FROM books_authors_link bal \
@@ -1271,24 +1326,29 @@ mod tests {
             "authors plan should not full-scan the link table:\n{plan}"
         );
 
-        // Series — override-aware count + author_display, must still drive
-        // through the `books_series_link` index for visibility and the
-        // no-override branch of the CASE.
+        // Series — single-pass effective-membership CTE (issue #154).
+        // Canonical arm (1) and the visibility `EXISTS` must still drive
+        // through the `books_series_link` index, not a full scan.
         let plan = plan_text(
             &pool,
-            "SELECT s.id, s.name, \
-              (SELECT COUNT(*) FROM books b \
+            "WITH effective AS ( \
+               SELECT bsl.series AS series_id, NULL AS series_name, bsl.book AS book_id \
+                 FROM books_series_link bsl \
+                 JOIN books b ON b.id = bsl.book \
                  JOIN libraries l2 ON l2.id = b.library_id \
                  LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
                 WHERE l2.path = ?1 \
-                  AND CASE \
-                        WHEN mo.book_uuid IS NOT NULL \
-                             AND json_type(mo.overrides, '$.series') IS NOT NULL \
-                          THEN json_extract(mo.overrides, '$.series') = s.name \
-                        ELSE EXISTS (SELECT 1 FROM books_series_link bsl \
-                                      WHERE bsl.book = b.id AND bsl.series = s.id) \
-                      END \
-              ) AS book_count \
+                  AND (mo.book_uuid IS NULL OR json_type(mo.overrides, '$.series') IS NULL) \
+               UNION \
+               SELECT NULL AS series_id, json_extract(mo.overrides, '$.series') AS series_name, b.id AS book_id \
+                 FROM books b \
+                 JOIN libraries l2 ON l2.id = b.library_id \
+                 JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
+                WHERE l2.path = ?1 AND json_type(mo.overrides, '$.series') IS NOT NULL \
+             ) \
+             SELECT s.id, s.name, \
+               (SELECT COUNT(*) FROM effective e \
+                 WHERE e.series_id = s.id OR e.series_name = s.name) AS book_count \
              FROM series s \
              WHERE s.name LIKE ?2 ESCAPE '\\' \
                AND EXISTS (SELECT 1 FROM books_series_link bsl \
@@ -1304,25 +1364,30 @@ mod tests {
             "series plan should not full-scan the link table:\n{plan}"
         );
 
-        // Tags — override-aware count, must still drive through the
-        // `books_tags_link` index for visibility and the no-override
-        // branch of the CASE.
+        // Tags — single-pass effective-membership CTE (issue #154).
+        // Canonical arm (1) and the visibility `EXISTS` must still drive
+        // through the `books_tags_link` index, not a full scan.
         let plan = plan_text(
             &pool,
-            "SELECT t.id, t.name, \
-              (SELECT COUNT(*) FROM books b \
+            "WITH effective AS ( \
+               SELECT btl.tag AS tag_id, NULL AS tag_name, btl.book AS book_id \
+                 FROM books_tags_link btl \
+                 JOIN books b ON b.id = btl.book \
                  JOIN libraries l2 ON l2.id = b.library_id \
                  LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
                 WHERE l2.path = ?1 \
-                  AND CASE \
-                        WHEN mo.book_uuid IS NOT NULL \
-                             AND json_type(mo.overrides, '$.subjects') IS NOT NULL \
-                          THEN EXISTS (SELECT 1 FROM json_each(mo.overrides, '$.subjects') je \
-                                        WHERE je.value = t.name) \
-                        ELSE EXISTS (SELECT 1 FROM books_tags_link btl \
-                                      WHERE btl.book = b.id AND btl.tag = t.id) \
-                      END \
-              ) AS book_count \
+                  AND (mo.book_uuid IS NULL OR json_type(mo.overrides, '$.subjects') IS NULL) \
+               UNION \
+               SELECT NULL AS tag_id, je.value AS tag_name, b.id AS book_id \
+                 FROM books b \
+                 JOIN libraries l2 ON l2.id = b.library_id \
+                 JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
+                 JOIN json_each(mo.overrides, '$.subjects') je \
+                WHERE l2.path = ?1 AND json_type(mo.overrides, '$.subjects') IS NOT NULL \
+             ) \
+             SELECT t.id, t.name, \
+               (SELECT COUNT(*) FROM effective e \
+                 WHERE e.tag_id = t.id OR e.tag_name = t.name) AS book_count \
              FROM tags t \
              WHERE t.name LIKE ?2 ESCAPE '\\' \
                AND EXISTS (SELECT 1 FROM books_tags_link btl \
