@@ -86,45 +86,74 @@ pub struct ChipEditorProps {
     /// `getByRole("option", { name })`.
     #[props(default = "chip-editor".to_string())]
     pub testid_prefix: String,
+    /// When `true`, the inline `<input>` receives `autofocus` so the
+    /// dropdown surfaces on first paint. Used by the landing-page
+    /// Authors-cell expansion sub-row so admins don't have to click
+    /// twice (once to expand, once to focus the input). Off by default
+    /// to keep the F5.1 metadata-edit page from stealing focus from
+    /// the page's other fields on mount.
+    #[props(default = false)]
+    pub autofocus: bool,
 }
 
 #[component]
 pub fn ChipEditor(props: ChipEditorProps) -> Element {
     let mut input = use_signal(String::new);
     let mut highlight = use_signal::<Option<usize>>(|| None);
+    // Focus state drives the "open-on-focus" dropdown behavior the
+    // design comp asks for: clicking into the input surfaces the top
+    // `MAX_SUGGESTIONS` candidates immediately so the admin can pick
+    // by sight, without having to type a character first to "wake up"
+    // the autocomplete. `onblur` clears it (and the highlight) so the
+    // dropdown collapses when focus leaves.
+    let mut focused = use_signal(|| false);
 
     // Filter on every render. Reads the suggestion pool by reference
     // so we never clone the underlying Vec — only the ≤5 matches that
     // actually make it into the dropdown get cloned out.
     //
-    // `query_lc` is also used below to decide whether to render the
-    // "+ Create '<query>'" footer row — empty query suppresses both
-    // the dropdown and the create row.
+    // When `query_lc` is empty AND the input is focused, we surface
+    // the first `MAX_SUGGESTIONS` not-already-chosen items so the
+    // dropdown is useful on first focus. When `query_lc` is non-empty
+    // we substring-filter as before.
     let query_lc = input().trim().to_lowercase();
     let filtered: Vec<SuggestionItem> = {
         let suggestions = props.suggestions.read();
-        if query_lc.is_empty() || suggestions.is_empty() {
+        if suggestions.is_empty() {
             Vec::new()
         } else {
-            // Normalize both sides with `to_lowercase()` (Unicode-aware)
-            // so the dedup check matches what `commit()` uses. The old
-            // `eq_ignore_ascii_case` path could let non-ASCII variants
-            // ("Maas"/"Máas") slip past the dedup.
+            // Normalize via `to_lowercase()` (Unicode-aware) so the
+            // dedup-against-existing-values check matches what
+            // `commit()` uses. The old `eq_ignore_ascii_case` path
+            // could let non-ASCII variants ("Maas"/"Máas") slip past.
             let current: std::collections::HashSet<String> = props
                 .values
                 .read()
                 .iter()
                 .map(|s| s.to_lowercase())
                 .collect();
-            suggestions
-                .iter()
-                .filter(|item| {
-                    let lc = item.name.to_lowercase();
-                    lc.contains(&query_lc) && !current.contains(&lc)
-                })
-                .take(MAX_SUGGESTIONS)
-                .cloned()
-                .collect()
+            if query_lc.is_empty() {
+                if focused() {
+                    suggestions
+                        .iter()
+                        .filter(|item| !current.contains(&item.name.to_lowercase()))
+                        .take(MAX_SUGGESTIONS)
+                        .cloned()
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            } else {
+                suggestions
+                    .iter()
+                    .filter(|item| {
+                        let lc = item.name.to_lowercase();
+                        lc.contains(&query_lc) && !current.contains(&lc)
+                    })
+                    .take(MAX_SUGGESTIONS)
+                    .cloned()
+                    .collect()
+            }
         }
     };
 
@@ -220,6 +249,14 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                     "data-testid": "{testid_input}",
                     placeholder: "{props.placeholder}",
                     value: "{input}",
+                    autofocus: props.autofocus,
+                    onfocus: move |_| {
+                        focused.set(true);
+                    },
+                    onblur: move |_| {
+                        focused.set(false);
+                        highlight.set(None);
+                    },
                     oninput: move |e| {
                         input.set(e.value());
                         highlight.set(None);
