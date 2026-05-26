@@ -154,8 +154,10 @@ pub(crate) fn find_override_cover_file(uuid: &str) -> Option<(String, Vec<u8>)> 
 }
 
 /// Load a book's cover image bytes + mime type from disk. The `id` parameter
-/// is the `books.id` primary key (so the `/api/covers/:id` URL shape stays
-/// stable); internally we look up the book's `uuid` and read the file.
+/// is the `books.id` primary key — the REST surface is uuid-keyed at
+/// `/api/covers/{uuid}` (`server/src/backend.rs`), where the handler resolves
+/// the uuid to an id via `resolve_book_id_by_uuid` before calling this. Inside,
+/// we look up the book's `uuid` again and read the cover file off disk.
 ///
 /// **F5.1:** User-uploaded override covers take precedence. When the
 /// `metadata_overrides` table flags `has_cover_override`, the override file

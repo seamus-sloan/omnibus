@@ -5,8 +5,8 @@
 use std::path::Path;
 
 /// Deterministic UUIDv5 derived from `(library_path, filename)` so reindexing
-/// the same file produces the same uuid. Keeps `/api/covers/:id` URLs stable
-/// across reindex cycles even as the primary `books.id` renumbers.
+/// the same file produces the same uuid. Keeps `/api/covers/{uuid}` URLs
+/// stable across reindex cycles even as the primary `books.id` renumbers.
 ///
 /// Implemented as `Uuid::new_v5(NAMESPACE_URL, "{library_path}\0{filename}")`.
 /// Issue #94: the previous implementation used
