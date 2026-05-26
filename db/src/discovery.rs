@@ -157,9 +157,10 @@ pub async fn get_author(
         .collect();
     let overrides_map = load_overrides_bulk(pool, &uuids).await?;
     for book in &mut books {
-        if let Some(uuid) = book.unique_identifier.as_deref() {
+        let uuid_owned = book.unique_identifier.clone();
+        if let Some(uuid) = uuid_owned.as_deref() {
             if let Some((ov, has_cover_ov)) = overrides_map.get(uuid) {
-                apply_overrides(book, ov, *has_cover_ov);
+                apply_overrides(book, uuid, ov, *has_cover_ov);
             }
         }
     }
@@ -319,9 +320,10 @@ pub async fn get_series(
         .collect();
     let overrides_map = load_overrides_bulk(pool, &uuids).await?;
     for book in &mut books {
-        if let Some(uuid) = book.unique_identifier.as_deref() {
+        let uuid_owned = book.unique_identifier.clone();
+        if let Some(uuid) = uuid_owned.as_deref() {
             if let Some((ov, has_cover_ov)) = overrides_map.get(uuid) {
-                apply_overrides(book, ov, *has_cover_ov);
+                apply_overrides(book, uuid, ov, *has_cover_ov);
             }
         }
         // Pin `series_id` / `series` to the parent series for every

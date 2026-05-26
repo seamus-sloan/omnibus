@@ -359,9 +359,13 @@ pub async fn list_books(
         .collect();
     let overrides_map = load_overrides_bulk(pool, &uuids).await?;
     for book in &mut out {
-        if let Some(uuid) = book.unique_identifier.as_deref() {
+        // Snapshot uuid into an owned local so the borrow-check sees the
+        // overrides_map lookup as independent of the &mut book passed into
+        // apply_overrides below.
+        let uuid_owned = book.unique_identifier.clone();
+        if let Some(uuid) = uuid_owned.as_deref() {
             if let Some((ov, has_cover_ov)) = overrides_map.get(uuid) {
-                apply_overrides(book, ov, *has_cover_ov);
+                apply_overrides(book, uuid, ov, *has_cover_ov);
             }
         }
     }
@@ -602,7 +606,7 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
 
     // F5.1: merge user-supplied metadata overrides.
     if let Some((ov, has_cover_ov)) = get_metadata_overrides(pool, &uuid).await? {
-        apply_overrides(&mut book, &ov, has_cover_ov);
+        apply_overrides(&mut book, &uuid, &ov, has_cover_ov);
     }
 
     // `apply_overrides` rewrites `book.series` from the JSON blob but
@@ -889,9 +893,13 @@ pub async fn search_books(
         .collect();
     let overrides_map = load_overrides_bulk(pool, &uuids).await?;
     for book in &mut out {
-        if let Some(uuid) = book.unique_identifier.as_deref() {
+        // Snapshot uuid into an owned local so the borrow-check sees the
+        // overrides_map lookup as independent of the &mut book passed into
+        // apply_overrides below.
+        let uuid_owned = book.unique_identifier.clone();
+        if let Some(uuid) = uuid_owned.as_deref() {
             if let Some((ov, has_cover_ov)) = overrides_map.get(uuid) {
-                apply_overrides(book, ov, *has_cover_ov);
+                apply_overrides(book, uuid, ov, *has_cover_ov);
             }
         }
     }

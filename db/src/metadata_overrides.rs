@@ -228,6 +228,7 @@ pub(crate) async fn load_overrides_bulk(
 /// replace entirely when present.
 pub(crate) fn apply_overrides(
     book: &mut EbookMetadata,
+    uuid: &str,
     ov: &MetadataOverrides,
     has_cover_override: bool,
 ) {
@@ -259,8 +260,10 @@ pub(crate) fn apply_overrides(
         book.subjects = s.clone();
     }
     if has_cover_override {
-        // Ensure cover_url is set even if the original had no cover.
-        book.cover_url = Some(format!("/api/covers/{}", book.id));
+        // Ensure cover_url is set even if the original had no cover. The
+        // REST route is uuid-keyed (`/api/covers/{uuid}`), matching the
+        // non-override cover_url construction in books.rs — never `book.id`.
+        book.cover_url = Some(format!("/api/covers/{uuid}"));
     }
     book.has_override = true;
 }
