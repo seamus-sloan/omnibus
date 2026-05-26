@@ -4,7 +4,8 @@
 //! SSR/hydration: the trigger is always rendered (empty placeholder
 //! initials in the pre-hydration phase) so the topbar markup is stable
 //! and `expectNavVisible` finds it without racing the auth ping. The
-//! post-mount `current_user()` effect then either fills in real initials
+//! App-wide [`crate::CurrentUser`] context — populated once by the boot
+//! effect in [`crate::App`] — then either fills in real initials
 //! (auth'd) or swaps the trigger for a `Log in` link (unauth). The panel
 //! only opens once we have a real user.
 
@@ -13,7 +14,7 @@ use dioxus_router::{use_navigator, Link};
 use omnibus_shared::UserSummary;
 
 use crate::components::atrium::{persist_theme, Theme};
-use crate::Route;
+use crate::{use_current_user, Route};
 
 /// Derive 1–2 character avatar initials from a username. Empty input falls
 /// back to "?".
@@ -28,36 +29,23 @@ pub(crate) fn initials_for(username: &str) -> String {
 #[cfg(any(feature = "web", feature = "server"))]
 #[component]
 pub fn UserMenu() -> Element {
-    // `mut` is unused on SSR-only builds; the signal is only `.set()` from
-    // the `web`-gated branches below.
-    #[cfg_attr(not(feature = "web"), allow(unused_mut))]
-    let mut authed = use_signal(|| Option::<Option<UserSummary>>::None);
     let mut open = use_signal(|| false);
 
-    #[cfg(feature = "web")]
-    use_effect(move || {
-        spawn(async move {
-            // Only an explicit `Ok(None)` (status 401) flips to the
-            // unauth state. Transient errors (429 from the per-IP
-            // `/api/auth/*` rate limit, network blips, etc.) leave
-            // `authed` as `None` so the topbar keeps showing the
-            // placeholder trigger — better than briefly swapping to
-            // "Log in" mid-session and letting parallel Playwright
-            // workers race the 10-req/60s budget on /api/auth/me.
-            match crate::data::current_user().await {
-                Ok(slot) => authed.set(Some(slot)),
-                Err(_) => {}
-            }
-        });
-    });
-
-    let snapshot = authed();
+    // Read the App-wide cached `/api/auth/me` result instead of firing our
+    // own fetch on every mount. The boot effect in `App` fills this in
+    // once; we just re-render reactively when it changes.
+    //
+    // Outer `None` = not yet resolved (pre-hydration on SSR, or a
+    // transient error left the cache empty). Inner `None` = explicit 401.
+    // Inner `Some(u)` = authenticated.
+    let snapshot = use_current_user().0();
     // SSR / pre-hydration: render the trigger (empty placeholder initials)
     // so the topbar markup is stable. WASM hydrates the same DOM, then the
-    // `current_user()` effect resolves: if Some(user), initials fill in
-    // and the dropdown becomes interactive; if None, swap to a Log-in
-    // link. The panel only renders when we have a real user — clicking
-    // the placeholder trigger before auth resolves is a no-op visually.
+    // App-level boot effect resolves the cached user: if Some(user),
+    // initials fill in and the dropdown becomes interactive; if None,
+    // swap to a Log-in link. The panel only renders when we have a real
+    // user — clicking the placeholder trigger before auth resolves is a
+    // no-op visually.
     let user = match &snapshot {
         Some(Some(u)) => Some(u.clone()),
         _ => None,

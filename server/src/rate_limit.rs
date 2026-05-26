@@ -19,6 +19,13 @@
 //! Default policy (`RateLimiter::new`) is tuned for the auth endpoints:
 //! 10 requests / 60s / IP. Search uses a separate limiter built via
 //! [`RateLimiter::with_policy`] with a tighter budget (30 / 10s).
+//!
+//! The auth limiter is mounted via [`rate_limit_paths`] with a prefix
+//! allow-list of `/api/auth/{login,register,logout}` — `/api/auth/me` is
+//! deliberately exempt. `/me` is an authenticated read of the caller's
+//! own row and presents no brute-force surface, so sharing the 10/60s
+//! bucket with credential endpoints just throttled legitimate UI boots
+//! (and parallel Playwright workers from the loopback IP).
 
 use axum::{
     extract::{ConnectInfo, Request, State},
@@ -264,6 +271,89 @@ mod tests {
                 "non-matching /api/rpc/* path must bypass the limiter"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn auth_limiter_throttles_login_but_not_me() {
+        // Mirrors the `main.rs` auth-router wiring: a default RateLimiter
+        // mounted on the auth router via `rate_limit_paths` with a prefix
+        // allow-list that *excludes* `/api/auth/me`. Verifies that bursting
+        // /me past the 10/60s default budget never trips the limiter, while
+        // /login on the same IP still does. Guards against future regression
+        // where someone re-mounts the auth router with `rate_limit_by_ip`
+        // (which would re-include /me in the bucket).
+        use axum::middleware::from_fn_with_state;
+        use axum::{body::Body, routing::get, routing::post, Router};
+        use tower::ServiceExt;
+
+        let limiter = Arc::new(RateLimiter::new()); // default 10/60s
+        let prefixes: Arc<Vec<&'static str>> = Arc::new(vec![
+            "/api/auth/login",
+            "/api/auth/register",
+            "/api/auth/logout",
+        ]);
+        let app = Router::new()
+            .route("/api/auth/me", get(|| async { "ok" }))
+            .route("/api/auth/login", post(|| async { "ok" }))
+            .layer(from_fn_with_state((limiter, prefixes), rate_limit_paths));
+
+        // Burst /me far past the 10/60s budget — every request must pass.
+        for i in 0..(MAX_REQUESTS as usize * 3) {
+            let res = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/auth/me")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::OK,
+                "/api/auth/me must bypass the auth limiter (request #{i})"
+            );
+        }
+
+        // /login on the same shared bucket (oneshot has no ConnectInfo so
+        // everything resolves to the 0.0.0.0 fallback) must still throttle
+        // after MAX_REQUESTS hits. The /me burst above did NOT consume from
+        // the bucket, so the first MAX_REQUESTS logins all succeed.
+        for i in 0..MAX_REQUESTS {
+            let res = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/auth/login")
+                        .method("POST")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::OK,
+                "/api/auth/login within budget (request #{i})"
+            );
+        }
+        let over = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth/login")
+                    .method("POST")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            over.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "/api/auth/login must still be limited"
+        );
     }
 
     #[tokio::test]

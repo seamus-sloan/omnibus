@@ -73,7 +73,7 @@ migrations/         — numbered SQL migrations embedded via sqlx::migrate!
 ### frontend/src/
 
 ```
-lib.rs              — Route, App, styles, ScreenLayout (feature-gated)
+lib.rs              — Route, App, styles, ScreenLayout (feature-gated); also owns the App-wide `CurrentUser` context (`use_current_user`) — a single `/api/auth/me` fetch on boot fills it, components gate `is_admin` off the cached signal instead of refetching per mount, and a `web_auth_state` subscription refills on login / clears on 401. Web/SSR only — mobile uses bearer tokens.
 data.rs             — Feature-gated data transport (mobile=reqwest, web/server=rpc); transport fns return Result<T, DataError> (thiserror enum: Network/Http/Decode/Unauthorized/Other) so the 401 path pattern-matches DataError::Unauthorized instead of re-inspecting raw status codes
 view_prefs.rs       — F1.3 per-library ViewPrefs/ViewFilters persistence for the landing page (sort/filter/facet state); web → localStorage keyed by library path, mobile → in-memory map (resets on cold launch), server (SSR) → defaults so first-hydration markup matches. Shape lives in omnibus-shared for a future server-backed endpoint
 rpc.rs              — #[get]/#[post] server functions (mounted by dioxus::server::router); server bodies call into omnibus_db
@@ -94,7 +94,7 @@ components/user_menu.rs — avatar trigger + dropdown panel in TopNav; hosts the
 main.rs             — dioxus::launch (WASM) / dioxus::serve (native); mounts auth_router + rate-limit + origin-check
 lib.rs              — re-exports backend + auth + rate_limit under `server` feature for tests
 backend.rs          — /api/* REST router (mobile-facing) + integration tests; `/api/search/*` sub-router carries its own per-IP rate-limit layer
-rate_limit.rs       — reusable in-memory per-IP fixed-window counter + `rate_limit_by_ip` axum middleware (login/register + search endpoints); `rate_limit_paths` is a path-prefix wrapper used for `/api/rpc/search-palette`
+rate_limit.rs       — reusable in-memory per-IP fixed-window counter + `rate_limit_by_ip` axum middleware; `rate_limit_paths` is a path-prefix wrapper used for both `/api/rpc/search-palette` and the auth router (allow-list = login/register/logout, so `/api/auth/me` is deliberately exempt from the 10/60s bucket)
 auth/mod.rs         — /api/auth/{register,login,logout,me} + AuthUser/AdminUser extractors + CSRF origin-check
 auth/gate.rs        — top-level middleware gating /api/* (pass-through for /api/auth/*)
 auth/strategy.rs    — AuthStrategy trait + PasswordStrategy (OIDC/WebAuthn fit the same shape)
