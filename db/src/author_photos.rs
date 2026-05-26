@@ -336,7 +336,8 @@ pub async fn fetch_remote_image(url: &str) -> Result<(String, Vec<u8>), FetchRem
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::queries::{get_author_photo, init_db};
+    use crate::pool::init_db;
+    use crate::queries::get_author_photo;
     use wiremock::{
         matchers::{method, path, query_param},
         Mock, MockServer, ResponseTemplate,

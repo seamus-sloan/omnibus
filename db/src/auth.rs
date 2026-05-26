@@ -839,7 +839,7 @@ pub async fn put_session_key(pool: &SqlitePool, key: &[u8]) -> AuthResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::queries::init_db;
+    use crate::pool::init_db;
 
     async fn pool() -> SqlitePool {
         init_db("sqlite::memory:").await.expect("pool init")
