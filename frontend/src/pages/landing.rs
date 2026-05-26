@@ -785,8 +785,19 @@ fn EbookRow(
     // immediately, without a full library refetch. The server-side
     // merge in `rpc_save_overrides` returns the canonical merged
     // EbookMetadata which we install verbatim.
+    //
+    // Resync from the prop when the upstream `book` changes (library
+    // refetch / sort change reusing the same EbookRow instance via the
+    // filename key) — but only when no cell is mid-edit, so a save
+    // round-trip doesn't clobber an open input. `use_reactive!` keys
+    // the effect on `book` itself.
     let mut book_state: Signal<EbookMetadata> = use_signal(|| book.clone());
     let editing: Signal<Option<EditField>> = use_signal(|| None);
+    use_effect(use_reactive!(|book| {
+        if editing().is_none() {
+            book_state.set(book.clone());
+        }
+    }));
 
     let nav = use_navigator();
     let uuid_click = uuid.clone();
@@ -847,7 +858,25 @@ fn EbookRow(
         .iter()
         .map(|c| c.name.clone())
         .collect();
-    let authors_draft: Signal<Vec<String>> = use_signal(|| initial_authors);
+    let mut authors_draft: Signal<Vec<String>> = use_signal(|| initial_authors);
+    // Keep `authors_draft` in sync with `book_state.creators` so a
+    // save round-trip (which may canonicalize / reorder names on the
+    // server) doesn't leave the chip editor showing stale chips, and
+    // re-opening the cell after an external update shows the current
+    // truth. The effect is a no-op when the values already match, so
+    // the user's in-progress chip edits aren't clobbered between
+    // `on_change` and the optimistic `book_state` install.
+    use_effect(move || {
+        let canonical: Vec<String> = book_state
+            .read()
+            .creators
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
+        if *authors_draft.peek() != canonical {
+            authors_draft.set(canonical);
+        }
+    });
     let uuid_for_authors = uuid.clone();
     let url_for_authors = server_url.clone();
     let save_authors = move |new_names: Vec<String>| {
@@ -909,12 +938,21 @@ fn EbookRow(
                 onclick: move |_| {
                     // Row-level click navigates only when no cell-level
                     // edit is in progress. Each editable cell stops
-                    // propagation on click already, so this only fires
-                    // when the user clicked a non-editable area (cover,
-                    // formats, dates).
+                    // propagation on click already, but a click on a
+                    // non-editable area (cover, formats, dates) while
+                    // a cell is open would otherwise blur+save the
+                    // input AND fire the navigation. Bailing on the
+                    // editing-is-some path keeps the user on the page
+                    // while the blur-save lands.
+                    if editing().is_some() {
+                        return;
+                    }
                     nav.push(Route::BookDetail { uuid: uuid_click.clone() });
                 },
                 onkeydown: move |evt: Event<KeyboardData>| {
+                    if editing().is_some() {
+                        return;
+                    }
                     let key = evt.key();
                     if key == Key::Enter || key == Key::Character(" ".to_string()) {
                         evt.prevent_default();
@@ -963,11 +1001,14 @@ fn EbookRow(
                     col_class: "ebook-col-series".to_string(),
                     cell_testid: "ebook-cell-series".to_string(),
                     field: EditField::Series,
-                    display_value: if editing() == Some(EditField::Series) {
-                        series_text.clone()
-                    } else {
-                        series_line.clone()
-                    },
+                    // Display: "Pioneers #1" (name + index, F1.3 standard).
+                    // Edit:    "Pioneers"    (the series-name override is
+                    //                         scalar; index lives in
+                    //                         `series_index` which the
+                    //                         landing-table doesn't
+                    //                         currently expose for edit).
+                    display_value: series_line.clone(),
+                    edit_value: Some(series_text.clone()),
                     is_admin,
                     editing,
                     placeholder: "Series".to_string(),
@@ -1037,12 +1078,19 @@ fn EditableCell(
     cell_testid: String,
     field: EditField,
     display_value: String,
+    /// Separate value used to seed the input when edit mode opens.
+    /// Some cells render a richer display string than the underlying
+    /// scalar override — Series shows "Pioneers #1" but only "Pioneers"
+    /// is the series-name override. Pass `Some(bare_value)` so the
+    /// input seeds (and the blur-comparison runs against) the editable
+    /// scalar, not the rendered text. Defaults to `display_value`.
+    #[props(default)]
+    edit_value: Option<String>,
     is_admin: bool,
     editing: Signal<Option<EditField>>,
     placeholder: String,
     on_save: EventHandler<String>,
     error: Option<String>,
-    #[props(default = false)] suppress_inline_input: bool,
 ) -> Element {
     let mut editing = editing;
     let mut draft = use_signal(String::new);
@@ -1054,8 +1102,14 @@ fn EditableCell(
     };
     let admin_class = if is_admin { " ebook-cell-editable" } else { "" };
     let combined_class = format!("{col_class}{admin_class}{active_class}");
-    let initial_for_click = display_value.clone();
-    let initial_for_cancel = display_value.clone();
+    // Single source of truth for "what the cell holds right now" —
+    // used to seed the draft on click, restore it on Escape, and skip
+    // the save-on-blur round-trip when nothing actually changed.
+    let initial = edit_value.unwrap_or_else(|| display_value.clone());
+    let initial_for_click = initial.clone();
+    let initial_for_cancel = initial.clone();
+    let initial_for_enter = initial.clone();
+    let initial_for_blur = initial.clone();
     let testid_input = format!("{cell_testid}-input");
 
     rsx! {
@@ -1072,7 +1126,7 @@ fn EditableCell(
                     editing.set(Some(field));
                 }
             },
-            if is_editing && !suppress_inline_input {
+            if is_editing {
                 input {
                     class: "ebook-cell-edit",
                     "data-testid": "{testid_input}",
@@ -1085,11 +1139,19 @@ fn EditableCell(
                         match e.key() {
                             Key::Enter => {
                                 e.prevent_default();
-                                on_save.call(draft());
+                                // Stop the Enter event from bubbling to
+                                // the row-level keydown that navigates
+                                // to the book detail page.
+                                e.stop_propagation();
+                                let current = draft();
+                                if current.trim() != initial_for_enter.trim() {
+                                    on_save.call(current);
+                                }
                                 editing.set(None);
                             }
                             Key::Escape => {
                                 e.prevent_default();
+                                e.stop_propagation();
                                 draft.set(initial_for_cancel.clone());
                                 editing.set(None);
                             }
@@ -1097,12 +1159,17 @@ fn EditableCell(
                         }
                     },
                     onblur: move |_| {
-                        // Save on blur — mirrors typical
-                        // contenteditable patterns; cheap because the
-                        // server's merge skips unchanged fields and
-                        // the network failure path silently leaves
-                        // the prior display value alone.
-                        on_save.call(draft());
+                        // Save on blur only when the draft actually
+                        // changed. Clicking into a cell and clicking
+                        // back out without typing must not POST an
+                        // override equal to the scanned value (which
+                        // would leak `metadata_overrides` rows that
+                        // match the underlying scan, defeating the
+                        // F5.1 merge semantics).
+                        let current = draft();
+                        if current.trim() != initial_for_blur.trim() {
+                            on_save.call(current);
+                        }
                         editing.set(None);
                     },
                 }
