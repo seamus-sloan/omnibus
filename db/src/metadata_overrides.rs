@@ -269,7 +269,7 @@ pub(crate) fn apply_overrides(
 }
 
 /// Rebuild the `books_fts` row for the book identified by `book_uuid` using
-/// the merged metadata returned from [`crate::queries::get_book`] (canonical
+/// the merged metadata returned from [`crate::books::get_book`] (canonical
 /// taxonomy with overrides applied). Called from the override write paths
 /// so search matches what the UI displays.
 ///
