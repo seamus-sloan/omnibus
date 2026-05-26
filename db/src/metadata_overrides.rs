@@ -235,7 +235,7 @@ pub(crate) fn apply_overrides(
         book.title = Some(t.clone());
     }
     if let Some(ref d) = ov.description {
-        book.description = crate::queries::sanitize_description(Some(d.clone()));
+        book.description = crate::books::sanitize_description(Some(d.clone()));
     }
     if let Some(ref p) = ov.publisher {
         book.publisher = Some(p.clone());
@@ -285,7 +285,7 @@ pub(crate) async fn rebuild_fts_for_book(
         return Ok(());
     };
 
-    let Some(merged) = crate::queries::get_book(pool, book_id).await? else {
+    let Some(merged) = crate::books::get_book(pool, book_id).await? else {
         return Ok(());
     };
     let title = merged.title.clone().unwrap_or_default();
