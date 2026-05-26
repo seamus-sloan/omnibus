@@ -1364,9 +1364,6 @@ mod tests {
             "series plan should not full-scan the link table:\n{plan}"
         );
 
-        // Tags — override-aware count, must still drive through the
-        // `books_tags_link` index for visibility and the no-override
-        // branch of the CASE.
         // Tags — single-pass effective-membership CTE (issue #154).
         // Canonical arm (1) and the visibility `EXISTS` must still drive
         // through the `books_tags_link` index, not a full scan.
