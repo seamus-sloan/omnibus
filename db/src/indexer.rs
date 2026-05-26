@@ -47,6 +47,22 @@ pub const REFRESH_AFTER_SECS: i64 = 60 * 60;
 
 /// True when a refresh should be kicked off: no state at all, or state
 /// older than [`REFRESH_AFTER_SECS`].
+///
+/// ## Clock-failure behavior
+///
+/// The freshness check is `now - last_indexed >= REFRESH_AFTER_SECS`. If
+/// reading the wall clock fails (`SystemTime::now()` is before the UNIX
+/// epoch — only reachable with a badly misconfigured system clock), the
+/// `.unwrap_or(last)` fallback substitutes the stored `last_indexed`
+/// timestamp for `now`. That makes `now - last == 0`, so the function
+/// returns `Ok(false)` and the reindex is **silently skipped**.
+///
+/// This is a deliberate "serve stale rather than thrash the disk"
+/// tradeoff: when the clock is unreadable we can't tell how old the index
+/// is, so rather than re-scanning the library on every poll (a clock that
+/// stays broken would otherwise trigger a reindex on every call) we keep
+/// serving the existing index until the clock recovers. The behavior is
+/// pinned by `is_stale_*` tests below; change it only with intent.
 pub async fn is_stale(pool: &SqlitePool, library_path: &str) -> Result<bool, sqlx::Error> {
     let Some(last) = crate::settings::last_indexed_at(pool, library_path).await? else {
         return Ok(true);
@@ -206,8 +222,34 @@ pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::books::IndexedRow;
+    use crate::books::{list_books, IndexedRow};
+    use crate::covers::test_helpers::CoversTempDir;
     use crate::ebook::StatEntry;
+    use crate::pool::init_db;
+    use crate::sync::replace_books;
+    use crate::sync::test_helpers::indexed;
+
+    /// Seed a `libraries` row for `path` with an explicit `last_indexed`
+    /// epoch-seconds value. There's no public writer for `last_indexed`
+    /// that lets a test set an arbitrary timestamp (`sync_books` always
+    /// stamps "now"), so the `is_stale` window tests insert the row
+    /// directly — exactly the columns `last_indexed_at` reads back.
+    async fn seed_last_indexed(pool: &SqlitePool, path: &str, last_indexed: i64) {
+        sqlx::query("INSERT INTO libraries (path, display_name, last_indexed) VALUES (?, ?, ?)")
+            .bind(path)
+            .bind(path)
+            .bind(last_indexed)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    fn now_secs() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+    }
 
     fn entry(name: &str, uuid: &str, mtime: i64, size: i64) -> StatEntry {
         StatEntry {
@@ -346,5 +388,91 @@ mod tests {
         let disk = vec![entry("sub/a.epub", "uuid-a", 100, 1000)];
         let d = diff_library(&disk, &[], Path::new("/srv/library"));
         assert_eq!(d.new[0].absolute, Path::new("/srv/library/sub/a.epub"));
+    }
+
+    #[tokio::test]
+    async fn is_stale_returns_true_when_no_index_exists() {
+        // Fresh DB: the library has never been indexed, so `last_indexed_at`
+        // is None and `is_stale` short-circuits to true (kick off the first
+        // index). No `libraries` row at all is the strongest form of this.
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        assert!(is_stale(&pool, "/lib").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn is_stale_returns_false_within_window() {
+        // Indexed 30s ago — well inside REFRESH_AFTER_SECS (1h), so no
+        // reindex is due yet.
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        seed_last_indexed(&pool, "/lib", now_secs() - 30).await;
+        assert!(!is_stale(&pool, "/lib").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn is_stale_returns_true_past_window() {
+        // Indexed just past the refresh horizon (REFRESH_AFTER_SECS + 1
+        // seconds ago) — the index is stale and a reindex is due.
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        seed_last_indexed(&pool, "/lib", now_secs() - REFRESH_AFTER_SECS - 1).await;
+        assert!(is_stale(&pool, "/lib").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn reindex_propagates_scan_error_without_clearing_existing_index() {
+        // Preserve-on-failure invariant: a fatal scan error (here, a
+        // library path that doesn't exist on disk) must return Err and
+        // leave the existing index completely untouched — we'd rather
+        // serve stale-but-good data than wipe the table. Seed one book,
+        // point `reindex` at a non-existent directory, and assert both the
+        // Err and that the original row survives.
+        let _covers = CoversTempDir::new("reindex-preserve");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+
+        // A path under a temp dir that we never create — `stat_ebook_library`
+        // reports `path not found`, which `reindex` turns into a bail!.
+        let missing = format!(
+            "{}/omnibus-nonexistent-{}",
+            std::env::temp_dir().display(),
+            now_secs()
+        );
+        assert!(
+            !std::path::Path::new(&missing).exists(),
+            "test precondition: the library path must not exist"
+        );
+
+        replace_books(
+            &pool,
+            &missing,
+            vec![indexed(
+                "a.epub",
+                Some("Dracula"),
+                &["Stoker"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            list_books(&pool, &missing).await.unwrap().len(),
+            1,
+            "test precondition: the book row must be seeded"
+        );
+
+        let result = reindex(&pool, &missing).await;
+        assert!(
+            result.is_err(),
+            "reindex must surface the fatal scan error as Err"
+        );
+
+        // The pre-existing index is intact — reindex never touched the DB.
+        let after = list_books(&pool, &missing).await.unwrap();
+        assert_eq!(
+            after.len(),
+            1,
+            "a failed scan must preserve the existing index"
+        );
+        assert_eq!(after[0].title.as_deref(), Some("Dracula"));
     }
 }
