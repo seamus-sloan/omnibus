@@ -1053,6 +1053,7 @@ fn EbookRow(
                                     show_avatar: true,
                                     aria_remove_prefix: "Remove".to_string(),
                                     testid_prefix: "ebook-authors-edit".to_string(),
+                                    autofocus: true,
                                 }
                             }
                             button {
