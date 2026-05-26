@@ -266,14 +266,19 @@ test("surfaces existing authors as chip-editor suggestions and adds via ↓+Ente
   const dropdown = page.getByTestId("me-authors-suggestions");
   await expect(dropdown).toBeVisible();
   await expect(dropdown.getByRole("option", { name: /Niklaus Wirth/ })).toBeVisible();
-  // Five-row cap is enforced — even a single-char prefix never returns more.
-  // Wrap the count check in `expect.poll` so it auto-retries while the
-  // dropdown is still rendering (avoids the flaky `count()`-then-assert race).
+  // Each suggestion row now carries a book-count badge. Confirm the
+  // count text renders alongside the name — Niklaus Wirth shows up
+  // in 4 Code Quartet fixtures (and possibly elsewhere). Just assert
+  // the suffix shape ("N book" or "N books") is present on the row.
+  await expect(dropdown.getByRole("option", { name: /Niklaus Wirth.*books?/ })).toBeVisible();
+  // Five-row suggestion cap (`MAX_SUGGESTIONS=5`) PLUS the optional
+  // "+ Create '<query>'" footer row → at most 6 options when the
+  // query isn't an exact match.
   await expect
     .poll(async () => dropdown.getByRole("option").count(), {
-      message: "ChipEditor dropdown must cap at MAX_SUGGESTIONS=5 rows",
+      message: "ChipEditor dropdown options must cap at MAX_SUGGESTIONS=5 + 1 create row",
     })
-    .toBeLessThanOrEqual(5);
+    .toBeLessThanOrEqual(6);
 
   await authorInput.press("ArrowDown");
   await authorInput.press("Enter");
@@ -289,7 +294,7 @@ test("surfaces existing authors as chip-editor suggestions and adds via ↓+Ente
   await page.getByTestId("me-discard").click();
 });
 
-test("chip-editor dropdown stays hidden when no suggestion matches", async ({
+test("chip-editor surfaces the +Create row when no suggestion matches and Enter commits the typed value", async ({
   page,
   request,
 }) => {
@@ -299,10 +304,14 @@ test("chip-editor dropdown stays hidden when no suggestion matches", async ({
   const authorInput = page.getByTestId("me-authors-input");
   await authorInput.fill("ZzzMatchesNothing");
 
-  // No dropdown when nothing matches.
-  await expect(page.getByTestId("me-authors-suggestions")).toHaveCount(0);
+  // No filtered matches, but the "+ Create '<query>'" footer renders so
+  // the user can commit a brand-new value without dismissing the dropdown.
+  const dropdown = page.getByTestId("me-authors-suggestions");
+  await expect(dropdown).toBeVisible();
+  await expect(dropdown.getByRole("option", { name: /\+ Create.*ZzzMatchesNothing/ })).toBeVisible();
+  await expect(dropdown.getByRole("option")).toHaveCount(1);
 
-  // Enter still adds the raw typed value as a new chip (free-text fallback).
+  // Enter commits the typed value as a new chip (free-text fallback).
   await authorInput.press("Enter");
   await expect(page.getByText("ZzzMatchesNothing", { exact: true })).toBeVisible();
   await expect(authorInput).toHaveValue("");
