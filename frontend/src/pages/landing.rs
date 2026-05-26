@@ -50,22 +50,24 @@ pub fn LandingPage() -> Element {
     let query = use_search_query().0;
 
     // F5.9-lite: admin-only inline-edit affordances on the power-user
-    // table. Non-admins see the existing read-only cells; the
-    // `current_user` effect resolves async and gates the click handlers
-    // server-side anyway via `rpc_save_overrides`, but hiding the
-    // affordance is the UX contract. Web-only (mobile keeps the
-    // read-only landing for now per the F5.9-lite plan; admin can edit
-    // via the per-book detail page).
+    // table. Non-admins see the existing read-only cells; hiding the
+    // affordance is the UX contract — `rpc_save_overrides` enforces the
+    // real boundary server-side. Web-only (mobile keeps the read-only
+    // landing for now per the F5.9-lite plan; admin can edit via the
+    // per-book detail page).
+    //
+    // Reads from the App-wide `CurrentUser` context — no per-mount
+    // `/api/auth/me` round-trip. Reactive: re-runs on boot resolve,
+    // fresh login, or observed 401.
     #[cfg_attr(not(feature = "web"), allow(unused_mut))]
     let mut is_admin = use_signal(|| false);
     #[cfg(feature = "web")]
-    use_effect(move || {
-        spawn(async move {
-            if let Ok(Some(user)) = data::current_user().await {
-                is_admin.set(user.is_admin);
-            }
+    {
+        let user_ctx = crate::use_current_user().0;
+        use_effect(move || {
+            is_admin.set(matches!(user_ctx(), Some(Some(ref u)) if u.is_admin));
         });
-    });
+    }
 
     // Suggestion pools for the inline Authors chip editor and the
     // (currently future-reserved) Tags pool. Each item carries the

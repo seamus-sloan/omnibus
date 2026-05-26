@@ -288,6 +288,33 @@ pub fn use_search_query() -> SearchQuery {
     use_context::<SearchQuery>()
 }
 
+/// App-wide cached `/api/auth/me` result. Owned by [`App`] via
+/// `use_context_provider` so every component that needs to gate on
+/// `is_admin` (top nav avatar, landing inline edits, author Delete) reads
+/// from one signal instead of each firing its own `current_user()` round
+/// trip on mount. Without this every navigation would re-fetch `/me`
+/// from N components and race the `/api/auth/*` rate-limit budget.
+///
+/// The outer `Option` is "not yet resolved since boot" (pre-hydration on
+/// SSR, or the very first tick before the boot effect lands). The inner
+/// `Option` is "resolved": `None` means an explicit 401 (unauthenticated),
+/// `Some(u)` means authenticated. Transient errors (network blip, 429)
+/// leave the outer `None` in place so the UI keeps showing the
+/// placeholder rather than briefly swapping to "Log in".
+///
+/// Web-only: mobile uses bearer tokens via `token_store` and never hits
+/// `/api/auth/me`. The context isn't provided on mobile and
+/// [`use_current_user`] is not callable there.
+#[cfg(not(feature = "mobile"))]
+#[derive(Copy, Clone)]
+pub struct CurrentUser(pub Signal<Option<Option<omnibus_shared::UserSummary>>>);
+
+/// Convenience accessor for the cached-user context. Web/SSR only.
+#[cfg(not(feature = "mobile"))]
+pub fn use_current_user() -> CurrentUser {
+    use_context::<CurrentUser>()
+}
+
 /// Atrium design-system stylesheet (F1.7). Served as a hashed static asset
 /// via Dioxus's Manganis pipeline so the browser caches it independently of
 /// the WASM bundle.
@@ -299,6 +326,62 @@ pub fn App() -> Element {
     use_context_provider(|| SearchQuery(Signal::new(String::new())));
     #[cfg(not(feature = "mobile"))]
     use_context_provider(|| components::search_palette::PaletteOpen(Signal::new(false)));
+
+    // Cached `/api/auth/me`. Provided unconditionally on non-mobile builds
+    // so SSR can render the placeholder topbar without resolving anything;
+    // the WASM hydration phase then runs the boot effect below to fill it
+    // in once for the lifetime of the App instance.
+    #[cfg(not(feature = "mobile"))]
+    {
+        use_context_provider(|| CurrentUser(Signal::new(None)));
+    }
+
+    // Single boot-time `/me` fetch (replaces the per-component effects in
+    // user_menu / landing / author). Also subscribes to `web_auth_state`
+    // so a fresh login refills the cache and a 401 clears it without
+    // requiring a hard reload.
+    #[cfg(feature = "web")]
+    {
+        let mut slot = use_context::<CurrentUser>().0;
+        use_future(move || async move {
+            // Initial fetch on mount. Only an explicit `Ok(_)` updates
+            // state — transient errors (network blip, rate-limit 429)
+            // leave the signal at `None` so callers keep showing the
+            // pre-resolve placeholder.
+            if let Ok(resolved) = data::current_user().await {
+                slot.set(Some(resolved));
+            }
+
+            // React to subsequent auth-state transitions. `current_user`
+            // itself pings `web_auth_state` on every call (true on 200,
+            // false on 401), so the very first transition we observe
+            // here is usually `true -> true` from the initial fetch
+            // above — skip same-value updates to avoid a redundant
+            // refetch loop.
+            let mut rx = data::web_auth_state::subscribe();
+            let mut last = *rx.borrow_and_update();
+            while rx.changed().await.is_ok() {
+                let now = *rx.borrow_and_update();
+                if now == last {
+                    continue;
+                }
+                last = now;
+                if now {
+                    // Fresh login (channel flipped false -> true): refetch
+                    // so the avatar / admin gates update without a reload.
+                    if let Ok(resolved) = data::current_user().await {
+                        slot.set(Some(resolved));
+                    }
+                } else {
+                    // 401 observed elsewhere: flip to unauthenticated
+                    // immediately. ScreenLayout already drives the
+                    // /login redirect off the same channel.
+                    slot.set(Some(None));
+                }
+            }
+        });
+    }
+
     components::atrium::init_theme();
     rsx! {
         document::Title { "Omnibus" }

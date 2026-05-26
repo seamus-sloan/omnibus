@@ -93,6 +93,20 @@ fn main() {
             }
 
             let auth_limiter = Arc::new(rate_limit::RateLimiter::new());
+            // Prefix-scope the auth limiter to credential-handling endpoints
+            // only. `/api/auth/me` is an authenticated read of the caller's
+            // own row — it's hit on every web App boot (and historically
+            // on every page mount) but presents no brute-force surface, so
+            // sharing the same 10-req/60s bucket as `/login`/`/register`
+            // just throttled legitimate UI rendering (and parallel
+            // Playwright workers from the same loopback IP). Logout stays
+            // limited because a stolen token could otherwise be used to
+            // DoS revoke endpoints.
+            let auth_limiter_prefixes: Arc<Vec<&'static str>> = Arc::new(vec![
+                "/api/auth/login",
+                "/api/auth/register",
+                "/api/auth/logout",
+            ]);
             // Search RPC limiter. Mirrors the REST-side limiter's policy
             // (`backend::search_router`, 30 req / 10s) but is a SEPARATE
             // instance with its own bucket map — the two routers are built
@@ -118,8 +132,8 @@ fn main() {
                 .merge(backend::rest_router(state.clone()))
                 .merge(auth::auth_router(state.clone()).layer(
                     axum::middleware::from_fn_with_state(
-                        auth_limiter,
-                        rate_limit::rate_limit_by_ip,
+                        (auth_limiter, auth_limiter_prefixes),
+                        rate_limit::rate_limit_paths,
                     ),
                 ))
                 // Apply require_auth and origin_check at the top level so
