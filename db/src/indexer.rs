@@ -206,8 +206,8 @@ pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ebook::StatEntry;
     use crate::books::IndexedRow;
+    use crate::ebook::StatEntry;
 
     fn entry(name: &str, uuid: &str, mtime: i64, size: i64) -> StatEntry {
         StatEntry {

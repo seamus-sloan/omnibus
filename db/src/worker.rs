@@ -694,8 +694,7 @@ mod tests {
         assert_eq!(ivs.len(), 2);
         assert!(
             ivs[0].1 <= ivs[1].0,
-            "expected serialized intervals, got {:?}",
-            ivs
+            "expected serialized intervals, got {ivs:?}"
         );
     }
 
@@ -738,8 +737,7 @@ mod tests {
         assert_eq!(ivs.len(), 2);
         assert!(
             ivs[0].1 > ivs[1].0,
-            "expected overlapping intervals, got {:?}",
-            ivs
+            "expected overlapping intervals, got {ivs:?}"
         );
     }
 

@@ -31,12 +31,12 @@ pub mod worker;
 // and mirrors how `db.rs` looked before the extraction.
 pub use app_state::*;
 pub use author_photos_data::*;
-pub use browse::*;
 pub use books::{
     count_books, count_search_books, get_book, get_book_by_uuid, library_from_db,
     library_from_db_with_total, list_books, list_indexed_rows, resolve_book_id_by_uuid,
     search_books, IndexedRow, MAX_BOOKS_RETURNED,
 };
+pub use browse::*;
 pub use covers::{covers_dir, get_cover, get_last_modified_epoch};
 pub use discovery::*;
 pub use helpers::{build_fts_match, sanitize_fts_query};
