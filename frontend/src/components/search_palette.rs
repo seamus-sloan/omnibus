@@ -333,6 +333,7 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                             SpGroupHead { label: "Books", count: r.books.len() }
                             for book in r.books.iter() {
                                 SpBookRow {
+                                    key: "{book.id}",
                                     book: book.clone(),
                                     selected: has_nav && is_selected(&items, sel, &FlatItem::Book { uuid: book.uuid.clone(), title: book.title.clone() }),
                                     on_click: {
@@ -351,6 +352,7 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                             SpGroupHead { label: "Authors", count: r.authors.len() }
                             for author in r.authors.iter() {
                                 SpAuthorRow {
+                                    key: "{author.id}",
                                     author: author.clone(),
                                     selected: has_nav && is_selected(&items, sel, &FlatItem::Author { id: author.id, name: author.name.clone() }),
                                     on_click: {
@@ -369,6 +371,7 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                             SpGroupHead { label: "Series", count: r.series.len() }
                             for s in r.series.iter() {
                                 SpSeriesRow {
+                                    key: "{s.id}",
                                     series: s.clone(),
                                     selected: has_nav && is_selected(&items, sel, &FlatItem::Series { id: s.id, name: s.name.clone() }),
                                     on_click: {
@@ -387,6 +390,7 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                             SpGroupHead { label: "Tags", count: r.tags.len() }
                             for tag in r.tags.iter() {
                                 SpTagRow {
+                                    key: "{tag.id}",
                                     tag: tag.clone(),
                                     selected: has_nav && is_selected(&items, sel, &FlatItem::Tag { id: tag.id, name: tag.name.clone() }),
                                     on_click: {
