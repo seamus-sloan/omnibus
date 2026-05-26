@@ -48,7 +48,7 @@ pub const REFRESH_AFTER_SECS: i64 = 60 * 60;
 /// True when a refresh should be kicked off: no state at all, or state
 /// older than [`REFRESH_AFTER_SECS`].
 pub async fn is_stale(pool: &SqlitePool, library_path: &str) -> Result<bool, sqlx::Error> {
-    let Some(last) = queries::last_indexed_at(pool, library_path).await? else {
+    let Some(last) = crate::settings::last_indexed_at(pool, library_path).await? else {
         return Ok(true);
     };
     let now = std::time::SystemTime::now()
