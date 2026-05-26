@@ -61,8 +61,10 @@ pub const REFRESH_AFTER_SECS: i64 = 60 * 60;
 /// tradeoff: when the clock is unreadable we can't tell how old the index
 /// is, so rather than re-scanning the library on every poll (a clock that
 /// stays broken would otherwise trigger a reindex on every call) we keep
-/// serving the existing index until the clock recovers. The behavior is
-/// pinned by `is_stale_*` tests below; change it only with intent.
+/// serving the existing index until the clock recovers. The decision is
+/// factored into the pure [`is_stale_decision`] so the window boundaries
+/// and this clock-failure fallback (`now == last`) are pinned by the
+/// `is_stale_decision_*` tests below; change it only with intent.
 pub async fn is_stale(pool: &SqlitePool, library_path: &str) -> Result<bool, sqlx::Error> {
     let Some(last) = crate::settings::last_indexed_at(pool, library_path).await? else {
         return Ok(true);
@@ -70,8 +72,18 @@ pub async fn is_stale(pool: &SqlitePool, library_path: &str) -> Result<bool, sql
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
+        // Clock unreadable: substitute `last` so `now - last == 0` and we
+        // serve stale (see the doc comment above).
         .unwrap_or(last);
-    Ok(now - last >= REFRESH_AFTER_SECS)
+    Ok(is_stale_decision(last, now))
+}
+
+/// Pure freshness decision used by [`is_stale`]: stale when the index is at
+/// least [`REFRESH_AFTER_SECS`] old. Factored out so the window boundaries
+/// and the clock-failure fallback (which calls this with `now == last`) are
+/// unit-testable without depending on a readable wall clock.
+fn is_stale_decision(last: i64, now: i64) -> bool {
+    now - last >= REFRESH_AFTER_SECS
 }
 
 /// Result of [`diff_library`]. Each bucket is what the writer should do
@@ -390,6 +402,27 @@ mod tests {
         assert_eq!(d.new[0].absolute, Path::new("/srv/library/sub/a.epub"));
     }
 
+    #[test]
+    fn is_stale_decision_respects_window_boundaries() {
+        // Pure window logic: not stale strictly inside the window, stale at
+        // and past the horizon.
+        let last = 1_700_000_000;
+        assert!(!is_stale_decision(last, last));
+        assert!(!is_stale_decision(last, last + REFRESH_AFTER_SECS - 1));
+        assert!(is_stale_decision(last, last + REFRESH_AFTER_SECS));
+        assert!(is_stale_decision(last, last + REFRESH_AFTER_SECS + 1));
+    }
+
+    #[test]
+    fn is_stale_decision_clock_failure_serves_stale() {
+        // The clock-failure fallback in `is_stale` substitutes `last` for an
+        // unreadable `now`, so the decision is evaluated with `now == last`.
+        // Pin the documented consequence: not stale (serve the existing index
+        // rather than thrash the disk on every poll).
+        let last = 1_700_000_000;
+        assert!(!is_stale_decision(last, last));
+    }
+
     #[tokio::test]
     async fn is_stale_returns_true_when_no_index_exists() {
         // Fresh DB: the library has never been indexed, so `last_indexed_at`
@@ -430,15 +463,12 @@ mod tests {
 
         // A path under a temp dir that we never create — `stat_ebook_library`
         // reports `path not found`, which `reindex` turns into a bail!.
-        let missing = format!(
-            "{}/omnibus-nonexistent-{}",
-            std::env::temp_dir().display(),
-            now_secs()
-        );
+        let missing_path = std::env::temp_dir().join(format!("omnibus-nonexistent-{}", now_secs()));
         assert!(
-            !std::path::Path::new(&missing).exists(),
+            !missing_path.exists(),
             "test precondition: the library path must not exist"
         );
+        let missing = missing_path.to_string_lossy().into_owned();
 
         replace_books(
             &pool,
