@@ -119,10 +119,6 @@ pub(crate) fn find_cover_file(uuid: &str) -> Option<(String, Vec<u8>)> {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if let Some(stem) = name_str.strip_suffix(&format!(".{uuid}")) {
-                // uuid is the prefix, not suffix; keep falling through
-                let _ = stem;
-            }
             if let Some(dot) = name_str.rfind('.') {
                 let (stem, ext) = name_str.split_at(dot);
                 if stem == uuid {
