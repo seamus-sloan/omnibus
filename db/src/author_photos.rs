@@ -20,7 +20,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use sqlx::SqlitePool;
 
-use crate::queries::{author_photo_status, upsert_author_photo, AuthorPhotoSource};
+use crate::author_photos_data::{author_photo_status, upsert_author_photo, AuthorPhotoSource};
 
 /// Default request timeout for the Open Library search + cover calls.
 const OPEN_LIBRARY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -336,8 +336,8 @@ pub async fn fetch_remote_image(url: &str) -> Result<(String, Vec<u8>), FetchRem
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::author_photos_data::get_author_photo;
     use crate::pool::init_db;
-    use crate::queries::get_author_photo;
     use wiremock::{
         matchers::{method, path, query_param},
         Mock, MockServer, ResponseTemplate,

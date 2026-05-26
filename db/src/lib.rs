@@ -7,6 +7,7 @@
 pub mod app_state;
 pub mod auth;
 pub mod author_photos;
+pub mod author_photos_data;
 pub mod books;
 pub mod covers;
 pub mod discovery;
@@ -28,6 +29,7 @@ pub mod worker;
 // instead of `omnibus_db::queries::list_books(...)`. Keeps callsites terse
 // and mirrors how `db.rs` looked before the extraction.
 pub use app_state::*;
+pub use author_photos_data::*;
 pub use books::{
     count_books, count_search_books, get_book, get_book_by_uuid, library_from_db,
     library_from_db_with_total, list_books, list_indexed_rows, resolve_book_id_by_uuid,
