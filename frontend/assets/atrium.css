@@ -1427,6 +1427,19 @@ body.atrium,
   max-height: 180px;
   overflow-y: auto;
 }
+/* Optional uppercase mini-header at the top of the dropdown
+   ("ADD AUTHOR", "ADD TAG", ...). Not selectable, not part of the
+   option list — purely a visual anchor matching the design comp. */
+.chip-editor-suggestions-header {
+  padding: 6px 10px 4px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  list-style: none;
+  cursor: default;
+}
 .chip-editor-suggestion {
   display: flex;
   align-items: baseline;
