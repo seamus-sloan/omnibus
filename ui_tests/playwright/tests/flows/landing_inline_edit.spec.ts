@@ -70,12 +70,15 @@ test("edits a title inline and saves the override via rpc_save_overrides", async
   // metadata returned by `rpc_save_overrides`.
   await expect(titleCell).toContainText("Alpha Inline Edited");
 
-  // Cleanup: revert via the F5.1 RPC so we don't leak the override.
-  const id = await fetchBookIdByTitle(request, "Alpha Inline Edited");
-  await request.post(`/api/rpc/ebook/overrides/delete`, { data: { uuid_or_id: id } }).catch(() => {});
-  // The RPC takes `uuid`, not numeric id — but fetchBookIdByTitle
-  // returns the uuid string in our codebase. The helper already
-  // resolves to the uuid; the cleanup is best-effort either way.
+  // Cleanup: revert via the F5.1 RPC so subsequent tests start from
+  // pristine fixture state. Assert the delete succeeds rather than
+  // swallowing errors — a silent failure would leak the override
+  // across the suite and turn this into an order-dependent flake.
+  const uuid = await fetchBookIdByTitle(request, "Alpha Inline Edited");
+  const revertResp = await request.post(`/api/rpc/ebook/overrides/delete`, {
+    data: { uuid },
+  });
+  expect(revertResp.status(), "cleanup revert must succeed").toBe(200);
 });
 
 test("inline edit save error keeps the row showing the prior value", async ({ page }) => {
