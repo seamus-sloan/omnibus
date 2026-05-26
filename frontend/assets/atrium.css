@@ -1428,6 +1428,9 @@ body.atrium,
   overflow-y: auto;
 }
 .chip-editor-suggestion {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
   padding: 6px 10px;
   font-size: 13px;
   color: var(--ink-1);
@@ -1436,6 +1439,45 @@ body.atrium,
 .chip-editor-suggestion:hover,
 .chip-editor-suggestion.is-active {
   background: var(--bg-2);
+}
+.chip-editor-suggestion-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chip-editor-suggestion-count {
+  color: var(--ink-3);
+  font-size: 11px;
+  font-family: var(--mono);
+  flex-shrink: 0;
+}
+/* Quiet "↩ Enter" affix — only surfaces on the focused row, mirrors
+   the design comp where each row gets a return glyph on highlight. */
+.chip-editor-suggestion-enter {
+  color: var(--ink-3);
+  font-size: 11px;
+  opacity: 0;
+  flex-shrink: 0;
+}
+.chip-editor-suggestion:hover .chip-editor-suggestion-enter,
+.chip-editor-suggestion.is-active .chip-editor-suggestion-enter {
+  opacity: 0.8;
+}
+/* "+ Create '…'" footer row — separated from the suggestion stack
+   above it with a hairline and a slightly more muted name color, so
+   it reads as a fallback rather than another canonical entry. */
+.chip-editor-suggestion--create {
+  border-top: 1px solid var(--line-2);
+  margin-top: 2px;
+  padding-top: 8px;
+}
+.chip-editor-suggestion--create .chip-editor-suggestion-name {
+  color: var(--ink-2);
+}
+.chip-editor-suggestion-quote {
+  color: var(--ink-1);
 }
 
 /* Series sub-grid */

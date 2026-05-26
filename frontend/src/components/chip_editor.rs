@@ -27,6 +27,25 @@ use dioxus::prelude::*;
 /// user requirement from the F5.9-lite plan.
 const MAX_SUGGESTIONS: usize = 5;
 
+/// One entry in the autocomplete pool. Carries the canonical name plus
+/// the number of books currently linked to it, both of which the
+/// dropdown row renders. Counts are display-only — the component never
+/// branches on them.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SuggestionItem {
+    pub name: String,
+    pub count: usize,
+}
+
+impl SuggestionItem {
+    pub fn new(name: impl Into<String>, count: usize) -> Self {
+        Self {
+            name: name.into(),
+            count,
+        }
+    }
+}
+
 #[derive(Props, PartialEq, Clone)]
 pub struct ChipEditorProps {
     /// The chip list. Shared with the consumer so the parent can read
@@ -38,11 +57,14 @@ pub struct ChipEditorProps {
     /// the consumer can persist on change (e.g. POST overrides) without
     /// having to re-subscribe to the signal.
     pub on_change: EventHandler<Vec<String>>,
-    /// Candidate pool, read by reference each render via the wrapping
-    /// `ReadSignal`. An empty signal suppresses the dropdown
-    /// entirely. Callers usually own a `Signal<Vec<String>>` and pass
-    /// it directly — `From<Signal<T>>` does the wrap.
-    pub suggestions: ReadSignal<Vec<String>>,
+    /// Candidate pool. Each item carries the canonical name plus the
+    /// number of books currently linked to it, which the dropdown
+    /// renders to the right of the name as a quiet "1 book" / "23
+    /// books" hint (so admins can tell apart "Min Jin Lee" with 1
+    /// book from "Min Kym" with 0). Read by reference each render via
+    /// the wrapping `ReadSignal`; an empty signal suppresses the
+    /// dropdown entirely.
+    pub suggestions: ReadSignal<Vec<SuggestionItem>>,
     /// When true, each chip is prefixed with an uppercase-initials
     /// avatar. Used by author chips (`me-avatar`); off for tags.
     #[props(default = false)]
@@ -71,20 +93,23 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
     let mut input = use_signal(String::new);
     let mut highlight = use_signal::<Option<usize>>(|| None);
 
-    // Filter on every render. Reads the suggestion pool via the
-    // ReadSignal so we never clone the underlying Vec — only the
-    // ≤5 matches that actually make it into the dropdown get cloned
-    // out.
-    let filtered: Vec<String> = {
-        let query = input().trim().to_lowercase();
+    // Filter on every render. Reads the suggestion pool by reference
+    // so we never clone the underlying Vec — only the ≤5 matches that
+    // actually make it into the dropdown get cloned out.
+    //
+    // `query_lc` is also used below to decide whether to render the
+    // "+ Create '<query>'" footer row — empty query suppresses both
+    // the dropdown and the create row.
+    let query_lc = input().trim().to_lowercase();
+    let filtered: Vec<SuggestionItem> = {
         let suggestions = props.suggestions.read();
-        if query.is_empty() || suggestions.is_empty() {
+        if query_lc.is_empty() || suggestions.is_empty() {
             Vec::new()
         } else {
             // Normalize both sides with `to_lowercase()` (Unicode-aware)
-            // so the dedup check matches what we use in `commit()`. The
-            // old `eq_ignore_ascii_case` path could let non-ASCII
-            // variants ("Maas"/"Máas") slip past the dedup.
+            // so the dedup check matches what `commit()` uses. The old
+            // `eq_ignore_ascii_case` path could let non-ASCII variants
+            // ("Maas"/"Máas") slip past the dedup.
             let current: std::collections::HashSet<String> = props
                 .values
                 .read()
@@ -93,9 +118,9 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                 .collect();
             suggestions
                 .iter()
-                .filter(|s| {
-                    let lc = s.to_lowercase();
-                    lc.contains(&query) && !current.contains(&lc)
+                .filter(|item| {
+                    let lc = item.name.to_lowercase();
+                    lc.contains(&query_lc) && !current.contains(&lc)
                 })
                 .take(MAX_SUGGESTIONS)
                 .cloned()
@@ -103,7 +128,32 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
         }
     };
 
+    // Render the "+ Create '<query>'" footer row when the user has typed
+    // something but no surviving suggestion is an exact (case-
+    // insensitive) match. This is the Tom-Yorke-style affordance: type
+    // a brand-new name, hit Enter or click the row, and the chip is
+    // added without you having to dismiss the dropdown first.
+    let typed = input().trim().to_string();
+    let show_create_row = !typed.is_empty()
+        && !filtered
+            .iter()
+            .any(|item| item.name.to_lowercase() == query_lc)
+        && !props
+            .values
+            .read()
+            .iter()
+            .any(|v| v.to_lowercase() == query_lc);
+
+    // Total selectable rows in the dropdown: filtered suggestions plus
+    // an optional "+ Create" trailing row. The create row, when shown,
+    // is at index `filtered.len()`. ↑/↓ navigation wraps across the
+    // whole set so the admin can land on Create with one keystroke
+    // after a typed-from-scratch entry.
     let filtered_for_keydown = filtered.clone();
+    let create_value_for_keydown = typed.clone();
+    let create_row_index = filtered_for_keydown.len();
+    let total_rows = filtered_for_keydown.len() + usize::from(show_create_row);
+
     let mut values_sig = props.values;
     let on_change = props.on_change;
     let mut commit = move |name: String| {
@@ -178,28 +228,36 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                         match e.key() {
                             Key::Enter => {
                                 e.prevent_default();
-                                let typed = input();
+                                let typed_now = input();
+                                // Dispatch to highlighted row (suggestion or
+                                // create) when present; otherwise commit the
+                                // raw typed value.
                                 let value = match highlight() {
-                                    Some(idx) => filtered_for_keydown
-                                        .get(idx)
-                                        .cloned()
-                                        .unwrap_or(typed),
-                                    None => typed,
+                                    Some(idx) if idx < filtered_for_keydown.len() => {
+                                        filtered_for_keydown
+                                            .get(idx)
+                                            .map(|s| s.name.clone())
+                                            .unwrap_or(typed_now)
+                                    }
+                                    Some(idx) if idx == create_row_index && show_create_row => {
+                                        create_value_for_keydown.clone()
+                                    }
+                                    _ => typed_now,
                                 };
                                 commit(value);
                             }
-                            Key::ArrowDown if !filtered_for_keydown.is_empty() => {
+                            Key::ArrowDown if total_rows > 0 => {
                                 e.prevent_default();
                                 let next = match highlight() {
-                                    Some(i) if i + 1 < filtered_for_keydown.len() => Some(i + 1),
+                                    Some(i) if i + 1 < total_rows => Some(i + 1),
                                     _ => Some(0),
                                 };
                                 highlight.set(next);
                             }
-                            Key::ArrowUp if !filtered_for_keydown.is_empty() => {
+                            Key::ArrowUp if total_rows > 0 => {
                                 e.prevent_default();
                                 let next = match highlight() {
-                                    Some(0) | None => Some(filtered_for_keydown.len() - 1),
+                                    Some(0) | None => Some(total_rows - 1),
                                     Some(i) => Some(i - 1),
                                 };
                                 highlight.set(next);
@@ -211,14 +269,14 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                         }
                     },
                 }
-                if !filtered.is_empty() {
+                if !filtered.is_empty() || show_create_row {
                     ul {
                         class: "chip-editor-suggestions",
                         role: "listbox",
                         "data-testid": "{testid_suggestions}",
-                        for (i, suggestion) in filtered.iter().cloned().enumerate() {
+                        for (i, item) in filtered.iter().cloned().enumerate() {
                             li {
-                                key: "{i}-{suggestion}",
+                                key: "{i}-{item.name}",
                                 class: if Some(i) == highlight() {
                                     "chip-editor-suggestion is-active"
                                 } else {
@@ -230,13 +288,47 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                                 // input's blur, so the input keeps focus
                                 // for the next add.
                                 onmousedown: {
-                                    let suggestion = suggestion.clone();
+                                    let name = item.name.clone();
                                     move |e: Event<MouseData>| {
                                         e.prevent_default();
-                                        commit(suggestion.clone());
+                                        commit(name.clone());
                                     }
                                 },
-                                "{suggestion}"
+                                span { class: "chip-editor-suggestion-name", "{item.name}" }
+                                span { class: "chip-editor-suggestion-count",
+                                    if item.count == 1 { "1 book" } else { "{item.count} books" }
+                                }
+                                span { class: "chip-editor-suggestion-enter",
+                                    aria_hidden: "true",
+                                    "\u{21a9}"
+                                }
+                            }
+                        }
+                        if show_create_row {
+                            li {
+                                key: "__create__-{typed}",
+                                class: if Some(create_row_index) == highlight() {
+                                    "chip-editor-suggestion chip-editor-suggestion--create is-active"
+                                } else {
+                                    "chip-editor-suggestion chip-editor-suggestion--create"
+                                },
+                                role: "option",
+                                aria_selected: if Some(create_row_index) == highlight() { "true" } else { "false" },
+                                onmousedown: {
+                                    let value = typed.clone();
+                                    move |e: Event<MouseData>| {
+                                        e.prevent_default();
+                                        commit(value.clone());
+                                    }
+                                },
+                                span { class: "chip-editor-suggestion-name",
+                                    "+ Create "
+                                    span { class: "chip-editor-suggestion-quote", "\"{typed}\"" }
+                                }
+                                span { class: "chip-editor-suggestion-enter",
+                                    aria_hidden: "true",
+                                    "\u{21a9}"
+                                }
                             }
                         }
                     }
@@ -246,19 +338,27 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
     }
 }
 
-/// Helper: flat-uniq a slice of `Vec<String>`-shaped iterables into a
-/// sorted candidate pool suitable for [`ChipEditorProps::suggestions`].
-/// Case-insensitive dedup (keeping the first-seen casing) so a library
-/// with mixed `Sarah J. Maas` / `sarah j. maas` collapses to one row.
-pub fn collect_suggestions<'a, I>(sources: I) -> Vec<String>
+/// Helper: dedup a list of `(name, count)` pairs into a sorted
+/// suggestion pool. Case-insensitive on the name (first-seen casing
+/// wins); when duplicates collide, the higher count wins so a
+/// freshly-imported `Sarah J. Maas` with 8 books beats a stale empty
+/// `sarah j. maas` row. Output is alphabetic case-insensitive — feed
+/// straight into [`ChipEditorProps::suggestions`].
+pub fn collect_suggestions<I>(sources: I) -> Vec<SuggestionItem>
 where
-    I: IntoIterator<Item = &'a String>,
+    I: IntoIterator<Item = SuggestionItem>,
 {
     use std::collections::BTreeMap;
-    let mut seen: BTreeMap<String, String> = BTreeMap::new();
-    for s in sources {
-        let key = s.to_lowercase();
-        seen.entry(key).or_insert_with(|| s.clone());
+    let mut seen: BTreeMap<String, SuggestionItem> = BTreeMap::new();
+    for item in sources {
+        let key = item.name.to_lowercase();
+        seen.entry(key)
+            .and_modify(|existing| {
+                if item.count > existing.count {
+                    existing.count = item.count;
+                }
+            })
+            .or_insert(item);
     }
     seen.into_values().collect()
 }
@@ -268,25 +368,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn collect_suggestions_dedups_case_insensitively() {
-        let a = "Sarah J. Maas".to_string();
-        let b = "sarah j. maas".to_string();
-        let c = "Brandon Sanderson".to_string();
-        let out = collect_suggestions([&a, &b, &c]);
+    fn collect_suggestions_dedups_case_insensitively_and_keeps_higher_count() {
+        let out = collect_suggestions([
+            SuggestionItem::new("Sarah J. Maas", 8),
+            SuggestionItem::new("sarah j. maas", 3),
+            SuggestionItem::new("Brandon Sanderson", 12),
+        ]);
         assert_eq!(out.len(), 2, "case-variant duplicates must collapse");
-        assert!(out.iter().any(|s| s == "Brandon Sanderson"));
-        // First-seen casing wins.
-        assert!(out.iter().any(|s| s == "Sarah J. Maas"));
+        let maas = out.iter().find(|i| i.name == "Sarah J. Maas").unwrap();
+        assert_eq!(maas.count, 8, "higher count wins on collision");
+        let sanderson = out.iter().find(|i| i.name == "Brandon Sanderson").unwrap();
+        assert_eq!(sanderson.count, 12);
     }
 
     #[test]
     fn collect_suggestions_returns_sorted_output() {
-        let a = "Zelda".to_string();
-        let b = "Ada".to_string();
-        let c = "Mira".to_string();
-        let out = collect_suggestions([&a, &b, &c]);
-        // BTreeMap iterates by lowercased key, so output is alphabetic
-        // case-insensitive.
-        assert_eq!(out, vec!["Ada", "Mira", "Zelda"]);
+        let out = collect_suggestions([
+            SuggestionItem::new("Zelda", 0),
+            SuggestionItem::new("Ada", 5),
+            SuggestionItem::new("Mira", 1),
+        ]);
+        let names: Vec<&str> = out.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, vec!["Ada", "Mira", "Zelda"]);
     }
 }

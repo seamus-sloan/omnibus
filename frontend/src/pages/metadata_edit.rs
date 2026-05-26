@@ -16,7 +16,7 @@ use dioxus_router::{navigator, Link};
 use omnibus_shared::{Contributor, EbookMetadata, MetadataOverrides};
 
 use crate::components::atrium::Cover;
-use crate::components::chip_editor::{collect_suggestions, ChipEditor};
+use crate::components::chip_editor::{collect_suggestions, ChipEditor, SuggestionItem};
 use crate::{data, use_server_url, Route};
 
 /// Top-level metadata edit page component, mounted at `/books/:uuid/edit`.
@@ -110,22 +110,30 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
     });
     let filename = use_signal(|| book.filename.clone());
 
-    // Suggestion pools for the ChipEditor dropdowns. Empty until the
-    // mount-time fetches resolve; an empty signal renders no dropdown.
-    let mut author_suggestions: Signal<Vec<String>> = use_signal(Vec::new);
-    let mut tag_suggestions: Signal<Vec<String>> = use_signal(Vec::new);
+    // Suggestion pools for the ChipEditor dropdowns. Each item carries
+    // the book-count the dropdown row renders next to the name. Empty
+    // until the mount-time fetches resolve; an empty signal renders no
+    // dropdown.
+    let mut author_suggestions: Signal<Vec<SuggestionItem>> = use_signal(Vec::new);
+    let mut tag_suggestions: Signal<Vec<SuggestionItem>> = use_signal(Vec::new);
     {
         let url = server_url.clone();
         use_effect(move || {
             let url = url.clone();
             spawn(async move {
                 if let Ok(authors) = data::list_authors(&url).await {
-                    let names: Vec<String> = authors.iter().map(|a| a.name.clone()).collect();
-                    author_suggestions.set(collect_suggestions(names.iter()));
+                    let items: Vec<SuggestionItem> = authors
+                        .into_iter()
+                        .map(|a| SuggestionItem::new(a.name, a.book_count))
+                        .collect();
+                    author_suggestions.set(collect_suggestions(items));
                 }
                 if let Ok(tags) = data::get_tag_cloud(&url).await {
-                    let names: Vec<String> = tags.iter().map(|t| t.name.clone()).collect();
-                    tag_suggestions.set(collect_suggestions(names.iter()));
+                    let items: Vec<SuggestionItem> = tags
+                        .into_iter()
+                        .map(|t| SuggestionItem::new(t.name, t.count))
+                        .collect();
+                    tag_suggestions.set(collect_suggestions(items));
                 }
             });
         });
