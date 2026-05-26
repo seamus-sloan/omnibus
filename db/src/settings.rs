@@ -66,7 +66,7 @@ pub async fn set_settings(pool: &SqlitePool, settings: &Settings) -> Result<(), 
     .await?;
     tx.commit().await?;
 
-    crate::queries::delete_cover_files_for(&orphan_uuids);
+    crate::covers::delete_cover_files_for(&orphan_uuids);
     Ok(())
 }
 

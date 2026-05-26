@@ -6,7 +6,7 @@ use std::path::Path;
 
 use sqlx::{sqlite::SqlitePoolOptions, Executor, SqlitePool};
 
-use crate::queries::covers_dir;
+use crate::covers::covers_dir;
 
 /// Schema migrations embedded at compile time from `db/migrations/`.
 /// Every schema change ships as a new numbered `.sql` file there; applied

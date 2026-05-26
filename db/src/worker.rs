@@ -575,7 +575,7 @@ impl Worker {
                 last_modified_epoch,
             } => {
                 let pool = self.pool.clone();
-                let cover = match crate::queries::get_cover(&pool, book_id).await {
+                let cover = match crate::covers::get_cover(&pool, book_id).await {
                     Ok(Some((_mime, bytes))) => bytes,
                     Ok(None) => {
                         return TaskOutcome::Err(format!("no cover for book {book_id}"));
