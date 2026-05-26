@@ -169,20 +169,25 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
     };
 
     // Render the "+ Create '<query>'" footer row when the user has typed
-    // something but no surviving suggestion is an exact (case-
-    // insensitive) match. This is the Tom-Yorke-style affordance: type
-    // a brand-new name, hit Enter or click the row, and the chip is
-    // added without you having to dismiss the dropdown first.
+    // something but no entry in the *full* suggestion pool (and no
+    // currently-chosen value) is an exact case-insensitive match.
+    // Checking against `filtered` alone would let an exact-match author
+    // outside the top-5 truncation falsely surface a Create row for a
+    // name that already exists in the library.
     let typed = input().trim().to_string();
-    let show_create_row = !typed.is_empty()
-        && !filtered
+    let exact_match_in_pool = !query_lc.is_empty()
+        && props
+            .suggestions
+            .read()
             .iter()
-            .any(|item| item.name.to_lowercase() == query_lc)
-        && !props
+            .any(|item| item.name.to_lowercase() == query_lc);
+    let exact_match_in_values = !query_lc.is_empty()
+        && props
             .values
             .read()
             .iter()
             .any(|v| v.to_lowercase() == query_lc);
+    let show_create_row = !typed.is_empty() && !exact_match_in_pool && !exact_match_in_values;
 
     // Total selectable rows in the dropdown: filtered suggestions plus
     // an optional "+ Create" trailing row. The create row, when shown,
@@ -276,6 +281,11 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                         match e.key() {
                             Key::Enter => {
                                 e.prevent_default();
+                                // Stop Enter from bubbling to host
+                                // handlers (e.g. the landing table
+                                // row's keydown that navigates to
+                                // the book detail page).
+                                e.stop_propagation();
                                 let typed_now = input();
                                 // Dispatch to highlighted row (suggestion or
                                 // create) when present; otherwise commit the
@@ -296,6 +306,7 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                             }
                             Key::ArrowDown if total_rows > 0 => {
                                 e.prevent_default();
+                                e.stop_propagation();
                                 let next = match highlight() {
                                     Some(i) if i + 1 < total_rows => Some(i + 1),
                                     _ => Some(0),
@@ -304,6 +315,7 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                             }
                             Key::ArrowUp if total_rows > 0 => {
                                 e.prevent_default();
+                                e.stop_propagation();
                                 let next = match highlight() {
                                     Some(0) | None => Some(total_rows - 1),
                                     Some(i) => Some(i - 1),
@@ -311,6 +323,7 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                                 highlight.set(next);
                             }
                             Key::Escape => {
+                                e.stop_propagation();
                                 highlight.set(None);
                                 props.on_close.call(());
                             }
