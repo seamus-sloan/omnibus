@@ -4,6 +4,14 @@
 
 use std::path::Path;
 
+/// Maximum query length (in chars) accepted by the FTS5 search entrypoints
+/// (`search_books`, `count_search_books`, `search_palette`). Inputs beyond
+/// this are truncated before reaching [`build_fts_match`] / `LIKE` so the
+/// generated MATCH expression and pattern length stay bounded regardless of
+/// caller payload size (issue #189). Module-wide so the limit is tunable in
+/// one place across every search path.
+pub(crate) const MAX_QUERY_LEN: usize = 256;
+
 /// Deterministic UUIDv5 derived from `(library_path, filename)` so reindexing
 /// the same file produces the same uuid. Keeps `/api/covers/{uuid}` URLs
 /// stable across reindex cycles even as the primary `books.id` renumbers.

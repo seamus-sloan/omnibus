@@ -12,13 +12,8 @@ use omnibus_shared::{
 };
 
 use crate::books::parse_json_array;
-use crate::helpers::build_fts_match;
+use crate::helpers::{build_fts_match, MAX_QUERY_LEN};
 use crate::metadata_overrides::load_overrides_bulk;
-
-/// Maximum query length (in chars) accepted by `search_palette`. Inputs
-/// beyond this are truncated to bound FTS5 expression size and LIKE
-/// pattern length.
-const MAX_QUERY_LEN: usize = 256;
 
 /// Search palette — grouped results for the command-palette overlay (F1.5).
 ///
