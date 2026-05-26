@@ -88,12 +88,23 @@ pub struct ChipEditorProps {
     pub testid_prefix: String,
     /// When `true`, the inline `<input>` receives `autofocus` so the
     /// dropdown surfaces on first paint. Used by the landing-page
-    /// Authors-cell expansion sub-row so admins don't have to click
-    /// twice (once to expand, once to focus the input). Off by default
-    /// to keep the F5.1 metadata-edit page from stealing focus from
-    /// the page's other fields on mount.
+    /// Authors cell so admins don't have to click twice (once to
+    /// enter edit mode, once to focus the input). Off by default to
+    /// keep the F5.1 metadata-edit page from stealing focus from the
+    /// page's other fields on mount.
     #[props(default = false)]
     pub autofocus: bool,
+    /// Optional uppercase mini-header rendered at the top of the
+    /// suggestion dropdown — "ADD AUTHOR" / "ADD TAG" in the F5.9-lite
+    /// design comp. Empty string (the default) suppresses the header
+    /// entirely.
+    #[props(default)]
+    pub dropdown_header: String,
+    /// Fired when the user presses Escape inside the input. Useful for
+    /// host components that want to exit a wrapping edit mode in
+    /// addition to clearing the dropdown highlight. Default no-op.
+    #[props(default)]
+    pub on_close: EventHandler<()>,
 }
 
 #[component]
@@ -301,6 +312,7 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                             }
                             Key::Escape => {
                                 highlight.set(None);
+                                props.on_close.call(());
                             }
                             _ => {}
                         }
@@ -311,6 +323,13 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                         class: "chip-editor-suggestions",
                         role: "listbox",
                         "data-testid": "{testid_suggestions}",
+                        if !props.dropdown_header.is_empty() {
+                            li {
+                                class: "chip-editor-suggestions-header",
+                                aria_hidden: "true",
+                                "{props.dropdown_header}"
+                            }
+                        }
                         for (i, item) in filtered.iter().cloned().enumerate() {
                             li {
                                 key: "{i}-{item.name}",

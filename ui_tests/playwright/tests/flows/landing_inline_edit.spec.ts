@@ -115,26 +115,30 @@ test("inline edit save error keeps the row showing the prior value", async ({ pa
   await expect(titleCell).toContainText(originalText);
 });
 
-test("clicking the Authors cell expands the chip editor sub-row", async ({ page }) => {
+test("clicking the Authors cell renders the chip editor inline", async ({ page }) => {
   await gotoReady(page, "/");
 
   const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
   const authorsCell = row.getByTestId("ebook-cell-author");
   await authorsCell.click();
 
-  // The expansion row should appear directly below the main row.
-  const editRow = page.getByTestId("ebook-authors-edit-row");
-  await expect(editRow).toBeVisible();
+  // The chip-editor input is rendered *inside* the cell (no sub-row).
+  // testid-prefixed `ebook-cell-author` per the AuthorsCell component.
+  const chipInput = authorsCell.getByTestId("ebook-cell-author-input");
+  await expect(chipInput).toBeVisible();
 
-  // The chip editor's input is testid-prefixed `ebook-authors-edit`.
-  await expect(editRow.getByTestId("ebook-authors-edit-input")).toBeVisible();
-
-  // Existing authors render as chips inside the expansion.
+  // Existing author chips render inside the same cell.
   for (const name of TARGET.authors) {
-    await expect(editRow.getByText(name, { exact: true })).toBeVisible();
+    await expect(authorsCell.getByText(name, { exact: true })).toBeVisible();
   }
 
-  // Close the editor with the Done button.
-  await editRow.getByTestId("ebook-authors-edit-close").click();
-  await expect(editRow).toHaveCount(0);
+  // The autocomplete dropdown auto-opens on focus, showing the
+  // library-wide author suggestion pool with an ADD AUTHOR header.
+  const dropdown = authorsCell.getByTestId("ebook-cell-author-suggestions");
+  await expect(dropdown).toBeVisible();
+  await expect(dropdown.getByText("ADD AUTHOR")).toBeVisible();
+
+  // Escape exits edit mode.
+  await chipInput.press("Escape");
+  await expect(chipInput).toHaveCount(0);
 });

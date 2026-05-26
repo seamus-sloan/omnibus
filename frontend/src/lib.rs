@@ -993,15 +993,20 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
    `<input>` is borderless and transparent — the cell IS the editor. */
 .ebook-cell-editable {
   cursor: text;
-  transition: box-shadow 0.1s ease;
+  transition: outline 0.1s ease, background 0.1s ease;
 }
+/* Dashed amber border on hover — matches the F5.9-lite design comp's
+   "editable affordance" treatment. `outline` (not `border`) so the
+   surrounding column widths stay locked. */
 .ebook-cell-editable:hover {
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) 35%, transparent);
+  outline: 1px dashed color-mix(in oklch, var(--accent) 55%, transparent);
+  outline-offset: -1px;
 }
 .ebook-cell-editing,
 .ebook-cell-editable.ebook-cell-editing:hover {
   background: var(--bg-0);
-  box-shadow: inset 0 0 0 1px var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 .ebook-cell-edit {
   width: 100%;
@@ -1013,6 +1018,24 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   padding: 0;
   outline: none;
 }
+/* Wraps the ChipEditor inside the Authors cell so the chips + input
+   + dropdown all live within the td. Allows chips to wrap; the cell
+   grows vertically as needed. The dropdown (`chip-editor-suggestions`)
+   anchors via its own `position: relative` wrap. */
+.ebook-cell-chip-host {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  width: 100%;
+}
+.ebook-cell-chip-host .chip-editor-input-wrap {
+  min-width: 80px;
+}
+/* Author cell allows vertical growth so wrapped chips don't get clipped.
+   Hover-state cell shows the same default vertical alignment as the
+   read-only rows to avoid a height flash on first hover. */
+.ebook-col-author { vertical-align: middle; }
 .ebook-edit-row td.ebook-edit-cell {
   background: var(--bg-1);
   padding: 10px 12px;

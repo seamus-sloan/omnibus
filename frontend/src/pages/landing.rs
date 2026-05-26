@@ -786,7 +786,7 @@ fn EbookRow(
     // merge in `rpc_save_overrides` returns the canonical merged
     // EbookMetadata which we install verbatim.
     let mut book_state: Signal<EbookMetadata> = use_signal(|| book.clone());
-    let mut editing: Signal<Option<EditField>> = use_signal(|| None);
+    let editing: Signal<Option<EditField>> = use_signal(|| None);
 
     let nav = use_navigator();
     let uuid_click = uuid.clone();
@@ -898,11 +898,8 @@ fn EbookRow(
     let language = display_book.language.clone().unwrap_or_default();
     let series_text = display_book.series.clone().unwrap_or_default();
 
-    let editing_authors = editing() == Some(EditField::Authors);
-
     rsx! {
-        Fragment {
-            tr {
+        tr {
                 class: "ebook-row",
                 "data-testid": "{row_testid}",
                 id: "{row_testid}",
@@ -951,21 +948,16 @@ fn EbookRow(
                     on_save: { let save = save_field.clone(); move |v: String| save(EditField::Title, v) },
                     error: display_book.error.clone(),
                 }
-                EditableCell {
-                    // Authors cell — clicking expands a chip-editor row
-                    // below this <tr> rather than swapping to an input
-                    // in place, so the wide chip layout doesn't fight
-                    // the narrow column.
-                    col_class: "ebook-col-author".to_string(),
-                    cell_testid: "ebook-cell-author".to_string(),
-                    field: EditField::Authors,
-                    display_value: authors_text.clone(),
+                AuthorsCell {
                     is_admin,
                     editing,
-                    placeholder: String::new(),
-                    on_save: move |_: String| {}, // chip editor handles save
-                    error: None,
-                    suppress_inline_input: true,
+                    authors_draft,
+                    authors_text: authors_text.clone(),
+                    suggestions: author_suggestions,
+                    on_change: {
+                        let save = save_authors;
+                        move |names: Vec<String>| save(names)
+                    },
                 }
                 EditableCell {
                     col_class: "ebook-col-series".to_string(),
@@ -1027,49 +1019,6 @@ fn EbookRow(
                     error: None,
                 }
             }
-            // Authors edit row — spans the full table width when the
-            // Author cell is active. Renders the F5.9-lite ChipEditor
-            // with the library-wide author suggestion pool so admins
-            // can re-attribute books to an existing canonical name in
-            // one click.
-            if editing_authors && is_admin {
-                tr {
-                    class: "ebook-edit-row",
-                    "data-testid": "ebook-authors-edit-row",
-                    td {
-                        colspan: "10",
-                        class: "ebook-edit-cell",
-                        div { class: "ebook-edit-bar",
-                            span { class: "ebook-edit-label", "Edit authors" }
-                            div { class: "me-chip-row ebook-edit-chips",
-                                ChipEditor {
-                                    values: authors_draft,
-                                    placeholder: "+ add author\u{2026}".to_string(),
-                                    on_change: {
-                                        let save = save_authors;
-                                        move |names: Vec<String>| save(names)
-                                    },
-                                    suggestions: author_suggestions,
-                                    show_avatar: true,
-                                    aria_remove_prefix: "Remove".to_string(),
-                                    testid_prefix: "ebook-authors-edit".to_string(),
-                                    autofocus: true,
-                                }
-                            }
-                            button {
-                                class: "btn",
-                                "data-testid": "ebook-authors-edit-close",
-                                onclick: move |e| {
-                                    e.stop_propagation();
-                                    editing.set(None);
-                                },
-                                "Done"
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -1162,6 +1111,71 @@ fn EditableCell(
                 if let Some(err) = error.as_ref() {
                     div { class: "error", "⚠ {err}" }
                 }
+            }
+        }
+    }
+}
+
+/// Inline-editable Authors cell. Unlike [`EditableCell`] (which hosts
+/// a single-line text input), the Authors cell renders the full
+/// [`ChipEditor`] *inside* the `<td>` when the row's editing signal
+/// matches `EditField::Authors`. The cell grows vertically to fit the
+/// chips + input + dropdown, matching the F5.9-lite design comp.
+///
+/// Display mode: comma-joined names. Hover: dashed amber outline.
+/// Click: swaps to chip editor (auto-focused) with the library-wide
+/// author pool surfaced in the dropdown. Escape exits edit mode.
+#[component]
+fn AuthorsCell(
+    is_admin: bool,
+    editing: Signal<Option<EditField>>,
+    authors_draft: Signal<Vec<String>>,
+    authors_text: String,
+    suggestions: ReadSignal<Vec<SuggestionItem>>,
+    on_change: EventHandler<Vec<String>>,
+) -> Element {
+    let mut editing = editing;
+    let is_editing = editing() == Some(EditField::Authors);
+    let active_class = if is_editing {
+        " ebook-cell-editing"
+    } else {
+        ""
+    };
+    let admin_class = if is_admin { " ebook-cell-editable" } else { "" };
+    let combined_class = format!("ebook-col-author{admin_class}{active_class}");
+
+    rsx! {
+        td {
+            class: "{combined_class}",
+            "data-testid": "ebook-cell-author",
+            onclick: move |e| {
+                if !is_admin {
+                    return;
+                }
+                e.stop_propagation();
+                if !is_editing {
+                    editing.set(Some(EditField::Authors));
+                }
+            },
+            if is_editing {
+                div { class: "ebook-cell-chip-host",
+                    ChipEditor {
+                        values: authors_draft,
+                        placeholder: "+ add author\u{2026}".to_string(),
+                        on_change,
+                        suggestions,
+                        show_avatar: false,
+                        aria_remove_prefix: "Remove".to_string(),
+                        testid_prefix: "ebook-cell-author".to_string(),
+                        autofocus: true,
+                        dropdown_header: "ADD AUTHOR".to_string(),
+                        on_close: move |_| {
+                            editing.set(None);
+                        },
+                    }
+                }
+            } else {
+                div { class: "ebook-title-cell", "{authors_text}" }
             }
         }
     }
