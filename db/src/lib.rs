@@ -8,6 +8,7 @@ pub mod app_state;
 pub mod auth;
 pub mod author_photos;
 pub mod ebook;
+pub mod helpers;
 pub mod indexer;
 pub mod library_layout;
 pub mod pool;
@@ -20,6 +21,7 @@ pub mod worker;
 // instead of `omnibus_db::queries::list_books(...)`. Keeps callsites terse
 // and mirrors how `db.rs` looked before the extraction.
 pub use app_state::*;
+pub use helpers::{build_fts_match, sanitize_fts_query};
 pub use pool::*;
 pub use queries::*;
 pub use thumbs::{thumb_path_for, thumbs_dir, ThumbError, ThumbSize};

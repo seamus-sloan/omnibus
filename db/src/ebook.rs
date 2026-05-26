@@ -267,7 +267,7 @@ pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatSca
                 .to_string_lossy()
                 .to_string();
             let (mtime_epoch, size_bytes) = stat_file(&entry_path);
-            let uuid = crate::queries::stable_uuid(library_path_key, &relative);
+            let uuid = crate::helpers::stable_uuid(library_path_key, &relative);
             entries.push(StatEntry {
                 filename: relative,
                 uuid,
