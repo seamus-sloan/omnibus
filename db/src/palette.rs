@@ -12,13 +12,8 @@ use omnibus_shared::{
 };
 
 use crate::books::parse_json_array;
-use crate::helpers::build_fts_match;
+use crate::helpers::{build_fts_match, cap_query_len};
 use crate::metadata_overrides::load_overrides_bulk;
-
-/// Maximum query length (in chars) accepted by `search_palette`. Inputs
-/// beyond this are truncated to bound FTS5 expression size and LIKE
-/// pattern length.
-const MAX_QUERY_LEN: usize = 256;
 
 /// Search palette — grouped results for the command-palette overlay (F1.5).
 ///
@@ -37,9 +32,8 @@ pub async fn search_palette(
     if trimmed.is_empty() {
         return Ok(PaletteResults::default());
     }
-    // Truncate to cap FTS5 + LIKE expression size. Collect chars to
-    // avoid slicing mid-codepoint.
-    let trimmed: String = trimmed.chars().take(MAX_QUERY_LEN).collect();
+    // Truncate to cap FTS5 + LIKE expression size; see `cap_query_len`.
+    let trimmed: String = cap_query_len(trimmed);
     let trimmed = trimmed.as_str();
 
     let start = std::time::Instant::now();

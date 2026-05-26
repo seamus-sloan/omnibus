@@ -7,7 +7,7 @@ use sqlx::{Row, SqlitePool};
 
 use omnibus_shared::{Contributor, EbookLibrary, EbookMetadata, Identifier};
 
-use crate::helpers::{build_fts_match, format_series_index};
+use crate::helpers::{build_fts_match, cap_query_len, format_series_index};
 use crate::metadata_overrides::{apply_overrides, get_metadata_overrides, load_overrides_bulk};
 
 /// Hard server-side cap on the number of books any single list/search
@@ -742,7 +742,11 @@ pub async fn search_books(
     library_path: &str,
     q: &str,
 ) -> Result<Vec<EbookMetadata>, sqlx::Error> {
-    let Some(match_expr) = build_fts_match(q) else {
+    // Cap query length before parsing to bound the FTS5 MATCH expression size,
+    // matching `search_palette` (issue #189). Normal/short queries are
+    // unaffected; see `cap_query_len`.
+    let capped = cap_query_len(q);
+    let Some(match_expr) = build_fts_match(&capped) else {
         return Ok(Vec::new());
     };
 
@@ -916,7 +920,11 @@ pub async fn count_search_books(
     library_path: &str,
     q: &str,
 ) -> Result<i64, sqlx::Error> {
-    let Some(match_expr) = build_fts_match(q) else {
+    // Cap query length before parsing to mirror `search_books` /
+    // `search_palette` (issue #189). Normal/short queries are unaffected;
+    // see `cap_query_len`.
+    let capped = cap_query_len(q);
+    let Some(match_expr) = build_fts_match(&capped) else {
         return Ok(0);
     };
     sqlx::query_scalar::<_, i64>(
@@ -989,6 +997,7 @@ mod tests {
         author_id_by_name, seed_discovery_fixture, series_id_by_name,
     };
     use crate::ebook::IndexedBook;
+    use crate::helpers::MAX_QUERY_LEN;
     use crate::metadata_overrides::upsert_metadata_overrides;
     use crate::pool::init_db;
     use crate::sync::replace_books;
@@ -1150,6 +1159,40 @@ mod tests {
         let hits = search_books(&pool, "/lib-a", "tolkien").await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].title.as_deref(), Some("A"));
+    }
+    #[tokio::test]
+    async fn search_books_truncates_oversized_query() {
+        // Issue #189: a query longer than MAX_QUERY_LEN chars must be capped
+        // before reaching build_fts_match, not panic or pass an unbounded
+        // expression to FTS5. The exact rows don't matter — this documents
+        // the contract that oversized input is bounded and returns Ok.
+        let _covers = CoversTempDir::new("fts_oversized");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "a.epub",
+                Some("Harry Potter"),
+                &["J.K. Rowling"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        // A single token far longer than the cap (no whitespace) is the
+        // worst case the issue describes.
+        let oversized = "a".repeat(MAX_QUERY_LEN * 10);
+        assert!(oversized.chars().count() > MAX_QUERY_LEN);
+
+        let hits = search_books(&pool, "/lib", &oversized).await;
+        assert!(hits.is_ok(), "oversized query should not error");
+
+        let total = count_search_books(&pool, "/lib", &oversized).await;
+        assert!(total.is_ok(), "oversized count query should not error");
     }
     #[tokio::test]
     async fn search_books_empty_query_returns_empty_vec() {
