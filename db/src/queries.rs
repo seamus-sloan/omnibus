@@ -498,11 +498,27 @@ resolve_or_insert_simple!(resolve_or_insert_tag, "tags", "name");
 resolve_or_insert_simple!(resolve_or_insert_publisher, "publishers", "name");
 resolve_or_insert_simple!(resolve_or_insert_language, "languages", "code");
 
+/// Resolve an author name to its row id, inserting a new row if necessary.
+///
+/// Returns `Ok(None)` when `name` is in `ignored_authors` — the
+/// F5.9-lite blocklist that keeps the next reindex from silently
+/// re-creating an admin-deleted junk-author row. Callers (see
+/// `insert_metadata_links`) must tolerate `None` by skipping the
+/// contributor entirely; that "skip on hit" is what makes admin author
+/// deletes durable across reindexes.
 async fn resolve_or_insert_author(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     name: &str,
     sort: Option<&str>,
-) -> Result<i64, sqlx::Error> {
+) -> Result<Option<i64>, sqlx::Error> {
+    let blocked: Option<i64> =
+        sqlx::query_scalar("SELECT 1 FROM ignored_authors WHERE name = ? LIMIT 1")
+            .bind(name)
+            .fetch_optional(&mut **tx)
+            .await?;
+    if blocked.is_some() {
+        return Ok(None);
+    }
     sqlx::query(
         "INSERT INTO authors (name, sort) VALUES (?, ?)
          ON CONFLICT(name) DO UPDATE SET sort = COALESCE(authors.sort, excluded.sort)",
@@ -511,10 +527,11 @@ async fn resolve_or_insert_author(
     .bind(sort)
     .execute(&mut **tx)
     .await?;
-    sqlx::query_scalar("SELECT id FROM authors WHERE name = ?")
+    let id: i64 = sqlx::query_scalar("SELECT id FROM authors WHERE name = ?")
         .bind(name)
         .fetch_one(&mut **tx)
-        .await
+        .await?;
+    Ok(Some(id))
 }
 
 // -----------------------------------------------------------------------------
@@ -1500,9 +1517,18 @@ async fn insert_metadata_links(
     m: &EbookMetadata,
 ) -> Result<(), sqlx::Error> {
     // Authors + contributors both land in `authors` — role/file_as are
-    // flattened. The first creator gets position 0.
+    // flattened. Positions follow the OPF's source order
+    // (`creators.iter().enumerate()`) so the primary author stays
+    // primary. Names matching the `ignored_authors` blocklist resolve
+    // to `None` and are skipped entirely; we leave a gap in `position`
+    // rather than renumbering, so a blocklisted leading contributor
+    // can produce a row whose first link is at position 1 — the
+    // surviving creators keep their original ordinal either way.
     for (pos, c) in m.creators.iter().enumerate() {
-        let author_id = resolve_or_insert_author(tx, &c.name, c.file_as.as_deref()).await?;
+        let Some(author_id) = resolve_or_insert_author(tx, &c.name, c.file_as.as_deref()).await?
+        else {
+            continue;
+        };
         sqlx::query(
             "INSERT OR IGNORE INTO books_authors_link (book, author, position)
              VALUES (?, ?, ?)",
@@ -1515,7 +1541,10 @@ async fn insert_metadata_links(
     }
     let author_count = m.creators.len();
     for (i, c) in m.contributors.iter().enumerate() {
-        let author_id = resolve_or_insert_author(tx, &c.name, c.file_as.as_deref()).await?;
+        let Some(author_id) = resolve_or_insert_author(tx, &c.name, c.file_as.as_deref()).await?
+        else {
+            continue;
+        };
         sqlx::query(
             "INSERT OR IGNORE INTO books_authors_link (book, author, position)
              VALUES (?, ?, ?)",
@@ -9760,5 +9789,119 @@ mod tests {
         let after_upload = list_authors(&pool, "/lib").await.unwrap();
         let ada = after_upload.iter().find(|a| a.id == ada_id).unwrap();
         assert!(ada.has_photo, "manual upload should yield has_photo = true");
+    }
+
+    // -------------------------------------------------------------------------
+    // ignored_authors blocklist (F5.9-lite reindex-resurrection guard)
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn resolve_or_insert_author_inserts_when_blocklist_is_empty() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let id = resolve_or_insert_author(&mut tx, "Ada Lovelace", None)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        assert!(id.is_some(), "empty blocklist should not skip insertion");
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM authors WHERE name = ?")
+            .bind("Ada Lovelace")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn resolve_or_insert_author_returns_none_when_blocked() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        sqlx::query("INSERT INTO ignored_authors(name) VALUES (?)")
+            .bind("calibre (8.0.0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        let id = resolve_or_insert_author(&mut tx, "calibre (8.0.0)", None)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        assert!(id.is_none(), "blocked name must skip insertion");
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM authors WHERE name = ?")
+            .bind("calibre (8.0.0)")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0, "no authors row should have been created");
+    }
+
+    #[tokio::test]
+    async fn resolve_or_insert_author_blocklist_match_is_case_insensitive() {
+        // `ignored_authors.name` is declared COLLATE NOCASE so a junk
+        // contributor that comes back from the OPF with different casing
+        // still gets skipped.
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        sqlx::query("INSERT INTO ignored_authors(name) VALUES (?)")
+            .bind("Calibre (8.0.0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        let id = resolve_or_insert_author(&mut tx, "CALIBRE (8.0.0)", None)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        assert!(id.is_none());
+    }
+
+    #[tokio::test]
+    async fn reindex_path_skips_blocked_contributor_and_keeps_real_author() {
+        // End-to-end: simulate the reindex path by going through
+        // `replace_books` (same insert_metadata_links pipeline). The
+        // blocklist guard must keep the junk row from being re-created
+        // while the legitimate author is still linked to the book.
+        let _covers = CoversTempDir::new("ignored_authors_reindex");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+
+        sqlx::query("INSERT INTO ignored_authors(name) VALUES (?)")
+            .bind("calibre (8.0.0) [https://calibre-ebook.com]")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "the-real-book.epub",
+                Some("The Real Book"),
+                &["Real Author", "calibre (8.0.0) [https://calibre-ebook.com]"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .expect("reindex path should succeed even with a blocked contributor");
+
+        let junk_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM authors WHERE name = ?")
+            .bind("calibre (8.0.0) [https://calibre-ebook.com]")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(junk_count, 0, "junk author must not be re-created");
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        assert_eq!(books.len(), 1);
+        let book = &books[0];
+        let names: Vec<&str> = book.creators.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["Real Author"],
+            "only the un-blocked creator should remain linked"
+        );
     }
 }
