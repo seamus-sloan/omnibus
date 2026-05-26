@@ -14,6 +14,7 @@ pub mod library_layout;
 pub mod pool;
 pub mod queries;
 pub mod scanner;
+mod taxonomy;
 pub mod thumbs;
 pub mod worker;
 
