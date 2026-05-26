@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 
 use sqlx::SqlitePool;
 
-use crate::{books, ebook, queries, sync};
+use crate::{books, ebook, sync};
 
 /// Reindex if the last successful index is older than this. One hour is a
 /// compromise between responsiveness to on-disk changes and avoiding

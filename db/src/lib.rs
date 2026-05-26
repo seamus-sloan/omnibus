@@ -19,7 +19,6 @@ pub mod library_layout;
 pub mod metadata_overrides;
 pub mod palette;
 pub mod pool;
-pub mod queries;
 pub mod scanner;
 pub mod settings;
 pub mod sync;
@@ -44,7 +43,9 @@ pub use helpers::{build_fts_match, sanitize_fts_query};
 pub use metadata_overrides::*;
 pub use palette::*;
 pub use pool::*;
-pub use queries::*;
 pub use settings::*;
 pub use sync::*;
 pub use thumbs::{thumb_path_for, thumbs_dir, ThumbError, ThumbSize};
+
+#[cfg(test)]
+mod queries_tests;

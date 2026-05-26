@@ -1,60 +1,37 @@
-//! Normalized DB layer (server-only).
-//!
-//! The schema (see `../migrations/0002_normalized_schema.sql`) splits a
-//! logical `books` row from one-or-more `book_files` rows per format, and
-//! normalizes authors, series, tags, publishers, languages, and identifiers
-//! into their own tables joined via m2m link tables. The filesystem remains
-//! the source of truth — every row here is rebuildable by reindexing.
-//!
-//! The public API here preserves the shape older callers expect
-//! (`replace_books`, `list_books`, `library_from_db`, `get_cover`,
-//! `last_indexed_at`) so the indexer, rpc, and backend layers only need to
-//! change at the edges. Internally, each of those functions drives the
-//! normalized layout.
+//! Inline integration tests for the db query layer. Lives here as a
+//! single file (rather than co-located per module) because so many tests
+//! exercise behavior that spans two or three of the new modules
+//! (covers + sync, settings + cover cleanup, overrides + book reads).
+//! Splitting them per module would force every test helper out into
+//! `pub(crate)` and obscure what's actually under test. Future tests for
+//! a single module's internal behavior should still land in that
+//! module's inline `#[cfg(test)] mod tests`.
 
-pub use crate::helpers::sanitize_fts_query;
-
-
-
-
-
-// -----------------------------------------------------------------------------
-// Tests
-// -----------------------------------------------------------------------------
-
-#[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::books::sanitize_description;
-    use crate::books::{
-        count_books, count_search_books, get_book, get_book_by_uuid, library_from_db,
-        library_from_db_with_total, list_books, list_indexed_rows, resolve_book_id_by_uuid,
-        search_books, IndexedRow, MAX_BOOKS_RETURNED,
-    };
-    use crate::covers::test_helpers::CoversTempDir;
-    use crate::covers::{cover_path_for, get_cover, get_last_modified_epoch, write_cover_file};
-    use crate::metadata_overrides::{
-        delete_metadata_overrides, get_book_uuid, get_metadata_overrides, merge_metadata_overrides,
-        upsert_metadata_overrides, write_override_cover,
-    };
-    use crate::pool::init_db;
-    use crate::settings::{
-        last_indexed_at, prune_orphan_libraries, seed_settings_from_env, set_settings, Settings,
-    };
-    use crate::covers::delete_cover_files_for;
-    use crate::helpers::stable_uuid;
     use crate::author_photos_data::{
         author_photo_status, delete_author, delete_author_photo, get_author_photo,
         upsert_author_photo, AuthorPhotoSource,
     };
+    use crate::books::{
+        count_books, get_book, library_from_db, library_from_db_with_total, list_books,
+        list_indexed_rows, sanitize_description, search_books, MAX_BOOKS_RETURNED,
+    };
     use crate::browse::{list_authors, list_series};
+    use crate::covers::test_helpers::CoversTempDir;
+    use crate::covers::{cover_path_for, delete_cover_files_for, get_cover, write_cover_file};
     use crate::discovery::{get_author, get_series, get_tag_cloud, MAX_DISCOVERY_BOOKS};
+    use crate::ebook::IndexedBook;
+    use crate::helpers::stable_uuid;
+    use crate::metadata_overrides::{
+        delete_metadata_overrides, get_metadata_overrides, merge_metadata_overrides,
+        upsert_metadata_overrides, write_override_cover,
+    };
     use crate::palette::search_palette;
-    use sqlx::{Row, SqlitePool};
+    use crate::pool::init_db;
+    use crate::settings::{last_indexed_at, prune_orphan_libraries, set_settings, Settings};
     use crate::sync::{replace_books, sync_books, SyncPlan};
     use omnibus_shared::{Contributor, EbookMetadata, Identifier, MetadataOverrides};
-
-    use crate::ebook::IndexedBook;
+    use sqlx::{Row, SqlitePool};
 
     fn indexed(
         filename: &str,
@@ -224,7 +201,7 @@ mod tests {
     /// shape the indexer emits, and reject anything else — including raw
     /// hex, CSS keywords, and injection payloads that try to break out of
     /// the `style="background: {bg}"` attribute used by Atrium consumers.
-
+    ///
     /// End-to-end gate: writing an `IndexedBook` whose `accent` carries an
     /// injection payload must result in `accent_color = NULL` in the DB,
     /// not the unsanitized string.

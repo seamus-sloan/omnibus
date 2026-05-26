@@ -3,12 +3,11 @@
 //!
 //! `author_photos` holds at most one row per author (PK = author_id). The
 //! `source` column distinguishes:
-//!   - `'manual'`     — admin upload via `PUT /api/authors/:id/photo`.
-//!   - `'openlibrary'`— resolved by the background worker.
-//!   - `'letter'`     — negative-cache marker: no usable image. `bytes` and
-//!                       `mime` are NULL; `get_author_photo` returns `None`
-//!                       so the GET handler 404s and the letter avatar
-//!                       stays in place.
+//! - `'manual'`     — admin upload via `PUT /api/authors/:id/photo`.
+//! - `'openlibrary'`— resolved by the background worker.
+//! - `'letter'`     — negative-cache marker: no usable image. `bytes` and
+//!   `mime` are NULL; `get_author_photo` returns `None` so the GET handler
+//!   404s and the letter avatar stays in place.
 //!
 //! Admin DELETE clears the row to force re-resolution on next view.
 //!
