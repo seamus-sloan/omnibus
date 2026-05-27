@@ -479,9 +479,12 @@ impl Worker {
     /// Phase-2 seam: write the in-flight progress count for `id`. The
     /// terminal state is written separately at the end of [`Worker::run`]
     /// so a mid-task report can't accidentally flip a task to `Done`.
-    /// Currently unused — wired up when `indexer::reindex` learns to
-    /// thread a progress callback through its per-EPUB loop.
-    #[allow(dead_code)]
+    /// Only exercised by tests today (see `report_progress_updates_running_count`),
+    /// so it lives behind `#[cfg(test)]` rather than an untraceable
+    /// `#[allow(dead_code)]`. Un-gate it — and drop this cfg — when
+    /// `indexer::reindex` learns to thread a progress callback through its
+    /// per-EPUB loop (#220).
+    #[cfg(test)]
     pub(crate) fn report_progress(&self, id: TaskId, processed: u32, total: Option<u32>) {
         let mut map = lock_unpoison(&self.progress);
         if let Some(entry) = map.get_mut(&id) {
