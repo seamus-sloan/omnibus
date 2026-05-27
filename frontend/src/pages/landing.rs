@@ -1982,4 +1982,80 @@ mod tests {
         assert_eq!(short_path("/Users/ek/books/"), "books");
         assert_eq!(short_path("relative"), "relative");
     }
+
+    // --- additional filter / facet / sort edge cases (#215) ---
+
+    #[test]
+    fn tag_filter_or_within_bucket() {
+        // tags is OR within the bucket: a book matches if it carries *any* of
+        // the selected subjects. alpha=Fantasy, beta=Sci-Fi, gamma=both.
+        let s = sample();
+        let f = ViewFilters {
+            tags: vec!["Fantasy".into()],
+            ..Default::default()
+        };
+        let out = apply_filters(&s, &f);
+        // alpha (Fantasy) and gamma (Fantasy + Sci-Fi) carry the tag; beta does not.
+        assert_eq!(ids(&out), vec![1, 3]);
+    }
+
+    #[test]
+    fn multi_format_filter_is_or_within_bucket_not_and() {
+        // Guards against the bug called out in #215: selecting two formats must
+        // include books matching *either* (OR within the formats bucket), never
+        // require a book to carry *both* (AND would wrongly exclude single-format
+        // books). Each book here has exactly one format.
+        let books = vec![
+            with_formats(sample()[0].clone(), &["epub"]),
+            with_formats(sample()[1].clone(), &["m4b"]),
+            with_formats(sample()[2].clone(), &["pdf"]),
+        ];
+        let f = ViewFilters {
+            formats: vec!["epub".into(), "m4b".into()],
+            ..Default::default()
+        };
+        let out = apply_filters(&books, &f);
+        // OR semantics keep both single-format epub and m4b books; AND would
+        // have dropped both and returned an empty list.
+        assert_eq!(ids(&out), vec![1, 2]);
+    }
+
+    #[test]
+    fn format_facet_counts_tally_across_full_unfiltered_list() {
+        // facet_counts must accumulate over every book it is given (the full,
+        // unfiltered list) — duplicates across books increment the same key.
+        let books = vec![
+            with_formats(sample()[0].clone(), &["epub"]),
+            with_formats(sample()[1].clone(), &["epub", "m4b"]),
+            with_formats(sample()[2].clone(), &["m4b"]),
+        ];
+        let f = facet_counts(&books);
+        let formats: std::collections::HashMap<_, _> = f.formats.into_iter().collect();
+        assert_eq!(formats.get("epub").copied(), Some(2));
+        assert_eq!(formats.get("m4b").copied(), Some(2));
+        assert_eq!(formats.len(), 2);
+    }
+
+    #[test]
+    fn sort_by_title_is_stable_on_equal_keys_via_id_tiebreak() {
+        // Two books share the same title; the id tiebreak keeps a deterministic
+        // order regardless of input order or sort direction.
+        let mut a = book(5, "a.epub", Some("Same"), &[], None, None, None, &[]);
+        let mut b = book(2, "b.epub", Some("Same"), &[], None, None, None, &[]);
+        a.title = Some("Same".into());
+        b.title = Some("Same".into());
+        let asc = sort_books(vec![a.clone(), b.clone()], SortKey::Title, SortDir::Asc);
+        assert_eq!(ids(&asc), vec![2, 5]);
+        // Reversed direction does not reverse the tiebreak: ids stay ascending.
+        let desc = sort_books(vec![a, b], SortKey::Title, SortDir::Desc);
+        assert_eq!(ids(&desc), vec![2, 5]);
+    }
+
+    #[test]
+    fn empty_filters_returns_full_list_unchanged_in_original_order() {
+        // Acceptance (4): an empty ViewFilters yields the input list verbatim.
+        let s = sample();
+        let out = apply_filters(&s, &ViewFilters::default());
+        assert_eq!(ids(&out), ids(&s));
+    }
 }
