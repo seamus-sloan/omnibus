@@ -24,6 +24,11 @@ use omnibus_shared::{
 #[cfg(feature = "server")]
 use omnibus_db::{self as db, scanner};
 
+// Magic-byte image-format sniff lives in `omnibus-shared` (single source of
+// truth shared with `server::backend`). Only the server-side bodies call it.
+#[cfg(feature = "server")]
+use omnibus_shared::detect_image_format;
+
 /// Server-only extractor alias used by each server function. Only referenced
 /// by the server-side body; the `#[cfg(feature = "server")]` stops the
 /// web build from importing axum/sqlx types.
@@ -351,28 +356,6 @@ pub async fn rpc_set_author_photo_url(id: i64, url: String) -> Result<()> {
     .await
     .map_err(|e| ServerFnError::new(format!("upsert_author_photo: {e}")))?;
     Ok(())
-}
-
-/// Magic-byte image format sniff. Duplicates `server::backend::detect_image_format`
-/// because the `frontend` crate can't depend on `server` (cycle) and the
-/// function is four lines of pattern matching. Keep the two implementations
-/// in sync — both must recognise the same formats.
-#[cfg(feature = "server")]
-fn detect_image_format(bytes: &[u8]) -> Option<String> {
-    if bytes.len() < 4 {
-        return None;
-    }
-    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        Some("image/jpeg".into())
-    } else if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
-        Some("image/png".into())
-    } else if bytes.starts_with(b"GIF8") {
-        Some("image/gif".into())
-    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-        Some("image/webp".into())
-    } else {
-        None
-    }
 }
 
 /// Return all tags with book counts for the tag cloud.
