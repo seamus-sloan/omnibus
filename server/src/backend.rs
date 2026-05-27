@@ -91,10 +91,9 @@ pub fn rest_router(state: AppState) -> Router {
         .route("/api/library", get(get_library))
         .route("/api/ebooks", get(get_ebooks))
         .route("/api/ebooks/{uuid}", get(get_ebook_by_uuid))
-        .route("/api/ebooks/{uuid}/overrides", post(post_ebook_overrides))
         .route(
-            "/api/ebooks/{uuid}/overrides/delete",
-            post(delete_ebook_overrides),
+            "/api/ebooks/{uuid}/overrides",
+            post(post_ebook_overrides).delete(delete_ebook_overrides),
         )
         // GET/DELETE for author photos carry no upload body (DELETE mutates,
         // but cheaply — it clears photo state, it doesn't ingest one), so
@@ -3067,8 +3066,8 @@ mod tests {
         let res = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("/api/ebooks/{uuid}/overrides/delete"))
-                    .method("POST")
+                    .uri(format!("/api/ebooks/{uuid}/overrides"))
+                    .method("DELETE")
                     .header(AUTHORIZATION, format!("Bearer {token}"))
                     .body(Body::empty())
                     .unwrap(),
