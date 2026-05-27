@@ -8,7 +8,7 @@
 //!   behind each other while different paths run in parallel.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use omnibus_shared::{ProgressState, TaskKind, TaskProgress, WorkerStatus};
@@ -233,6 +233,22 @@ impl Drop for ProgressTerminalGuard {
     }
 }
 
+/// Recover from a poisoned `std::sync::Mutex` instead of panicking.
+///
+/// The `completions` / `progress` maps are best-effort bookkeeping that
+/// every `Task::Scan` (and every other posted task) touches on its hot
+/// path. If a thread panics while holding one of these locks — e.g. a
+/// `ProgressTerminalGuard::drop` unwinding mid-write — `std::sync::Mutex`
+/// poisons permanently, and a plain `.lock().unwrap()` would then turn that
+/// one-off panic into a process-wide crash on every subsequent task. The
+/// guarded data is just in-memory maps with no invariant left broken by a
+/// partial write, so taking the inner guard and carrying on is strictly
+/// safer than tearing down the worker. Mirrors `frontend::data`'s
+/// `unpoison` helper.
+fn lock_unpoison<T>(m: &StdMutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Current wall-clock time in milliseconds since the UNIX epoch. Used only
 /// for the `started_at_ms` / `last_update_ms` fields on [`TaskProgress`],
 /// which the UI renders as elapsed-time hints. A backward NTP step would
@@ -291,7 +307,7 @@ impl Worker {
         // before sending, dropping `tx` closes the channel and any pending
         // `await_completion` falls through to the "dropped" error branch.
         let (tx, rx) = watch::channel(None);
-        self.completions.lock().unwrap().insert(id, rx);
+        lock_unpoison(&self.completions).insert(id, rx);
 
         // Seed the progress map *before* spawning so a caller polling
         // `progress_snapshot()` immediately after `post` returns always
@@ -315,7 +331,7 @@ impl Worker {
                 },
                 terminal_at: None,
             };
-            self.progress.lock().unwrap().insert(id, entry);
+            lock_unpoison(&self.progress).insert(id, entry);
         }
 
         let this = self.clone();
@@ -371,7 +387,7 @@ impl Worker {
         // outcome is never missed; removing the slot here bounds the map even
         // when the run loop's own cleanup hasn't fired yet.
         let mut rx = {
-            let mut map = self.completions.lock().unwrap();
+            let mut map = lock_unpoison(&self.completions);
             match map.remove(&id) {
                 Some(rx) => rx,
                 None => return TaskOutcome::Err("unknown task id".into()),
@@ -428,10 +444,7 @@ impl Worker {
         // `Done`. Today there is no in-flight reporter so this is always 0.
         let terminal = match &outcome {
             TaskOutcome::Ok => {
-                let processed = self
-                    .progress
-                    .lock()
-                    .unwrap()
+                let processed = lock_unpoison(&self.progress)
                     .get(&id)
                     .and_then(|e| match e.progress.state {
                         ProgressState::Running { processed, .. } => Some(processed),
@@ -467,7 +480,7 @@ impl Worker {
     /// thread a progress callback through its per-EPUB loop.
     #[allow(dead_code)]
     pub(crate) fn report_progress(&self, id: TaskId, processed: u32, total: Option<u32>) {
-        let mut map = self.progress.lock().unwrap();
+        let mut map = lock_unpoison(&self.progress);
         if let Some(entry) = map.get_mut(&id) {
             if entry.terminal_at.is_some() {
                 return; // race: terminal already recorded
@@ -481,7 +494,7 @@ impl Worker {
     /// `ProgressTerminalGuard` (panic). The `terminal_at` Instant is
     /// monotonic so eviction is robust to wall-clock drift.
     fn write_terminal_progress(&self, id: TaskId, state: ProgressState) {
-        let mut map = self.progress.lock().unwrap();
+        let mut map = lock_unpoison(&self.progress);
         if let Some(entry) = map.get_mut(&id) {
             entry.progress.last_update_ms = wall_clock_ms();
             entry.progress.state = state;
@@ -508,7 +521,7 @@ impl Worker {
     /// for the full 10 s of wall-clock time.
     fn progress_snapshot_with_retention(&self, retention: Duration) -> WorkerStatus {
         let now = Instant::now();
-        let mut map = self.progress.lock().unwrap();
+        let mut map = lock_unpoison(&self.progress);
 
         // First pass: identify expired terminals so we don't hold the
         // iterator while mutating the map.
@@ -1129,5 +1142,89 @@ mod tests {
             .find(|p| p.task_id == id)
             .expect("terminal entry");
         assert!(matches!(entry2.state, ProgressState::Done { .. }));
+    }
+
+    /// Poisoning the `progress` mutex (a thread panics while holding its
+    /// lock) must not turn every later worker operation into a panic. Before
+    /// the `lock_unpoison` helper a single poisoning event cascaded into a
+    /// process-wide crash on the hot path every `Task::Scan` goes through.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn poisoned_progress_lock_recovers_instead_of_panicking() {
+        let w = make_worker_default(pool().await);
+
+        // Poison the `progress` mutex: take the lock on a scratch thread and
+        // panic while holding it. `catch_unwind` keeps the panic from
+        // tearing down the test thread; the lock stays poisoned afterward.
+        let progress = w.progress.clone();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = progress.lock().unwrap();
+            panic!("intentional poisoning panic");
+        }));
+        assert!(
+            w.progress.lock().is_err(),
+            "progress mutex should be poisoned after the panic"
+        );
+
+        // A full post → await round-trip touches the poisoned `progress`
+        // lock in `post` (seed) and `run` (terminal write). It must run to
+        // completion rather than panicking.
+        let id = w.post(Task::Test {
+            tag: "after-poison",
+            latency_ms: 0,
+            resource: None,
+            route_through_scan_sem: false,
+            on_run: None,
+            on_done: None,
+        });
+        match w.await_completion(id).await {
+            TaskOutcome::Ok => {}
+            other => panic!("expected Ok after poison recovery, got {other:?}"),
+        }
+
+        // The read path (`progress_snapshot`) also recovers and observes the
+        // task's terminal state.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let snap = w.progress_snapshot();
+            if snap.recent_complete.iter().any(|p| p.task_id == id) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "snapshot never surfaced the post-poison task"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    /// Same recovery guarantee for the `completions` mutex, which `post`
+    /// and `await_completion` touch on the awaited (non-fire-and-forget)
+    /// path.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn poisoned_completions_lock_recovers_instead_of_panicking() {
+        let w = make_worker_default(pool().await);
+
+        let completions = w.completions.clone();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = completions.lock().unwrap();
+            panic!("intentional poisoning panic");
+        }));
+        assert!(
+            w.completions.lock().is_err(),
+            "completions mutex should be poisoned after the panic"
+        );
+
+        let id = w.post(Task::Test {
+            tag: "after-poison",
+            latency_ms: 0,
+            resource: None,
+            route_through_scan_sem: false,
+            on_run: None,
+            on_done: None,
+        });
+        match w.await_completion(id).await {
+            TaskOutcome::Ok => {}
+            other => panic!("expected Ok after poison recovery, got {other:?}"),
+        }
     }
 }
