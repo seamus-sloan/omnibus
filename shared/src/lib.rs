@@ -636,3 +636,185 @@ impl WorkerStatus {
         self.active.is_empty() && self.recent_complete.is_empty()
     }
 }
+
+#[cfg(test)]
+mod metadata_overrides_tests {
+    use super::*;
+
+    fn contributor(name: &str) -> Contributor {
+        Contributor {
+            name: name.to_string(),
+            ..Default::default()
+        }
+    }
+
+    // --- validate() --------------------------------------------------------
+
+    #[test]
+    fn validate_accepts_well_formed_override() {
+        let ov = MetadataOverrides {
+            title: Some("A Reasonable Title".into()),
+            description: Some("A short blurb.".into()),
+            publisher: Some("Some Press".into()),
+            published: Some("2020".into()),
+            language: Some("en".into()),
+            series: Some("Some Series".into()),
+            series_index: Some("1".into()),
+            creators: Some(vec![contributor("Ada Lovelace")]),
+            subjects: Some(vec!["fiction".into(), "history".into()]),
+        };
+        assert_eq!(ov.validate(), Ok(()));
+    }
+
+    #[test]
+    fn validate_accepts_empty_default_override() {
+        // An all-`None` override (nothing being overridden) is trivially valid.
+        assert_eq!(MetadataOverrides::default().validate(), Ok(()));
+    }
+
+    #[test]
+    fn validate_rejects_title_exceeding_length_cap() {
+        let ov = MetadataOverrides {
+            title: Some("x".repeat(MetadataOverrides::MAX_SCALAR_LEN + 1)),
+            ..Default::default()
+        };
+        let err = ov
+            .validate()
+            .expect_err("over-length title should be rejected");
+        assert!(
+            err.contains("title"),
+            "message should name the field: {err}"
+        );
+        assert!(err.contains("4096"), "message should name the cap: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_title_at_length_cap_is_accepted() {
+        // Boundary: exactly MAX_SCALAR_LEN is allowed (the check is `> max`).
+        let ov = MetadataOverrides {
+            title: Some("x".repeat(MetadataOverrides::MAX_SCALAR_LEN)),
+            ..Default::default()
+        };
+        assert_eq!(ov.validate(), Ok(()));
+    }
+
+    #[test]
+    fn validate_rejects_too_many_subjects() {
+        let ov = MetadataOverrides {
+            subjects: Some(vec!["tag".to_string(); MetadataOverrides::MAX_SUBJECTS + 1]),
+            ..Default::default()
+        };
+        let err = ov
+            .validate()
+            .expect_err("over-cap subject count should be rejected");
+        assert!(err.contains("too many tags"), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_over_long_creator_name() {
+        let ov = MetadataOverrides {
+            creators: Some(vec![contributor(
+                &"x".repeat(MetadataOverrides::MAX_CREATOR_LEN + 1),
+            )]),
+            ..Default::default()
+        };
+        let err = ov
+            .validate()
+            .expect_err("over-length creator name should be rejected");
+        assert!(err.contains("creator name"), "unexpected message: {err}");
+    }
+
+    // --- merge() -----------------------------------------------------------
+    //
+    // NOTE on contract: the issue describes `merge` as "applies an override
+    // layer onto a base `EbookMetadata`, with empty-array meaning clear-all".
+    // The actual `MetadataOverrides::merge` merges two `MetadataOverrides`
+    // layers (a prior stored override + an incoming edit), not an
+    // `EbookMetadata`, and uses `incoming.field.or(self.field)`. The
+    // empty-array-clears-the-base-book behaviour lives in
+    // `db::metadata_overrides::apply_overrides`, where `Some(vec![])`
+    // overwrites the book's list with an empty vec. The tests below assert the
+    // ACTUAL `merge` semantics; case (4) documents that for `merge` itself an
+    // empty `Some(vec![])` is an *override layer value* that wins over the
+    // base layer (it does not collapse to "don't touch"), which is consistent
+    // with — and feeds into — the clear-all behaviour at apply time.
+
+    #[test]
+    fn merge_empty_creators_layer_wins_over_base_creators() {
+        // Issue case (4): incoming `creators: Some(vec![])` is preserved on the
+        // merged override (it does NOT fall back to the base layer's creators).
+        // Downstream `apply_overrides` then clears the book's creators.
+        let base = MetadataOverrides {
+            creators: Some(vec![contributor("Stale Author")]),
+            ..Default::default()
+        };
+        let incoming = MetadataOverrides {
+            creators: Some(vec![]),
+            ..Default::default()
+        };
+        let merged = base.merge(&incoming);
+        assert_eq!(merged.creators, Some(vec![]));
+    }
+
+    #[test]
+    fn merge_none_creators_leaves_base_creators_unchanged() {
+        // Issue case (5): incoming `creators: None` preserves the base layer.
+        let base = MetadataOverrides {
+            creators: Some(vec![contributor("Original Author")]),
+            ..Default::default()
+        };
+        let incoming = MetadataOverrides::default();
+        let merged = base.merge(&incoming);
+        assert_eq!(merged.creators, Some(vec![contributor("Original Author")]));
+    }
+
+    #[test]
+    fn merge_nonempty_creators_replaces_base_entirely() {
+        // Issue case (6): incoming non-empty creators replaces, not appends.
+        let base = MetadataOverrides {
+            creators: Some(vec![contributor("Old A"), contributor("Old B")]),
+            ..Default::default()
+        };
+        let incoming = MetadataOverrides {
+            creators: Some(vec![contributor("New One")]),
+            ..Default::default()
+        };
+        let merged = base.merge(&incoming);
+        assert_eq!(merged.creators, Some(vec![contributor("New One")]));
+    }
+
+    #[test]
+    fn merge_empty_subjects_layer_wins_over_base_subjects() {
+        // Adjacent case: same empty-vec-wins semantics for the subjects field.
+        let base = MetadataOverrides {
+            subjects: Some(vec!["stale".into()]),
+            ..Default::default()
+        };
+        let incoming = MetadataOverrides {
+            subjects: Some(vec![]),
+            ..Default::default()
+        };
+        let merged = base.merge(&incoming);
+        assert_eq!(merged.subjects, Some(vec![]));
+    }
+
+    #[test]
+    fn merge_preserves_untouched_scalar_fields_from_base() {
+        // An incoming edit that only sets `title` must preserve all other
+        // prior-override fields (the documented reason `merge` exists).
+        let base = MetadataOverrides {
+            title: Some("Old Title".into()),
+            publisher: Some("Kept Publisher".into()),
+            series: Some("Kept Series".into()),
+            ..Default::default()
+        };
+        let incoming = MetadataOverrides {
+            title: Some("New Title".into()),
+            ..Default::default()
+        };
+        let merged = base.merge(&incoming);
+        assert_eq!(merged.title, Some("New Title".into()));
+        assert_eq!(merged.publisher, Some("Kept Publisher".into()));
+        assert_eq!(merged.series, Some("Kept Series".into()));
+    }
+}
