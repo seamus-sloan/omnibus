@@ -689,6 +689,58 @@ pub async fn lookup_session(pool: &SqlitePool, raw_token: &str) -> AuthResult<(U
     Ok((user, session))
 }
 
+/// Outcome of [`validate_session`], collapsed to the only two dispositions
+/// an HTTP auth extractor cares about:
+///
+/// * [`SessionAuthError::Unauthenticated`] — no usable token on the request,
+///   or the token doesn't resolve to a live session (missing / expired /
+///   idle-expired / revoked). HTTP callers map this to `401 Unauthorized`.
+/// * [`SessionAuthError::Internal`] — an infrastructure failure (e.g. the DB
+///   query itself errored). HTTP callers map this to `500`.
+///
+/// Keeping this enum here (rather than re-deriving the 401-vs-500 split in
+/// each extractor) is the whole point of the consolidation: the
+/// cookie/bearer → live-session contract lives in exactly one place.
+#[derive(Debug, thiserror::Error)]
+pub enum SessionAuthError {
+    #[error("unauthenticated")]
+    Unauthenticated,
+    #[error(transparent)]
+    Internal(AuthError),
+}
+
+/// Resolve an authenticated `(User, Session)` from raw HTTP header values,
+/// preferring an `Authorization: Bearer …` token over the `omnibus_session`
+/// cookie (see [`parse_session_token`]). This is the single consolidated
+/// session-validation surface shared by every HTTP auth extractor — both the
+/// REST `AuthUser`/`AdminUser` extractors (`server::auth::extractor`) and the
+/// Dioxus server-function extractors (`omnibus_frontend::rpc`) delegate here
+/// so the token precedence, SHA-256 hashing, absolute + idle expiry, and
+/// revocation checks (all enforced by [`lookup_session`]) cannot drift between
+/// the two code paths.
+///
+/// Pure-string API by design — `omnibus-db` stays free of axum/http types, so
+/// each caller does only the thin work of pulling the header strings out of
+/// its own request representation before delegating.
+///
+/// * `None` token → [`SessionAuthError::Unauthenticated`].
+/// * [`AuthError::SessionNotFound`] → [`SessionAuthError::Unauthenticated`].
+/// * any other [`AuthError`] → [`SessionAuthError::Internal`].
+pub async fn validate_session(
+    pool: &SqlitePool,
+    authorization: Option<&str>,
+    cookie_header: Option<&str>,
+) -> Result<(User, Session), SessionAuthError> {
+    let Some((token, _kind)) = parse_session_token(authorization, cookie_header) else {
+        return Err(SessionAuthError::Unauthenticated);
+    };
+    match lookup_session(pool, &token).await {
+        Ok(pair) => Ok(pair),
+        Err(AuthError::SessionNotFound) => Err(SessionAuthError::Unauthenticated),
+        Err(e) => Err(SessionAuthError::Internal(e)),
+    }
+}
+
 pub async fn revoke_session(pool: &SqlitePool, session_id: i64) -> AuthResult<()> {
     sqlx::query("UPDATE sessions SET revoked_at = ? WHERE id = ?")
         .bind(now_unix())
@@ -1162,6 +1214,91 @@ mod tests {
         let p = pool().await;
         let err = lookup_session(&p, "not-a-real-token").await.unwrap_err();
         assert!(matches!(err, AuthError::SessionNotFound));
+    }
+
+    // ---- validate_session (shared HTTP-extractor surface) ----------------------
+
+    #[tokio::test]
+    async fn validate_session_resolves_bearer_token() {
+        let p = pool().await;
+        let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+        let ns = create_session(&p, u.id, None, SessionKind::Bearer, 3600)
+            .await
+            .unwrap();
+        let auth = format!("Bearer {}", ns.raw_token);
+        let (user, sess) = validate_session(&p, Some(&auth), None).await.unwrap();
+        assert_eq!(user.id, u.id);
+        assert_eq!(sess.id, ns.session.id);
+        assert_eq!(sess.kind, SessionKind::Bearer);
+    }
+
+    #[tokio::test]
+    async fn validate_session_resolves_cookie_token() {
+        let p = pool().await;
+        let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+        let ns = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+            .await
+            .unwrap();
+        let cookie = format!("{}={}", SESSION_COOKIE_NAME, ns.raw_token);
+        let (user, sess) = validate_session(&p, None, Some(&cookie)).await.unwrap();
+        assert_eq!(user.id, u.id);
+        assert_eq!(sess.kind, SessionKind::Cookie);
+    }
+
+    #[tokio::test]
+    async fn validate_session_no_token_is_unauthenticated() {
+        let p = pool().await;
+        let err = validate_session(&p, None, None).await.unwrap_err();
+        assert!(matches!(err, SessionAuthError::Unauthenticated));
+    }
+
+    #[tokio::test]
+    async fn validate_session_unknown_token_is_unauthenticated() {
+        // A syntactically valid token that resolves to no live session maps
+        // to Unauthenticated (401), not Internal (500).
+        let p = pool().await;
+        let err = validate_session(&p, Some("Bearer not-a-real-token"), None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SessionAuthError::Unauthenticated));
+    }
+
+    #[tokio::test]
+    async fn validate_session_expired_is_unauthenticated() {
+        let p = pool().await;
+        let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+        let ns = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE sessions SET expires_at = 1 WHERE id = ?")
+            .bind(ns.session.id)
+            .execute(&p)
+            .await
+            .unwrap();
+        let cookie = format!("{}={}", SESSION_COOKIE_NAME, ns.raw_token);
+        let err = validate_session(&p, None, Some(&cookie)).await.unwrap_err();
+        assert!(matches!(err, SessionAuthError::Unauthenticated));
+    }
+
+    #[tokio::test]
+    async fn validate_session_prefers_bearer_over_cookie() {
+        // Mirrors parse_session_token precedence: a Bearer header wins even
+        // when a (different) cookie is also present.
+        let p = pool().await;
+        let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+        let bearer = create_session(&p, u.id, None, SessionKind::Bearer, 3600)
+            .await
+            .unwrap();
+        let cookie_sess = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+            .await
+            .unwrap();
+        let auth = format!("Bearer {}", bearer.raw_token);
+        let cookie = format!("{}={}", SESSION_COOKIE_NAME, cookie_sess.raw_token);
+        let (_user, sess) = validate_session(&p, Some(&auth), Some(&cookie))
+            .await
+            .unwrap();
+        assert_eq!(sess.id, bearer.session.id);
+        assert_eq!(sess.kind, SessionKind::Bearer);
     }
 
     #[tokio::test]
