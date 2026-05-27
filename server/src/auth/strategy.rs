@@ -14,7 +14,6 @@
 //!   only needs to prove it's shaped right; implementations can land in
 //!   their own phases.
 
-use async_trait::async_trait;
 use omnibus_db::auth::AuthError;
 use sqlx::SqlitePool;
 
@@ -31,7 +30,20 @@ pub struct AuthenticatedUser {
 /// Contract for a pluggable auth backend. Implementations do the crypto +
 /// DB lookup; the session-issuing + cookie/bearer plumbing stays in the
 /// handler layer so every strategy lands sessions the same way.
-#[async_trait]
+///
+/// Uses native async-fn-in-traits (stable since Rust 1.75) instead of the
+/// `#[async_trait]` macro, dropping the per-call `Box`-ing it imposed. Sound
+/// here because every consumer holds a *concrete* strategy type — there is no
+/// `dyn AuthStrategy` dispatch anywhere — so the compiler monomorphizes each
+/// call directly.
+///
+/// `authenticate` is written as `fn(..) -> impl Future<..> + Send` rather than
+/// `async fn` so the returned future keeps an explicit `Send` bound (an
+/// `async fn` in a public trait can't carry one — see the `async_fn_in_trait`
+/// lint). The `+ Send` matches the future `#[async_trait]` produced and keeps
+/// the trait usable from `tokio::spawn`-ed axum handlers. If a future strategy
+/// ever needs to be stored behind `dyn`, reintroduce `async-trait` (or
+/// `trait-variant`) for that path.
 pub trait AuthStrategy: Send + Sync {
     /// Short stable tag for logs and admin UI (`"password"`, `"oidc"`, …).
     fn kind(&self) -> &'static str;
@@ -41,12 +53,12 @@ pub trait AuthStrategy: Send + Sync {
     /// implementations will ignore it in favor of their own flow and accept
     /// the trait shape as-is, probably exposing additional methods for the
     /// redirect/assertion dance.
-    async fn authenticate(
+    fn authenticate(
         &self,
         pool: &SqlitePool,
         username: &str,
         secret: &str,
-    ) -> Result<AuthenticatedUser, AuthError>;
+    ) -> impl std::future::Future<Output = Result<AuthenticatedUser, AuthError>> + Send;
 }
 
 /// Username + Argon2id PHC password strategy. Thin wrapper over
@@ -54,7 +66,6 @@ pub trait AuthStrategy: Send + Sync {
 /// logic stays in one place.
 pub struct PasswordStrategy;
 
-#[async_trait]
 impl AuthStrategy for PasswordStrategy {
     fn kind(&self) -> &'static str {
         "password"
