@@ -1986,17 +1986,24 @@ mod tests {
     // --- additional filter / facet / sort edge cases (#215) ---
 
     #[test]
-    fn tag_filter_or_within_bucket() {
-        // tags is OR within the bucket: a book matches if it carries *any* of
-        // the selected subjects. alpha=Fantasy, beta=Sci-Fi, gamma=both.
+    fn tag_filter_is_or_within_bucket_not_and() {
+        // tags is OR within the bucket: selecting two subjects must keep books
+        // carrying *either* one, never require *both* (AND would wrongly drop
+        // the single-tag books). alpha=Fantasy, beta=Sci-Fi, gamma=both.
         let s = sample();
-        let f = ViewFilters {
+        let both = ViewFilters {
+            tags: vec!["Fantasy".into(), "Sci-Fi".into()],
+            ..Default::default()
+        };
+        // OR keeps all three; AND would have returned only gamma (id 3).
+        assert_eq!(ids(&apply_filters(&s, &both)), vec![1, 2, 3]);
+
+        // A single selected tag still matches every book carrying it.
+        let one = ViewFilters {
             tags: vec!["Fantasy".into()],
             ..Default::default()
         };
-        let out = apply_filters(&s, &f);
-        // alpha (Fantasy) and gamma (Fantasy + Sci-Fi) carry the tag; beta does not.
-        assert_eq!(ids(&out), vec![1, 3]);
+        assert_eq!(ids(&apply_filters(&s, &one)), vec![1, 3]);
     }
 
     #[test]
