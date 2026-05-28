@@ -196,13 +196,11 @@ struct CompletionsPruneGuard {
 
 impl Drop for CompletionsPruneGuard {
     fn drop(&mut self) {
-        // `lock()` only fails on poisoning; if we're already unwinding
-        // from a panic we don't want to compound it with a double-panic,
-        // so silently skip on poison. The cap-bounding contract is
-        // preserved on the dominant non-poisoned path.
-        if let Ok(mut map) = self.completions.lock() {
-            map.remove(&self.id);
-        }
+        // Recover on poison via `lock_unpoison` so the slot is reclaimed even
+        // after another task panicked while holding this lock — otherwise the
+        // map would grow unbounded. `into_inner` never panics, so this stays
+        // safe on the unwinding path (no double-panic).
+        lock_unpoison(&self.completions).remove(&self.id);
     }
 }
 
@@ -218,16 +216,21 @@ struct ProgressTerminalGuard {
 
 impl Drop for ProgressTerminalGuard {
     fn drop(&mut self) {
-        if let Ok(mut map) = self.progress.lock() {
-            if let Some(entry) = map.get_mut(&self.id) {
-                if entry.terminal_at.is_none() {
-                    let now_ms = wall_clock_ms();
-                    entry.progress.state = ProgressState::Failed {
-                        message: "task panicked".to_string(),
-                    };
-                    entry.progress.last_update_ms = now_ms;
-                    entry.terminal_at = Some(Instant::now());
-                }
+        // Recover on poison via `lock_unpoison` rather than skipping on `Err`:
+        // a poisoned `progress` map would otherwise leave this task's entry
+        // stuck in `Running` forever (never evicted, UI shows a stuck task),
+        // so the terminal "task panicked" write is exactly what must still
+        // happen. `into_inner` never panics, so there is no double-panic risk
+        // on the unwinding path.
+        let mut map = lock_unpoison(&self.progress);
+        if let Some(entry) = map.get_mut(&self.id) {
+            if entry.terminal_at.is_none() {
+                let now_ms = wall_clock_ms();
+                entry.progress.state = ProgressState::Failed {
+                    message: "task panicked".to_string(),
+                };
+                entry.progress.last_update_ms = now_ms;
+                entry.terminal_at = Some(Instant::now());
             }
         }
     }
@@ -1152,9 +1155,10 @@ mod tests {
     async fn poisoned_progress_lock_recovers_instead_of_panicking() {
         let w = make_worker_default(pool().await);
 
-        // Poison the `progress` mutex: take the lock on a scratch thread and
-        // panic while holding it. `catch_unwind` keeps the panic from
-        // tearing down the test thread; the lock stays poisoned afterward.
+        // Poison the `progress` mutex: take the lock and panic while holding
+        // it inside `catch_unwind`, which contains the unwind to this call (no
+        // thread is spawned) so the test thread survives and the lock stays
+        // poisoned afterward.
         let progress = w.progress.clone();
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _guard = progress.lock().unwrap();
@@ -1192,6 +1196,65 @@ mod tests {
             assert!(
                 Instant::now() < deadline,
                 "snapshot never surfaced the post-poison task"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    /// Regression for the poisoned-`progress` drop path: when a task panics
+    /// *and* the `progress` mutex is already poisoned, `ProgressTerminalGuard`
+    /// must still record the terminal `Failed` entry. Before the drop used
+    /// `lock_unpoison` it skipped on poison, leaving the task stuck in
+    /// `Running` forever (never evicted, UI shows a stuck task).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn poisoned_progress_lock_still_records_terminal_on_panic() {
+        let w = make_worker_default(pool().await);
+
+        // Poison the `progress` mutex (panic while holding the lock, contained
+        // by `catch_unwind` so the test thread survives).
+        let progress = w.progress.clone();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = progress.lock().unwrap();
+            panic!("intentional poisoning panic");
+        }));
+        assert!(
+            w.progress.lock().is_err(),
+            "progress mutex should be poisoned after the panic"
+        );
+
+        // A task that panics in `run` so its `ProgressTerminalGuard` drops on
+        // the unwind — with the lock poisoned, that drop is the only thing
+        // that can record the terminal state.
+        let id = w.post(Task::Test {
+            tag: "panic-after-poison",
+            latency_ms: 0,
+            resource: None,
+            route_through_scan_sem: false,
+            on_run: Some(Arc::new(|| panic!("intentional test panic"))),
+            on_done: None,
+        });
+        let _ = w.await_completion(id).await;
+
+        // The entry must surface as terminal `Failed`, never stuck in the
+        // `active` (Running) bucket.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let snap = w.progress_snapshot();
+            if let Some(p) = snap.recent_complete.iter().find(|p| p.task_id == id) {
+                assert!(
+                    matches!(p.state, ProgressState::Failed { .. }),
+                    "panicked task should be terminal Failed, got {:?}",
+                    p.state
+                );
+                break;
+            }
+            assert!(
+                snap.active.iter().all(|p| p.task_id != id),
+                "task stuck in Running after panic with a poisoned progress lock"
+            );
+            assert!(
+                Instant::now() < deadline,
+                "terminal entry never surfaced after panic + poison"
             );
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
