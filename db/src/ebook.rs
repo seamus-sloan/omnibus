@@ -620,6 +620,12 @@ fn all<R: std::io::Read + std::io::Seek>(doc: &EpubDoc<R>, key: &str) -> Vec<Str
         .collect()
 }
 
+/// Hard cap on embedded cover bytes we'll hand to the `image` decoder.
+/// Higher than the 5 MiB HTTP cap in `author_photos` because these are
+/// trusted local files; 20 MiB still covers uncompressed print-resolution
+/// covers while bounding the decode allocation against a crafted EPUB.
+const MAX_EMBEDDED_COVER_BYTES: usize = 20 * 1024 * 1024;
+
 /// F1.7 Atrium: extract a representative accent color from cover bytes.
 /// Returns an `oklch(L C H)` string clamped to a readable band, or `None`
 /// when decoding fails or the cover has no chromatic content. See the
@@ -627,6 +633,9 @@ fn all<R: std::io::Read + std::io::Seek>(doc: &EpubDoc<R>, key: &str) -> Vec<Str
 /// for the algorithm rationale (hue-bucket → highest-weighted → OKLCH).
 pub fn extract_accent(bytes: &[u8]) -> Option<String> {
     if bytes.is_empty() {
+        return None;
+    }
+    if bytes.len() > MAX_EMBEDDED_COVER_BYTES {
         return None;
     }
     let img = image::load_from_memory(bytes).ok()?;
@@ -791,6 +800,18 @@ mod tests {
     #[test]
     fn extract_accent_returns_none_for_corrupt_bytes() {
         assert!(extract_accent(b"not an image, just text").is_none());
+    }
+
+    #[test]
+    fn extract_accent_returns_none_for_oversized_bytes() {
+        // A slice past the cap must be rejected by the size guard before it
+        // ever reaches the decoder — protecting the indexer from a crafted
+        // EPUB whose stored image expands to gigabytes of pixels on decode.
+        let bytes = vec![0u8; MAX_EMBEDDED_COVER_BYTES + 1];
+        assert!(
+            extract_accent(&bytes).is_none(),
+            "oversized cover bytes should be rejected before decoding"
+        );
     }
 
     #[test]
