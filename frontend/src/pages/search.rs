@@ -152,7 +152,7 @@ pub fn SearchPage(query: String) -> Element {
                 ul { class: "search-results",
                     for tag in r.tags.iter().cloned() {
                         li {
-                            key: "{tag.name}",
+                            key: "{tag.id}",
                             Link {
                                 to: Route::Search { query: format!("tag:{}", tag.name) },
                                 class: "search-result-row",
