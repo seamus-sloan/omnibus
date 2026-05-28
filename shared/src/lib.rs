@@ -689,7 +689,7 @@ mod metadata_overrides_tests {
     }
 
     #[test]
-    fn validate_rejects_title_at_length_cap_is_accepted() {
+    fn validate_accepts_title_at_length_cap() {
         // Boundary: exactly MAX_SCALAR_LEN is allowed (the check is `> max`).
         let ov = MetadataOverrides {
             title: Some("x".repeat(MetadataOverrides::MAX_SCALAR_LEN)),
