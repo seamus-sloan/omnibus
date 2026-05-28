@@ -621,7 +621,7 @@ fn all<R: std::io::Read + std::io::Seek>(doc: &EpubDoc<R>, key: &str) -> Vec<Str
 }
 
 /// Hard cap on embedded cover bytes we'll hand to the `image` decoder.
-/// Higher than the 5 MiB HTTP cap in `author_photos` because these are
+/// Higher than the 10 MiB HTTP cap in `author_photos` because these are
 /// trusted local files; 20 MiB still covers uncompressed print-resolution
 /// covers while bounding the decode allocation against a crafted EPUB.
 const MAX_EMBEDDED_COVER_BYTES: usize = 20 * 1024 * 1024;
@@ -804,13 +804,22 @@ mod tests {
 
     #[test]
     fn extract_accent_returns_none_for_oversized_bytes() {
-        // A slice past the cap must be rejected by the size guard before it
-        // ever reaches the decoder — protecting the indexer from a crafted
-        // EPUB whose stored image expands to gigabytes of pixels on decode.
-        let bytes = vec![0u8; MAX_EMBEDDED_COVER_BYTES + 1];
+        // Start from a *valid* cover that decodes to an accent on its own, so
+        // the only thing keeping the oversized case out of the decoder is the
+        // size guard. (All-zero bytes would fail to decode regardless, which
+        // wouldn't catch a regression that removed the guard.)
+        let mut bytes = solid_color_png(200, 60, 50, 64, 96);
+        assert!(
+            extract_accent(&bytes).is_some(),
+            "sanity: the unpadded cover should decode to an accent"
+        );
+        // Pad past the cap with trailing bytes the PNG decoder ignores (it
+        // stops at IEND). Without the guard these would still decode and
+        // yield Some, so this assertion fails if the cap check is removed.
+        bytes.resize(MAX_EMBEDDED_COVER_BYTES + 1, 0);
         assert!(
             extract_accent(&bytes).is_none(),
-            "oversized cover bytes should be rejected before decoding"
+            "oversized cover bytes should be rejected by the size guard before decoding"
         );
     }
 
