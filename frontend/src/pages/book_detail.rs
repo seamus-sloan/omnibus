@@ -85,9 +85,6 @@ pub fn BookDetailPage(uuid: String) -> Element {
 // the data-fetch shell stays small.
 // ---------------------------------------------------------------------------
 
-/// Build the "kicker" line above the title — "<type> · <year>", falling back
-/// to "Book" when the Dublin Core type is absent and dropping the year when
-/// it's empty. Pure derivation, unit-tested below.
 fn kicker_label(dc_type: Option<&str>, year: &str) -> String {
     match (dc_type, year.is_empty()) {
         (Some(t), false) => format!("{t} · {year}"),
@@ -97,8 +94,6 @@ fn kicker_label(dc_type: Option<&str>, year: &str) -> String {
     }
 }
 
-/// Format the series label under the title — "<series> #<index>", just the
-/// series name when there's no index, or `None` when there's no series.
 fn series_label(series: Option<&str>, index: Option<&str>) -> Option<String> {
     match (series, index) {
         (Some(s), Some(i)) => Some(format!("{s} #{i}")),

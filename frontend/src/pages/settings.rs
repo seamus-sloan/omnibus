@@ -142,9 +142,6 @@ pub fn SettingsPage() -> Element {
     }
 }
 
-/// Build the human-readable summary line for a configured library section:
-/// "<n> file(s) found." plus a " <count> .<ext> found." clause per extension.
-/// Pure derivation, unit-tested below.
 fn library_summary_line(section: &LibrarySection) -> String {
     let mut line = format!("{} file(s) found.", section.total_files);
     for (ext, count) in &section.counts_by_ext {
