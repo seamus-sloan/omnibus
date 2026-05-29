@@ -188,9 +188,13 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_first_user_race_only_one_admin() {
-        // SQLite serializes writes, so BEGIN IMMEDIATE will cause the
-        // second transaction to see user_count = 1 and register bob as a
-        // non-admin. This is the race we are specifically defending against.
+        // BEGIN IMMEDIATE serializes the two registrations on the RESERVED
+        // write lock: whichever transaction wins inserts the first user as
+        // admin and flips registration_enabled to '0' before committing. The
+        // loser blocks until that commit, then sees user_count = 1 with
+        // registration disabled and is rejected. So the race resolves
+        // deterministically — exactly one user, who is the admin, and exactly
+        // one Ok. This is the race we are specifically defending against.
         let p = pool().await;
 
         let p1 = p.clone();
@@ -201,12 +205,6 @@ mod tests {
         let r1 = t1.await.unwrap();
         let r2 = t2.await.unwrap();
 
-        // Both succeed (second sees registration_enabled=1 because first
-        // flips it inside the same transaction — the second either sees
-        // it still "1" (before commit) or "0" (after commit). Under
-        // BEGIN IMMEDIATE the second blocks until the first commits, so
-        // it sees "0" and gets RegistrationDisabled — OR the second won
-        // the BEGIN IMMEDIATE race and alice is the non-first one.
         let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
             .fetch_one(&p)
             .await
@@ -216,12 +214,14 @@ mod tests {
             .await
             .unwrap();
 
-        // Exactly one user succeeded, and it's the admin.
+        // The loser is rejected before inserting, so exactly one user exists
+        // and it's the admin; exactly one create returned Ok.
+        assert_eq!(users, 1, "loser never inserts — exactly one user survives");
         assert_eq!(admins, 1, "exactly one admin regardless of race outcome");
-        // The other either failed with RegistrationDisabled or wasn't created.
-        assert!(users >= 1);
-        assert!(users <= 2);
-        assert!(r1.is_ok() || r2.is_ok());
+        assert!(
+            r1.is_ok() ^ r2.is_ok(),
+            "exactly one create succeeds; the other is rejected"
+        );
     }
 
     #[tokio::test]
