@@ -16,13 +16,6 @@ pub struct Settings {
     pub audiobook_library_path: Option<String>,
 }
 
-/// Response payload for the counter endpoints (`GET /api/value`,
-/// `POST /api/value/increment`).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ValueResponse {
-    pub value: i64,
-}
-
 /// One half of the library listing (either ebooks or audiobooks).
 ///
 /// `counts_by_ext` is an ordered list of `(extension, count)` pairs for the
