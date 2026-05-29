@@ -1427,6 +1427,30 @@ mod tests {
         );
     }
 
+    /// #248: the revoked-expiry DELETE must be served by the partial
+    /// `idx_sessions_revoked_at` (added in migration 0012) instead of scanning.
+    /// As with the idle term, the prune issues this as a standalone
+    /// single-predicate statement so the planner can use the index; this guards
+    /// against a regression back to the OR'd form that scans.
+    #[tokio::test]
+    async fn prune_revoked_delete_uses_revoked_index() {
+        use sqlx::Row;
+        let p = pool().await;
+        let plan: String =
+            sqlx::query("EXPLAIN QUERY PLAN DELETE FROM sessions WHERE revoked_at IS NOT NULL")
+                .fetch_all(&p)
+                .await
+                .unwrap()
+                .iter()
+                .map(|r| r.get::<String, _>("detail"))
+                .collect::<Vec<_>>()
+                .join("\n");
+        assert!(
+            plan.contains("idx_sessions_revoked_at"),
+            "revoked-prune delete should use idx_sessions_revoked_at, got plan:\n{plan}"
+        );
+    }
+
     // ---- devices --------------------------------------------------------------
 
     #[tokio::test]
