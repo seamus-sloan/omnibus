@@ -86,6 +86,23 @@ impl AppState {
 }
 
 pub fn rest_router(state: AppState) -> Router {
+    // Standalone/test entrypoint: a fresh, dedicated search limiter per call.
+    // The live server uses `rest_router_with_search_limiter` to share one (#249).
+    rest_router_with_search_limiter(
+        state,
+        std::sync::Arc::new(RateLimiter::with_policy(
+            SEARCH_RATE_LIMIT_WINDOW,
+            SEARCH_RATE_LIMIT_MAX,
+        )),
+    )
+}
+
+/// Build the `/api/*` REST router, sharing `search_limiter` with the caller so
+/// REST `/api/search/*` and RPC `/api/rpc/search-*` draw from one budget (#249).
+pub fn rest_router_with_search_limiter(
+    state: AppState,
+    search_limiter: std::sync::Arc<RateLimiter>,
+) -> Router {
     let pool = state.pool().clone();
     Router::new()
         .route("/api/_health", get(health::get_health))
@@ -109,7 +126,7 @@ pub fn rest_router(state: AppState) -> Router {
             get(author_photos::get_author_photo).delete(author_photos::delete_author_photo),
         )
         .merge(upload_router())
-        .merge(search_router())
+        .merge(search_router(search_limiter))
         .route("/api/covers/{uuid}", get(covers::get_cover))
         .route("/api/thumbs/{uuid}/{size}", get(covers::get_thumb))
         .route("/api/authors", get(authors::get_authors))
@@ -153,11 +170,10 @@ pub fn rest_router(state: AppState) -> Router {
 /// the outer `.with_state(state)` finalizes the state type. The rate-limit
 /// middleware carries its own state (`Arc<RateLimiter>`) via
 /// `from_fn_with_state`, which doesn't propagate to the route handlers.
-fn search_router() -> Router<AppState> {
-    let limiter = std::sync::Arc::new(RateLimiter::with_policy(
-        SEARCH_RATE_LIMIT_WINDOW,
-        SEARCH_RATE_LIMIT_MAX,
-    ));
+///
+/// The `limiter` is passed in so the live server can share one `Arc` across both
+/// search families (#249); `rest_router` supplies a fresh dedicated one.
+fn search_router(limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> {
     Router::new()
         .route("/api/search", get(search::get_search))
         .route("/api/search/palette", get(search::get_search_palette))
