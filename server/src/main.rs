@@ -107,23 +107,14 @@ fn main() {
                 "/api/auth/register",
                 "/api/auth/logout",
             ]);
-            // One per-IP search budget shared across BOTH search families
-            // (#249): the same `Arc<RateLimiter>` backs the REST `/api/search/*`
-            // layer (threaded into `rest_router_with_search_limiter`) and the
-            // RPC `/api/rpc/search-*` layer below. The bucket map keys on IP
-            // alone, so sharing the Arc gives a principal a single
-            // `SEARCH_RATE_LIMIT_MAX` / `SEARCH_RATE_LIMIT_WINDOW` budget in
-            // total — hammering both families can no longer reach 2×.
+            // One per-IP budget shared by the REST `/api/search/*` and RPC
+            // `/api/rpc/search-*` layers (same Arc), so neither reaches 2× (#249).
             let search_limiter = Arc::new(rate_limit::RateLimiter::with_policy(
                 backend::SEARCH_RATE_LIMIT_WINDOW,
                 backend::SEARCH_RATE_LIMIT_MAX,
             ));
-            // Prefix (matched via `starts_with`) covers BOTH RPC search routes:
-            // the full search `/api/rpc/search` (rpc_search) and
-            // `/api/rpc/search-palette` (rpc_search_palette). Both run FTS5, so
-            // neither may bypass the shared search budget (#249) — a narrower
-            // `/api/rpc/search-palette` prefix would have left the full search
-            // unlimited.
+            // `starts_with` prefix covers both `/api/rpc/search` and
+            // `/api/rpc/search-palette` so neither bypasses the budget (#249).
             let search_rpc_prefixes: Arc<Vec<&'static str>> = Arc::new(vec!["/api/rpc/search"]);
             let router = dioxus::server::router(App)
                 .layer(axum::middleware::from_fn_with_state(
