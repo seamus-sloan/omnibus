@@ -2,6 +2,17 @@
 //! row (capped at `INDEX_LIMIT`) so the UI's client-side sort/filter has
 //! the full list to work with; per-row counts come back override-aware so
 //! the index surfaces stay consistent with the discovery-detail reads.
+//!
+//! # Multi-tenancy invariant
+//!
+//! Both browse reads are **DB-wide**: they return every author / series in
+//! the configured library without filtering by the requesting user's
+//! access. The app is single-tenant and single-library today (see Phase 4
+//! in `docs/roadmap/0-0-summary.md`), so every authenticated caller sees
+//! the same index. Per-user ACL scoping — a `user_id` parameter plus an
+//! access-control join — is deferred to F4.x and tracked by issue #232;
+//! each function carries a `# Multi-tenancy` rustdoc section and a
+//! `TODO(F4.x)` marker in its body until that work lands.
 
 use sqlx::{Row, SqlitePool};
 
