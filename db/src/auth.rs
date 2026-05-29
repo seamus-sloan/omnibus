@@ -1317,14 +1317,18 @@ mod tests {
             .fetch_one(&p)
             .await
             .unwrap();
-        let future = now_unix() + 10_000;
+        // Touch timestamp inside the session lifetime (created with TTL 3600)
+        // and distinct from the creation-time last_used_at, so the
+        // `expires_at > ?` guard passes — leaving `revoked_at IS NULL` as the
+        // only reason the UPDATE matches 0 rows.
+        let touch_at = now_unix() + 100;
         let touched = sqlx::query(
             "UPDATE sessions SET last_used_at = ?
              WHERE id = ? AND revoked_at IS NULL AND expires_at > ?",
         )
-        .bind(future)
+        .bind(touch_at)
         .bind(ns.session.id)
-        .bind(future)
+        .bind(touch_at)
         .execute(&p)
         .await
         .unwrap()
