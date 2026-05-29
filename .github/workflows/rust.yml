@@ -84,6 +84,12 @@ jobs:
       - name: cargo clippy (db)
         run: nix develop --command cargo clippy -p omnibus-db --all-targets -- -D warnings
 
+      - name: Clippy frontend
+        run: nix develop --command cargo clippy -p omnibus-frontend --features server --all-targets -- -D warnings
+
+      - name: Clippy shared
+        run: nix develop --command cargo clippy -p omnibus-shared --all-targets -- -D warnings
+
       - name: cargo test (server)
         run: nix develop --command cargo test -p omnibus
 
