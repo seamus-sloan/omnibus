@@ -217,21 +217,33 @@ pub async fn revoke_all_sessions_for_user(pool: &SqlitePool, user_id: i64) -> Au
 /// boundary, same idle cutoff) so the table only ever retains rows that can
 /// still authenticate. Returns the number of rows deleted; intended to run on
 /// a periodic schedule (see the prune task in `server::main`).
-/// `idx_sessions_expires_at` covers the absolute-expiry term; the revoked and
-/// idle terms are not separately indexed.
+///
+/// Issued as three single-predicate DELETEs (one per index from migrations 0004
+/// and 0012): SQLite scans the table for the OR'd form unless every branch is
+/// indexed.
 pub async fn prune_expired_sessions(pool: &SqlitePool) -> AuthResult<u64> {
     let now = now_unix();
-    let r = sqlx::query(
-        "DELETE FROM sessions
-         WHERE revoked_at IS NOT NULL
-            OR expires_at <= ?
-            OR last_used_at < ?",
-    )
-    .bind(now)
-    .bind(now - SESSION_IDLE_TIMEOUT_SECS)
-    .execute(pool)
-    .await?;
-    Ok(r.rows_affected())
+    let idle_cutoff = now - SESSION_IDLE_TIMEOUT_SECS;
+
+    // One transaction keeps the prune atomic; a row matching several predicates
+    // is removed by the first matching DELETE, so the counts don't overlap.
+    let mut tx = pool.begin().await?;
+    let revoked = sqlx::query("DELETE FROM sessions WHERE revoked_at IS NOT NULL")
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    let expired = sqlx::query("DELETE FROM sessions WHERE expires_at <= ?")
+        .bind(now)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    let idle = sqlx::query("DELETE FROM sessions WHERE last_used_at < ?")
+        .bind(idle_cutoff)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    tx.commit().await?;
+    Ok(revoked + expired + idle)
 }
 
 #[cfg(test)]
@@ -487,5 +499,48 @@ mod tests {
         // Idempotent: a second prune with nothing to remove deletes zero rows.
         let again = prune_expired_sessions(&p).await.unwrap();
         assert_eq!(again, 0);
+    }
+
+    /// #248: the idle DELETE must use `idx_sessions_last_used_at`, not scan.
+    /// Guards against regressing to the OR'd form (migration 0012).
+    #[tokio::test]
+    async fn prune_idle_delete_uses_last_used_index() {
+        use sqlx::Row;
+        let p = pool().await;
+        let plan: String =
+            sqlx::query("EXPLAIN QUERY PLAN DELETE FROM sessions WHERE last_used_at < ?")
+                .bind(0_i64)
+                .fetch_all(&p)
+                .await
+                .unwrap()
+                .iter()
+                .map(|r| r.get::<String, _>("detail"))
+                .collect::<Vec<_>>()
+                .join("\n");
+        assert!(
+            plan.contains("idx_sessions_last_used_at"),
+            "idle-prune delete should use idx_sessions_last_used_at, got plan:\n{plan}"
+        );
+    }
+
+    /// #248: the revoked DELETE must use the partial `idx_sessions_revoked_at`,
+    /// not scan. Guards against regressing to the OR'd form (migration 0012).
+    #[tokio::test]
+    async fn prune_revoked_delete_uses_revoked_index() {
+        use sqlx::Row;
+        let p = pool().await;
+        let plan: String =
+            sqlx::query("EXPLAIN QUERY PLAN DELETE FROM sessions WHERE revoked_at IS NOT NULL")
+                .fetch_all(&p)
+                .await
+                .unwrap()
+                .iter()
+                .map(|r| r.get::<String, _>("detail"))
+                .collect::<Vec<_>>()
+                .join("\n");
+        assert!(
+            plan.contains("idx_sessions_revoked_at"),
+            "revoked-prune delete should use idx_sessions_revoked_at, got plan:\n{plan}"
+        );
     }
 }
