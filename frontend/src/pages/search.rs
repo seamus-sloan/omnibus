@@ -94,6 +94,7 @@ pub fn SearchPage(query: String) -> Element {
                 ul { class: "search-results",
                     for book in r.books.iter().cloned() {
                         li {
+                            key: "{book.uuid}",
                             Link {
                                 to: Route::BookDetail { uuid: book.uuid.clone() },
                                 class: "search-result-row",
@@ -110,6 +111,7 @@ pub fn SearchPage(query: String) -> Element {
                 ul { class: "search-results",
                     for author in r.authors.iter().cloned() {
                         li {
+                            key: "{author.id}",
                             Link {
                                 to: Route::AuthorDetail { id: author.id },
                                 class: "search-result-row",
@@ -128,6 +130,7 @@ pub fn SearchPage(query: String) -> Element {
                 ul { class: "search-results",
                     for s in r.series.iter().cloned() {
                         li {
+                            key: "{s.id}",
                             Link {
                                 to: Route::SeriesDetail { id: s.id },
                                 class: "search-result-row",
@@ -149,6 +152,7 @@ pub fn SearchPage(query: String) -> Element {
                 ul { class: "search-results",
                     for tag in r.tags.iter().cloned() {
                         li {
+                            key: "{tag.id}",
                             Link {
                                 to: Route::Search { query: format!("tag:{}", tag.name) },
                                 class: "search-result-row",

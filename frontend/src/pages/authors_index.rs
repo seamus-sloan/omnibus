@@ -205,7 +205,9 @@ pub fn AuthorsIndexPage() -> Element {
                     }
                 } else if show_letters {
                     for (letter, group) in letters.iter() {
-                        section { class: "idx-letter-section",
+                        section {
+                            key: "{letter}",
+                            class: "idx-letter-section",
                             div { class: "idx-letter-rail",
                                 div { class: "idx-letter-rail-glyph", "{letter}" }
                                 div { class: "idx-letter-rail-count mono", "{group.len()}" }
