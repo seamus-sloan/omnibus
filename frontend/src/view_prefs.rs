@@ -162,3 +162,51 @@ mod tests {
         assert_eq!(load("/library/missing"), ViewPrefs::default());
     }
 }
+
+// -----------------------------------------------------------------------------
+// SSR / server-only tests — exercise the no-persistence path that compiles
+// under the `server` feature (the default `cargo test -p omnibus-frontend
+// --features server`). The `web`/`mobile` impls live behind their own cfgs and
+// are unreachable here, so these assertions pin the documented SSR contract:
+// every call returns defaults and `save` is an inert no-op.
+// -----------------------------------------------------------------------------
+#[cfg(all(test, not(any(feature = "web", feature = "mobile"))))]
+mod ssr_tests {
+    use super::*;
+    use omnibus_shared::{SortDir, SortKey, ViewFilters, ViewMode};
+
+    #[test]
+    fn load_always_returns_defaults() {
+        assert_eq!(load("/library/a"), ViewPrefs::default());
+        assert_eq!(load(""), ViewPrefs::default());
+    }
+
+    #[test]
+    fn save_is_a_noop_and_does_not_affect_subsequent_loads() {
+        let prefs = ViewPrefs {
+            view_mode: ViewMode::Grid,
+            sort_key: SortKey::Author,
+            sort_dir: SortDir::Desc,
+            filters: ViewFilters {
+                formats: vec!["epub".into()],
+                ..Default::default()
+            },
+            filters_open: true,
+        };
+        // Persisting must not change what a later load returns under SSR.
+        save("/library/a", &prefs);
+        assert_eq!(load("/library/a"), ViewPrefs::default());
+    }
+
+    #[test]
+    fn default_prefs_match_documented_shape() {
+        // First-hydration markup depends on these defaults: Table view, sorted
+        // by Title ascending, no active filters, sidebar closed.
+        let d = ViewPrefs::default();
+        assert_eq!(d.view_mode, ViewMode::Table);
+        assert_eq!(d.sort_key, SortKey::Title);
+        assert_eq!(d.sort_dir, SortDir::Asc);
+        assert!(d.filters.is_empty());
+        assert!(!d.filters_open);
+    }
+}
