@@ -620,6 +620,12 @@ fn all<R: std::io::Read + std::io::Seek>(doc: &EpubDoc<R>, key: &str) -> Vec<Str
         .collect()
 }
 
+/// Hard cap on embedded cover bytes we'll hand to the `image` decoder.
+/// Higher than the 10 MiB HTTP cap in `author_photos` because these are
+/// trusted local files; 20 MiB still covers uncompressed print-resolution
+/// covers while bounding the decode allocation against a crafted EPUB.
+const MAX_EMBEDDED_COVER_BYTES: usize = 20 * 1024 * 1024;
+
 /// F1.7 Atrium: extract a representative accent color from cover bytes.
 /// Returns an `oklch(L C H)` string clamped to a readable band, or `None`
 /// when decoding fails or the cover has no chromatic content. See the
@@ -627,6 +633,9 @@ fn all<R: std::io::Read + std::io::Seek>(doc: &EpubDoc<R>, key: &str) -> Vec<Str
 /// for the algorithm rationale (hue-bucket → highest-weighted → OKLCH).
 pub fn extract_accent(bytes: &[u8]) -> Option<String> {
     if bytes.is_empty() {
+        return None;
+    }
+    if bytes.len() > MAX_EMBEDDED_COVER_BYTES {
         return None;
     }
     let img = image::load_from_memory(bytes).ok()?;
@@ -791,6 +800,27 @@ mod tests {
     #[test]
     fn extract_accent_returns_none_for_corrupt_bytes() {
         assert!(extract_accent(b"not an image, just text").is_none());
+    }
+
+    #[test]
+    fn extract_accent_returns_none_for_oversized_bytes() {
+        // Start from a *valid* cover that decodes to an accent on its own, so
+        // the only thing keeping the oversized case out of the decoder is the
+        // size guard. (All-zero bytes would fail to decode regardless, which
+        // wouldn't catch a regression that removed the guard.)
+        let mut bytes = solid_color_png(200, 60, 50, 64, 96);
+        assert!(
+            extract_accent(&bytes).is_some(),
+            "sanity: the unpadded cover should decode to an accent"
+        );
+        // Pad past the cap with trailing bytes the PNG decoder ignores (it
+        // stops at IEND). Without the guard these would still decode and
+        // yield Some, so this assertion fails if the cap check is removed.
+        bytes.resize(MAX_EMBEDDED_COVER_BYTES + 1, 0);
+        assert!(
+            extract_accent(&bytes).is_none(),
+            "oversized cover bytes should be rejected by the size guard before decoding"
+        );
     }
 
     #[test]
