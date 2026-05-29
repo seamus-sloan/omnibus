@@ -71,7 +71,9 @@ pub enum AuthError {
     Db(#[from] sqlx::Error),
     #[error("password hashing failed: {0}")]
     Hash(String),
-    #[error("CSPRNG token generation failed: {0}")]
+    // Covers both session-token and signing-key generation, so the message
+    // is phrased generically rather than naming "token".
+    #[error("CSPRNG byte generation failed: {0}")]
     TokenGeneration(String),
 }
 
