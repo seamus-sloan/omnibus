@@ -802,17 +802,21 @@ async fn post_ebook_cover(
                                 .into_response();
                         }
                         // Validate magic bytes — don't trust Content-Type alone.
-                        let detected = detect_image_format(&b);
-                        if detected.is_none() {
-                            return (
-                                axum::http::StatusCode::BAD_REQUEST,
-                                "file does not appear to be a valid image",
-                            )
-                                .into_response();
+                        // Bind the detected MIME directly: a `None` here means the
+                        // bytes carry no recognisable image header, so surface a
+                        // 415 rather than `.unwrap()`-panicking the task (#210).
+                        match detect_image_format(&b) {
+                            // Use the detected MIME so the stored extension matches
+                            // actual content, not the (untrusted) client header.
+                            Some(mime) => break (mime, b),
+                            None => {
+                                return (
+                                    axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                                    "Could not detect image format",
+                                )
+                                    .into_response();
+                            }
                         }
-                        // Use the detected MIME so the stored extension matches
-                        // actual content, not the (untrusted) client header.
-                        break (detected.unwrap(), b);
                     }
                     Err(e) => return internal("read cover field", e),
                 }
@@ -967,15 +971,19 @@ async fn put_author_photo(
                             )
                                 .into_response();
                         }
-                        let detected = detect_image_format(&b);
-                        if detected.is_none() {
-                            return (
-                                axum::http::StatusCode::BAD_REQUEST,
-                                "file does not appear to be a valid image",
-                            )
-                                .into_response();
+                        // Bind the detected MIME directly: a `None` here means the
+                        // bytes carry no recognisable image header, so surface a
+                        // 415 rather than `.unwrap()`-panicking the task (#210).
+                        match detect_image_format(&b) {
+                            Some(mime) => break (mime, b),
+                            None => {
+                                return (
+                                    axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                                    "Could not detect image format",
+                                )
+                                    .into_response();
+                            }
                         }
-                        break (detected.unwrap(), b);
                     }
                     Err(e) => return internal("read photo field", e),
                 }
@@ -3242,6 +3250,54 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn api_post_cover_rejects_undetectable_format() {
+        // Content-Type passes the `image/` prefix gate but the bytes carry no
+        // recognisable image magic header, so `detect_image_format` returns
+        // `None`. The handler must surface a 415 (#210) instead of
+        // `.unwrap()`-panicking the task into a bare 500.
+        let _covers = CoversDirGuard::new("undetectable_format");
+        let (app, _state, pool) = fixture().await;
+        let (_id, uuid) = seed_book_with_uuid(&pool, "/lib", "UndetectableBook").await;
+        let admin = test_support::create_admin(&pool, "admin").await;
+        let token = test_support::bearer_token(&pool, admin.id).await;
+
+        // image/png header, but the body is not a real image.
+        let (content_type, body) =
+            build_cover_multipart("image/png", b"definitely not image bytes");
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/ebooks/{uuid}/cover"))
+                    .method("POST")
+                    .header("content-type", content_type)
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body = std::str::from_utf8(&bytes).unwrap_or("");
+        assert!(
+            body.contains("Could not detect image format"),
+            "415 body should explain the format detection failure, got {body:?}"
+        );
+
+        // No override row should have been written for the rejected upload.
+        let books = db::list_books(&pool, "/lib").await.unwrap();
+        let uuid = books[0].unique_identifier.clone().unwrap();
+        assert!(
+            db::get_metadata_overrides(&pool, &uuid)
+                .await
+                .unwrap()
+                .is_none(),
+            "rejected undetectable-format upload must not create an override row"
+        );
+    }
+
     // ---------------------------------------------------------------------
     // F1.11 Author profile photos.
     // ---------------------------------------------------------------------
@@ -3416,7 +3472,8 @@ mod tests {
     async fn api_put_author_photo_rejects_bogus_image_bytes() {
         // Content-Type says image/png but the bytes don't carry the PNG magic
         // header — the magic-byte check must catch this even when the
-        // declared MIME passes the `image/` prefix guard.
+        // declared MIME passes the `image/` prefix guard. The handler surfaces
+        // a 415 (#210) since the payload is not a recognisable image format.
         let (app, _state, pool) = fixture().await;
         let id = seed_author(&pool, "Ada Lovelace").await;
         let admin = test_support::create_admin(&pool, "admin").await;
@@ -3435,7 +3492,14 @@ mod tests {
             )
             .await
             .expect("request should succeed");
-        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(res.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body = std::str::from_utf8(&bytes).unwrap_or("");
+        assert!(
+            body.contains("Could not detect image format"),
+            "415 body should explain the format detection failure, got {body:?}"
+        );
     }
 
     #[tokio::test]
