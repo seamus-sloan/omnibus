@@ -765,21 +765,37 @@ pub async fn revoke_all_sessions_for_user(pool: &SqlitePool, user_id: i64) -> Au
 /// boundary, same idle cutoff) so the table only ever retains rows that can
 /// still authenticate. Returns the number of rows deleted; intended to run on
 /// a periodic schedule (see the prune task in `server::main`).
-/// `idx_sessions_expires_at` covers the absolute-expiry term; the revoked and
-/// idle terms are not separately indexed.
+/// Each term is served by a dedicated index — migration 0012 adds
+/// `idx_sessions_last_used_at` and the partial `idx_sessions_revoked_at`, and
+/// 0004's `idx_sessions_expires_at` covers absolute expiry — so the prune is
+/// index-driven rather than a full table scan.
 pub async fn prune_expired_sessions(pool: &SqlitePool) -> AuthResult<u64> {
     let now = now_unix();
-    let r = sqlx::query(
-        "DELETE FROM sessions
-         WHERE revoked_at IS NOT NULL
-            OR expires_at <= ?
-            OR last_used_at < ?",
-    )
-    .bind(now)
-    .bind(now - SESSION_IDLE_TIMEOUT_SECS)
-    .execute(pool)
-    .await?;
-    Ok(r.rows_affected())
+    let idle_cutoff = now - SESSION_IDLE_TIMEOUT_SECS;
+
+    // Three single-predicate DELETEs (one per index) rather than one OR'd
+    // DELETE: SQLite only applies its OR-by-union optimization when *every*
+    // branch is index-backed, so the OR form fell back to `SCAN sessions`
+    // (verified via EXPLAIN QUERY PLAN). A row matching several predicates is
+    // removed by the first matching statement, so the counts don't overlap.
+    // Wrapped in one transaction to keep the prune atomic.
+    let mut tx = pool.begin().await?;
+    let revoked = sqlx::query("DELETE FROM sessions WHERE revoked_at IS NOT NULL")
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    let expired = sqlx::query("DELETE FROM sessions WHERE expires_at <= ?")
+        .bind(now)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    let idle = sqlx::query("DELETE FROM sessions WHERE last_used_at < ?")
+        .bind(idle_cutoff)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    tx.commit().await?;
+    Ok(revoked + expired + idle)
 }
 
 // -----------------------------------------------------------------------------
@@ -1385,6 +1401,30 @@ mod tests {
         // Idempotent: a second prune with nothing to remove deletes zero rows.
         let again = prune_expired_sessions(&p).await.unwrap();
         assert_eq!(again, 0);
+    }
+
+    /// #248: the idle-expiry DELETE must be served by `idx_sessions_last_used_at`
+    /// (added in migration 0012) instead of scanning. The prune issues this as a
+    /// standalone single-predicate statement precisely so the planner can use the
+    /// index; this guards against a regression back to the OR'd form that scans.
+    #[tokio::test]
+    async fn prune_idle_delete_uses_last_used_index() {
+        use sqlx::Row;
+        let p = pool().await;
+        let plan: String =
+            sqlx::query("EXPLAIN QUERY PLAN DELETE FROM sessions WHERE last_used_at < ?")
+                .bind(0_i64)
+                .fetch_all(&p)
+                .await
+                .unwrap()
+                .iter()
+                .map(|r| r.get::<String, _>("detail"))
+                .collect::<Vec<_>>()
+                .join("\n");
+        assert!(
+            plan.contains("idx_sessions_last_used_at"),
+            "idle-prune delete should use idx_sessions_last_used_at, got plan:\n{plan}"
+        );
     }
 
     // ---- devices --------------------------------------------------------------
