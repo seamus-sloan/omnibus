@@ -328,83 +328,77 @@ pub async fn create_user(pool: &SqlitePool, username: &str, password: &str) -> A
     validate_password(password)?;
     let phc = hash_password(password)?;
 
-    let mut conn = pool.acquire().await?;
-    sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+    // `BEGIN IMMEDIATE` is load-bearing here: it takes a RESERVED write lock
+    // at transaction start, so two concurrent first-user registrations can't
+    // both observe an empty `users` table and both become admin. Plain
+    // `pool.begin()` issues a DEFERRED `BEGIN` that acquires the write lock
+    // lazily, which would weaken that guarantee — so we use `begin_with` to
+    // issue the exact statement while still getting a real `sqlx::Transaction`
+    // (structured ROLLBACK on early-return drop, no reliance on
+    // connection-drop implicit cleanup).
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
-    // Rollback-on-error guard. We can't use RAII here because async drop
-    // isn't stable; explicit COMMIT/ROLLBACK via match below.
-    let result: AuthResult<User> = async {
-        let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
-            .fetch_one(&mut *conn)
-            .await?;
-
-        let is_first = user_count == 0;
-
-        if !is_first {
-            let enabled: String =
-                sqlx::query_scalar("SELECT value FROM settings WHERE key = 'registration_enabled'")
-                    .fetch_optional(&mut *conn)
-                    .await?
-                    .unwrap_or_else(|| "0".to_string());
-            if enabled != "1" {
-                return Err(AuthError::RegistrationDisabled);
-            }
-        }
-
-        let existing: Option<i64> =
-            sqlx::query_scalar("SELECT id FROM users WHERE username = ? COLLATE NOCASE")
-                .bind(username)
-                .fetch_optional(&mut *conn)
-                .await?;
-        if existing.is_some() {
-            return Err(AuthError::UsernameTaken);
-        }
-
-        let is_admin = if is_first { 1i64 } else { 0 };
-        let can_upload = if is_first { 1i64 } else { 0 };
-        let can_edit = if is_first { 1i64 } else { 0 };
-        let can_download = 1i64;
-
-        let id: i64 = sqlx::query_scalar(
-            "INSERT INTO users (username, password_hash, is_admin, can_upload, can_edit, can_download)
-             VALUES (?, ?, ?, ?, ?, ?)
-             RETURNING id",
-        )
-        .bind(username)
-        .bind(&phc)
-        .bind(is_admin)
-        .bind(can_upload)
-        .bind(can_edit)
-        .bind(can_download)
-        .fetch_one(&mut *conn)
+    let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&mut *tx)
         .await?;
 
-        if is_first {
-            sqlx::query("UPDATE settings SET value = '0' WHERE key = 'registration_enabled'")
-                .execute(&mut *conn)
-                .await?;
-        }
+    let is_first = user_count == 0;
 
-        Ok(User {
-            id,
-            username: username.to_string(),
-            is_admin: is_admin != 0,
-            can_upload: can_upload != 0,
-            can_edit: can_edit != 0,
-            can_download: can_download != 0,
-        })
-    }
-    .await;
-
-    match &result {
-        Ok(_) => {
-            sqlx::query("COMMIT").execute(&mut *conn).await?;
-        }
-        Err(_) => {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+    if !is_first {
+        let enabled: String =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'registration_enabled'")
+                .fetch_optional(&mut *tx)
+                .await?
+                .unwrap_or_else(|| "0".to_string());
+        if enabled != "1" {
+            return Err(AuthError::RegistrationDisabled);
         }
     }
-    result
+
+    let existing: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM users WHERE username = ? COLLATE NOCASE")
+            .bind(username)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if existing.is_some() {
+        return Err(AuthError::UsernameTaken);
+    }
+
+    let is_admin = if is_first { 1i64 } else { 0 };
+    let can_upload = if is_first { 1i64 } else { 0 };
+    let can_edit = if is_first { 1i64 } else { 0 };
+    let can_download = 1i64;
+
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO users (username, password_hash, is_admin, can_upload, can_edit, can_download)
+         VALUES (?, ?, ?, ?, ?, ?)
+         RETURNING id",
+    )
+    .bind(username)
+    .bind(&phc)
+    .bind(is_admin)
+    .bind(can_upload)
+    .bind(can_edit)
+    .bind(can_download)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if is_first {
+        sqlx::query("UPDATE settings SET value = '0' WHERE key = 'registration_enabled'")
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    tx.commit().await?;
+
+    Ok(User {
+        id,
+        username: username.to_string(),
+        is_admin: is_admin != 0,
+        can_upload: can_upload != 0,
+        can_edit: can_edit != 0,
+        can_download: can_download != 0,
+    })
 }
 
 pub async fn get_user_by_username(pool: &SqlitePool, username: &str) -> AuthResult<Option<User>> {
@@ -1027,6 +1021,39 @@ mod tests {
         assert!(users >= 1);
         assert!(users <= 2);
         assert!(r1.is_ok() || r2.is_ok());
+    }
+
+    #[tokio::test]
+    async fn create_user_error_path_rolls_back_cleanly() {
+        // A `?` early-return between BEGIN IMMEDIATE and COMMIT (here a
+        // UsernameTaken reject) must drop the transaction without a partial
+        // commit: no extra user row, `registration_enabled` untouched, and a
+        // subsequent valid create still succeeds on the same connection pool.
+        let p = pool().await;
+        create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+        set_registration_enabled(&p, true).await.unwrap();
+
+        // Collide on the existing username — returns inside the transaction.
+        let err = create_user(&p, "alice", "different-long-pass")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AuthError::UsernameTaken));
+
+        // The failed attempt left no trace: still exactly one user, and the
+        // admin's registration toggle wasn't flipped by the rolled-back tx.
+        let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&p)
+            .await
+            .unwrap();
+        assert_eq!(users, 1, "rolled-back create must not insert a row");
+        assert!(
+            registration_enabled(&p).await.unwrap(),
+            "registration toggle must survive the rollback"
+        );
+
+        // The connection is back in a usable, non-stuck state.
+        let bob = create_user(&p, "bob", "bunker9-longer-pass").await.unwrap();
+        assert!(!bob.is_admin);
     }
 
     // ---- login + lockout ------------------------------------------------------
