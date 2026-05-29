@@ -15,7 +15,7 @@
 //!   run before a session exists.
 //!
 //! Everything else under `/api/*` — the REST routes (`/api/settings`,
-//! `/api/library`, `/api/ebooks`, `/api/covers/{id}`) and the
+//! `/api/library`, `/api/ebooks`, `/api/covers/{uuid}`) and the
 //! Dioxus server-function endpoints (`/api/rpc/*`) — requires a valid session
 //! or returns `401 Unauthorized`.
 //!
