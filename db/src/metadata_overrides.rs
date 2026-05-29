@@ -429,6 +429,65 @@ mod tests {
         assert_eq!(loaded.title, Some("Fresh".into()));
         assert!(!has_cover, "a brand-new merged row has no cover override");
     }
+    /// #243: two concurrent saves to the same book (e.g. the F5.1 edit form
+    /// open in two tabs, or a network retry firing twice) each touch a
+    /// different field. Because the rpc/REST save paths route through
+    /// `merge_metadata_overrides` — whose read-merge-write runs under a single
+    /// `BEGIN IMMEDIATE` — neither write may be silently dropped: both fields
+    /// must survive regardless of interleaving.
+    #[tokio::test]
+    async fn merge_metadata_overrides_concurrent_saves_dont_drop_writes() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        let pool_a = pool.clone();
+        let pool_b = pool.clone();
+        let save_title = tokio::spawn(async move {
+            merge_metadata_overrides(
+                &pool_a,
+                "race-uuid",
+                &MetadataOverrides {
+                    title: Some("Title From Tab A".into()),
+                    ..Default::default()
+                },
+                user_id,
+            )
+            .await
+        });
+        let save_publisher = tokio::spawn(async move {
+            merge_metadata_overrides(
+                &pool_b,
+                "race-uuid",
+                &MetadataOverrides {
+                    publisher: Some("Publisher From Tab B".into()),
+                    ..Default::default()
+                },
+                user_id,
+            )
+            .await
+        });
+
+        save_title.await.unwrap().unwrap();
+        save_publisher.await.unwrap().unwrap();
+
+        let (loaded, _) = get_metadata_overrides(&pool, "race-uuid")
+            .await
+            .unwrap()
+            .expect("overrides should exist");
+        assert_eq!(
+            loaded.title,
+            Some("Title From Tab A".into()),
+            "tab A's title must not be lost to tab B's concurrent save"
+        );
+        assert_eq!(
+            loaded.publisher,
+            Some("Publisher From Tab B".into()),
+            "tab B's publisher must not be lost to tab A's concurrent save"
+        );
+    }
     #[tokio::test]
     async fn get_metadata_overrides_returns_none_when_absent() {
         let pool = init_db("sqlite::memory:").await.unwrap();
