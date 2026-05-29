@@ -80,6 +80,9 @@
               url = "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${version}/wasm-bindgen-${version}-${plat.triple}.tar.gz";
               inherit (plat) hash;
             };
+            # The tarball is already-built binaries — only unpack + install.
+            dontConfigure = true;
+            dontBuild = true;
             installPhase = ''
               runHook preInstall
               mkdir -p $out/bin
