@@ -434,18 +434,27 @@ mod tests {
     /// different field. Because the rpc/REST save paths route through
     /// `merge_metadata_overrides` — whose read-merge-write runs under a single
     /// `BEGIN IMMEDIATE` — neither write may be silently dropped: both fields
-    /// must survive regardless of interleaving.
+    /// must survive regardless of interleaving. A barrier releases both tasks
+    /// into the merge at the same instant so the test exercises real contention
+    /// rather than letting the first save finish before the second starts.
     #[tokio::test]
     async fn merge_metadata_overrides_concurrent_saves_dont_drop_writes() {
+        use std::sync::Arc;
+        use tokio::sync::Barrier;
+
         let pool = init_db("sqlite::memory:").await.unwrap();
         let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
             .await
             .unwrap()
             .id;
 
+        let barrier = Arc::new(Barrier::new(2));
         let pool_a = pool.clone();
         let pool_b = pool.clone();
+        let barrier_a = barrier.clone();
+        let barrier_b = barrier.clone();
         let save_title = tokio::spawn(async move {
+            barrier_a.wait().await;
             merge_metadata_overrides(
                 &pool_a,
                 "race-uuid",
@@ -458,6 +467,7 @@ mod tests {
             .await
         });
         let save_publisher = tokio::spawn(async move {
+            barrier_b.wait().await;
             merge_metadata_overrides(
                 &pool_b,
                 "race-uuid",

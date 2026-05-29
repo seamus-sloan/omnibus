@@ -397,13 +397,9 @@ pub async fn rpc_save_overrides(
     if let Err(msg) = overrides.validate() {
         return Err(ServerFnError::new(msg).into());
     }
-    // Merge incoming overrides with any existing ones so a second edit that
-    // only touches field B doesn't wipe a prior override on field A. The
-    // read-merge-write is serialized inside a single BEGIN IMMEDIATE
-    // transaction in the db layer so two concurrent edits to the same book
-    // (two tabs, or a network retry) can't interleave and drop each other's
-    // changes, and a text-only edit carries the existing cover flag forward
-    // instead of clearing it (#243, matching the REST path's #166 fix).
+    // Route through the db layer's read-merge-write (one BEGIN IMMEDIATE) so
+    // concurrent edits to the same book can't interleave and drop each other's
+    // changes, and a text-only edit keeps the existing cover flag.
     db::merge_metadata_overrides(&pool.0, &uuid, &overrides, user.id).await?;
     Ok(db::get_book_by_uuid(&pool.0, &uuid).await?)
 }
