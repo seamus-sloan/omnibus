@@ -8,7 +8,7 @@ use axum::{
     http::{header, request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use omnibus_db::auth::{self as auth_db, AuthError, SessionKind};
+use omnibus_db::auth::{self as auth_db, SessionAuthError, SessionKind};
 use omnibus_shared::UserSummary;
 use sqlx::SqlitePool;
 
@@ -83,10 +83,19 @@ where
             .get::<SqlitePool>()
             .cloned()
             .ok_or_else(|| internal("missing SqlitePool extension"))?;
-        let Some((token, _kind)) = extract_token(&parts.headers) else {
-            return Err(unauthorized());
-        };
-        match auth_db::lookup_session(&pool, &token).await {
+        // The cookie/bearer → live-session contract (token precedence,
+        // SHA-256 hashing, absolute + idle expiry, revocation) lives in
+        // `auth_db::validate_session` so this extractor and the Dioxus
+        // server-function path in `omnibus_frontend::rpc` cannot drift.
+        let authorization = parts
+            .headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok());
+        let cookie_header = parts
+            .headers
+            .get(header::COOKIE)
+            .and_then(|v| v.to_str().ok());
+        match auth_db::validate_session(&pool, authorization, cookie_header).await {
             Ok((user, session)) => Ok(AuthUser {
                 id: user.id,
                 username: user.username,
@@ -97,8 +106,8 @@ where
                 session_id: session.id,
                 session_kind: session.kind,
             }),
-            Err(AuthError::SessionNotFound) => Err(unauthorized()),
-            Err(e) => Err(internal(e)),
+            Err(SessionAuthError::Unauthenticated) => Err(unauthorized()),
+            Err(SessionAuthError::Internal(e)) => Err(internal(e)),
         }
     }
 }

@@ -53,15 +53,17 @@ pub use server_auth::{AdminUser, AuthUser};
 /// ~50 lines is cheaper than restructuring the workspace.
 ///
 /// Behaviour mirrors `server::auth::extractor::AuthUser` /
-/// `AdminUser`. Both call `omnibus_db::auth::parse_session_token` and
-/// `lookup_session` so the wire-level token format stays in lockstep with
-/// the REST side.
+/// `AdminUser`. Both delegate session validation to
+/// `omnibus_db::auth::validate_session`, the single consolidated security
+/// surface (token precedence, SHA-256 hashing, absolute + idle expiry,
+/// revocation), so the wire-level contract stays in lockstep with the REST
+/// side without the compiler being able to catch a divergence.
 #[cfg(feature = "server")]
 mod server_auth {
     use dioxus::fullstack::axum::extract::FromRequestParts;
     use dioxus::fullstack::axum::http::{header, request::Parts, StatusCode};
     use dioxus::fullstack::axum::response::{IntoResponse, Response};
-    use omnibus_db::auth::{self as auth_db, AuthError};
+    use omnibus_db::auth::{self as auth_db, SessionAuthError};
     use sqlx::SqlitePool;
 
     /// Authenticated user. Extractor returns 401 when no live session is
@@ -112,18 +114,14 @@ mod server_auth {
                 .headers
                 .get(header::COOKIE)
                 .and_then(|v| v.to_str().ok());
-            let Some((token, _kind)) = auth_db::parse_session_token(authorization, cookie_header)
-            else {
-                return Err(unauthorized());
-            };
-            match auth_db::lookup_session(&pool, &token).await {
+            match auth_db::validate_session(&pool, authorization, cookie_header).await {
                 Ok((user, _session)) => Ok(AuthUser {
                     id: user.id,
                     is_admin: user.is_admin,
                     can_edit: user.can_edit,
                 }),
-                Err(AuthError::SessionNotFound) => Err(unauthorized()),
-                Err(e) => Err(internal(e)),
+                Err(SessionAuthError::Unauthenticated) => Err(unauthorized()),
+                Err(SessionAuthError::Internal(e)) => Err(internal(e)),
             }
         }
     }
