@@ -385,13 +385,10 @@ pub async fn rpc_save_overrides(
     if let Err(msg) = overrides.validate() {
         return Err(ServerFnError::new(msg).into());
     }
-    // Merge incoming overrides with any existing ones so that a second edit
-    // that only touches field B doesn't wipe a prior override on field A.
-    let merged = match db::get_metadata_overrides(&pool.0, &uuid).await? {
-        Some((existing, _)) => existing.merge(&overrides),
-        None => overrides,
-    };
-    db::upsert_metadata_overrides(&pool.0, &uuid, &merged, false, user.id).await?;
+    // Route through the db layer's read-merge-write (one BEGIN IMMEDIATE) so
+    // concurrent edits to the same book can't interleave and drop each other's
+    // changes, and a text-only edit keeps the existing cover flag.
+    db::merge_metadata_overrides(&pool.0, &uuid, &overrides, user.id).await?;
     Ok(db::get_book_by_uuid(&pool.0, &uuid).await?)
 }
 
