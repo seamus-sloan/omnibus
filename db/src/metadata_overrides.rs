@@ -80,44 +80,33 @@ pub async fn merge_metadata_overrides(
     incoming: &MetadataOverrides,
     user_id: i64,
 ) -> Result<(), sqlx::Error> {
-    // Mirror `auth::create_user`'s explicit transaction idiom: async drop
-    // isn't stable, so we acquire one connection, run BEGIN IMMEDIATE, and
-    // COMMIT/ROLLBACK by hand based on the inner result.
-    let mut conn = pool.acquire().await?;
-    sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+    // `begin_with("BEGIN IMMEDIATE")` gives the same RESERVED-lock-at-start
+    // semantics as the old hand-rolled statement (so concurrent edits to the
+    // same book serialize instead of interleaving), but returns a real
+    // `sqlx::Transaction`. Any `?` early-return below drops `tx` without a
+    // commit, and the Drop impl issues a structured ROLLBACK — no reliance on
+    // connection-drop implicit cleanup.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
-    let result: Result<(), sqlx::Error> = async {
-        let existing: Option<(String, i64)> = sqlx::query_as(
-            "SELECT overrides, has_cover_override FROM metadata_overrides WHERE book_uuid = ?",
-        )
-        .bind(book_uuid)
-        .fetch_optional(&mut *conn)
-        .await?;
+    let existing: Option<(String, i64)> = sqlx::query_as(
+        "SELECT overrides, has_cover_override FROM metadata_overrides WHERE book_uuid = ?",
+    )
+    .bind(book_uuid)
+    .fetch_optional(&mut *tx)
+    .await?;
 
-        let (merged, has_cover_override) = match existing {
-            Some((json, has_cover)) => {
-                let prior: MetadataOverrides =
-                    serde_json::from_str(&json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-                (prior.merge(incoming), has_cover != 0)
-            }
-            None => (incoming.clone(), false),
-        };
-
-        let json = serde_json::to_string(&merged).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
-        upsert_overrides_row(&mut *conn, book_uuid, &json, has_cover_override, user_id).await?;
-        Ok(())
-    }
-    .await;
-
-    match &result {
-        Ok(()) => {
-            sqlx::query("COMMIT").execute(&mut *conn).await?;
+    let (merged, has_cover_override) = match existing {
+        Some((json, has_cover)) => {
+            let prior: MetadataOverrides =
+                serde_json::from_str(&json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+            (prior.merge(incoming), has_cover != 0)
         }
-        Err(_) => {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-        }
-    }
-    result?;
+        None => (incoming.clone(), false),
+    };
+
+    let json = serde_json::to_string(&merged).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+    upsert_overrides_row(&mut *tx, book_uuid, &json, has_cover_override, user_id).await?;
+    tx.commit().await?;
 
     // Best-effort FTS rebuild — same rationale as `upsert_metadata_overrides`.
     // Kept outside the transaction so the write lock is released first.
