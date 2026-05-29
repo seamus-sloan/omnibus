@@ -14,8 +14,8 @@
 //!   omnibus server on the port. Cannot require auth or the probe couldn't
 //!   run before a session exists.
 //!
-//! Everything else under `/api/*` — the REST routes (`/api/value`,
-//! `/api/settings`, `/api/library`, `/api/ebooks`, `/api/covers/{id}`) and the
+//! Everything else under `/api/*` — the REST routes (`/api/settings`,
+//! `/api/library`, `/api/ebooks`, `/api/covers/{id}`) and the
 //! Dioxus server-function endpoints (`/api/rpc/*`) — requires a valid session
 //! or returns `401 Unauthorized`.
 //!
