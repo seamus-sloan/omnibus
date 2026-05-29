@@ -445,10 +445,12 @@ async fn insert_book_row(
 ///
 /// The multi-valued relations (authors, tags, identifiers) are written in
 /// batches rather than one statement per term: collect the distinct terms
-/// for this book, `INSERT OR IGNORE` them all in one statement, resolve
-/// every id with one `SELECT ... WHERE name IN (...)`, then write the join
-/// rows in one statement. This collapses the old ~4-queries-per-author /
-/// 2-queries-per-tag fan-out into a constant handful per book, which keeps
+/// for this book, `INSERT OR IGNORE` them all in one statement, then write
+/// the join rows with one `INSERT ... SELECT ... JOIN` that resolves each id
+/// inline by name (NOCASE) — no separate id-resolution `SELECT`. Each batched
+/// statement is chunked to stay under SQLite's bound-parameter limit. This
+/// collapses the old ~4-queries-per-author / 2-queries-per-tag fan-out into a
+/// constant handful per book, which keeps
 /// the SQLite write lock from being held for the whole of a bulk import
 /// (issue #242). Series / publisher / language are single-valued per book,
 /// so they keep the simple resolve-then-link path.
@@ -626,25 +628,30 @@ async fn insert_tag_links(
     if tags.is_empty() {
         return Ok(());
     }
-    let rows = std::iter::repeat_n("(?)", tags.len())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let insert_sql = format!("INSERT OR IGNORE INTO tags (name) VALUES {rows}");
-    let mut insert_q = sqlx::query(&insert_sql);
-    for t in &tags {
-        insert_q = insert_q.bind(*t);
-    }
-    insert_q.execute(&mut **tx).await?;
+    // Both statements bind ~1 param per tag; chunk so a tag-heavy book can't
+    // exceed SQLite's bound-parameter cap (999 by default). 500 keeps the link
+    // statement (book_id + one per tag) safely under the limit.
+    for chunk in tags.chunks(500) {
+        let rows = std::iter::repeat_n("(?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let insert_sql = format!("INSERT OR IGNORE INTO tags (name) VALUES {rows}");
+        let mut insert_q = sqlx::query(&insert_sql);
+        for t in chunk {
+            insert_q = insert_q.bind(*t);
+        }
+        insert_q.execute(&mut **tx).await?;
 
-    let link_sql = format!(
-        "INSERT OR IGNORE INTO books_tags_link (book, tag) \
-         SELECT ?, t.id FROM (VALUES {rows}) AS v JOIN tags t ON t.name = v.column1"
-    );
-    let mut link_q = sqlx::query(&link_sql).bind(book_id);
-    for t in &tags {
-        link_q = link_q.bind(*t);
+        let link_sql = format!(
+            "INSERT OR IGNORE INTO books_tags_link (book, tag) \
+             SELECT ?, t.id FROM (VALUES {rows}) AS v JOIN tags t ON t.name = v.column1"
+        );
+        let mut link_q = sqlx::query(&link_sql).bind(book_id);
+        for t in chunk {
+            link_q = link_q.bind(*t);
+        }
+        link_q.execute(&mut **tx).await?;
     }
-    link_q.execute(&mut **tx).await?;
     Ok(())
 }
 
@@ -664,16 +671,23 @@ async fn insert_identifier_links(
     if idents.is_empty() {
         return Ok(());
     }
-    let rows = std::iter::repeat_n("(?, ?, ?)", idents.len())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let sql =
-        format!("INSERT OR REPLACE INTO book_identifiers (book_id, scheme, value) VALUES {rows}");
-    let mut q = sqlx::query(&sql);
-    for (scheme, value) in &idents {
-        q = q.bind(book_id).bind(*scheme).bind(*value);
+    // 3 bound params per identifier; chunk at 250 (→ 750 binds) to stay under
+    // SQLite's 999-param cap for books with very large identifier lists.
+    // OR REPLACE keeps the last value per (book_id, scheme); processing chunks
+    // in OPF order preserves that "last wins" semantics across chunk boundaries.
+    for chunk in idents.chunks(250) {
+        let rows = std::iter::repeat_n("(?, ?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "INSERT OR REPLACE INTO book_identifiers (book_id, scheme, value) VALUES {rows}"
+        );
+        let mut q = sqlx::query(&sql);
+        for (scheme, value) in chunk {
+            q = q.bind(book_id).bind(*scheme).bind(*value);
+        }
+        q.execute(&mut **tx).await?;
     }
-    q.execute(&mut **tx).await?;
     Ok(())
 }
 
@@ -1659,6 +1673,58 @@ mod tests {
             names,
             vec!["Real Author"],
             "only the un-blocked creator should remain linked"
+        );
+    }
+
+    #[tokio::test]
+    async fn reindex_blocklist_matches_case_insensitively() {
+        // The batched blocklist join leans on `ignored_authors.name`'s NOCASE
+        // collation: a contributor whose casing differs from the stored entry
+        // must still be skipped. Guards `insert_author_links` against a
+        // regression (e.g. swapping the join operands) that would silently
+        // break case-insensitive matching.
+        let _covers = CoversTempDir::new("ignored_authors_nocase");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+
+        sqlx::query("INSERT INTO ignored_authors(name) VALUES (?)")
+            .bind("Calibre Bot")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        replace_books(
+            &pool,
+            "/lib",
+            vec![indexed(
+                "the-real-book.epub",
+                Some("The Real Book"),
+                &["Real Author", "calibre bot"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .expect("reindex should succeed with a mixed-case blocked contributor");
+
+        let junk_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM authors WHERE name = ? COLLATE NOCASE")
+                .bind("calibre bot")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            junk_count, 0,
+            "a case-variant blocked author must not be created"
+        );
+
+        let books = list_books(&pool, "/lib").await.unwrap();
+        assert_eq!(books.len(), 1);
+        let names: Vec<&str> = books[0].creators.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["Real Author"],
+            "the mixed-case blocked contributor must be skipped"
         );
     }
 }
