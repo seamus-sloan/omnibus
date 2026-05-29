@@ -16,8 +16,12 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # "sound" = no known exploitable vulnerability; "best-effort" also pulls in
 # unmaintained / notice advisories.
 ignore = [
-    # Example — add RUSTSEC IDs here when accepting a specific advisory:
-    # { id = "RUSTSEC-0000-0000", reason = "..." }
+    # rsa "Marvin Attack" timing sidechannel. `rsa` enters Cargo.lock only via
+    # `sqlx-mysql`; this project uses sqlx with the sqlite backend only, so
+    # `rsa` is never compiled into any target (`cargo tree -i rsa --target all`
+    # is empty). No fixed `rsa` release exists yet — revisit when one ships.
+    # Keep in sync with the `--ignore` flag on the cargo-audit step in rust.yml.
+    { id = "RUSTSEC-2023-0071", reason = "rsa is lock-only via the unused sqlx-mysql backend; never compiled (sqlite-only), so not reachable" },
 ]
 
 # ---------------------------------------------------------------------------
@@ -41,10 +45,9 @@ allow = [
     "MPL-2.0",
     "CC0-1.0",
 ]
-# Treat crates whose license cannot be determined as an error.
-unlicensed = "deny"
-# Copyleft licenses that are not in the allow-list are denied by default.
-copyleft = "deny"
+# With version = 2 the allow-list above is authoritative: any license not
+# listed is denied, and a crate whose license cannot be determined is an
+# error. (The pre-v2 `unlicensed` / `copyleft` keys were removed in v2.)
 
 # ---------------------------------------------------------------------------
 # Bans

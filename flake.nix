@@ -100,6 +100,7 @@
             pkgs.openssl
             rust
             pkgs-unstable.cargo-audit
+            pkgs-unstable.cargo-deny
             pkgs.jdk21
             wasm-bindgen-cli-0_2_122
             pkgs-unstable.dioxus-cli
