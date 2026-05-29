@@ -51,7 +51,8 @@ Default `cargo build` / `clippy` covers `server`, `shared`, `frontend` only. Mob
 ### shared/src/
 
 ```
-lib.rs              — Settings, ValueResponse, LibraryContents, LibrarySection, EbookMetadata, EbookLibrary, AuthorDetail, SeriesDetail, TagWeight, ViewPrefs, ViewFilters, MetadataOverrides, Contributor, Identifier, PaletteResults + palette hit types (F1.5)
+lib.rs              — Settings, ValueResponse, LibraryContents, LibrarySection, EbookMetadata, EbookLibrary, AuthorDetail, SeriesDetail, TagWeight, ViewPrefs, ViewFilters, MetadataOverrides, Contributor, Identifier, PaletteResults + palette hit types (F1.5); re-exports image_format::detect_image_format
+image_format.rs     — magic-byte image-format sniff (detect_image_format); pure &[u8] inspection, single source of truth for both server::backend and frontend::rpc upload paths
 ```
 
 ### db/src/
