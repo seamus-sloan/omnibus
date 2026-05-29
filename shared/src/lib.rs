@@ -257,6 +257,13 @@ pub struct EbookLibrary {
     pub path: Option<String>,
     pub books: Vec<EbookMetadata>,
     pub error: Option<String>,
+    /// Total FTS5 hit count *before* the server-side `MAX_BOOKS_RETURNED` cap,
+    /// set by the search paths so the web client can show "N of M results"
+    /// even when `books` is truncated. `None` for the full-library
+    /// (`/api/ebooks`, `rpc_get_ebooks`) responses, which surface truncation
+    /// via the `X-Total-Count` header instead. Issue #241.
+    #[serde(default)]
+    pub total: Option<i64>,
 }
 
 // -----------------------------------------------------------------------------
