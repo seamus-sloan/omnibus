@@ -10,6 +10,7 @@ on:
       - "flake.lock"
       - "rust-toolchain*"
       - ".github/workflows/rust.yml"
+      - "deny.toml"
   push:
     branches: [main]
 
@@ -135,21 +136,33 @@ jobs:
           purge-primary-key: never
           gc-max-store-size-linux: 5G
 
-      # Run cargo-audit in JSON mode for downstream parsing. We do NOT fail
-      # the job on findings — the next step posts a PR comment instead, so
-      # vulnerabilities are surfaced as a visible report rather than a
-      # blocking gate. `continue-on-error: true` keeps the workflow green
-      # while still letting the report step read `audit.json`.
+      # Run cargo-audit in JSON mode for downstream parsing. `set +e` captures
+      # the exit code without failing this step, so the report/comment steps
+      # below still run on an advisory; the dedicated "Fail on advisories" gate
+      # at the end re-raises this exit code so CI blocks on unfixed advisories.
+      # To accept a specific advisory (e.g. disputed or
+      # only-affects-unused-feature), add `--ignore RUSTSEC-XXXX-YYYY` below
+      # with a comment explaining the rationale (keep in sync with deny.toml).
+      #
+      # Ignored advisories:
+      #   RUSTSEC-2023-0071 (rsa "Marvin Attack") — `rsa` is pulled into
+      #   Cargo.lock only by `sqlx-mysql`. We use sqlx with the sqlite backend
+      #   only, so `rsa` is never compiled into any target (`cargo tree -i rsa
+      #   --target all` is empty). No fixed `rsa` release exists yet; revisit
+      #   when one does. Lock-file-only, not reachable — not exploitable here.
       - name: cargo audit
         id: audit
-        continue-on-error: true
         run: |
           set +e
           # Redirect inside the nix-develop subshell so the shellHook's
           # informational echoes (`Nix dev shell ready.`, etc.) don't get
           # mixed into the JSON capture file.
-          nix develop --command bash -c 'cargo audit --json > audit.json'
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          nix develop --command bash -c 'cargo audit --json --ignore RUSTSEC-2023-0071 > audit.json'
+          exit_code=$?
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          # Deliberately succeed here so the report + sticky-comment steps run
+          # even when an advisory is present; the gate step below re-raises it.
+          exit 0
 
       # Build a human-readable markdown report from the JSON output. If
       # `audit.json` is missing or not valid JSON (cargo-audit itself failed,
@@ -157,6 +170,7 @@ jobs:
       # rather than silently claiming "no advisories found".
       - name: Format audit report
         id: report
+        if: always()
         run: |
           set -euo pipefail
           # `jq` is part of the standard ubuntu-latest image.
@@ -183,7 +197,7 @@ jobs:
               fi
             fi
             echo
-            echo "<sub>Posted by the Rust workflow's \`security\` job. This gate is informational — see the workflow file for rationale.</sub>"
+            echo "<sub>Posted by the Rust workflow's \`security\` job.</sub>"
           } > audit-report.md
           echo "count=$count" >> "$GITHUB_OUTPUT"
 
@@ -192,7 +206,7 @@ jobs:
       # comment instead of stacking new ones. Only runs on pull_request
       # events — pushes to `main` skip this and just leave the artifact.
       - name: Post / update PR comment
-        if: github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: cargo-audit-report
@@ -205,3 +219,37 @@ jobs:
           name: cargo-audit-json
           path: audit.json
           retention-days: 14
+
+      # Re-raise the captured cargo-audit exit code so the job fails on unfixed
+      # advisories. Kept separate from the audit step so the report + sticky
+      # PR comment above always run first (they lack a hard dependency on this
+      # gate's success).
+      - name: Fail on advisories
+        if: always()
+        run: |
+          code="${{ steps.audit.outputs.exit_code }}"
+          if [ "$code" != "0" ]; then
+            echo "cargo audit reported advisories (exit code $code); failing the job." >&2
+            exit "$code"
+          fi
+
+      # cargo deny adds coverage cargo-audit lacks: advisories against the ~31
+      # git-pinned Dioxus crates, source allow-listing, and duplicate-version
+      # bans. deny.toml in the repo root is the config.
+      #
+      # Scoped to `advisories sources bans` for now — the `licenses` check is
+      # intentionally NOT run here yet: the workspace member crates carry no
+      # `license` field (they're unpublished), which cargo-deny reports as
+      # "unlicensed", and the full transitive license set hasn't been validated
+      # against deny.toml's allow-list locally. The [licenses] config is left in
+      # deny.toml so enabling it is a one-line follow-up once verified.
+      #
+      # `continue-on-error` (observation mode): this deny.toml was authored
+      # without a runner that has cargo-deny + the advisory DB available, so it
+      # has not yet had a clean run to validate the allow-lists/sources against
+      # the real dependency set. Keep it non-blocking until its first green run,
+      # then drop this line to make it a hard gate. Real enforcement meanwhile
+      # comes from the (blocking) `cargo audit` step above.
+      - name: cargo deny check
+        continue-on-error: true
+        run: nix develop --command cargo deny check advisories sources bans
