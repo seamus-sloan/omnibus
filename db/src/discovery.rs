@@ -2,6 +2,18 @@
 //! books, plus the global tag cloud. Membership and ordering follow the
 //! merged (override-aware) view via the BOOK_COLUMNS template shared
 //! with the book read path.
+//!
+//! # Multi-tenancy invariant
+//!
+//! Every read in this module is **DB-wide**: it returns all matching rows
+//! without filtering by the requesting user's library access. The app is
+//! single-tenant and single-library today (see Phase 4 in
+//! `docs/roadmap/0-0-summary.md`), so every authenticated caller is
+//! implicitly authorised to see every author, series, and tag. Per-user
+//! ACL scoping — a `user_id` parameter on each signature plus an
+//! access-control join in each query — is deferred to F4.x and tracked by
+//! issue #232; each function carries a `# Multi-tenancy` rustdoc section
+//! and a `TODO(F4.x)` marker in its body until that work lands.
 
 use sqlx::{Row, SqlitePool};
 
