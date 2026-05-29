@@ -32,21 +32,20 @@ pub(super) async fn get_search(
             0,
         );
     };
-    let books = match db::search_books(&state.pool, &path, &params.q).await {
-        Ok(b) => b,
+    // Issue #241: one FTS5 pass yields both the (capped) vec and the *full*
+    // hit count via a scalar COUNT over the materialized matches CTE, replacing
+    // the prior search_books + count_search_books double pass.
+    let (books, total) = match db::search_books_with_total(&state.pool, &path, &params.q).await {
+        Ok(pair) => pair,
         Err(error) => return internal("search books", error),
     };
-    // Issue #81: return the *full* hit count alongside the (capped) vec
-    // so clients can detect truncation via the `X-Total-Count` /
-    // `X-Total-Cap` headers without changing the JSON body shape.
-    let total = match db::count_search_books(&state.pool, &path, &params.q).await {
-        Ok(t) => t,
-        Err(error) => return internal("count search books", error),
-    };
+    // The full hit count rides the `X-Total-Count` / `X-Total-Cap` headers so
+    // clients can detect truncation without changing the JSON body shape.
     let body = Json(omnibus_shared::EbookLibrary {
         path: Some(path),
         books,
         error: None,
+        total: None,
     })
     .into_response();
     with_pagination_headers(body, total)
