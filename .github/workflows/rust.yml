@@ -130,10 +130,11 @@ jobs:
           purge-primary-key: never
           gc-max-store-size-linux: 5G
 
-      # Run cargo-audit in JSON mode for downstream parsing and also fail the
-      # job on any advisory. `set +e` captures the exit code so we can both
-      # record it for the report step and re-exit with it so CI blocks on
-      # unfixed advisories. To accept a specific advisory (e.g. disputed or
+      # Run cargo-audit in JSON mode for downstream parsing. `set +e` captures
+      # the exit code without failing this step, so the report/comment steps
+      # below still run on an advisory; the dedicated "Fail on advisories" gate
+      # at the end re-raises this exit code so CI blocks on unfixed advisories.
+      # To accept a specific advisory (e.g. disputed or
       # only-affects-unused-feature), add `--ignore RUSTSEC-XXXX-YYYY` below
       # with a comment explaining the rationale (keep in sync with deny.toml).
       #
@@ -153,7 +154,9 @@ jobs:
           nix develop --command bash -c 'cargo audit --json --ignore RUSTSEC-2023-0071 > audit.json'
           exit_code=$?
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
-          exit $exit_code
+          # Deliberately succeed here so the report + sticky-comment steps run
+          # even when an advisory is present; the gate step below re-raises it.
+          exit 0
 
       # Build a human-readable markdown report from the JSON output. If
       # `audit.json` is missing or not valid JSON (cargo-audit itself failed,
@@ -161,6 +164,7 @@ jobs:
       # rather than silently claiming "no advisories found".
       - name: Format audit report
         id: report
+        if: always()
         run: |
           set -euo pipefail
           # `jq` is part of the standard ubuntu-latest image.
@@ -196,7 +200,7 @@ jobs:
       # comment instead of stacking new ones. Only runs on pull_request
       # events — pushes to `main` skip this and just leave the artifact.
       - name: Post / update PR comment
-        if: github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: cargo-audit-report
@@ -209,6 +213,19 @@ jobs:
           name: cargo-audit-json
           path: audit.json
           retention-days: 14
+
+      # Re-raise the captured cargo-audit exit code so the job fails on unfixed
+      # advisories. Kept separate from the audit step so the report + sticky
+      # PR comment above always run first (they lack a hard dependency on this
+      # gate's success).
+      - name: Fail on advisories
+        if: always()
+        run: |
+          code="${{ steps.audit.outputs.exit_code }}"
+          if [ "$code" != "0" ]; then
+            echo "cargo audit reported advisories (exit code $code); failing the job." >&2
+            exit "$code"
+          fi
 
       # cargo deny adds coverage cargo-audit lacks: advisories against the ~31
       # git-pinned Dioxus crates, source allow-listing, and duplicate-version
