@@ -13,8 +13,7 @@ use crate::helpers::{
 };
 use crate::settings::upsert_library;
 use crate::taxonomy::{
-    resolve_or_insert_author, resolve_or_insert_language, resolve_or_insert_publisher,
-    resolve_or_insert_series, resolve_or_insert_tag,
+    resolve_or_insert_language, resolve_or_insert_publisher, resolve_or_insert_series,
 };
 
 /// Per-bucket payload for [`sync_books`]. Built by
@@ -214,17 +213,26 @@ pub async fn sync_books(
     }
 
     // --- Backfill --------------------------------------------------------
-    for (uuid, mtime_epoch, size_bytes) in &plan.backfill {
-        sqlx::query(
-            "UPDATE book_files SET mtime_epoch = ?, size_bytes = ?
-             WHERE book_id = (SELECT id FROM books WHERE library_id = ? AND uuid = ?)",
-        )
-        .bind(mtime_epoch)
-        .bind(size_bytes)
-        .bind(library_id)
-        .bind(uuid)
-        .execute(&mut *tx)
-        .await?;
+    // One `UPDATE ... FROM (VALUES ..)` per chunk instead of one statement per
+    // book, so a post-migration run over a large library doesn't hold the
+    // write lock for thousands of individual writes (issue #245). Chunked to
+    // stay well under SQLite's bound-parameter limit (3 binds per row, plus 1
+    // for library_id).
+    for chunk in plan.backfill.chunks(250) {
+        let rows = std::iter::repeat_n("(?, ?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "UPDATE book_files SET mtime_epoch = v.column2, size_bytes = v.column3 \
+             FROM (VALUES {rows}) AS v, books b \
+             WHERE b.uuid = v.column1 AND b.library_id = ? AND book_files.book_id = b.id"
+        );
+        let mut q = sqlx::query(&sql);
+        for (uuid, mtime_epoch, size_bytes) in chunk {
+            q = q.bind(uuid).bind(mtime_epoch).bind(size_bytes);
+        }
+        q = q.bind(library_id);
+        q.execute(&mut *tx).await?;
     }
 
     let now = std::time::SystemTime::now()
@@ -434,50 +442,22 @@ async fn insert_book_row(
 
 /// Insert the per-book metadata join rows (authors + contributors, series,
 /// tags, publisher, language, identifiers).
+///
+/// The multi-valued relations (authors, tags, identifiers) are written in
+/// batches rather than one statement per term: collect the distinct terms
+/// for this book, `INSERT OR IGNORE` them all in one statement, resolve
+/// every id with one `SELECT ... WHERE name IN (...)`, then write the join
+/// rows in one statement. This collapses the old ~4-queries-per-author /
+/// 2-queries-per-tag fan-out into a constant handful per book, which keeps
+/// the SQLite write lock from being held for the whole of a bulk import
+/// (issue #242). Series / publisher / language are single-valued per book,
+/// so they keep the simple resolve-then-link path.
 async fn insert_metadata_links(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
     m: &EbookMetadata,
 ) -> Result<(), sqlx::Error> {
-    // Authors + contributors both land in `authors` — role/file_as are
-    // flattened. Positions follow the OPF's source order
-    // (`creators.iter().enumerate()`) so the primary author stays
-    // primary. Names matching the `ignored_authors` blocklist resolve
-    // to `None` and are skipped entirely; we leave a gap in `position`
-    // rather than renumbering, so a blocklisted leading contributor
-    // can produce a row whose first link is at position 1 — the
-    // surviving creators keep their original ordinal either way.
-    for (pos, c) in m.creators.iter().enumerate() {
-        let Some(author_id) = resolve_or_insert_author(tx, &c.name, c.file_as.as_deref()).await?
-        else {
-            continue;
-        };
-        sqlx::query(
-            "INSERT OR IGNORE INTO books_authors_link (book, author, position)
-             VALUES (?, ?, ?)",
-        )
-        .bind(book_id)
-        .bind(author_id)
-        .bind(pos as i64)
-        .execute(&mut **tx)
-        .await?;
-    }
-    let author_count = m.creators.len();
-    for (i, c) in m.contributors.iter().enumerate() {
-        let Some(author_id) = resolve_or_insert_author(tx, &c.name, c.file_as.as_deref()).await?
-        else {
-            continue;
-        };
-        sqlx::query(
-            "INSERT OR IGNORE INTO books_authors_link (book, author, position)
-             VALUES (?, ?, ?)",
-        )
-        .bind(book_id)
-        .bind(author_id)
-        .bind((author_count + i) as i64)
-        .execute(&mut **tx)
-        .await?;
-    }
+    insert_author_links(tx, book_id, m).await?;
 
     if let Some(series_name) = m.series.as_deref().filter(|s| !s.is_empty()) {
         let series_id = resolve_or_insert_series(tx, series_name).await?;
@@ -488,17 +468,7 @@ async fn insert_metadata_links(
             .await?;
     }
 
-    for subject in &m.subjects {
-        if subject.is_empty() {
-            continue;
-        }
-        let tag_id = resolve_or_insert_tag(tx, subject).await?;
-        sqlx::query("INSERT OR IGNORE INTO books_tags_link (book, tag) VALUES (?, ?)")
-            .bind(book_id)
-            .bind(tag_id)
-            .execute(&mut **tx)
-            .await?;
-    }
+    insert_tag_links(tx, book_id, m).await?;
 
     if let Some(pub_name) = m.publisher.as_deref().filter(|s| !s.is_empty()) {
         let pub_id = resolve_or_insert_publisher(tx, pub_name).await?;
@@ -518,25 +488,192 @@ async fn insert_metadata_links(
             .await?;
     }
 
-    for ident in &m.identifiers {
-        if ident.value.is_empty() {
-            continue;
-        }
-        let scheme = ident
-            .scheme
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
-        sqlx::query(
-            "INSERT OR REPLACE INTO book_identifiers (book_id, scheme, value)
-             VALUES (?, ?, ?)",
-        )
-        .bind(book_id)
-        .bind(&scheme)
-        .bind(&ident.value)
-        .execute(&mut **tx)
-        .await?;
+    insert_identifier_links(tx, book_id, m).await?;
+
+    Ok(())
+}
+
+/// Batch-insert author + contributor join rows. Creators take positions
+/// `0..n`, contributors follow at `n..` (OPF source order). Names on the
+/// `ignored_authors` blocklist are skipped — leaving a gap in `position`
+/// rather than renumbering — identical to the previous per-author loop, but
+/// resolved in a constant handful of statements instead of ~4 per author.
+async fn insert_author_links(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    m: &EbookMetadata,
+) -> Result<(), sqlx::Error> {
+    // (name, sort, position) in OPF order: creators first, then contributors.
+    let author_count = m.creators.len();
+    let entries: Vec<(&str, Option<&str>, i64)> = m
+        .creators
+        .iter()
+        .enumerate()
+        .map(|(pos, c)| (c.name.as_str(), c.file_as.as_deref(), pos as i64))
+        .chain(m.contributors.iter().enumerate().map(|(i, c)| {
+            (
+                c.name.as_str(),
+                c.file_as.as_deref(),
+                (author_count + i) as i64,
+            )
+        }))
+        .collect();
+    if entries.is_empty() {
+        return Ok(());
     }
 
+    // Distinct names (first-seen order), keeping the first non-null sort —
+    // mirrors the old per-row `COALESCE(authors.sort, excluded.sort)`.
+    let mut order: Vec<&str> = Vec::new();
+    let mut sort_for: std::collections::HashMap<&str, Option<&str>> =
+        std::collections::HashMap::new();
+    for (name, sort, _) in &entries {
+        if let Some(slot) = sort_for.get_mut(name) {
+            if slot.is_none() {
+                *slot = *sort;
+            }
+        } else {
+            order.push(name);
+            sort_for.insert(name, *sort);
+        }
+    }
+
+    // Which of these names are blocklisted? Compared via `ignored_authors.name`
+    // so SQLite applies the column's NOCASE collation (identical match
+    // semantics to the old per-name `WHERE name = ?`). Returns the book's own
+    // name strings (from the VALUES list), so the skip check below is exact.
+    let name_rows = std::iter::repeat_n("(?)", order.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let ignored_sql = format!(
+        "SELECT v.column1 FROM (VALUES {name_rows}) AS v \
+         WHERE EXISTS (SELECT 1 FROM ignored_authors i WHERE i.name = v.column1)"
+    );
+    let mut ignored_q = sqlx::query_scalar::<_, String>(&ignored_sql);
+    for name in &order {
+        ignored_q = ignored_q.bind(*name);
+    }
+    let ignored: std::collections::HashSet<String> =
+        ignored_q.fetch_all(&mut **tx).await?.into_iter().collect();
+
+    let kept: Vec<&str> = order
+        .iter()
+        .copied()
+        .filter(|n| !ignored.contains(*n))
+        .collect();
+    if kept.is_empty() {
+        return Ok(());
+    }
+
+    // Upsert all kept authors in one statement.
+    let author_rows = std::iter::repeat_n("(?, ?)", kept.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let upsert_sql = format!(
+        "INSERT INTO authors (name, sort) VALUES {author_rows} \
+         ON CONFLICT(name) DO UPDATE SET sort = COALESCE(authors.sort, excluded.sort)"
+    );
+    let mut upsert_q = sqlx::query(&upsert_sql);
+    for name in &kept {
+        upsert_q = upsert_q.bind(*name).bind(sort_for[*name]);
+    }
+    upsert_q.execute(&mut **tx).await?;
+
+    // Link rows, deduped by name keeping the first (lowest) position so a name
+    // appearing as both creator and contributor keeps its creator position —
+    // matching the old `INSERT OR IGNORE` loop. The id is resolved in SQL via
+    // the NOCASE join, so casing differences don't need handling in Rust.
+    let mut linked: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let link_entries: Vec<(&str, i64)> = entries
+        .iter()
+        .filter(|(name, _, _)| !ignored.contains(*name))
+        .filter(|(name, _, _)| linked.insert(name))
+        .map(|(name, _, pos)| (*name, *pos))
+        .collect();
+    let link_rows = std::iter::repeat_n("(?, ?)", link_entries.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let link_sql = format!(
+        "INSERT OR IGNORE INTO books_authors_link (book, author, position) \
+         SELECT ?, a.id, v.column2 \
+         FROM (VALUES {link_rows}) AS v \
+         JOIN authors a ON a.name = v.column1"
+    );
+    let mut link_q = sqlx::query(&link_sql).bind(book_id);
+    for (name, pos) in &link_entries {
+        link_q = link_q.bind(*name).bind(*pos);
+    }
+    link_q.execute(&mut **tx).await?;
+    Ok(())
+}
+
+/// Batch-insert the book's tag (subject) join rows: one `INSERT OR IGNORE`
+/// into `tags` for all distinct non-empty subjects, then one link insert that
+/// resolves ids via a NOCASE join.
+async fn insert_tag_links(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    m: &EbookMetadata,
+) -> Result<(), sqlx::Error> {
+    let mut seen = std::collections::HashSet::new();
+    let tags: Vec<&str> = m
+        .subjects
+        .iter()
+        .map(|s| s.as_str())
+        .filter(|s| !s.is_empty())
+        .filter(|s| seen.insert(*s))
+        .collect();
+    if tags.is_empty() {
+        return Ok(());
+    }
+    let rows = std::iter::repeat_n("(?)", tags.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let insert_sql = format!("INSERT OR IGNORE INTO tags (name) VALUES {rows}");
+    let mut insert_q = sqlx::query(&insert_sql);
+    for t in &tags {
+        insert_q = insert_q.bind(*t);
+    }
+    insert_q.execute(&mut **tx).await?;
+
+    let link_sql = format!(
+        "INSERT OR IGNORE INTO books_tags_link (book, tag) \
+         SELECT ?, t.id FROM (VALUES {rows}) AS v JOIN tags t ON t.name = v.column1"
+    );
+    let mut link_q = sqlx::query(&link_sql).bind(book_id);
+    for t in &tags {
+        link_q = link_q.bind(*t);
+    }
+    link_q.execute(&mut **tx).await?;
+    Ok(())
+}
+
+/// Batch-insert the book's identifiers in one statement. `INSERT OR REPLACE`
+/// keeps the last value per `(book_id, scheme)`, matching the old loop.
+async fn insert_identifier_links(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    m: &EbookMetadata,
+) -> Result<(), sqlx::Error> {
+    let idents: Vec<(&str, &str)> = m
+        .identifiers
+        .iter()
+        .filter(|i| !i.value.is_empty())
+        .map(|i| (i.scheme.as_deref().unwrap_or("unknown"), i.value.as_str()))
+        .collect();
+    if idents.is_empty() {
+        return Ok(());
+    }
+    let rows = std::iter::repeat_n("(?, ?, ?)", idents.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql =
+        format!("INSERT OR REPLACE INTO book_identifiers (book_id, scheme, value) VALUES {rows}");
+    let mut q = sqlx::query(&sql);
+    for (scheme, value) in &idents {
+        q = q.bind(book_id).bind(*scheme).bind(*value);
+    }
+    q.execute(&mut **tx).await?;
     Ok(())
 }
 
