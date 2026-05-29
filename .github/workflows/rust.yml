@@ -10,6 +10,7 @@ on:
       - "flake.lock"
       - "rust-toolchain*"
       - ".github/workflows/rust.yml"
+      - "deny.toml"
   push:
     branches: [main]
 
@@ -129,21 +130,23 @@ jobs:
           purge-primary-key: never
           gc-max-store-size-linux: 5G
 
-      # Run cargo-audit in JSON mode for downstream parsing. We do NOT fail
-      # the job on findings — the next step posts a PR comment instead, so
-      # vulnerabilities are surfaced as a visible report rather than a
-      # blocking gate. `continue-on-error: true` keeps the workflow green
-      # while still letting the report step read `audit.json`.
+      # Run cargo-audit in JSON mode for downstream parsing and also fail the
+      # job on any advisory. `set +e` captures the exit code so we can both
+      # record it for the report step and re-exit with it so CI blocks on
+      # unfixed advisories. To accept a specific advisory (e.g. disputed or
+      # only-affects-unused-feature), pass `--ignore RUSTSEC-XXXX-YYYY` with
+      # a comment explaining the rationale.
       - name: cargo audit
         id: audit
-        continue-on-error: true
         run: |
           set +e
           # Redirect inside the nix-develop subshell so the shellHook's
           # informational echoes (`Nix dev shell ready.`, etc.) don't get
           # mixed into the JSON capture file.
           nix develop --command bash -c 'cargo audit --json > audit.json'
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          exit_code=$?
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          exit $exit_code
 
       # Build a human-readable markdown report from the JSON output. If
       # `audit.json` is missing or not valid JSON (cargo-audit itself failed,
@@ -177,7 +180,7 @@ jobs:
               fi
             fi
             echo
-            echo "<sub>Posted by the Rust workflow's \`security\` job. This gate is informational — see the workflow file for rationale.</sub>"
+            echo "<sub>Posted by the Rust workflow's \`security\` job.</sub>"
           } > audit-report.md
           echo "count=$count" >> "$GITHUB_OUTPUT"
 
@@ -199,3 +202,9 @@ jobs:
           name: cargo-audit-json
           path: audit.json
           retention-days: 14
+
+      # cargo deny checks advisories (overlapping with cargo audit but also
+      # covering git-pinned crates), license compatibility, banned crates, and
+      # duplicate transitive versions. deny.toml in the repo root is the config.
+      - name: cargo deny check
+        run: nix develop --command cargo deny check
