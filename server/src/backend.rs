@@ -80,6 +80,27 @@ impl AppState {
 }
 
 pub fn rest_router(state: AppState) -> Router {
+    // Standalone/test entrypoint: a fresh, dedicated search limiter, so each
+    // `rest_router` call (and thus each integration test) gets its own bucket
+    // map. The live server instead calls `rest_router_with_search_limiter` so
+    // the REST and RPC search families share one per-IP budget (#249).
+    rest_router_with_search_limiter(
+        state,
+        std::sync::Arc::new(RateLimiter::with_policy(
+            SEARCH_RATE_LIMIT_WINDOW,
+            SEARCH_RATE_LIMIT_MAX,
+        )),
+    )
+}
+
+/// Build the `/api/*` REST router, sharing `search_limiter` with the caller.
+/// `main.rs` passes the *same* `Arc<RateLimiter>` here and to the RPC
+/// `rate_limit_paths` layer so `/api/search/*` (REST) and `/api/rpc/search-*`
+/// (RPC) draw down a single per-IP budget instead of one each (#249).
+pub fn rest_router_with_search_limiter(
+    state: AppState,
+    search_limiter: std::sync::Arc<RateLimiter>,
+) -> Router {
     let pool = state.pool().clone();
     Router::new()
         .route("/api/_health", get(get_health))
@@ -105,7 +126,7 @@ pub fn rest_router(state: AppState) -> Router {
             get(get_author_photo).delete(delete_author_photo),
         )
         .merge(upload_router())
-        .merge(search_router())
+        .merge(search_router(search_limiter))
         .route("/api/covers/{uuid}", get(get_cover))
         .route("/api/thumbs/{uuid}/{size}", get(get_thumb))
         .route("/api/authors", get(get_authors))
@@ -146,11 +167,12 @@ pub fn rest_router(state: AppState) -> Router {
 /// the outer `.with_state(state)` finalizes the state type. The rate-limit
 /// middleware carries its own state (`Arc<RateLimiter>`) via
 /// `from_fn_with_state`, which doesn't propagate to the route handlers.
-fn search_router() -> Router<AppState> {
-    let limiter = std::sync::Arc::new(RateLimiter::with_policy(
-        SEARCH_RATE_LIMIT_WINDOW,
-        SEARCH_RATE_LIMIT_MAX,
-    ));
+///
+/// The `limiter` is passed in (not built here) so the live server can share
+/// the same `Arc` with the RPC `/api/rpc/search-*` layer for a single per-IP
+/// budget across both search families (#249); `rest_router` supplies a fresh
+/// dedicated one for standalone/test use.
+fn search_router(limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> {
     Router::new()
         .route("/api/search", get(get_search))
         .route("/api/search/palette", get(get_search_palette))

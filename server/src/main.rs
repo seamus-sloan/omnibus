@@ -107,18 +107,14 @@ fn main() {
                 "/api/auth/register",
                 "/api/auth/logout",
             ]);
-            // Search RPC limiter. Mirrors the REST-side limiter's policy
-            // (`backend::search_router`, 30 req / 10s) but is a SEPARATE
-            // instance with its own bucket map — the two routers are built
-            // independently. So each route family enforces its own per-IP
-            // budget: REST `/api/search/*` and RPC `/api/rpc/search-*` are
-            // NOT a single shared budget, and a client that hammers both
-            // families can consume up to 2× the per-family budget in total.
-            // Accepted because a real client uses one family (mobile→REST,
-            // web→RPC), and sharing one bucket map would mean threading the
-            // same limiter through both the dioxus router and `rest_router`'s
-            // constructor. Revisit if a true cross-family budget is needed.
-            let search_rpc_limiter = Arc::new(rate_limit::RateLimiter::with_policy(
+            // One per-IP search budget shared across BOTH search families
+            // (#249): the same `Arc<RateLimiter>` backs the REST `/api/search/*`
+            // layer (threaded into `rest_router_with_search_limiter`) and the
+            // RPC `/api/rpc/search-*` layer below. The bucket map keys on IP
+            // alone, so sharing the Arc gives a principal a single
+            // `SEARCH_RATE_LIMIT_MAX` / `SEARCH_RATE_LIMIT_WINDOW` budget in
+            // total — hammering both families can no longer reach 2×.
+            let search_limiter = Arc::new(rate_limit::RateLimiter::with_policy(
                 backend::SEARCH_RATE_LIMIT_WINDOW,
                 backend::SEARCH_RATE_LIMIT_MAX,
             ));
@@ -126,10 +122,13 @@ fn main() {
                 Arc::new(vec!["/api/rpc/search-palette"]);
             let router = dioxus::server::router(App)
                 .layer(axum::middleware::from_fn_with_state(
-                    (search_rpc_limiter, search_rpc_prefixes),
+                    (search_limiter.clone(), search_rpc_prefixes),
                     rate_limit::rate_limit_paths,
                 ))
-                .merge(backend::rest_router(state.clone()))
+                .merge(backend::rest_router_with_search_limiter(
+                    state.clone(),
+                    search_limiter,
+                ))
                 .merge(auth::auth_router(state.clone()).layer(
                     axum::middleware::from_fn_with_state(
                         (auth_limiter, auth_limiter_prefixes),

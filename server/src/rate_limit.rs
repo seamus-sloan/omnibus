@@ -161,12 +161,11 @@ pub async fn rate_limit_by_ip(
 /// only a subset should be limited (e.g. the dioxus fullstack RPC router,
 /// where we only want to throttle `/api/rpc/search-*`).
 ///
-/// Bucket map is shared with whatever limiter is passed in. Passing the
-/// *same* `Arc<RateLimiter>` that's also mounted on the REST sub-router via
-/// [`rate_limit_by_ip`] would throttle REST + RPC search traffic from one
-/// principal against a single budget. The current `main.rs` wiring instead
-/// passes a dedicated instance, so REST and RPC enforce independent per-IP
-/// budgets (see the `main.rs` call site for that tradeoff's rationale).
+/// Bucket map is shared with whatever limiter is passed in. `main.rs` passes
+/// the *same* `Arc<RateLimiter>` here (for `/api/rpc/search-*`) and into the
+/// REST `/api/search/*` layer (via [`rate_limit_by_ip`], threaded through
+/// `backend::rest_router_with_search_limiter`), so both search families draw
+/// from a single per-IP budget (#249).
 pub async fn rate_limit_paths(
     State((limiter, prefixes)): State<(Arc<RateLimiter>, Arc<Vec<&'static str>>)>,
     req: Request,
@@ -271,6 +270,71 @@ mod tests {
                 "non-matching /api/rpc/* path must bypass the limiter"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn one_shared_limiter_unifies_rest_and_rpc_search_budget() {
+        // #249: the REST `/api/search/*` layer (rate_limit_by_ip) and the RPC
+        // `/api/rpc/search-*` layer (rate_limit_paths) must draw from ONE
+        // per-IP budget when handed the same Arc — so spending the budget on
+        // one family also blocks the other. `oneshot` carries no ConnectInfo,
+        // so every request shares the 0.0.0.0 fallback bucket.
+        use axum::middleware::from_fn_with_state;
+        use axum::{body::Body, routing::get, Router};
+        use tower::ServiceExt;
+
+        let max = 4u32;
+        let limiter = Arc::new(RateLimiter::with_policy(Duration::from_secs(60), max));
+        let rpc_prefixes: Arc<Vec<&'static str>> = Arc::new(vec!["/api/rpc/search-palette"]);
+
+        // REST sub-router limited by rate_limit_by_ip with the shared limiter;
+        // the whole app's RPC path limited by rate_limit_paths with the SAME one.
+        let rest = Router::new()
+            .route("/api/search", get(|| async { "ok" }))
+            .layer(from_fn_with_state(limiter.clone(), rate_limit_by_ip));
+        let app = Router::new()
+            .route("/api/rpc/search-palette", get(|| async { "ok" }))
+            .merge(rest)
+            .layer(from_fn_with_state(
+                (limiter.clone(), rpc_prefixes),
+                rate_limit_paths,
+            ));
+
+        // Spend the entire budget on the REST family.
+        for i in 0..max {
+            let res = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/search?q=x")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::OK,
+                "REST request #{i} within budget"
+            );
+        }
+        // The RPC family is now also exhausted — proving a single shared budget
+        // rather than the previous 2× (one per family).
+        let rpc = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/rpc/search-palette?q=x")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rpc.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "RPC search must be blocked once REST has spent the shared budget"
+        );
     }
 
     #[tokio::test]
