@@ -36,21 +36,58 @@
         # `dioxus-cli` from nixpkgs-unstable bundles its own `wasm-bindgen-cli`
         # (appended to PATH via `--suffix`), but the `dioxus` git pin in
         # Cargo.toml (v0.7.9 monorepo tag) pulls in `wasm-bindgen 0.2.122`
-        # transitively. Build the matching CLI ourselves and put it earlier
-        # in PATH so dx picks it up first.
-        wasm-bindgen-cli-0_2_122 = pkgs-unstable.wasm-bindgen-cli.overrideAttrs (old: rec {
-          version = "0.2.122";
-          src = pkgs.fetchCrate {
+        # transitively, and nixpkgs-unstable only ships 0.2.121. `dx` requires
+        # the CLI version to match the locked crate, so we supply 0.2.122 and
+        # put it earlier in PATH.
+        #
+        # We install the upstream *prebuilt* CLI binary from the GitHub release
+        # rather than building it from source. Building from source (via
+        # `fetchCrate` + `fetchCargoVendor`) downloads the crate and every one
+        # of its dependencies from the crates.io app endpoint
+        # (https://crates.io/api/v1/crates/.../download), which enforces
+        # User-Agent policy + rate limits and intermittently 403s the Nix
+        # fetcher on cold-cache CI runs — that failure aborts the whole
+        # `nix develop` shell before any cargo command runs. GitHub release
+        # assets are a plain CDN with no such gating and touch crates.io zero
+        # times. Linux uses the static musl build so no dynamic-linker patching
+        # is needed inside the Nix sandbox.
+        wasm-bindgen-cli-0_2_122 =
+          let
+            version = "0.2.122";
+            plat = {
+              x86_64-linux = {
+                triple = "x86_64-unknown-linux-musl";
+                hash = "sha256-Eio/4uqcbj6JtQ5C3Ro0bkmfP2WlSq4LTq62WBOdHg4=";
+              };
+              aarch64-linux = {
+                triple = "aarch64-unknown-linux-musl";
+                hash = "sha256-sd/kcq8O4SzaCHoLKJhd87UXQV2a5GfLz4USMbzoVts=";
+              };
+              x86_64-darwin = {
+                triple = "x86_64-apple-darwin";
+                hash = "sha256-y1AKayScIEdLvdhtTY1ZP6Zcnl29Vquxrn7kjAg5ChE=";
+              };
+              aarch64-darwin = {
+                triple = "aarch64-apple-darwin";
+                hash = "sha256-Nr6tyGxcAsURoVLo/CxjhQZGiH6X3JSuBFU2QPg56Ag=";
+              };
+            }.${system} or (throw "wasm-bindgen-cli ${version}: unsupported system ${system}");
+          in
+          pkgs.stdenvNoCC.mkDerivation {
             pname = "wasm-bindgen-cli";
             inherit version;
-            hash = "sha256-vO4RSxi/sMWxmsEs3GuljdMfIRSu75A+Q+c5wgYToRU=";
+            src = pkgs.fetchurl {
+              url = "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${version}/wasm-bindgen-${version}-${plat.triple}.tar.gz";
+              inherit (plat) hash;
+            };
+            installPhase = ''
+              runHook preInstall
+              mkdir -p $out/bin
+              cp wasm-bindgen wasm2es6js wasm-bindgen-test-runner $out/bin/
+              chmod +x $out/bin/*
+              runHook postInstall
+            '';
           };
-          cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
-            inherit src;
-            name = "wasm-bindgen-cli-${version}-vendor";
-            hash = "sha256-Inup6vvJSG5ghNyeDPyZbfZo4d0LsMG2OJfStoaeDBs=";
-          };
-        });
       in {
         devShells.default = pkgs.mkShell {
           packages = [
