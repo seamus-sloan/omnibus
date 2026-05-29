@@ -422,34 +422,6 @@ async fn drain_error(response: reqwest::Response, status: reqwest::StatusCode) -
 }
 
 #[cfg(feature = "mobile")]
-pub async fn get_value(server_url: &str) -> Result<i64, DataError> {
-    let url = format!("{server_url}/api/value");
-    let response = with_bearer(http_client().get(&url)).send().await?;
-    let status = note_status(response.status());
-    if !status.is_success() {
-        return Err(drain_error(response, status).await);
-    }
-    let payload: serde_json::Value = response.json().await?;
-    payload["value"]
-        .as_i64()
-        .ok_or_else(|| DataError::Other("missing value field".into()))
-}
-
-#[cfg(feature = "mobile")]
-pub async fn post_increment(server_url: &str) -> Result<i64, DataError> {
-    let url = format!("{server_url}/api/value/increment");
-    let response = with_bearer(http_client().post(&url)).send().await?;
-    let status = note_status(response.status());
-    if !status.is_success() {
-        return Err(drain_error(response, status).await);
-    }
-    let payload: serde_json::Value = response.json().await?;
-    payload["value"]
-        .as_i64()
-        .ok_or_else(|| DataError::Other("missing value field".into()))
-}
-
-#[cfg(feature = "mobile")]
 pub async fn get_settings(server_url: &str) -> Result<Settings, DataError> {
     let url = format!("{server_url}/api/settings");
     let response = with_bearer(http_client().get(&url)).send().await?;
@@ -864,22 +836,6 @@ fn note_server_fn_err(e: dioxus::CapturedError) -> DataError {
 //
 // `server_url` is unused here — server functions always resolve against the
 // page origin. We keep the parameter so the call sites stay platform-agnostic.
-
-#[cfg(not(feature = "mobile"))]
-pub async fn get_value(_server_url: &str) -> Result<i64, DataError> {
-    match crate::rpc::rpc_get_value().await {
-        Ok(payload) => Ok(payload.value),
-        Err(e) => Err(note_server_fn_err(e)),
-    }
-}
-
-#[cfg(not(feature = "mobile"))]
-pub async fn post_increment(_server_url: &str) -> Result<i64, DataError> {
-    match crate::rpc::rpc_increment_value().await {
-        Ok(payload) => Ok(payload.value),
-        Err(e) => Err(note_server_fn_err(e)),
-    }
-}
 
 #[cfg(not(feature = "mobile"))]
 pub async fn get_settings(_server_url: &str) -> Result<Settings, DataError> {
