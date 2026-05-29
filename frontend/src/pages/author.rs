@@ -274,6 +274,7 @@ fn render_author(
                         div { class: "disc-grid",
                             for book in books.iter() {
                                 Link {
+                                    key: "{book.id}",
                                     to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
                                     class: "lib-tile",
                                     Cover { book: (*book).clone() }
@@ -298,6 +299,7 @@ fn render_author(
                         div { class: "disc-grid",
                             for book in standalone.iter() {
                                 Link {
+                                    key: "{book.id}",
                                     to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
                                     class: "lib-tile",
                                     Cover { book: (*book).clone() }
