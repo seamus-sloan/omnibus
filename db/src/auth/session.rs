@@ -22,7 +22,7 @@ pub async fn create_session(
     kind: SessionKind,
     ttl_secs: i64,
 ) -> AuthResult<NewSession> {
-    let raw = generate_token();
+    let raw = generate_token()?;
     let hash = hash_token(&raw);
     let now = now_unix();
     let expires = now + ttl_secs;

@@ -1,17 +1,16 @@
 //! Token generation + at-rest hashing.
 
 use base64::engine::{general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use rand::{rngs::OsRng, RngCore};
 use sha2::{Digest, Sha256};
 
-use super::SessionKind;
+use super::{AuthError, AuthResult, SessionKind};
 
-/// 32 bytes from OsRng (CSPRNG), base64url-encoded (no padding). ~43 chars,
-/// 256-bit entropy. Returned to the client exactly once.
-pub fn generate_token() -> String {
+/// 32 bytes from the OS CSPRNG via `getrandom`, base64url-encoded (no
+/// padding). ~43 chars, 256-bit entropy. Returned to the client exactly once.
+pub fn generate_token() -> AuthResult<String> {
     let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
-    URL_SAFE_NO_PAD.encode(bytes)
+    getrandom::getrandom(&mut bytes).map_err(|e| AuthError::TokenGeneration(e.to_string()))?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
 /// SHA-256 of the raw token. What we store and look up by.
@@ -68,8 +67,8 @@ mod tests {
 
     #[test]
     fn token_is_unique_and_base64url() {
-        let a = generate_token();
-        let b = generate_token();
+        let a = generate_token().unwrap();
+        let b = generate_token().unwrap();
         assert_ne!(a, b);
         assert!(a
             .chars()

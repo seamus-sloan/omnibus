@@ -1,9 +1,8 @@
 //! Session signing-key secret.
 
-use rand::{rngs::OsRng, RngCore};
 use sqlx::SqlitePool;
 
-use super::AuthResult;
+use super::{AuthError, AuthResult};
 
 const SESSION_KEY_NAME: &str = "session_signing_key";
 const SESSION_KEY_LEN: usize = 64; // 512 bits — tower-sessions key size
@@ -17,7 +16,7 @@ pub async fn load_or_create_session_key(pool: &SqlitePool) -> AuthResult<Vec<u8>
         return Ok(bytes);
     }
     let mut key = vec![0u8; SESSION_KEY_LEN];
-    OsRng.fill_bytes(&mut key);
+    getrandom::getrandom(&mut key).map_err(|e| AuthError::TokenGeneration(e.to_string()))?;
     put_session_key(pool, &key).await?;
     Ok(key)
 }

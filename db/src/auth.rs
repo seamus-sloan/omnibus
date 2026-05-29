@@ -71,6 +71,8 @@ pub enum AuthError {
     Db(#[from] sqlx::Error),
     #[error("password hashing failed: {0}")]
     Hash(String),
+    #[error("CSPRNG token generation failed: {0}")]
+    TokenGeneration(String),
 }
 
 impl From<argon2::password_hash::Error> for AuthError {
