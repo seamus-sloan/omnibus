@@ -748,10 +748,11 @@ pub async fn search_books(
 
 /// Same as [`search_books`] but returns the *true* FTS5 hit count (before the
 /// `MAX_BOOKS_RETURNED` cap) alongside the hydrated rows, in a **single** FTS5
-/// pass via `COUNT(*) OVER ()`. Used by the REST search handler and the RPC
-/// search server function so neither has to issue a second
-/// `count_search_books` query. Empty/oversized `q` is handled identically to
-/// `search_books` and yields `(vec![], 0)`. Issue #241.
+/// pass: the `bm25` MATCH scan runs once inside a `MATERIALIZED` CTE and the
+/// total comes from a scalar `(SELECT COUNT(*) FROM matches)` over it. Used by
+/// the REST search handler and the RPC search server function so neither has
+/// to issue a second `count_search_books` query. Empty/oversized `q` is handled
+/// identically to `search_books` and yields `(vec![], 0)`. Issue #241.
 pub async fn search_books_with_total(
     pool: &SqlitePool,
     library_path: &str,
@@ -849,8 +850,9 @@ pub async fn search_books_with_total(
     .fetch_all(pool)
     .await?;
 
-    // `COUNT(*) OVER ()` is identical on every row; read it off the first.
-    // An empty result set means zero matches.
+    // `total_count` is the scalar `COUNT(*)` over the materialized matches, so
+    // it's identical on every row; read it off the first. An empty result set
+    // means zero matches.
     let total: i64 = rows.first().map(|r| r.get("total_count")).unwrap_or(0);
 
     let mut out = Vec::with_capacity(rows.len());
@@ -1201,7 +1203,7 @@ mod tests {
         assert_eq!(books.len(), 2, "two titles match 'rust'");
         assert_eq!(
             total, 2,
-            "single-pass COUNT(*) OVER () equals the match count"
+            "single-pass total (scalar COUNT over the materialized CTE) equals the match count"
         );
         let counted = count_search_books(&pool, "/lib", "rust").await.unwrap();
         assert_eq!(

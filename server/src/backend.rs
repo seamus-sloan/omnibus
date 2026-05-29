@@ -384,8 +384,8 @@ async fn get_search(
         );
     };
     // Issue #241: one FTS5 pass yields both the (capped) vec and the *full*
-    // hit count via `COUNT(*) OVER ()`, replacing the prior
-    // search_books + count_search_books double pass.
+    // hit count via a scalar COUNT over the materialized matches CTE, replacing
+    // the prior search_books + count_search_books double pass.
     let (books, total) = match db::search_books_with_total(&state.pool, &path, &params.q).await {
         Ok(pair) => pair,
         Err(error) => return internal("search books", error),
