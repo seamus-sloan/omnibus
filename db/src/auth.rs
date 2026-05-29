@@ -673,11 +673,20 @@ pub async fn lookup_session(pool: &SqlitePool, raw_token: &str) -> AuthResult<(U
     };
 
     if now - last_used_at >= SESSION_TOUCH_THRESHOLD_SECS {
-        sqlx::query("UPDATE sessions SET last_used_at = ? WHERE id = ?")
-            .bind(now)
-            .bind(session_id)
-            .execute(pool)
-            .await?;
+        // Re-assert validity inside the touch UPDATE so a session that is
+        // revoked or (absolute-)expired between the SELECT above and this
+        // write can't have its `last_used_at` bumped by a racing lookup.
+        // The threshold guard stays the gate for *whether* we touch, so this
+        // remains rate-limited and a 0-row result here is benign.
+        sqlx::query(
+            "UPDATE sessions SET last_used_at = ?
+             WHERE id = ? AND revoked_at IS NULL AND expires_at > ?",
+        )
+        .bind(now)
+        .bind(session_id)
+        .bind(now)
+        .execute(pool)
+        .await?;
     }
 
     Ok((user, session))
@@ -1234,6 +1243,102 @@ mod tests {
         revoke_session(&p, ns.session.id).await.unwrap();
         let err = lookup_session(&p, &ns.raw_token).await.unwrap_err();
         assert!(matches!(err, AuthError::SessionNotFound));
+    }
+
+    #[tokio::test]
+    async fn lookup_session_touches_last_used_when_past_threshold() {
+        let p = pool().await;
+        let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+        let ns = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60)
+            .await
+            .unwrap();
+        // Past the touch threshold but well within the idle window -> still valid.
+        let stale = now_unix() - SESSION_TOUCH_THRESHOLD_SECS - 60;
+        sqlx::query("UPDATE sessions SET last_used_at = ? WHERE id = ?")
+            .bind(stale)
+            .bind(ns.session.id)
+            .execute(&p)
+            .await
+            .unwrap();
+        lookup_session(&p, &ns.raw_token).await.unwrap();
+        let after: i64 = sqlx::query_scalar("SELECT last_used_at FROM sessions WHERE id = ?")
+            .bind(ns.session.id)
+            .fetch_one(&p)
+            .await
+            .unwrap();
+        assert!(
+            after > stale,
+            "a valid session past the touch threshold should have last_used_at bumped"
+        );
+    }
+
+    #[tokio::test]
+    async fn lookup_session_skips_touch_within_threshold() {
+        let p = pool().await;
+        let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+        let ns = create_session(&p, u.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60)
+            .await
+            .unwrap();
+        // Touched recently (inside the threshold): lookup must not rewrite it.
+        let recent = now_unix() - (SESSION_TOUCH_THRESHOLD_SECS / 2);
+        sqlx::query("UPDATE sessions SET last_used_at = ? WHERE id = ?")
+            .bind(recent)
+            .bind(ns.session.id)
+            .execute(&p)
+            .await
+            .unwrap();
+        lookup_session(&p, &ns.raw_token).await.unwrap();
+        let after: i64 = sqlx::query_scalar("SELECT last_used_at FROM sessions WHERE id = ?")
+            .bind(ns.session.id)
+            .fetch_one(&p)
+            .await
+            .unwrap();
+        assert_eq!(
+            after, recent,
+            "a recently-touched session must not be touched again (rate-limit preserved)"
+        );
+    }
+
+    #[tokio::test]
+    async fn touch_update_does_not_bump_revoked_session() {
+        // #246: the opportunistic touch re-asserts validity in its UPDATE WHERE
+        // clause so a session revoked/expired between the read and the write (a
+        // concurrent-request race) can't have last_used_at bumped. The public
+        // lookup rejects such sessions before the touch, so this exercises the
+        // exact guarded statement lookup_session issues.
+        let p = pool().await;
+        let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+        let ns = create_session(&p, u.id, None, SessionKind::Bearer, 3600)
+            .await
+            .unwrap();
+        revoke_session(&p, ns.session.id).await.unwrap();
+        let before: i64 = sqlx::query_scalar("SELECT last_used_at FROM sessions WHERE id = ?")
+            .bind(ns.session.id)
+            .fetch_one(&p)
+            .await
+            .unwrap();
+        let future = now_unix() + 10_000;
+        let touched = sqlx::query(
+            "UPDATE sessions SET last_used_at = ?
+             WHERE id = ? AND revoked_at IS NULL AND expires_at > ?",
+        )
+        .bind(future)
+        .bind(ns.session.id)
+        .bind(future)
+        .execute(&p)
+        .await
+        .unwrap()
+        .rows_affected();
+        assert_eq!(touched, 0, "revoked session must not be touched");
+        let after: i64 = sqlx::query_scalar("SELECT last_used_at FROM sessions WHERE id = ?")
+            .bind(ns.session.id)
+            .fetch_one(&p)
+            .await
+            .unwrap();
+        assert_eq!(
+            after, before,
+            "revoked session last_used_at must be unchanged"
+        );
     }
 
     #[tokio::test]
