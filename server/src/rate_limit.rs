@@ -285,7 +285,8 @@ mod tests {
 
         let max = 4u32;
         let limiter = Arc::new(RateLimiter::with_policy(Duration::from_secs(60), max));
-        let rpc_prefixes: Arc<Vec<&'static str>> = Arc::new(vec!["/api/rpc/search-palette"]);
+        // Prefix covers both /api/rpc/search and /api/rpc/search-palette.
+        let rpc_prefixes: Arc<Vec<&'static str>> = Arc::new(vec!["/api/rpc/search"]);
 
         // REST sub-router limited by rate_limit_by_ip with the shared limiter;
         // the whole app's RPC path limited by rate_limit_paths with the SAME one.
@@ -293,6 +294,7 @@ mod tests {
             .route("/api/search", get(|| async { "ok" }))
             .layer(from_fn_with_state(limiter.clone(), rate_limit_by_ip));
         let app = Router::new()
+            .route("/api/rpc/search", get(|| async { "ok" }))
             .route("/api/rpc/search-palette", get(|| async { "ok" }))
             .merge(rest)
             .layer(from_fn_with_state(
@@ -318,23 +320,22 @@ mod tests {
                 "REST request #{i} within budget"
             );
         }
-        // The RPC family is now also exhausted — proving a single shared budget
-        // rather than the previous 2× (one per family).
-        let rpc = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/rpc/search-palette?q=x")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            rpc.status(),
-            StatusCode::TOO_MANY_REQUESTS,
-            "RPC search must be blocked once REST has spent the shared budget"
-        );
+        // Both RPC search routes are now also exhausted — proving a single
+        // shared budget rather than the previous 2× (one per family). The full
+        // search `/api/rpc/search` must be covered too, not just the palette
+        // (#249): a narrower prefix would have left it as a bypass.
+        for uri in ["/api/rpc/search?q=x", "/api/rpc/search-palette?q=x"] {
+            let rpc = app
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                rpc.status(),
+                StatusCode::TOO_MANY_REQUESTS,
+                "{uri} must be blocked once REST has spent the shared budget"
+            );
+        }
     }
 
     #[tokio::test]

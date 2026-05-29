@@ -118,8 +118,13 @@ fn main() {
                 backend::SEARCH_RATE_LIMIT_WINDOW,
                 backend::SEARCH_RATE_LIMIT_MAX,
             ));
-            let search_rpc_prefixes: Arc<Vec<&'static str>> =
-                Arc::new(vec!["/api/rpc/search-palette"]);
+            // Prefix (matched via `starts_with`) covers BOTH RPC search routes:
+            // the full search `/api/rpc/search` (rpc_search) and
+            // `/api/rpc/search-palette` (rpc_search_palette). Both run FTS5, so
+            // neither may bypass the shared search budget (#249) — a narrower
+            // `/api/rpc/search-palette` prefix would have left the full search
+            // unlimited.
+            let search_rpc_prefixes: Arc<Vec<&'static str>> = Arc::new(vec!["/api/rpc/search"]);
             let router = dioxus::server::router(App)
                 .layer(axum::middleware::from_fn_with_state(
                     (search_limiter.clone(), search_rpc_prefixes),
