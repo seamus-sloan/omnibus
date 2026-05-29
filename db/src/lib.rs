@@ -4,7 +4,6 @@
 //! (axum REST handlers) and `frontend/` (Dioxus server functions under
 //! `feature = "server"`).
 
-pub mod app_state;
 pub mod auth;
 pub mod author_photos;
 pub mod author_photos_data;
@@ -29,7 +28,6 @@ pub mod worker;
 // Flatten the query layer so callers write `omnibus_db::list_books(...)`
 // instead of `omnibus_db::queries::list_books(...)`. Keeps callsites terse
 // and mirrors how `db.rs` looked before the extraction.
-pub use app_state::*;
 pub use author_photos_data::*;
 pub use books::{
     count_books, count_search_books, get_book, get_book_by_uuid, library_from_db,

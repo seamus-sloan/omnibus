@@ -18,7 +18,7 @@ use dioxus::prelude::*;
 use omnibus_shared::{
     AuthorDetail, AuthorPhotoScanResult, AuthorSummary, EbookLibrary, EbookMetadata,
     LibraryContents, MetadataOverrides, PaletteResults, SeriesDetail, SeriesSummary, Settings,
-    TagWeight, ValueResponse, WorkerStatus,
+    TagWeight, WorkerStatus,
 };
 
 #[cfg(feature = "server")]
@@ -140,18 +140,6 @@ mod server_auth {
             Ok(AdminUser(user))
         }
     }
-}
-
-#[get("/api/rpc/value", pool: PoolExt, _user: AuthUser)]
-pub async fn rpc_get_value() -> Result<ValueResponse> {
-    let value = db::get_value(&pool.0).await?;
-    Ok(ValueResponse { value })
-}
-
-#[post("/api/rpc/value/increment", pool: PoolExt, _user: AuthUser)]
-pub async fn rpc_increment_value() -> Result<ValueResponse> {
-    let value = db::increment_value(&pool.0).await?;
-    Ok(ValueResponse { value })
 }
 
 #[get("/api/rpc/settings", pool: PoolExt, _admin: AdminUser)]
@@ -401,13 +389,10 @@ pub async fn rpc_save_overrides(
     if let Err(msg) = overrides.validate() {
         return Err(ServerFnError::new(msg).into());
     }
-    // Merge incoming overrides with any existing ones so that a second edit
-    // that only touches field B doesn't wipe a prior override on field A.
-    let merged = match db::get_metadata_overrides(&pool.0, &uuid).await? {
-        Some((existing, _)) => existing.merge(&overrides),
-        None => overrides,
-    };
-    db::upsert_metadata_overrides(&pool.0, &uuid, &merged, false, user.id).await?;
+    // Route through the db layer's read-merge-write (one BEGIN IMMEDIATE) so
+    // concurrent edits to the same book can't interleave and drop each other's
+    // changes, and a text-only edit keeps the existing cover flag.
+    db::merge_metadata_overrides(&pool.0, &uuid, &overrides, user.id).await?;
     Ok(db::get_book_by_uuid(&pool.0, &uuid).await?)
 }
 

@@ -96,6 +96,7 @@ fn auth_error_to_response(e: AuthError) -> Response {
         AuthError::SessionNotFound => (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
         AuthError::Db(e) => internal(e),
         AuthError::Hash(e) => internal(e),
+        AuthError::TokenGeneration(e) => internal(e),
     }
 }
 

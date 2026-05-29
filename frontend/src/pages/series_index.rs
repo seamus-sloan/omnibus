@@ -209,3 +209,41 @@ fn sort_key(s: &SeriesSummary) -> String {
     let stripped = n.strip_prefix("The ").or_else(|| n.strip_prefix("the "));
     stripped.unwrap_or(n).to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn summary(name: &str, sort: Option<&str>) -> SeriesSummary {
+        SeriesSummary {
+            name: name.to_string(),
+            sort: sort.map(String::from),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn sort_key_prefers_explicit_sort_field() {
+        let s = summary("The Expanse", Some("Expanse"));
+        assert_eq!(sort_key(&s), "Expanse");
+    }
+
+    #[test]
+    fn sort_key_ignores_empty_sort_field() {
+        let s = summary("Foundation", Some(""));
+        assert_eq!(sort_key(&s), "Foundation");
+    }
+
+    #[test]
+    fn sort_key_strips_leading_the_in_both_cases() {
+        assert_eq!(sort_key(&summary("The Foo Bar", None)), "Foo Bar");
+        assert_eq!(sort_key(&summary("the foo bar", None)), "foo bar");
+    }
+
+    #[test]
+    fn sort_key_leaves_non_the_prefix_intact() {
+        // "Theology" must not have "The" stripped — only the "The " word.
+        assert_eq!(sort_key(&summary("Theology", None)), "Theology");
+        assert_eq!(sort_key(&summary("Dune", None)), "Dune");
+    }
+}
