@@ -28,8 +28,10 @@ pub(crate) fn resolve_cover<R: std::io::Read + std::io::Seek>(
             return Some(bytes);
         }
         // Sidecar lookup found a file but reading it failed — fall through
-        // to the embedded path. Pass the broken path to materialize_sidecar
-        // so it can repair the cache instead of refusing forever.
+        // to the embedded path. Pass the broken path to materialize_sidecar,
+        // which self-heals the cache only when the embedded cover materializes
+        // to that exact path (same extension); otherwise the corrupt file is
+        // left untouched and we fall back to the embedded cover for this scan.
         corrupt_sidecar = Some(sidecar);
     }
 
