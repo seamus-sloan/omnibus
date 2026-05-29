@@ -242,19 +242,23 @@ pub async fn rpc_get_ebook(uuid: String) -> Result<Option<EbookMetadata>> {
 /// bodies on GET.
 ///
 /// Issue #81: `search_books` is capped server-side at
-/// `db::MAX_BOOKS_RETURNED` hits. See `rpc_get_ebooks` for why this
-/// path can't currently expose a truncation header.
+/// `db::MAX_BOOKS_RETURNED` hits. Server functions can't expose response
+/// headers, so — unlike `rpc_get_ebooks` — the search path threads the full
+/// hit count through `EbookLibrary::total` (issue #241), letting the web
+/// client show "N of M results" when the vec is truncated.
 #[post("/api/rpc/search", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_search(q: String) -> Result<EbookLibrary> {
     let settings = db::get_settings(&pool.0).await?;
     let Some(path) = settings.ebook_library_path else {
         return Ok(EbookLibrary::default());
     };
-    let books = db::search_books(&pool.0, &path, &q).await?;
+    // Issue #241: single FTS5 pass returns the capped vec and the full count.
+    let (books, total) = db::search_books_with_total(&pool.0, &path, &q).await?;
     Ok(EbookLibrary {
         path: Some(path),
         books,
         error: None,
+        total: Some(total),
     })
 }
 

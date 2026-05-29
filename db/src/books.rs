@@ -742,19 +742,48 @@ pub async fn search_books(
     library_path: &str,
     q: &str,
 ) -> Result<Vec<EbookMetadata>, sqlx::Error> {
+    let (books, _total) = search_books_with_total(pool, library_path, q).await?;
+    Ok(books)
+}
+
+/// Same as [`search_books`] but returns the *true* FTS5 hit count (before the
+/// `MAX_BOOKS_RETURNED` cap) alongside the hydrated rows, in a **single** FTS5
+/// pass via `COUNT(*) OVER ()`. Used by the REST search handler and the RPC
+/// search server function so neither has to issue a second
+/// `count_search_books` query. Empty/oversized `q` is handled identically to
+/// `search_books` and yields `(vec![], 0)`. Issue #241.
+pub async fn search_books_with_total(
+    pool: &SqlitePool,
+    library_path: &str,
+    q: &str,
+) -> Result<(Vec<EbookMetadata>, i64), sqlx::Error> {
     // Cap query length before parsing to bound the FTS5 MATCH expression size,
     // matching `search_palette` (issue #189). Normal/short queries are
     // unaffected; see `cap_query_len`.
     let capped = cap_query_len(q);
     let Some(match_expr) = build_fts_match(&capped) else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     };
 
     let rows = sqlx::query(
         r#"
+        WITH matches AS MATERIALIZED (
+            -- Run the FTS5 MATCH + bm25 scan exactly once. bm25() is only
+            -- valid in a query that directly references books_fts, so it lives
+            -- here; the outer query then both counts and hydrates off the
+            -- materialized result without a second FTS5 pass (issue #241).
+            SELECT books_fts.rowid AS bid,
+                   bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0) AS rank
+            FROM books_fts
+            JOIN books b ON b.id = books_fts.rowid
+            JOIN libraries l ON l.id = b.library_id
+            WHERE books_fts MATCH ? AND l.path = ?
+        )
         SELECT b.id, b.uuid,
                b.title, b.description, b.series_index, b.has_cover,
                b.pubdate, b.last_modified, b.timestamp, b.isbn, b.accent_color,
+
+               (SELECT COUNT(*) FROM matches)               AS total_count,
 
                (SELECT bf.filename FROM book_files bf
                  WHERE bf.book_id = b.id
@@ -808,11 +837,9 @@ pub async fn search_books(
                   FROM (SELECT format FROM book_files
                          WHERE book_id = b.id
                          ORDER BY format))                  AS formats_json
-        FROM books_fts
-        JOIN books b ON b.id = books_fts.rowid
-        JOIN libraries l ON l.id = b.library_id
-        WHERE books_fts MATCH ? AND l.path = ?
-        ORDER BY bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0), b.sort, b.id
+        FROM matches m
+        JOIN books b ON b.id = m.bid
+        ORDER BY m.rank, b.sort, b.id
         LIMIT ?
         "#,
     )
@@ -821,6 +848,10 @@ pub async fn search_books(
     .bind(MAX_BOOKS_RETURNED)
     .fetch_all(pool)
     .await?;
+
+    // `COUNT(*) OVER ()` is identical on every row; read it off the first.
+    // An empty result set means zero matches.
+    let total: i64 = rows.first().map(|r| r.get("total_count")).unwrap_or(0);
 
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
@@ -909,7 +940,7 @@ pub async fn search_books(
     }
     backfill_creator_ids(pool, &mut out).await?;
 
-    Ok(out)
+    Ok((out, total))
 }
 
 /// Total number of FTS5 hits for `q` under `library_path` (before the
@@ -963,6 +994,7 @@ pub async fn library_from_db(
         path: Some(path.to_string()),
         books,
         error: None,
+        total: None,
     })
 }
 
@@ -984,6 +1016,7 @@ pub async fn library_from_db_with_total(
             path: Some(path.to_string()),
             books,
             error: None,
+            total: None,
         },
         total,
     ))
@@ -1136,6 +1169,50 @@ mod tests {
         // hit on "Something Else" is intentionally excluded.
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].title.as_deref(), Some("Harry Potter"));
+    }
+    #[tokio::test]
+    async fn search_books_with_total_matches_count_search_books() {
+        // #241: the single FTS5 pass must return the same true hit count the
+        // standalone `count_search_books` query produced.
+        let _covers = CoversTempDir::new("fts_total");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed("a.epub", Some("Rust in Action"), &["A"], &[], None, None),
+                indexed(
+                    "b.epub",
+                    Some("Rust for Rustaceans"),
+                    &["B"],
+                    &[],
+                    None,
+                    None,
+                ),
+                indexed("c.epub", Some("Unrelated"), &["C"], &[], None, None),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let (books, total) = search_books_with_total(&pool, "/lib", "rust")
+            .await
+            .unwrap();
+        assert_eq!(books.len(), 2, "two titles match 'rust'");
+        assert_eq!(
+            total, 2,
+            "single-pass COUNT(*) OVER () equals the match count"
+        );
+        let counted = count_search_books(&pool, "/lib", "rust").await.unwrap();
+        assert_eq!(
+            total, counted,
+            "single-pass total agrees with count_search_books"
+        );
+
+        // Empty query short-circuits to (empty, 0) without an FTS pass.
+        let (empty, zero) = search_books_with_total(&pool, "/lib", "   ").await.unwrap();
+        assert!(empty.is_empty());
+        assert_eq!(zero, 0);
     }
     #[tokio::test]
     async fn search_books_finds_by_author_and_scopes_to_library() {
