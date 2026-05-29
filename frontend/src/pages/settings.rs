@@ -142,6 +142,44 @@ pub fn SettingsPage() -> Element {
     }
 }
 
+/// Build the human-readable summary line for a configured library section:
+/// "<n> file(s) found." plus a " <count> .<ext> found." clause per extension.
+/// Pure derivation, unit-tested below.
+fn library_summary_line(section: &LibrarySection) -> String {
+    let mut line = format!("{} file(s) found.", section.total_files);
+    for (ext, count) in &section.counts_by_ext {
+        line.push_str(&format!(" {count} .{ext} found."));
+    }
+    line
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn section(total: usize, counts: &[(&str, usize)]) -> LibrarySection {
+        LibrarySection {
+            path: Some("/lib".into()),
+            total_files: total,
+            counts_by_ext: counts.iter().map(|(e, c)| (e.to_string(), *c)).collect(),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn summary_line_reports_total_only_when_no_ext_breakdown() {
+        assert_eq!(library_summary_line(&section(3, &[])), "3 file(s) found.");
+    }
+
+    #[test]
+    fn summary_line_appends_a_clause_per_extension() {
+        let line = library_summary_line(&section(5, &[("epub", 4), ("pdf", 1)]));
+        assert!(line.starts_with("5 file(s) found."));
+        assert!(line.contains("4 .epub found."));
+        assert!(line.contains("1 .pdf found."));
+    }
+}
+
 #[component]
 fn LibrarySummary(testid: String, section: LibrarySection) -> Element {
     if section.path.is_none() {
@@ -165,10 +203,7 @@ fn LibrarySummary(testid: String, section: LibrarySection) -> Element {
         };
     }
 
-    let mut line = format!("{} file(s) found.", section.total_files);
-    for (ext, count) in &section.counts_by_ext {
-        line.push_str(&format!(" {count} .{ext} found."));
-    }
+    let line = library_summary_line(&section);
 
     rsx! {
         p {

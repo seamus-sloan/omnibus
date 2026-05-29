@@ -85,6 +85,63 @@ pub fn BookDetailPage(uuid: String) -> Element {
 // the data-fetch shell stays small.
 // ---------------------------------------------------------------------------
 
+/// Build the "kicker" line above the title — "<type> · <year>", falling back
+/// to "Book" when the Dublin Core type is absent and dropping the year when
+/// it's empty. Pure derivation, unit-tested below.
+fn kicker_label(dc_type: Option<&str>, year: &str) -> String {
+    match (dc_type, year.is_empty()) {
+        (Some(t), false) => format!("{t} · {year}"),
+        (Some(t), true) => t.to_string(),
+        (None, false) => format!("Book · {year}"),
+        (None, true) => "Book".to_string(),
+    }
+}
+
+/// Format the series label under the title — "<series> #<index>", just the
+/// series name when there's no index, or `None` when there's no series.
+fn series_label(series: Option<&str>, index: Option<&str>) -> Option<String> {
+    match (series, index) {
+        (Some(s), Some(i)) => Some(format!("{s} #{i}")),
+        (Some(s), None) => Some(s.to_string()),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kicker_label_combines_type_and_year() {
+        assert_eq!(kicker_label(Some("Novel"), "2021"), "Novel · 2021");
+    }
+    #[test]
+    fn kicker_label_drops_empty_year() {
+        assert_eq!(kicker_label(Some("Novel"), ""), "Novel");
+    }
+    #[test]
+    fn kicker_label_defaults_type_to_book() {
+        assert_eq!(kicker_label(None, "2021"), "Book · 2021");
+        assert_eq!(kicker_label(None, ""), "Book");
+    }
+    #[test]
+    fn series_label_formats_name_and_index() {
+        assert_eq!(
+            series_label(Some("Dune"), Some("2")),
+            Some("Dune #2".into())
+        );
+    }
+    #[test]
+    fn series_label_without_index_is_just_name() {
+        assert_eq!(series_label(Some("Dune"), None), Some("Dune".into()));
+    }
+    #[test]
+    fn series_label_absent_series_is_none() {
+        assert_eq!(series_label(None, Some("2")), None);
+        assert_eq!(series_label(None, None), None);
+    }
+}
+
 fn render_loaded(b: EbookMetadata) -> Element {
     let title = b.title.clone().unwrap_or_else(|| b.filename.clone());
     let primary_author = b
@@ -104,17 +161,8 @@ fn render_loaded(b: EbookMetadata) -> Element {
         .and_then(|p| p.get(0..4))
         .unwrap_or("")
         .to_string();
-    let kicker = match (b.dc_type.as_deref(), year.is_empty()) {
-        (Some(t), false) => format!("{t} · {year}"),
-        (Some(t), true) => t.to_string(),
-        (None, false) => format!("Book · {year}"),
-        (None, true) => "Book".to_string(),
-    };
-    let series_label = match (b.series.as_deref(), b.series_index.as_deref()) {
-        (Some(s), Some(i)) => Some(format!("{s} #{i}")),
-        (Some(s), None) => Some(s.to_string()),
-        _ => None,
-    };
+    let kicker = kicker_label(b.dc_type.as_deref(), &year);
+    let series_label = series_label(b.series.as_deref(), b.series_index.as_deref());
     let accent_style = b
         .accent
         .as_deref()
