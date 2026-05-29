@@ -18,7 +18,7 @@ use dioxus::prelude::*;
 use omnibus_shared::{
     AuthorDetail, AuthorPhotoScanResult, AuthorSummary, EbookLibrary, EbookMetadata,
     LibraryContents, MetadataOverrides, PaletteResults, SeriesDetail, SeriesSummary, Settings,
-    TagWeight, ValueResponse, WorkerStatus,
+    TagWeight, WorkerStatus,
 };
 
 #[cfg(feature = "server")]
@@ -140,18 +140,6 @@ mod server_auth {
             Ok(AdminUser(user))
         }
     }
-}
-
-#[get("/api/rpc/value", pool: PoolExt, _user: AuthUser)]
-pub async fn rpc_get_value() -> Result<ValueResponse> {
-    let value = db::get_value(&pool.0).await?;
-    Ok(ValueResponse { value })
-}
-
-#[post("/api/rpc/value/increment", pool: PoolExt, _user: AuthUser)]
-pub async fn rpc_increment_value() -> Result<ValueResponse> {
-    let value = db::increment_value(&pool.0).await?;
-    Ok(ValueResponse { value })
 }
 
 #[get("/api/rpc/settings", pool: PoolExt, _admin: AdminUser)]

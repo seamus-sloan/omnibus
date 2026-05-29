@@ -18,7 +18,7 @@ use omnibus_db::{
     self as db, scanner,
     worker::{Task, TaskOutcome, Worker, WorkerConfig},
 };
-use omnibus_shared::{detect_image_format, MetadataOverrides, Settings, ValueResponse};
+use omnibus_shared::{detect_image_format, MetadataOverrides, Settings};
 use serde::Deserialize;
 use sqlx::SqlitePool;
 
@@ -83,8 +83,6 @@ pub fn rest_router(state: AppState) -> Router {
     let pool = state.pool().clone();
     Router::new()
         .route("/api/_health", get(get_health))
-        .route("/api/value", get(get_value))
-        .route("/api/value/increment", post(increment_value))
         .route("/api/settings", get(get_settings))
         .route("/api/settings", post(post_settings))
         .route("/api/reindex", post(post_reindex))
@@ -231,20 +229,6 @@ async fn get_health() -> Response {
         "build_id": build_id().to_string(),
     }))
     .into_response()
-}
-
-async fn get_value(_user: AuthUser, State(state): State<AppState>) -> Response {
-    match db::get_value(&state.pool).await {
-        Ok(value) => Json(ValueResponse { value }).into_response(),
-        Err(error) => internal("read value", error),
-    }
-}
-
-async fn increment_value(_user: AuthUser, State(state): State<AppState>) -> Response {
-    match db::increment_value(&state.pool).await {
-        Ok(value) => Json(ValueResponse { value }).into_response(),
-        Err(error) => internal("increment value", error),
-    }
 }
 
 async fn get_settings(_admin: AdminUser, State(state): State<AppState>) -> Response {
@@ -1203,41 +1187,6 @@ mod tests {
     // -------------------------------------------------------------------
 
     #[tokio::test]
-    async fn api_reads_and_increments_value() {
-        let (app, _state, pool) = fixture().await;
-        let user = test_support::create_user(&pool, "alice").await;
-        let token = test_support::bearer_token(&pool, user.id).await;
-
-        let response = app
-            .clone()
-            .oneshot(get_with_bearer("/api/value", &token))
-            .await
-            .expect("request should succeed");
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let payload: ValueResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(payload.value, 0);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/value/increment")
-                    .method("POST")
-                    .header(AUTHORIZATION, format!("Bearer {token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let payload: ValueResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(payload.value, 1);
-    }
-
-    #[tokio::test]
     async fn api_get_settings_returns_null_defaults() {
         let (app, _state, pool) = fixture().await;
         let admin = test_support::create_admin(&pool, "admin").await;
@@ -1999,29 +1948,6 @@ mod tests {
     // -------------------------------------------------------------------
 
     #[tokio::test]
-    async fn api_value_returns_401_when_anonymous() {
-        let (app, _, _) = fixture().await;
-        let res = app.oneshot(get_anon("/api/value")).await.unwrap();
-        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn api_value_increment_returns_401_when_anonymous() {
-        let (app, _, _) = fixture().await;
-        let res = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/value/increment")
-                    .method("POST")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
     async fn api_get_settings_returns_401_when_anonymous() {
         let (app, _, _) = fixture().await;
         let res = app.oneshot(get_anon("/api/settings")).await.unwrap();
@@ -2372,41 +2298,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    }
-
-    // -------------------------------------------------------------------
-    // 500 — handler error path returns a generic body, never leaks the
-    // underlying sqlx error message. Regression test for #78.
-    // -------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn api_value_500_body_is_generic_and_never_leaks_db_details() {
-        let (_, _, pool) = fixture().await;
-        let user = test_support::create_user(&pool, "alice").await;
-        let token = test_support::bearer_token(&pool, user.id).await;
-
-        // Force `db::get_value` to fail by dropping the table it reads.
-        // Auth setup above completed before the drop, so the request still
-        // passes the `AuthUser` extractor and reaches `get_value`.
-        sqlx::query("DROP TABLE app_state")
-            .execute(&pool)
-            .await
-            .expect("drop app_state");
-
-        let app = rest_router(AppState::new(pool));
-        let res = app
-            .oneshot(get_with_bearer("/api/value", &token))
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
-
-        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
-        let body = std::str::from_utf8(&bytes).expect("utf-8 body");
-        assert_eq!(body, "internal server error");
-        assert!(
-            !body.contains("app_state") && !body.contains("sqlx") && !body.contains("SQL"),
-            "500 body must not leak internal error details, got {body:?}"
-        );
     }
 
     // -------------------------------------------------------------------
