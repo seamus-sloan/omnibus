@@ -18,7 +18,7 @@ use omnibus_db::{
     self as db, scanner,
     worker::{Task, TaskOutcome, Worker, WorkerConfig},
 };
-use omnibus_shared::{MetadataOverrides, Settings, ValueResponse};
+use omnibus_shared::{detect_image_format, MetadataOverrides, Settings, ValueResponse};
 use serde::Deserialize;
 use sqlx::SqlitePool;
 
@@ -716,26 +716,6 @@ async fn delete_ebook_overrides(
         Ok(Some(book)) => Json(book).into_response(),
         Ok(None) => (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
         Err(e) => internal("get_book", e),
-    }
-}
-
-/// Detect image format from magic bytes. Returns the canonical MIME type for
-/// accepted raster formats (JPEG, PNG, GIF, WebP). Returns `None` for
-/// unrecognised or dangerous formats (SVG, arbitrary binaries).
-fn detect_image_format(bytes: &[u8]) -> Option<String> {
-    if bytes.len() < 4 {
-        return None;
-    }
-    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        Some("image/jpeg".into())
-    } else if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
-        Some("image/png".into())
-    } else if bytes.starts_with(b"GIF8") {
-        Some("image/gif".into())
-    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-        Some("image/webp".into())
-    } else {
-        None
     }
 }
 

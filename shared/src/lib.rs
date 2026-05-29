@@ -6,6 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod image_format;
+pub use image_format::detect_image_format;
+
 /// User-configurable paths for the ebook and audiobook libraries.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Settings {
