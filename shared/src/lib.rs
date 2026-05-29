@@ -170,46 +170,55 @@ pub struct MetadataOverrides {
 }
 
 impl MetadataOverrides {
-    /// Maximum length for scalar string fields (title, publisher, etc.).
-    const MAX_SCALAR_LEN: usize = 4096;
-    /// Maximum length for the description field.
-    const MAX_DESCRIPTION_LEN: usize = 256 * 1024;
+    /// Maximum length (in Unicode scalar values, i.e. `chars`) for scalar
+    /// string fields (title, publisher, etc.).
+    const MAX_SCALAR_CHARS: usize = 4096;
+    /// Maximum length (in chars) for the description field.
+    const MAX_DESCRIPTION_CHARS: usize = 256 * 1024;
     /// Maximum number of tags (subjects).
     const MAX_SUBJECTS: usize = 64;
-    /// Maximum length of a single tag.
-    const MAX_SUBJECT_LEN: usize = 128;
+    /// Maximum length (in chars) of a single tag.
+    const MAX_SUBJECT_CHARS: usize = 128;
     /// Maximum number of creators.
     const MAX_CREATORS: usize = 32;
-    /// Maximum length of a creator name.
-    const MAX_CREATOR_LEN: usize = 256;
+    /// Maximum length (in chars) of a creator name.
+    const MAX_CREATOR_CHARS: usize = 256;
 
     /// Validate field lengths. Returns `Err` with a human-readable message if
     /// any field exceeds the cap. Call at the handler level before persisting.
+    ///
+    /// Length caps are measured in Unicode scalar values (`chars`), not UTF-8
+    /// bytes, so a multibyte (e.g. CJK or emoji) string is held to the same
+    /// visible-character budget as an ASCII one.
     pub fn validate(&self) -> Result<(), String> {
         let check_scalar = |name: &str, val: &Option<String>, max: usize| -> Result<(), String> {
             if let Some(v) = val {
-                if v.len() > max {
+                if v.chars().count() > max {
                     return Err(format!("{name} exceeds {max} characters"));
                 }
             }
             Ok(())
         };
-        check_scalar("title", &self.title, Self::MAX_SCALAR_LEN)?;
-        check_scalar("publisher", &self.publisher, Self::MAX_SCALAR_LEN)?;
-        check_scalar("published", &self.published, Self::MAX_SCALAR_LEN)?;
-        check_scalar("language", &self.language, Self::MAX_SCALAR_LEN)?;
-        check_scalar("series", &self.series, Self::MAX_SCALAR_LEN)?;
-        check_scalar("series_index", &self.series_index, Self::MAX_SCALAR_LEN)?;
-        check_scalar("description", &self.description, Self::MAX_DESCRIPTION_LEN)?;
+        check_scalar("title", &self.title, Self::MAX_SCALAR_CHARS)?;
+        check_scalar("publisher", &self.publisher, Self::MAX_SCALAR_CHARS)?;
+        check_scalar("published", &self.published, Self::MAX_SCALAR_CHARS)?;
+        check_scalar("language", &self.language, Self::MAX_SCALAR_CHARS)?;
+        check_scalar("series", &self.series, Self::MAX_SCALAR_CHARS)?;
+        check_scalar("series_index", &self.series_index, Self::MAX_SCALAR_CHARS)?;
+        check_scalar(
+            "description",
+            &self.description,
+            Self::MAX_DESCRIPTION_CHARS,
+        )?;
         if let Some(ref creators) = self.creators {
             if creators.len() > Self::MAX_CREATORS {
                 return Err(format!("too many creators (max {})", Self::MAX_CREATORS));
             }
             for c in creators {
-                if c.name.len() > Self::MAX_CREATOR_LEN {
+                if c.name.chars().count() > Self::MAX_CREATOR_CHARS {
                     return Err(format!(
                         "creator name exceeds {} characters",
-                        Self::MAX_CREATOR_LEN
+                        Self::MAX_CREATOR_CHARS
                     ));
                 }
             }
@@ -219,8 +228,11 @@ impl MetadataOverrides {
                 return Err(format!("too many tags (max {})", Self::MAX_SUBJECTS));
             }
             for s in subjects {
-                if s.len() > Self::MAX_SUBJECT_LEN {
-                    return Err(format!("tag exceeds {} characters", Self::MAX_SUBJECT_LEN));
+                if s.chars().count() > Self::MAX_SUBJECT_CHARS {
+                    return Err(format!(
+                        "tag exceeds {} characters",
+                        Self::MAX_SUBJECT_CHARS
+                    ));
                 }
             }
         }
@@ -678,7 +690,7 @@ mod metadata_overrides_tests {
     #[test]
     fn validate_rejects_title_exceeding_length_cap() {
         let ov = MetadataOverrides {
-            title: Some("x".repeat(MetadataOverrides::MAX_SCALAR_LEN + 1)),
+            title: Some("x".repeat(MetadataOverrides::MAX_SCALAR_CHARS + 1)),
             ..Default::default()
         };
         let err = ov
@@ -693,12 +705,62 @@ mod metadata_overrides_tests {
 
     #[test]
     fn validate_accepts_title_at_length_cap() {
-        // Boundary: exactly MAX_SCALAR_LEN is allowed (the check is `> max`).
+        // Boundary: exactly MAX_SCALAR_CHARS is allowed (the check is `> max`).
         let ov = MetadataOverrides {
-            title: Some("x".repeat(MetadataOverrides::MAX_SCALAR_LEN)),
+            title: Some("x".repeat(MetadataOverrides::MAX_SCALAR_CHARS)),
             ..Default::default()
         };
         assert_eq!(ov.validate(), Ok(()));
+    }
+
+    #[test]
+    fn validate_measures_scalar_cap_in_chars_not_bytes() {
+        // A 4-byte emoji is one Unicode scalar. Exactly the cap in chars must
+        // pass even though it is 4× the cap in bytes.
+        let at_cap = "\u{1F600}".repeat(MetadataOverrides::MAX_SCALAR_CHARS);
+        assert_eq!(at_cap.chars().count(), MetadataOverrides::MAX_SCALAR_CHARS);
+        assert!(at_cap.len() > MetadataOverrides::MAX_SCALAR_CHARS);
+        let ov = MetadataOverrides {
+            title: Some(at_cap),
+            ..Default::default()
+        };
+        assert_eq!(
+            ov.validate(),
+            Ok(()),
+            "exactly the char cap should pass regardless of byte count"
+        );
+
+        // cap + 1 chars must fail even though the same byte count of ASCII
+        // would have been accepted.
+        let over_cap = "\u{1F600}".repeat(MetadataOverrides::MAX_SCALAR_CHARS + 1);
+        let ov = MetadataOverrides {
+            title: Some(over_cap),
+            ..Default::default()
+        };
+        assert!(
+            ov.validate().is_err(),
+            "char cap + 1 should be rejected regardless of byte count"
+        );
+    }
+
+    #[test]
+    fn validate_measures_description_cap_in_chars_not_bytes() {
+        // CJK characters are 3 bytes each in UTF-8. Exactly the description cap
+        // in chars passes; cap + 1 fails — neither decided by byte length.
+        let at_cap = "\u{4E16}".repeat(MetadataOverrides::MAX_DESCRIPTION_CHARS);
+        assert!(at_cap.len() > MetadataOverrides::MAX_DESCRIPTION_CHARS);
+        let ov = MetadataOverrides {
+            description: Some(at_cap),
+            ..Default::default()
+        };
+        assert_eq!(ov.validate(), Ok(()));
+
+        let over_cap = "\u{4E16}".repeat(MetadataOverrides::MAX_DESCRIPTION_CHARS + 1);
+        let ov = MetadataOverrides {
+            description: Some(over_cap),
+            ..Default::default()
+        };
+        assert!(ov.validate().is_err());
     }
 
     #[test]
@@ -717,7 +779,7 @@ mod metadata_overrides_tests {
     fn validate_rejects_over_long_creator_name() {
         let ov = MetadataOverrides {
             creators: Some(vec![contributor(
-                &"x".repeat(MetadataOverrides::MAX_CREATOR_LEN + 1),
+                &"x".repeat(MetadataOverrides::MAX_CREATOR_CHARS + 1),
             )]),
             ..Default::default()
         };
