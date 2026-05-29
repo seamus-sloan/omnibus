@@ -694,8 +694,8 @@ pub async fn delete_overrides(
     server_url: &str,
     uuid: &str,
 ) -> Result<Option<EbookMetadata>, DataError> {
-    let url = format!("{server_url}/api/ebooks/{uuid}/overrides/delete");
-    let response = with_bearer(http_client().post(&url)).send().await?;
+    let url = format!("{server_url}/api/ebooks/{uuid}/overrides");
+    let response = with_bearer(http_client().delete(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
