@@ -31,6 +31,17 @@ tempfile = "3"
 # 0.7.5), so `dx serve` refuses to start with an "incompatible versions" banner.
 # Patching to the matching git tag keeps the lib + CLI in lockstep until the
 # next coordinated crates.io release.
+#
+# SECURITY NOTE — `cargo audit` blind spot: `cargo audit` keys RUSTSEC advisory
+# lookups on crates.io package name + version. These crates resolve by git SHA,
+# not a crates.io version, so any advisory filed against a patched Dioxus crate
+# will NOT surface in `cargo audit` (and therefore not in CI). Severity is low —
+# Dioxus is a UI framework, not a network/crypto dep — but the gap is silent.
+# Mitigation: on every Dioxus bump, manually review the DioxusLabs changelog and
+# GitHub security advisories (https://github.com/DioxusLabs/dioxus/security/advisories)
+# for the new tag. Exit condition: once Dioxus publishes the matching version to
+# crates.io, replace these git patches with plain `version = "..."` entries and
+# delete this whole note (the audited path is then restored automatically).
 [patch.crates-io]
 dioxus = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
 dioxus-asset-resolver = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
