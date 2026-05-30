@@ -15,6 +15,8 @@ pub enum Route {
     BookDetail { uuid: String },
     #[route("/books/:uuid/edit")]
     MetadataEdit { uuid: String },
+    #[route("/read/:uuid")]
+    BookRead { uuid: String },
     #[route("/authors")]
     AuthorsIndex {},
     #[route("/authors/:id")]
@@ -67,6 +69,17 @@ pub fn BookDetail(uuid: String) -> Element {
 pub fn MetadataEdit(uuid: String) -> Element {
     rsx! {
         ScreenLayout { MetadataEditPage { uuid } }
+    }
+}
+
+/// Route target for `/read/:uuid` — the F2.2 immersive EPUB reader.
+/// Deliberately rendered **without** [`ScreenLayout`]: the reader is a
+/// full-screen surface with its own slim control bar, so the app's top/bottom
+/// nav is suppressed. Same uuid-keyed stability rationale as [`BookDetail`].
+#[component]
+pub fn BookRead(uuid: String) -> Element {
+    rsx! {
+        BookReadPage { uuid }
     }
 }
 

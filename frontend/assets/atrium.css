@@ -71,6 +71,29 @@
   color-scheme: light;
 }
 
+/* ── Tokens · sepia ──────────────────────────────────────────────── */
+/* Warm paper palette: cream/parchment grounds (hue ~78 with raised
+   chroma for a tea-stained tint) and warm dark-brown ink. Overrides the
+   same token set as the light block so contrast stays readable. */
+[data-theme="sepia"] {
+  --bg-0:  oklch(0.945 0.022 80);
+  --bg-1:  oklch(0.915 0.026 80);
+  --bg-2:  oklch(0.880 0.030 78);
+  --bg-3:  oklch(0.840 0.034 76);
+  --line:  oklch(0.42 0.030 60 / 0.28);
+  --line-2:oklch(0.42 0.030 60 / 0.14);
+  --ink-0: oklch(0.26 0.038 55);
+  --ink-1: oklch(0.40 0.036 55);
+  --ink-2: oklch(0.52 0.032 58);
+  --ink-3: oklch(0.64 0.028 60);
+  --accent:      oklch(0.58 0.11 50);
+  --accent-soft: oklch(0.82 0.05 60);
+  --accent-ink:  oklch(0.98 0.012 80);
+  --cover-fallback-bg:  oklch(0.80 0.030 72);
+  --cover-fallback-ink: oklch(0.30 0.036 55);
+  color-scheme: light;
+}
+
 /* ── Base ───────────────────────────────────────────────────────── */
 body.atrium,
 .atrium {
