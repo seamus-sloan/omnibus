@@ -451,18 +451,22 @@ pub async fn fetch_remote_image_with(
     // Strict mode (the default): resolve host → validate IPs → pin the
     // reqwest client to that set so DNS rebinding can't swap in a private
     // IP between our check and reqwest's own DNS resolution. In test mode
-    // we skip the guard and reuse the shared client — a hostile URL can't
-    // reach this code path because `allow_private_addresses` is `pub` and
-    // grep-auditable, and the production handlers never set it.
-    let client = if config.allow_private_addresses {
-        shared_client()?
-    } else {
+    // (`allow_private_addresses`) we skip the IP-range check but still
+    // build a per-call client. Redirects are disabled in BOTH modes: a
+    // 3xx pointing at a new host (e.g. `http://169.254.169.254/`) would
+    // force reqwest to re-resolve through its default resolver, bypassing
+    // the IP-range guard that only applies to the original host. An admin
+    // could otherwise host `attacker.com` (passes the guard) and serve a
+    // 302 to IMDS to exfiltrate cloud creds. Author-photo URLs are direct
+    // image fetches; legitimate sources don't need cross-host redirects.
+    let mut builder = reqwest::Client::builder()
+        .user_agent(default_user_agent())
+        .redirect(reqwest::redirect::Policy::none());
+    if !config.allow_private_addresses {
         let (host, addrs) = validated_resolve(url).await?;
-        reqwest::Client::builder()
-            .user_agent(default_user_agent())
-            .resolve_to_addrs(&host, &addrs)
-            .build()?
-    };
+        builder = builder.resolve_to_addrs(&host, &addrs);
+    }
+    let client = builder.build()?;
 
     let resp = client.get(url).timeout(REMOTE_IMAGE_TIMEOUT).send().await?;
     let status = resp.status();
@@ -907,6 +911,41 @@ mod tests {
             .await
             .expect_err("must reject non-http(s)");
         assert!(matches!(err, FetchRemoteImageError::BadScheme));
+    }
+
+    #[tokio::test]
+    async fn fetch_remote_image_does_not_follow_redirects_to_private_ips() {
+        // Regression for the SSRF redirect-bypass: an admin could host
+        // `attacker.com` (resolves to a public IP, passes the IP-range
+        // guard in strict mode) and serve a 302 to `http://127.0.0.1/`
+        // or `http://169.254.169.254/`. If reqwest follows the redirect
+        // it re-resolves through its default resolver and the IP-range
+        // guard never sees the new host — full bypass. The fix disables
+        // redirect-following on the per-call client, so a 3xx surfaces
+        // as a 302 status (BadStatus) and the SSRF target is never hit.
+        //
+        // The test runs under `allow_private_addresses` so the wiremock
+        // server bound to loopback isn't rejected up-front — the point
+        // is to exercise the redirect-policy code, not the IP guard.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(302).insert_header("Location", "http://169.254.169.254/"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let cfg = RemoteImageConfig {
+            allow_private_addresses: true,
+        };
+        let err = fetch_remote_image_with(&format!("{}/photo.jpg", server.uri()), &cfg)
+            .await
+            .expect_err("redirect must NOT be followed");
+        assert!(
+            matches!(err, FetchRemoteImageError::BadStatus(302)),
+            "expected BadStatus(302) (redirect not followed), got {err:?}",
+        );
     }
 
     #[tokio::test]
