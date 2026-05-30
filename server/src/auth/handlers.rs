@@ -77,6 +77,24 @@ fn auth_error_to_response(e: AuthError) -> Response {
                 .into_response()
         }
         AuthError::UsernameTaken => (StatusCode::CONFLICT, "username taken").into_response(),
+        AuthError::UsernameEmpty => {
+            (StatusCode::BAD_REQUEST, "username must not be empty").into_response()
+        }
+        AuthError::UsernameTooLong { max } => (
+            StatusCode::BAD_REQUEST,
+            format!("username too long (max {max})"),
+        )
+            .into_response(),
+        AuthError::UsernameWhitespace => (
+            StatusCode::BAD_REQUEST,
+            "username must not have leading or trailing whitespace",
+        )
+            .into_response(),
+        AuthError::UsernameInvalidChar => (
+            StatusCode::BAD_REQUEST,
+            "username contains an invalid control character",
+        )
+            .into_response(),
         AuthError::PasswordTooShort { min } => (
             StatusCode::BAD_REQUEST,
             format!("password too short (min {min})"),

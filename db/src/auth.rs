@@ -31,7 +31,7 @@ mod users;
 
 pub use device::{list_devices_for_user, register_device};
 pub use login::verify_login;
-pub use password::{hash_password, validate_password, verify_password};
+pub use password::{hash_password, validate_password, validate_username, verify_password};
 pub use session::{
     create_session, lookup_session, prune_expired_sessions, revoke_all_sessions_for_user,
     revoke_session, validate_session, SessionAuthError,
@@ -57,6 +57,14 @@ pub enum AuthError {
     AccountLocked { until_unix: i64 },
     #[error("username is already taken")]
     UsernameTaken,
+    #[error("username must not be empty")]
+    UsernameEmpty,
+    #[error("username is too long (max {max} chars)")]
+    UsernameTooLong { max: usize },
+    #[error("username must not have leading or trailing whitespace")]
+    UsernameWhitespace,
+    #[error("username contains an invalid control character")]
+    UsernameInvalidChar,
     #[error("password is too short (min {min} chars)")]
     PasswordTooShort { min: usize },
     #[error("password is too long (max {max} chars)")]

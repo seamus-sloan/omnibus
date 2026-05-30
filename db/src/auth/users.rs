@@ -2,7 +2,7 @@
 
 use sqlx::SqlitePool;
 
-use super::password::{hash_password, validate_password};
+use super::password::{hash_password, validate_password, validate_username};
 use super::{row_to_user, AuthError, AuthResult, User};
 
 /// Atomically create a user. The first user created becomes admin; the
@@ -11,6 +11,7 @@ use super::{row_to_user, AuthError, AuthResult, User};
 /// if disabled. Uses BEGIN IMMEDIATE so two concurrent callers cannot both
 /// observe an empty users table.
 pub async fn create_user(pool: &SqlitePool, username: &str, password: &str) -> AuthResult<User> {
+    validate_username(username)?;
     validate_password(password)?;
     let phc = hash_password(password)?;
 
@@ -255,6 +256,32 @@ mod tests {
         // The connection is back in a usable, non-stuck state.
         let bob = create_user(&p, "bob", "bunker9-longer-pass").await.unwrap();
         assert!(!bob.is_admin);
+    }
+
+    #[tokio::test]
+    async fn create_user_rejects_invalid_username() {
+        // create_user runs validate_username before touching the DB, so an
+        // empty/control-char/oversize username should error out without
+        // consuming the first-user-admin slot.
+        let p = pool().await;
+
+        assert!(matches!(
+            create_user(&p, "", "hunter2-real-long").await,
+            Err(AuthError::UsernameEmpty)
+        ));
+        assert!(matches!(
+            create_user(&p, "ali\0ce", "hunter2-real-long").await,
+            Err(AuthError::UsernameInvalidChar)
+        ));
+        assert!(matches!(
+            create_user(&p, " alice", "hunter2-real-long").await,
+            Err(AuthError::UsernameWhitespace)
+        ));
+
+        // None of the rejected attempts created a row, so the first valid
+        // create still gets the admin slot.
+        let alice = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+        assert!(alice.is_admin);
     }
 
     #[tokio::test]
