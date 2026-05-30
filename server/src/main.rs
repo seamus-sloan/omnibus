@@ -34,6 +34,13 @@ fn main() {
             // the rebuild-detection use case.
             backend::init_build_id();
 
+            if rate_limit::trust_forwarded_for() {
+                tracing::warn!(
+                    target: "omnibus::startup",
+                    "OMNIBUS_TRUST_FORWARDED_FOR is enabled \u{2014} ensure a trusted reverse proxy is in front."
+                );
+            }
+
             let database_url = std::env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "sqlite://omnibus.db?mode=rwc".to_string());
 

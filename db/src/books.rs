@@ -179,24 +179,13 @@ pub(crate) fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata,
         published: r.get("pubdate"),
         modified: r.get("last_modified"),
         language: r.get("language_code"),
-        rights: None,
-        source: None,
-        coverage: None,
-        dc_type: None,
-        dc_format: None,
-        relation: None,
         creators,
-        contributors: vec![],
         subjects,
         identifiers,
         series: r.get("series_name"),
         series_index: series_index.map(format_series_index),
         series_id: r.get("series_link_id"),
-        epub_version: None,
         unique_identifier: Some(uuid.clone()),
-        resource_count: 0,
-        spine_count: 0,
-        toc_count: 0,
         cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
         accent: r.get("accent_color"),
         formats: parse_json_array(r.get("formats_json"))?,
@@ -325,24 +314,13 @@ pub async fn list_books(
             published: r.get("pubdate"),
             modified: r.get("last_modified"),
             language: r.get("language_code"),
-            rights: None,
-            source: None,
-            coverage: None,
-            dc_type: None,
-            dc_format: None,
-            relation: None,
             creators,
-            contributors: vec![],
             subjects,
             identifiers,
             series: r.get("series_name"),
             series_index: series_index.map(format_series_index),
             series_id: r.get("series_link_id"),
-            epub_version: None,
             unique_identifier: Some(uuid.clone()),
-            resource_count: 0,
-            spine_count: 0,
-            toc_count: 0,
             cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
             accent: r.get("accent_color"),
             formats: parse_json_array(r.get("formats_json"))?,
@@ -578,24 +556,13 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
         published: r.get("pubdate"),
         modified: r.get("last_modified"),
         language: r.get("language"),
-        rights: None,
-        source: None,
-        coverage: None,
-        dc_type: None,
-        dc_format: None,
-        relation: None,
         creators,
-        contributors: vec![],
         subjects,
         identifiers,
         series: r.get("series_name"),
         series_index: series_index.map(format_series_index),
         series_id: r.get("series_link_id"),
-        epub_version: None,
         unique_identifier: Some(uuid.clone()),
-        resource_count: 0,
-        spine_count: 0,
-        toc_count: 0,
         cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
         accent: r.get("accent_color"),
         formats,
@@ -896,24 +863,13 @@ pub async fn search_books_with_total(
             published: r.get("pubdate"),
             modified: r.get("last_modified"),
             language: r.get("language_code"),
-            rights: None,
-            source: None,
-            coverage: None,
-            dc_type: None,
-            dc_format: None,
-            relation: None,
             creators,
-            contributors: vec![],
             subjects,
             identifiers,
             series: r.get("series_name"),
             series_index: series_index.map(format_series_index),
             series_id: r.get("series_link_id"),
-            epub_version: None,
             unique_identifier: Some(uuid.clone()),
-            resource_count: 0,
-            spine_count: 0,
-            toc_count: 0,
             cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
             accent: r.get("accent_color"),
             formats: parse_json_array(r.get("formats_json"))?,
@@ -1022,6 +978,36 @@ pub async fn library_from_db_with_total(
         },
         total,
     ))
+}
+
+/// Resolve the on-disk path of a book's file for the given format
+/// (e.g. "EPUB"). The indexer stores `books.path` **relative to its
+/// `libraries.path` root** (mirroring the scanner's `root.join(filename)`),
+/// and `book_files.filename` as the stem, so the path is
+/// `<libraries.path>/<books.path>/<filename>.<format-lowercased>`. When the
+/// library root is itself relative the result resolves against the server's
+/// working directory, exactly as the scanner read it. Ok(None) when the book
+/// or a file row for that format is absent.
+pub async fn book_file_path(
+    pool: &SqlitePool,
+    id: i64,
+    format: &str,
+) -> Result<Option<std::path::PathBuf>, sqlx::Error> {
+    let row = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT l.path, b.path, bf.filename FROM books b \
+         JOIN libraries l ON l.id = b.library_id \
+         JOIN book_files bf ON bf.book_id = b.id \
+         WHERE b.id = ? AND bf.format = ? COLLATE NOCASE LIMIT 1",
+    )
+    .bind(id)
+    .bind(format)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(lib, dir, stem)| {
+        std::path::Path::new(&lib)
+            .join(&dir)
+            .join(format!("{stem}.{}", format.to_lowercase()))
+    }))
 }
 
 #[cfg(test)]
@@ -1137,6 +1123,73 @@ mod tests {
         assert!(lib.books.is_empty());
         assert_eq!(total, 0);
     }
+    #[tokio::test]
+    async fn book_file_path_returns_absolute_path_for_epub() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let lib_id =
+            sqlx::query("INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib')")
+                .execute(&pool)
+                .await
+                .unwrap()
+                .last_insert_rowid();
+        // `books.path` is stored RELATIVE to the library root (the scanner's
+        // `root.join(filename)` convention), so the resolved path must be
+        // `<libraries.path>/<books.path>/<stem>.<ext>`.
+        let book_id = sqlx::query(
+            "INSERT INTO books (uuid, library_id, path, title) \
+             VALUES ('uuid-epub', ?, 'sub/dir', 'Some Book')",
+        )
+        .bind(lib_id)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        sqlx::query(
+            "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime) \
+             VALUES (?, 'EPUB', 'some-book', 0, '')",
+        )
+        .bind(book_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let path = book_file_path(&pool, book_id, "EPUB").await.unwrap();
+        assert_eq!(
+            path,
+            Some(std::path::PathBuf::from("/lib/sub/dir/some-book.epub"))
+        );
+    }
+
+    #[tokio::test]
+    async fn book_file_path_returns_none_for_missing_book() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let path = book_file_path(&pool, 9999, "EPUB").await.unwrap();
+        assert!(path.is_none());
+    }
+
+    #[tokio::test]
+    async fn book_file_path_returns_none_when_no_file_row_for_format() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let lib_id =
+            sqlx::query("INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib')")
+                .execute(&pool)
+                .await
+                .unwrap()
+                .last_insert_rowid();
+        let book_id = sqlx::query(
+            "INSERT INTO books (uuid, library_id, path, title) \
+             VALUES ('uuid-nofile', ?, '/lib/Bookless', 'Bookless')",
+        )
+        .bind(lib_id)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+
+        let path = book_file_path(&pool, book_id, "EPUB").await.unwrap();
+        assert!(path.is_none());
+    }
+
     #[tokio::test]
     async fn search_books_finds_by_title_and_ranks_by_bm25() {
         let _covers = CoversTempDir::new("fts_title");

@@ -118,6 +118,7 @@ Phase 6  Mobile                   (feature parity on native)
 - [F2.1 Progress sync service](2-1-progress-sync.md)
 - [F2.2 In-browser epub reader](2-2-epub-reader.md)
 - [F2.3 In-browser audiobook player](2-3-audiobook-player.md)
+- [F2.4 Reader experience](2-4-reader-experience.md)
 
 ### Phase 3 — Personalization
 
@@ -147,6 +148,7 @@ Phase 6  Mobile                   (feature parity on native)
 ### Phase 6 — Mobile
 
 - [F6.1 Mobile app](6-1-mobile.md)
+- [F6.2 Mobile epub reader](6-2-mobile-epub-reader.md)
 
 ---
 
