@@ -85,12 +85,11 @@ pub fn BookDetailPage(uuid: String) -> Element {
 // the data-fetch shell stays small.
 // ---------------------------------------------------------------------------
 
-fn kicker_label(dc_type: Option<&str>, year: &str) -> String {
-    match (dc_type, year.is_empty()) {
-        (Some(t), false) => format!("{t} · {year}"),
-        (Some(t), true) => t.to_string(),
-        (None, false) => format!("Book · {year}"),
-        (None, true) => "Book".to_string(),
+fn kicker_label(year: &str) -> String {
+    if year.is_empty() {
+        "Book".to_string()
+    } else {
+        format!("Book · {year}")
     }
 }
 
@@ -107,17 +106,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kicker_label_combines_type_and_year() {
-        assert_eq!(kicker_label(Some("Novel"), "2021"), "Novel · 2021");
+    fn kicker_label_renders_year_when_present() {
+        assert_eq!(kicker_label("2021"), "Book · 2021");
     }
     #[test]
-    fn kicker_label_drops_empty_year() {
-        assert_eq!(kicker_label(Some("Novel"), ""), "Novel");
-    }
-    #[test]
-    fn kicker_label_defaults_type_to_book() {
-        assert_eq!(kicker_label(None, "2021"), "Book · 2021");
-        assert_eq!(kicker_label(None, ""), "Book");
+    fn kicker_label_falls_back_to_book_when_year_empty() {
+        assert_eq!(kicker_label(""), "Book");
     }
     #[test]
     fn series_label_formats_name_and_index() {
@@ -156,7 +150,7 @@ fn render_loaded(b: EbookMetadata) -> Element {
         .and_then(|p| p.get(0..4))
         .unwrap_or("")
         .to_string();
-    let kicker = kicker_label(b.dc_type.as_deref(), &year);
+    let kicker = kicker_label(&year);
     let series_label = series_label(b.series.as_deref(), b.series_index.as_deref());
     let accent_style = b
         .accent

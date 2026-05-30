@@ -95,9 +95,13 @@ const EXPECTED: &[Expected] = &[
         has_cover: true,
     },
     Expected {
+        // OPF lists William H. Allen as `<dc:creator>` and W. T. Sedgwick as
+        // `<dc:contributor>`. The parser merges contributors into `creators`
+        // (creators first, contributors after) — see issue #174 and
+        // `EbookMetadata::creators` docs.
         filename: "civics_and_health.epub",
         title: "Civics and Health",
-        authors: &["William H. Allen"],
+        authors: &["William H. Allen", "W. T. Sedgwick"],
         language: "en",
         published: Some("2007-05-08"),
         has_cover: true,
@@ -111,9 +115,11 @@ const EXPECTED: &[Expected] = &[
         has_cover: true,
     },
     Expected {
+        // OPF lists de Vries + te Winkel as `<dc:creator>` and Adriaan
+        // Beets as `<dc:contributor>` (issue #174 merge contract).
         filename: "woordenlijst_nederlandsche_taal.epub",
         title: "Woordenlijst voor de spelling der Nederlandsche Taal / Met aanwijzing van de geslachten der naamwoorden en de vervoeging der werkwoorden",
-        authors: &["M. de Vries", "L. A. te Winkel"],
+        authors: &["M. de Vries", "L. A. te Winkel", "Adriaan Beets"],
         language: "nl",
         published: Some("2007-09-22"),
         has_cover: true,
@@ -127,9 +133,11 @@ const EXPECTED: &[Expected] = &[
         has_cover: true,
     },
     Expected {
+        // OPF lists Pérez Galdós as `<dc:creator>` and S. Griswold Morley
+        // as `<dc:contributor>` (issue #174 merge contract).
         filename: "mariucha.epub",
         title: "Mariucha",
-        authors: &["Benito Pérez Galdós"],
+        authors: &["Benito Pérez Galdós", "S. Griswold Morley"],
         // OPF claims `en` even though the work is Spanish; we record what the file says.
         language: "en",
         published: Some("2008-03-25"),
@@ -144,9 +152,12 @@ const EXPECTED: &[Expected] = &[
         has_cover: true,
     },
     Expected {
+        // OPF lists Marcosson + Frohman as `<dc:creator>` and J. M. Barrie
+        // as `<dc:contributor>`. The parser merges contributors into
+        // `creators` — see issue #174 and `EbookMetadata::creators` docs.
         filename: "charles_frohman.epub",
         title: "Charles Frohman: Manager and Man",
-        authors: &["Isaac Frederick Marcosson", "Daniel Frohman"],
+        authors: &["Isaac Frederick Marcosson", "Daniel Frohman", "J. M. Barrie"],
         language: "en",
         published: Some("2008-07-29"),
         has_cover: true,
@@ -160,9 +171,11 @@ const EXPECTED: &[Expected] = &[
         has_cover: true,
     },
     Expected {
+        // OPF lists Gillespie as `<dc:creator>` and W. M. Hetherington as
+        // `<dc:contributor>` (issue #174 merge contract).
         filename: "works_of_george_gillespie.epub",
         title: "The Works of Mr. George Gillespie (Vol. 1 of 2)",
-        authors: &["George Gillespie"],
+        authors: &["George Gillespie", "W. M. Hetherington"],
         language: "en",
         published: Some("2008-10-08"),
         has_cover: true,
@@ -176,17 +189,30 @@ const EXPECTED: &[Expected] = &[
         has_cover: true,
     },
     Expected {
+        // OPF lists Alcott as `<dc:creator>` and the illustrator Frank T.
+        // Merrill as `<dc:contributor>` (issue #174 merge contract).
         filename: "little_women.epub",
         title: "Little Women; Or, Meg, Jo, Beth, and Amy",
-        authors: &["Louisa May Alcott"],
+        authors: &["Louisa May Alcott", "Frank T. Merrill"],
         language: "en",
         published: Some("2011-08-16"),
         has_cover: true,
     },
     Expected {
+        // OPF lists Gogol as `<dc:creator>` and six translators/editors as
+        // `<dc:contributor>`. See `civics_and_health.epub` comment for the
+        // merge contract (issue #174).
         filename: "gogol_dramatische_werke.epub",
         title: "Sämmtliche Werke 5: Dramatische Werke",
-        authors: &["Nikolai Vasilevich Gogol"],
+        authors: &[
+            "Nikolai Vasilevich Gogol",
+            "Otto Buek",
+            "Thomas Commichau",
+            "Gregorius Itelson",
+            "Alexandra Ramm",
+            "Carl Ritter",
+            "André Villard",
+        ],
         language: "de",
         published: Some("2017-09-05"),
         has_cover: true,
