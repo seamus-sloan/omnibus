@@ -283,6 +283,36 @@ fn now_millis() -> u128 {
         .unwrap_or(0)
 }
 
+/// Absolute path of the workspace root the server was launched from —
+/// captured once at process start. Surfaced via `/api/_health` so
+/// `scripts/dev-server-up.sh` can tell *its own workspace's* server apart
+/// from a sibling `jj` workspace's server that happens to be bound to the
+/// port it's probing. Without this, port-walking would silently reuse a
+/// sibling workspace's server (different code, different DB) and the
+/// agent would validate against the wrong build.
+///
+/// `main.rs` calls [`init_repo_root`] eagerly during boot so the value is
+/// set before any request can read it. `OnceLock::get_or_init` is
+/// idempotent, so calling [`repo_root`] later returns the same value.
+pub fn repo_root() -> &'static str {
+    REPO_ROOT.get_or_init(current_dir_string)
+}
+
+/// Eagerly initialize [`repo_root`] from the process's current working
+/// directory. Idempotent.
+pub fn init_repo_root() {
+    let _ = REPO_ROOT.get_or_init(current_dir_string);
+}
+
+static REPO_ROOT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+fn current_dir_string() -> String {
+    std::env::current_dir()
+        .ok()
+        .and_then(|p| p.into_os_string().into_string().ok())
+        .unwrap_or_default()
+}
+
 /// Attach the issue-#81 pagination hint headers to a list/search response.
 ///
 /// * `X-Total-Count` — the true row count of the underlying query, before
@@ -578,6 +608,14 @@ mod tests {
         assert!(
             build_id.chars().all(|c| c.is_ascii_digit()),
             "build_id should be all digits, got {build_id:?}"
+        );
+        // `repo_root` is the workspace-identity field scripts/dev-server-up.sh
+        // parses to distinguish this workspace's server from a sibling
+        // jj workspace's server bound to the same port. Must be a string.
+        assert!(
+            body["repo_root"].is_string(),
+            "repo_root must be a string, got {:?}",
+            body["repo_root"]
         );
     }
 
