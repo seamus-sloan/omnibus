@@ -34,13 +34,6 @@ fn main() {
             // the rebuild-detection use case.
             backend::init_build_id();
 
-            // #278: warn loudly when the operator has opted in to trusting
-            // client-supplied X-Forwarded-For headers. This is only safe
-            // behind a trusted reverse proxy that rewrites the header from
-            // a known-good source — on a directly internet-exposed
-            // deployment any client can rotate the header per request and
-            // bypass the per-IP rate limiter entirely (e.g. unbounded
-            // /api/auth/login credential stuffing).
             if rate_limit::trust_forwarded_for() {
                 tracing::warn!(
                     target: "omnibus::startup",
