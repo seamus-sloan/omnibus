@@ -65,27 +65,26 @@ pub struct Identifier {
 /// has a cover; clients combine it with their configured server base. This
 /// keeps the list response small — covers are fetched lazily as separate
 /// HTTP requests instead of being embedded as base64 data URLs.
+///
+/// Note: OPF `<dc:contributor>` entries are merged into `creators` at parse
+/// time (creators first, then contributors in source order). The normalized
+/// schema stores them in the same `books_authors_link` table, so they are
+/// indistinguishable on read — a separate wire field would always serialize
+/// as empty. See issue #174.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EbookMetadata {
     pub id: i64,
     pub filename: String,
 
-    // Dublin Core core — single-valued first, multi-valued second.
+    // Dublin Core core.
     pub title: Option<String>,
     pub description: Option<String>,
     pub publisher: Option<String>,
     pub published: Option<String>,
     pub modified: Option<String>,
     pub language: Option<String>,
-    pub rights: Option<String>,
-    pub source: Option<String>,
-    pub coverage: Option<String>,
-    pub dc_type: Option<String>,
-    pub dc_format: Option<String>,
-    pub relation: Option<String>,
 
     pub creators: Vec<Contributor>,
-    pub contributors: Vec<Contributor>,
     pub subjects: Vec<String>,
     pub identifiers: Vec<Identifier>,
 
@@ -97,12 +96,9 @@ pub struct EbookMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub series_id: Option<i64>,
 
-    // Structural / document-level info.
-    pub epub_version: Option<String>,
+    /// OPF unique identifier (`<dc:identifier id="…">`). Used by the
+    /// frontend to construct `/books/:uuid` and `/api/covers/:uuid` URLs.
     pub unique_identifier: Option<String>,
-    pub resource_count: usize,
-    pub spine_count: usize,
-    pub toc_count: usize,
 
     pub cover_url: Option<String>,
 

@@ -495,30 +495,25 @@ async fn insert_metadata_links(
     Ok(())
 }
 
-/// Batch-insert author + contributor join rows. Creators take positions
-/// `0..n`, contributors follow at `n..` (OPF source order). Names on the
-/// `ignored_authors` blocklist are skipped — leaving a gap in `position`
-/// rather than renumbering — identical to the previous per-author loop, but
-/// resolved in a constant handful of statements instead of ~4 per author.
+/// Batch-insert author join rows from the merged `creators` list. The OPF
+/// parser appends `<dc:contributor>` entries onto `creators` in source
+/// order (see `db::ebook::parse`), so positions here are simply `0..n` in
+/// that combined order. Names on the `ignored_authors` blocklist are
+/// skipped — leaving a gap in `position` rather than renumbering — identical
+/// to the previous per-author loop, but resolved in a constant handful of
+/// statements instead of ~4 per author.
 async fn insert_author_links(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
     m: &EbookMetadata,
 ) -> Result<(), sqlx::Error> {
-    // (name, sort, position) in OPF order: creators first, then contributors.
-    let author_count = m.creators.len();
+    // (name, sort, position) in OPF order: creators + contributors are
+    // already merged into `m.creators` by the parser.
     let entries: Vec<(&str, Option<&str>, i64)> = m
         .creators
         .iter()
         .enumerate()
         .map(|(pos, c)| (c.name.as_str(), c.file_as.as_deref(), pos as i64))
-        .chain(m.contributors.iter().enumerate().map(|(i, c)| {
-            (
-                c.name.as_str(),
-                c.file_as.as_deref(),
-                (author_count + i) as i64,
-            )
-        }))
         .collect();
     if entries.is_empty() {
         return Ok(());
@@ -582,9 +577,10 @@ async fn insert_author_links(
     upsert_q.execute(&mut **tx).await?;
 
     // Link rows, deduped by name keeping the first (lowest) position so a name
-    // appearing as both creator and contributor keeps its creator position —
-    // matching the old `INSERT OR IGNORE` loop. The id is resolved in SQL via
-    // the NOCASE join, so casing differences don't need handling in Rust.
+    // repeated in the merged creators+contributors list keeps its first
+    // position — matching the old `INSERT OR IGNORE` loop. The id is resolved
+    // in SQL via the NOCASE join, so casing differences don't need handling in
+    // Rust.
     let mut linked: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let link_entries: Vec<(&str, i64)> = entries
         .iter()
@@ -701,12 +697,7 @@ pub(crate) async fn insert_fts_row(
     first_isbn: Option<&str>,
     m: &EbookMetadata,
 ) -> Result<(), sqlx::Error> {
-    let authors_text = join_names(
-        m.creators
-            .iter()
-            .chain(m.contributors.iter())
-            .map(|c| c.name.as_str()),
-    );
+    let authors_text = join_names(m.creators.iter().map(|c| c.name.as_str()));
     let series_text = m.series.clone().unwrap_or_default();
     let tags_text = join_names(m.subjects.iter().map(String::as_str));
     sqlx::query(
