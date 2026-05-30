@@ -68,12 +68,38 @@ fn internal<E: std::fmt::Display>(context: &'static str, e: E) -> Response {
 pub struct AppState {
     pool: SqlitePool,
     worker: Arc<Worker>,
+    /// Issue #275 SSRF guard config for `put_author_photo_url`. Defaults to
+    /// strict (`allow_private_addresses = false`). Integration tests that
+    /// drive the handler against a `wiremock` server bound to `127.0.0.1`
+    /// construct `AppState` via [`AppState::new_with_remote_image_config`]
+    /// with the flag flipped on; production code must never do this.
+    remote_image_config: Arc<db::author_photos::RemoteImageConfig>,
 }
 
 impl AppState {
     pub fn new(pool: SqlitePool) -> Self {
         let worker = Worker::new(pool.clone(), WorkerConfig::default());
-        Self { pool, worker }
+        Self {
+            pool,
+            worker,
+            remote_image_config: Arc::new(db::author_photos::RemoteImageConfig::default()),
+        }
+    }
+
+    /// Test-only constructor that overrides the SSRF guard config. Wraps
+    /// [`AppState::new`] so the SQLite pool + worker stay identical and only
+    /// the [`db::author_photos::RemoteImageConfig`] field differs. Marked
+    /// `#[cfg(test)]` so production callers cannot accidentally flip
+    /// `allow_private_addresses` (#275).
+    #[cfg(test)]
+    pub(crate) fn new_with_remote_image_config(
+        pool: SqlitePool,
+        cfg: db::author_photos::RemoteImageConfig,
+    ) -> Self {
+        Self {
+            remote_image_config: Arc::new(cfg),
+            ..Self::new(pool)
+        }
     }
 
     pub fn pool(&self) -> &SqlitePool {
@@ -82,6 +108,10 @@ impl AppState {
 
     pub fn worker(&self) -> &Arc<Worker> {
         &self.worker
+    }
+
+    pub fn remote_image_config(&self) -> &db::author_photos::RemoteImageConfig {
+        &self.remote_image_config
     }
 }
 
@@ -112,6 +142,7 @@ pub fn rest_router_with_search_limiter(
         .route("/api/library", get(ebooks::get_library))
         .route("/api/ebooks", get(ebooks::get_ebooks))
         .route("/api/ebooks/{uuid}", get(ebooks::get_ebook_by_uuid))
+        .route("/api/ebooks/{uuid}/file", get(ebooks::get_ebook_file))
         .route(
             "/api/ebooks/{uuid}/overrides",
             post(overrides::post_ebook_overrides).delete(overrides::delete_ebook_overrides),
@@ -291,6 +322,25 @@ pub(crate) mod test_support {
             .await
             .expect("db should initialize");
         let state = AppState::new(pool.clone());
+        let app = rest_router(state.clone());
+        (app, state, pool)
+    }
+
+    /// Variant of [`fixture`] that flips the SSRF guard off (issue #275) so
+    /// the wiremock-backed `put_author_photo_url` tests can drive the
+    /// handler against a server bound to `127.0.0.1`. Production paths
+    /// always construct `AppState::new` and therefore always block private
+    /// IPs.
+    pub(crate) async fn fixture_loopback_remote_image() -> (Router, AppState, sqlx::SqlitePool) {
+        let pool = db::init_db("sqlite::memory:")
+            .await
+            .expect("db should initialize");
+        let state = AppState::new_with_remote_image_config(
+            pool.clone(),
+            db::author_photos::RemoteImageConfig {
+                allow_private_addresses: true,
+            },
+        );
         let app = rest_router(state.clone());
         (app, state, pool)
     }

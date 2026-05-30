@@ -46,7 +46,13 @@ pub const MAX_REQUESTS: u32 = 10;
 /// Maximum number of tracked IPs before stale buckets are pruned.
 const MAX_BUCKETS: usize = 10_000;
 
-fn trust_forwarded_for() -> bool {
+/// Returns true when the operator has opted in to consulting the client-supplied
+/// `X-Forwarded-For` header as the rate-limit key (via
+/// `OMNIBUS_TRUST_FORWARDED_FOR={1,true,yes}`). Exposed `pub` so the server
+/// entrypoint can emit a startup warning — enabling this without a trusted
+/// reverse proxy in front of Axum lets any client rotate the header per
+/// request and defeats the per-IP limiter entirely (#278).
+pub fn trust_forwarded_for() -> bool {
     matches!(
         std::env::var("OMNIBUS_TRUST_FORWARDED_FOR").as_deref(),
         Ok("1" | "true" | "yes")

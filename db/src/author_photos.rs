@@ -14,6 +14,7 @@
 //! This keeps a single page-view from costing two HTTP round-trips on
 //! every refresh for authors who genuinely have no Open Library entry.
 
+use std::net::{IpAddr, SocketAddr};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -260,6 +261,17 @@ const REMOTE_IMAGE_TIMEOUT: Duration = Duration::from_secs(15);
 pub enum FetchRemoteImageError {
     #[error("URL must start with http:// or https://")]
     BadScheme,
+    /// Issue #275 — SSRF guard. The supplied URL parsed cleanly, but either
+    /// its host could not be resolved or one of the resolved IPs falls into a
+    /// blocked range (loopback / private RFC1918 / link-local / multicast /
+    /// IPv6 ULA / IPv6 site-local / unspecified / broadcast / documentation).
+    /// We reject *before* any TCP connect so a hostile admin URL can't be
+    /// used to probe the loopback / cloud-metadata (`169.254.169.254`) /
+    /// internal-network surface area.
+    #[error("URL host is not allowed: {0}")]
+    BlockedAddress(String),
+    #[error("URL is not parseable")]
+    InvalidUrl,
     #[error("remote server returned {0}")]
     BadStatus(u16),
     #[error("remote response content-type is not an image ({0})")]
@@ -272,6 +284,137 @@ pub enum FetchRemoteImageError {
     Http(#[from] reqwest::Error),
 }
 
+/// Knobs for [`fetch_remote_image_with`]. Production code constructs
+/// [`RemoteImageConfig::default`] (strict: only public IPs are allowed). The
+/// `allow_private_addresses` escape hatch exists exclusively for integration
+/// tests that need to hit a local `wiremock` server bound to `127.0.0.1` —
+/// the production HTTP handlers must never construct a `RemoteImageConfig`
+/// with this flag set.
+#[derive(Debug, Clone, Default)]
+pub struct RemoteImageConfig {
+    /// When `true`, [`fetch_remote_image_with`] skips the IP-range check
+    /// entirely. Default `false` (derived `Default`). Test-only override —
+    /// see the doc comment on this struct.
+    pub allow_private_addresses: bool,
+}
+
+/// SSRF guard. Returns `true` if `addr` falls into any range we refuse to
+/// open a TCP connection against from an admin-supplied URL. Categories:
+///   - loopback (127.0.0.0/8, ::1)
+///   - unspecified (0.0.0.0, ::)
+///   - IPv4 private (RFC 1918: 10/8, 172.16/12, 192.168/16)
+///   - IPv4 link-local (169.254/16 — covers AWS/GCP/Azure IMDS at
+///     169.254.169.254)
+///   - IPv4 multicast (224/4) + broadcast (255.255.255.255)
+///   - IPv4 documentation (192.0.2/24, 198.51.100/24, 203.0.113/24)
+///   - IPv4 carrier-grade NAT (100.64/10)
+///   - IPv4 benchmarking (198.18/15)
+///   - IPv6 multicast (ff00::/8)
+///   - IPv6 ULA (fc00::/7) — `Ipv6Addr::is_unique_local` is nightly-only
+///     so we bit-check the high octet directly.
+///   - IPv6 link-local (fe80::/10) — also nightly-only on stable, bit-check.
+///   - IPv6 documentation (2001:db8::/32)
+///   - IPv6-mapped IPv4 — unwrap to the wrapped IPv4 and re-check, so
+///     `::ffff:127.0.0.1` is still loopback.
+fn is_blocked_address(addr: IpAddr) -> bool {
+    match addr {
+        IpAddr::V4(v4) => {
+            if v4.is_loopback()
+                || v4.is_unspecified()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+            {
+                return true;
+            }
+            let oct = v4.octets();
+            // 100.64.0.0/10 — RFC 6598 carrier-grade NAT.
+            if oct[0] == 100 && (oct[1] & 0xc0) == 64 {
+                return true;
+            }
+            // 198.18.0.0/15 — RFC 2544 benchmarking.
+            if oct[0] == 198 && (oct[1] & 0xfe) == 18 {
+                return true;
+            }
+            false
+        }
+        IpAddr::V6(v6) => {
+            if v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() {
+                return true;
+            }
+            // IPv6-mapped IPv4 (::ffff:0:0/96) — recurse on the embedded v4
+            // so `::ffff:127.0.0.1` is rejected as loopback.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_blocked_address(IpAddr::V4(v4));
+            }
+            let seg = v6.segments();
+            // fc00::/7 — Unique Local Addresses (`is_unique_local` is
+            // nightly-only on `Ipv6Addr`).
+            if (seg[0] & 0xfe00) == 0xfc00 {
+                return true;
+            }
+            // fe80::/10 — Link-local (`is_unicast_link_local` is nightly-only).
+            if (seg[0] & 0xffc0) == 0xfe80 {
+                return true;
+            }
+            // 2001:db8::/32 — documentation.
+            if seg[0] == 0x2001 && seg[1] == 0x0db8 {
+                return true;
+            }
+            false
+        }
+    }
+}
+
+/// Parse `url` and resolve its host to a list of pinned `SocketAddr`s with
+/// every address gated by [`is_blocked_address`]. Used by
+/// [`fetch_remote_image_with`] so the subsequent `reqwest` call is locked to
+/// the validated set (defeats DNS rebinding between our check and reqwest's
+/// own resolution).
+async fn validated_resolve(url: &str) -> Result<(String, Vec<SocketAddr>), FetchRemoteImageError> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| FetchRemoteImageError::InvalidUrl)?;
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err(FetchRemoteImageError::BadScheme);
+    }
+    let host = parsed
+        .host_str()
+        .ok_or(FetchRemoteImageError::InvalidUrl)?
+        .to_string();
+    let port = parsed
+        .port_or_known_default()
+        .ok_or(FetchRemoteImageError::InvalidUrl)?;
+
+    // Fast path: the host is already a literal IP — `lookup_host` would still
+    // work, but skipping it avoids spurious DNS lookups on IP-literal URLs.
+    if let Ok(literal) = host.parse::<IpAddr>() {
+        if is_blocked_address(literal) {
+            return Err(FetchRemoteImageError::BlockedAddress(literal.to_string()));
+        }
+        return Ok((host, vec![SocketAddr::new(literal, port)]));
+    }
+
+    let mut addrs: Vec<SocketAddr> = Vec::new();
+    let resolved = tokio::net::lookup_host(format!("{host}:{port}"))
+        .await
+        .map_err(|_| FetchRemoteImageError::BlockedAddress(host.clone()))?;
+    for sa in resolved {
+        if is_blocked_address(sa.ip()) {
+            // Reject the *whole* hostname if any A/AAAA record points
+            // somewhere private — partial allowlisting would still let a
+            // hostile DNS server smuggle a private IP into the resolved set.
+            return Err(FetchRemoteImageError::BlockedAddress(sa.ip().to_string()));
+        }
+        addrs.push(sa);
+    }
+    if addrs.is_empty() {
+        return Err(FetchRemoteImageError::BlockedAddress(host));
+    }
+    Ok((host, addrs))
+}
+
 /// Fetch an image from a user-supplied URL with the same validation gates as
 /// the multipart upload route — image content-type, no SVG, size cap. Returns
 /// the raw bytes and the server-advertised content-type; callers are
@@ -281,18 +424,51 @@ pub enum FetchRemoteImageError {
 /// (F1.11 follow-up). Lives next to [`fetch_open_library`] because it
 /// reuses the same `reqwest` setup and shares the "we expect an image"
 /// surface area.
+///
+/// **SSRF guard (issue #275).** Production callers go through
+/// [`fetch_remote_image`], which uses the default strict
+/// [`RemoteImageConfig`]: the URL's host is resolved and every resolved IP
+/// is checked against [`is_blocked_address`] *before* any TCP connect, then
+/// the `reqwest` client is built with `.resolve_to_addrs(host, validated)`
+/// so it can't be tricked into re-resolving and hitting a different IP (DNS
+/// rebinding).
 pub async fn fetch_remote_image(url: &str) -> Result<(String, Vec<u8>), FetchRemoteImageError> {
+    fetch_remote_image_with(url, &RemoteImageConfig::default()).await
+}
+
+/// [`fetch_remote_image`] with an injectable config. Integration tests that
+/// need to hit a `127.0.0.1`-bound `wiremock` server flip
+/// `allow_private_addresses` on; everything else (RPC handler, REST
+/// handler, follow-up code paths) MUST keep the default.
+pub async fn fetch_remote_image_with(
+    url: &str,
+    config: &RemoteImageConfig,
+) -> Result<(String, Vec<u8>), FetchRemoteImageError> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err(FetchRemoteImageError::BadScheme);
     }
-    // Reuse the process-wide client so this on-demand admin fetch shares the
-    // connection pool / TLS session cache with the Worker's Open Library
-    // resolutions. The longer per-request timeout is applied on the builder.
-    let resp = shared_client()?
-        .get(url)
-        .timeout(REMOTE_IMAGE_TIMEOUT)
-        .send()
-        .await?;
+
+    // Strict mode (the default): resolve host → validate IPs → pin the
+    // reqwest client to that set so DNS rebinding can't swap in a private
+    // IP between our check and reqwest's own DNS resolution. In test mode
+    // (`allow_private_addresses`) we skip the IP-range check but still
+    // build a per-call client. Redirects are disabled in BOTH modes: a
+    // 3xx pointing at a new host (e.g. `http://169.254.169.254/`) would
+    // force reqwest to re-resolve through its default resolver, bypassing
+    // the IP-range guard that only applies to the original host. An admin
+    // could otherwise host `attacker.com` (passes the guard) and serve a
+    // 302 to IMDS to exfiltrate cloud creds. Author-photo URLs are direct
+    // image fetches; legitimate sources don't need cross-host redirects.
+    let mut builder = reqwest::Client::builder()
+        .user_agent(default_user_agent())
+        .redirect(reqwest::redirect::Policy::none());
+    if !config.allow_private_addresses {
+        let (host, addrs) = validated_resolve(url).await?;
+        builder = builder.resolve_to_addrs(&host, &addrs);
+    }
+    let client = builder.build()?;
+
+    let resp = client.get(url).timeout(REMOTE_IMAGE_TIMEOUT).send().await?;
     let status = resp.status();
     if !status.is_success() {
         return Err(FetchRemoteImageError::BadStatus(status.as_u16()));
@@ -537,6 +713,258 @@ mod tests {
         // The header matcher above only matches when the UA is correct, so a
         // single received request confirms the override fired.
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    // -----------------------------------------------------------------
+    // Issue #275 — SSRF guard. `is_blocked_address` and
+    // `fetch_remote_image` must refuse to open a TCP connect against the
+    // loopback / RFC1918 / link-local / multicast / IPv6 ULA address
+    // space *before* any HTTP traffic flies.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn is_blocked_address_blocks_loopback_v4() {
+        assert!(is_blocked_address("127.0.0.1".parse().unwrap()));
+        assert!(is_blocked_address("127.255.255.254".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_blocked_address_blocks_private_v4() {
+        for ip in [
+            "10.0.0.1",
+            "10.255.255.255",
+            "192.168.1.1",
+            "172.16.0.1",
+            "172.31.255.255",
+        ] {
+            assert!(is_blocked_address(ip.parse().unwrap()), "{ip}");
+        }
+    }
+
+    #[test]
+    fn is_blocked_address_blocks_link_local_v4() {
+        // 169.254/16 — covers the AWS/GCP/Azure IMDS endpoint at .169.254.
+        assert!(is_blocked_address("169.254.169.254".parse().unwrap()));
+        assert!(is_blocked_address("169.254.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_blocked_address_blocks_multicast_unspecified_broadcast_v4() {
+        assert!(is_blocked_address("0.0.0.0".parse().unwrap()));
+        assert!(is_blocked_address("255.255.255.255".parse().unwrap()));
+        assert!(is_blocked_address("224.0.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_blocked_address_blocks_documentation_v4() {
+        assert!(is_blocked_address("192.0.2.1".parse().unwrap()));
+        assert!(is_blocked_address("198.51.100.1".parse().unwrap()));
+        assert!(is_blocked_address("203.0.113.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_blocked_address_blocks_carrier_grade_nat_v4() {
+        // 100.64.0.0/10 — RFC 6598 CGN range.
+        assert!(is_blocked_address("100.64.0.1".parse().unwrap()));
+        assert!(is_blocked_address("100.127.255.255".parse().unwrap()));
+        // 100.63.x and 100.128.x sit outside /10 — must NOT be blocked.
+        assert!(!is_blocked_address("100.63.255.255".parse().unwrap()));
+        assert!(!is_blocked_address("100.128.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_blocked_address_blocks_benchmarking_v4() {
+        // 198.18.0.0/15.
+        assert!(is_blocked_address("198.18.0.1".parse().unwrap()));
+        assert!(is_blocked_address("198.19.255.255".parse().unwrap()));
+        assert!(!is_blocked_address("198.20.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_blocked_address_blocks_loopback_v6() {
+        assert!(is_blocked_address("::1".parse().unwrap()));
+        assert!(is_blocked_address("::".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_blocked_address_blocks_unique_local_v6() {
+        // fc00::/7 — both `fc` and `fd` high bytes.
+        assert!(is_blocked_address("fc00::1".parse().unwrap()));
+        assert!(is_blocked_address("fd00::1".parse().unwrap()));
+        // fe00:: is OUTSIDE fc00::/7 (the next /8 up) — must NOT be blocked
+        // by the ULA check (it WOULD be caught by other rules if applicable
+        // but is otherwise treated as a normal public unicast prefix).
+    }
+
+    #[test]
+    fn is_blocked_address_blocks_link_local_v6() {
+        // fe80::/10 — link-local.
+        assert!(is_blocked_address("fe80::1".parse().unwrap()));
+        assert!(is_blocked_address("febf:ffff::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_blocked_address_blocks_ipv4_mapped_loopback() {
+        // ::ffff:127.0.0.1 — IPv6 wrapper around the v4 loopback. Must be
+        // recognised so a hostile URL can't slip through the v4 guard by
+        // dressing the address up as v6.
+        assert!(is_blocked_address("::ffff:127.0.0.1".parse().unwrap()));
+        // ::ffff:169.254.169.254 — same wrapper, IMDS target.
+        assert!(is_blocked_address(
+            "::ffff:169.254.169.254".parse().unwrap()
+        ));
+    }
+
+    #[test]
+    fn is_blocked_address_blocks_ipv6_multicast_and_documentation() {
+        assert!(is_blocked_address("ff02::1".parse().unwrap()));
+        // 2001:db8::/32 documentation prefix.
+        assert!(is_blocked_address("2001:db8::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_blocked_address_allows_public_v4() {
+        // Spot-check a handful of public unicast IPs to make sure the guard
+        // hasn't accidentally over-matched.
+        assert!(!is_blocked_address("1.1.1.1".parse().unwrap()));
+        assert!(!is_blocked_address("8.8.8.8".parse().unwrap()));
+        assert!(!is_blocked_address("104.16.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_blocked_address_allows_public_v6() {
+        // Google DNS over v6.
+        assert!(!is_blocked_address("2001:4860:4860::8888".parse().unwrap()));
+        // Cloudflare DNS over v6.
+        assert!(!is_blocked_address("2606:4700:4700::1111".parse().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn fetch_remote_image_blocks_loopback_literal_under_strict_config() {
+        // Strict config (the production default). Must reject before any
+        // TCP connect — there's nothing listening on 127.0.0.1:1 in CI, so
+        // a regression that bypassed the guard would surface as a
+        // connect-refused HTTP error instead of `BlockedAddress`.
+        let cfg = RemoteImageConfig::default();
+        let err = fetch_remote_image_with("http://127.0.0.1:1/x", &cfg)
+            .await
+            .expect_err("must block loopback under strict config");
+        assert!(matches!(err, FetchRemoteImageError::BlockedAddress(_)));
+    }
+
+    #[tokio::test]
+    async fn fetch_remote_image_blocks_aws_imds_link_local_under_strict_config() {
+        // 169.254.169.254 — the headline SSRF target. Must be refused
+        // regardless of whether the underlying network would actually
+        // route to it.
+        let cfg = RemoteImageConfig::default();
+        let err = fetch_remote_image_with("http://169.254.169.254/latest/meta-data/", &cfg)
+            .await
+            .expect_err("must block IMDS link-local under strict config");
+        assert!(matches!(err, FetchRemoteImageError::BlockedAddress(_)));
+    }
+
+    #[tokio::test]
+    async fn fetch_remote_image_blocks_rfc1918_private_under_strict_config() {
+        let cfg = RemoteImageConfig::default();
+        for url in [
+            "http://10.0.0.1/x",
+            "http://192.168.1.1/x",
+            "http://172.16.0.1/x",
+        ] {
+            let err = fetch_remote_image_with(url, &cfg)
+                .await
+                .expect_err("must block RFC1918 under strict config");
+            assert!(
+                matches!(err, FetchRemoteImageError::BlockedAddress(_)),
+                "expected BlockedAddress for {url}, got {err:?}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_remote_image_blocks_ipv6_loopback_under_strict_config() {
+        let cfg = RemoteImageConfig::default();
+        let err = fetch_remote_image_with("http://[::1]:1/x", &cfg)
+            .await
+            .expect_err("must block IPv6 loopback under strict config");
+        assert!(matches!(err, FetchRemoteImageError::BlockedAddress(_)));
+    }
+
+    #[tokio::test]
+    async fn fetch_remote_image_rejects_invalid_url() {
+        let cfg = RemoteImageConfig::default();
+        // Garbage URL — must surface InvalidUrl, never reach the resolver.
+        let err = fetch_remote_image_with("http://", &cfg)
+            .await
+            .expect_err("must reject malformed URL");
+        assert!(matches!(
+            err,
+            FetchRemoteImageError::InvalidUrl | FetchRemoteImageError::BlockedAddress(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn fetch_remote_image_rejects_non_http_scheme() {
+        let cfg = RemoteImageConfig::default();
+        let err = fetch_remote_image_with("ftp://example.com/p.jpg", &cfg)
+            .await
+            .expect_err("must reject non-http(s)");
+        assert!(matches!(err, FetchRemoteImageError::BadScheme));
+    }
+
+    #[tokio::test]
+    async fn fetch_remote_image_does_not_follow_redirects_to_private_ips() {
+        // Regression for the SSRF redirect-bypass: an admin could host
+        // `attacker.com` (resolves to a public IP, passes the IP-range
+        // guard in strict mode) and serve a 302 to `http://127.0.0.1/`
+        // or `http://169.254.169.254/`. If reqwest follows the redirect
+        // it re-resolves through its default resolver and the IP-range
+        // guard never sees the new host — full bypass. The fix disables
+        // redirect-following on the per-call client, so a 3xx surfaces
+        // as a 302 status (BadStatus) and the SSRF target is never hit.
+        //
+        // The test runs under `allow_private_addresses` so the wiremock
+        // server bound to loopback isn't rejected up-front — the point
+        // is to exercise the redirect-policy code, not the IP guard.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(302).insert_header("Location", "http://169.254.169.254/"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let cfg = RemoteImageConfig {
+            allow_private_addresses: true,
+        };
+        let err = fetch_remote_image_with(&format!("{}/photo.jpg", server.uri()), &cfg)
+            .await
+            .expect_err("redirect must NOT be followed");
+        assert!(
+            matches!(err, FetchRemoteImageError::BadStatus(302)),
+            "expected BadStatus(302) (redirect not followed), got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_remote_image_allows_loopback_under_test_config() {
+        // The test-only escape hatch must actually flip the guard off so
+        // the existing wiremock-backed integration tests can keep working.
+        // We confirm by pointing at a TCP port that nothing is listening
+        // on — strict config would have returned `BlockedAddress`, lax
+        // config gets all the way to a transport-level `Http` error.
+        let cfg = RemoteImageConfig {
+            allow_private_addresses: true,
+        };
+        let err = fetch_remote_image_with("http://127.0.0.1:1/x", &cfg)
+            .await
+            .expect_err("nothing is listening on :1");
+        assert!(
+            matches!(err, FetchRemoteImageError::Http(_)),
+            "lax config must skip the SSRF guard and reach the network layer, got {err:?}",
+        );
     }
 
     #[tokio::test]

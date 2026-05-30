@@ -1508,3 +1508,68 @@ async fn search_books_returns_empty_for_unknown_library() {
         "query against a non-existent library must not leak rows from another library"
     );
 }
+
+#[tokio::test]
+async fn book_file_path_returns_absolute_path_for_epub() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib_id = sqlx::query("INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib')")
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    // `books.path` is stored RELATIVE to the library root (the scanner's
+    // `root.join(filename)` convention), so the resolved path must be
+    // `<libraries.path>/<books.path>/<stem>.<ext>`.
+    let book_id = sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title) \
+         VALUES ('uuid-epub', ?, 'sub/dir', 'Some Book')",
+    )
+    .bind(lib_id)
+    .execute(&pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime) \
+         VALUES (?, 'EPUB', 'some-book', 0, '')",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let path = book_file_path(&pool, book_id, "EPUB").await.unwrap();
+    assert_eq!(
+        path,
+        Some(std::path::PathBuf::from("/lib/sub/dir/some-book.epub"))
+    );
+}
+
+#[tokio::test]
+async fn book_file_path_returns_none_for_missing_book() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let path = book_file_path(&pool, 9999, "EPUB").await.unwrap();
+    assert!(path.is_none());
+}
+
+#[tokio::test]
+async fn book_file_path_returns_none_when_no_file_row_for_format() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib_id = sqlx::query("INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib')")
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let book_id = sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title) \
+         VALUES ('uuid-nofile', ?, '/lib/Bookless', 'Bookless')",
+    )
+    .bind(lib_id)
+    .execute(&pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+
+    let path = book_file_path(&pool, book_id, "EPUB").await.unwrap();
+    assert!(path.is_none());
+}

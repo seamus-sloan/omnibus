@@ -145,24 +145,13 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
         published: r.get("pubdate"),
         modified: r.get("last_modified"),
         language: r.get("language"),
-        rights: None,
-        source: None,
-        coverage: None,
-        dc_type: None,
-        dc_format: None,
-        relation: None,
         creators,
-        contributors: vec![],
         subjects,
         identifiers,
         series: r.get("series_name"),
         series_index: series_index.map(format_series_index),
         series_id: r.get("series_link_id"),
-        epub_version: None,
         unique_identifier: Some(uuid.clone()),
-        resource_count: 0,
-        spine_count: 0,
-        toc_count: 0,
         cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
         accent: r.get("accent_color"),
         formats,
@@ -231,4 +220,34 @@ pub async fn resolve_book_id_by_uuid(
         .bind(uuid)
         .fetch_optional(pool)
         .await
+}
+
+/// Resolve the on-disk path of a book's file for the given format
+/// (e.g. "EPUB"). The indexer stores `books.path` **relative to its
+/// `libraries.path` root** (mirroring the scanner's `root.join(filename)`),
+/// and `book_files.filename` as the stem, so the path is
+/// `<libraries.path>/<books.path>/<filename>.<format-lowercased>`. When the
+/// library root is itself relative the result resolves against the server's
+/// working directory, exactly as the scanner read it. Ok(None) when the book
+/// or a file row for that format is absent.
+pub async fn book_file_path(
+    pool: &SqlitePool,
+    id: i64,
+    format: &str,
+) -> Result<Option<std::path::PathBuf>, sqlx::Error> {
+    let row = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT l.path, b.path, bf.filename FROM books b \
+         JOIN libraries l ON l.id = b.library_id \
+         JOIN book_files bf ON bf.book_id = b.id \
+         WHERE b.id = ? AND bf.format = ? COLLATE NOCASE LIMIT 1",
+    )
+    .bind(id)
+    .bind(format)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(lib, dir, stem)| {
+        std::path::Path::new(&lib)
+            .join(&dir)
+            .join(format!("{stem}.{}", format.to_lowercase()))
+    }))
 }

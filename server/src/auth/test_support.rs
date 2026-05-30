@@ -14,6 +14,10 @@ use omnibus_db::{
 use sqlx::SqlitePool;
 
 use super::{BEARER_TTL_SECS, COOKIE_TTL_SECS, SESSION_COOKIE};
+// `SESSION_COOKIE` (plain name) is intentionally used here even on a
+// production-shaped deploy: the read side `parse_session_token` accepts
+// either form, so integration-test cookies don't need to negotiate the
+// `OMNIBUS_SECURE_COOKIES` env var to hit the same code path.
 
 /// Insert a user with the given `is_admin` flag, bypassing the registration
 /// gate and first-user auto-promote logic. The password hash is a sentinel

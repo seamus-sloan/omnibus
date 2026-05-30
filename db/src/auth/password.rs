@@ -17,6 +17,12 @@ const ARGON2_PARALLELISM: u32 = 1;
 const MIN_PASSWORD_LEN: usize = 10;
 const MAX_PASSWORD_LEN: usize = 128;
 
+/// Username length ceiling, measured in Unicode scalar values. Sized to
+/// comfortably cover real names, role-style handles, and email-derived
+/// usernames while keeping the value short enough to render in any UI
+/// column and to bound storage/log overhead per row.
+const MAX_USERNAME_LEN: usize = 64;
+
 /// Tiny embedded reject-list. Deliberately small (top ~50) — this is a
 /// "don't be stupid" check, not a HIBP replacement. Self-hosted deployments
 /// are offline-tolerant, so a runtime breach check is out of scope.
@@ -104,6 +110,51 @@ pub fn validate_password(password: &str) -> AuthResult<()> {
     Ok(())
 }
 
+/// Validate a username before insert. Rules:
+///
+/// * Non-empty after rejecting leading/trailing whitespace.
+/// * Maximum `MAX_USERNAME_LEN` Unicode scalar values (not bytes), so a
+///   handful of multi-byte characters can't cheaply blow past the cap.
+/// * No leading or trailing whitespace — those are almost always a paste
+///   accident and the lack of normalization would let "alice" and
+///   " alice" coexist as distinct rows under `COLLATE NOCASE`.
+/// * No ASCII control characters (U+0000..=U+001F, U+007F). Null bytes
+///   break C-string-shaped consumers; other controls corrupt log output
+///   and terminal/UI rendering.
+///
+/// Deliberately *not* handled here: Unicode homoglyph confusables
+/// (e.g. Cyrillic `а` vs Latin `a`). That's a normalization/display
+/// concern that belongs alongside the admin UI surfaces that render
+/// user-supplied usernames; case-collision dedup via the existing
+/// `users.username COLLATE NOCASE` index is the only collision guarantee
+/// this layer makes.
+pub fn validate_username(username: &str) -> AuthResult<()> {
+    if username.is_empty() {
+        return Err(AuthError::UsernameEmpty);
+    }
+    if username.trim() != username {
+        return Err(AuthError::UsernameWhitespace);
+    }
+    // Re-check after trim in case the input was entirely whitespace —
+    // `trim() != self` would have already caught that, but the empty check
+    // here makes the intent explicit if the rules above ever reorder.
+    if username.trim().is_empty() {
+        return Err(AuthError::UsernameEmpty);
+    }
+    if username.chars().count() > MAX_USERNAME_LEN {
+        return Err(AuthError::UsernameTooLong {
+            max: MAX_USERNAME_LEN,
+        });
+    }
+    if username
+        .chars()
+        .any(|c| (c as u32) <= 0x1F || c as u32 == 0x7F)
+    {
+        return Err(AuthError::UsernameInvalidChar);
+    }
+    Ok(())
+}
+
 pub fn hash_password(password: &str) -> AuthResult<String> {
     let salt = SaltString::generate(&mut PhcOsRng);
     let phc = argon2_hasher()
@@ -154,5 +205,109 @@ mod tests {
     #[test]
     fn password_policy_accepts_reasonable() {
         assert!(validate_password("xk7-banana-frog-42").is_ok());
+    }
+
+    // ---- username policy ----------------------------------------------------
+
+    #[test]
+    fn username_policy_rejects_empty() {
+        assert!(matches!(
+            validate_username(""),
+            Err(AuthError::UsernameEmpty)
+        ));
+    }
+
+    #[test]
+    fn username_policy_accepts_single_char() {
+        assert!(validate_username("a").is_ok());
+    }
+
+    #[test]
+    fn username_policy_accepts_max_length() {
+        let name: String = "a".repeat(MAX_USERNAME_LEN);
+        assert!(validate_username(&name).is_ok());
+    }
+
+    #[test]
+    fn username_policy_rejects_over_max_length() {
+        let name: String = "a".repeat(MAX_USERNAME_LEN + 1);
+        assert!(matches!(
+            validate_username(&name),
+            Err(AuthError::UsernameTooLong { .. })
+        ));
+    }
+
+    #[test]
+    fn username_policy_rejects_leading_whitespace() {
+        assert!(matches!(
+            validate_username(" alice"),
+            Err(AuthError::UsernameWhitespace)
+        ));
+    }
+
+    #[test]
+    fn username_policy_rejects_trailing_whitespace() {
+        assert!(matches!(
+            validate_username("alice "),
+            Err(AuthError::UsernameWhitespace)
+        ));
+    }
+
+    #[test]
+    fn username_policy_rejects_only_whitespace() {
+        // All-whitespace input has trim() != self, so it surfaces as the
+        // whitespace error rather than the empty error — either is a
+        // reject, but lock the variant to keep callers' error UX stable.
+        assert!(matches!(
+            validate_username("   "),
+            Err(AuthError::UsernameWhitespace)
+        ));
+    }
+
+    #[test]
+    fn username_policy_rejects_embedded_tab() {
+        assert!(matches!(
+            validate_username("ali\tce"),
+            Err(AuthError::UsernameInvalidChar)
+        ));
+    }
+
+    #[test]
+    fn username_policy_rejects_embedded_newline() {
+        assert!(matches!(
+            validate_username("ali\nce"),
+            Err(AuthError::UsernameInvalidChar)
+        ));
+    }
+
+    #[test]
+    fn username_policy_rejects_embedded_null() {
+        assert!(matches!(
+            validate_username("ali\0ce"),
+            Err(AuthError::UsernameInvalidChar)
+        ));
+    }
+
+    #[test]
+    fn username_policy_rejects_low_control_char() {
+        assert!(matches!(
+            validate_username("ali\x1fce"),
+            Err(AuthError::UsernameInvalidChar)
+        ));
+    }
+
+    #[test]
+    fn username_policy_rejects_delete_char() {
+        assert!(matches!(
+            validate_username("ali\x7fce"),
+            Err(AuthError::UsernameInvalidChar)
+        ));
+    }
+
+    #[test]
+    fn username_policy_accepts_reasonable() {
+        assert!(validate_username("alice").is_ok());
+        assert!(validate_username("Alice.Smith-42_").is_ok());
+        assert!(validate_username("user@example.com").is_ok());
     }
 }

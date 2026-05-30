@@ -25,7 +25,7 @@ mod search;
 #[cfg(test)]
 mod tests;
 
-pub use get::{get_book, get_book_by_uuid, resolve_book_id_by_uuid};
+pub use get::{book_file_path, get_book, get_book_by_uuid, resolve_book_id_by_uuid};
 pub use list::{
     count_books, library_from_db, library_from_db_with_total, list_books, list_indexed_rows,
     IndexedRow,
