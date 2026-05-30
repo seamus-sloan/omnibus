@@ -69,9 +69,13 @@ Helpers used only by this spec (e.g. `fillSettingsForm`) live inside the spec fi
 ## 6. Run
 
 ```bash
+just dev-up                            # idempotent, identity-checked, fast on reuse
+source .claude/runtime/env.sh          # picks up PLAYWRIGHT_BASE_URL for the chosen port
 cd ui_tests/playwright
 npx playwright test
 ```
+
+If you need to drive the same page manually (for snapshots / debugging while iterating on the spec), use the [`ui-validate`](../ui-validate/SKILL.md) skill — same server, same login, Chrome DevTools MCP by default.
 
 ## 7. End-of-session
 

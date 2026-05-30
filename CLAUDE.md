@@ -23,7 +23,15 @@ Auto-discoverable skills in [.claude/skills/](.claude/skills/) — Claude Code l
 
 - [add-backend-route](.claude/skills/add-backend-route/SKILL.md) — adding an Axum page or API endpoint end-to-end.
 - [add-playwright-flow](.claude/skills/add-playwright-flow/SKILL.md) — adding a new E2E spec.
-- [ui-validate](.claude/skills/ui-validate/SKILL.md) — bring up a port-walking dev server, log in as the seeded admin, drive the browser preview, poll `/api/_health` for rebuild signal.
+- [ui-validate](.claude/skills/ui-validate/SKILL.md) — bring up a port-walking dev server, log in as the seeded admin, drive the browser, poll `/api/_health` for rebuild signal.
+
+### Browser tools
+
+When you need to drive the running web app to verify a UI change, use **[`ui-validate`](.claude/skills/ui-validate/SKILL.md)**. Its default browser MCP is **Chrome DevTools** (`mcp__chrome-devtools__*`). To swap that skill to **Claude Preview** (`mcp__Claude_Preview__preview_*`), run `scripts/skills/swap-browser.sh preview` from the repo root; swap back with `scripts/skills/swap-browser.sh chrome-devtools`.
+
+Other browser-driving entrypoints exist for narrower jobs and should NOT be the default:
+- **`qa-browser`** — drives your real Chrome via the extension MCP. Good for letting the user watch the agent work; disruptive when running multiple agents because they all share one Chrome.
+- **`chrome-devtools-mcp:*` skills** — perf traces, Lighthouse audits, deep CDP work. Overkill for routine verification.
 
 ## Architecture
 
