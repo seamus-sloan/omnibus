@@ -77,6 +77,24 @@ fn auth_error_to_response(e: AuthError) -> Response {
                 .into_response()
         }
         AuthError::UsernameTaken => (StatusCode::CONFLICT, "username taken").into_response(),
+        AuthError::UsernameEmpty => {
+            (StatusCode::BAD_REQUEST, "username must not be empty").into_response()
+        }
+        AuthError::UsernameTooLong { max } => (
+            StatusCode::BAD_REQUEST,
+            format!("username too long (max {max})"),
+        )
+            .into_response(),
+        AuthError::UsernameWhitespace => (
+            StatusCode::BAD_REQUEST,
+            "username must not have leading or trailing whitespace",
+        )
+            .into_response(),
+        AuthError::UsernameInvalidChar => (
+            StatusCode::BAD_REQUEST,
+            "username contains an invalid control character",
+        )
+            .into_response(),
         AuthError::PasswordTooShort { min } => (
             StatusCode::BAD_REQUEST,
             format!("password too short (min {min})"),
@@ -413,6 +431,42 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn register_invalid_username_returns_400() {
+        // Cover each AuthError::Username* validation rejection at the HTTP
+        // boundary (#276). Each case is a fresh app so the
+        // first-registration / registration-disabled gate doesn't latch
+        // between iterations.
+        // `too_long` deliberately uses 256 chars — well over the 64-scalar
+        // MAX_USERNAME_LEN policy without depending on the (private) const.
+        let too_long = "x".repeat(256);
+        let cases: &[(&str, &str)] = &[
+            ("empty", ""),
+            ("too_long", &too_long),
+            ("leading_space", " alice"),
+            ("trailing_space", "alice "),
+            ("control_char", "ali\x01ce"),
+            ("null_byte", "ali\0ce"),
+        ];
+        for (label, username) in cases {
+            let (app, _pool) = app().await;
+            let res = app
+                .oneshot(json_req(
+                    "/api/auth/register",
+                    "POST",
+                    json!({"username": username, "password": "correct horse battery staple"}),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::BAD_REQUEST,
+                "username case {label} must reject with 400, got {}",
+                res.status()
+            );
+        }
     }
 
     #[tokio::test]
