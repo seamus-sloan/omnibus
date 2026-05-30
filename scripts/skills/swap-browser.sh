@@ -23,7 +23,13 @@ EOF
 fi
 TARGET="$1"
 
-cd "$(git rev-parse --show-toplevel)"
+# Path-based root resolution. `git rev-parse --show-toplevel` fails inside
+# `jj workspace` checkouts (they don't have a `.git` at the workspace
+# root), and this skill swap is meant to work from any workspace, so we
+# anchor on the script's own location: scripts/skills/swap-browser.sh is
+# always two directories deep in the workspace.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/../.."
 SKILL=".claude/skills/ui-validate/SKILL.md"
 if [ ! -f "$SKILL" ]; then
     echo "swap-browser.sh: $SKILL not found." >&2

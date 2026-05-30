@@ -3,7 +3,7 @@ name: ui-validate
 description: End-to-end recipe for validating omnibus UI changes in a real browser — brings up a port-walking dev server, logs in as the seeded admin, polls /api/_health for the rebuild signal, and verifies via snapshot/screenshot. Triggers when you need to drive the running web app to verify a change, when another agent may already own :3000, when the page isn't reloading after an edit, or when login state is uncertain.
 ---
 
-<!-- BROWSER_MCP: chrome-devtools -->
+<!-- BROWSER_MCP: preview -->
 
 # Validate a UI change in the browser
 
@@ -56,10 +56,10 @@ This is the process-start timestamp. Any Rust HMR cycle restarts the process, so
 
 Use the Chrome DevTools MCP. The session cookie is `HttpOnly` (see `server/src/auth/handlers.rs`) and can't be injected from JS — drive the login form:
 
-1. `mcp__chrome-devtools__new_page` → `http://localhost:$OMNIBUS_PORT/login`
-2. `mcp__chrome-devtools__fill` username `admin` / password `omnibus-dev` (matches `.env.example`)
-3. `mcp__chrome-devtools__click` the Sign in button
-4. `mcp__chrome-devtools__take_snapshot` to confirm the redirect to the landing page
+1. `mcp__Claude_Preview__preview_start` → `http://localhost:$OMNIBUS_PORT/login`
+2. `mcp__Claude_Preview__preview_fill` username `admin` / password `omnibus-dev` (matches `.env.example`)
+3. `mcp__Claude_Preview__preview_click` the Sign in button
+4. `mcp__Claude_Preview__preview_snapshot` to confirm the redirect to the landing page
 
 Cache this state for the rest of the session. Only redo the login if a later snapshot shows the login form again (cookie expired or got cleared).
 
@@ -77,17 +77,17 @@ done
 BEFORE_BUILD="$NOW_BUILD"
 ```
 
-Then reload via `mcp__chrome-devtools__evaluate_script` with `location.reload()`.
+Then reload via `mcp__Claude_Preview__preview_eval` with `location.reload()`.
 
 **Frontend-only changes** (Dioxus components, CSS) may not restart the server, so `build_id` won't move within 30s. In that case skip the build-id poll, reload directly, and rely on DOM testid presence (`take_snapshot`) to detect the new render.
 
 ## 6. Verify
 
-- `mcp__chrome-devtools__take_snapshot` — content/structure assertion (DOM tree).
-- `mcp__chrome-devtools__take_screenshot` — visual proof to share with the user.
-- `mcp__chrome-devtools__list_console_messages` — JS error checks.
-- `mcp__chrome-devtools__list_network_requests` — failed-fetch checks.
-- `mcp__chrome-devtools__evaluate_script` — CSS / computed-style checks, e.g. `getComputedStyle(document.querySelector('.foo')).color`.
+- `mcp__Claude_Preview__preview_snapshot` — content/structure assertion (DOM tree).
+- `mcp__Claude_Preview__preview_screenshot` — visual proof to share with the user.
+- `mcp__Claude_Preview__preview_console_logs` — JS error checks.
+- `mcp__Claude_Preview__preview_network` — failed-fetch checks.
+- `mcp__Claude_Preview__preview_eval` — CSS / computed-style checks, e.g. `getComputedStyle(document.querySelector('.foo')).color`.
 
 ## 7. Run Playwright against the same server
 
