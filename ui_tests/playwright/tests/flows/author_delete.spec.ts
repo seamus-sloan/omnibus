@@ -1,6 +1,7 @@
 import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expectMutation } from "../utils/api";
+import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 import type { APIRequestContext } from "@playwright/test";
@@ -10,9 +11,10 @@ import type { APIRequestContext } from "@playwright/test";
 // The delete primitive (PR 2) inserts the author name into the
 // `ignored_authors` blocklist, so a re-run of the test suite would
 // keep finding the author missing even if we re-seed. Each test in
-// this file picks a *different* fixture author and cleans up by
-// DELETE-ing the blocklist row at the end, so subsequent runs start
-// from a clean state.
+// this file picks a *different* fixture author; the one test that
+// actually confirms a delete restores that author afterwards (see
+// `restoreDeletedAuthor`) so the shared on-disk fixture library other
+// specs read stays intact.
 
 test.describe.configure({ mode: "serial" });
 
@@ -36,23 +38,68 @@ async function fetchAuthorIdByName(
   throw new Error(`no indexed author named ${JSON.stringify(name)}`);
 }
 
-// Re-seed the library after each delete so the deleted author re-appears
-// on disk (the EPUB is still there) and the ignored_authors guard is the
-// only thing keeping the row absent. Then DELETE the blocklist row so
-// the next reindex re-creates the author cleanly. Without this cleanup
-// every subsequent test run would fail because the seeded fixture's
-// author is permanently blocklisted.
-async function clearBlocklistAndReseed(
+// Undo a confirmed delete so the shared fixture library other specs read
+// stays intact.
+//
+// The E2E server runs against a *persistent* on-disk DB shared by every spec
+// (unlike the per-process `sqlite::memory:` of the unit tests). `delete_author`
+// drops the `books_authors_link` rows and durably blocklists the name in
+// `ignored_authors`, and the indexer is incremental — a re-seed only re-parses
+// files whose mtime changed, so it can't resurrect the author for an unchanged
+// fixture EPUB. Left uncleaned, the un-linked book turns author-less for the
+// rest of the run and breaks every later spec that asserts that author
+// (`landing.spec` renders an empty author cell, etc.).
+//
+// We restore the link the reindex-proof, parallel-safe way: a per-book
+// metadata override that re-asserts the original creator list at read time.
+// Overrides are keyed by uuid and merged on read, so they survive the
+// incremental re-seeds other specs trigger and never touch the shared library
+// path (re-pointing settings would race parallel workers). The fixture table
+// is the source of truth for each book's authors.
+async function restoreDeletedAuthor(
   request: APIRequestContext,
   authorName: string,
 ): Promise<void> {
-  // No public RPC for `DELETE FROM ignored_authors` exists yet — the
-  // F5.9-lite plan defers that to a follow-up admin tool. For now we
-  // rely on the in-memory DB being fresh between full test suite runs;
-  // this helper is a stub so the test file documents the cleanup
-  // intent and can switch to the real call once it exists.
-  void request;
-  void authorName;
+  const affected = FIXTURE_BOOKS.filter((b) => b.authors.includes(authorName));
+  expect(
+    affected.length,
+    `restoreDeletedAuthor: no fixture book lists ${JSON.stringify(authorName)}`,
+  ).toBeGreaterThan(0);
+
+  for (const book of affected) {
+    const uuid = await fetchBookUuidByTitle(request, book.title);
+    const resp = await request.post("/api/rpc/ebook/overrides", {
+      data: {
+        uuid,
+        overrides: {
+          creators: book.authors.map((name) => ({ name, role: null, file_as: null })),
+        },
+      },
+    });
+    expect(
+      resp.status(),
+      `POST /api/rpc/ebook/overrides failed for ${book.title}`,
+    ).toBe(200);
+  }
+
+  // Confirm the author is observable again before releasing the shared DB.
+  await expect
+    .poll(
+      async () => {
+        const r = await request.get("/api/rpc/ebooks");
+        if (r.status() !== 200) return false;
+        const body = (await r.json()) as {
+          books: { creators: { name: string }[] }[];
+        };
+        return body.books.some((b) => b.creators.some((c) => c.name === authorName));
+      },
+      {
+        message: `author ${JSON.stringify(authorName)} should be restored via override`,
+        timeout: 10_000,
+        intervals: [100, 200, 500, 1_000],
+      },
+    )
+    .toBe(true);
 }
 
 test("renders Delete author button for admin viewers", async ({ page, request }) => {
@@ -123,7 +170,7 @@ test("confirming Delete posts to rpc_delete_author and redirects to /authors", a
     expect(book.creators.find((c) => c.name === targetName)).toBeUndefined();
   }
 
-  await clearBlocklistAndReseed(request, targetName);
+  await restoreDeletedAuthor(request, targetName);
 });
 
 test("surfaces an error and stays on the page when delete fails", async ({
