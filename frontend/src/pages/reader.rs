@@ -30,9 +30,50 @@ const JSZIP_JS: Asset = asset!("/assets/vendor/jszip.min.js");
 const EPUBJS_JS: Asset = asset!("/assets/vendor/epub.min.js");
 const READER_GLUE_JS: Asset = asset!("/assets/vendor/epub-reader-glue.js");
 
+/// Lifecycle of the in-iframe book render. Drives the loading / error overlay
+/// so a slow network, a 404 file route, or a malformed EPUB shows feedback
+/// instead of a blank viewer. The glue reports `ready` / `error` through the
+/// `__omnibusOnStatus` callback; the readiness poll reports `error` if the
+/// vendored scripts never load.
+///
+/// Only the `web` build transitions through `Loading`/`Failed` (driven by the
+/// glue); SSR/mobile have no interop and sit at `Ready`, so those variants read
+/// as never-constructed there.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
+enum ReaderStatus {
+    Loading,
+    Ready,
+    Failed,
+}
+
+/// Single audited surface for calling into `window.OmnibusReader`. `method` is
+/// always a hard-coded identifier and `arg_js` is either empty, an integer, or
+/// a `serde_json`-encoded literal — so this is the one place JS is built for
+/// reader commands (the bootstrap `init` poll below is the only other eval).
+#[cfg(feature = "web")]
+fn reader_call(method: &str, arg_js: &str) {
+    let js = format!("window.OmnibusReader && window.OmnibusReader.{method}({arg_js});");
+    let _ = dioxus::document::eval(&js);
+}
+
 #[component]
 pub fn BookReadPage(uuid: String) -> Element {
     let theme = use_context::<Signal<Theme>>();
+
+    // Book-render lifecycle. Web starts Loading and the glue/poll resolve it;
+    // other targets have no interop, so they render the (empty) viewer as Ready.
+    #[cfg_attr(not(feature = "web"), allow(unused_mut))]
+    let mut status = use_signal(|| {
+        #[cfg(feature = "web")]
+        {
+            ReaderStatus::Loading
+        }
+        #[cfg(not(feature = "web"))]
+        {
+            ReaderStatus::Ready
+        }
+    });
 
     // Font size in px; clamped to a sane reading range on adjust. Declared on
     // every target so the chrome buttons can read/write it; only the web build
@@ -43,52 +84,72 @@ pub fn BookReadPage(uuid: String) -> Element {
     // ── Web interop: mount the reader once the async scripts are ready. ──
     #[cfg(feature = "web")]
     {
+        use wasm_bindgen::prelude::*;
+
+        // Component-lifetime owner for the JS callbacks. Replacing the vec on a
+        // re-mount (uuid change) drops the previous generation, and the holder
+        // drops on unmount — so callbacks are never leaked with `forget()`.
+        // `use_hook` hands back a clone of the `Rc` each render; the inner
+        // `RefCell<Vec<..>>` is the single live store.
+        let cb_holder: std::rc::Rc<std::cell::RefCell<Vec<Closure<dyn FnMut(String)>>>> =
+            use_hook(|| std::rc::Rc::new(std::cell::RefCell::new(Vec::new())));
+
         let uuid_for_mount = uuid.clone();
         let uuid_for_cb = uuid.clone();
-        // Run once after first render. `use_effect` with no signal reads only
-        // re-runs when its tracked deps change — there are none, so this is a
-        // mount-time effect.
         use_effect(use_reactive!(|uuid_for_mount| {
-            use wasm_bindgen::prelude::*;
-
             let uuid = uuid_for_mount.clone();
             let uuid_cb = uuid_for_cb.clone();
+
+            // Re-entering a book restarts the lifecycle (Loading until the glue
+            // reports ready/error, or the poll times out).
+            status.set(ReaderStatus::Loading);
+
             let saved = crate::reader_progress::load(&uuid);
             let size = font_size();
             let theme_name = theme.read().as_attr();
-            // Build every JS string literal with serde_json so untrusted input
-            // (the route-controlled `uuid`, the persisted `cfi`) can never break
-            // out of string context into the `document::eval` payload. `theme`
-            // is a fixed enum attr but is encoded the same way for uniformity.
+            // Build every JS literal with serde_json so untrusted input (the
+            // route-controlled `uuid`, the persisted `cfi`) can never break out
+            // of string context in the `document::eval` payload. `theme` is a
+            // fixed enum attr but is encoded the same way for uniformity.
             let url_lit = serde_json::to_string(&format!("/api/ebooks/{uuid}/file"))
                 .unwrap_or_else(|_| "\"\"".into());
             let theme_lit = serde_json::to_string(theme_name).unwrap_or_else(|_| "\"dark\"".into());
+            let cfi_arg = serde_json::to_string(&saved).unwrap_or_else(|_| "null".into());
 
-            // Register the relocate callback the glue invokes on every page
-            // turn: persist the new CFI so a re-open resumes in place. Leaked
-            // for the page lifetime (`forget`) — there's a single reader per
-            // page mount and the window outlives it.
+            // (Re)build the callbacks the glue invokes — relocate (persist CFI)
+            // and status (drive the loading/error overlay) — owning them in the
+            // holder so the previous generation is dropped, never leaked.
             if let Some(window) = web_sys::window() {
-                let closure = Closure::<dyn FnMut(String)>::new(move |cfi: String| {
+                let relocate = Closure::<dyn FnMut(String)>::new(move |cfi: String| {
                     crate::reader_progress::save(&uuid_cb, &cfi);
+                });
+                let on_status = Closure::<dyn FnMut(String)>::new(move |state: String| {
+                    status.set(match state.as_str() {
+                        "ready" => ReaderStatus::Ready,
+                        "error" => ReaderStatus::Failed,
+                        _ => ReaderStatus::Loading,
+                    });
                 });
                 let _ = js_sys::Reflect::set(
                     &window,
                     &JsValue::from_str("__omnibusOnRelocate"),
-                    closure.as_ref().unchecked_ref(),
+                    relocate.as_ref().unchecked_ref(),
                 );
-                closure.forget();
+                let _ = js_sys::Reflect::set(
+                    &window,
+                    &JsValue::from_str("__omnibusOnStatus"),
+                    on_status.as_ref().unchecked_ref(),
+                );
+                // Window now references the new closures; replacing the holder
+                // drops the previous generation's.
+                *cb_holder.borrow_mut() = vec![relocate, on_status];
             }
 
-            // serde_json on the Option yields a valid JS literal directly:
-            // `"…"` for Some (with all escaping handled) or `null` for None.
-            let cfi_arg = serde_json::to_string(&saved).unwrap_or_else(|_| "null".into());
-
-            // Poll until both globals exist (scripts load async) then init,
-            // pointing the reader at the cookie-gated file route. Every
-            // interpolated value is either a serde_json literal or an integer.
+            // Poll until the vendored globals load (async) then init. Bounded
+            // (~10s) so a failed asset load reports an error via the status
+            // callback instead of spinning on a blank viewer forever.
             let js = format!(
-                r#"(function go(){{ if (window.OmnibusReader && window.ePub) {{ window.OmnibusReader.init("omnibus-viewer", {url_lit}, {{ cfi: {cfi_arg}, fontSize: {size}, theme: {theme_lit} }}); }} else {{ setTimeout(go, 50); }} }})();"#
+                r#"(function(){{ var n=0; (function go(){{ if (window.OmnibusReader && window.ePub) {{ window.OmnibusReader.init("omnibus-viewer", {url_lit}, {{ cfi: {cfi_arg}, fontSize: {size}, theme: {theme_lit} }}); }} else if (n++ < 200) {{ setTimeout(go, 50); }} else if (typeof window.__omnibusOnStatus === "function") {{ window.__omnibusOnStatus("error"); }} }})(); }})();"#
             );
             let _ = dioxus::document::eval(&js);
         }));
@@ -97,8 +158,7 @@ pub fn BookReadPage(uuid: String) -> Element {
         use_effect(move || {
             let attr_lit =
                 serde_json::to_string(theme.read().as_attr()).unwrap_or_else(|_| "\"dark\"".into());
-            let js = format!("window.OmnibusReader && window.OmnibusReader.setTheme({attr_lit});");
-            let _ = dioxus::document::eval(&js);
+            reader_call("setTheme", &attr_lit);
         });
     }
 
@@ -115,32 +175,22 @@ pub fn BookReadPage(uuid: String) -> Element {
         let next = (font_size() - 1).clamp(12, 32);
         font_size.set(next);
         #[cfg(feature = "web")]
-        {
-            let js = format!("window.OmnibusReader && window.OmnibusReader.setFontSize({next});");
-            let _ = dioxus::document::eval(&js);
-        }
+        reader_call("setFontSize", &next.to_string());
     };
     let on_font_increase = move |_| {
         let next = (font_size() + 1).clamp(12, 32);
         font_size.set(next);
         #[cfg(feature = "web")]
-        {
-            let js = format!("window.OmnibusReader && window.OmnibusReader.setFontSize({next});");
-            let _ = dioxus::document::eval(&js);
-        }
+        reader_call("setFontSize", &next.to_string());
     };
 
     let on_prev = move |_| {
         #[cfg(feature = "web")]
-        {
-            let _ = dioxus::document::eval("window.OmnibusReader && window.OmnibusReader.prev();");
-        }
+        reader_call("prev", "");
     };
     let on_next = move |_| {
         #[cfg(feature = "web")]
-        {
-            let _ = dioxus::document::eval("window.OmnibusReader && window.OmnibusReader.next();");
-        }
+        reader_call("next", "");
     };
 
     let set_theme = move |t: Theme| {
@@ -237,11 +287,38 @@ pub fn BookReadPage(uuid: String) -> Element {
             }
 
             // Viewer fills the remaining space; epub.js renders into this id.
+            // A status overlay sits on top until the first page paints (or on
+            // failure) so a slow/missing/broken book shows feedback, not a
+            // blank box.
             div {
-                id: "omnibus-viewer",
-                class: "reader-viewer",
-                "data-testid": "reader-viewer",
-                style: "flex:1; min-height:0; width:100%;",
+                class: "reader-stage",
+                style: "flex:1; min-height:0; width:100%; position:relative;",
+                div {
+                    id: "omnibus-viewer",
+                    class: "reader-viewer",
+                    "data-testid": "reader-viewer",
+                    style: "position:absolute; inset:0;",
+                }
+                match status() {
+                    ReaderStatus::Loading => rsx! {
+                        div {
+                            class: "reader-overlay",
+                            "data-testid": "reader-loading",
+                            style: "position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--ink-2); background:var(--bg-0);",
+                            "Loading\u{2026}"
+                        }
+                    },
+                    ReaderStatus::Failed => rsx! {
+                        div {
+                            class: "reader-overlay",
+                            "data-testid": "reader-error",
+                            role: "alert",
+                            style: "position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--ink-2); background:var(--bg-0);",
+                            "This book couldn\u{2019}t be loaded."
+                        }
+                    },
+                    ReaderStatus::Ready => rsx! {},
+                }
             }
         }
     }
