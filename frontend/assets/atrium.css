@@ -64,7 +64,16 @@
   --ink-0: oklch(0.17 0.006 70);
   --ink-1: oklch(0.36 0.008 70);
   --ink-2: oklch(0.52 0.010 70);
-  --ink-3: oklch(0.66 0.010 70);
+  /* `--ink-3` is the muted-label tier — meta-table keys, hints, axis labels,
+     disabled-action arrows. The dark theme runs it at 0.48 L against a
+     0.175 L ground (≈3.9:1). The original light value of 0.66 L against a
+     0.965 L card ground only reached ≈2.2:1, which is the rails-mismatch
+     issue (#289): on the book-detail / metadata-edit rails the identifier
+     keys, "Mark as finished" action row, and axis labels wash out in Light
+     mode. Pulling it down to 0.50 L mirrors the dark side of the token and
+     lands the contrast ratio near 3.5:1 — still reads as muted, but legible
+     for the small UI text these rails carry. */
+  --ink-3: oklch(0.50 0.010 70);
   --accent-ink: oklch(0.99 0 0);
   --cover-fallback-bg:  oklch(0.86 0.004 70);
   --cover-fallback-ink: oklch(0.28 0.006 70);
@@ -627,6 +636,19 @@ body.atrium,
   display: flex; align-items: center; justify-content: space-between;
   width: 100%; height: 36px; padding: 0 10px;
   border-radius: 8px;
+}
+/* The action rows ship disabled until F3.x wires the real handlers, and the
+   browser's default `button[disabled]` styling drops their opacity, which
+   tanks contrast on Light theme (was the second half of #289 — "Mark as
+   finished" reading as a washed-out grey). Pin our own disabled style so
+   the row reads as muted-but-legible in every theme. The non-disabled state
+   intentionally inherits `.btn.ghost` so the row is ready for the wired
+   future without extra rules. */
+.bd-action-row[disabled],
+.bd-action-row:disabled {
+  opacity: 1;
+  color: var(--ink-2);
+  cursor: not-allowed;
 }
 .bd-action-row-arrow { color: var(--ink-3); }
 .bd-shelves { display: flex; gap: 6px; flex-wrap: wrap; }
