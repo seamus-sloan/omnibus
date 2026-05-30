@@ -252,18 +252,19 @@ pub(super) async fn put_author_photo_url(
         return (axum::http::StatusCode::BAD_REQUEST, "url is required").into_response();
     }
 
-    let (advertised_mime, bytes) = match db::author_photos::fetch_remote_image(url).await {
-        Ok(pair) => pair,
-        Err(db::author_photos::FetchRemoteImageError::Http(e)) => {
-            return internal("fetch remote image", e);
-        }
-        Err(e) => {
-            // All other variants are validation errors (bad scheme, non-image
-            // content-type, too-large, …) — map to 400 with the user-facing
-            // message from `#[error]`.
-            return (axum::http::StatusCode::BAD_REQUEST, e.to_string()).into_response();
-        }
-    };
+    let (advertised_mime, bytes) =
+        match db::author_photos::fetch_remote_image_with(url, state.remote_image_config()).await {
+            Ok(pair) => pair,
+            Err(db::author_photos::FetchRemoteImageError::Http(e)) => {
+                return internal("fetch remote image", e);
+            }
+            Err(e) => {
+                // All other variants are validation errors (bad scheme, blocked
+                // SSRF target, non-image content-type, too-large, …) — map to
+                // 400 with the user-facing message from `#[error]`.
+                return (axum::http::StatusCode::BAD_REQUEST, e.to_string()).into_response();
+            }
+        };
 
     // Magic-byte sniff — don't trust the remote Content-Type header.
     let mime = match detect_image_format(&bytes) {
@@ -602,6 +603,51 @@ mod tests {
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     }
 
+    /// Issue #275 — admin SSRF regression. The default `AppState` (built by
+    /// `fixture()`) must reject IP-literal URLs that point at the loopback /
+    /// cloud-metadata / RFC1918 address space *before* any TCP connect.
+    /// Every URL listed below is one a hostile or compromised admin could
+    /// plausibly try; each must surface 400.
+    #[tokio::test]
+    async fn api_put_author_photo_url_blocks_private_ip_targets() {
+        let (app, _state, pool) = fixture().await;
+        let id = seed_author(&pool, "Ada Lovelace").await;
+        let admin = auth_test_support::create_admin(&pool, "admin").await;
+        let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+        // Pin the test cases to a stable shortlist covering each blocked
+        // category (loopback, cloud-metadata link-local, RFC1918, IPv4
+        // unspecified, IPv6 loopback, IPv6-mapped loopback). The full
+        // category matrix is unit-tested against `is_blocked_address` in
+        // `omnibus_db::author_photos::tests`.
+        let cases = [
+            "http://127.0.0.1/x",
+            "http://169.254.169.254/latest/meta-data/", // AWS IMDSv1
+            "http://10.0.0.1/x",
+            "http://192.168.1.1/x",
+            "http://172.16.0.1/x",
+            "http://0.0.0.0/x",
+            "http://[::1]/x",
+            "http://[::ffff:127.0.0.1]/x",
+        ];
+        for url in cases {
+            let res = app
+                .clone()
+                .oneshot(put_photo_url(
+                    &format!("/api/authors/{id}/photo/url"),
+                    &token,
+                    url,
+                ))
+                .await
+                .expect("request should succeed");
+            assert_eq!(
+                res.status(),
+                StatusCode::BAD_REQUEST,
+                "SSRF URL {url:?} must be blocked",
+            );
+        }
+    }
+
     #[tokio::test]
     async fn api_put_author_photo_url_rejects_bad_scheme() {
         let (app, _state, pool) = fixture().await;
@@ -640,7 +686,10 @@ mod tests {
             .mount(&mock)
             .await;
 
-        let (app, _state, pool) = fixture().await;
+        // wiremock binds to 127.0.0.1, which the production SSRF guard
+        // (#275) rejects. Use the loopback-allowing fixture so the handler
+        // exercises the rest of the validation pipeline.
+        let (app, _state, pool) = fixture_loopback_remote_image().await;
         let id = seed_author(&pool, "Ada Lovelace").await;
         let admin = auth_test_support::create_admin(&pool, "admin").await;
         let token = auth_test_support::bearer_token(&pool, admin.id).await;
@@ -684,7 +733,8 @@ mod tests {
             .mount(&mock)
             .await;
 
-        let (app, _state, pool) = fixture().await;
+        // See note in `api_put_author_photo_url_uploads_and_get_serves`.
+        let (app, _state, pool) = fixture_loopback_remote_image().await;
         let id = seed_author(&pool, "Ada Lovelace").await;
         let admin = auth_test_support::create_admin(&pool, "admin").await;
         let token = auth_test_support::bearer_token(&pool, admin.id).await;
@@ -723,7 +773,8 @@ mod tests {
             .mount(&mock)
             .await;
 
-        let (app, _state, pool) = fixture().await;
+        // See note in `api_put_author_photo_url_uploads_and_get_serves`.
+        let (app, _state, pool) = fixture_loopback_remote_image().await;
         let id = seed_author(&pool, "Ada Lovelace").await;
         let admin = auth_test_support::create_admin(&pool, "admin").await;
         let token = auth_test_support::bearer_token(&pool, admin.id).await;

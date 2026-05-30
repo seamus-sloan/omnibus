@@ -67,7 +67,7 @@ thumbs.rs           — F1.2 thumbnail pipeline: decode cover → resize to Sm/M
 indexer.rs          — scan → DB indexing, staleness checks (is_stale + reindex); reindex opts into materialize_sidecars
 library_layout.rs   — F0.6 canonical layout: slugify, canonical_path, sidecar_cover_for, allocate_canonical_path (collision suffix)
 worker.rs           — single-process Worker primitive: per-task-type concurrency cap + per-resource keyed mutex; reindexes route through Task::Scan; F1.11 ResolveAuthorPhoto dispatches into author_photos::resolve
-author_photos.rs    — F1.11 author profile photo cascade (manual → Open Library → letter); injectable `OpenLibraryConfig` for tests (wiremock). First outbound HTTP in the codebase (reqwest, rustls-tls).
+author_photos.rs    — F1.11 author profile photo cascade (manual → Open Library → letter); injectable `OpenLibraryConfig` for tests (wiremock). First outbound HTTP in the codebase (reqwest, rustls-tls). Also hosts `fetch_remote_image` for the admin "paste URL" path — gated by a `RemoteImageConfig` SSRF guard (#275): resolves the host, blocks loopback / RFC1918 / link-local (incl. AWS IMDS 169.254.169.254) / multicast / IPv6 ULA / site-local / mapped-v4 before any TCP connect, then pins `reqwest` to the validated addresses so DNS rebinding can't slip in a private IP. The `allow_private_addresses` flag is test-only — production AppState construction always uses the strict default.
 migrations/         — numbered SQL migrations embedded via sqlx::migrate!
 ```
 
