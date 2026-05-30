@@ -1,0 +1,303 @@
+//! Library-scoped list/count read paths plus the small `IndexedRow`
+//! projection used by the incremental reindex diff.
+
+use sqlx::{Row, SqlitePool};
+
+use omnibus_shared::{Contributor, EbookLibrary, EbookMetadata, Identifier};
+
+use crate::helpers::format_series_index;
+use crate::metadata_overrides::{apply_overrides, load_overrides_bulk};
+
+use super::projection::{
+    backfill_creator_ids, parse_json_array, sanitize_description, CreatorRow, IdentifierRow,
+    MAX_BOOKS_RETURNED,
+};
+
+/// Return every book indexed under `library_path`. One round-trip to SQLite:
+/// every multi-valued relation is pulled in a single statement using scalar
+/// subqueries (for single-valued joins) and `json_group_array` over ordered
+/// inner selects (for multi-valued lists), matching the pattern in `get_book`.
+pub async fn list_books(
+    pool: &SqlitePool,
+    library_path: &str,
+) -> Result<Vec<EbookMetadata>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT b.id, b.uuid,
+               b.title, b.description, b.series_index, b.has_cover,
+               b.pubdate, b.last_modified, b.timestamp, b.isbn, b.accent_color,
+
+               (SELECT bf.filename FROM book_files bf
+                 WHERE bf.book_id = b.id
+                 ORDER BY (bf.format != 'EPUB'), bf.format
+                 LIMIT 1)                                   AS primary_filename,
+
+               (SELECT bf.format FROM book_files bf
+                 WHERE bf.book_id = b.id
+                 ORDER BY (bf.format != 'EPUB'), bf.format
+                 LIMIT 1)                                   AS primary_format,
+
+               (SELECT pub.name FROM books_publishers_link bpl
+                  JOIN publishers pub ON pub.id = bpl.publisher
+                 WHERE bpl.book = b.id ORDER BY pub.name LIMIT 1)
+                                                            AS publisher_name,
+
+               (SELECT lang.code FROM books_languages_link bll
+                  JOIN languages lang ON lang.id = bll.language
+                 WHERE bll.book = b.id ORDER BY lang.code LIMIT 1)
+                                                            AS language_code,
+
+               (SELECT s.name FROM books_series_link bsl
+                  JOIN series s ON s.id = bsl.series
+                 WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
+                                                            AS series_name,
+
+               (SELECT s.id FROM books_series_link bsl
+                  JOIN series s ON s.id = bsl.series
+                 WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
+                                                            AS series_link_id,
+
+               (SELECT json_group_array(json_object('id', a_id, 'name', name, 'sort', sort))
+                  FROM (SELECT a.id AS a_id, a.name AS name, a.sort AS sort
+                          FROM books_authors_link bal
+                          JOIN authors a ON a.id = bal.author
+                         WHERE bal.book = b.id
+                         ORDER BY bal.position))            AS creators_json,
+
+               (SELECT json_group_array(name)
+                  FROM (SELECT t.name AS name FROM books_tags_link btl
+                          JOIN tags t ON t.id = btl.tag
+                         WHERE btl.book = b.id
+                         ORDER BY t.name))                  AS subjects_json,
+
+               (SELECT json_group_array(json_object('scheme', scheme, 'value', value))
+                  FROM (SELECT scheme, value FROM book_identifiers
+                         WHERE book_id = b.id
+                         ORDER BY scheme, value))           AS identifiers_json,
+
+               (SELECT json_group_array(format)
+                  FROM (SELECT format FROM book_files
+                         WHERE book_id = b.id
+                         ORDER BY format))                  AS formats_json
+        FROM books b
+        JOIN libraries l ON l.id = b.library_id
+        WHERE l.path = ?
+        ORDER BY b.sort, b.id
+        LIMIT ?
+        "#,
+    )
+    .bind(library_path)
+    .bind(MAX_BOOKS_RETURNED)
+    .fetch_all(pool)
+    .await?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let id: i64 = r.get("id");
+        let has_cover: i64 = r.get("has_cover");
+        let primary_filename: Option<String> = r.get("primary_filename");
+        let primary_format: Option<String> = r.get("primary_format");
+        let filename = match (primary_filename, primary_format) {
+            (Some(stem), Some(fmt)) => format!("{stem}.{}", fmt.to_ascii_lowercase()),
+            _ => String::new(),
+        };
+        let series_index: Option<f64> = r.get("series_index");
+
+        let creators: Vec<Contributor> = parse_json_array::<CreatorRow>(r.get("creators_json"))?
+            .into_iter()
+            .map(|c| Contributor {
+                name: c.name,
+                role: None,
+                file_as: c.sort.filter(|s| !s.is_empty()),
+                id: c.id,
+            })
+            .collect();
+        let subjects: Vec<String> = parse_json_array(r.get("subjects_json"))?;
+        let identifiers: Vec<Identifier> =
+            parse_json_array::<IdentifierRow>(r.get("identifiers_json"))?
+                .into_iter()
+                .map(|i| Identifier {
+                    value: i.value,
+                    scheme: Some(i.scheme),
+                })
+                .collect();
+
+        let uuid: String = r.get("uuid");
+        out.push(EbookMetadata {
+            id,
+            filename,
+            title: r.get("title"),
+            description: sanitize_description(r.get("description")),
+            publisher: r.get("publisher_name"),
+            published: r.get("pubdate"),
+            modified: r.get("last_modified"),
+            language: r.get("language_code"),
+            rights: None,
+            source: None,
+            coverage: None,
+            dc_type: None,
+            dc_format: None,
+            relation: None,
+            creators,
+            contributors: vec![],
+            subjects,
+            identifiers,
+            series: r.get("series_name"),
+            series_index: series_index.map(format_series_index),
+            series_id: r.get("series_link_id"),
+            epub_version: None,
+            unique_identifier: Some(uuid.clone()),
+            resource_count: 0,
+            spine_count: 0,
+            toc_count: 0,
+            cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
+            accent: r.get("accent_color"),
+            formats: parse_json_array(r.get("formats_json"))?,
+            added_at: r.get("timestamp"),
+            error: None,
+            has_override: false,
+        });
+    }
+
+    // F5.1: bulk-merge metadata overrides.
+    let uuids: Vec<String> = out
+        .iter()
+        .filter_map(|b| b.unique_identifier.clone())
+        .collect();
+    let overrides_map = load_overrides_bulk(pool, &uuids).await?;
+    for book in &mut out {
+        // Snapshot uuid into an owned local so the borrow-check sees the
+        // overrides_map lookup as independent of the &mut book passed into
+        // apply_overrides below.
+        let uuid_owned = book.unique_identifier.clone();
+        if let Some(uuid) = uuid_owned.as_deref() {
+            if let Some((ov, has_cover_ov)) = overrides_map.get(uuid) {
+                apply_overrides(book, uuid, ov, *has_cover_ov);
+            }
+        }
+    }
+    backfill_creator_ids(pool, &mut out).await?;
+
+    Ok(out)
+}
+
+/// One row per book under `library_path`, carrying just the bits the
+/// incremental reindex diff needs to classify a filesystem stat against
+/// the existing index.
+///
+/// `mtime_epoch` / `size_bytes` come from the matching `book_files` row.
+/// Today the scanner only writes `.epub` files, so there's one
+/// `book_files` row per book; the `MAX(...)` aggregation is defensive in
+/// case a future audiobook scanner adds a sibling format row for the
+/// same `books.id`. The diff treats `(mtime_epoch=0, size_bytes=0)` as a
+/// "never observed" sentinel (the migration default) and routes those
+/// rows through the Backfill branch — no OPF re-parse on first run.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexedRow {
+    pub uuid: String,
+    pub mtime_epoch: i64,
+    pub size_bytes: i64,
+}
+
+/// Read every indexed book under `library_path`, projecting just the
+/// columns the incremental diff needs. Single query; the diff itself is
+/// pure CPU on the returned `Vec`.
+pub async fn list_indexed_rows(
+    pool: &SqlitePool,
+    library_path: &str,
+) -> Result<Vec<IndexedRow>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT b.uuid                                  AS uuid,
+               COALESCE(MAX(bf.mtime_epoch), 0)        AS mtime_epoch,
+               COALESCE(MAX(bf.size_bytes), 0)         AS size_bytes
+          FROM books b
+          JOIN libraries l   ON l.id = b.library_id
+          LEFT JOIN book_files bf ON bf.book_id = b.id
+         WHERE l.path = ?
+         GROUP BY b.id, b.uuid
+        "#,
+    )
+    .bind(library_path)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| IndexedRow {
+            uuid: r.get("uuid"),
+            mtime_epoch: r.get("mtime_epoch"),
+            size_bytes: r.get("size_bytes"),
+        })
+        .collect())
+}
+
+/// Total number of books currently indexed under `library_path`.
+///
+/// Companion to `list_books`: `list_books` caps the returned vec at
+/// `MAX_BOOKS_RETURNED`, so callers that need to surface a truncation
+/// hint (UI banner, `X-Total-Count` header) ask the count separately.
+/// Single scalar query — cheaper than re-running the full SELECT just
+/// to count rows. Issue #81.
+pub async fn count_books(pool: &SqlitePool, library_path: &str) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+          FROM books b
+          JOIN libraries l ON l.id = b.library_id
+         WHERE l.path = ?
+        "#,
+    )
+    .bind(library_path)
+    .fetch_one(pool)
+    .await
+}
+
+/// Build an `EbookLibrary` from whatever is currently in the DB for
+/// `library_path`. Returns an empty library (no error, no books) if the path
+/// is `None`.
+///
+/// The returned `books` vec is capped at `MAX_BOOKS_RETURNED` (issue #81);
+/// callers that need to surface a truncation hint should use
+/// [`library_from_db_with_total`] instead. This entrypoint deliberately
+/// avoids the extra `count_books` round-trip — non-REST callers (the RPC
+/// path, internal lookups) don't need the total and shouldn't pay for it.
+pub async fn library_from_db(
+    pool: &SqlitePool,
+    library_path: Option<&str>,
+) -> Result<EbookLibrary, sqlx::Error> {
+    let Some(path) = library_path else {
+        return Ok(EbookLibrary::default());
+    };
+    let books = list_books(pool, path).await?;
+    Ok(EbookLibrary {
+        path: Some(path.to_string()),
+        books,
+        error: None,
+        total: None,
+    })
+}
+
+/// Same as `library_from_db` but also returns the *true* book count under
+/// `library_path` (before the `MAX_BOOKS_RETURNED` cap). Used by the REST
+/// handler to set `X-Total-Count` and `X-Total-Cap` response headers so
+/// the client can detect a truncated response. Issue #81.
+pub async fn library_from_db_with_total(
+    pool: &SqlitePool,
+    library_path: Option<&str>,
+) -> Result<(EbookLibrary, i64), sqlx::Error> {
+    let Some(path) = library_path else {
+        return Ok((EbookLibrary::default(), 0));
+    };
+    let books = list_books(pool, path).await?;
+    let total = count_books(pool, path).await?;
+    Ok((
+        EbookLibrary {
+            path: Some(path.to_string()),
+            books,
+            error: None,
+            total: None,
+        },
+        total,
+    ))
+}
