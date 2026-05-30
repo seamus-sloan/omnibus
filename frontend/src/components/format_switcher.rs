@@ -1,17 +1,23 @@
 //! Per-format CTAs on the book detail page (F1.4).
 //!
 //! Renders one row per format the book has, sorted alphabetically, with the
-//! relevant actions wired underneath. All actions stay disabled in Phase 1:
-//! Read (F2.2 reader), Listen (F2.3 player), and Send to Kindle (F4.x) ship
-//! later. The rows themselves are the UI contract for the `books` /
-//! `book_files` split from F0.1 — a work with both EPUB and M4B surfaces both
-//! formats here so the future per-format actions slot in without re-shaping
-//! the markup.
+//! relevant actions wired underneath. The EPUB Read action routes into the
+//! F2.2 immersive reader on web (mobile stays disabled — no JS engine for
+//! epub.js, see F6.2); Listen (F2.3 player) and Send to Kindle (F4.x) ship
+//! later and stay disabled. The rows themselves are the UI contract for the
+//! `books` / `book_files` split from F0.1 — a work with both EPUB and M4B
+//! surfaces both formats here so the future per-format actions slot in
+//! without re-shaping the markup.
 
 use dioxus::prelude::*;
+#[cfg(not(feature = "mobile"))]
+use dioxus_router::Link;
+
+#[cfg(not(feature = "mobile"))]
+use crate::Route;
 
 #[component]
-pub fn FormatSwitcher(formats: Vec<String>) -> Element {
+pub fn FormatSwitcher(formats: Vec<String>, uuid: String) -> Element {
     let rows = prepare_rows(&formats);
     if rows.is_empty() {
         return rsx! {};
@@ -24,14 +30,17 @@ pub fn FormatSwitcher(formats: Vec<String>) -> Element {
             aria_label: "Available formats",
             "data-testid": "format-switcher",
             for row in rows {
-                FormatRow { kind: row }
+                FormatRow { kind: row, uuid: uuid.clone() }
             }
         }
     }
 }
 
 #[component]
-fn FormatRow(kind: FormatKind) -> Element {
+fn FormatRow(
+    kind: FormatKind,
+    #[cfg_attr(feature = "mobile", allow(unused_variables))] uuid: String,
+) -> Element {
     let label = kind.label();
     let testid = format!("format-row-{}", label.to_ascii_lowercase());
     rsx! {
@@ -43,12 +52,29 @@ fn FormatRow(kind: FormatKind) -> Element {
             div { class: "format-actions",
                 match kind {
                     FormatKind::Epub => rsx! {
-                        button {
-                            class: "btn",
-                            disabled: true,
-                            title: "Reader coming soon",
-                            "data-testid": "action-read",
-                            "Read"
+                        {
+                            // F2.2: web routes into the immersive reader; mobile
+                            // stays disabled (no JS engine for epub.js — see F6.2).
+                            #[cfg(not(feature = "mobile"))]
+                            let read_action = rsx! {
+                                Link {
+                                    to: Route::BookRead { uuid: uuid.clone() },
+                                    class: "btn",
+                                    "data-testid": "action-read",
+                                    "Read"
+                                }
+                            };
+                            #[cfg(feature = "mobile")]
+                            let read_action = rsx! {
+                                button {
+                                    class: "btn",
+                                    disabled: true,
+                                    title: "Reading on mobile coming soon",
+                                    "data-testid": "action-read",
+                                    "Read"
+                                }
+                            };
+                            read_action
                         }
                         button {
                             class: "btn",

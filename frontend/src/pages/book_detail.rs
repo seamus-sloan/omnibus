@@ -266,12 +266,32 @@ fn render_loaded(b: EbookMetadata) -> Element {
                         }
                         div { class: "bd-cta-row",
                             if has_ebook {
-                                button {
-                                    class: "btn primary lg",
-                                    disabled: true,
-                                    title: "Reader coming soon",
-                                    // TODO(F2.2): open the ebook reader, or "Resume" with progress (F2.1)
-                                    "Start reading"
+                                {
+                                    // F2.2: web navigates into the immersive reader at
+                                    // `/read/:uuid`. Mobile stays disabled — the Dioxus
+                                    // Native shell has no JS engine for epub.js (see the
+                                    // F6.2 mobile-reader roadmap doc).
+                                    #[cfg(not(feature = "mobile"))]
+                                    let start_reading = rsx! {
+                                        Link {
+                                            to: Route::BookRead { uuid: b.unique_identifier.clone().unwrap_or_default() },
+                                            class: "btn primary lg",
+                                            "data-testid": "start-reading",
+                                            // TODO(F2.1): swap to "Resume" once progress sync lands
+                                            "Start reading"
+                                        }
+                                    };
+                                    #[cfg(feature = "mobile")]
+                                    let start_reading = rsx! {
+                                        button {
+                                            class: "btn primary lg",
+                                            disabled: true,
+                                            title: "Reading on mobile coming soon",
+                                            // TODO(F6.2): native mobile epub reader
+                                            "Start reading"
+                                        }
+                                    };
+                                    start_reading
                                 }
                             } else if has_audio {
                                 button {
@@ -446,7 +466,10 @@ fn render_loaded(b: EbookMetadata) -> Element {
 
                         div { class: "label bd-rail-head", "Formats" }
                         // Relocated FormatSwitcher — same testids as before.
-                        FormatSwitcher { formats: b.formats.clone() }
+                        FormatSwitcher {
+                            formats: b.formats.clone(),
+                            uuid: b.unique_identifier.clone().unwrap_or_default(),
+                        }
 
                         // F5.1: metadata editor
                         Link {

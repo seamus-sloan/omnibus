@@ -11,6 +11,7 @@ pub mod components;
 pub mod contexts;
 pub mod data;
 pub mod pages;
+pub mod reader_progress;
 pub mod routes;
 pub mod rpc;
 pub mod styles;
@@ -19,8 +20,9 @@ pub mod view_prefs;
 pub use components::Nav;
 pub use contexts::*;
 pub use pages::{
-    AuthorPage, AuthorsIndexPage, BookDetailPage, LandingPage, LoginPage, MetadataEditPage,
-    RegisterPage, SearchPage, SeriesIndexPage, SeriesPage, SettingsPage, TagCloudPage,
+    AuthorPage, AuthorsIndexPage, BookDetailPage, BookReadPage, LandingPage, LoginPage,
+    MetadataEditPage, RegisterPage, SearchPage, SeriesIndexPage, SeriesPage, SettingsPage,
+    TagCloudPage,
 };
 pub use routes::*;
 pub use styles::STYLES;

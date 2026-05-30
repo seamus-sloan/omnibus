@@ -67,11 +67,11 @@ test("renders the detail contents for the selected book", async ({ page, request
   await expect(epubRow).toBeVisible();
   await expect(epubRow.getByTestId("format-badge")).toHaveText("EPUB");
 
-  // Read + Send-to-Kindle are scoped inside the EPUB row and stay disabled
-  // until F2.2 (reader) and F4.x (kindle) ship.
+  // Read now routes into the F2.2 immersive reader (an enabled link to
+  // /read/:uuid on web); Send-to-Kindle stays disabled until F4.x ships.
   const readBtn = epubRow.getByTestId("action-read");
   await expect(readBtn).toBeVisible();
-  await expect(readBtn).toBeDisabled();
+  await expect(readBtn).toHaveAttribute("href", /\/read\//);
   const kindleBtn = epubRow.getByTestId("action-kindle");
   await expect(kindleBtn).toBeVisible();
   await expect(kindleBtn).toBeDisabled();
