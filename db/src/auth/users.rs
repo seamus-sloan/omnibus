@@ -55,6 +55,14 @@ pub async fn create_user(pool: &SqlitePool, username: &str, password: &str) -> A
     let can_edit = if is_first { 1i64 } else { 0 };
     let can_download = 1i64;
 
+    // INVARIANT: update `password_changed_at` here when password changes.
+    // The column defaults to `strftime('%s','now')` on INSERT (see
+    // `migrations/0004_auth.sql`), which is correct for first creation —
+    // but any future password-change endpoint MUST issue
+    // `UPDATE users SET password_changed_at = strftime('%s','now')
+    //  WHERE id = ?` in the same transaction as the new `password_hash`,
+    // otherwise downstream "invalidate sessions older than last password
+    // change" logic will silently read the account-creation timestamp.
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO users (username, password_hash, is_admin, can_upload, can_edit, can_download)
          VALUES (?, ?, ?, ?, ?, ?)

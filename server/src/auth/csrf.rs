@@ -26,7 +26,16 @@ use axum::{
 };
 use axum_extra::extract::cookie::CookieJar;
 
-use super::SESSION_COOKIE;
+use super::{SESSION_COOKIE, SESSION_COOKIE_HOST_PREFIXED};
+
+/// Look up either form of the session cookie in `jar`. The CSRF gate
+/// triggers off the *presence* of a session cookie regardless of which
+/// name the server is currently writing, so a mid-rollout
+/// `OMNIBUS_SECURE_COOKIES` toggle doesn't drop CSRF protection for
+/// cookies issued under the previous name.
+fn has_session_cookie(jar: &CookieJar) -> bool {
+    jar.get(SESSION_COOKIE_HOST_PREFIXED).is_some() || jar.get(SESSION_COOKIE).is_some()
+}
 
 pub async fn origin_check(req: Request, next: Next) -> Response {
     let method = req.method();
@@ -50,7 +59,7 @@ pub async fn origin_check(req: Request, next: Next) -> Response {
     // the header so unrelated cookies that merely contain our name don't
     // trigger the origin check.
     let jar = CookieJar::from_headers(req.headers());
-    if jar.get(SESSION_COOKIE).is_none() {
+    if !has_session_cookie(&jar) {
         return next.run(req).await;
     }
 
@@ -244,7 +253,7 @@ mod tests {
                 }
             }
             let jar = CookieJar::from_headers(req.headers());
-            if jar.get(SESSION_COOKIE).is_none() {
+            if !has_session_cookie(&jar) {
                 return (StatusCode::OK, "ok").into_response();
             }
             let origin = req
@@ -290,6 +299,43 @@ mod tests {
         )
         .await;
         assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn host_prefixed_cookie_also_triggers_origin_check() {
+        // A cookie under the `__Host-` prefixed name must arm the origin
+        // check the same as the legacy plain name, otherwise a deploy that
+        // flips OMNIBUS_SECURE_COOKIES on would silently drop CSRF
+        // protection for cookies the server is now issuing.
+        let res = guarded_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/mut")
+                    .method("POST")
+                    .header(header::HOST, "localhost:3000")
+                    .header(header::ORIGIN, "http://evil.example")
+                    .header(
+                        header::COOKIE,
+                        format!("{SESSION_COOKIE_HOST_PREFIXED}=fake"),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn has_session_cookie_matches_either_name() {
+        let make = |raw: &str| {
+            let mut h = axum::http::HeaderMap::new();
+            h.insert(header::COOKIE, raw.parse().unwrap());
+            CookieJar::from_headers(&h)
+        };
+        assert!(has_session_cookie(&make("omnibus_session=tok")));
+        assert!(has_session_cookie(&make("__Host-omnibus_session=tok")));
+        assert!(!has_session_cookie(&make("other=tok")));
     }
 
     #[tokio::test]
