@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use epub::doc::{EpubDoc, EpubVersion};
+use epub::doc::EpubDoc;
 use omnibus_shared::{Contributor, EbookMetadata, Identifier};
 
 use super::accent::extract_accent;
@@ -55,8 +55,13 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
         }
     };
 
-    let creators = collect_contributors(&doc, "creator");
-    let contributors = collect_contributors(&doc, "contributor");
+    // OPF `<dc:creator>` and `<dc:contributor>` both flow into the same
+    // `books_authors_link` table at insert time (the schema does not
+    // distinguish them on read). Merge them up front — creators first,
+    // contributors after, in OPF source order — so downstream code only
+    // sees one list. Issue #174.
+    let mut creators = collect_contributors(&doc, "creator");
+    creators.extend(collect_contributors(&doc, "contributor"));
     let identifiers = collect_identifiers(&doc);
     let (series, series_index) = collect_series(&doc);
 
@@ -75,15 +80,8 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
             published: first(&doc, "date"),
             modified: first(&doc, "dcterms:modified"),
             language: first(&doc, "language"),
-            rights: first(&doc, "rights"),
-            source: first(&doc, "source"),
-            coverage: first(&doc, "coverage"),
-            dc_type: first(&doc, "type"),
-            dc_format: first(&doc, "format"),
-            relation: first(&doc, "relation"),
 
             creators,
-            contributors,
             subjects: all(&doc, "subject"),
             identifiers,
 
@@ -91,11 +89,7 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
             series_index,
             series_id: None,
 
-            epub_version: Some(format_version(doc.version)),
             unique_identifier: doc.unique_identifier.clone(),
-            resource_count: doc.resources.len(),
-            spine_count: doc.spine.len(),
-            toc_count: doc.toc.len(),
 
             cover_url: None,
             accent,
@@ -109,14 +103,6 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
         // writer sees this struct.
         mtime_epoch: 0,
         size_bytes: 0,
-    }
-}
-
-fn format_version(v: EpubVersion) -> String {
-    match v {
-        EpubVersion::Version2_0 => "2.0".to_string(),
-        EpubVersion::Version3_0 => "3.0".to_string(),
-        other => format!("{other:?}"),
     }
 }
 
