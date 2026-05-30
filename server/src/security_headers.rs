@@ -10,13 +10,42 @@
 //! * **`Content-Security-Policy`** — defense-in-depth against any XSS gap in
 //!   the user-supplied content rendered through SSR (book descriptions are
 //!   sanitized via `ammonia`, but the policy keeps an injection limited to
-//!   the page's own origin). The policy is intentionally generous enough to
-//!   hydrate Dioxus today (`'wasm-unsafe-eval'` on `script-src` because
-//!   `WebAssembly.instantiate` is treated as `eval` by the browser CSP
-//!   engine; `'unsafe-inline'` on `style-src` because Dioxus emits inline
-//!   `style=""` attributes; `data:` / `blob:` on `img-src` to cover thumbs
-//!   and base64-embedded images). Tighten incrementally as the asset surface
-//!   stabilizes.
+//!   the page's own origin). Per-directive rationale:
+//!   * `script-src 'self' 'unsafe-inline' 'unsafe-eval'` — three relaxations,
+//!     all forced by the Dioxus web runtime; none can be tightened without
+//!     upstream changes. `'self'` loads the external WASM glue
+//!     (`/wasm/omnibus.js`). `'unsafe-inline'` is required because Dioxus
+//!     fullstack emits its hydration bootstrap (`window.dx_hydrate = …`) and
+//!     serialized state (`window.initial_dioxus_hydration_data = …`) as inline
+//!     `<script>` tags with no nonce and a per-page-variable body, so the SSR
+//!     markup cannot hydrate without it (hashes are unstable across pages;
+//!     Dioxus stamps no nonce). `'unsafe-eval'` is required because the
+//!     `dioxus-interpreter-js` runtime builds functions at runtime via the
+//!     `Function()` constructor — classic `eval`; `'wasm-unsafe-eval'` only
+//!     permits `WebAssembly.instantiate`, NOT `Function()`/`eval()`, so the
+//!     WASM panics on init under it. `'unsafe-eval'` is a superset that also
+//!     covers WASM instantiation, so `'wasm-unsafe-eval'` is not listed
+//!     separately. Net effect: `script-src` provides essentially no
+//!     script-injection protection here — an inherent cost of Dioxus web
+//!     today. The CSP's real value lives in the *other* directives:
+//!     `connect-src 'self'` blocks exfiltration to foreign origins, `'self'`
+//!     still blocks loading *external* scripts, and `object-src` / `base-uri`
+//!     / `form-action` / `frame-ancestors` are all locked down. Combined with
+//!     `ammonia` sanitizing the primary XSS source (book descriptions), an
+//!     injected script's blast radius stays bounded. Revisit only if Dioxus
+//!     drops its `Function()` use and gains nonce support.
+//!   * `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com` —
+//!     `'unsafe-inline'` because Dioxus emits inline `style=""` attributes;
+//!     the Google Fonts host because `atrium.css` `@import`s the Geist /
+//!     Instrument Serif stylesheet from it. Self-hosting the fonts (tracked as
+//!     an F1.7 follow-up in `atrium.css`) would let both the CDN host here and
+//!     in `font-src` drop back to `'self'`.
+//!   * `font-src 'self' data: https://fonts.gstatic.com` — Google serves the
+//!     actual WOFF2 files from `fonts.gstatic.com`; without it the `@import`ed
+//!     stylesheet resolves but the glyphs fall back to system fonts.
+//!   * `img-src 'self' data: blob:` — `data:` / `blob:` cover thumbnails and
+//!     base64-embedded images.
+//!   * Tighten incrementally as the asset surface stabilizes.
 //! * **`X-Frame-Options: DENY`** — legacy clickjacking guard. `frame-ancestors
 //!   'none'` in the CSP supersedes this on modern browsers; both ship for
 //!   coverage on older clients.
@@ -42,10 +71,10 @@ use tower_http::set_header::SetResponseHeaderLayer;
 /// Conservative content-security policy that still hydrates Dioxus WASM.
 /// See module docs for the per-directive rationale.
 const DEFAULT_CSP: &str = "default-src 'self'; \
-script-src 'self' 'wasm-unsafe-eval'; \
-style-src 'self' 'unsafe-inline'; \
+script-src 'self' 'unsafe-inline' 'unsafe-eval'; \
+style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
 img-src 'self' data: blob:; \
-font-src 'self' data:; \
+font-src 'self' data: https://fonts.gstatic.com; \
 connect-src 'self'; \
 object-src 'none'; \
 base-uri 'self'; \
@@ -153,12 +182,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn csp_permits_wasm_eval_and_inline_styles() {
+    async fn csp_permits_dioxus_hydration_and_fonts() {
         // Guard rails so a future tightening of the CSP doesn't silently
-        // break Dioxus hydration in the browser. WebAssembly.instantiate is
-        // treated as `eval` by the CSP engine; Dioxus emits inline style
-        // attributes; thumbnails are served as data:/blob: URLs in some
-        // code paths.
+        // re-break the live page. These assertions encode hard requirements
+        // discovered in-browser (the header-only checks below can't observe
+        // them):
+        //   * Dioxus fullstack emits its hydration bootstrap + serialized
+        //     state as INLINE <script> tags with no nonce, so script-src must
+        //     carry 'unsafe-inline' or the SSR markup never hydrates.
+        //   * dioxus-interpreter-js builds functions via the Function()
+        //     constructor → needs 'unsafe-eval' (NOT just 'wasm-unsafe-eval',
+        //     which only permits WebAssembly.instantiate; the WASM panics on
+        //     init under it). 'unsafe-eval' subsumes WASM instantiation.
+        //   * atrium.css @imports Google Fonts (stylesheet on fonts.googleapis
+        //     .com, WOFF2 glyphs on fonts.gstatic.com) → style-src + font-src
+        //     must allowlist those hosts.
+        //   * Dioxus emits inline style="" attributes → style-src 'unsafe-inline'.
+        //   * thumbnails are served as data:/blob: URLs in some paths.
         let app = app_with_baseline();
         let res = app
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
@@ -170,12 +210,16 @@ mod tests {
             .and_then(|v| v.to_str().ok())
             .unwrap();
         assert!(
-            csp.contains("'wasm-unsafe-eval'"),
-            "csp missing wasm: {csp}"
+            csp.contains("script-src 'self' 'unsafe-inline' 'unsafe-eval'"),
+            "csp must allow inline (hydration) + Function()-eval (dioxus interpreter) scripts: {csp}"
         );
         assert!(
-            csp.contains("style-src 'self' 'unsafe-inline'"),
-            "csp must allow inline styles: {csp}"
+            csp.contains("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"),
+            "csp must allow inline styles + Google Fonts stylesheet host: {csp}"
+        );
+        assert!(
+            csp.contains("font-src 'self' data: https://fonts.gstatic.com"),
+            "csp must allow the Google Fonts WOFF2 host: {csp}"
         );
         assert!(
             csp.contains("img-src 'self' data: blob:"),
