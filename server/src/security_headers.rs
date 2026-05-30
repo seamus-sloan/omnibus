@@ -29,11 +29,12 @@
 //!   `backend::covers` becomes redundant once this layer is mounted, but
 //!   stays as belt-and-suspenders.
 //! * **`Strict-Transport-Security`** — only emitted when
-//!   `OMNIBUS_SECURE_COOKIES=1` (the same env var that gates the `Secure`
-//!   cookie flag in `auth::handlers`). Sending HSTS over plain HTTP is
-//!   ignored by browsers but would be wrong on a LAN-IP dev origin where the
-//!   operator has set `OMNIBUS_SECURE_COOKIES=0` — gating on the same flag
-//!   keeps the "production HTTPS" signal in one place.
+//!   `OMNIBUS_SECURE_COOKIES` resolves to truthy via the shared
+//!   `auth::handlers::parse_secure_cookies` reader. Sharing the parse
+//!   keeps the HSTS toggle pinned to the cookie `Secure` toggle so the
+//!   two can't drift; sending HSTS over plain HTTP is ignored by browsers
+//!   but would advertise the wrong policy on a LAN-IP dev origin where
+//!   the operator has set `OMNIBUS_SECURE_COOKIES=0`.
 
 use axum::http::{header, HeaderName, HeaderValue};
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -56,9 +57,9 @@ frame-ancestors 'none'";
 const DEFAULT_HSTS: &str = "max-age=31536000; includeSubDomains";
 
 /// Build the `(CSP, X-Frame-Options, Referrer-Policy, X-Content-Type-Options)`
-/// layer applied unconditionally to every response.
+/// layers applied unconditionally to every response.
 ///
-/// Returned as a tuple of layers so the caller can fold each via repeated
+/// Returned as an array of layers so the caller can fold each via repeated
 /// `.layer(...)` calls without us needing to build a custom `tower::Layer`
 /// composition (axum's `Router` only stacks layers one at a time).
 pub fn baseline_layers() -> [SetResponseHeaderLayer<HeaderValue>; 4] {
@@ -84,32 +85,18 @@ pub fn baseline_layers() -> [SetResponseHeaderLayer<HeaderValue>; 4] {
 
 /// HSTS layer, conditionally constructed.
 ///
-/// Returns `Some(layer)` only when the operator has opted into HTTPS-only
-/// cookies (`OMNIBUS_SECURE_COOKIES` unset or any truthy value). Plain-HTTP
-/// dev origins (`OMNIBUS_SECURE_COOKIES=0`) skip HSTS — emitting it on plain
-/// HTTP is a no-op for browsers but advertises the wrong policy.
-pub fn hsts_layer() -> Option<SetResponseHeaderLayer<HeaderValue>> {
-    if hsts_enabled(std::env::var("OMNIBUS_SECURE_COOKIES").ok().as_deref()) {
-        Some(SetResponseHeaderLayer::overriding(
+/// Returns `Some(layer)` when `secure_cookies` is true (the operator has
+/// opted into HTTPS-only cookies), `None` otherwise. The caller resolves
+/// the toggle by passing the result of `auth::handlers::parse_secure_cookies`
+/// — sharing the single parser keeps HSTS pinned to the cookie `Secure`
+/// flag so the two policies can't drift.
+pub fn hsts_layer(secure_cookies: bool) -> Option<SetResponseHeaderLayer<HeaderValue>> {
+    secure_cookies.then(|| {
+        SetResponseHeaderLayer::overriding(
             header::STRICT_TRANSPORT_SECURITY,
             HeaderValue::from_static(DEFAULT_HSTS),
-        ))
-    } else {
-        None
-    }
-}
-
-/// Pure parse of the `OMNIBUS_SECURE_COOKIES` env var into an HSTS toggle.
-/// Extracted so tests don't need to mutate process env. Mirrors
-/// `auth::handlers::parse_secure_cookies` so the two flags stay aligned.
-fn hsts_enabled(raw: Option<&str>) -> bool {
-    match raw {
-        Some(v) => {
-            let v = v.trim().to_ascii_lowercase();
-            !matches!(v.as_str(), "0" | "false" | "no" | "")
-        }
-        None => true,
-    }
+        )
+    })
 }
 
 #[cfg(test)]
@@ -227,31 +214,9 @@ mod tests {
         assert_eq!(all[0].to_str().unwrap(), DEFAULT_CSP);
     }
 
-    #[test]
-    fn hsts_enabled_defaults_on_when_unset() {
-        assert!(hsts_enabled(None));
-    }
-
-    #[test]
-    fn hsts_enabled_off_for_falsey_values() {
-        for raw in ["0", "false", "FALSE", "No", " no ", ""] {
-            assert!(!hsts_enabled(Some(raw)), "hsts should be off for {raw:?}");
-        }
-    }
-
-    #[test]
-    fn hsts_enabled_on_for_anything_else() {
-        for raw in ["1", "true", "yes", "anything"] {
-            assert!(hsts_enabled(Some(raw)), "hsts should be on for {raw:?}");
-        }
-    }
-
     #[tokio::test]
-    async fn hsts_layer_emits_one_year_include_subdomains_when_enabled() {
-        let layer = SetResponseHeaderLayer::overriding(
-            header::STRICT_TRANSPORT_SECURITY,
-            HeaderValue::from_static(DEFAULT_HSTS),
-        );
+    async fn hsts_layer_when_enabled_emits_one_year_include_subdomains() {
+        let layer = hsts_layer(true).expect("hsts_layer(true) must yield a layer");
         let app = Router::new()
             .route("/", get(|| async { "ok" }))
             .layer(layer);
@@ -265,5 +230,10 @@ mod tests {
                 .and_then(|v| v.to_str().ok()),
             Some(DEFAULT_HSTS)
         );
+    }
+
+    #[test]
+    fn hsts_layer_when_disabled_returns_none() {
+        assert!(hsts_layer(false).is_none());
     }
 }

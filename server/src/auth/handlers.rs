@@ -104,7 +104,7 @@ fn want_bearer(kind: Option<&str>) -> bool {
     matches!(kind, Some("ios") | Some("android") | Some("bearer"))
 }
 
-fn parse_secure_cookies(raw: Option<&str>) -> bool {
+pub fn parse_secure_cookies(raw: Option<&str>) -> bool {
     match raw {
         Some(v) => {
             let v = v.trim().to_ascii_lowercase();

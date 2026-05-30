@@ -168,11 +168,14 @@ fn main() {
             // but inside the trace layer — so headers attach to every
             // response, including the 408/413 short-circuits emitted by
             // those guards above.
+            let secure_cookies = auth::handlers::parse_secure_cookies(
+                std::env::var("OMNIBUS_SECURE_COOKIES").ok().as_deref(),
+            );
             let mut router = router;
             for layer in security_headers::baseline_layers() {
                 router = router.layer(layer);
             }
-            if let Some(layer) = security_headers::hsts_layer() {
+            if let Some(layer) = security_headers::hsts_layer(secure_cookies) {
                 router = router.layer(layer);
             }
             // TraceLayer last so it is the outermost layer and observes
