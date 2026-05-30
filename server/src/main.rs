@@ -20,7 +20,7 @@ fn main() {
     {
         dioxus::serve(|| async move {
             use dioxus::server::axum::Extension;
-            use omnibus::{auth, backend, rate_limit};
+            use omnibus::{auth, backend, rate_limit, security_headers};
             use omnibus_db::{
                 indexer,
                 worker::{Task, Worker},
@@ -166,11 +166,29 @@ fn main() {
                     axum::http::StatusCode::REQUEST_TIMEOUT,
                     std::time::Duration::from_secs(30),
                 ))
-                .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024))
-                // TraceLayer last so it is the outermost layer and observes
-                // every response — including 408/413 short-circuits from the
-                // timeout and body-limit guards above.
-                .layer(tower_http::trace::TraceLayer::new_for_http());
+                .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024));
+
+            // Global HTTP security response headers (#277). Applied as a
+            // separate `for` fold because `SetResponseHeaderLayer` is one
+            // layer per header, and Router::layer composes them one at a
+            // time. Placed here — outside the timeout/body-limit guards
+            // but inside the trace layer — so headers attach to every
+            // response, including the 408/413 short-circuits emitted by
+            // those guards above.
+            let secure_cookies = auth::handlers::parse_secure_cookies(
+                std::env::var("OMNIBUS_SECURE_COOKIES").ok().as_deref(),
+            );
+            let mut router = router;
+            for layer in security_headers::baseline_layers() {
+                router = router.layer(layer);
+            }
+            if let Some(layer) = security_headers::hsts_layer(secure_cookies) {
+                router = router.layer(layer);
+            }
+            // TraceLayer last so it is the outermost layer and observes
+            // every response — including 408/413 short-circuits from the
+            // timeout and body-limit guards above.
+            let router = router.layer(tower_http::trace::TraceLayer::new_for_http());
 
             Ok(router)
         });
