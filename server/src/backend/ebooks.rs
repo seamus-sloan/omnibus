@@ -440,8 +440,14 @@ mod tests {
 
         // Write a tiny stand-in EPUB file under a temp dir whose parent is
         // recorded as `books.path` and whose stem matches `book_files.filename`.
-        let tmp =
-            std::env::temp_dir().join(format!("omnibus_ebook_file_test_{}", std::process::id()));
+        // pid + nanos suffix (matching `backend.rs`'s covers scratch dir) so
+        // concurrent/repeat runs don't race on the same path.
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp = std::env::temp_dir().join(format!("omnibus_ebook_file_test_{pid}_{nanos}"));
         std::fs::create_dir_all(&tmp).unwrap();
         let stem = "alpha";
         let file_path = tmp.join(format!("{stem}.epub"));

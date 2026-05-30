@@ -56,6 +56,13 @@ pub fn BookReadPage(uuid: String) -> Element {
             let saved = crate::reader_progress::load(&uuid);
             let size = font_size();
             let theme_name = theme.read().as_attr();
+            // Build every JS string literal with serde_json so untrusted input
+            // (the route-controlled `uuid`, the persisted `cfi`) can never break
+            // out of string context into the `document::eval` payload. `theme`
+            // is a fixed enum attr but is encoded the same way for uniformity.
+            let url_lit = serde_json::to_string(&format!("/api/ebooks/{uuid}/file"))
+                .unwrap_or_else(|_| "\"\"".into());
+            let theme_lit = serde_json::to_string(theme_name).unwrap_or_else(|_| "\"dark\"".into());
 
             // Register the relocate callback the glue invokes on every page
             // turn: persist the new CFI so a re-open resumes in place. Leaked
@@ -73,25 +80,24 @@ pub fn BookReadPage(uuid: String) -> Element {
                 closure.forget();
             }
 
-            // Build a JSON-safe CFI literal (`"…"` or `null`) for the init
-            // call. Escape backslashes first, then double-quotes, so the
-            // generated JS string literal is valid for arbitrary CFI text.
-            let cfi_arg = saved
-                .map(|c| format!("\"{}\"", c.replace('\\', "\\\\").replace('"', "\\\"")))
-                .unwrap_or_else(|| "null".into());
+            // serde_json on the Option yields a valid JS literal directly:
+            // `"…"` for Some (with all escaping handled) or `null` for None.
+            let cfi_arg = serde_json::to_string(&saved).unwrap_or_else(|_| "null".into());
 
             // Poll until both globals exist (scripts load async) then init,
-            // pointing the reader at the cookie-gated file route.
+            // pointing the reader at the cookie-gated file route. Every
+            // interpolated value is either a serde_json literal or an integer.
             let js = format!(
-                r#"(function go(){{ if (window.OmnibusReader && window.ePub) {{ window.OmnibusReader.init("omnibus-viewer", "/api/ebooks/{uuid}/file", {{ cfi: {cfi_arg}, fontSize: {size}, theme: "{theme_name}" }}); }} else {{ setTimeout(go, 50); }} }})();"#
+                r#"(function go(){{ if (window.OmnibusReader && window.ePub) {{ window.OmnibusReader.init("omnibus-viewer", {url_lit}, {{ cfi: {cfi_arg}, fontSize: {size}, theme: {theme_lit} }}); }} else {{ setTimeout(go, 50); }} }})();"#
             );
             let _ = dioxus::document::eval(&js);
         }));
 
         // Flow app theme changes into the reader content.
         use_effect(move || {
-            let attr = theme.read().as_attr();
-            let js = format!(r#"window.OmnibusReader && window.OmnibusReader.setTheme("{attr}");"#);
+            let attr_lit =
+                serde_json::to_string(theme.read().as_attr()).unwrap_or_else(|_| "\"dark\"".into());
+            let js = format!("window.OmnibusReader && window.OmnibusReader.setTheme({attr_lit});");
             let _ = dioxus::document::eval(&js);
         });
     }
