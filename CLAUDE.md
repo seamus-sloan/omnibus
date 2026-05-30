@@ -92,10 +92,11 @@ components/user_menu.rs — avatar trigger + dropdown panel in TopNav; hosts the
 ### server/src/
 
 ```
-main.rs             — dioxus::launch (WASM) / dioxus::serve (native); mounts auth_router + rate-limit + origin-check
-lib.rs              — re-exports backend + auth + rate_limit under `server` feature for tests
+main.rs             — dioxus::launch (WASM) / dioxus::serve (native); mounts auth_router + rate-limit + origin-check + security_headers
+lib.rs              — re-exports backend + auth + rate_limit + security_headers under `server` feature for tests
 backend.rs          — /api/* REST router (mobile-facing) + integration tests; `/api/search/*` sub-router carries its own per-IP rate-limit layer
 rate_limit.rs       — reusable in-memory per-IP fixed-window counter + `rate_limit_by_ip` axum middleware; `rate_limit_paths` is a path-prefix wrapper used for both `/api/rpc/search-palette` and the auth router (allow-list = login/register/logout, so `/api/auth/me` is deliberately exempt from the 10/60s bucket)
+security_headers.rs — #277 global HTTP security response headers: CSP (Dioxus-WASM-compatible), X-Frame-Options DENY, Referrer-Policy strict-origin-when-cross-origin, X-Content-Type-Options nosniff applied unconditionally; HSTS (1y + includeSubDomains) gated on OMNIBUS_SECURE_COOKIES so plain-HTTP dev origins don't advertise the wrong policy
 auth/mod.rs         — /api/auth/{register,login,logout,me} + AuthUser/AdminUser extractors + CSRF origin-check
 auth/gate.rs        — top-level middleware gating /api/* (pass-through for /api/auth/*)
 auth/strategy.rs    — AuthStrategy trait + PasswordStrategy (OIDC/WebAuthn fit the same shape)

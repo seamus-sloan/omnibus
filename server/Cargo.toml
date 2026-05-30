@@ -16,7 +16,7 @@ dioxus = "0.7"
 # Server-only deps — all optional and gated behind the `server` feature.
 axum = { version = "0.8", features = ["multipart"], optional = true }
 axum-extra = { version = "0.10", features = ["cookie"], optional = true }
-tower-http = { version = "0.6", features = ["trace", "timeout"], optional = true }
+tower-http = { version = "0.6", features = ["trace", "timeout", "set-header"], optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros"], optional = true }
