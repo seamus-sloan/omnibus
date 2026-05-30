@@ -299,6 +299,7 @@ fn UmThemeSeg(theme: Signal<Theme>) -> Element {
     let current = *theme.read();
     let dark_on = matches!(current, Theme::Dark);
     let light_on = matches!(current, Theme::Light);
+    let sepia_on = matches!(current, Theme::Sepia);
     rsx! {
         div { class: "um-theme",
             div { class: "um-section-label", "THEME" }
@@ -324,10 +325,13 @@ fn UmThemeSeg(theme: Signal<Theme>) -> Element {
                     "Light"
                 }
                 button {
-                    class: "um-theme-btn",
+                    class: if sepia_on { "um-theme-btn on" } else { "um-theme-btn" },
                     r#type: "button",
-                    disabled: true,
-                    "aria-disabled": "true",
+                    "data-testid": "theme-sepia",
+                    onclick: move |_| {
+                        theme.set(Theme::Sepia);
+                        persist_theme(Theme::Sepia);
+                    },
                     "Sepia"
                 }
             }

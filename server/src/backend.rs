@@ -112,6 +112,7 @@ pub fn rest_router_with_search_limiter(
         .route("/api/library", get(ebooks::get_library))
         .route("/api/ebooks", get(ebooks::get_ebooks))
         .route("/api/ebooks/{uuid}", get(ebooks::get_ebook_by_uuid))
+        .route("/api/ebooks/{uuid}/file", get(ebooks::get_ebook_file))
         .route(
             "/api/ebooks/{uuid}/overrides",
             post(overrides::post_ebook_overrides).delete(overrides::delete_ebook_overrides),

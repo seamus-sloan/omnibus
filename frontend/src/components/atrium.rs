@@ -7,18 +7,15 @@
 //!
 //! Components:
 //! - [`AtriumRoot`] — wraps the router output in a
-//!   `<div class="atrium" data-theme="dark|light">`. The Atrium token block
-//!   in `frontend/assets/atrium.css` keys off the `data-theme` attribute on
-//!   this wrapper (not on `<html>`) so the swap is declarative — no
-//!   DOM-attribute mutation from Rust.
+//!   `<div class="atrium" data-theme="dark|light|sepia">`. The Atrium token
+//!   block in `frontend/assets/atrium.css` keys off the `data-theme`
+//!   attribute on this wrapper (not on `<html>`) so the swap is declarative —
+//!   no DOM-attribute mutation from Rust.
 //! - [`Cover`] — book cover. Uses the real `/api/covers/:id` image when the
 //!   book has one and falls back to a stylized typographic template when it
 //!   doesn't. The per-book accent (from `EbookMetadata.accent`, populated
 //!   by [`omnibus_db::ebook::extract_accent`]) is wired as a `--accent`
 //!   custom property so cover-derived theming composes against the page.
-//! - [`ThemeToggle`] — light/dark switch backed by a global signal and
-//!   persisted via `localStorage` on web. Mobile keeps the value in-memory
-//!   for now; a follow-up under F1.7 finalizes mobile persistence.
 //!
 //! SSR/hydration: [`init_theme`] always seeds the context with `Theme::Dark`
 //! so the SSR-rendered markup is deterministic and matches the WASM
@@ -36,6 +33,7 @@ use omnibus_shared::EbookMetadata;
 pub enum Theme {
     Dark,
     Light,
+    Sepia,
 }
 
 impl Theme {
@@ -43,6 +41,7 @@ impl Theme {
         match self {
             Theme::Dark => "dark",
             Theme::Light => "light",
+            Theme::Sepia => "sepia",
         }
     }
 
@@ -50,6 +49,7 @@ impl Theme {
         match s {
             "dark" => Some(Theme::Dark),
             "light" => Some(Theme::Light),
+            "sepia" => Some(Theme::Sepia),
             _ => None,
         }
     }
@@ -187,37 +187,6 @@ fn fallback_title(title: Option<&str>, filename: &str) -> String {
     }
 }
 
-// ── Theme toggle ──────────────────────────────────────────────────
-
-/// Light/dark toggle. Reads a global `Signal<Theme>` (provided by
-/// [`init_theme`]) and writes the next value on click. Re-rendering the
-/// surrounding [`AtriumRoot`] swaps `data-theme` and the CSS variables follow.
-#[component]
-pub fn ThemeToggle() -> Element {
-    let mut theme = use_context::<Signal<Theme>>();
-    let label = match *theme.read() {
-        Theme::Dark => "☾",
-        Theme::Light => "☀",
-    };
-    rsx! {
-        button {
-            class: "theme-toggle",
-            "data-testid": "theme-toggle",
-            "aria-label": "Toggle theme",
-            r#type: "button",
-            onclick: move |_| {
-                let next = match *theme.read() {
-                    Theme::Dark => Theme::Light,
-                    Theme::Light => Theme::Dark,
-                };
-                theme.set(next);
-                persist_theme(next);
-            },
-            "{label}"
-        }
-    }
-}
-
 // ── Persistence ───────────────────────────────────────────────────
 
 #[cfg(feature = "web")]
@@ -248,6 +217,17 @@ fn read_persisted_theme() -> Option<Theme> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn theme_attr_round_trips() {
+        assert_eq!(Theme::Dark.as_attr(), "dark");
+        assert_eq!(Theme::Light.as_attr(), "light");
+        assert_eq!(Theme::Sepia.as_attr(), "sepia");
+        assert_eq!(Theme::from_attr("dark"), Some(Theme::Dark));
+        assert_eq!(Theme::from_attr("light"), Some(Theme::Light));
+        assert_eq!(Theme::from_attr("sepia"), Some(Theme::Sepia));
+        assert_eq!(Theme::from_attr("nope"), None);
+    }
 
     #[test]
     fn fallback_title_prefers_a_present_title() {
