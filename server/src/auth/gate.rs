@@ -106,6 +106,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bare_api_auth_path_passes_gate_then_404s() {
+        // Locks in issue #279: the `path == "/api/auth"` allow-list entry
+        // is intentional (some HTTP clients normalize trailing slashes
+        // during redirect following), but no real handler is mounted at
+        // the bare `/api/auth` root. If a future change accidentally
+        // mounts one — e.g. a status endpoint on the auth sub-router —
+        // that handler would be unauthenticated. This test catches that
+        // class of change by asserting the bare path still 404s and never
+        // 200s, so the gate's pass-through stays free of routable
+        // surface area.
+        let (app, _pool) = app().await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn api_auth_passes_through_without_auth() {
         let (app, _pool) = app().await;
         let res = app

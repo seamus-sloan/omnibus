@@ -17,7 +17,7 @@ use omnibus_db::auth::{self as auth_db, AuthError, SessionKind};
 use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};
 
 use super::extractor::{extract_token, AuthUser};
-use super::{BEARER_TTL_SECS, COOKIE_TTL_SECS, SESSION_COOKIE};
+use super::{session_cookie_name, BEARER_TTL_SECS, COOKIE_TTL_SECS};
 use crate::backend::AppState;
 
 pub fn auth_router(state: AppState) -> Router {
@@ -94,6 +94,11 @@ fn auth_error_to_response(e: AuthError) -> Response {
             (StatusCode::FORBIDDEN, "registration disabled").into_response()
         }
         AuthError::SessionNotFound => (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
+        AuthError::DeviceFieldInvalid { field, reason } => (
+            StatusCode::BAD_REQUEST,
+            format!("invalid {field}: {reason}"),
+        )
+            .into_response(),
         AuthError::Db(e) => internal(e),
         AuthError::Hash(e) => internal(e),
         AuthError::TokenGeneration(e) => internal(e),
@@ -118,22 +123,34 @@ fn secure_cookies() -> bool {
     parse_secure_cookies(std::env::var("OMNIBUS_SECURE_COOKIES").ok().as_deref())
 }
 
+/// Build a session cookie. When `OMNIBUS_SECURE_COOKIES` is on (the
+/// default) this emits a `__Host-omnibus_session` cookie; the
+/// `__Host-` prefix is browser-enforced to require `Secure` + no
+/// `Domain` + `Path=/`, all of which this helper already sets. On dev
+/// origins with the flag flipped off it falls back to the plain
+/// `omnibus_session` name (no `Secure`, same `Path=/`, still no
+/// `Domain`) so loopback/LAN HTTP keeps working.
 fn session_cookie(value: String, max_age_secs: i64) -> Cookie<'static> {
-    let mut c = Cookie::new(SESSION_COOKIE, value);
+    let secure = secure_cookies();
+    // Invariants required by the `__Host-` prefix when `secure` is true:
+    // no Domain attribute, Path=/, Secure. We set all three unconditionally
+    // here so a future edit can't break the prefix contract by accident.
+    let mut c = Cookie::new(session_cookie_name(secure), value);
     c.set_http_only(true);
     c.set_same_site(SameSite::Lax);
     c.set_path("/");
-    c.set_secure(secure_cookies());
+    c.set_secure(secure);
     c.set_max_age(time::Duration::seconds(max_age_secs));
     c
 }
 
 fn cleared_cookie() -> Cookie<'static> {
-    let mut c = Cookie::new(SESSION_COOKIE, "");
+    let secure = secure_cookies();
+    let mut c = Cookie::new(session_cookie_name(secure), "");
     c.set_http_only(true);
     c.set_same_site(SameSite::Lax);
     c.set_path("/");
-    c.set_secure(secure_cookies());
+    c.set_secure(secure);
     c.set_max_age(time::Duration::seconds(0));
     c
 }
@@ -306,6 +323,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn session_cookie_uses_host_prefix_when_secure() {
+        // `__Host-` is required for the subdomain-injection guarantee;
+        // verify both the chosen name and the attributes that the prefix
+        // contract demands (Secure, Path=/, no Domain).
+        let c = session_cookie("tok".to_string(), 60);
+        // secure_cookies() defaults to true (no env override in test).
+        assert_eq!(c.name(), crate::auth::SESSION_COOKIE_HOST_PREFIXED);
+        assert_eq!(c.path(), Some("/"));
+        assert!(c.secure().unwrap_or(false));
+        assert!(c.domain().is_none());
+    }
+
+    #[test]
+    fn session_cookie_name_helper_branches_on_secure_flag() {
+        assert_eq!(super::session_cookie_name(true), "__Host-omnibus_session");
+        assert_eq!(super::session_cookie_name(false), "omnibus_session");
+    }
+
     #[tokio::test]
     async fn register_first_user_becomes_admin_and_sets_cookie() {
         let (app, _pool) = app().await;
@@ -324,7 +360,14 @@ mod tests {
             .iter()
             .map(|v| v.to_str().unwrap().to_string())
             .collect();
-        assert!(set_cookie.iter().any(|c| c.starts_with("omnibus_session=")));
+        // Default is secure_cookies() == true, so the cookie ships under the
+        // `__Host-` prefixed name. The plain name is used only when
+        // OMNIBUS_SECURE_COOKIES is explicitly disabled for plain-HTTP LAN dev.
+        let expected_name = format!("{}=", super::session_cookie_name(true));
+        assert!(
+            set_cookie.iter().any(|c| c.starts_with(&expected_name)),
+            "expected Set-Cookie starting with {expected_name:?}, got {set_cookie:?}",
+        );
         let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
             .await
             .unwrap();

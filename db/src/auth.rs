@@ -29,7 +29,10 @@ mod session_key;
 mod token;
 mod users;
 
-pub use device::{list_devices_for_user, register_device};
+pub use device::{
+    list_devices_for_user, register_device, validate_client_version, validate_device_name,
+    MAX_CLIENT_VERSION_CHARS, MAX_DEVICE_NAME_CHARS,
+};
 pub use login::verify_login;
 pub use password::{hash_password, validate_password, verify_password};
 pub use session::{
@@ -37,7 +40,10 @@ pub use session::{
     revoke_session, validate_session, SessionAuthError,
 };
 pub use session_key::{get_session_key, load_or_create_session_key, put_session_key};
-pub use token::{generate_token, hash_token, parse_session_token, SESSION_COOKIE_NAME};
+pub use token::{
+    generate_token, hash_token, is_session_cookie_name, parse_session_token, SESSION_COOKIE_NAME,
+    SESSION_COOKIE_NAME_HOST_PREFIXED,
+};
 pub use users::{
     create_user, get_user_by_id, get_user_by_username, promote_to_admin, registration_enabled,
     set_registration_enabled,
@@ -67,6 +73,11 @@ pub enum AuthError {
     RegistrationDisabled,
     #[error("session not found or expired")]
     SessionNotFound,
+    #[error("invalid {field}: {reason}")]
+    DeviceFieldInvalid {
+        field: &'static str,
+        reason: &'static str,
+    },
     #[error(transparent)]
     Db(#[from] sqlx::Error),
     #[error("password hashing failed: {0}")]
