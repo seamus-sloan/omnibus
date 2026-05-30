@@ -244,12 +244,10 @@ jobs:
       # against deny.toml's allow-list locally. The [licenses] config is left in
       # deny.toml so enabling it is a one-line follow-up once verified.
       #
-      # `continue-on-error` (observation mode): this deny.toml was authored
-      # without a runner that has cargo-deny + the advisory DB available, so it
-      # has not yet had a clean run to validate the allow-lists/sources against
-      # the real dependency set. Keep it non-blocking until its first green run,
-      # then drop this line to make it a hard gate. Real enforcement meanwhile
-      # comes from the (blocking) `cargo audit` step above.
+      # Now a hard gate: a violation in advisories, sources, or bans fails the
+      # job. If a deny.toml policy needs to relax (e.g. a new git-pinned source
+      # appears for a Dioxus crate), update deny.toml's `[sources.allow-git]`
+      # or the relevant `ignore`/`skip` list rather than re-introducing
+      # `continue-on-error: true`.
       - name: cargo deny check
-        continue-on-error: true
         run: nix develop --command cargo deny check advisories sources bans

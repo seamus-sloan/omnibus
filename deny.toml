@@ -22,6 +22,31 @@ ignore = [
     # is empty). No fixed `rsa` release exists yet — revisit when one ships.
     # Keep in sync with the `--ignore` flag on the cargo-audit step in rust.yml.
     { id = "RUSTSEC-2023-0071", reason = "rsa is lock-only via the unused sqlx-mysql backend; never compiled (sqlite-only), so not reachable" },
+
+    # ---- Unmaintained (informational) advisories pulled in by the Dioxus
+    # desktop/mobile native shell tree (wry/tao → gtk-rs/webkit2gtk on Linux,
+    # plus a few proc-macro helpers). These are NOT vulnerabilities; they are
+    # "crate is no longer maintained" notices. We accept them because:
+    #   1. They originate exclusively from upstream Dioxus dependencies which
+    #      we git-pin (see [sources.allow-git] below). Removing them requires
+    #      upstream Dioxus to migrate off these crates — not in our control.
+    #   2. cargo-audit (the blocking vulnerability gate in rust.yml's
+    #      `security` job) covers real RUSTSEC vulnerabilities. cargo-deny
+    #      here adds source/ban enforcement; surfacing unmaintained notices
+    #      is informational, not a security gate.
+    # Revisit when Dioxus upgrades the affected sub-trees.
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error unmaintained — transitive via Dioxus mobile/desktop crates; awaiting upstream migration" },
+    { id = "RUSTSEC-2024-0411", reason = "gtk-rs GTK3 binding unmaintained — Linux-only Dioxus desktop dep (wry/tao); awaiting upstream migration to GTK4" },
+    { id = "RUSTSEC-2024-0412", reason = "gtk-rs GTK3 binding unmaintained — Linux-only Dioxus desktop dep (wry/tao); awaiting upstream migration to GTK4" },
+    { id = "RUSTSEC-2024-0413", reason = "gtk-rs GTK3 binding unmaintained — Linux-only Dioxus desktop dep (wry/tao); awaiting upstream migration to GTK4" },
+    { id = "RUSTSEC-2024-0414", reason = "gtk-rs GTK3 binding unmaintained — Linux-only Dioxus desktop dep (wry/tao); awaiting upstream migration to GTK4" },
+    { id = "RUSTSEC-2024-0415", reason = "gtk-rs GTK3 binding unmaintained — Linux-only Dioxus desktop dep (wry/tao); awaiting upstream migration to GTK4" },
+    { id = "RUSTSEC-2024-0416", reason = "gtk-rs GTK3 binding unmaintained — Linux-only Dioxus desktop dep (wry/tao); awaiting upstream migration to GTK4" },
+    { id = "RUSTSEC-2024-0418", reason = "gtk-rs GTK3 binding unmaintained — Linux-only Dioxus desktop dep (wry/tao); awaiting upstream migration to GTK4" },
+    { id = "RUSTSEC-2024-0419", reason = "gtk-rs GTK3 binding unmaintained — Linux-only Dioxus desktop dep (wry/tao); awaiting upstream migration to GTK4" },
+    { id = "RUSTSEC-2024-0420", reason = "gtk-rs GTK3 binding unmaintained — Linux-only Dioxus desktop dep (wry/tao); awaiting upstream migration to GTK4" },
+    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained — transitive via Dioxus mobile/desktop crates; awaiting upstream migration" },
+    { id = "RUSTSEC-2025-0057", reason = "fxhash unmaintained — transitive via Dioxus mobile/desktop crates; awaiting upstream migration" },
 ]
 
 # ---------------------------------------------------------------------------
