@@ -1,6 +1,7 @@
 import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expectMutation } from "../utils/api";
+import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 import type { APIRequestContext } from "@playwright/test";
@@ -10,9 +11,10 @@ import type { APIRequestContext } from "@playwright/test";
 // The delete primitive (PR 2) inserts the author name into the
 // `ignored_authors` blocklist, so a re-run of the test suite would
 // keep finding the author missing even if we re-seed. Each test in
-// this file picks a *different* fixture author and cleans up by
-// DELETE-ing the blocklist row at the end, so subsequent runs start
-// from a clean state.
+// this file picks a *different* fixture author; the one test that
+// actually confirms a delete restores that author afterwards (see
+// `restoreDeletedAuthor`) so the shared on-disk fixture library other
+// specs read stays intact.
 
 test.describe.configure({ mode: "serial" });
 
@@ -36,23 +38,57 @@ async function fetchAuthorIdByName(
   throw new Error(`no indexed author named ${JSON.stringify(name)}`);
 }
 
-// Re-seed the library after each delete so the deleted author re-appears
-// on disk (the EPUB is still there) and the ignored_authors guard is the
-// only thing keeping the row absent. Then DELETE the blocklist row so
-// the next reindex re-creates the author cleanly. Without this cleanup
-// every subsequent test run would fail because the seeded fixture's
-// author is permanently blocklisted.
-async function clearBlocklistAndReseed(
+// Undo a confirmed delete so the persistent, shared on-disk DB stays intact
+// for later specs. A plain re-seed can't fix it — `delete_author` durably
+// blocklists the name in `ignored_authors`, and the incremental indexer won't
+// re-parse the unchanged fixture EPUB. So we re-assert the original creators
+// via a per-book metadata override: reindex-proof (keyed by uuid, merged on
+// read) and parallel-safe (never re-points the shared library path). See the
+// PR description for the full rationale.
+async function restoreDeletedAuthor(
   request: APIRequestContext,
   authorName: string,
 ): Promise<void> {
-  // No public RPC for `DELETE FROM ignored_authors` exists yet — the
-  // F5.9-lite plan defers that to a follow-up admin tool. For now we
-  // rely on the in-memory DB being fresh between full test suite runs;
-  // this helper is a stub so the test file documents the cleanup
-  // intent and can switch to the real call once it exists.
-  void request;
-  void authorName;
+  const affected = FIXTURE_BOOKS.filter((b) => b.authors.includes(authorName));
+  expect(
+    affected.length,
+    `restoreDeletedAuthor: no fixture book lists ${JSON.stringify(authorName)}`,
+  ).toBeGreaterThan(0);
+
+  for (const book of affected) {
+    const uuid = await fetchBookUuidByTitle(request, book.title);
+    const resp = await request.post("/api/rpc/ebook/overrides", {
+      data: {
+        uuid,
+        overrides: {
+          creators: book.authors.map((name) => ({ name, role: null, file_as: null })),
+        },
+      },
+    });
+    expect(
+      resp.status(),
+      `POST /api/rpc/ebook/overrides failed for ${book.title}`,
+    ).toBe(200);
+  }
+
+  // Confirm the author is observable again before releasing the shared DB.
+  await expect
+    .poll(
+      async () => {
+        const r = await request.get("/api/rpc/ebooks");
+        if (r.status() !== 200) return false;
+        const body = (await r.json()) as {
+          books: { creators: { name: string }[] }[];
+        };
+        return body.books.some((b) => b.creators.some((c) => c.name === authorName));
+      },
+      {
+        message: `author ${JSON.stringify(authorName)} should be restored via override`,
+        timeout: 10_000,
+        intervals: [100, 200, 500, 1_000],
+      },
+    )
+    .toBe(true);
 }
 
 test("renders Delete author button for admin viewers", async ({ page, request }) => {
@@ -98,32 +134,39 @@ test("confirming Delete posts to rpc_delete_author and redirects to /authors", a
   await page.getByTestId("author-delete-btn").click();
   await expect(page.getByTestId("author-delete-modal")).toBeVisible();
 
-  await expectMutation(
-    page,
-    {
-      method: "POST",
-      url: /\/api\/rpc\/author\/delete$/,
-      expectedStatus: 200,
-    },
-    async () => page.getByTestId("author-delete-confirm").click(),
-  );
+  let deleted = false;
+  try {
+    await expectMutation(
+      page,
+      {
+        method: "POST",
+        url: /\/api\/rpc\/author\/delete$/,
+        expectedStatus: 200,
+      },
+      async () => page.getByTestId("author-delete-confirm").click(),
+    );
+    deleted = true;
 
-  // The redirect should land on the /authors index page. Match
-  // trailing slash optional to accept either form.
-  await expect(page).toHaveURL(/\/authors\/?$/);
+    // The redirect should land on the /authors index page. Match
+    // trailing slash optional to accept either form.
+    await expect(page).toHaveURL(/\/authors\/?$/);
 
-  // The deleted author should no longer be linked to any book in the
-  // /api/rpc/ebooks response — confirms the blocklist + link
-  // teardown executed.
-  const after = await request.get("/api/rpc/ebooks");
-  const body = (await after.json()) as {
-    books: { creators: { name: string }[] }[];
-  };
-  for (const book of body.books) {
-    expect(book.creators.find((c) => c.name === targetName)).toBeUndefined();
+    // The deleted author should no longer be linked to any book in the
+    // /api/rpc/ebooks response — confirms the blocklist + link
+    // teardown executed.
+    const after = await request.get("/api/rpc/ebooks");
+    const body = (await after.json()) as {
+      books: { creators: { name: string }[] }[];
+    };
+    for (const book of body.books) {
+      expect(book.creators.find((c) => c.name === targetName)).toBeUndefined();
+    }
+  } finally {
+    // Restore even if an assertion above failed — the delete mutated the
+    // shared, persistent DB, so leaking it would break later specs and
+    // bury the real failure. Skip if the delete itself never landed.
+    if (deleted) await restoreDeletedAuthor(request, targetName);
   }
-
-  await clearBlocklistAndReseed(request, targetName);
 });
 
 test("surfaces an error and stays on the page when delete fails", async ({
