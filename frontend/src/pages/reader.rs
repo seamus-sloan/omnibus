@@ -145,8 +145,8 @@ pub fn BookReadPage(uuid: String) -> Element {
                                 "epub_cfi": cfi_for_post,
                             }
                         });
-                        if let Ok(req) = gloo_net::http::Request::post("/api/rpc/progress")
-                            .json(&body)
+                        if let Ok(req) =
+                            gloo_net::http::Request::post("/api/rpc/progress").json(&body)
                         {
                             let _ = req.send().await;
                         }

@@ -282,6 +282,10 @@ impl ProgressUpdate {
         if self.book_uuid.trim().is_empty() {
             return Err("book_uuid is required".into());
         }
+        // Reject the non-discriminated field at the API boundary so a
+        // cross-format payload (e.g. `{format:"epub", audio_position_seconds:…}`)
+        // returns 400 instead of falling through to the migration 0013 CHECK
+        // constraint and surfacing as a 500.
         match self.format {
             ProgressFormat::Epub => {
                 if self
@@ -292,6 +296,9 @@ impl ProgressUpdate {
                 {
                     return Err("epub_cfi is required for format=epub".into());
                 }
+                if self.audio_position_seconds.is_some() {
+                    return Err("audio_position_seconds must not be set for format=epub".into());
+                }
             }
             ProgressFormat::Audio => {
                 let Some(pos) = self.audio_position_seconds else {
@@ -301,6 +308,9 @@ impl ProgressUpdate {
                     return Err(
                         "audio_position_seconds must be a non-negative finite number".into(),
                     );
+                }
+                if self.epub_cfi.is_some() {
+                    return Err("epub_cfi must not be set for format=audio".into());
                 }
             }
         }
@@ -334,6 +344,28 @@ pub struct SessionReport {
     pub progress_units: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<i64>,
+}
+
+impl SessionReport {
+    /// Reject empty UUIDs, inverted time ranges, and negative durations
+    /// before they reach the `reading_sessions` / `listening_sessions`
+    /// tables — these rows feed future stats / year-in-review, so a single
+    /// negative `progress_units` would skew aggregates indefinitely.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.book_uuid.trim().is_empty() {
+            return Err("book_uuid is required".into());
+        }
+        if self.started_at < 0 || self.ended_at < 0 {
+            return Err("started_at and ended_at must be non-negative".into());
+        }
+        if self.ended_at < self.started_at {
+            return Err("ended_at must be greater than or equal to started_at".into());
+        }
+        if self.progress_units < 0 {
+            return Err("progress_units must be non-negative".into());
+        }
+        Ok(())
+    }
 }
 
 /// Response payload for `GET /api/ebooks` and `rpc_get_ebooks`.
@@ -966,5 +998,65 @@ mod metadata_overrides_tests {
         assert_eq!(merged.title, Some("New Title".into()));
         assert_eq!(merged.publisher, Some("Kept Publisher".into()));
         assert_eq!(merged.series, Some("Kept Series".into()));
+    }
+
+    // --- F2.1 ProgressUpdate / SessionReport validation -------------------
+
+    #[test]
+    fn progress_update_rejects_cross_format_audio_field_on_epub() {
+        let u = ProgressUpdate {
+            book_uuid: "x".into(),
+            format: ProgressFormat::Epub,
+            epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
+            audio_position_seconds: Some(12.0),
+        };
+        let err = u
+            .validate()
+            .expect_err("epub payload must reject audio_position_seconds");
+        assert!(err.contains("audio_position_seconds"), "got: {err}");
+    }
+
+    #[test]
+    fn progress_update_rejects_cross_format_cfi_on_audio() {
+        let u = ProgressUpdate {
+            book_uuid: "x".into(),
+            format: ProgressFormat::Audio,
+            epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
+            audio_position_seconds: Some(12.0),
+        };
+        let err = u
+            .validate()
+            .expect_err("audio payload must reject epub_cfi");
+        assert!(err.contains("epub_cfi"), "got: {err}");
+    }
+
+    #[test]
+    fn session_report_rejects_inverted_time_range() {
+        let r = SessionReport {
+            book_uuid: "x".into(),
+            format: ProgressFormat::Epub,
+            started_at: 500,
+            ended_at: 200,
+            progress_units: 0,
+            device_id: None,
+        };
+        let err = r.validate().expect_err("ended < started must be rejected");
+        assert!(err.contains("ended_at"), "got: {err}");
+    }
+
+    #[test]
+    fn session_report_rejects_negative_progress_units() {
+        let r = SessionReport {
+            book_uuid: "x".into(),
+            format: ProgressFormat::Audio,
+            started_at: 100,
+            ended_at: 200,
+            progress_units: -5,
+            device_id: None,
+        };
+        let err = r
+            .validate()
+            .expect_err("negative progress_units must be rejected");
+        assert!(err.contains("progress_units"), "got: {err}");
     }
 }

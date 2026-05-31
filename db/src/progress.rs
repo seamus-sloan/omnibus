@@ -119,16 +119,19 @@ pub async fn get_progress(
     }))
 }
 
-/// Append one session row to the per-format table. Silently skips reports
-/// whose `book_uuid` is unknown — a session that outlived the book it
-/// referred to is best-effort telemetry, not an integrity failure.
+/// Append one session row to the per-format table. Returns `Ok(true)` when
+/// a row was inserted and `Ok(false)` when the report was skipped because
+/// the `book_uuid` is unknown (a session that outlived the book it referred
+/// to is best-effort telemetry, not an integrity failure). The handler
+/// surfaces the inserted count to the client so it can tell which queued
+/// reports actually persisted.
 pub async fn record_session(
     pool: &SqlitePool,
     user_id: i64,
     report: &SessionReport,
-) -> Result<(), sqlx::Error> {
+) -> Result<bool, sqlx::Error> {
     let Some(book_id) = resolve_book_id_by_uuid(pool, &report.book_uuid).await? else {
-        return Ok(());
+        return Ok(false);
     };
     match report.format {
         ProgressFormat::Epub => {
@@ -162,7 +165,7 @@ pub async fn record_session(
             .await?;
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -382,5 +385,24 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(audio_count, 1);
+
+        // Unknown uuid → skipped, returns false so the REST handler can
+        // count only the rows that actually landed (issue: copilot review
+        // on #300).
+        let skipped = record_session(
+            &pool,
+            user,
+            &SessionReport {
+                book_uuid: "no-such-uuid".into(),
+                format: ProgressFormat::Epub,
+                started_at: 0,
+                ended_at: 10,
+                progress_units: 10,
+                device_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!skipped, "unknown uuid should be skipped (returns false)");
     }
 }

@@ -716,7 +716,7 @@ pub async fn get_progress(
 pub async fn record_sessions(
     server_url: &str,
     reports: Vec<SessionReport>,
-) -> Result<(), DataError> {
+) -> Result<u64, DataError> {
     let url = format!("{server_url}/api/progress/sessions");
     let response = with_bearer(http_client().post(&url).json(&reports))
         .send()
@@ -725,7 +725,8 @@ pub async fn record_sessions(
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    Ok(())
+    let body: serde_json::Value = response.json().await?;
+    Ok(body.get("recorded").and_then(|v| v.as_u64()).unwrap_or(0))
 }
 
 // ===== Mobile auth transport: bearer token =====
@@ -1153,7 +1154,7 @@ pub async fn get_progress(
 pub async fn record_sessions(
     _server_url: &str,
     reports: Vec<SessionReport>,
-) -> Result<(), DataError> {
+) -> Result<u64, DataError> {
     crate::rpc::rpc_record_sessions(reports)
         .await
         .map_err(note_server_fn_err)

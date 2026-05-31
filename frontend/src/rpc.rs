@@ -461,11 +461,19 @@ pub async fn rpc_get_progress(
 }
 
 #[post("/api/rpc/progress/sessions", pool: PoolExt, user: AuthUser)]
-pub async fn rpc_record_sessions(reports: Vec<SessionReport>) -> Result<()> {
+pub async fn rpc_record_sessions(reports: Vec<SessionReport>) -> Result<u64> {
     for r in &reports {
-        db::progress::record_session(&pool.0, user.id, r).await?;
+        if let Err(msg) = r.validate() {
+            return Err(ServerFnError::new(msg).into());
+        }
     }
-    Ok(())
+    let mut inserted = 0u64;
+    for r in &reports {
+        if db::progress::record_session(&pool.0, user.id, r).await? {
+            inserted += 1;
+        }
+    }
+    Ok(inserted)
 }
 
 /// Search palette — grouped results (books, authors, series, tags) for the

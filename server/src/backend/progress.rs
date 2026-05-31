@@ -66,19 +66,30 @@ pub(super) async fn get_progress(
 }
 
 /// Append a batch of session reports. Mobile posts these on reconnect; web
-/// posts best-effort on unmount. Unknown book uuids are silently skipped
-/// inside the db layer (best-effort telemetry).
+/// posts best-effort on unmount. Each report is validated at the API
+/// boundary (negative durations / inverted time ranges → 400); unknown
+/// book uuids are silently skipped inside the db layer (best-effort
+/// telemetry). `recorded` reflects the **inserted** row count so callers
+/// can tell which queued reports actually persisted.
 pub(super) async fn post_sessions(
     user: AuthUser,
     State(state): State<AppState>,
     Json(reports): Json<Vec<SessionReport>>,
 ) -> Response {
     for r in &reports {
-        if let Err(e) = db::progress::record_session(&state.pool, user.id, r).await {
-            return internal("record_session", e);
+        if let Err(msg) = r.validate() {
+            return (axum::http::StatusCode::BAD_REQUEST, msg).into_response();
         }
     }
-    Json(serde_json::json!({ "recorded": reports.len() })).into_response()
+    let mut inserted = 0usize;
+    for r in &reports {
+        match db::progress::record_session(&state.pool, user.id, r).await {
+            Ok(true) => inserted += 1,
+            Ok(false) => {}
+            Err(e) => return internal("record_session", e),
+        }
+    }
+    Json(serde_json::json!({ "recorded": inserted })).into_response()
 }
 
 #[cfg(test)]
@@ -124,6 +135,35 @@ mod tests {
         let body = serde_json::json!({
             "book_uuid": "anything",
             "format": "epub",
+        });
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/progress")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn api_post_progress_rejects_cross_format_field() {
+        // `{format:"epub", audio_position_seconds:…}` must 400 at the
+        // boundary so the migration's CHECK doesn't surface as a 500
+        // (issue: copilot review on #300).
+        let (app, _state, pool) = fixture().await;
+        let user = auth_test_support::create_user(&pool, "alice").await;
+        let token = auth_test_support::bearer_token(&pool, user.id).await;
+        let body = serde_json::json!({
+            "book_uuid": "anything",
+            "format": "epub",
+            "epub_cfi": "epubcfi(/6/4!/4/2/1:0)",
+            "audio_position_seconds": 12.0,
         });
         let res = app
             .oneshot(
@@ -265,5 +305,61 @@ mod tests {
         let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["recorded"], 1);
+    }
+
+    #[tokio::test]
+    async fn api_post_sessions_reports_only_inserted_when_some_skipped() {
+        // One real uuid + one unknown uuid. Handler must report
+        // `recorded: 1`, not 2 — silently-skipped reports are tracked
+        // separately so the mobile client can detect data loss (issue:
+        // copilot review on #300).
+        let (app, _state, pool) = fixture().await;
+        let (_, uuid) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
+        let user = auth_test_support::create_user(&pool, "alice").await;
+        let token = auth_test_support::bearer_token(&pool, user.id).await;
+        let body = serde_json::json!([
+            { "book_uuid": uuid,             "format": "epub", "started_at": 100, "ended_at": 460, "progress_units": 360 },
+            { "book_uuid": "no-such-uuid",   "format": "epub", "started_at": 100, "ended_at": 460, "progress_units": 360 },
+        ]);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/progress/sessions")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["recorded"], 1);
+    }
+
+    #[tokio::test]
+    async fn api_post_sessions_rejects_inverted_time_range() {
+        let (app, _state, pool) = fixture().await;
+        let (_, uuid) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
+        let user = auth_test_support::create_user(&pool, "alice").await;
+        let token = auth_test_support::bearer_token(&pool, user.id).await;
+        let body = serde_json::json!([
+            { "book_uuid": uuid, "format": "epub", "started_at": 500, "ended_at": 200, "progress_units": 0 }
+        ]);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/progress/sessions")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     }
 }
