@@ -243,7 +243,15 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                             {value.chars().filter(|c| c.is_uppercase()).take(2).collect::<String>()}
                         }
                     }
-                    "{value}"
+                    // The label is its own element (not a bare text node) so
+                    // the chip exposes a node whose text is *exactly* the
+                    // value — `getByText(value, { exact: true })` in the E2E
+                    // specs would otherwise match nothing, since the chip
+                    // `div` also contains the avatar initials and the remove
+                    // button's "✕". Visually identical: `.chip` is an
+                    // inline-flex row, so the span is the same flex item the
+                    // bare text already was.
+                    span { class: "me-chip-label", "{value}" }
                     button {
                         class: "me-chip-remove",
                         "aria-label": "{props.aria_remove_prefix} {value}",
