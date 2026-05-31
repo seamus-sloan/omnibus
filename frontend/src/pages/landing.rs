@@ -22,8 +22,8 @@ use toolbar::Toolbar;
 ///
 /// Hydrates the configured ebook library once, then renders either a dense
 /// table or a cover grid. Sort and filter happen entirely client-side over
-/// the hydrated list (per F1.3 spec for libraries up to ~10k books). View
-/// mode + sort + filters persist per library path via [`view_prefs`].
+/// the hydrated list (for libraries up to ~10k books). View mode + sort +
+/// filters persist per library path via [`view_prefs`].
 #[component]
 pub fn LandingPage() -> Element {
     let server_url = use_server_url();

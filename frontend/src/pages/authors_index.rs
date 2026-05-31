@@ -1,5 +1,5 @@
-//! Authors index page (F1.12). Lists every author in the library as a
-//! browsable surface, mirroring the `AuthorsIndex` design comp from
+//! Authors index page. Lists every author in the library as a browsable
+//! surface, mirroring the `AuthorsIndex` design comp from
 //! `screens/indices.jsx`.
 
 use dioxus::prelude::*;

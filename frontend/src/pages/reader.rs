@@ -1,19 +1,11 @@
-//! F2.2 barebones EPUB reader — immersive, full-screen reading surface.
-//!
+//! Barebones EPUB reader — an immersive, full-screen reading surface.
 //! Loads epub.js (+ JSZip) as classic sibling scripts and the vendored
-//! `epub-reader-glue.js`, which exposes `window.OmnibusReader`. The Rust side
-//! drives it through `dioxus::document::eval`, streams the EPUB bytes from the
-//! cookie-gated `GET /api/ebooks/:uuid/file` route, and persists the current
-//! position (an opaque EPUB CFI) through [`crate::reader_progress`].
-//!
-//! The chrome (back, font −/+, theme buttons, prev/next) renders on every
-//! target so SSR/mobile builds compile; the JS interop that actually mounts a
-//! book is web-only (`#[cfg(feature = "web")]`). Theme changes flow into the
-//! reader via a `use_effect` on the shared `Theme` signal so the in-iframe
-//! content tracks the app theme.
-//!
-//! Position persistence is localStorage-only for now (web) — superseded by the
-//! server-backed F2.1 progress-sync endpoint when that lands.
+//! `epub-reader-glue.js`, which exposes `window.OmnibusReader`. The Rust
+//! side drives it through `dioxus::document::eval`, streams the EPUB bytes
+//! from the cookie-gated `GET /api/ebooks/:uuid/file` route, and persists
+//! the current position (an opaque EPUB CFI) through
+//! [`crate::reader_progress`]. The chrome compiles on every target; the
+//! JS interop that mounts a book is web-only.
 
 use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]

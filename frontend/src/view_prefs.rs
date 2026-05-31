@@ -1,13 +1,10 @@
-//! Per-library view-preference persistence for [`ViewPrefs`].
-//!
-//! Web persists to `localStorage` keyed by library path; mobile keeps an
-//! in-memory map (resets on cold launch — explicit MVP choice in F1.3 plan,
-//! to be replaced when a server-backed `/api/user/view-prefs` lands); server
-//! (SSR) always returns defaults so the rendered markup matches what the
-//! WASM client paints on first hydration.
-//!
-//! Shape lives in `omnibus-shared` so a future server endpoint can reuse the
-//! same JSON contract.
+//! Per-library view-preference persistence for [`ViewPrefs`]. Web persists
+//! to `localStorage` keyed by library path; mobile keeps an in-memory map
+//! (resets on cold launch — MVP choice, to be replaced when a
+//! server-backed `/api/user/view-prefs` lands); server (SSR) always
+//! returns defaults so the rendered markup matches what the WASM client
+//! paints on first hydration. Shape lives in `omnibus-shared` so a future
+//! server endpoint can reuse the same JSON contract.
 
 use omnibus_shared::ViewPrefs;
 

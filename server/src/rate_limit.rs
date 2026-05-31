@@ -51,7 +51,7 @@ const MAX_BUCKETS: usize = 10_000;
 /// `OMNIBUS_TRUST_FORWARDED_FOR={1,true,yes}`). Exposed `pub` so the server
 /// entrypoint can emit a startup warning — enabling this without a trusted
 /// reverse proxy in front of Axum lets any client rotate the header per
-/// request and defeats the per-IP limiter entirely (#278).
+/// request and defeats the per-IP limiter entirely.
 pub fn trust_forwarded_for() -> bool {
     matches!(
         std::env::var("OMNIBUS_TRUST_FORWARDED_FOR").as_deref(),
@@ -169,7 +169,7 @@ pub async fn rate_limit_by_ip(
 ///
 /// Bucket map is shared with whatever limiter is passed in. `main.rs` passes the
 /// *same* `Arc` here and to the REST `/api/search/*` layer so both search
-/// families share one per-IP budget (#249).
+/// families share one per-IP budget.
 pub async fn rate_limit_paths(
     State((limiter, prefixes)): State<(Arc<RateLimiter>, Arc<Vec<&'static str>>)>,
     req: Request,

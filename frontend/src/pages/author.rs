@@ -316,18 +316,13 @@ fn render_author(
     }
 }
 
-/// F5.9-lite (issue #159) confirmation modal for the admin "Delete
-/// author" action. On confirm, hits the `rpc_delete_author` server fn
-/// (which un-links every book, inserts the name into
-/// `ignored_authors`, and refreshes FTS) then navigates back to
-/// `/authors`. The blocklist insert is what makes the delete durable
-/// across reindexes — without it the next `Task::Scan` would silently
-/// recreate the row from the OPF metadata.
-///
-/// Web-only — the matching `data::delete_author` is gated
-/// `not(feature = "mobile")` per the F5.9-lite plan's admin-web-only v1
-/// scope. Mobile admins can fall back to the F5.1 detail page for
-/// per-book edits.
+/// Confirmation modal for the admin "Delete author" action. On confirm,
+/// hits the `rpc_delete_author` server fn (which un-links every book,
+/// inserts the name into `ignored_authors`, and refreshes FTS) then
+/// navigates back to `/authors`. The blocklist insert is what makes the
+/// delete durable across reindexes — without it the next `Task::Scan`
+/// would silently recreate the row from the OPF metadata. Web-only;
+/// mobile admins fall back to the per-book metadata edit page.
 #[cfg(not(feature = "mobile"))]
 #[component]
 fn AuthorDeleteModal(

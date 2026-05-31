@@ -1,4 +1,4 @@
-//! Background-worker primitive (F0.5).
+//! Background-worker primitive.
 //!
 //! Single-process queue with two fairness knobs:
 //! - `scan_concurrency` caps how many `Task::Scan` / `Task::ScanAudiobooks`

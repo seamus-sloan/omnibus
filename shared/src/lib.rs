@@ -70,7 +70,7 @@ pub struct Identifier {
 /// time (creators first, then contributors in source order). The normalized
 /// schema stores them in the same `books_authors_link` table, so they are
 /// indistinguishable on read — a separate wire field would always serialize
-/// as empty. See issue #174.
+/// as empty.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EbookMetadata {
     pub id: i64,
@@ -120,20 +120,19 @@ pub struct EbookMetadata {
 
     pub error: Option<String>,
 
-    /// True when user-supplied metadata overrides (F5.1) are active for this
-    /// book. The detail page uses this to show a "has overrides" indicator and
+    /// True when user-supplied metadata overrides are active for this book.
+    /// The detail page uses this to show a "has overrides" indicator and
     /// offer a revert action.
     #[serde(default)]
     pub has_override: bool,
 }
 
-/// User-supplied metadata overrides (F5.1). JSON-serialized into the
+/// User-supplied metadata overrides. JSON-serialized into the
 /// `metadata_overrides.overrides` column. Each field, when `Some`, replaces
 /// the corresponding scanned value at read time.
 ///
-/// M2M fields (`creators`, `subjects`) replace entirely when present — a tag
-/// list override replaces, not appends (per roadmap: "A tag list override
-/// should replace, not append").
+/// M2M fields (`creators`, `subjects`) replace entirely when present — a
+/// tag list override replaces, not appends.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MetadataOverrides {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -404,7 +403,7 @@ pub struct AuthorDetail {
     pub has_photo: bool,
 }
 
-/// Result of an admin-triggered "Scan for picture" run (F1.11). The endpoint
+/// Result of an admin-triggered "Scan for picture" run. The endpoint
 /// clears any cached row and runs the Open Library cascade inline; a
 /// `false` here means Open Library had nothing to offer for this author
 /// and a sticky `letter` marker has been written to skip future
@@ -432,9 +431,9 @@ pub struct TagWeight {
     pub count: usize,
 }
 
-/// Lightweight author row for the `/authors` index (F1.12). Carries only
-/// what the card needs — no joined book list. The detail page
-/// (`AuthorDetail`) is fetched on click.
+/// Lightweight author row for the `/authors` index. Carries only what the
+/// card needs — no joined book list. The detail page (`AuthorDetail`) is
+/// fetched on click.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuthorSummary {
     pub id: i64,
@@ -446,8 +445,8 @@ pub struct AuthorSummary {
     /// — the UI falls back to the theme accent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent: Option<String>,
-    /// F1.11: `true` when a usable profile photo is cached for this author
-    /// (a `manual` or `openlibrary` row in `author_photos`). Same semantics
+    /// `true` when a usable profile photo is cached for this author (a
+    /// `manual` or `openlibrary` row in `author_photos`). Same semantics
     /// as `AuthorDetail::has_photo` — `'letter'` negative-cache rows do
     /// not set this flag. Lets the `/authors` index render a real `<img>`
     /// in one round trip instead of fetching the detail payload per card.
@@ -455,9 +454,9 @@ pub struct AuthorSummary {
     pub has_photo: bool,
 }
 
-/// Lightweight series row for the `/series` index (F1.12). Carries the
-/// primary author of the series (first book's first creator) so the card
-/// can render the by-line without a second fetch.
+/// Lightweight series row for the `/series` index. Carries the primary
+/// author of the series (first book's first creator) so the card can
+/// render the by-line without a second fetch.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SeriesSummary {
     pub id: i64,
@@ -685,11 +684,11 @@ pub struct LoginResponse {
     pub token: Option<String>,
 }
 
-/// Discriminant for [`TaskProgress`] entries (F0.5 worker). Mirrors the
-/// payload-less shape of the server-side `Task` enum so the wire protocol
-/// stays decoupled from the runtime `Task` type's lifetimes and handler
-/// closures. `#[non_exhaustive]` so future worker actions (e.g. F5.9
-/// `DetectCleanup`) can be added without breaking client matches.
+/// Discriminant for [`TaskProgress`] entries. Mirrors the payload-less
+/// shape of the server-side `Task` enum so the wire protocol stays
+/// decoupled from the runtime `Task` type's lifetimes and handler
+/// closures. `#[non_exhaustive]` so future worker actions can be added
+/// without breaking client matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -755,10 +754,10 @@ pub struct TaskProgress {
 
 /// Aggregate progress feed served from `POST /api/rpc/worker_status`.
 ///
-/// Two-vec split mirrors the F0.5 design doc shape: callers can short-circuit
-/// the "do I need a fade timer?" check by inspecting `recent_complete.is_empty()`
-/// without scanning `active`. Both vecs are sorted by `task_id` for stable
-/// list rendering across polls.
+/// Two-vec split lets callers short-circuit the "do I need a fade timer?"
+/// check by inspecting `recent_complete.is_empty()` without scanning
+/// `active`. Both vecs are sorted by `task_id` for stable list rendering
+/// across polls.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkerStatus {
     pub active: Vec<TaskProgress>,

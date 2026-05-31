@@ -7,14 +7,13 @@
 //! rest of the library. This output is consumed by [`crate::indexer`],
 //! which writes it to the DB.
 //!
-//! Cover sourcing (F0.6): a `cover.{jpg,jpeg,png}` (or per-stem
+//! Cover sourcing: a `cover.{jpg,jpeg,png}` (or per-stem
 //! `<basename>.{jpg,jpeg,png}`) sidecar next to the epub is preferred over
 //! the embedded cover. With [`ScanOptions::materialize_sidecars`] set, the
 //! scanner extracts the embedded cover into a `<basename>.jpg`/`.png`
 //! sidecar on first encounter so subsequent scans skip the zip altogether.
-//! Materialization is best-effort: a write failure (read-only fs,
-//! permission denied) falls back to the in-memory embedded bytes for the
-//! current scan and retries on the next one.
+//! Materialization is best-effort: a write failure falls back to the
+//! in-memory embedded bytes for the current scan and retries on the next.
 
 use std::path::Path;
 

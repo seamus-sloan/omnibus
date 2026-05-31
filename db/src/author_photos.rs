@@ -1,18 +1,9 @@
-//! F1.11 Author profile photo resolver.
-//!
-//! Runs the manual → Open Library → letter cascade for a given author and
-//! persists the result in `author_photos`. Driven by
-//! [`crate::worker::Task::ResolveAuthorPhoto`], which gives us:
-//!   - at most one in-flight resolution per author (per-resource keyed
-//!     mutex),
-//!   - background execution, so the page renders the letter avatar
-//!     immediately and upgrades on the next visit.
-//!
-//! Cache semantics: a `'letter'` row is written on any miss (network
-//! error, Open Library has no match, sub-1KB image, non-image bytes) and
-//! sticks until an admin clears it via `DELETE /api/authors/:id/photo`.
-//! This keeps a single page-view from costing two HTTP round-trips on
-//! every refresh for authors who genuinely have no Open Library entry.
+//! Author profile photo resolver. Runs the manual → Open Library → letter
+//! cascade for a given author and persists the result in `author_photos`.
+//! Driven by [`crate::worker::Task::ResolveAuthorPhoto`] so resolutions
+//! run in the background with at most one in-flight per author. Any miss
+//! writes a sticky `'letter'` row so subsequent page loads don't pay the
+//! network round-trip again until an admin clears it.
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::OnceLock;
@@ -420,17 +411,11 @@ async fn validated_resolve(url: &str) -> Result<(String, Vec<SocketAddr>), Fetch
 /// the raw bytes and the server-advertised content-type; callers are
 /// expected to run magic-byte sniffing on the bytes before persisting.
 ///
-/// Used by the "paste image URL" branch of the author photo edit modal
-/// (F1.11 follow-up). Lives next to [`fetch_open_library`] because it
-/// reuses the same `reqwest` setup and shares the "we expect an image"
-/// surface area.
-///
-/// **SSRF guard (issue #275).** Production callers go through
-/// [`fetch_remote_image`], which uses the default strict
-/// [`RemoteImageConfig`]: the URL's host is resolved and every resolved IP
-/// is checked against [`is_blocked_address`] *before* any TCP connect, then
-/// the `reqwest` client is built with `.resolve_to_addrs(host, validated)`
-/// so it can't be tricked into re-resolving and hitting a different IP (DNS
+/// Production callers go through the default strict [`RemoteImageConfig`]
+/// SSRF guard: the URL's host is resolved and every resolved IP is checked
+/// against [`is_blocked_address`] *before* any TCP connect, then the
+/// `reqwest` client is built with `.resolve_to_addrs(host, validated)` so
+/// it can't be tricked into re-resolving and hitting a different IP (DNS
 /// rebinding).
 pub async fn fetch_remote_image(url: &str) -> Result<(String, Vec<u8>), FetchRemoteImageError> {
     fetch_remote_image_with(url, &RemoteImageConfig::default()).await

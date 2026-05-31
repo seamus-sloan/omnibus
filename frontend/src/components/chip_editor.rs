@@ -1,30 +1,17 @@
-//! Generic add/remove chip editor with a substring-match suggestion dropdown.
-//!
-//! Used by the F5.1 metadata edit page for authors and tags, and by the
-//! F5.9-lite landing-table inline editor for the Authors column. The
-//! component renders as a sequence of chip elements followed by an
-//! input + optional dropdown — the consumer wraps the output in
-//! whatever flex container fits their layout (`me-chip-row`,
-//! `me-tag-chips`, ...).
-//!
-//! The dropdown surfaces up to [`MAX_SUGGESTIONS`] case-insensitive
-//! substring matches against `suggestions`, excluding values already
-//! present in `values`. Keyboard: ↓/↑ moves the highlight, Enter
-//! commits (highlighted suggestion when present, raw input otherwise),
-//! Escape clears the highlight. Pass an empty signal to disable the
-//! dropdown entirely and fall back to plain free-text entry.
-//!
-//! Suggestions are passed in as a [`ReadSignal`] so the component
-//! reads them by reference each render instead of taking ownership of a
-//! cloned `Vec` on every keystroke. The consumer owns the candidate pool
-//! — usually derived from a fetched list (`data::list_authors`,
-//! `data::get_tag_cloud`) or a flat-uniq of an already-loaded book list.
+//! Generic add/remove chip editor with a substring-match suggestion
+//! dropdown. Renders a sequence of chip elements followed by an
+//! input + optional dropdown so the consumer can wrap the output in
+//! whatever flex container fits their layout. The dropdown surfaces up to
+//! [`MAX_SUGGESTIONS`] case-insensitive substring matches against
+//! `suggestions`, excluding values already present in `values`. Keyboard:
+//! ↓/↑ moves the highlight, Enter commits, Escape clears. Pass an empty
+//! signal to disable the dropdown and fall back to free-text entry.
 
 use dioxus::prelude::*;
 
 /// Cap on suggestion rows. Five fits without scroll on a typical
-/// edit-row layout and matches the explicit "< 5 relevant suggestions"
-/// user requirement from the F5.9-lite plan.
+/// edit-row layout and matches the "< 5 relevant suggestions"
+/// user requirement.
 const MAX_SUGGESTIONS: usize = 5;
 
 /// One entry in the autocomplete pool. Carries the canonical name plus

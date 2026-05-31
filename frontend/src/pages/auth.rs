@@ -1,30 +1,13 @@
-//! Login and register pages for the web and mobile clients.
-//!
-//! Both pages render the same markup on every target so SSR/WASM hydration
-//! matches. Submit handlers branch on feature:
-//!
-//! * `web` — POST JSON to `/api/auth/{login,register}` via `gloo-net`; the
-//!   server sets the `omnibus_session` cookie via `Set-Cookie` and the
-//!   browser's same-origin fetch keeps it for subsequent requests.
-//! * `mobile` — POST JSON to the same endpoints via `reqwest`, with a
-//!   `client_kind` of `ios` / `android` / `bearer` so the server issues a
-//!   bearer token in the body. The token is stashed in
-//!   `data::token_store` (only present under `feature = "mobile"`, hence
-//!   this is a code-formatted reference rather than an intra-doc link)
-//!   and attached to every subsequent request. Until secure storage
-//!   lands, **debug builds only** persist the token in plaintext to
-//!   `$HOME/.omnibus-token`; release builds keep it in memory and
-//!   require re-login on each cold start. See the TODO at the top of
-//!   that module.
-//! * `server` — SSR never executes the submit closure (no interaction
-//!   happens during SSR), so this path is a compile-only stub returning a
-//!   static error.
-//!
-//! Polish ([F1.6](../../../../docs/roadmap/1-6-auth-ui.md)) wraps both
-//! pages in [`AuthShell`] and replaces the bare `settings-field` divs with
-//! the [`Field`] / [`Banner`] / [`StrengthMeter`] primitives from
-//! [`crate::components::auth`]. The visual layer is presentational only —
-//! server policy still owns password validation and session expiry.
+//! Login and register pages for the web and mobile clients. Both render
+//! the same markup on every target so SSR/WASM hydration matches; submit
+//! handlers branch on feature. Web POSTs to `/api/auth/{login,register}`
+//! and lets the server's `Set-Cookie` carry the session; mobile POSTs the
+//! same endpoints with a `client_kind` of `ios` / `android` / `bearer` so
+//! the server returns a bearer token that's stashed in
+//! `data::token_store`. SSR is a compile-only stub. The visual shell uses
+//! the [`AuthShell`] / [`Field`] / [`Banner`] / [`StrengthMeter`]
+//! primitives from [`crate::components::auth`]; server policy still owns
+//! password validation and session expiry.
 
 use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};

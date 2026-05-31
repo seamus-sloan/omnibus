@@ -1,18 +1,9 @@
 //! Worker progress indicator — polls `/api/rpc/worker_status` at 1 Hz and
 //! renders a per-task row (active scans / thumbnails / author photos)
 //! plus a transient "complete" or red error banner for terminal entries.
-//!
-//! Mounted on `/settings` directly above the Save button for v1. The
-//! component is intentionally agnostic of which page mounts it — future
-//! surfaces (e.g. F5.9 library-cleanup detection trigger) can drop the
-//! same primitive in without changes here, since the data plane already
-//! distinguishes [`TaskKind`] variants.
-//!
-//! Web-only. Mobile UI is out of scope for issue #69 v1; the mobile
-//! `data::worker_status` stub returns an empty status so callers compile.
-//! Wrapping the whole module in `#[cfg(not(feature = "mobile"))]` keeps
-//! it out of the mobile bundle entirely, mirroring how `search_palette`
-//! is gated.
+//! Mounted on `/settings` for v1 but agnostic of its host page — future
+//! surfaces can drop the primitive in without changes here. Web-only;
+//! mobile gets an empty-status stub so callers compile.
 
 #![cfg(not(feature = "mobile"))]
 
@@ -22,9 +13,9 @@ use omnibus_shared::{ProgressState, TaskKind, TaskProgress, WorkerStatus};
 use crate::{data, use_server_url};
 
 /// Polling cadence in milliseconds. Always 1 s while the component is
-/// mounted — the issue spec calls for a 1 s tick, the response is ~1 KB,
-/// and this is a self-hosted single-user app. Idle-throttling adds bug
-/// surface (when does it un-throttle?) for no measurable benefit.
+/// mounted — the response is ~1 KB and this is a self-hosted single-user
+/// app. Idle-throttling adds bug surface (when does it un-throttle?) for
+/// no measurable benefit.
 const POLL_INTERVAL_MS: u32 = 1_000;
 
 /// 1 Hz-polled worker progress strip. Renders nothing when the worker is
@@ -206,8 +197,8 @@ fn FailedRow(kind: TaskKind, message: String, on_dismiss: EventHandler<MouseEven
 /// Map a wire-protocol [`TaskKind`] to a user-facing label. `running` flips
 /// the tense ("Scanning" vs "Library scan") so the indicator reads
 /// naturally in both the in-flight and terminal contexts. New `TaskKind`
-/// variants (e.g. F5.9 cleanup detection) add one match arm here and
-/// inherit the same active/done/failed rendering for free.
+/// variants add one match arm here and inherit the same active/done/failed
+/// rendering for free.
 fn kind_label(kind: TaskKind, running: bool) -> &'static str {
     match (kind, running) {
         (TaskKind::Scan, true) => "Scanning library",

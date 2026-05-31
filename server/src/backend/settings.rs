@@ -57,7 +57,7 @@ pub(super) async fn post_settings(
 }
 
 /// Admin-only synchronous reindex: 200 on success, 409 when no library
-/// path is configured, 500 on worker failure. Regression target for #112.
+/// path is configured, 500 on worker failure.
 pub(super) async fn post_reindex(_admin: AdminUser, State(state): State<AppState>) -> Response {
     let settings = match db::get_settings(&state.pool).await {
         Ok(s) => s,

@@ -1,4 +1,4 @@
-//! F1.5 Search Palette — command-palette / Spotlight-style search overlay.
+//! Search Palette — command-palette / Spotlight-style search overlay.
 //!
 //! Replaces the inline `NavSearch` text input with a trigger **button** in the
 //! top nav. Clicking the button (or pressing `⌘K` / `Ctrl+K`) opens a floating

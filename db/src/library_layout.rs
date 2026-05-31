@@ -1,24 +1,12 @@
-//! Canonical Omnibus library layout helpers (F0.6).
-//!
-//! Omnibus writes the canonical tree as
-//! `<library_root>/<author-slug>/<title-slug>/<title-slug>.<ext>`. Only the
-//! upload path (F5.3) calls the write helpers today; the read path uses the
-//! tolerant scanner in [`crate::scanner`] / [`crate::ebook`] and the sidecar
-//! cover lookup ([`sidecar_cover_for`]).
-//!
-//! Slug rule: ASCII-fold via `deunicode`, lowercase, non-alphanumerics
-//! collapse into `-`, leading/trailing `-` trimmed, hard-cap at 80 chars on a
-//! codepoint boundary. Empty fold result falls back to `"book"` so we never
-//! produce a zero-length path component. The display name (with case,
-//! punctuation, unicode) lives in the DB — the slug is purely a filesystem
-//! artifact.
-//!
-//! Cover sidecar contract: `cover.jpg` (or per-stem `<basename>.jpg`) sitting
-//! next to an ebook is the *single* source of truth for that book's cover
-//! after the first scan. The scanner materializes the embedded cover into
-//! that file once, then never re-reads the zip. This is opportunistic — a
-//! read-only filesystem is handled by falling back to the in-memory embedded
-//! bytes for the current scan and retrying on the next one.
+//! Canonical Omnibus library layout helpers. The canonical tree is
+//! `<library_root>/<author-slug>/<title-slug>/<title-slug>.<ext>`; slugs
+//! ASCII-fold via `deunicode`, lowercase, collapse non-alphanumerics into
+//! `-`, and cap at 80 chars on a codepoint boundary (empty result falls
+//! back to `"book"`). A `cover.jpg` (or per-stem `<basename>.jpg`) sidecar
+//! next to an ebook is the single source of truth for that book's cover
+//! after the first scan; the scanner materializes the embedded cover once
+//! and never re-reads the zip, falling back to in-memory bytes on a
+//! read-only filesystem.
 
 use std::path::{Path, PathBuf};
 
@@ -96,8 +84,7 @@ pub fn canonical_path(library_root: &Path, author: &str, title: &str, ext: &str)
 /// matters on flat-dump libraries with thousands of files in one folder,
 /// where each `read_dir` is O(files-in-folder). The case-insensitive
 /// `read_dir` scans remain as fallbacks so the matching contract is unchanged
-/// — the only observable difference is fewer syscalls on the common case
-/// (F0.6 / #52).
+/// — the only observable difference is fewer syscalls on the common case.
 ///
 /// Note: "direct-path probe" rather than "exact-case lookup" because
 /// `is_file()` on a case-insensitive filesystem (APFS, NTFS) will match a
@@ -186,9 +173,9 @@ fn find_with_extensions(dir: &Path, base: &str) -> Option<PathBuf> {
 /// the title-slug component until an unused folder is found, and place the
 /// file inside that suffixed folder.
 ///
-/// This is the upload-time helper for F5.3. F0.6 ships it with tests but no
-/// caller. An empty `ext` is rejected with `InvalidInput` — uploads must
-/// know the format they're storing.
+/// Upload-time helper, kept covered by tests even though no caller wires
+/// it in yet. An empty `ext` is rejected with `InvalidInput` — uploads
+/// must know the format they're storing.
 pub fn allocate_canonical_path(
     library_root: &Path,
     author: &str,

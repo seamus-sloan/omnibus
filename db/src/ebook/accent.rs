@@ -4,11 +4,11 @@
 /// covers while bounding the decode allocation against a crafted EPUB.
 const MAX_EMBEDDED_COVER_BYTES: usize = 20 * 1024 * 1024;
 
-/// F1.7 Atrium: extract a representative accent color from cover bytes.
-/// Returns an `oklch(L C H)` string clamped to a readable band, or `None`
-/// when decoding fails or the cover has no chromatic content. See the
-/// [Atrium design doc](../../../docs/design/atrium-design-system.md) §2b
-/// for the algorithm rationale (hue-bucket → highest-weighted → OKLCH).
+/// Extract a representative accent color from cover bytes. Returns an
+/// `oklch(L C H)` string clamped to a readable band, or `None` when decoding
+/// fails or the cover has no chromatic content. The algorithm hue-buckets
+/// the pixels, picks the highest-weighted bucket, and converts to OKLCH —
+/// see `docs/design/atrium-design-system.md` §2b for the rationale.
 pub fn extract_accent(bytes: &[u8]) -> Option<String> {
     if bytes.is_empty() {
         return None;

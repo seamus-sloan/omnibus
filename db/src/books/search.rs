@@ -42,7 +42,7 @@ pub async fn search_books(
 /// total comes from a scalar `(SELECT COUNT(*) FROM matches)` over it. Used by
 /// the REST search handler and the RPC search server function so neither has
 /// to issue a second `count_search_books` query. Empty/oversized `q` is handled
-/// identically to `search_books` and yields `(vec![], 0)`. Issue #241.
+/// identically to `search_books` and yields `(vec![], 0)`.
 pub async fn search_books_with_total(
     pool: &SqlitePool,
     library_path: &str,
@@ -226,7 +226,7 @@ pub async fn search_books_with_total(
 
 /// Total number of FTS5 hits for `q` under `library_path` (before the
 /// `MAX_BOOKS_RETURNED` cap is applied). Empty/whitespace `q` returns 0
-/// to mirror `search_books`. Issue #81.
+/// to mirror `search_books`.
 pub async fn count_search_books(
     pool: &SqlitePool,
     library_path: &str,

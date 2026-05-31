@@ -1,4 +1,4 @@
-//! Atrium design-system primitives (F1.7).
+//! Atrium design-system primitives.
 //!
 //! The CSS lives in [`frontend/assets/atrium.css`](../../assets/atrium.css);
 //! this module exposes the Dioxus components that consume those classes.
@@ -102,8 +102,8 @@ pub fn AtriumRoot(children: Element) -> Element {
 
 /// Book cover. Renders the real image when one exists, otherwise a stylized
 /// "plate" template using the book's title + author metadata on a neutral
-/// grey ground (the per-book accent only tints real-image theming, never the
-/// missing-cover plate — see issue #92).
+/// grey ground (the per-book accent only tints real-image theming, never
+/// the missing-cover plate).
 ///
 /// The `--accent` custom property is set inline from the book's extracted
 /// accent color (or left to inherit the page-level default). Consumers who
