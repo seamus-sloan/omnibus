@@ -1,3 +1,9 @@
+//! Per-route page components.
+//!
+//! One submodule per top-level route in [`crate::Route`]. Each `pub use`
+//! below re-exports the page component the router instantiates; flow logic
+//! (data fetching, signal effects) lives inside the page modules.
+
 mod auth;
 mod author;
 mod authors_index;

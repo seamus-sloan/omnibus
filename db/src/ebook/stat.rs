@@ -1,3 +1,9 @@
+//! Phase A of the ebook scan: cheap filesystem stat per file.
+//!
+//! Emits one [`StatEntry`] per ebook file under the library root without
+//! opening the zip or parsing the OPF. The incremental diff in
+//! [`crate::ebook`] consumes these to classify entries against `book_files`.
+
 use std::path::{Path, PathBuf};
 
 /// Phase A output: a single filesystem stat row, with no zip open or OPF

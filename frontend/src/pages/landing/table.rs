@@ -1,3 +1,9 @@
+//! Power-user table view for the landing page.
+//!
+//! Dense `<table>` rendering with inline-editable authors / title / tags
+//! for admins. Used by [`super::LandingPage`] when the view-mode toggle is
+//! set to table.
+
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
 use omnibus_shared::{Contributor, EbookMetadata, MetadataOverrides, SortDir, SortKey, ViewPrefs};

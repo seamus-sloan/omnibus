@@ -1,3 +1,9 @@
+//! Web top navigation bar.
+//!
+//! Brand link, primary section links (Library / Authors / Series), the
+//! search-palette trigger, and the user menu. Mounted by
+//! [`crate::ScreenLayout`] on every web route except the immersive reader.
+
 use dioxus::prelude::*;
 use dioxus_router::{use_route, Link};
 

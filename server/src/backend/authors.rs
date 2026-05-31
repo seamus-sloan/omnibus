@@ -1,3 +1,9 @@
+//! `/api/authors/*` handlers.
+//!
+//! Cookie-gated reads that return the authors index and per-author detail.
+//! Detail reads also enqueue a background `ResolveAuthorPhoto` task when
+//! the author has no cached photo yet.
+
 use axum::{
     extract::{Path, State},
     response::{IntoResponse, Response},

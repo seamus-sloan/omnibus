@@ -1,3 +1,9 @@
+//! Settings page (`/settings`) — library-path form + live file summaries.
+//!
+//! Admin-only. Hydrates the saved [`Settings`], lets the admin point Omnibus
+//! at ebook / audiobook directories, and shows recursive per-extension
+//! counts via the scanner so changes can be eyeballed before saving.
+
 use dioxus::prelude::*;
 use omnibus_shared::{LibraryContents, LibrarySection, Settings};
 
