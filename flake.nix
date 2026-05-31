@@ -130,6 +130,22 @@
               export CARGO_TARGET_DIR="$HOME/.cache/cargo-target/$(basename "$_cargo_root")"
             fi
 
+            # Per-workspace stable PORT — each known `jj workspace` gets its
+            # own base port so three agents in three workspaces don't compete
+            # for the same port. scripts/dev-server-up.sh port-walks within
+            # $PORT..$PORT+9 as a fallback for foreign-process / sibling
+            # collisions. Override by exporting PORT before `nix develop`.
+            if [ -z "''${PORT:-}" ]; then
+              _ws_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+              case "$(basename "$_ws_root")" in
+                omnibus)        export PORT=3000 ;;
+                omnibus-xray)   export PORT=3010 ;;
+                omnibus-yankee) export PORT=3020 ;;
+                omnibus-zulu)   export PORT=3030 ;;
+                *)              export PORT=3000 ;;  # fallback for any other checkout
+              esac
+            fi
+
             # Pin Playwright's Chromium to the Nix store so no per-user
             # download lands in ~/Library/Caches/ms-playwright/. The npm
             # @playwright/test version must match this bundle's version.

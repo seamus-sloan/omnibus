@@ -33,6 +33,12 @@ fn main() {
             // though the process has been up for seconds — misleading for
             // the rebuild-detection use case.
             backend::init_build_id();
+            // Capture the workspace root (current working directory at
+            // boot) so /api/_health can announce which `jj` worktree this
+            // server belongs to. scripts/dev-server-up.sh uses this to
+            // distinguish "my workspace's server" from "a sibling
+            // workspace's server bound to the port I want".
+            backend::init_repo_root();
 
             if rate_limit::trust_forwarded_for() {
                 tracing::warn!(
