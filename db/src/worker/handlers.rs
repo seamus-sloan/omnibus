@@ -1,0 +1,101 @@
+//! Per-task-kind handlers. `Worker::execute` is the single dispatch
+//! match — each arm pulls the inputs out of a [`Task`] variant and calls
+//! the owning module (`indexer::reindex`, `author_photos::resolve`,
+//! `thumbs::ensure_thumbnails_sync`).
+
+use super::types::{Task, TaskOutcome, Worker};
+
+impl Worker {
+    pub(super) async fn execute(&self, task: Task) -> TaskOutcome {
+        match task {
+            Task::Scan { library_path } => {
+                match crate::indexer::reindex(&self.pool, &library_path).await {
+                    Ok(()) => TaskOutcome::Ok,
+                    Err(e) => TaskOutcome::Err(e.to_string()),
+                }
+            }
+            Task::ScanAudiobooks { library_path } => {
+                match crate::indexer::reindex_audiobooks(&self.pool, &library_path).await {
+                    Ok(()) => TaskOutcome::Ok,
+                    Err(e) => TaskOutcome::Err(e.to_string()),
+                }
+            }
+            Task::HlsTranscode {
+                book_id,
+                book_file_id,
+                library_path,
+                profile,
+            } => {
+                match crate::hls::transcode_book(
+                    &self.pool,
+                    book_id,
+                    book_file_id,
+                    &library_path,
+                    &profile,
+                )
+                .await
+                {
+                    Ok(()) => TaskOutcome::Ok,
+                    Err(e) => TaskOutcome::Err(e.to_string()),
+                }
+            }
+            Task::ResolveAuthorPhoto { author_id } => {
+                match crate::author_photos::resolve(&self.pool, author_id).await {
+                    Ok(()) => TaskOutcome::Ok,
+                    Err(e) => TaskOutcome::Err(e.to_string()),
+                }
+            }
+            Task::GenerateThumbs {
+                book_id,
+                last_modified_epoch,
+            } => {
+                let pool = self.pool.clone();
+                let cover = match crate::covers::get_cover(&pool, book_id).await {
+                    Ok(Some((_mime, bytes))) => bytes,
+                    Ok(None) => {
+                        return TaskOutcome::Err(format!("no cover for book {book_id}"));
+                    }
+                    Err(e) => return TaskOutcome::Err(e.to_string()),
+                };
+                let cap = crate::thumbs::cap_bytes();
+                match tokio::task::spawn_blocking(move || {
+                    crate::thumbs::ensure_thumbnails_sync(book_id, last_modified_epoch, cover)?;
+                    crate::thumbs::evict_if_over_cap(cap)
+                        .map_err(|e| crate::thumbs::ThumbError::Io(e.to_string()))
+                })
+                .await
+                {
+                    Ok(Ok(())) => TaskOutcome::Ok,
+                    Ok(Err(e)) => TaskOutcome::Err(e.to_string()),
+                    Err(join_err) => {
+                        // `JoinError` covers both panics and cancellation —
+                        // distinguish so the log doesn't lie about which one.
+                        let kind = if join_err.is_panic() {
+                            "panicked"
+                        } else {
+                            "was cancelled"
+                        };
+                        TaskOutcome::Err(format!("spawn_blocking {kind}: {join_err}"))
+                    }
+                }
+            }
+            #[cfg(test)]
+            Task::Test {
+                tag: _,
+                latency_ms,
+                on_run,
+                on_done,
+                ..
+            } => {
+                if let Some(f) = on_run.as_ref() {
+                    f();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(latency_ms)).await;
+                if let Some(f) = on_done.as_ref() {
+                    f();
+                }
+                TaskOutcome::Ok
+            }
+        }
+    }
+}

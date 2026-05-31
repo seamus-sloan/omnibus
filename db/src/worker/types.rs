@@ -1,0 +1,290 @@
+//! Public type surface and shared helpers for the worker.
+//!
+//! Owns `Task` / `TaskOutcome` / `TaskId` / `WorkerConfig`, the `Worker`
+//! struct + constructor, the internal `ProgressEntry`, the
+//! `TERMINAL_RETENTION` knob, and the `lock_unpoison` / `wall_clock_ms`
+//! helpers every other sibling module reaches for.
+
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use omnibus_shared::{TaskKind, TaskProgress};
+use sqlx::SqlitePool;
+use tokio::sync::{watch, Mutex, Semaphore};
+
+/// How long a terminal ([`omnibus_shared::ProgressState::Done`] /
+/// [`omnibus_shared::ProgressState::Failed`]) entry sticks around in
+/// [`Worker::progress_snapshot`] after its `terminal_at` timestamp before
+/// lazy eviction drops it. Long enough that a 1 Hz polling client always
+/// observes the transition; short enough that the in-memory map stays
+/// bounded by current concurrency + a handful of recently-finished tasks.
+pub(super) const TERMINAL_RETENTION: Duration = Duration::from_secs(10);
+
+/// A unit of background work handed to [`Worker::post`].
+///
+/// Each variant carries the inputs its handler needs and determines two
+/// scheduling properties via the private `resource_key` / `uses_scan_sem`
+/// helpers: which per-resource keyed mutex (if any) serializes it against
+/// peers, and whether it counts against the scan-concurrency semaphore.
+/// See [`Worker`] for how those interact.
+///
+/// `#[non_exhaustive]` so adding a variant is not a breaking change for
+/// downstream `match`es; new variants must wire up both scheduling helpers
+/// and the `execute` dispatch arm.
+#[non_exhaustive]
+pub enum Task {
+    /// Reindex the library rooted at `library_path` (full scan → DB upsert
+    /// via `indexer::reindex`). Keyed on the path, so two scans of the same
+    /// library serialize while different libraries scan in parallel; counts
+    /// against the scan-concurrency semaphore.
+    Scan { library_path: String },
+    /// F2.3 sibling of [`Task::Scan`] for the audiobook library. Same
+    /// keying (one resource lock per path) and same scan-semaphore
+    /// participation; routes to [`crate::indexer::reindex_audiobooks`].
+    ScanAudiobooks { library_path: String },
+    /// (Re)generate cached WebP thumbnails for `book_id`'s cover.
+    /// `last_modified_epoch` lets the handler skip work when the cached
+    /// thumbnails are already current. Keyed on `thumb:{book_id}` and does
+    /// not consume the scan semaphore, so thumbnailing runs alongside scans.
+    GenerateThumbs {
+        book_id: i64,
+        last_modified_epoch: i64,
+    },
+    /// F1.11: resolve and cache an author's profile photo. The resolver
+    /// hits Open Library at most once per author per (admin-DELETE-able)
+    /// cache window; a `'letter'` marker is written on any miss so future
+    /// page views skip the network entirely. Keyed on
+    /// `author-photo:{author_id}` and does not consume the scan semaphore.
+    ResolveAuthorPhoto { author_id: i64 },
+    /// F2.3 HLS transcode for one `(book_id, profile)` pair. Acquires the
+    /// HLS semaphore (capped at [`WorkerConfig::hls_concurrency`]) and the
+    /// per-`(book_id, profile)` keyed mutex so duplicate transcode posts are
+    /// serialized rather than running concurrently.
+    HlsTranscode {
+        book_id: i64,
+        book_file_id: i64,
+        library_path: String,
+        profile: String,
+    },
+    /// Test-only synthetic task: sleeps `latency_ms` and invokes the
+    /// optional `on_run` / `on_done` hooks, with `resource` and
+    /// `route_through_scan_sem` letting a test exercise the keyed mutex and
+    /// scan semaphore directly. Compiled out of non-test builds.
+    #[cfg(test)]
+    Test {
+        tag: &'static str,
+        latency_ms: u64,
+        resource: Option<String>,
+        route_through_scan_sem: bool,
+        on_run: Option<Arc<dyn Fn() + Send + Sync>>,
+        on_done: Option<Arc<dyn Fn() + Send + Sync>>,
+    },
+}
+
+impl Task {
+    pub(super) fn resource_key(&self) -> Option<String> {
+        match self {
+            Task::Scan { library_path } => Some(library_path.clone()),
+            Task::ScanAudiobooks { library_path } => Some(format!("audiobooks:{library_path}")),
+            Task::GenerateThumbs { book_id, .. } => Some(format!("thumb:{book_id}")),
+            Task::ResolveAuthorPhoto { author_id } => Some(format!("author-photo:{author_id}")),
+            Task::HlsTranscode {
+                book_id, profile, ..
+            } => Some(format!("hls:{book_id}:{profile}")),
+            #[cfg(test)]
+            Task::Test { resource, .. } => resource.clone(),
+        }
+    }
+
+    pub(super) fn uses_scan_sem(&self) -> bool {
+        match self {
+            Task::Scan { .. } => true,
+            Task::ScanAudiobooks { .. } => true,
+            Task::GenerateThumbs { .. } => false,
+            Task::ResolveAuthorPhoto { .. } => false,
+            Task::HlsTranscode { .. } => false,
+            #[cfg(test)]
+            Task::Test {
+                route_through_scan_sem,
+                ..
+            } => *route_through_scan_sem,
+        }
+    }
+
+    /// `true` for tasks that should acquire the HLS concurrency semaphore.
+    pub(super) fn uses_hls_sem(&self) -> bool {
+        matches!(self, Task::HlsTranscode { .. })
+    }
+
+    /// Wire-protocol discriminant exposed to the UI via
+    /// [`Worker::progress_snapshot`]. Tests deliberately collapse onto an
+    /// existing variant so the [`TaskKind`] enum doesn't grow a `Test` arm
+    /// that downstream UIs would have to render.
+    pub(super) fn kind(&self) -> TaskKind {
+        match self {
+            Task::Scan { .. } => TaskKind::Scan,
+            Task::ScanAudiobooks { .. } => TaskKind::Scan,
+            Task::GenerateThumbs { .. } => TaskKind::GenerateThumbs,
+            Task::ResolveAuthorPhoto { .. } => TaskKind::ResolveAuthorPhoto,
+            // Reuse Scan kind for UI display until a dedicated HLS progress
+            // widget is added.
+            Task::HlsTranscode { .. } => TaskKind::Scan,
+            #[cfg(test)]
+            Task::Test { .. } => TaskKind::Scan,
+        }
+    }
+}
+
+/// Process-local handle returned by [`Worker::post`], used to look up a
+/// task's completion via [`Worker::await_completion`]. Monotonically
+/// assigned per `Worker`; not stable across restarts and not a DB id.
+pub type TaskId = u64;
+
+/// Terminal result of a task, delivered to awaiters of its [`TaskId`].
+#[derive(Clone, Debug)]
+pub enum TaskOutcome {
+    /// The handler ran to completion successfully.
+    Ok,
+    /// The handler failed; the string is the stringified underlying error.
+    /// Also produced when the spawned task is dropped or panics before
+    /// reporting (see [`Worker::await_completion`]).
+    Err(String),
+}
+
+/// Construction-time tuning for a [`Worker`].
+#[derive(Clone, Debug)]
+pub struct WorkerConfig {
+    /// Maximum number of scan-semaphore tasks (currently [`Task::Scan`] /
+    /// [`Task::ScanAudiobooks`]) allowed to run concurrently. Clamped to at
+    /// least 1 by [`Worker::new`]. Other task types are unaffected by this cap.
+    pub scan_concurrency: usize,
+    /// Maximum number of concurrent [`Task::HlsTranscode`] jobs. Each
+    /// transcode drives one ffmpeg process; defaults to
+    /// `max(1, num_cpus / 2)` so a two-core machine runs one transcode at
+    /// a time while an eight-core machine can run four concurrently.
+    pub hls_concurrency: usize,
+}
+
+impl Default for WorkerConfig {
+    fn default() -> Self {
+        let cpus = num_cpus();
+        Self {
+            scan_concurrency: 1,
+            hls_concurrency: (cpus / 2).max(1),
+        }
+    }
+}
+
+/// Number of logical CPUs. Reads `/proc/cpuinfo` via `std::thread` so we
+/// avoid adding a `num_cpus` crate for one call site.
+fn num_cpus() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+}
+
+/// Single-process background-task runner shared behind an `Arc`.
+///
+/// Posting a [`Task`] spawns it on the tokio runtime and returns a
+/// [`TaskId`] immediately ([`post`](Worker::post) returns as soon as the
+/// task is spawned; it does not wait for the task to run to completion).
+/// Two fairness mechanisms shape execution:
+///
+/// * **Per-resource keyed mutex** — tasks reporting the same resource key
+///   (e.g. two scans of the same library path) serialize behind one
+///   another, while tasks on different keys run concurrently.
+/// * **Scan-concurrency semaphore** — scan-class tasks additionally
+///   contend for a fixed pool of permits sized by
+///   [`WorkerConfig::scan_concurrency`], capping how many run at once
+///   regardless of resource key.
+///
+/// The resource lock is always acquired before the scan permit so a task
+/// queued behind a same-resource peer never holds a permit while idle.
+/// Owns the [`SqlitePool`] its handlers run against.
+pub struct Worker {
+    pub(super) pool: SqlitePool,
+    pub(super) scan_sem: Arc<Semaphore>,
+    /// Semaphore capping concurrent `Task::HlsTranscode` runs. Separate from
+    /// `scan_sem` so HLS jobs don't compete with library scans for permits.
+    pub(super) hls_sem: Arc<Semaphore>,
+    pub(super) resource_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    pub(super) completions: Arc<StdMutex<HashMap<TaskId, watch::Receiver<Option<TaskOutcome>>>>>,
+    /// Live snapshot of every posted task's lifecycle state. Holds entries
+    /// from `post` until ~[`TERMINAL_RETENTION`] after the task reaches a
+    /// terminal state. Read path is [`Worker::progress_snapshot`]; write
+    /// paths are `post` (initial Running) and `run` (terminal Done/Failed,
+    /// plus the panic-safety guard).
+    pub(super) progress: Arc<StdMutex<BTreeMap<TaskId, ProgressEntry>>>,
+    pub(super) next_id: std::sync::atomic::AtomicU64,
+}
+
+/// Internal pairing of the wire-facing [`TaskProgress`] with a monotonic
+/// `terminal_at` timestamp used purely for eviction. We intentionally don't
+/// reuse `TaskProgress.last_update_ms` (wall-clock; can jump under NTP) for
+/// expiry decisions — that field exists only so the UI can render elapsed
+/// time.
+pub(super) struct ProgressEntry {
+    pub(super) progress: TaskProgress,
+    pub(super) terminal_at: Option<Instant>,
+}
+
+/// Recover from a poisoned `std::sync::Mutex` instead of panicking.
+///
+/// The `completions` / `progress` maps are best-effort bookkeeping that
+/// every `Task::Scan` (and every other posted task) touches on its hot
+/// path. If a thread panics while holding one of these locks — e.g. a
+/// `ProgressTerminalGuard::drop` unwinding mid-write — `std::sync::Mutex`
+/// poisons permanently, and a plain `.lock().unwrap()` would then turn that
+/// one-off panic into a process-wide crash on every subsequent task. The
+/// guarded data is just in-memory maps with no invariant left broken by a
+/// partial write, so taking the inner guard and carrying on is strictly
+/// safer than tearing down the worker. Mirrors `frontend::data`'s
+/// `unpoison` helper.
+pub(super) fn lock_unpoison<T>(m: &StdMutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Current wall-clock time in milliseconds since the UNIX epoch. Used only
+/// for the `started_at_ms` / `last_update_ms` fields on [`TaskProgress`],
+/// which the UI renders as elapsed-time hints. A backward NTP step would
+/// produce a wonky elapsed-time display for one polling tick — well within
+/// the UI's tolerance.
+pub(super) fn wall_clock_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+impl Worker {
+    /// Build a `Worker` over `pool` with the given `config`, returning it
+    /// behind an `Arc` (every method takes `&Arc<Self>` or `&self`, and
+    /// posted tasks clone the `Arc` into their spawned future).
+    pub fn new(pool: SqlitePool, config: WorkerConfig) -> Arc<Self> {
+        Arc::new(Self {
+            pool,
+            scan_sem: Arc::new(Semaphore::new(config.scan_concurrency.max(1))),
+            hls_sem: Arc::new(Semaphore::new(config.hls_concurrency.max(1))),
+            resource_locks: Arc::new(Mutex::new(HashMap::new())),
+            completions: Arc::new(StdMutex::new(HashMap::new())),
+            progress: Arc::new(StdMutex::new(BTreeMap::new())),
+            next_id: std::sync::atomic::AtomicU64::new(1),
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn completions_len(&self) -> usize {
+        self.completions.lock().unwrap().len()
+    }
+
+    #[cfg(test)]
+    pub(super) async fn resource_locks_len(&self) -> usize {
+        self.resource_locks.lock().await.len()
+    }
+
+    #[cfg(test)]
+    pub(super) fn progress_len(&self) -> usize {
+        self.progress.lock().unwrap().len()
+    }
+}
