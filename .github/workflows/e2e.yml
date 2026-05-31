@@ -71,36 +71,26 @@ jobs:
           restore-keys: |
             playwright-node-modules-${{ runner.os }}-
 
-      - name: Build, start server, and run Playwright tests
+      - name: Install Playwright npm deps
+        run: nix develop --command bash -c 'set -euo pipefail; cd ui_tests/playwright && npm ci'
+
+      - name: Bundle web app
+        run: nix develop --command bash -c 'set -euo pipefail; dx bundle --platform web --package omnibus --fullstack'
+
+      # Backgrounded with `nohup ... &` + `disown` so the server survives the
+      # step's shell exit. Subsequent steps run in fresh shells on the same
+      # runner VM, so the PID stays alive and `127.0.0.1:3000` keeps serving.
+      - name: Start server
         run: |
-          # Inside this outer single-quoted bash -c block, any embedded
-          # `'` would terminate the string, so the inner trap argument is
-          # escaped with the standard '\'' (close-outer, literal-quote,
-          # reopen-outer) sequence. Without the escape the runner shell
-          # folds the segments into `trap echo ::endgroup:: ERR`, trap
-          # prints usage on the invalid signal, and `set -e` aborts the
-          # whole job before any group runs.
           nix develop --command bash -c '
             set -euo pipefail
-            trap '\''echo "::endgroup::"'\'' ERR
-
-            echo "::group::Install Playwright npm deps"
-            cd ui_tests/playwright && npm ci && cd ../..
-            echo "::endgroup::"
-
-            echo "::group::Bundle web app"
-            dx bundle --platform web --package omnibus --fullstack
-            echo "::endgroup::"
-
-            echo "::group::Start server"
-            PORT=3000 ./target/dx/omnibus/debug/web/server >server.log 2>&1 &
+            nohup env PORT=3000 ./target/dx/omnibus/debug/web/server >server.log 2>&1 &
+            disown
             npx --yes wait-on -t 60000 http://127.0.0.1:3000
-            echo "::endgroup::"
-
-            echo "::group::Run Playwright tests"
-            cd ui_tests/playwright && npm test
-            echo "::endgroup::"
           '
+
+      - name: Run Playwright tests
+        run: nix develop --command bash -c 'set -euo pipefail; cd ui_tests/playwright && npm test'
 
       - name: Upload Playwright report
         if: failure()
