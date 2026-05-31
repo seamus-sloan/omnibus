@@ -18,12 +18,14 @@ use std::path::{Path, PathBuf};
 use omnibus_shared::{Contributor, EbookMetadata};
 
 mod cover;
+mod group;
 mod parse;
 mod stat;
 
 #[cfg(test)]
 mod tests;
 
+pub use group::{group_into_books, AudiobookGroup};
 pub use parse::{parse_audiobook_targets, AudiobookError, AudiobookParseTarget};
 pub use stat::{stat_audiobook_library, AudiobookStatEntry, AudiobookStatScanResult};
 
