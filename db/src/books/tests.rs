@@ -3,18 +3,16 @@
 //! drive `list_books` + `search_books` + `get_book` together stay co-located.
 
 use super::*;
-use crate::covers::test_helpers::CoversTempDir;
-use crate::discovery::test_helpers::{
-    author_id_by_name, seed_discovery_fixture, series_id_by_name,
-};
 use crate::ebook::IndexedBook;
 use crate::helpers::MAX_QUERY_LEN;
 use crate::metadata_overrides::upsert_metadata_overrides;
 use crate::pool::init_db;
 use crate::sync::replace_books;
-use crate::sync::test_helpers::indexed;
+use crate::test_support::{
+    author_id_by_name, indexed, seed_discovery_fixture, seed_minimal_books, series_id_by_name,
+    CoversTempDir,
+};
 use omnibus_shared::{Contributor, EbookMetadata, Identifier, MetadataOverrides};
-use sqlx::SqlitePool;
 
 // ---------- Server-side cap (issue #81) ----------
 //
@@ -22,39 +20,6 @@ use sqlx::SqlitePool;
 // `/api/ebooks` poll on a multi-thousand-book library serialized the
 // whole table. The fix is a hard `LIMIT MAX_BOOKS_RETURNED`, plus a
 // companion count helper so callers can detect truncation.
-
-/// Seed `count` minimal `books` rows under `/lib` using a recursive CTE.
-/// Bypasses `replace_books` / the indexer entirely — the cap behavior
-/// only depends on rows existing, not on full m2m relations being set
-/// up. Keeps the test runtime down to milliseconds even for 50k+ rows.
-async fn seed_minimal_books(pool: &SqlitePool, count: i64) {
-    sqlx::query("INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib')")
-        .execute(pool)
-        .await
-        .unwrap();
-    let lib_id: i64 = sqlx::query_scalar("SELECT id FROM libraries WHERE path = '/lib'")
-        .fetch_one(pool)
-        .await
-        .unwrap();
-    sqlx::query(
-        r#"
-        WITH RECURSIVE n(i) AS (
-            SELECT 1
-            UNION ALL
-            SELECT i + 1 FROM n WHERE i < ?
-        )
-        INSERT INTO books (uuid, library_id, path, title, sort)
-        SELECT 'uuid-' || i, ?, '/lib/b' || i, 'Title ' || i,
-               'Title ' || printf('%010d', i)
-          FROM n
-        "#,
-    )
-    .bind(count)
-    .bind(lib_id)
-    .execute(pool)
-    .await
-    .unwrap();
-}
 
 #[tokio::test]
 async fn library_from_db_returns_empty_for_none_path() {

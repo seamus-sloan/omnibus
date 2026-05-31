@@ -381,11 +381,10 @@ pub async fn search_palette(
 mod tests {
     use super::*;
     use crate::books::list_books;
-    use crate::covers::test_helpers::CoversTempDir;
     use crate::metadata_overrides::upsert_metadata_overrides;
     use crate::pool::init_db;
     use crate::sync::replace_books;
-    use crate::sync::test_helpers::indexed;
+    use crate::test_support::{indexed, CoversTempDir};
     use omnibus_shared::{Contributor, MetadataOverrides};
     use sqlx::SqlitePool;
 

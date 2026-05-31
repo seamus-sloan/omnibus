@@ -80,14 +80,8 @@ pub fn scan_libraries(ebook_path: Option<&str>, audiobook_path: Option<&str>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::make_test_dir;
     use std::fs;
-
-    fn make_test_dir(suffix: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("omnibus_scanner_test_{suffix}"));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("should create test dir");
-        dir
-    }
 
     #[test]
     fn list_files_with_no_path_returns_empty() {

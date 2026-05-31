@@ -235,11 +235,10 @@ pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()
 mod tests {
     use super::*;
     use crate::books::{list_books, IndexedRow};
-    use crate::covers::test_helpers::CoversTempDir;
     use crate::ebook::StatEntry;
     use crate::pool::init_db;
     use crate::sync::replace_books;
-    use crate::sync::test_helpers::indexed;
+    use crate::test_support::{indexed, CoversTempDir};
 
     /// Seed a `libraries` row for `path` with an explicit `last_indexed`
     /// epoch-seconds value. There's no public writer for `last_indexed`

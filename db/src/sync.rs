@@ -732,84 +732,16 @@ fn materialize_new_covers(new_covers: Vec<(String, String, Vec<u8>)>) {
 }
 
 #[cfg(test)]
-pub(crate) mod test_helpers {
-    //! Shared `IndexedBook` builders used by db tests across modules.
-    //! `pub(crate)` so siblings can call e.g.
-    //! `use crate::sync::test_helpers::indexed;`.
-
-    use crate::ebook::IndexedBook;
-    use omnibus_shared::{Contributor, EbookMetadata};
-
-    pub(crate) fn indexed(
-        filename: &str,
-        title: Option<&str>,
-        authors: &[&str],
-        subjects: &[&str],
-        series: Option<(&str, &str)>,
-        cover: Option<(&str, &[u8])>,
-    ) -> IndexedBook {
-        IndexedBook {
-            metadata: EbookMetadata {
-                filename: filename.into(),
-                title: title.map(Into::into),
-                creators: authors
-                    .iter()
-                    .map(|a| Contributor {
-                        name: (*a).into(),
-                        ..Default::default()
-                    })
-                    .collect(),
-                subjects: subjects.iter().map(|s| (*s).to_string()).collect(),
-                series: series.map(|(n, _)| n.into()),
-                series_index: series.map(|(_, i)| i.into()),
-                ..Default::default()
-            },
-            cover: cover.map(|(m, b)| (m.into(), b.to_vec())),
-            mtime_epoch: 0,
-            size_bytes: 0,
-        }
-    }
-    // ------------------------------------------------------------------
-    // sync_books — incremental write path. Each test seeds an initial
-    // state via `replace_books` (the legacy nuke-and-pave wrapper), then
-    // applies a hand-built `SyncPlan` to exercise one or more diff
-    // buckets and asserts the post-state.
-    // ------------------------------------------------------------------
-
-    /// Build an `IndexedBook` matching `indexed(...)` but with the
-    /// supplied (mtime_epoch, size_bytes). Used to drive the New +
-    /// Changed branches of sync_books with realistic fs metadata.
-    pub(crate) fn indexed_with_stat(
-        filename: &str,
-        title: Option<&str>,
-        mtime_epoch: i64,
-        size_bytes: i64,
-    ) -> IndexedBook {
-        IndexedBook {
-            metadata: EbookMetadata {
-                filename: filename.into(),
-                title: title.map(Into::into),
-                ..Default::default()
-            },
-            cover: None,
-            mtime_epoch,
-            size_bytes,
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
-    use super::test_helpers::{indexed, indexed_with_stat};
     use super::*;
     use crate::books::{get_book, list_books, list_indexed_rows, search_books};
     use crate::covers::get_cover;
-    use crate::covers::test_helpers::CoversTempDir;
     use crate::ebook::IndexedBook;
     use crate::helpers::stable_uuid;
     use crate::metadata_overrides::upsert_metadata_overrides;
     use crate::pool::init_db;
     use crate::settings::last_indexed_at;
+    use crate::test_support::{indexed, indexed_with_stat, CoversTempDir};
     use omnibus_shared::{Contributor, EbookMetadata, MetadataOverrides};
 
     #[tokio::test]

@@ -140,20 +140,12 @@ pub fn scan_ebook_library_with(path: Option<&str>, opts: ScanOptions) -> ScanRes
 #[cfg(test)]
 pub(crate) mod test_support {
     use std::path::Path;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// Build a unique temp directory per test invocation. Rust runs unit
-    /// tests in parallel by default, so a fixed path under `temp_dir()`
-    /// would collide between tests (and between repeated runs).
-    pub(crate) fn make_test_dir(suffix: &str) -> std::path::PathBuf {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let pid = std::process::id();
-        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("omnibus_ebook_{suffix}_{pid}_{seq}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("should create test dir");
-        dir
-    }
+    // `make_test_dir` lives in the crate-level `test_support` module so
+    // every db test reaches for the same unique-per-invocation builder.
+    // Re-export here so existing `use crate::ebook::test_support::*;`
+    // globs keep resolving without touching every callsite.
+    pub(crate) use crate::test_support::make_test_dir;
 
     /// Build an in-memory PNG of a single solid color. Used to drive
     /// `extract_accent` without baking a fixture cover into the repo.
