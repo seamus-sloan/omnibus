@@ -16,11 +16,7 @@ use crate::taxonomy::{
     resolve_or_insert_language, resolve_or_insert_publisher, resolve_or_insert_series,
 };
 
-/// Error returned by the sync write path. Wraps `sqlx::Error` so the
-/// module boundary doesn't leak SQLite implementation details — per the
-/// "never return raw `sqlx::Error` across a module boundary" rule in
-/// `.claude/rules/02-error-handling.md`. Internal `pub(crate)` helpers
-/// stay on `sqlx::Error` and are promoted at the `pub` boundary via `?`.
+/// Errors returned by the public sync write path.
 #[derive(Debug, thiserror::Error)]
 pub enum SyncError {
     #[error(transparent)]

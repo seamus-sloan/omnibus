@@ -22,12 +22,7 @@ use omnibus_shared::{AuthorDetail, SeriesDetail, TagWeight};
 use crate::books::{backfill_creator_ids, row_to_ebook, BOOK_COLUMNS};
 use crate::metadata_overrides::{apply_overrides, load_overrides_bulk};
 
-/// Error returned by the discovery-detail reads. Wraps `sqlx::Error` so
-/// the module boundary doesn't leak SQLite implementation details — per
-/// the "never return raw `sqlx::Error` across a module boundary" rule
-/// in `.claude/rules/02-error-handling.md`. `Option<T>` is preserved for
-/// missing-id semantics (callers branch on `Ok(None)`), so there is no
-/// `NotFound` variant.
+/// Errors returned by the discovery-detail reads.
 #[derive(Debug, thiserror::Error)]
 pub enum DiscoveryError {
     #[error(transparent)]

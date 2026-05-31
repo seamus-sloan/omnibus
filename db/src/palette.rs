@@ -15,10 +15,7 @@ use crate::books::parse_json_array;
 use crate::helpers::{build_fts_match, cap_query_len};
 use crate::metadata_overrides::load_overrides_bulk;
 
-/// Error returned by the search palette. Wraps `sqlx::Error` so the
-/// module boundary doesn't leak SQLite implementation details — per the
-/// "never return raw `sqlx::Error` across a module boundary" rule in
-/// `.claude/rules/02-error-handling.md`.
+/// Errors returned by the search palette.
 #[derive(Debug, thiserror::Error)]
 pub enum PaletteError {
     #[error(transparent)]
