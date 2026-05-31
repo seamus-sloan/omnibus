@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 
 use sqlx::SqlitePool;
 
-use crate::{books, ebook, sync};
+use crate::{audiobook, books, ebook, sync};
 
 /// Reindex if the last successful index is older than this. One hour is a
 /// compromise between responsiveness to on-disk changes and avoiding
@@ -217,6 +217,81 @@ pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()
         };
         let new_books = ebook::parse_ebook_targets(new_targets, opts.clone());
         let changed_books = ebook::parse_ebook_targets(changed_targets, opts);
+        (new_books, changed_books)
+    })
+    .await?;
+
+    let plan = sync::SyncPlan {
+        new_books: parsed.0,
+        changed_books: parsed.1,
+        removed_uuids: diff.removed,
+        backfill: diff.backfill,
+    };
+    sync::sync_books(pool, library_path, plan).await?;
+    Ok(())
+}
+
+/// F2.3 sibling of [`reindex`] for the audiobook library. Same diff /
+/// sync machinery — the only differences are the Phase A walker (lofty
+/// extensions instead of `.epub`) and the Phase B tag parser. The output
+/// flows through [`sync::sync_books`] unchanged; per-file `format` is
+/// derived from the extension by [`crate::helpers::split_filename`] so
+/// rows land in `book_files` as `M4B` / `M4A` / `MP3`.
+pub async fn reindex_audiobooks(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()> {
+    let path_for_scan = library_path.to_owned();
+    let library_key_for_scan = library_path.to_owned();
+    let stat = tokio::task::spawn_blocking(move || {
+        audiobook::stat_audiobook_library(Some(&path_for_scan), &library_key_for_scan)
+    })
+    .await?;
+    if let Some(msg) = stat.error {
+        anyhow::bail!("audiobook scan of {library_path} failed: {msg}");
+    }
+
+    let db_rows = books::list_indexed_rows(pool, library_path).await?;
+    let library_root: PathBuf = PathBuf::from(library_path);
+
+    // Reuse the format-agnostic diff classifier by projecting the
+    // audiobook stat shape onto the ebook one. This stays a local
+    // adapter — generalizing both paths over a trait would be larger
+    // surface for no current win.
+    let stat_as_ebook: Vec<ebook::StatEntry> = stat
+        .entries
+        .into_iter()
+        .map(|e| ebook::StatEntry {
+            filename: e.filename,
+            uuid: e.uuid,
+            mtime_epoch: e.mtime_epoch,
+            size_bytes: e.size_bytes,
+            error: e.error,
+        })
+        .collect();
+    let diff = diff_library(&stat_as_ebook, &db_rows, &library_root);
+
+    let new_targets: Vec<audiobook::AudiobookParseTarget> = diff
+        .new
+        .iter()
+        .map(|t| audiobook::AudiobookParseTarget {
+            filename: t.filename.clone(),
+            absolute: t.absolute.clone(),
+            mtime_epoch: t.mtime_epoch,
+            size_bytes: t.size_bytes,
+        })
+        .collect();
+    let changed_targets: Vec<audiobook::AudiobookParseTarget> = diff
+        .changed
+        .iter()
+        .map(|t| audiobook::AudiobookParseTarget {
+            filename: t.filename.clone(),
+            absolute: t.absolute.clone(),
+            mtime_epoch: t.mtime_epoch,
+            size_bytes: t.size_bytes,
+        })
+        .collect();
+
+    let parsed = tokio::task::spawn_blocking(move || {
+        let new_books = audiobook::parse_audiobook_targets(new_targets);
+        let changed_books = audiobook::parse_audiobook_targets(changed_targets);
         (new_books, changed_books)
     })
     .await?;

@@ -41,6 +41,10 @@ pub enum Task {
     /// library serialize while different libraries scan in parallel; counts
     /// against the scan-concurrency semaphore.
     Scan { library_path: String },
+    /// F2.3 sibling of [`Task::Scan`] for the audiobook library. Same
+    /// keying (one resource lock per path) and same scan-semaphore
+    /// participation; routes to [`crate::indexer::reindex_audiobooks`].
+    ScanAudiobooks { library_path: String },
     /// (Re)generate cached WebP thumbnails for `book_id`'s cover.
     /// `last_modified_epoch` lets the handler skip work when the cached
     /// thumbnails are already current. Keyed on `thumb:{book_id}` and does
@@ -74,6 +78,7 @@ impl Task {
     fn resource_key(&self) -> Option<String> {
         match self {
             Task::Scan { library_path } => Some(library_path.clone()),
+            Task::ScanAudiobooks { library_path } => Some(format!("audiobooks:{library_path}")),
             Task::GenerateThumbs { book_id, .. } => Some(format!("thumb:{book_id}")),
             Task::ResolveAuthorPhoto { author_id } => Some(format!("author-photo:{author_id}")),
             #[cfg(test)]
@@ -84,6 +89,7 @@ impl Task {
     fn uses_scan_sem(&self) -> bool {
         match self {
             Task::Scan { .. } => true,
+            Task::ScanAudiobooks { .. } => true,
             Task::GenerateThumbs { .. } => false,
             Task::ResolveAuthorPhoto { .. } => false,
             #[cfg(test)]
@@ -101,6 +107,7 @@ impl Task {
     fn kind(&self) -> TaskKind {
         match self {
             Task::Scan { .. } => TaskKind::Scan,
+            Task::ScanAudiobooks { .. } => TaskKind::Scan,
             Task::GenerateThumbs { .. } => TaskKind::GenerateThumbs,
             Task::ResolveAuthorPhoto { .. } => TaskKind::ResolveAuthorPhoto,
             #[cfg(test)]
@@ -579,6 +586,12 @@ impl Worker {
         match task {
             Task::Scan { library_path } => {
                 match crate::indexer::reindex(&self.pool, &library_path).await {
+                    Ok(()) => TaskOutcome::Ok,
+                    Err(e) => TaskOutcome::Err(e.to_string()),
+                }
+            }
+            Task::ScanAudiobooks { library_path } => {
+                match crate::indexer::reindex_audiobooks(&self.pool, &library_path).await {
                     Ok(()) => TaskOutcome::Ok,
                     Err(e) => TaskOutcome::Err(e.to_string()),
                 }

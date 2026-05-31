@@ -17,6 +17,8 @@ pub enum Route {
     MetadataEdit { uuid: String },
     #[route("/read/:uuid")]
     BookRead { uuid: String },
+    #[route("/listen/:uuid")]
+    BookListen { uuid: String },
     #[route("/authors")]
     AuthorsIndex {},
     #[route("/authors/:id")]
@@ -80,6 +82,16 @@ pub fn MetadataEdit(uuid: String) -> Element {
 pub fn BookRead(uuid: String) -> Element {
     rsx! {
         BookReadPage { uuid }
+    }
+}
+
+/// Route target for `/listen/:uuid` — the F2.3 immersive audiobook
+/// player. Same uuid-keyed stability + no-chrome rationale as
+/// [`BookRead`]; the player owns its own slim top bar.
+#[component]
+pub fn BookListen(uuid: String) -> Element {
+    rsx! {
+        BookListenPage { uuid }
     }
 }
 
