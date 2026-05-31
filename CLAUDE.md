@@ -23,7 +23,13 @@ Auto-discoverable skills in [.claude/skills/](.claude/skills/) — Claude Code l
 
 - [add-backend-route](.claude/skills/add-backend-route/SKILL.md) — adding an Axum page or API endpoint end-to-end.
 - [add-playwright-flow](.claude/skills/add-playwright-flow/SKILL.md) — adding a new E2E spec.
-- [ui-validate](.claude/skills/ui-validate/SKILL.md) — bring up a port-walking dev server, log in as the seeded admin, drive the browser preview, poll `/api/_health` for rebuild signal.
+- [ui-validate](.claude/skills/ui-validate/SKILL.md) — bring up a port-walking dev server, log in as the seeded admin, drive the browser, poll `/api/_health` for rebuild signal.
+
+### Browser tools
+
+When you need to drive the running web app to verify a UI change, use **[`ui-validate`](.claude/skills/ui-validate/SKILL.md)**. It uses **Claude Preview** (`mcp__Claude_Preview__preview_*`) — each agent gets its own isolated headless Chromium, so parallel agents across workspaces never share a browser.
+
+Do not use Chrome DevTools MCP or Claude in Chrome for routine agent verification — both share a single browser instance (one at a time), so they break down with parallel agents. Use `qa-browser` only when you explicitly want to watch the agent work in your real browser for a one-off session.
 
 ## Architecture
 
