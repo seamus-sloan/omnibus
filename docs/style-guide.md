@@ -358,9 +358,10 @@ use crate::pool::init_db;
 [02-error-handling.md](../.claude/rules/02-error-handling.md)). Tests
 use them freely.
 
-**`unsafe`:** not used anywhere in the workspace. If a future change
-needs it, document the invariant in a `// SAFETY:` comment and call
-it out in the PR description.
+**`unsafe`:** avoid it in production code. The current uses are test-only
+environment guards and must carry `// SAFETY:` comments explaining the
+serialization invariant. If a future production change needs unsafe,
+document the invariant and call it out in the PR description.
 
 ---
 

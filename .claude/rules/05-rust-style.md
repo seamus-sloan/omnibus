@@ -108,9 +108,9 @@ See [03-unit-testing.md](03-unit-testing.md) for the underlying rule.
 - **`unwrap()` / `expect()`** are banned in production paths (see
   [02-error-handling.md](02-error-handling.md)). Test code can use
   freely.
-- **`unsafe`**: not used anywhere in the workspace. If you need it,
-  document the invariant in a `// SAFETY:` comment and raise it in the
-  PR description.
+- **`unsafe`**: avoid it in production code. Any `unsafe` block must
+  document the invariant in a `// SAFETY:` comment, and new production
+  uses must be raised in the PR description.
 
 ## Out of scope
 
