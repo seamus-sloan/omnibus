@@ -84,13 +84,31 @@ fn FormatRow(
                             "Send to Kindle"
                         }
                     },
-                    FormatKind::M4b => rsx! {
-                        button {
-                            class: "btn",
-                            disabled: true,
-                            title: "Audio player coming soon",
-                            "data-testid": "action-listen",
-                            "Listen"
+                    FormatKind::M4b | FormatKind::Mp3 => rsx! {
+                        {
+                            // F2.3: web routes into the immersive player; mobile
+                            // stays disabled (no `<audio>` binding in the Dioxus
+                            // Native shell yet — see F6.x).
+                            #[cfg(not(feature = "mobile"))]
+                            let listen_action = rsx! {
+                                Link {
+                                    to: Route::BookListen { uuid: uuid.clone() },
+                                    class: "btn",
+                                    "data-testid": "action-listen",
+                                    "Listen"
+                                }
+                            };
+                            #[cfg(feature = "mobile")]
+                            let listen_action = rsx! {
+                                button {
+                                    class: "btn",
+                                    disabled: true,
+                                    title: "Listening on mobile coming soon",
+                                    "data-testid": "action-listen",
+                                    "Listen"
+                                }
+                            };
+                            listen_action
                         }
                     },
                     FormatKind::Other(_) => rsx! {
@@ -109,6 +127,7 @@ fn FormatRow(
 enum FormatKind {
     Epub,
     M4b,
+    Mp3,
     Other(String),
 }
 
@@ -116,8 +135,13 @@ impl FormatKind {
     fn from_raw(raw: &str) -> Self {
         if raw.eq_ignore_ascii_case("EPUB") {
             FormatKind::Epub
-        } else if raw.eq_ignore_ascii_case("M4B") {
+        } else if raw.eq_ignore_ascii_case("M4B") || raw.eq_ignore_ascii_case("M4A") {
+            // M4A is the same MPEG-4 container as M4B with a different
+            // extension; both flow through the F2.3 player and the
+            // tower-http serve handler under the same code path.
             FormatKind::M4b
+        } else if raw.eq_ignore_ascii_case("MP3") {
+            FormatKind::Mp3
         } else {
             FormatKind::Other(raw.to_string())
         }
@@ -127,6 +151,7 @@ impl FormatKind {
         match self {
             FormatKind::Epub => "EPUB",
             FormatKind::M4b => "M4B",
+            FormatKind::Mp3 => "MP3",
             FormatKind::Other(s) => s.as_str(),
         }
     }

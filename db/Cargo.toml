@@ -52,6 +52,12 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 # the DB are sanitized without a reindex.
 ammonia = "4"
 
+# F2.3 audiobook metadata: read title/artist/album/duration and embedded
+# cover artwork from m4b/m4a/mp3 (and any other container lofty supports).
+# Chosen over `mp4ameta` so mp3 works through the same Tag API without an
+# ffprobe fallback.
+lofty = "0.22"
+
 # Stable, toolchain-independent UUIDv5 derivation for cover ids (issue #94).
 # `std::collections::hash_map::DefaultHasher` is documented as subject to
 # change between Rust versions, so a toolchain bump would silently rotate

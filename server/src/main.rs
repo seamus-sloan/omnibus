@@ -79,6 +79,12 @@ fn main() {
                         worker.post(Task::Scan { library_path: path });
                     }
                 }
+                if let Some(path) = settings.audiobook_library_path {
+                    let stale = indexer::is_stale(&pool, &path).await.unwrap_or(true);
+                    if stale {
+                        worker.post(Task::ScanAudiobooks { library_path: path });
+                    }
+                }
             }
 
             // Prune sessions that can never authenticate again (revoked,
