@@ -12,8 +12,8 @@
 
 use omnibus_shared::{
     AuthorDetail, AuthorPhotoScanResult, AuthorSummary, EbookLibrary, EbookMetadata,
-    LibraryContents, MetadataOverrides, PaletteResults, SeriesDetail, SeriesSummary, Settings,
-    TagWeight, WorkerStatus,
+    LibraryContents, MetadataOverrides, PaletteResults, ProgressFormat, ProgressRecord,
+    ProgressUpdate, SeriesDetail, SeriesSummary, SessionReport, Settings, TagWeight, WorkerStatus,
 };
 #[cfg(any(feature = "web", feature = "mobile"))]
 use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};
@@ -675,6 +675,60 @@ pub async fn delete_overrides(
     Ok(Some(response.json::<EbookMetadata>().await?))
 }
 
+// ===== Mobile: F2.1 progress sync =====
+
+#[cfg(feature = "mobile")]
+pub async fn save_progress(
+    server_url: &str,
+    update: ProgressUpdate,
+) -> Result<ProgressRecord, DataError> {
+    let url = format!("{server_url}/api/progress");
+    let response = with_bearer(http_client().post(&url).json(&update))
+        .send()
+        .await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(response.json::<ProgressRecord>().await?)
+}
+
+#[cfg(feature = "mobile")]
+pub async fn get_progress(
+    server_url: &str,
+    uuid: &str,
+    format: ProgressFormat,
+) -> Result<Option<ProgressRecord>, DataError> {
+    let fmt = match format {
+        ProgressFormat::Epub => "epub",
+        ProgressFormat::Audio => "audio",
+    };
+    let url = format!("{server_url}/api/progress/{uuid}?format={fmt}");
+    let response = with_bearer(http_client().get(&url)).send().await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(response.json::<Option<ProgressRecord>>().await?)
+}
+
+#[cfg(feature = "mobile")]
+pub async fn record_sessions(
+    server_url: &str,
+    reports: Vec<SessionReport>,
+) -> Result<u64, DataError> {
+    let url = format!("{server_url}/api/progress/sessions");
+    let response = with_bearer(http_client().post(&url).json(&reports))
+        .send()
+        .await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    let body: serde_json::Value = response.json().await?;
+    Ok(body.get("recorded").and_then(|v| v.as_u64()).unwrap_or(0))
+}
+
 // ===== Mobile auth transport: bearer token =====
 //
 // Mobile cannot use cookies (Dioxus Native is not a webview), so login
@@ -1069,6 +1123,39 @@ pub async fn delete_overrides(
     uuid: &str,
 ) -> Result<Option<EbookMetadata>, DataError> {
     crate::rpc::rpc_delete_overrides(uuid.to_string())
+        .await
+        .map_err(note_server_fn_err)
+}
+
+// ===== Web / SSR: F2.1 progress sync =====
+
+#[cfg(not(feature = "mobile"))]
+pub async fn save_progress(
+    _server_url: &str,
+    update: ProgressUpdate,
+) -> Result<ProgressRecord, DataError> {
+    crate::rpc::rpc_save_progress(update)
+        .await
+        .map_err(note_server_fn_err)
+}
+
+#[cfg(not(feature = "mobile"))]
+pub async fn get_progress(
+    _server_url: &str,
+    uuid: &str,
+    format: ProgressFormat,
+) -> Result<Option<ProgressRecord>, DataError> {
+    crate::rpc::rpc_get_progress(uuid.to_string(), format)
+        .await
+        .map_err(note_server_fn_err)
+}
+
+#[cfg(not(feature = "mobile"))]
+pub async fn record_sessions(
+    _server_url: &str,
+    reports: Vec<SessionReport>,
+) -> Result<u64, DataError> {
+    crate::rpc::rpc_record_sessions(reports)
         .await
         .map_err(note_server_fn_err)
 }

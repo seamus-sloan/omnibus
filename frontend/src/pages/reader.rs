@@ -104,7 +104,7 @@ pub fn BookReadPage(uuid: String) -> Element {
             // reports ready/error, or the poll times out).
             status.set(ReaderStatus::Loading);
 
-            let saved = crate::reader_progress::load(&uuid);
+            let local_saved = crate::reader_progress::load(&uuid);
             let size = font_size();
             let theme_name = theme.read().as_attr();
             // Build every JS literal with serde_json so untrusted input (the
@@ -114,14 +114,43 @@ pub fn BookReadPage(uuid: String) -> Element {
             let url_lit = serde_json::to_string(&format!("/api/ebooks/{uuid}/file"))
                 .unwrap_or_else(|_| "\"\"".into());
             let theme_lit = serde_json::to_string(theme_name).unwrap_or_else(|_| "\"dark\"".into());
-            let cfi_arg = serde_json::to_string(&saved).unwrap_or_else(|_| "null".into());
 
-            // (Re)build the callbacks the glue invokes — relocate (persist CFI)
-            // and status (drive the loading/error overlay) — owning them in the
-            // holder so the previous generation is dropped, never leaked.
+            // (Re)build the callbacks the glue invokes — relocate (persist CFI
+            // locally + fire-and-forget POST to the server) and status (drive
+            // the loading/error overlay) — owning them in the holder so the
+            // previous generation is dropped, never leaked.
             if let Some(window) = web_sys::window() {
+                let uuid_for_save = uuid_cb.clone();
                 let relocate = Closure::<dyn FnMut(String)>::new(move |cfi: String| {
-                    crate::reader_progress::save(&uuid_cb, &cfi);
+                    // Local cache-aside write — instant first-paint for the
+                    // next open even if the server is unreachable.
+                    crate::reader_progress::save(&uuid_for_save, &cfi);
+                    // Fire-and-forget server write. Posted directly via
+                    // gloo-net (not the Dioxus server-fn client) because this
+                    // closure is invoked by epub.js from the JS event loop —
+                    // outside any Dioxus reactive scope. The JS glue already
+                    // debounces 400ms so write volume is bounded; errors are
+                    // ignored, the local cache is the safety net.
+                    let uuid_for_post = uuid_for_save.clone();
+                    let cfi_for_post = cfi.clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        // Dioxus' #[post] macro wraps args as
+                        // `{ "<arg_name>": <value> }` — `rpc_save_progress`
+                        // takes `update: ProgressUpdate`, so the request body
+                        // must be `{ "update": { … } }`.
+                        let body = serde_json::json!({
+                            "update": {
+                                "book_uuid": uuid_for_post,
+                                "format": "epub",
+                                "epub_cfi": cfi_for_post,
+                            }
+                        });
+                        if let Ok(req) =
+                            gloo_net::http::Request::post("/api/rpc/progress").json(&body)
+                        {
+                            let _ = req.send().await;
+                        }
+                    });
                 });
                 let on_status = Closure::<dyn FnMut(String)>::new(move |state: String| {
                     status.set(match state.as_str() {
@@ -145,13 +174,36 @@ pub fn BookReadPage(uuid: String) -> Element {
                 *cb_holder.borrow_mut() = vec![relocate, on_status];
             }
 
-            // Poll until the vendored globals load (async) then init. Bounded
-            // (~10s) so a failed asset load reports an error via the status
-            // callback instead of spinning on a blank viewer forever.
-            let js = format!(
-                r#"(function(){{ var n=0; (function go(){{ if (window.OmnibusReader && window.ePub) {{ window.OmnibusReader.init("omnibus-viewer", {url_lit}, {{ cfi: {cfi_arg}, fontSize: {size}, theme: {theme_lit} }}); }} else if (n++ < 200) {{ setTimeout(go, 50); }} else if (typeof window.__omnibusOnStatus === "function") {{ window.__omnibusOnStatus("error"); }} }})(); }})();"#
-            );
-            let _ = dioxus::document::eval(&js);
+            // Cache-aside reconciliation: hit the server for the
+            // authoritative position before mounting. On success the server
+            // CFI wins (so a position written on another device syncs
+            // forward); on failure we fall back to the local cache so the
+            // reader never blocks on the network. Uses `spawn` (not
+            // `wasm_bindgen_futures::spawn_local`) so the future inherits
+            // the current Dioxus runtime scope — `dioxus::document::eval`
+            // requires that scope and panics otherwise.
+            let uuid_for_fetch = uuid.clone();
+            spawn(async move {
+                let server_cfi = crate::data::get_progress(
+                    "",
+                    &uuid_for_fetch,
+                    omnibus_shared::ProgressFormat::Epub,
+                )
+                .await
+                .ok()
+                .flatten()
+                .and_then(|r| r.epub_cfi);
+                let chosen = server_cfi.or(local_saved);
+                let cfi_arg = serde_json::to_string(&chosen).unwrap_or_else(|_| "null".into());
+                // Poll until the vendored globals load (async) then init.
+                // Bounded (~10s) so a failed asset load reports an error via
+                // the status callback instead of spinning on a blank viewer
+                // forever.
+                let js = format!(
+                    r#"(function(){{ var n=0; (function go(){{ if (window.OmnibusReader && window.ePub) {{ window.OmnibusReader.init("omnibus-viewer", {url_lit}, {{ cfi: {cfi_arg}, fontSize: {size}, theme: {theme_lit} }}); }} else if (n++ < 200) {{ setTimeout(go, 50); }} else if (typeof window.__omnibusOnStatus === "function") {{ window.__omnibusOnStatus("error"); }} }})(); }})();"#
+                );
+                let _ = dioxus::document::eval(&js);
+            });
         }));
 
         // Flow app theme changes into the reader content.

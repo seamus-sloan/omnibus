@@ -26,6 +26,7 @@ mod covers;
 mod ebooks;
 mod health;
 mod overrides;
+mod progress;
 mod search;
 mod series;
 mod settings;
@@ -147,6 +148,11 @@ pub fn rest_router_with_search_limiter(
             "/api/ebooks/{uuid}/overrides",
             post(overrides::post_ebook_overrides).delete(overrides::delete_ebook_overrides),
         )
+        // F2.1 progress sync — mobile-facing REST. Web hits the analogous
+        // `/api/rpc/progress*` server functions defined in `omnibus_frontend::rpc`.
+        .route("/api/progress", post(progress::post_progress))
+        .route("/api/progress/sessions", post(progress::post_sessions))
+        .route("/api/progress/{uuid}", get(progress::get_progress))
         // GET/DELETE for author photos carry no upload body (DELETE mutates,
         // but cheaply — it clears photo state, it doesn't ingest one), so
         // they stay outside the rate-limited `upload_router`. Only the binary

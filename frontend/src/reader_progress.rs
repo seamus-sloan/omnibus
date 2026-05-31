@@ -4,10 +4,11 @@
 //! in-memory map (resets on cold launch); server (SSR) is a no-op so the
 //! rendered markup never depends on a stored position.
 //!
-//! This is the localStorage-only stopgap: it is intended to be superseded by
-//! the server-backed F2.1 progress-sync endpoint once that lands, at which
-//! point this module becomes the offline/first-paint cache rather than the
-//! source of truth. The stored value is the raw EPUB CFI string (no JSON
+//! Now the offline / first-paint cache layer for the F2.1 progress-sync
+//! endpoint (`POST /api/progress`, `GET /api/progress/{uuid}`): the reader
+//! reads this synchronously for an instant local CFI, then reconciles
+//! against the server before mounting; saves write here AND fire-and-forget
+//! POST to the server. The stored value is the raw EPUB CFI string (no JSON
 //! envelope) — exactly the opaque locator the reader hands back.
 
 #[cfg(feature = "web")]

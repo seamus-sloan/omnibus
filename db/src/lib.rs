@@ -18,6 +18,7 @@ pub mod library_layout;
 pub mod metadata_overrides;
 pub mod palette;
 pub mod pool;
+pub mod progress;
 pub mod scanner;
 pub mod settings;
 pub mod sync;
