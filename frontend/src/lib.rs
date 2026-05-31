@@ -212,8 +212,8 @@ pub fn App() -> Element {
     rsx! {
         document::Title { "Omnibus" }
         document::Stylesheet { href: ATRIUM_CSS }
-        for chunk in ALL_STYLES.iter() {
-            style { {*chunk} }
+        for &chunk in ALL_STYLES {
+            style { {chunk} }
         }
         components::atrium::AtriumRoot {
             dioxus_router::Router::<Route> {}

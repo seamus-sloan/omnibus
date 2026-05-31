@@ -2,6 +2,7 @@
 //! supporting bits — cover/meta grid, breadcrumb, description, format
 //! switcher rows, tag list, and identifier grid.
 
+/// CSS chunk for the book detail page.
 pub const STYLES: &str = r#"
 /* ===== Book detail page ===== */
 .book-detail {

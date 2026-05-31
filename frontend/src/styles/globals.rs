@@ -2,6 +2,7 @@
 //! `.app-shell` / `.screen` layout primitives, `.sr-only`, `.card`, and
 //! the bare heading + value-line rules consumed by multiple pages.
 
+/// Globals CSS chunk: color scheme, body, layout primitives, headings.
 pub const STYLES: &str = r#"
 :root { color-scheme: dark; }
 

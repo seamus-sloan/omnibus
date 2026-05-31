@@ -1,6 +1,7 @@
 //! Styles for the Settings page (`pages::settings`) — form fields,
 //! status line, and the per-library card with its file list.
 
+/// CSS chunk for the settings page.
 pub const STYLES: &str = r#"
 .settings-form {
   display: flex;

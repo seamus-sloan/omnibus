@@ -1,6 +1,7 @@
 //! Styles for the mobile-target bottom navigation bar
 //! (`components::bottom_nav`).
 
+/// CSS chunk for the mobile bottom-nav bar.
 pub const STYLES: &str = r#"
 .bottom-nav {
   position: fixed;

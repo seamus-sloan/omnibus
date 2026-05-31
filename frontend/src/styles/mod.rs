@@ -11,9 +11,7 @@ pub mod globals;
 pub mod landing;
 pub mod settings;
 
-/// Every CSS chunk injected by `App`, in source order. The renderer
-/// emits one `<style>` tag per chunk; browsers concatenate them into a
-/// single cascade so the result is equivalent to a single sheet.
+/// Every CSS chunk injected by `App`, in source order.
 pub const ALL_STYLES: &[&str] = &[
     globals::STYLES,
     auth::STYLES,

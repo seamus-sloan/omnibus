@@ -3,6 +3,7 @@
 //! and the F1.7 Atrium cover-grid view (header / toolbar / filter chips
 //! / sidebar / grid).
 
+/// CSS chunk for the landing page (cover grid + power-user table).
 pub const STYLES: &str = r#"
 /* Power-user table — dense rows, mono uppercase headers, hover row background.
    Atrium tokens drive colors so light theme works for free. */

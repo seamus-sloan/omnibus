@@ -3,6 +3,7 @@
 //! are `--auth-*` prefixed so they don't collide with the rest of the
 //! app.
 
+/// CSS chunk for the login / register / auth shell pages.
 pub const STYLES: &str = r#"
 .auth-footer { font-size: 0.85rem; color: #94a3b8; margin-top: 1rem; text-align: center; }
 .auth-footer a { color: #22d3ee; }
