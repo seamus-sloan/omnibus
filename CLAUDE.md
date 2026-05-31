@@ -27,13 +27,9 @@ Auto-discoverable skills in [.claude/skills/](.claude/skills/) — Claude Code l
 
 ### Browser tools
 
-When you need to drive the running web app to verify a UI change, use **[`ui-validate`](.claude/skills/ui-validate/SKILL.md)**. Its default browser MCP is **Claude Preview** (`mcp__Claude_Preview__preview_*`) — each agent gets its own isolated headless Chromium, so three agents in three workspaces never fight over a shared browser. To swap to **Chrome DevTools** (`mcp__chrome-devtools__*`), run `scripts/skills/swap-browser.sh chrome-devtools` from the repo root; swap back with `scripts/skills/swap-browser.sh preview`.
+When you need to drive the running web app to verify a UI change, use **[`ui-validate`](.claude/skills/ui-validate/SKILL.md)**. It uses **Claude Preview** (`mcp__Claude_Preview__preview_*`) — each agent gets its own isolated headless Chromium, so parallel agents across workspaces never share a browser.
 
-**Do NOT use Chrome DevTools MCP as the default for agent verification.** It shares a single Chrome profile (enforced by a `SingletonLock`) — only one agent can use it at a time, and concurrent agents will stomp on each other's page selection.
-
-Other browser-driving entrypoints exist for narrower jobs:
-- **`qa-browser`** — drives your real Chrome via the extension MCP. Good for letting the user watch the agent work; disruptive when running multiple agents because they all share one Chrome.
-- **`chrome-devtools-mcp:*` skills** — perf traces, Lighthouse audits, deep CDP work. Single-agent only; not for routine verification.
+Do not use Chrome DevTools MCP or Claude in Chrome for routine agent verification — both share a single browser instance (one at a time), so they break down with parallel agents. Use `qa-browser` only when you explicitly want to watch the agent work in your real browser for a one-off session.
 
 ## Architecture
 

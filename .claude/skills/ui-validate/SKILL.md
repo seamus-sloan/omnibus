@@ -3,13 +3,9 @@ name: ui-validate
 description: End-to-end recipe for validating omnibus UI changes in a real browser — brings up a port-walking dev server, logs in as the seeded admin, polls /api/_health for the rebuild signal, and verifies via snapshot/screenshot. Triggers when you need to drive the running web app to verify a change, when another agent may already own :3000, when the page isn't reloading after an edit, or when login state is uncertain.
 ---
 
-<!-- BROWSER_MCP: preview -->
-
 # Validate a UI change in the browser
 
-**Default browser MCP: Chrome DevTools** (`mcp__chrome-devtools__*`). To swap this skill to Claude Preview instead, run `scripts/skills/swap-browser.sh preview` from the repo root; to swap back, `scripts/skills/swap-browser.sh chrome-devtools`. The two are functionally equivalent for this flow; the swap rewrites tool-call names without changing the steps.
-
-This is the canonical flow for validating any change to the Dioxus web UI. It assumes nothing about the current server state — it's safe to re-run.
+This is the canonical flow for validating any change to the Dioxus web UI. Uses **Claude Preview** (`mcp__Claude_Preview__preview_*`) — each agent gets its own isolated headless Chromium, so parallel agents across workspaces never share a browser. It assumes nothing about the current server state — safe to re-run.
 
 ## 1. Bring the server up (idempotent)
 
