@@ -15,7 +15,11 @@ on:
       - "frontend/**"
       - "shared/**"
       - "server/**"
+      - "db/**"
       - "ui_tests/**"
+      - "Cargo.lock"
+      - "flake.lock"
+      - "flake.nix"
       - ".github/workflows/e2e.yml"
   workflow_dispatch:
 
@@ -24,29 +28,107 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  playwright:
-    name: playwright
+  # Compile the fullstack web bundle (native server binary + WASM client)
+  # once and stash it in the GHA cache. The shard jobs below restore from
+  # the same key and skip the ~3-minute `dx bundle` entirely on a hit.
+  # Cache key is sourced from everything that can change compiled output:
+  # workspace lockfile, the three crates that feed the web build, the flake
+  # (toolchain pin), and this workflow file itself.
+  bundle:
+    name: bundle
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # Required by nix-community/cache-nix-action `purge: true` so it can
-      # delete its own expired cache entries via the Actions cache API.
       actions: write
     env:
-      CI: "1"
-      # Pin target dir so the bundled binary lands at the path "Start server"
-      # expects and rust-cache (keyed on `. -> target`) caches the right path.
       CARGO_TARGET_DIR: ./target
+    outputs:
+      cache-key: ${{ steps.bundle-key.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute bundle cache key
+        id: bundle-key
+        run: |
+          key="dx-bundle-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock', 'flake.nix', 'frontend/**', 'shared/**', 'server/**', 'db/**', '.github/workflows/e2e.yml') }}"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      # Split restore + save so the save happens as a normal step right after
+      # the bundle, BEFORE `Swatinem/rust-cache`'s post-step cleans `target/`.
+      # If we used `actions/cache@v4` (combined), its post-step would run
+      # AFTER rust-cache's cleanup — GHA runs post-steps in reverse
+      # declaration order — and find an empty path. (We learned that the
+      # hard way; see https://github.com/seamus-sloan/omnibus/pull/319.)
+      - name: Restore dx bundle cache
+        id: bundle-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: target/dx/omnibus/debug/web
+          key: ${{ steps.bundle-key.outputs.key }}
+
+      - name: Install Nix
+        if: steps.bundle-cache.outputs.cache-hit != 'true'
+        uses: DeterminateSystems/nix-installer-action@v22
+
+      - name: Cache Nix store
+        if: steps.bundle-cache.outputs.cache-hit != 'true'
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-e2e-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-prefixes-first-match: nix-e2e-${{ runner.os }}-
+          purge: true
+          purge-prefixes: nix-e2e-${{ runner.os }}-
+          purge-last-accessed: 604800
+          purge-primary-key: never
+          gc-max-store-size-linux: 5G
+
+      # Same `shared-key` as rust.yml so a warm `cargo` target dir from the
+      # Rust workflow primes the native half of `dx bundle` here (and vice
+      # versa). Without this they live in separate cache buckets.
+      - name: Cache cargo registry and target
+        if: steps.bundle-cache.outputs.cache-hit != 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          shared-key: omnibus
+
+      - name: Bundle web app
+        if: steps.bundle-cache.outputs.cache-hit != 'true'
+        run: nix develop --command bash -c 'set -euo pipefail; dx bundle --platform web --package omnibus --fullstack'
+
+      # Explicit save (not the combined cache action's post-step) so it runs
+      # while `target/dx/omnibus/debug/web` still exists. See the restore step
+      # above for the rust-cache cleanup race we're dodging.
+      - name: Save dx bundle cache
+        if: steps.bundle-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: target/dx/omnibus/debug/web
+          key: ${{ steps.bundle-key.outputs.key }}
+
+  playwright:
+    name: playwright (shard ${{ matrix.shard }}/${{ strategy.job-total }})
+    needs: bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    env:
+      CI: "1"
+      CARGO_TARGET_DIR: ./target
+      TOTAL_SHARDS: "2"
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v22
 
-      # Cache the Nix store across runs. Auto-purges caches with the same
-      # prefix that haven't been touched in 7 days so we stay under the 10 GB
-      # per-repo GHA cache quota. Replaces DeterminateSystems/magic-nix-cache-action
-      # (sunset; was uploading unbounded and exceeding the quota).
+      # Distinct nix cache from `rust.yml`'s `nix-rust-` so the two workflows
+      # don't clobber each other; shared across e2e jobs via the prefix.
       - name: Cache Nix store
         uses: nix-community/cache-nix-action@v7
         with:
@@ -58,11 +140,6 @@ jobs:
           purge-primary-key: never
           gc-max-store-size-linux: 5G
 
-      - name: Cache cargo registry and target
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-
       - name: Cache Playwright node_modules
         uses: actions/cache@v4
         with:
@@ -71,42 +148,44 @@ jobs:
           restore-keys: |
             playwright-node-modules-${{ runner.os }}-
 
-      - name: Build, start server, and run Playwright tests
+      # Re-use the bundle produced by the `bundle` job. The key is the same
+      # one that job computed, so this is a guaranteed hit when `bundle`
+      # succeeded.
+      - name: Restore dx bundle cache
+        uses: actions/cache@v4
+        with:
+          path: target/dx/omnibus/debug/web
+          key: ${{ needs.bundle.outputs.cache-key }}
+          fail-on-cache-miss: true
+
+      - name: Install Playwright npm deps
+        run: nix develop --command bash -c 'set -euo pipefail; cd ui_tests/playwright && npm ci'
+
+      # Backgrounded with `nohup ... &` + `disown` so the server survives the
+      # step's shell exit and the next step can poll it.
+      - name: Start server
         run: |
-          # Inside this outer single-quoted bash -c block, any embedded
-          # `'` would terminate the string, so the inner trap argument is
-          # escaped with the standard '\'' (close-outer, literal-quote,
-          # reopen-outer) sequence. Without the escape the runner shell
-          # folds the segments into `trap echo ::endgroup:: ERR`, trap
-          # prints usage on the invalid signal, and `set -e` aborts the
-          # whole job before any group runs.
           nix develop --command bash -c '
             set -euo pipefail
-            trap '\''echo "::endgroup::"'\'' ERR
-
-            echo "::group::Install Playwright npm deps"
-            cd ui_tests/playwright && npm ci && cd ../..
-            echo "::endgroup::"
-
-            echo "::group::Bundle web app"
-            dx bundle --platform web --package omnibus --fullstack
-            echo "::endgroup::"
-
-            echo "::group::Start server"
-            PORT=3000 ./target/dx/omnibus/debug/web/server >server.log 2>&1 &
+            chmod +x ./target/dx/omnibus/debug/web/server
+            nohup env PORT=3000 ./target/dx/omnibus/debug/web/server >server.log 2>&1 &
+            disown
             npx --yes wait-on -t 60000 http://127.0.0.1:3000
-            echo "::endgroup::"
+          '
 
-            echo "::group::Run Playwright tests"
-            cd ui_tests/playwright && npm test
-            echo "::endgroup::"
+      - name: Run Playwright tests
+        run: |
+          nix develop --command bash -c '
+            set -euo pipefail
+            cd ui_tests/playwright
+            npx playwright test --shard=${{ matrix.shard }}/${{ env.TOTAL_SHARDS }}
           '
 
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: playwright-report-shard-${{ matrix.shard }}
           path: |
             ui_tests/playwright/playwright-report
             ui_tests/playwright/test-results
@@ -116,6 +195,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: server-log
+          name: server-log-shard-${{ matrix.shard }}
           path: server.log
           retention-days: 7

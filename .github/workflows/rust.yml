@@ -74,10 +74,14 @@ jobs:
           purge-primary-key: never
           gc-max-store-size-linux: 5G
 
+      # `shared-key` is identical to the e2e workflow's bundle job so a warm
+      # cargo target dir from one workflow primes the other. Without it each
+      # workflow gets its own cache bucket and they never share intermediates.
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
+          shared-key: omnibus
 
       - name: cargo clippy (server)
         run: nix develop --command cargo clippy -p omnibus --all-targets -- -D warnings
