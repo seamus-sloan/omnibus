@@ -25,6 +25,7 @@ gloo-timers = { version = "0.3", features = ["futures"], optional = true }
 # path that needs to ship raw bytes from the web client.
 web-sys = { version = "0.3", features = ["Window", "Storage", "KeyboardEvent", "FormData", "Blob", "BlobPropertyBag"], optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
 js-sys = { version = "0.3", optional = true }
 # sqlx + tokio are needed at the type level by rpc.rs when building server
 # functions (PoolExt = Extension<SqlitePool>, #[tokio::spawn] for reindex).
@@ -52,6 +53,7 @@ web = [
     "dep:serde_json",
     "dep:web-sys",
     "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
     "dep:js-sys",
     "dep:tokio",
     "tokio/sync",

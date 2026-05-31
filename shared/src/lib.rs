@@ -247,6 +247,95 @@ impl MetadataOverrides {
     }
 }
 
+// -----------------------------------------------------------------------------
+// F2.1 progress sync
+// -----------------------------------------------------------------------------
+
+/// Discriminator for the format-specific payload variant in [`ProgressUpdate`]
+/// / [`ProgressRecord`] / [`SessionReport`]. Serializes as a plain
+/// lowercase string (`"epub"` / `"audio"`) so the wire shape stays compact.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ProgressFormat {
+    Epub,
+    Audio,
+}
+
+/// F2.1 progress-sync write payload. `format` discriminates which position
+/// field is meaningful: `Epub` requires `epub_cfi`, `Audio` requires
+/// `audio_position_seconds`. The server validates this at the handler
+/// boundary via [`ProgressUpdate::validate`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProgressUpdate {
+    pub book_uuid: String,
+    pub format: ProgressFormat,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epub_cfi: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_position_seconds: Option<f64>,
+}
+
+impl ProgressUpdate {
+    /// Reject empty UUIDs and missing format-specific positions. Mirrors
+    /// `MetadataOverrides::validate` — handlers translate `Err(_)` into 400.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.book_uuid.trim().is_empty() {
+            return Err("book_uuid is required".into());
+        }
+        match self.format {
+            ProgressFormat::Epub => {
+                if self
+                    .epub_cfi
+                    .as_deref()
+                    .map(|s| s.trim().is_empty())
+                    .unwrap_or(true)
+                {
+                    return Err("epub_cfi is required for format=epub".into());
+                }
+            }
+            ProgressFormat::Audio => {
+                let Some(pos) = self.audio_position_seconds else {
+                    return Err("audio_position_seconds is required for format=audio".into());
+                };
+                if !pos.is_finite() || pos < 0.0 {
+                    return Err(
+                        "audio_position_seconds must be a non-negative finite number".into(),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Server-authoritative position returned by `POST /api/progress` and
+/// `GET /api/progress/{uuid}`. The non-discriminated field for the other
+/// format is always `None`. `updated_at` is unix seconds (SQLite
+/// `strftime('%s')`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProgressRecord {
+    pub book_uuid: String,
+    pub format: ProgressFormat,
+    pub epub_cfi: Option<String>,
+    pub audio_position_seconds: Option<f64>,
+    pub updated_at: i64,
+}
+
+/// F2.1 batched session row (reader / audio open-to-close span). Mobile
+/// posts these on reconnect via `POST /api/progress/sessions`; web posts
+/// best-effort on unmount. `progress_units` is seconds_read (epub) or
+/// seconds_listened (audio).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionReport {
+    pub book_uuid: String,
+    pub format: ProgressFormat,
+    pub started_at: i64,
+    pub ended_at: i64,
+    pub progress_units: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<i64>,
+}
+
 /// Response payload for `GET /api/ebooks` and `rpc_get_ebooks`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EbookLibrary {

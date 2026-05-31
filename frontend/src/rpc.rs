@@ -17,8 +17,8 @@ use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
     AuthorDetail, AuthorPhotoScanResult, AuthorSummary, EbookLibrary, EbookMetadata,
-    LibraryContents, MetadataOverrides, PaletteResults, SeriesDetail, SeriesSummary, Settings,
-    TagWeight, WorkerStatus,
+    LibraryContents, MetadataOverrides, PaletteResults, ProgressFormat, ProgressRecord,
+    ProgressUpdate, SeriesDetail, SeriesSummary, SessionReport, Settings, TagWeight, WorkerStatus,
 };
 
 #[cfg(feature = "server")]
@@ -429,6 +429,43 @@ pub async fn rpc_delete_overrides(uuid: String) -> Result<Option<EbookMetadata>>
 #[post("/api/rpc/author/delete", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_delete_author(id: i64) -> Result<u64> {
     Ok(db::delete_author(&pool.0, id).await?)
+}
+
+// ---------------------------------------------------------------------------
+// F2.1 Progress sync (web RPC). Mobile uses the analogous REST routes in
+// `server::backend::progress`. All three use POST because Dioxus `#[get]`
+// server functions can't carry an argument body — same rationale as
+// `rpc_get_ebook`.
+// ---------------------------------------------------------------------------
+
+#[post("/api/rpc/progress", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_save_progress(update: ProgressUpdate) -> Result<ProgressRecord> {
+    if let Err(msg) = update.validate() {
+        return Err(ServerFnError::new(msg).into());
+    }
+    match db::progress::upsert_progress(&pool.0, user.id, &update).await {
+        Ok(rec) => Ok(rec),
+        Err(db::progress::ProgressError::BookNotFound) => {
+            Err(ServerFnError::new("book not found").into())
+        }
+        Err(db::progress::ProgressError::Sqlx(e)) => Err(ServerFnError::new(e.to_string()).into()),
+    }
+}
+
+#[post("/api/rpc/progress/get", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_get_progress(
+    uuid: String,
+    format: ProgressFormat,
+) -> Result<Option<ProgressRecord>> {
+    Ok(db::progress::get_progress(&pool.0, user.id, &uuid, format).await?)
+}
+
+#[post("/api/rpc/progress/sessions", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_record_sessions(reports: Vec<SessionReport>) -> Result<()> {
+    for r in &reports {
+        db::progress::record_session(&pool.0, user.id, r).await?;
+    }
+    Ok(())
 }
 
 /// Search palette — grouped results (books, authors, series, tags) for the
