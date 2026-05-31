@@ -1,9 +1,8 @@
 //! Worker progress indicator — polls `/api/rpc/worker_status` at 1 Hz and
-//! renders a per-task row (active scans / thumbnails / author photos)
-//! plus a transient "complete" or red error banner for terminal entries.
-//! Mounted on `/settings` for v1 but agnostic of its host page — future
-//! surfaces can drop the primitive in without changes here. Web-only;
-//! mobile gets an empty-status stub so callers compile.
+//! renders a per-task row (active scans / thumbnails / author photos) plus
+//! a transient "complete" or red error banner for terminal entries.
+//! Mounted on `/settings` but agnostic of host page. Web-only; mobile gets
+//! an empty-status stub so callers compile.
 
 #![cfg(not(feature = "mobile"))]
 

@@ -1,11 +1,8 @@
-//! Per-format CTAs on the book detail page. Renders one row per format the
-//! book has, sorted alphabetically, with the relevant actions wired
-//! underneath. The EPUB Read action routes into the immersive reader on
-//! web (mobile stays disabled — no JS engine for epub.js); Listen and
-//! Send to Kindle ship later and stay disabled. The rows themselves are
-//! the UI contract for the `books` / `book_files` split — a work with both
-//! EPUB and M4B surfaces both formats so future per-format actions slot
-//! in without re-shaping the markup.
+//! Per-format CTA rows on the book detail page. Renders one row per format
+//! the book has, sorted alphabetically, with per-format actions wired
+//! underneath. EPUB Read routes into the immersive reader on web (mobile
+//! disabled, no JS engine); Listen and Send-to-Kindle ship later and stay
+//! disabled. The rows are the UI contract for the books / book_files split.
 
 use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]

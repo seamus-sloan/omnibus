@@ -1,9 +1,7 @@
-//! `AuthStrategy` — pluggable authentication back-ends. Ships with
-//! `PasswordStrategy` (username + argon2id PHC); OIDC and WebAuthn fit
-//! the same shape so they can drop in without reshaping the login flow.
-//! The trait returns a `UserId`, not `(username, password)`, which is what
-//! makes credential-agnostic backends fit. `kind()` is a short stable tag
-//! (`"password"`, `"oidc"`, `"webauthn"`) surfaced to the admin UI.
+//! `AuthStrategy` — pluggable authentication back-ends. Ships with the
+//! `PasswordStrategy` (username + argon2id PHC); OIDC and WebAuthn fit the
+//! same shape so they drop in without reshaping the login flow. Consumed
+//! by the handlers in [`super::handlers`].
 
 use omnibus_db::auth::AuthError;
 use sqlx::SqlitePool;

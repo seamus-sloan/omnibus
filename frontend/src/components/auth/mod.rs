@@ -1,9 +1,7 @@
-//! Shared auth-page primitives. Each is purely presentational: props in,
-//! rsx out. No signals, no transport, no feature gating inside component
-//! bodies — SSR and WASM must render identical markup so dioxus hydration
-//! matches. Provides [`AuthShell`] (split-pane wrapper), [`Field`]
-//! (label + input + hint/error/success slots), [`Banner`] (callout), and
-//! [`StrengthMeter`] (four-segment password strength bar).
+//! Shared auth-page primitives used by [`crate::pages::auth`]: [`AuthShell`]
+//! split-pane wrapper, [`Field`] label+input+hint slots, [`Banner`] callout,
+//! and [`StrengthMeter`] password bar. Purely presentational (props in,
+//! rsx out) with no feature-gated bodies so SSR and WASM markup matches.
 
 mod banner;
 mod field;

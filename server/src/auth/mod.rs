@@ -1,9 +1,8 @@
 //! Server-side axum glue on top of [`omnibus_db::auth`]: cookie/bearer
-//! extractors ([`extractor`]), `/api/auth/{register,login,logout,me}` plus
-//! [`auth_router`] ([`handlers`]), CSRF origin check ([`csrf`]), pluggable
-//! auth backends ([`strategy`]), and the `OMNIBUS_INITIAL_ADMIN` recovery
-//! hook ([`boot`]). Per-route extractors (`AuthUser` / `AdminUser`) are
-//! what enforce permissions; [`gate::require_auth`] is just the boundary.
+//! extractors ([`extractor`]), `/api/auth/*` handlers + router ([`handlers`]),
+//! CSRF origin check ([`csrf`]), pluggable auth backends ([`strategy`]),
+//! the initial-admin recovery hook ([`boot`]), and the `/api/*` gate
+//! middleware ([`gate`]). Mounted by [`crate::main`].
 
 pub mod boot;
 pub mod csrf;

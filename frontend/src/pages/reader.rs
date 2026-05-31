@@ -1,11 +1,8 @@
-//! Barebones EPUB reader — an immersive, full-screen reading surface.
-//! Loads epub.js (+ JSZip) as classic sibling scripts and the vendored
-//! `epub-reader-glue.js`, which exposes `window.OmnibusReader`. The Rust
-//! side drives it through `dioxus::document::eval`, streams the EPUB bytes
-//! from the cookie-gated `GET /api/ebooks/:uuid/file` route, and persists
-//! the current position (an opaque EPUB CFI) through
-//! [`crate::reader_progress`]. The chrome compiles on every target; the
-//! JS interop that mounts a book is web-only.
+//! Immersive full-screen EPUB reader. Loads the vendored epub.js + JSZip
+//! glue (`window.OmnibusReader`) via `dioxus::document::eval`, streams
+//! bytes from cookie-gated `GET /api/ebooks/:uuid/file`, and persists
+//! position via [`crate::reader_progress`]. Chrome compiles on every
+//! target; the JS interop that mounts a book is web-only.
 
 use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]

@@ -1,13 +1,8 @@
-//! Login and register pages for the web and mobile clients. Both render
-//! the same markup on every target so SSR/WASM hydration matches; submit
-//! handlers branch on feature. Web POSTs to `/api/auth/{login,register}`
-//! and lets the server's `Set-Cookie` carry the session; mobile POSTs the
-//! same endpoints with a `client_kind` of `ios` / `android` / `bearer` so
-//! the server returns a bearer token that's stashed in
-//! `data::token_store`. SSR is a compile-only stub. The visual shell uses
-//! the [`AuthShell`] / [`Field`] / [`Banner`] / [`StrengthMeter`]
-//! primitives from [`crate::components::auth`]; server policy still owns
-//! password validation and session expiry.
+//! Login and register pages for the web and mobile clients. Markup is
+//! identical across targets so SSR/WASM hydration matches; submit handlers
+//! branch per feature — `web` POSTs `/api/auth/{login,register}` and lets
+//! the `Set-Cookie` session carry through, `mobile` POSTs the same endpoints
+//! and stashes the returned bearer token in `data::token_store`.
 
 use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};

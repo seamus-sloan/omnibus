@@ -1,12 +1,8 @@
-//! Canonical Omnibus library layout helpers. The canonical tree is
-//! `<library_root>/<author-slug>/<title-slug>/<title-slug>.<ext>`; slugs
-//! ASCII-fold via `deunicode`, lowercase, collapse non-alphanumerics into
-//! `-`, and cap at 80 chars on a codepoint boundary (empty result falls
-//! back to `"book"`). A `cover.jpg` (or per-stem `<basename>.jpg`) sidecar
-//! next to an ebook is the single source of truth for that book's cover
-//! after the first scan; the scanner materializes the embedded cover once
-//! and never re-reads the zip, falling back to in-memory bytes on a
-//! read-only filesystem.
+//! Canonical Omnibus library layout helpers. Writes the tree as
+//! `<library_root>/<author-slug>/<title-slug>/<title-slug>.<ext>` for the
+//! upload path; the read path uses the tolerant scanner in
+//! [`crate::scanner`] / [`crate::ebook`] plus the sidecar cover lookup
+//! ([`sidecar_cover_for`]). Per-helper docs spell out slug + sidecar rules.
 
 use std::path::{Path, PathBuf};
 

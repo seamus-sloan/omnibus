@@ -1,10 +1,8 @@
-//! Reading-position persistence — the saved EPUB CFI for each book. Web
-//! persists to `localStorage` keyed by book UUID; mobile keeps an
-//! in-memory map (resets on cold launch); server (SSR) is a no-op so the
-//! rendered markup never depends on a stored position. Now the offline /
-//! first-paint cache for the progress-sync endpoint — the reader reads
-//! synchronously for an instant local CFI then reconciles against the
-//! server, and saves write here AND fire-and-forget POST.
+//! Reading-position persistence — saved EPUB CFI per book. Web stores
+//! per-UUID in `localStorage`, mobile keeps an in-memory map, SSR is a
+//! no-op. Now the offline / first-paint cache for the progress-sync
+//! endpoint: reader reads here synchronously then reconciles against
+//! the server; saves write here AND fire-and-forget POST.
 
 #[cfg(feature = "web")]
 const STORAGE_PREFIX: &str = "omn.reading::";

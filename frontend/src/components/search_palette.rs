@@ -1,28 +1,8 @@
-//! Search Palette — command-palette / Spotlight-style search overlay.
-//!
-//! Replaces the inline `NavSearch` text input with a trigger **button** in the
-//! top nav. Clicking the button (or pressing `⌘K` / `Ctrl+K`) opens a floating
-//! palette with its own full-width input, debounced FTS5 search, and grouped
-//! results: Books, Authors, Series, Tags, and a placeholder "Inside text"
-//! section.
-//!
-//! ## Component tree
-//!
-//! ```text
-//! SearchPaletteHost          — mounted in TopNav, replaces NavSearch
-//! ├─ SpTriggerButton         — search button (icon + "Search" + ⌘K kbd hint)
-//! └─ (open) SpOverlay        — portal: scrim + panel
-//!            ├─ SpInput       — autofocused serif italic input
-//!            ├─ SpMeta        — "5 results · 18ms"
-//!            ├─ SpResults     — scrollable grouped results
-//!            └─ SpFooter      — keyboard hints + "fts5 · ranked"
-//! ```
-//!
-//! ## Hydration safety
-//!
-//! The palette starts closed (`PaletteOpen = false`). The overlay only renders
-//! when open, so SSR and WASM agree on initial DOM — no hydration mismatch.
-//! The `⌘K` listener fires only in `#[cfg(feature = "web")]`.
+//! Command-palette / Spotlight-style search overlay. Replaces the inline
+//! nav search input with a trigger button in the top nav; clicking it (or
+//! pressing `⌘K` / `Ctrl+K`) opens a floating palette with debounced FTS5
+//! search and grouped results (Books, Authors, Series, Tags, Inside text).
+//! Mounted by `TopNav`; web-only via `cfg(not(feature = "mobile"))`.
 
 use dioxus::core::Task;
 use dioxus::prelude::*;
@@ -36,11 +16,25 @@ use crate::{data, use_server_url, Route};
 /// Whether the search palette overlay is open. Registered at the App level
 /// via `use_context_provider` so both the trigger button and the global
 /// `⌘K` shortcut can toggle it.
+//
+// Hydration safety: the palette starts closed (`PaletteOpen = false`) and
+// `SpOverlay` only renders when open, so SSR and WASM agree on initial DOM
+// — no hydration mismatch. The `⌘K` listener fires only under
+// `feature = "web"`.
 #[derive(Copy, Clone, PartialEq)]
 pub struct PaletteOpen(pub Signal<bool>);
 
 /// Top-level host: renders the trigger button and (when open) the overlay.
 /// Mount this in `TopNav` in place of the old `NavSearch`.
+//
+// Component tree:
+//   SearchPaletteHost          — mounted in TopNav, replaces NavSearch
+//   ├─ SpTriggerButton         — search button (icon + "Search" + ⌘K kbd hint)
+//   └─ (open) SpOverlay        — portal: scrim + panel
+//              ├─ SpInput       — autofocused serif italic input
+//              ├─ SpMeta        — "5 results · 18ms"
+//              ├─ SpResults     — scrollable grouped results
+//              └─ SpFooter      — keyboard hints + "fts5 · ranked"
 #[component]
 pub fn SearchPaletteHost() -> Element {
     let open = use_context::<PaletteOpen>();

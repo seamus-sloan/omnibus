@@ -1,11 +1,8 @@
-//! Generic add/remove chip editor with a substring-match suggestion
-//! dropdown. Renders a sequence of chip elements followed by an
-//! input + optional dropdown so the consumer can wrap the output in
-//! whatever flex container fits their layout. The dropdown surfaces up to
-//! [`MAX_SUGGESTIONS`] case-insensitive substring matches against
-//! `suggestions`, excluding values already present in `values`. Keyboard:
-//! ↓/↑ moves the highlight, Enter commits, Escape clears. Pass an empty
-//! signal to disable the dropdown and fall back to free-text entry.
+//! Generic add/remove chip editor with a substring-match suggestion dropdown.
+//! Renders chips, then input, then optional dropdown; the consumer wraps the
+//! output in whatever flex container their layout needs. Up to
+//! [`MAX_SUGGESTIONS`] case-insensitive matches against `suggestions` show,
+//! excluding values already present. Empty `suggestions` → free-text entry.
 
 use dioxus::prelude::*;
 
