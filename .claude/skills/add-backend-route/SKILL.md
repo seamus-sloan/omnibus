@@ -81,6 +81,10 @@ Per [03-unit-testing.md](../../rules/03-unit-testing.md):
 
 See [add-playwright-flow](../add-playwright-flow/SKILL.md). Use the `/api/rpc/*` URL in `expectMutation` for web tests — Playwright drives the browser, which calls server functions, not REST.
 
-## 9. End-of-session
+## 9. Verify in the browser (when the route surfaces in the UI)
+
+If this route is hit by a UI page, drive that page via [`ui-validate`](../ui-validate/SKILL.md) — it brings up the dev server (idempotent, identity-checked across `jj` workspaces), logs in as the seeded admin, and uses Chrome DevTools MCP (or Claude Preview after a one-command swap) to snapshot the new behavior.
+
+## 10. End-of-session
 
 Run [99-end-of-session.md](../../rules/99-end-of-session.md). Update [CLAUDE.md](../../../CLAUDE.md) module-structure section if a new module was introduced.
