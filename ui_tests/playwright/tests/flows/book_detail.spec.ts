@@ -17,8 +17,13 @@ const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "alpha")!;
 test("navigates from a landing row to the detail page and back", async ({ page }) => {
   await gotoReady(page, "/");
 
-  // Click the row for our target book and follow the SPA navigation.
-  await getRow(page, TARGET.slug).click();
+  // Click the row's cover cell to follow the SPA navigation. We target the
+  // cover specifically because the seeded admin sees inline-editable cells
+  // (title, author, …) that intercept clicks to open their editor instead of
+  // navigating; the cover cell is non-editable, so its click bubbles to the
+  // row's navigate handler — what a user clicking a non-interactive part of
+  // the row gets.
+  await getRow(page, TARGET.slug).getByTestId("ebook-cell-cover").click();
   // `/books/:uuid` — UUIDv5 in canonical 8-4-4-4-12 hyphenated form.
   await expect(page).toHaveURL(/\/books\/[0-9a-fA-F-]{36}$/);
 
