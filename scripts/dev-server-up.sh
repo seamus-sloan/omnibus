@@ -24,14 +24,20 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-cd "$REPO_ROOT"
+# Workspace root for THIS run. Compared against the `repo_root` field that
+# /api/_health now returns, so we can tell our own server apart from a
+# sibling `jj` workspace's server bound to the same port.
+MY_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$MY_REPO_ROOT"
 
 RUNTIME_DIR=".claude/runtime"
 mkdir -p "$RUNTIME_DIR"
 
-START_PORT="${PORT:-3010}"
-END_PORT=$((START_PORT + 20))
+START_PORT="${PORT:-3000}"
+# A 10-port window matches flake.nix's per-workspace PORT stride (3000,
+# 3010, 3020, 3030) — so port-walking stays *within* this workspace's
+# window and never wanders into a sibling workspace's range.
+END_PORT=$((START_PORT + 9))
 
 # Tighter timeouts than curl defaults so a misbehaving foreign process
 # can't stall the probe sweep.
@@ -39,6 +45,27 @@ probe_health() {
     local port="$1"
     curl --silent --show-error --max-time 2 --connect-timeout 1 \
         "http://127.0.0.1:${port}/api/_health" 2>/dev/null || true
+}
+
+# HMR-tolerant probe. `dx serve` briefly stops serving while it rebuilds
+# the backend binary after a Rust change; /api/_health then returns
+# connection-refused or 5xx for a few seconds before the new build is
+# back up. This helper retries up to ~5s before declaring the server
+# down so callers don't false-positive during a hot reload.
+probe_health_with_retry() {
+    local port="$1"
+    local deadline=$(($(date +%s) + 5))
+    local body
+    while [ "$(date +%s)" -le "$deadline" ]; do
+        body="$(probe_health "$port")"
+        if is_omnibus_response "$body"; then
+            echo "$body"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "$body"
+    return 1
 }
 
 is_port_free() {
@@ -52,6 +79,23 @@ is_omnibus_response() {
     echo "$1" | grep -q '"app"[[:space:]]*:[[:space:]]*"omnibus"'
 }
 
+# Pull the `repo_root` field from an /api/_health JSON body. Empty if the
+# server is too old to expose it (pre-#TBD) or the response is malformed.
+extract_repo_root() {
+    echo "$1" | sed -nE 's/.*"repo_root"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p'
+}
+
+# Same as is_omnibus_response, but ALSO requires the server's reported
+# `repo_root` to match MY_REPO_ROOT — i.e. "this is omnibus AND it's MY
+# workspace's omnibus". Without this gate, two jj workspaces port-walking
+# from the same base port would silently reuse each other's server.
+is_my_omnibus_response() {
+    is_omnibus_response "$1" || return 1
+    local server_root
+    server_root="$(extract_repo_root "$1")"
+    [ -n "$server_root" ] && [ "$server_root" = "$MY_REPO_ROOT" ]
+}
+
 choose_port() {
     local port
     for ((port = START_PORT; port <= END_PORT; port++)); do
@@ -59,13 +103,19 @@ choose_port() {
             echo "$port:free"
             return 0
         fi
-        local body
+        local body server_root
         body="$(probe_health "$port")"
-        if is_omnibus_response "$body"; then
+        if is_my_omnibus_response "$body"; then
             echo "$port:reuse"
             return 0
         fi
-        # Port is held by something that isn't omnibus — skip it.
+        if is_omnibus_response "$body"; then
+            # Sibling workspace's omnibus server bound to this port. Don't
+            # reuse it (different code, different DB) — walk to the next.
+            server_root="$(extract_repo_root "$body")"
+            echo "dev-up: port $port held by sibling workspace ${server_root:-<unknown>}, skipping" >&2
+        fi
+        # Port held by something that isn't omnibus, or by a sibling — skip.
     done
     return 1
 }
@@ -124,12 +174,17 @@ EOF
     export OMNIBUS_PUBLIC_ORIGIN="http://localhost:$port,http://127.0.0.1:$port"
 
     echo "dev-up: starting dx serve on port $port (log: $RUNTIME_DIR/server.log)" >&2
-    # nohup detaches from this script's process group so `just dev-up` can
-    # exit cleanly without taking the server with it. setsid would be
-    # cleaner but isn't on macOS by default.
+    # Three things together detach `dx serve` from this script's lifetime
+    # so the server survives the agent / shell that invoked `just dev-up`:
+    #   * nohup     — traps SIGHUP so terminal disconnect can't kill it.
+    #   * `&`       — backgrounds; the script exits without waiting.
+    #   * disown    — removes the job from this shell's job table so the
+    #                 shell can't SIGHUP it on exit (bash builtin, portable).
+    # setsid would be cleaner but isn't on macOS by default.
     nohup dx serve --platform web --fullstack --port "$port" --package omnibus \
         >"$RUNTIME_DIR/server.log" 2>&1 &
     local server_pid=$!
+    disown "$server_pid" 2>/dev/null || disown 2>/dev/null || true
     echo "$server_pid" >"$RUNTIME_DIR/server.pid"
 
     if ! wait_for_health "$port" >/dev/null; then
@@ -162,19 +217,27 @@ main() {
     port="${choice%%:*}"
     mode="${choice##*:}"
 
+    local action
     if [ "$mode" = "reuse" ]; then
         echo "dev-up: reusing existing omnibus server on port $port" >&2
+        action="reuse"
     else
         start_server "$port"
+        action="started"
     fi
 
     write_runtime_files "$port"
 
-    local body build_id
+    local body build_id pid
     body="$(probe_health "$port")"
     build_id="$(echo "$body" | sed -nE 's/.*"build_id"[[:space:]]*:[[:space:]]*"([0-9]+)".*/\1/p')"
+    pid="$(cat "$RUNTIME_DIR/server.pid" 2>/dev/null || echo '')"
 
-    echo "omnibus dev server ready at http://127.0.0.1:$port (build_id=$build_id); log in as ${OMNIBUS_DEV_SEED_USER:-<unset>}"
+    # Human-readable line to stderr; the agent-parseable marker to stdout.
+    # Anyone driving this script programmatically should `grep '^OMNIBUS_DEV_READY '`
+    # against stdout — the format is stable and the only line on stdout.
+    echo "omnibus dev server ready at http://127.0.0.1:$port (build_id=$build_id); log in as ${OMNIBUS_DEV_SEED_USER:-<unset>}" >&2
+    echo "OMNIBUS_DEV_READY port=$port repo_root=$MY_REPO_ROOT build_id=$build_id action=$action pid=$pid"
 }
 
 main "$@"
