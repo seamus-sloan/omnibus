@@ -117,7 +117,20 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
     // by sight, without having to type a character first to "wake up"
     // the autocomplete. `onblur` clears it (and the highlight) so the
     // dropdown collapses when focus leaves.
-    let mut focused = use_signal(|| false);
+    // Seed `focused` from `autofocus`: an autofocused input is focused on
+    // first paint, but the browser's autofocus does not always emit an
+    // `onfocus` event for a freshly-mounted node (e.g. the landing cell's
+    // editor, mounted on click), so relying on the event left `focused`
+    // false and the open-on-focus dropdown never surfaced. Seeding it true
+    // makes the dropdown appear on first paint, as the `autofocus` prop
+    // promises; `onblur` still flips it false when focus leaves.
+    let mut focused = use_signal(|| props.autofocus);
+    // Suppress the open-on-focus pool *after a commit* so committing a chip
+    // (Enter / suggestion pick) collapses the dropdown rather than instantly
+    // re-surfacing the pool against the now-empty input. Any keystroke or a
+    // fresh focus clears it, so the autocomplete still wakes on the next
+    // interaction.
+    let mut suppress_open = use_signal(|| false);
 
     // Filter on every render. Reads the suggestion pool by reference
     // so we never clone the underlying Vec — only the ≤5 matches that
@@ -144,7 +157,7 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                 .map(|s| s.to_lowercase())
                 .collect();
             if query_lc.is_empty() {
-                if focused() {
+                if focused() && !suppress_open() {
                     suggestions
                         .iter()
                         .filter(|item| !current.contains(&item.name.to_lowercase()))
@@ -219,6 +232,7 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
         {
             input.set(String::new());
             highlight.set(None);
+            suppress_open.set(true);
             return;
         }
         let mut new_values = values_sig.read().clone();
@@ -227,6 +241,7 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
         on_change.call(new_values);
         input.set(String::new());
         highlight.set(None);
+        suppress_open.set(true);
     };
 
     let testid_suggestions = format!("{}-suggestions", props.testid_prefix);
@@ -276,6 +291,7 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                     autofocus: props.autofocus,
                     onfocus: move |_| {
                         focused.set(true);
+                        suppress_open.set(false);
                     },
                     onblur: move |_| {
                         focused.set(false);
@@ -284,6 +300,7 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                     oninput: move |e| {
                         input.set(e.value());
                         highlight.set(None);
+                        suppress_open.set(false);
                     },
                     onkeydown: move |e| {
                         match e.key() {
