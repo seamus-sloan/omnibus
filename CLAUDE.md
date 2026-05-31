@@ -9,9 +9,10 @@ Omnibus is a self-hosted ebook/audiobook library (see [docs/roadmap/0-0-summary.
 Numbered rules in [.claude/rules/](.claude/rules/), applied in order. Follow them mechanically.
 
 - [01-dev-environment.md](.claude/rules/01-dev-environment.md) — always work inside `nix develop`; env vars the shellHook sets.
-- [02-error-handling.md](.claude/rules/02-error-handling.md) — `thiserror` for domain errors, `anyhow` for handlers.
-- [03-unit-testing.md](.claude/rules/03-unit-testing.md) — inline `#[cfg(test)]`, `oneshot` for handlers, coverage expectations.
+- [02-error-handling.md](.claude/rules/02-error-handling.md) — `thiserror` for predictable failures, `anyhow` for unpredictable ones and handlers.
+- [03-unit-testing.md](.claude/rules/03-unit-testing.md) — sibling `<mod>/tests.rs`, `test_support` per crate, happy + per-variant coverage.
 - [04-playwright.md](.claude/rules/04-playwright.md) — full E2E conventions (selectors, fixtures, `expectMutation`, error paths).
+- [05-rust-style.md](.claude/rules/05-rust-style.md) — Rust style guide: comments, function/file shape, errors, tests, mechanics. Long-form rationale in [docs/style-guide.md](docs/style-guide.md).
 - [98-keep-skills-fresh.md](.claude/rules/98-keep-skills-fresh.md) — update skills when the code they reference changes.
 - [99-end-of-session.md](.claude/rules/99-end-of-session.md) — end-of-session checklist (docs sync, fmt/clippy, coverage, line-count cap).
 
