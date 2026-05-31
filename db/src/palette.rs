@@ -15,6 +15,16 @@ use crate::books::parse_json_array;
 use crate::helpers::{build_fts_match, cap_query_len};
 use crate::metadata_overrides::load_overrides_bulk;
 
+/// Error returned by the search palette. Wraps `sqlx::Error` so the
+/// module boundary doesn't leak SQLite implementation details — per the
+/// "never return raw `sqlx::Error` across a module boundary" rule in
+/// `.claude/rules/02-error-handling.md`.
+#[derive(Debug, thiserror::Error)]
+pub enum PaletteError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
 /// Search palette — grouped results for the command-palette overlay (F1.5).
 ///
 /// Returns up to 5 results per category (books, authors, series, tags),
@@ -27,7 +37,7 @@ pub async fn search_palette(
     pool: &SqlitePool,
     library_path: &str,
     q: &str,
-) -> Result<PaletteResults, sqlx::Error> {
+) -> Result<PaletteResults, PaletteError> {
     let trimmed = q.trim();
     if trimmed.is_empty() {
         return Ok(PaletteResults::default());

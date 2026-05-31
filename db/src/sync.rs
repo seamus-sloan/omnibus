@@ -16,6 +16,17 @@ use crate::taxonomy::{
     resolve_or_insert_language, resolve_or_insert_publisher, resolve_or_insert_series,
 };
 
+/// Error returned by the sync write path. Wraps `sqlx::Error` so the
+/// module boundary doesn't leak SQLite implementation details — per the
+/// "never return raw `sqlx::Error` across a module boundary" rule in
+/// `.claude/rules/02-error-handling.md`. Internal `pub(crate)` helpers
+/// stay on `sqlx::Error` and are promoted at the `pub` boundary via `?`.
+#[derive(Debug, thiserror::Error)]
+pub enum SyncError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
 /// Per-bucket payload for [`sync_books`]. Built by
 /// `crate::indexer::diff_library` (plus the Phase-B parse for new + changed).
 ///
@@ -61,7 +72,7 @@ pub async fn sync_books(
     pool: &SqlitePool,
     library_path: &str,
     plan: SyncPlan,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), SyncError> {
     let mut tx = pool.begin().await?;
     let library_id = upsert_library(&mut tx, library_path).await?;
 
@@ -331,7 +342,7 @@ pub async fn replace_books(
     pool: &SqlitePool,
     library_path: &str,
     books: Vec<crate::ebook::IndexedBook>,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), SyncError> {
     let removed_uuids: Vec<String> = sqlx::query_scalar(
         "SELECT b.uuid FROM books b
          JOIN libraries l ON l.id = b.library_id

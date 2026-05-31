@@ -22,6 +22,18 @@ use omnibus_shared::{AuthorDetail, SeriesDetail, TagWeight};
 use crate::books::{backfill_creator_ids, row_to_ebook, BOOK_COLUMNS};
 use crate::metadata_overrides::{apply_overrides, load_overrides_bulk};
 
+/// Error returned by the discovery-detail reads. Wraps `sqlx::Error` so
+/// the module boundary doesn't leak SQLite implementation details — per
+/// the "never return raw `sqlx::Error` across a module boundary" rule
+/// in `.claude/rules/02-error-handling.md`. `Option<T>` is preserved for
+/// missing-id semantics (callers branch on `Ok(None)`), so there is no
+/// `NotFound` variant.
+#[derive(Debug, thiserror::Error)]
+pub enum DiscoveryError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
 /// Hard cap on the nested `books` vec returned by the discovery-detail
 /// reads ([`get_author`] / [`get_series`]). Issue #150: these functions
 /// previously serialized *every* book attributed to an author or series
@@ -66,7 +78,7 @@ pub const MAX_DISCOVERY_BOOKS: i64 = 1_000;
 pub async fn get_author(
     pool: &SqlitePool,
     author_id: i64,
-) -> Result<Option<AuthorDetail>, sqlx::Error> {
+) -> Result<Option<AuthorDetail>, DiscoveryError> {
     // TODO(F4.x): scope by `user_id` once per-user ACLs land. See the
     // function-level rustdoc above for the single-tenant rationale.
     let author_row = sqlx::query("SELECT id, name, sort FROM authors WHERE id = ?")
@@ -230,7 +242,7 @@ pub async fn get_author(
 pub async fn get_series(
     pool: &SqlitePool,
     series_id: i64,
-) -> Result<Option<SeriesDetail>, sqlx::Error> {
+) -> Result<Option<SeriesDetail>, DiscoveryError> {
     // TODO(F4.x): scope by `user_id` once per-user ACLs land. See the
     // function-level rustdoc above for the single-tenant rationale.
     let series_row = sqlx::query("SELECT id, name, sort FROM series WHERE id = ?")
@@ -411,7 +423,7 @@ const TAG_CLOUD_LIMIT: i64 = 500;
 /// parameter and count only books visible to that user via the
 /// access-control join. The `TODO(F4.x)` marker in the body stays in
 /// place until that work lands.
-pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, sqlx::Error> {
+pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, DiscoveryError> {
     // TODO(F4.x): scope by `user_id` once per-user ACLs land. See the
     // function-level rustdoc above for the single-tenant rationale.
     //
