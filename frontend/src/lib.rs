@@ -26,7 +26,7 @@ pub use pages::{
     SettingsPage, TagCloudPage,
 };
 pub use routes::*;
-pub use styles::STYLES;
+pub use styles::ALL_STYLES;
 
 #[cfg(feature = "mobile")]
 pub use data::ServerUrl;
@@ -213,7 +213,9 @@ pub fn App() -> Element {
     rsx! {
         document::Title { "Omnibus" }
         document::Stylesheet { href: ATRIUM_CSS }
-        style { {STYLES} }
+        for &chunk in ALL_STYLES {
+            style { {chunk} }
+        }
         components::atrium::AtriumRoot {
             dioxus_router::Router::<Route> {}
         }
