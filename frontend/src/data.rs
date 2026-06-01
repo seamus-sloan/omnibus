@@ -76,6 +76,7 @@ impl DataError {
 
 // ===== Mobile transport: reqwest =====
 
+/// Dioxus context wrapper holding the backend base URL for mobile clients.
 #[cfg(feature = "mobile")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServerUrl(pub String);
@@ -421,6 +422,7 @@ async fn drain_error(response: reqwest::Response, status: reqwest::StatusCode) -
     }
 }
 
+/// GET `/api/settings` — fetch library paths and indexer config.
 #[cfg(feature = "mobile")]
 pub async fn get_settings(server_url: &str) -> Result<Settings, DataError> {
     let url = format!("{server_url}/api/settings");
@@ -432,6 +434,7 @@ pub async fn get_settings(server_url: &str) -> Result<Settings, DataError> {
     Ok(response.json::<Settings>().await?)
 }
 
+/// POST `/api/settings` — persist updated library paths; server kicks a reindex.
 #[cfg(feature = "mobile")]
 pub async fn save_settings(server_url: &str, settings: Settings) -> Result<Settings, DataError> {
     let url = format!("{server_url}/api/settings");
@@ -445,6 +448,7 @@ pub async fn save_settings(server_url: &str, settings: Settings) -> Result<Setti
     Ok(response.json::<Settings>().await?)
 }
 
+/// GET `/api/library` — fetch the high-level library section listing.
 #[cfg(feature = "mobile")]
 pub async fn get_library(server_url: &str) -> Result<LibraryContents, DataError> {
     let url = format!("{server_url}/api/library");
@@ -456,6 +460,7 @@ pub async fn get_library(server_url: &str) -> Result<LibraryContents, DataError>
     Ok(response.json::<LibraryContents>().await?)
 }
 
+/// GET `/api/ebooks` — fetch the full ebook library payload.
 #[cfg(feature = "mobile")]
 pub async fn get_ebooks(server_url: &str) -> Result<EbookLibrary, DataError> {
     let url = format!("{server_url}/api/ebooks");
@@ -467,6 +472,7 @@ pub async fn get_ebooks(server_url: &str) -> Result<EbookLibrary, DataError> {
     Ok(response.json::<EbookLibrary>().await?)
 }
 
+/// GET `/api/search?q=` — full-text search across the ebook library.
 #[cfg(feature = "mobile")]
 pub async fn search_ebooks(server_url: &str, q: &str) -> Result<EbookLibrary, DataError> {
     // Percent-encode the query so FTS5 operators and whitespace survive the
@@ -510,6 +516,7 @@ pub async fn search_palette(server_url: &str, q: &str) -> Result<PaletteResults,
     Ok(response.json::<PaletteResults>().await?)
 }
 
+/// GET `/api/ebooks/{uuid}` — fetch one ebook by uuid, `Ok(None)` on 404.
 #[cfg(feature = "mobile")]
 pub async fn get_ebook(server_url: &str, uuid: &str) -> Result<Option<EbookMetadata>, DataError> {
     let url = format!("{server_url}/api/ebooks/{uuid}");
@@ -524,6 +531,7 @@ pub async fn get_ebook(server_url: &str, uuid: &str) -> Result<Option<EbookMetad
     Ok(Some(response.json::<EbookMetadata>().await?))
 }
 
+/// GET `/api/authors/{id}` — fetch one author detail, `Ok(None)` on 404.
 #[cfg(feature = "mobile")]
 pub async fn get_author(server_url: &str, id: i64) -> Result<Option<AuthorDetail>, DataError> {
     let url = format!("{server_url}/api/authors/{id}");
@@ -596,6 +604,7 @@ pub async fn scan_author_photo(
     Ok(response.json::<AuthorPhotoScanResult>().await?)
 }
 
+/// GET `/api/series/{id}` — fetch one series detail, `Ok(None)` on 404.
 #[cfg(feature = "mobile")]
 pub async fn get_series(server_url: &str, id: i64) -> Result<Option<SeriesDetail>, DataError> {
     let url = format!("{server_url}/api/series/{id}");
@@ -610,6 +619,7 @@ pub async fn get_series(server_url: &str, id: i64) -> Result<Option<SeriesDetail
     Ok(Some(response.json::<SeriesDetail>().await?))
 }
 
+/// GET `/api/authors` — fetch the full authors index for browse / autocomplete.
 #[cfg(feature = "mobile")]
 pub async fn list_authors(server_url: &str) -> Result<Vec<AuthorSummary>, DataError> {
     let url = format!("{server_url}/api/authors");
@@ -621,6 +631,7 @@ pub async fn list_authors(server_url: &str) -> Result<Vec<AuthorSummary>, DataEr
     Ok(response.json::<Vec<AuthorSummary>>().await?)
 }
 
+/// GET `/api/series` — fetch the full series index for browse / autocomplete.
 #[cfg(feature = "mobile")]
 pub async fn list_series(server_url: &str) -> Result<Vec<SeriesSummary>, DataError> {
     let url = format!("{server_url}/api/series");
@@ -632,6 +643,7 @@ pub async fn list_series(server_url: &str) -> Result<Vec<SeriesSummary>, DataErr
     Ok(response.json::<Vec<SeriesSummary>>().await?)
 }
 
+/// GET `/api/tags` — fetch the weighted tag cloud for the discovery page.
 #[cfg(feature = "mobile")]
 pub async fn get_tag_cloud(server_url: &str) -> Result<Vec<TagWeight>, DataError> {
     let url = format!("{server_url}/api/tags");
@@ -643,6 +655,7 @@ pub async fn get_tag_cloud(server_url: &str) -> Result<Vec<TagWeight>, DataError
     Ok(response.json::<Vec<TagWeight>>().await?)
 }
 
+/// POST `/api/ebooks/{uuid}/overrides` — persist user metadata overrides.
 #[cfg(feature = "mobile")]
 pub async fn save_overrides(
     server_url: &str,
@@ -661,6 +674,7 @@ pub async fn save_overrides(
     Ok(Some(response.json::<EbookMetadata>().await?))
 }
 
+/// DELETE `/api/ebooks/{uuid}/overrides` — revert to original metadata.
 #[cfg(feature = "mobile")]
 pub async fn delete_overrides(
     server_url: &str,
@@ -737,6 +751,7 @@ pub async fn record_sessions(
 // of a `Set-Cookie` header. The token is stashed in [`token_store`] and
 // attached to every subsequent request via `with_bearer`.
 
+/// POST `/api/auth/login` (mobile) — bearer-token login, stashes the token.
 #[cfg(feature = "mobile")]
 pub async fn mobile_login(
     server_url: &str,
@@ -754,6 +769,7 @@ pub async fn mobile_login(
     finish_bearer_auth(post_mobile_auth(server_url, "/api/auth/login", &req).await?)
 }
 
+/// POST `/api/auth/register` (mobile) — bearer-token signup, stashes the token.
 #[cfg(feature = "mobile")]
 pub async fn mobile_register(
     server_url: &str,
@@ -787,6 +803,7 @@ fn finish_bearer_auth(resp: LoginResponse) -> Result<UserSummary, DataError> {
     Ok(resp.user)
 }
 
+/// POST `/api/auth/logout` (mobile) — best-effort revoke, then clear local token.
 #[cfg(feature = "mobile")]
 pub async fn mobile_logout(server_url: &str) -> Result<(), DataError> {
     // Best-effort server revocation, then always clear the local token so a
@@ -891,6 +908,7 @@ fn note_server_fn_err(e: dioxus::CapturedError) -> DataError {
 // `server_url` is unused here — server functions always resolve against the
 // page origin. We keep the parameter so the call sites stay platform-agnostic.
 
+/// Web/SSR `get_settings` — server-function wrapper that proxies to `rpc_get_settings`.
 #[cfg(not(feature = "mobile"))]
 pub async fn get_settings(_server_url: &str) -> Result<Settings, DataError> {
     crate::rpc::rpc_get_settings()
@@ -898,6 +916,7 @@ pub async fn get_settings(_server_url: &str) -> Result<Settings, DataError> {
         .map_err(note_server_fn_err)
 }
 
+/// Web/SSR `save_settings` — server-function wrapper that proxies to `rpc_save_settings`.
 #[cfg(not(feature = "mobile"))]
 pub async fn save_settings(_server_url: &str, settings: Settings) -> Result<Settings, DataError> {
     crate::rpc::rpc_save_settings(settings)
@@ -905,6 +924,7 @@ pub async fn save_settings(_server_url: &str, settings: Settings) -> Result<Sett
         .map_err(note_server_fn_err)
 }
 
+/// Web/SSR `get_library` — server-function wrapper that proxies to `rpc_get_library`.
 #[cfg(not(feature = "mobile"))]
 pub async fn get_library(_server_url: &str) -> Result<LibraryContents, DataError> {
     crate::rpc::rpc_get_library()
@@ -923,6 +943,7 @@ pub async fn worker_status(_server_url: &str) -> Result<WorkerStatus, DataError>
         .map_err(note_server_fn_err)
 }
 
+/// Mobile stub for `worker_status` — returns an empty snapshot until the REST mirror lands.
 #[cfg(feature = "mobile")]
 pub async fn worker_status(_server_url: &str) -> Result<WorkerStatus, DataError> {
     // Mobile REST mirror is a follow-up; return an empty status so any
@@ -931,6 +952,7 @@ pub async fn worker_status(_server_url: &str) -> Result<WorkerStatus, DataError>
     Ok(WorkerStatus::default())
 }
 
+/// Web/SSR `get_ebooks` — server-function wrapper that proxies to `rpc_get_ebooks`.
 #[cfg(not(feature = "mobile"))]
 pub async fn get_ebooks(_server_url: &str) -> Result<EbookLibrary, DataError> {
     crate::rpc::rpc_get_ebooks()
@@ -938,6 +960,7 @@ pub async fn get_ebooks(_server_url: &str) -> Result<EbookLibrary, DataError> {
         .map_err(note_server_fn_err)
 }
 
+/// Web/SSR `search_ebooks` — server-function wrapper that proxies to `rpc_search`.
 #[cfg(not(feature = "mobile"))]
 pub async fn search_ebooks(_server_url: &str, q: &str) -> Result<EbookLibrary, DataError> {
     crate::rpc::rpc_search(q.to_string())
@@ -953,6 +976,7 @@ pub async fn search_palette(_server_url: &str, q: &str) -> Result<PaletteResults
         .map_err(note_server_fn_err)
 }
 
+/// Web/SSR `get_ebook` — server-function wrapper that proxies to `rpc_get_ebook`.
 #[cfg(not(feature = "mobile"))]
 pub async fn get_ebook(_server_url: &str, uuid: &str) -> Result<Option<EbookMetadata>, DataError> {
     crate::rpc::rpc_get_ebook(uuid.to_string())
@@ -960,6 +984,7 @@ pub async fn get_ebook(_server_url: &str, uuid: &str) -> Result<Option<EbookMeta
         .map_err(note_server_fn_err)
 }
 
+/// Web/SSR `get_author` — server-function wrapper that proxies to `rpc_get_author`.
 #[cfg(not(feature = "mobile"))]
 pub async fn get_author(_server_url: &str, id: i64) -> Result<Option<AuthorDetail>, DataError> {
     crate::rpc::rpc_get_author(id)
@@ -967,6 +992,7 @@ pub async fn get_author(_server_url: &str, id: i64) -> Result<Option<AuthorDetai
         .map_err(note_server_fn_err)
 }
 
+/// Web/SSR `scan_author_photo` — server-function wrapper that proxies to `rpc_scan_author_photo`.
 #[cfg(not(feature = "mobile"))]
 pub async fn scan_author_photo(
     _server_url: &str,
@@ -1078,6 +1104,7 @@ pub async fn upload_author_photo(
     ))
 }
 
+/// Web/SSR `get_series` — server-function wrapper that proxies to `rpc_get_series`.
 #[cfg(not(feature = "mobile"))]
 pub async fn get_series(_server_url: &str, id: i64) -> Result<Option<SeriesDetail>, DataError> {
     crate::rpc::rpc_get_series(id)
@@ -1085,6 +1112,7 @@ pub async fn get_series(_server_url: &str, id: i64) -> Result<Option<SeriesDetai
         .map_err(note_server_fn_err)
 }
 
+/// Web/SSR `get_tag_cloud` — server-function wrapper that proxies to `rpc_get_tag_cloud`.
 #[cfg(not(feature = "mobile"))]
 pub async fn get_tag_cloud(_server_url: &str) -> Result<Vec<TagWeight>, DataError> {
     crate::rpc::rpc_get_tag_cloud()
@@ -1092,6 +1120,7 @@ pub async fn get_tag_cloud(_server_url: &str) -> Result<Vec<TagWeight>, DataErro
         .map_err(note_server_fn_err)
 }
 
+/// Web/SSR `list_authors` — server-function wrapper that proxies to `rpc_list_authors`.
 #[cfg(not(feature = "mobile"))]
 pub async fn list_authors(_server_url: &str) -> Result<Vec<AuthorSummary>, DataError> {
     crate::rpc::rpc_list_authors()
@@ -1099,6 +1128,7 @@ pub async fn list_authors(_server_url: &str) -> Result<Vec<AuthorSummary>, DataE
         .map_err(note_server_fn_err)
 }
 
+/// Web/SSR `list_series` — server-function wrapper that proxies to `rpc_list_series`.
 #[cfg(not(feature = "mobile"))]
 pub async fn list_series(_server_url: &str) -> Result<Vec<SeriesSummary>, DataError> {
     crate::rpc::rpc_list_series()
@@ -1106,6 +1136,7 @@ pub async fn list_series(_server_url: &str) -> Result<Vec<SeriesSummary>, DataEr
         .map_err(note_server_fn_err)
 }
 
+/// Web/SSR `save_overrides` — server-function wrapper that proxies to `rpc_save_overrides`.
 #[cfg(not(feature = "mobile"))]
 pub async fn save_overrides(
     _server_url: &str,
@@ -1117,6 +1148,7 @@ pub async fn save_overrides(
         .map_err(note_server_fn_err)
 }
 
+/// Web/SSR `delete_overrides` — server-function wrapper that proxies to `rpc_delete_overrides`.
 #[cfg(not(feature = "mobile"))]
 pub async fn delete_overrides(
     _server_url: &str,
@@ -1173,6 +1205,7 @@ pub async fn record_sessions(
 // pages render the same markup on the server (no auth calls issued during
 // SSR), and the actions only fire on user interaction after hydration.
 
+/// POST `/api/auth/login` (web) — cookie-session login; pings `web_auth_state` on success.
 #[cfg(feature = "web")]
 pub async fn login(req: LoginRequest) -> Result<LoginResponse, String> {
     let resp = post_auth_json("/api/auth/login", &req).await?;
@@ -1182,6 +1215,7 @@ pub async fn login(req: LoginRequest) -> Result<LoginResponse, String> {
     Ok(resp)
 }
 
+/// POST `/api/auth/register` (web) — cookie-session signup; pings `web_auth_state` on success.
 #[cfg(feature = "web")]
 pub async fn register(req: RegisterRequest) -> Result<LoginResponse, String> {
     let resp = post_auth_json("/api/auth/register", &req).await?;
@@ -1189,6 +1223,7 @@ pub async fn register(req: RegisterRequest) -> Result<LoginResponse, String> {
     Ok(resp)
 }
 
+/// POST `/api/auth/logout` (web) — clears the session cookie and notifies subscribers.
 #[cfg(feature = "web")]
 pub async fn logout() -> Result<(), String> {
     use gloo_net::http::Request;
@@ -1205,6 +1240,7 @@ pub async fn logout() -> Result<(), String> {
     Ok(())
 }
 
+/// GET `/api/auth/me` (web) — resolve the currently-authenticated user, if any.
 #[cfg(feature = "web")]
 pub async fn current_user() -> Result<Option<UserSummary>, String> {
     use gloo_net::http::Request;

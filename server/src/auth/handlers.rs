@@ -20,6 +20,7 @@ use super::extractor::{extract_token, AuthUser};
 use super::{session_cookie_name, BEARER_TTL_SECS, COOKIE_TTL_SECS};
 use crate::backend::AppState;
 
+/// Build the `/api/auth/{register,login,logout,me}` router.
 pub fn auth_router(state: AppState) -> Router {
     let pool = state.pool().clone();
     Router::new()
@@ -127,6 +128,7 @@ fn want_bearer(kind: Option<&str>) -> bool {
     matches!(kind, Some("ios") | Some("android") | Some("bearer"))
 }
 
+/// Parse the `OMNIBUS_SECURE_COOKIES` env value (defaults to `true` when unset).
 pub fn parse_secure_cookies(raw: Option<&str>) -> bool {
     match raw {
         Some(v) => {
