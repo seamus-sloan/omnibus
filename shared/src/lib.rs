@@ -493,6 +493,7 @@ pub struct PaletteResults {
 }
 
 impl PaletteResults {
+    /// Total number of hits across every result category.
     pub fn total_count(&self) -> usize {
         self.books.len() + self.authors.len() + self.series.len() + self.tags.len()
     }
@@ -574,6 +575,7 @@ pub enum SortKey {
     NewestAdded,
 }
 
+/// Ascending or descending sort direction for a [`SortKey`].
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SortDir {
@@ -764,6 +766,7 @@ pub struct WorkerStatus {
 }
 
 impl WorkerStatus {
+    /// `true` when no tasks are active or recently completed.
     pub fn is_empty(&self) -> bool {
         self.active.is_empty() && self.recent_complete.is_empty()
     }

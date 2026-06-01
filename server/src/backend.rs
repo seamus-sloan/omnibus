@@ -41,6 +41,7 @@ mod tags;
 /// client. Surfaced as a constant so callers / tests share a single source
 /// of truth.
 pub const SEARCH_RATE_LIMIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+/// Max search requests per [`SEARCH_RATE_LIMIT_WINDOW`] per IP.
 pub const SEARCH_RATE_LIMIT_MAX: u32 = 30;
 
 /// Per-IP rate-limit budget for the binary-upload endpoints
@@ -52,6 +53,7 @@ pub const SEARCH_RATE_LIMIT_MAX: u32 = 30;
 /// backstopping abuse. Surfaced as constants so callers / tests share a
 /// single source of truth.
 pub const UPLOAD_RATE_LIMIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+/// Max upload requests per [`UPLOAD_RATE_LIMIT_WINDOW`] per IP.
 pub const UPLOAD_RATE_LIMIT_MAX: u32 = 10;
 
 /// Generic 500 response that never leaks internal error details to the wire.
@@ -66,6 +68,7 @@ fn internal<E: std::fmt::Display>(context: &'static str, e: E) -> Response {
         .into_response()
 }
 
+/// Shared axum router state — SQLite pool, worker handle, SSRF guard config.
 #[derive(Clone)]
 pub struct AppState {
     pool: SqlitePool,
@@ -79,6 +82,7 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Build an `AppState` with the default (strict) SSRF guard.
     pub fn new(pool: SqlitePool) -> Self {
         let worker = Worker::new(pool.clone(), WorkerConfig::default());
         Self {
@@ -104,19 +108,23 @@ impl AppState {
         }
     }
 
+    /// SQLite connection pool used by every handler.
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
 
+    /// Shared single-process background worker handle.
     pub fn worker(&self) -> &Arc<Worker> {
         &self.worker
     }
 
+    /// SSRF guard config consulted before fetching admin-supplied URLs.
     pub fn remote_image_config(&self) -> &db::author_photos::RemoteImageConfig {
         &self.remote_image_config
     }
 }
 
+/// Build the `/api/*` REST router with a fresh per-call search rate-limiter.
 pub fn rest_router(state: AppState) -> Router {
     // Standalone/test entrypoint: a fresh, dedicated search limiter per call.
     // The live server uses `rest_router_with_search_limiter` to share one (#249).
