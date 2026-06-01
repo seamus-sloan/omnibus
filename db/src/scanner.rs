@@ -150,6 +150,91 @@ mod tests {
     }
 
     #[test]
+    fn list_files_returns_empty_section_when_path_is_none() {
+        // Silent contract: `path = None` short-circuits to a default-shaped
+        // section (no path, no counts, no error) without touching the FS.
+        let result = list_files(None, EBOOK_EXTENSIONS);
+        assert_eq!(result, LibrarySection::default());
+        assert!(result.path.is_none());
+        assert_eq!(result.total_files, 0);
+        assert!(result.counts_by_ext.is_empty());
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn list_files_returns_section_with_error_when_path_missing() {
+        // Silent contract: a path that doesn't exist on disk still returns
+        // an Ok-shaped `LibrarySection`; the failure is surfaced via
+        // `error: Some("path not found: ...")`, never as a panic or Err.
+        let missing = "/definitely/does/not/exist/omnibus_scanner_missing_dir";
+        let result = list_files(Some(missing), EBOOK_EXTENSIONS);
+        assert_eq!(result.path.as_deref(), Some(missing));
+        assert_eq!(result.total_files, 0);
+        // Counts slot is preallocated for each requested extension, all zero.
+        assert_eq!(
+            result.counts_by_ext,
+            vec![("epub".to_string(), 0), ("pdf".to_string(), 0)],
+        );
+        let err = result.error.expect("missing path should populate error");
+        assert!(
+            err.contains("path not found"),
+            "unexpected error message: {err}",
+        );
+        assert!(
+            err.contains(missing),
+            "error should include the path: {err}"
+        );
+    }
+
+    #[test]
+    fn list_files_surfaces_io_error_on_unreadable_dir() {
+        // Silent contract: when `read_dir` fails mid-walk (e.g. the directory
+        // exists but is not readable), the section is returned with
+        // `error: Some("could not read directory: ...")` instead of panicking
+        // or propagating an `Err`.
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let dir = tmp.path();
+        // Seed a file so the walk has something to enumerate if it ever
+        // succeeded; the test only cares about the read_dir failure path.
+        fs::write(dir.join("a.epub"), b"").expect("seed file");
+
+        let original = fs::metadata(dir).expect("stat tempdir").permissions();
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o000)).expect("strip dir perms");
+
+        // Self-skip when the chmod didn't actually deny access (e.g. running
+        // as root in a container — root bypasses DAC perms). Restore perms
+        // before returning so TempDir cleanup can proceed.
+        if fs::read_dir(dir).is_ok() {
+            let _ = fs::set_permissions(dir, original);
+            eprintln!(
+                "skipping list_files_surfaces_io_error_on_unreadable_dir: \
+                 process can still read mode-000 dir (likely running as root)",
+            );
+            return;
+        }
+
+        let result = list_files(Some(dir.to_str().unwrap()), EBOOK_EXTENSIONS);
+
+        // Restore perms *before* assertions so a failed assert can't leak a
+        // mode-000 dir that breaks TempDir's Drop.
+        fs::set_permissions(dir, original).expect("restore dir perms");
+
+        assert_eq!(result.path.as_deref(), dir.to_str());
+        assert_eq!(result.total_files, 0);
+        assert_eq!(
+            result.counts_by_ext,
+            vec![("epub".to_string(), 0), ("pdf".to_string(), 0)],
+        );
+        let err = result.error.expect("unreadable dir should populate error");
+        assert!(
+            err.contains("could not read directory"),
+            "unexpected error message: {err}",
+        );
+    }
+
+    #[test]
     fn scan_libraries_uses_audiobook_extensions() {
         let dir = make_test_dir("audiobooks");
         fs::write(dir.join("chapter1.m4b"), b"").unwrap();
