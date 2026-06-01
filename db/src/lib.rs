@@ -24,6 +24,8 @@ pub mod scanner;
 pub mod settings;
 pub mod sync;
 mod taxonomy;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 pub mod thumbs;
 pub mod worker;
 

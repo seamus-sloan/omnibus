@@ -328,11 +328,10 @@ pub fn delete_override_cover(uuid: &str) {
 mod tests {
     use super::*;
     use crate::books::{get_book, list_books, search_books};
-    use crate::covers::test_helpers::CoversTempDir;
     use crate::palette::search_palette;
     use crate::pool::init_db;
     use crate::sync::replace_books;
-    use crate::sync::test_helpers::indexed;
+    use crate::test_support::{indexed, CoversTempDir};
     use omnibus_shared::MetadataOverrides;
 
     // -----------------------------------------------------------------

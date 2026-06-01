@@ -74,6 +74,13 @@ uuid = { version = "1", features = ["v5"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 urlencoding = "2"
 
+[features]
+# Re-exports `test_support` helpers (in-memory pool seeders, `IndexedBook`
+# factories, `CoversTempDir`) so external test crates can depend on them
+# without re-implementing fixtures. Internal `#[cfg(test)]` builds get the
+# module automatically via the `any(test, feature = "test-support")` gate.
+test-support = []
+
 [dev-dependencies]
 tempfile.workspace = true
 wiremock = "0.6"
