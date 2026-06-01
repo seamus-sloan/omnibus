@@ -3,11 +3,6 @@
 //! small and covers can be regenerated independently by reindexing.
 //! `books.has_cover` tracks whether a file should exist; a missing file on
 //! disk is treated as "no cover" (404), not an error.
-//!
-//! Also hosts the `CoversTempDir` test guard used throughout the db tests
-//! — `pub(crate)` so siblings can `use crate::covers::test_helpers::*`
-//! without each test module needing its own copy of the OMNIBUS_COVERS_DIR
-//! mutex.
 
 use std::path::PathBuf;
 
@@ -248,65 +243,13 @@ pub async fn get_last_modified_epoch(
 }
 
 #[cfg(test)]
-pub(crate) mod test_helpers {
-    //! Shared test guards used by every db test module that touches the
-    //! covers directory. `OMNIBUS_COVERS_DIR` is a process-global env var,
-    //! so tests that touch it must serialize. A single Mutex held for the
-    //! duration of each test keeps parallel `cargo test` runs from stomping
-    //! on each other's covers dir.
-
-    use std::path::PathBuf;
-
-    pub(crate) static COVERS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    pub(crate) struct CoversTempDir {
-        pub(crate) path: PathBuf,
-        prev: Option<String>,
-        _guard: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl CoversTempDir {
-        pub(crate) fn new(tag: &str) -> Self {
-            let guard = COVERS_ENV_LOCK
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let pid = std::process::id();
-            let seq = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let path = std::env::temp_dir().join(format!("omnibus_covers_{tag}_{pid}_{seq}"));
-            let _ = std::fs::remove_dir_all(&path);
-            let prev = std::env::var("OMNIBUS_COVERS_DIR").ok();
-            std::env::set_var("OMNIBUS_COVERS_DIR", &path);
-            Self {
-                path,
-                prev,
-                _guard: guard,
-            }
-        }
-    }
-
-    impl Drop for CoversTempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
-            match self.prev.take() {
-                Some(v) => std::env::set_var("OMNIBUS_COVERS_DIR", v),
-                None => std::env::remove_var("OMNIBUS_COVERS_DIR"),
-            }
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::books::list_books;
-    use crate::covers::test_helpers::CoversTempDir;
     use crate::metadata_overrides::{upsert_metadata_overrides, write_override_cover};
     use crate::pool::init_db;
     use crate::sync::replace_books;
-    use crate::sync::test_helpers::indexed;
+    use crate::test_support::{indexed, CoversTempDir};
     use omnibus_shared::MetadataOverrides;
 
     #[tokio::test]

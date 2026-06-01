@@ -480,173 +480,17 @@ pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, sqlx::Er
 }
 
 #[cfg(test)]
-pub(crate) mod test_helpers {
-    //! Discovery fixture seeders shared with `browse`, `books`, and
-    //! `author_photos_data` tests. `pub(crate)` so siblings can call e.g.
-    //! `use crate::discovery::test_helpers::seed_discovery_fixture;`.
-
-    use crate::covers::test_helpers::CoversTempDir;
-    use crate::pool::init_db;
-    use crate::sync::replace_books;
-    use crate::sync::test_helpers::indexed;
-    use sqlx::SqlitePool;
-
-    // -------------------------------------------------------------------------
-    // Discovery query tests (F1.8)
-    // -------------------------------------------------------------------------
-
-    /// Seed a small multi-author, multi-series, multi-tag fixture for the
-    /// discovery query tests below. Returns the pool and a `CoversTempDir`
-    /// guard the caller must keep alive for the lifetime of the test.
-    pub(crate) async fn seed_discovery_fixture() -> (SqlitePool, CoversTempDir) {
-        let guard = CoversTempDir::new("discovery");
-        let pool = init_db("sqlite::memory:").await.unwrap();
-        replace_books(
-            &pool,
-            "/lib",
-            vec![
-                // Two-author book in Saga #1 with tag "fiction"
-                indexed(
-                    "saga1.epub",
-                    Some("Saga: Book One"),
-                    &["Ada Lovelace", "Grace Hopper"],
-                    &["fiction", "classic"],
-                    Some(("Saga", "1")),
-                    None,
-                ),
-                // Sequel in Saga #2, same primary author + new tag
-                indexed(
-                    "saga2.epub",
-                    Some("Saga: Book Two"),
-                    &["Ada Lovelace"],
-                    &["fiction"],
-                    Some(("Saga", "2")),
-                    None,
-                ),
-                // Standalone by Ada — no series
-                indexed(
-                    "standalone.epub",
-                    Some("Standalone"),
-                    &["Ada Lovelace"],
-                    &["essay"],
-                    None,
-                    None,
-                ),
-                // Different-author, different-series book
-                indexed(
-                    "other.epub",
-                    Some("Other Story"),
-                    &["Niklaus Wirth"],
-                    &["nonfiction"],
-                    Some(("Pioneers", "1")),
-                    None,
-                ),
-            ],
-        )
-        .await
-        .unwrap();
-        (pool, guard)
-    }
-    pub(crate) async fn author_id_by_name(pool: &SqlitePool, name: &str) -> i64 {
-        sqlx::query_scalar::<_, i64>("SELECT id FROM authors WHERE name = ?")
-            .bind(name)
-            .fetch_one(pool)
-            .await
-            .unwrap()
-    }
-    pub(crate) async fn series_id_by_name(pool: &SqlitePool, name: &str) -> i64 {
-        sqlx::query_scalar::<_, i64>("SELECT id FROM series WHERE name = ?")
-            .bind(name)
-            .fetch_one(pool)
-            .await
-            .unwrap()
-    }
-    // -------------------------------------------------------------------------
-    // Discovery read caps (issue #150)
-    //
-    // `get_author` / `get_series` previously serialized every attributed book
-    // in one payload. The fix is a hard `LIMIT MAX_DISCOVERY_BOOKS` on the
-    // nested `books` vec plus an uncapped `book_count` so callers can detect
-    // truncation as `book_count > books.len()`.
-    // -------------------------------------------------------------------------
-
-    /// Seed `count` minimal `books` rows under `/lib`, all linked to one
-    /// author ("Prolific") and one series ("Mega"), via recursive CTEs.
-    /// Bypasses `replace_books`/the indexer — the cap only depends on link
-    /// rows existing — keeping the test fast even past the 1k cap. Returns
-    /// `(author_id, series_id)`.
-    pub(crate) async fn seed_books_for_one_author_and_series(
-        pool: &SqlitePool,
-        count: i64,
-    ) -> (i64, i64) {
-        sqlx::query("INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib')")
-            .execute(pool)
-            .await
-            .unwrap();
-        let lib_id: i64 = sqlx::query_scalar("SELECT id FROM libraries WHERE path = '/lib'")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-        let author_id: i64 = sqlx::query_scalar(
-            "INSERT INTO authors (name, sort) VALUES ('Prolific', 'Prolific') RETURNING id",
-        )
-        .fetch_one(pool)
-        .await
-        .unwrap();
-        let series_id: i64 = sqlx::query_scalar(
-            "INSERT INTO series (name, sort) VALUES ('Mega', 'Mega') RETURNING id",
-        )
-        .fetch_one(pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            r#"
-            WITH RECURSIVE n(i) AS (
-                SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
-            )
-            INSERT INTO books (uuid, library_id, path, title, sort, series_index)
-            SELECT 'uuid-' || i, ?, '/lib/b' || i, 'Title ' || i,
-                   'Title ' || printf('%010d', i), i
-              FROM n
-            "#,
-        )
-        .bind(count)
-        .bind(lib_id)
-        .execute(pool)
-        .await
-        .unwrap();
-        // Link every seeded book to the author and the series.
-        sqlx::query(
-            "INSERT INTO books_authors_link (book, author, position)
-             SELECT id, ?, 0 FROM books",
-        )
-        .bind(author_id)
-        .execute(pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO books_series_link (book, series)
-             SELECT id, ? FROM books",
-        )
-        .bind(series_id)
-        .execute(pool)
-        .await
-        .unwrap();
-        (author_id, series_id)
-    }
-}
-
-#[cfg(test)]
 mod tests {
-    use super::test_helpers::*;
     use super::*;
     use crate::author_photos_data::{upsert_author_photo, AuthorPhotoSource};
     use crate::books::list_books;
-    use crate::covers::test_helpers::CoversTempDir;
     use crate::metadata_overrides::upsert_metadata_overrides;
     use crate::pool::init_db;
     use crate::sync::replace_books;
-    use crate::sync::test_helpers::indexed;
+    use crate::test_support::{
+        author_id_by_name, indexed, seed_books_for_one_author_and_series, seed_discovery_fixture,
+        series_id_by_name, CoversTempDir,
+    };
     use omnibus_shared::{Contributor, MetadataOverrides};
 
     #[tokio::test]

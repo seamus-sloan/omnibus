@@ -236,10 +236,9 @@ mod tests {
     use super::*;
     use crate::author_photos_data::{upsert_author_photo, AuthorPhotoSource};
     use crate::books::list_books;
-    use crate::covers::test_helpers::CoversTempDir;
-    use crate::discovery::test_helpers::*;
     use crate::metadata_overrides::upsert_metadata_overrides;
     use crate::pool::init_db;
+    use crate::test_support::*;
     use omnibus_shared::{Contributor, MetadataOverrides};
 
     // -----------------------------------------------------------------

@@ -245,7 +245,7 @@ pub(crate) mod test_helpers {
     //! tests. They mutate `EBOOK_LIBRARY_PATH` / `AUDIOBOOK_LIBRARY_PATH`,
     //! which is process-global; under `cargo test`'s default parallel
     //! execution two tests racing those vars can observe a torn state.
-    //! Mirrors `covers::test_helpers::CoversTempDir`: acquiring the guard
+    //! Mirrors `test_support::CoversTempDir`: acquiring the guard
     //! locks `ENV_LOCK` and snapshots both vars, and dropping it restores
     //! their prior values (so the rest of the test run — and local dev — sees
     //! them unchanged) before releasing the lock. Keeping the `MutexGuard` in
@@ -395,10 +395,9 @@ mod tests {
     }
 
     use crate::books::list_books;
-    use crate::covers::test_helpers::CoversTempDir;
     use crate::covers::{cover_path_for, delete_cover_files_for, write_cover_file};
     use crate::sync::replace_books;
-    use crate::sync::test_helpers::indexed;
+    use crate::test_support::{indexed, CoversTempDir};
 
     #[tokio::test]
     async fn set_settings_prunes_library_when_ebook_path_changes() {
