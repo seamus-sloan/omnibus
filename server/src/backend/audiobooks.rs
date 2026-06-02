@@ -1,124 +1,183 @@
-//! F2.3 audiobook file streaming for the in-browser player.
+//! F2.3 HLS audiobook streaming — playlist manifest, segment file, and
+//! transcode-readiness status endpoints.
 //!
-//! `GET /api/audiobooks/{uuid}/file` resolves the uuid to an on-disk
-//! audiobook path, then delegates to `tower-http`'s [`ServeFile`] which
-//! handles Range / 206 / `If-None-Match` / `If-Modified-Since` natively.
-//! Without Range support the browser's `<audio>` element can't seek into a
-//! ~400 MB m4b without re-streaming from byte 0; doing the parsing
-//! ourselves invites subtle bugs in conditional-GET handling, so we
-//! piggyback on tower-http.
+//! Three handlers replace the old `/api/audiobooks/{uuid}/file` route:
 //!
-//! The handler prefers `M4B` then `M4A` then `MP3` so a single uuid maps
-//! cleanly to one playable file when a book ships with both formats —
-//! the Listen CTA is uuid-only, not format-specific.
+//! - `GET /api/audiobooks/{uuid}/playlist.m3u8` — returns a VOD HLS manifest
+//!   built from the stored `book_file_parts.duration_seconds` values. Always
+//!   present once a book is indexed, even before the transcode finishes.
+//! - `GET /api/audiobooks/{uuid}/segments/{segment}` — serves `seg-NNNN.ts`
+//!   files from the on-disk HLS segment cache. Triggers a transcode job if the
+//!   segment is missing (fire-and-wait so the first segment is usually ready by
+//!   the time hls.js asks for it).
+//! - `GET /api/audiobooks/{uuid}/status` — returns `{"ready":bool,"progress":f32}`
+//!   so the frontend can show a "Preparing…" overlay while the first transcode
+//!   runs and poll until ready before initializing hls.js.
 
 use axum::{
     body::Body,
     extract::{Path, Request, State},
     response::{IntoResponse, Response},
+    Json,
 };
-use omnibus_db::{self as db};
+use omnibus_db::{hls, worker::Task};
+use serde::Serialize;
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
 use super::{internal, AppState};
 use crate::auth::AuthUser;
 
-const AUDIOBOOK_FORMATS: &[&str] = &["M4B", "M4A", "MP3"];
-
-/// Stream the raw audiobook bytes for `uuid` with full Range support.
-pub(super) async fn get_audiobook_file(
+/// Returns the HLS VOD manifest for `uuid` (always built from DB — no
+/// filesystem read). The manifest is derived from stored
+/// `book_file_parts.duration_seconds` values so it stays accurate before
+/// and after transcoding.
+pub(super) async fn get_audiobook_playlist(
     _user: AuthUser,
     State(state): State<AppState>,
     Path(uuid): Path<String>,
-    req: Request,
 ) -> Response {
-    let id = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
-        Ok(Some(id)) => id,
+    let resolved = match hls::resolve_audiobook(&state.pool, &uuid).await {
+        Ok(Some(r)) => r,
         Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return internal("resolve_book_id_by_uuid", e),
-    };
-    let mut resolved: Option<(std::path::PathBuf, &'static str)> = None;
-    for fmt in AUDIOBOOK_FORMATS {
-        match db::book_file_path(&state.pool, id, fmt).await {
-            Ok(Some(path)) => {
-                resolved = Some((path, fmt));
-                break;
-            }
-            Ok(None) => continue,
-            Err(e) => return internal("book_file_path", e),
-        }
-    }
-    let Some((path, fmt)) = resolved else {
-        return axum::http::StatusCode::NOT_FOUND.into_response();
+        Err(e) => return internal("resolve_audiobook", e),
     };
 
-    // `ServeFile::new(path)` builds a one-shot service; `oneshot(req)`
-    // drives the response (Range/conditional-GET handling included). We
-    // hand back the wrapped body unchanged and only overlay our own
-    // content-type so the browser treats the bytes as audio regardless
-    // of how tower-http sniffed the extension.
-    let serve = ServeFile::new(path);
+    let parts = match hls::get_parts(&state.pool, resolved.book_file_id).await {
+        Ok(p) => p,
+        Err(e) => return internal("get_parts", e),
+    };
+
+    let m3u8 = hls::build_manifest(&parts);
+    (
+        axum::http::StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "application/vnd.apple.mpegurl",
+        )],
+        m3u8,
+    )
+        .into_response()
+}
+
+/// Returns `{"ready": bool, "progress": f32}` for the AUDIO64 profile.
+/// If the transcode has not started yet, fires a `Task::HlsTranscode`
+/// fire-and-forget to the worker.
+pub(super) async fn get_audiobook_status(
+    _user: AuthUser,
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+) -> Response {
+    let resolved = match hls::resolve_audiobook(&state.pool, &uuid).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return internal("resolve_audiobook", e),
+    };
+
+    let book_id = resolved.book_id;
+    let ready = hls::is_ready(book_id, hls::AUDIO64);
+    let progress = hls::read_progress(book_id, hls::AUDIO64);
+
+    // If neither ready nor in progress, kick off the transcode. The worker
+    // serializes duplicate posts via the per-resource keyed mutex so a second
+    // poll while the job is already running just enqueues behind it.
+    if !ready && progress < 0.05 {
+        state.worker.post(Task::HlsTranscode {
+            book_id,
+            book_file_id: resolved.book_file_id,
+            library_path: resolved.library_path,
+            profile: hls::AUDIO64.to_string(),
+        });
+    }
+
+    Json(StatusResponse { ready, progress }).into_response()
+}
+
+/// Serves one `.ts` segment file from the HLS cache.
+///
+/// If the segment is absent (transcode not yet complete) the handler
+/// posts a `Task::HlsTranscode` and blocks until it finishes. After
+/// completion it re-checks for the file and serves it, or 404s if
+/// ffmpeg failed to produce it.
+pub(super) async fn get_audiobook_segment(
+    _user: AuthUser,
+    State(state): State<AppState>,
+    Path((uuid, segment)): Path<(String, String)>,
+    req: Request,
+) -> Response {
+    // Validate: segment must match `seg-NNNN.ts` exactly.
+    if !is_valid_segment_name(&segment) {
+        return axum::http::StatusCode::BAD_REQUEST.into_response();
+    }
+
+    let resolved = match hls::resolve_audiobook(&state.pool, &uuid).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return internal("resolve_audiobook", e),
+    };
+
+    let book_id = resolved.book_id;
+    let seg_path = hls::segment_dir(book_id, hls::AUDIO64).join(&segment);
+
+    // Fast path: segment already on disk.
+    if !seg_path.exists() {
+        // Transcode hasn't produced this segment yet — trigger and wait.
+        let task_id = state.worker.post(Task::HlsTranscode {
+            book_id,
+            book_file_id: resolved.book_file_id,
+            library_path: resolved.library_path,
+            profile: hls::AUDIO64.to_string(),
+        });
+        let _ = state.worker.await_completion(task_id).await;
+
+        if !seg_path.exists() {
+            return axum::http::StatusCode::NOT_FOUND.into_response();
+        }
+    }
+
+    let serve = ServeFile::new(&seg_path);
     let res = match serve.oneshot(req).await {
-        Ok(res) => res,
-        Err(e) => return internal("serve audiobook", e),
+        Ok(r) => r,
+        Err(e) => return internal("serve segment", e),
     };
     let (mut parts, body) = res.into_parts();
     parts.headers.insert(
         axum::http::header::CONTENT_TYPE,
-        content_type_for(fmt).parse().expect("static content-type"),
+        "video/MP2T".parse().expect("static content-type"),
     );
-    parts.headers.insert(
-        axum::http::header::CACHE_CONTROL,
-        "private, max-age=86400".parse().unwrap(),
-    );
-    parts
-        .headers
-        .insert(axum::http::header::VARY, "Cookie".parse().unwrap());
     Response::from_parts(parts, Body::new(body))
 }
 
-fn content_type_for(format: &str) -> &'static str {
-    match format {
-        "MP3" => "audio/mpeg",
-        _ => "audio/mp4",
+/// JSON response body for `GET /api/audiobooks/{uuid}/status`.
+#[derive(Serialize)]
+struct StatusResponse {
+    ready: bool,
+    progress: f32,
+}
+
+/// `true` if `name` matches `seg-NNNN.ts` exactly (4 decimal digits).
+fn is_valid_segment_name(name: &str) -> bool {
+    if !name.starts_with("seg-") || !name.ends_with(".ts") {
+        return false;
     }
+    let digits = &name[4..name.len() - 3];
+    digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit())
 }
 
 #[cfg(test)]
 mod tests {
-    use axum::http::{header::AUTHORIZATION, Request, StatusCode};
+    use axum::http::StatusCode;
     use tower::ServiceExt;
 
     use super::*;
     use crate::auth::test_support as auth_test_support;
     use crate::backend::test_support::*;
 
-    fn pid_nanos() -> (u32, u128) {
-        let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        (pid, nanos)
-    }
-
-    async fn seed_one_audiobook(
-        pool: &sqlx::SqlitePool,
-        format: &str,
-        bytes: &[u8],
-    ) -> (String, std::path::PathBuf) {
-        let (pid, nanos) = pid_nanos();
-        let tmp = std::env::temp_dir().join(format!("omnibus_audiobook_test_{pid}_{nanos}"));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let stem = "the-princess-knight";
-        let ext = format.to_ascii_lowercase();
-        let file_path = tmp.join(format!("{stem}.{ext}"));
-        std::fs::write(&file_path, bytes).unwrap();
-
+    /// Seed one audiobook book + book_files + book_file_parts row for tests.
+    async fn seed_one_audiobook(pool: &sqlx::SqlitePool) -> String {
         let lib_id =
             sqlx::query("INSERT INTO libraries (path, display_name) VALUES (?, 'audiobooks')")
-                .bind(tmp.to_str().unwrap())
+                .bind("/audiobooks")
                 .execute(pool)
                 .await
                 .unwrap()
@@ -128,100 +187,157 @@ mod tests {
             sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, ?, 'PK')")
                 .bind(uuid)
                 .bind(lib_id)
-                .bind(tmp.to_str().unwrap())
+                .bind("/audiobooks")
                 .execute(pool)
                 .await
                 .unwrap()
                 .last_insert_rowid();
-        sqlx::query(
+        let file_id = sqlx::query(
             "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime) \
-             VALUES (?, ?, ?, ?, '')",
+             VALUES (?, 'MP3', 'the-princess-knight', 100, '')",
         )
         .bind(book_id)
-        .bind(format)
-        .bind(stem)
-        .bind(bytes.len() as i64)
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        sqlx::query(
+            "INSERT INTO book_file_parts (book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds) \
+             VALUES (?, 0, 'ch01.mp3', 50, 0, 300.0)",
+        )
+        .bind(file_id)
         .execute(pool)
         .await
         .unwrap();
-        (uuid.into(), tmp)
+        uuid.to_string()
     }
 
     #[tokio::test]
-    async fn api_get_audiobook_file_returns_401_when_anonymous() {
+    async fn api_get_audiobook_playlist_returns_401_when_anonymous() {
         let (app, _, _) = fixture().await;
         let res = app
-            .oneshot(get_anon("/api/audiobooks/some-uuid/file"))
+            .oneshot(get_anon("/api/audiobooks/some-uuid/playlist.m3u8"))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
-    async fn api_get_audiobook_file_returns_404_for_unknown_uuid() {
-        let (app, _state, pool) = fixture().await;
+    async fn api_get_audiobook_playlist_returns_404_for_unknown_uuid() {
+        let (app, _, pool) = fixture().await;
         let user = auth_test_support::create_user(&pool, "alice").await;
         let token = auth_test_support::bearer_token(&pool, user.id).await;
         let res = app
             .oneshot(get_with_bearer(
-                "/api/audiobooks/does-not-exist/file",
+                "/api/audiobooks/does-not-exist/playlist.m3u8",
                 &token,
             ))
             .await
-            .expect("request should succeed");
+            .unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
-    async fn api_get_audiobook_file_returns_200_with_m4b_content_type() {
+    async fn api_get_audiobook_playlist_returns_m3u8_for_known_uuid() {
         let (_, _, pool) = fixture().await;
         let user = auth_test_support::create_user(&pool, "alice").await;
         let token = auth_test_support::bearer_token(&pool, user.id).await;
-        let (uuid, tmp) = seed_one_audiobook(&pool, "M4B", b"\0\0\0\x20ftypm4b ").await;
+        let uuid = seed_one_audiobook(&pool).await;
 
         let app = crate::backend::rest_router(AppState::new(pool));
         let res = app
             .oneshot(get_with_bearer(
-                &format!("/api/audiobooks/{uuid}/file"),
+                &format!("/api/audiobooks/{uuid}/playlist.m3u8"),
                 &token,
             ))
             .await
-            .expect("request should succeed");
+            .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        assert_eq!(
-            res.headers()
-                .get(axum::http::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok()),
-            Some("audio/mp4"),
+        let ct = res
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert_eq!(ct, "application/vnd.apple.mpegurl");
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = std::str::from_utf8(&body).unwrap();
+        assert!(
+            body_str.contains("#EXTM3U"),
+            "manifest should contain #EXTM3U"
         );
-        std::fs::remove_dir_all(&tmp).ok();
+        assert!(
+            body_str.contains("seg-0000.ts"),
+            "manifest should reference seg-0000.ts"
+        );
     }
 
     #[tokio::test]
-    async fn api_get_audiobook_file_honors_range_header_with_206() {
-        // Range support is the whole point of going through ServeFile —
-        // an audio element seeking into a long file relies on it. Without
-        // a 206 response the browser re-downloads from byte 0 on every
-        // scrub, which is the bug we'd otherwise ship.
+    async fn api_get_audiobook_status_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let res = app
+            .oneshot(get_anon("/api/audiobooks/some-uuid/status"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_get_audiobook_status_returns_404_for_unknown_uuid() {
+        let (app, _, pool) = fixture().await;
+        let user = auth_test_support::create_user(&pool, "alice").await;
+        let token = auth_test_support::bearer_token(&pool, user.id).await;
+        let res = app
+            .oneshot(get_with_bearer(
+                "/api/audiobooks/does-not-exist/status",
+                &token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn api_get_audiobook_status_returns_ready_false_when_not_transcoded() {
         let (_, _, pool) = fixture().await;
         let user = auth_test_support::create_user(&pool, "alice").await;
         let token = auth_test_support::bearer_token(&pool, user.id).await;
-        let body = b"abcdefghijklmnopqrstuvwxyz".to_vec();
-        let (uuid, tmp) = seed_one_audiobook(&pool, "M4B", &body).await;
+        let uuid = seed_one_audiobook(&pool).await;
 
         let app = crate::backend::rest_router(AppState::new(pool));
-        let req = Request::builder()
-            .uri(format!("/api/audiobooks/{uuid}/file"))
-            .header(AUTHORIZATION, format!("Bearer {token}"))
-            .header(axum::http::header::RANGE, "bytes=5-9")
-            .body(axum::body::Body::empty())
-            .unwrap();
-        let res = app.oneshot(req).await.expect("request should succeed");
-        assert_eq!(res.status(), StatusCode::PARTIAL_CONTENT);
-        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        let res = app
+            .oneshot(get_with_bearer(
+                &format!("/api/audiobooks/{uuid}/status"),
+                &token,
+            ))
             .await
             .unwrap();
-        assert_eq!(&bytes[..], &body[5..=9]);
-        std::fs::remove_dir_all(&tmp).ok();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["ready"], serde_json::Value::Bool(false));
+    }
+
+    #[tokio::test]
+    async fn api_get_audiobook_segment_returns_401_when_anonymous() {
+        let (app, _, _) = fixture().await;
+        let res = app
+            .oneshot(get_anon("/api/audiobooks/some-uuid/segments/seg-0000.ts"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn is_valid_segment_name_rejects_traversal_paths() {
+        assert!(!is_valid_segment_name("../secret.txt"));
+        assert!(!is_valid_segment_name("seg-000.ts"));
+        assert!(!is_valid_segment_name("seg-00000.ts"));
+        assert!(!is_valid_segment_name("seg-abcd.ts"));
+        assert!(is_valid_segment_name("seg-0000.ts"));
+        assert!(is_valid_segment_name("seg-9999.ts"));
     }
 }

@@ -1,23 +1,22 @@
-//! F2.3 immersive audiobook player.
+//! F2.3 immersive audiobook player with HLS streaming.
 //!
-//! Renders a full-screen "Now playing" surface modeled on the
-//! `Listening` design from the canvas: cover + title + author on the
-//! left, scrub bar + transport controls on the right. Streams audio
-//! from the cookie-gated `GET /api/audiobooks/:uuid/file` route (Range-
-//! served by `tower-http::ServeFile`, so the browser can scrub through
-//! a 400 MB m4b without re-downloading).
+//! Renders a full-screen "Now playing" surface: cover + title + author on the
+//! left, scrub bar + transport controls on the right. Audio is streamed via
+//! HLS from `/api/audiobooks/:uuid/playlist.m3u8` (built from stored
+//! `book_file_parts` durations; segments served from the ffmpeg transcode
+//! cache).
 //!
-//! JS surface is intentionally small — no `hls.js`, no vendored asset;
-//! one inline `dioxus::document::eval` bootstrap wires up event
-//! listeners on the page's `<audio>` element and exposes a tiny
-//! `window.OmnibusAudio` control surface that Rust pokes at from
-//! signal effects (play/pause/seek/setRate).
+//! Startup sequence:
+//! 1. Poll `GET /api/audiobooks/{uuid}/status` every second until `ready`.
+//! 2. Load hls.js and call `window.OmnibusAudio.initHls(playlistUrl)`.
+//! 3. The HLS manifest drives segment fetches; the player timeline is
+//!    continuous across all parts (a folder of mp3s appears as one book).
 //!
-//! Position lives in [`crate::audiobook_progress`] — localStorage on
-//! web, in-memory on mobile, no-op under SSR. Saves both write there
-//! AND fire-and-forget POST `/api/rpc/progress` (F2.1) with
-//! `format: "audio"` + `audio_position_seconds`, so a position written
-//! on one device syncs forward on the next open.
+//! Position lives in [`crate::audiobook_progress`] — localStorage on web,
+//! in-memory on mobile, no-op under SSR. Writes both there AND fire-and-
+//! forget POST `/api/rpc/progress` (F2.1) with `format: "audio"` +
+//! `audio_position_seconds`, so a position written on one device syncs
+//! forward on the next open.
 
 use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]
@@ -34,10 +33,9 @@ use crate::{data, use_server_url, Route};
 #[cfg(not(feature = "mobile"))]
 const RATE_STEPS: &[f64] = &[0.8, 1.0, 1.25, 1.5, 1.75, 2.0];
 
-/// Single audited surface for poking `window.OmnibusAudio`. Same shape
-/// as `reader.rs::reader_call` — `method` is always a hard-coded
-/// identifier and `arg_js` is empty or a `serde_json`-encoded literal,
-/// so this is the one place audio-control JS is constructed.
+/// Single audited surface for poking `window.OmnibusAudio`. Same shape as
+/// `reader.rs::reader_call` — `method` is always a hard-coded identifier and
+/// `arg_js` is empty or a `serde_json`-encoded literal.
 #[cfg(feature = "web")]
 fn audio_call(method: &str, arg_js: &str) {
     let js = format!("window.OmnibusAudio && window.OmnibusAudio.{method}({arg_js});");
@@ -72,6 +70,9 @@ pub fn BookListenPage(uuid: String) -> Element {
         #[cfg_attr(not(feature = "web"), allow(unused_mut))]
         let mut playing = use_signal(|| false);
         let mut rate = use_signal(crate::audiobook_progress::load_rate);
+        // HLS readiness: false until /status returns ready=true.
+        #[cfg_attr(not(feature = "web"), allow(unused_mut))]
+        let mut hls_ready = use_signal(|| false);
 
         let url = server_url.clone();
         let uuid_for_fetch = uuid.clone();
@@ -91,7 +92,7 @@ pub fn BookListenPage(uuid: String) -> Element {
             });
         }));
 
-        // ── Web interop: bind <audio> element listeners on first paint. ──
+        // ── Web interop: HLS status poll + audio element binding ──────────
         #[cfg(feature = "web")]
         {
             use wasm_bindgen::prelude::*;
@@ -107,17 +108,13 @@ pub fn BookListenPage(uuid: String) -> Element {
                 let initial_position = crate::audiobook_progress::load(&uuid).unwrap_or(0.0);
                 let initial_rate = crate::audiobook_progress::load_rate();
 
-                // Register the time / duration callbacks before the bootstrap
-                // eval mounts the listeners — otherwise a fast `loadedmetadata`
-                // would fire before `window.__omnibusOnAudioDuration` exists.
+                // Register Rust-side callbacks before the JS bootstrap so a
+                // fast `loadedmetadata` always finds them.
                 if let Some(window) = web_sys::window() {
                     let uuid_for_save = uuid_cb.clone();
                     let mut last_saved = 0.0_f64;
                     let on_time = Closure::<dyn FnMut(f64)>::new(move |secs: f64| {
                         elapsed.set(secs);
-                        // Throttle persistence to ~5 s of wall time; the
-                        // `timeupdate` event fires 4× per second and we don't
-                        // want to spam localStorage or the server endpoint.
                         if (secs - last_saved).abs() < 5.0 {
                             return;
                         }
@@ -134,9 +131,6 @@ pub fn BookListenPage(uuid: String) -> Element {
                     let uuid_for_pause = uuid_cb.clone();
                     let on_pause = Closure::<dyn FnMut(f64)>::new(move |secs: f64| {
                         playing.set(false);
-                        // Force-persist on pause so a quick "open, sample,
-                        // close" produces a usable resume point even when
-                        // we haven't crossed the 5s save threshold above.
                         crate::audiobook_progress::save(&uuid_for_pause, secs);
                         post_audio_progress(uuid_for_pause.clone(), secs);
                     });
@@ -164,66 +158,149 @@ pub fn BookListenPage(uuid: String) -> Element {
                     *cb_holder.borrow_mut() = vec![on_time, on_duration, on_play, on_pause];
                 }
 
-                let url_lit = serde_json::to_string(&format!("/api/audiobooks/{uuid}/file"))
-                    .unwrap_or_else(|_| "\"\"".into());
+                // Inject hls.js (one-time; the script tag is idempotent because
+                // the browser caches it by URL).
+                let _ = dioxus::document::eval(
+                    r#"(function(){
+                        if (window.Hls) return;
+                        var s = document.createElement('script');
+                        s.src = '/assets/vendor/hls.min.js';
+                        s.async = true;
+                        document.head.appendChild(s);
+                    })();"#,
+                );
 
-                // Cache-aside reconciliation: pull the server-authoritative
-                // position before mounting. Server wins on success; local
-                // cache is the fallback so the player never blocks on the
-                // network. Matches the reader.rs pattern (#300) so the F2.1
-                // sync feel is identical across formats.
-                let uuid_for_fetch = uuid.clone();
-                spawn(async move {
-                    let server_pos = data::get_progress(
-                        "",
-                        &uuid_for_fetch,
-                        omnibus_shared::ProgressFormat::Audio,
-                    )
-                    .await
-                    .ok()
-                    .flatten()
-                    .and_then(|r| r.audio_position_seconds);
-                    let chosen = server_pos.unwrap_or(initial_position);
-                    let pos_lit = serde_json::to_string(&chosen).unwrap_or_else(|_| "0".into());
-                    let rate_lit =
-                        serde_json::to_string(&initial_rate).unwrap_or_else(|_| "1".into());
-                    let js = format!(
-                        r#"
+                // Install the OmnibusAudio control surface immediately so
+                // the transport buttons are wired even before HLS attaches.
+                let pos_lit =
+                    serde_json::to_string(&initial_position).unwrap_or_else(|_| "0".into());
+                let rate_lit = serde_json::to_string(&initial_rate).unwrap_or_else(|_| "1".into());
+                let uuid_lit = serde_json::to_string(&uuid).unwrap_or_else(|_| "\"\"".into());
+                let playlist_url = format!("/api/audiobooks/{uuid}/playlist.m3u8");
+                let playlist_lit =
+                    serde_json::to_string(&playlist_url).unwrap_or_else(|_| "\"\"".into());
+
+                let js = format!(
+                    r#"
 (function(){{
-  var n=0;
-  function go(){{
+  // Wait for the audio element to appear in the DOM.
+  var n = 0;
+  function mount(){{
     var el = document.getElementById('omnibus-audio');
-    if (!el) {{ if (n++ < 200) {{ return setTimeout(go, 50); }} else {{ return; }} }}
+    if (!el) {{ if (n++ < 200) {{ return setTimeout(mount, 50); }} else {{ return; }} }}
     el.preload = 'auto';
-    el.src = {url_lit};
     el.playbackRate = {rate_lit};
     el.addEventListener('loadedmetadata', function(){{
       try {{ el.currentTime = {pos_lit}; }} catch(_) {{}}
-      if (window.__omnibusOnAudioDuration) {{ window.__omnibusOnAudioDuration(el.duration || 0); }}
+      if (window.__omnibusOnAudioDuration) {{
+        window.__omnibusOnAudioDuration(el.duration || 0);
+      }}
     }});
     el.addEventListener('timeupdate', function(){{
-      if (window.__omnibusOnAudioTime) {{ window.__omnibusOnAudioTime(el.currentTime || 0); }}
+      if (window.__omnibusOnAudioTime) {{
+        window.__omnibusOnAudioTime(el.currentTime || 0);
+      }}
     }});
     el.addEventListener('play', function(){{
-      if (window.__omnibusOnAudioPlay) {{ window.__omnibusOnAudioPlay(el.currentTime || 0); }}
+      if (window.__omnibusOnAudioPlay) {{
+        window.__omnibusOnAudioPlay(el.currentTime || 0);
+      }}
     }});
     el.addEventListener('pause', function(){{
-      if (window.__omnibusOnAudioPause) {{ window.__omnibusOnAudioPause(el.currentTime || 0); }}
+      if (window.__omnibusOnAudioPause) {{
+        window.__omnibusOnAudioPause(el.currentTime || 0);
+      }}
     }});
+
+    // HLS init helper — called by Rust once the /status endpoint says ready.
     window.OmnibusAudio = {{
-      play: function(){{ var p = el.play(); if (p && p.catch) p.catch(function(){{}}); }},
-      pause: function(){{ el.pause(); }},
-      toggle: function(){{ if (el.paused) {{ this.play(); }} else {{ this.pause(); }} }},
-      seek: function(s){{ try {{ el.currentTime = Math.max(0, s); }} catch(_) {{}} }},
-      skip: function(d){{ try {{ el.currentTime = Math.max(0, (el.currentTime||0) + d); }} catch(_) {{}} }},
+      play:    function(){{ var p = el.play(); if (p && p.catch) p.catch(function(){{}}); }},
+      pause:   function(){{ el.pause(); }},
+      toggle:  function(){{ if (el.paused) {{ this.play(); }} else {{ this.pause(); }} }},
+      seek:    function(s){{ try {{ el.currentTime = Math.max(0, s); }} catch(_) {{}} }},
+      skip:    function(d){{ try {{ el.currentTime = Math.max(0, (el.currentTime||0) + d); }} catch(_) {{}} }},
       setRate: function(r){{ try {{ el.playbackRate = r; }} catch(_) {{}} }},
+      initHls: function(url){{
+        if (typeof Hls !== 'undefined' && Hls.isSupported()) {{
+          var hls = new Hls();
+          hls.loadSource(url);
+          hls.attachMedia(el);
+          hls.on(Hls.Events.ERROR, function(_, d) {{
+            if (d.fatal && window.__omnibusOnAudioPause) {{
+              window.__omnibusOnAudioPause(el.currentTime || 0);
+            }}
+          }});
+        }} else if (el.canPlayType('application/vnd.apple.mpegurl')) {{
+          // Safari / iOS native HLS.
+          el.src = url;
+          el.load();
+        }} else {{
+          // No HLS support — show an error (handled by the Rust side).
+          console.warn('OmnibusAudio: no HLS support in this browser');
+        }}
+      }},
+      _uuid: {uuid_lit},
     }};
   }}
-  go();
+  mount();
 }})();
 "#
-                    );
-                    let _ = dioxus::document::eval(&js);
+                );
+                let _ = dioxus::document::eval(&js);
+
+                // Reconcile server-authoritative position.
+                let uuid_for_fetch = uuid.clone();
+                let playlist = playlist_lit.clone();
+                spawn(async move {
+                    // Poll /status until ready, then init HLS.
+                    loop {
+                        match gloo_net::http::Request::get(&format!(
+                            "/api/audiobooks/{}/status",
+                            uuid_for_fetch
+                        ))
+                        .send()
+                        .await
+                        {
+                            Ok(resp) if resp.status() == 200 => {
+                                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                                    let ready = json
+                                        .get("ready")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+                                    if ready {
+                                        hls_ready.set(true);
+                                        // Init the HLS player on the JS side.
+                                        let init_js = format!(
+                                            "window.OmnibusAudio && window.OmnibusAudio.initHls({playlist});"
+                                        );
+                                        let _ = dioxus::document::eval(&init_js);
+                                        // Server-authoritative seek position.
+                                        let server_pos = data::get_progress(
+                                            "",
+                                            &uuid_for_fetch,
+                                            omnibus_shared::ProgressFormat::Audio,
+                                        )
+                                        .await
+                                        .ok()
+                                        .flatten()
+                                        .and_then(|r| r.audio_position_seconds);
+                                        if let Some(pos) = server_pos {
+                                            let pos_lit = serde_json::to_string(&pos)
+                                                .unwrap_or_else(|_| "0".into());
+                                            let seek_js = format!(
+                                                "window.OmnibusAudio && window.OmnibusAudio.seek({pos_lit});"
+                                            );
+                                            let _ = dioxus::document::eval(&seek_js);
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        // 1-second poll interval.
+                        gloo_timers::future::TimeoutFuture::new(1_000).await;
+                    }
                 });
             }));
         }
@@ -292,6 +369,7 @@ pub fn BookListenPage(uuid: String) -> Element {
         let scrub_max = if dur > 0.0 { dur } else { 1.0 };
         let rate_label = format!("{:.2}\u{00d7}", rate());
         let play_label = if playing() { "Pause" } else { "Play" };
+        let ready = hls_ready();
 
         rsx! {
             div {
@@ -318,14 +396,28 @@ pub fn BookListenPage(uuid: String) -> Element {
                     }
                 }
 
-                // The audio element is invisible — the chrome below is the
-                // sole UI. Placed at root so it persists across the layout
-                // sub-grid below.
+                // The audio element is invisible — transport chrome is below.
                 audio {
                     id: "omnibus-audio",
                     "data-testid": "listen-audio",
                     style: "display:none;",
                     preload: "auto",
+                }
+
+                // "Preparing your audiobook…" overlay shown while HLS transcodes.
+                if !ready {
+                    div {
+                        "data-testid": "listen-preparing",
+                        style: "position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; background:var(--bg-0); z-index:10;",
+                        p {
+                            style: "font-family:var(--serif); font-size:1.2rem; color:var(--ink-1);",
+                            "Preparing your audiobook\u{2026}"
+                        }
+                        p {
+                            style: "margin-top:0.5rem; font-family:var(--mono); font-size:0.85rem; color:var(--ink-3);",
+                            "This may take a moment on first listen."
+                        }
+                    }
                 }
 
                 // Stage: cover on the left, "now playing" panel on the right.
@@ -364,7 +456,10 @@ pub fn BookListenPage(uuid: String) -> Element {
                             div {
                                 style: "display:flex; justify-content:space-between; margin-top:8px; font-family:var(--mono); font-size:12px; color:var(--ink-2);",
                                 span { "{format_hms(elapsed_now)}" }
-                                span { style: "color:var(--ink-3);", "\u{00b7} {format_hms(remaining)} remaining" }
+                                span {
+                                    style: "color:var(--ink-3);",
+                                    "\u{00b7} {format_hms(remaining)} remaining"
+                                }
                                 span { "{format_hms(dur)}" }
                             }
                         }
@@ -434,10 +529,9 @@ fn format_hms(seconds: f64) -> String {
 }
 
 /// Fire-and-forget POST `/api/rpc/progress` with the audio update.
-/// Mirrors the EPUB reader's payload pattern in `reader.rs` so both
-/// formats produce the same `ProgressUpdate` shape (`format: "audio"`
-/// + `audio_position_seconds`). Errors are intentionally ignored — the
-/// local cache is the safety net.
+/// Mirrors the EPUB reader's payload pattern so both formats produce the same
+/// `ProgressUpdate` shape (`format: "audio"` + `audio_position_seconds`).
+/// Errors are intentionally ignored — the local cache is the safety net.
 #[cfg(feature = "web")]
 fn post_audio_progress(uuid: String, seconds: f64) {
     wasm_bindgen_futures::spawn_local(async move {

@@ -21,6 +21,20 @@ Audiobook support is the feature AudioBookShelf users currently leave for — la
 - Playback speed lives in localStorage per-user — not synced (device-specific preference).
 - Metadata embed tool (write ID3/m4b tags back) is deferred — admin-only feature for a later phase; see ABS's `/api/tools/item/:id/embed-metadata`.
 
+## Status
+
+**F2.3 foundation (PR #327):** single-file audiobook indexing + basic HTML5 `<audio>` player. Merged.
+
+**F2.3 HLS pipeline (PR #331):** multi-file audiobook grouping (`group_into_books`), Phase B
+multi-part tag parse (`parse_groups`), `book_file_parts` schema, ffmpeg-backed HLS transcode cache
+(`db::hls`), `Task::HlsTranscode` worker variant, `/playlist.m3u8` + `/segments/` + `/status`
+routes, hls.js 1.6.16 vendored, "Preparing…" overlay. Merged.
+
+**Next increment:** Chapter-list UI — extract chapter atoms from m4b containers (via `mp4ameta`)
+and embedded ID3 chapters from mp3s (via lofty), persist into a `file_chapters` table keyed on
+`book_file_id`, and surface a scrollable chapter sidebar in the listen page. The `book_file_parts`
+schema already provides a natural anchor for chapter data.
+
 ## Dependencies
 
 - [F2.1 Progress sync service](2-1-progress-sync.md).
