@@ -55,24 +55,12 @@ use sqlx::Row;
 // Errors
 // -----------------------------------------------------------------------------
 
-/// Auth-layer error space. Coarse variants by design (per
-/// `.claude/rules/05-rust-style.md#errors`): every input-rule rejection
-/// — password policy, username policy, and device-field bounds — folds
-/// into [`AuthError::Validation`] carrying the user-facing message
-/// verbatim. The remaining variants stay distinct because callers
-/// branch on them: [`AuthError::UsernameTaken`] maps to `409 Conflict`
-/// (a state collision, not a malformed input) while every other input
-/// rejection is `400 Bad Request`, and `InvalidCredentials` /
-/// `AccountLocked` / `SessionNotFound` / `RegistrationDisabled` each
-/// carry distinct HTTP semantics and/or structured data.
+/// Auth-layer error space.
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
     #[error("invalid credentials")]
     InvalidCredentials,
-    /// Input-rule rejection — password policy, username policy, or
-    /// device-field bounds. The wrapped string is the user-facing
-    /// message that the HTTP layer hands back verbatim (always
-    /// `400 Bad Request`).
+    /// Input-rule rejection; wrapped string is the user-facing 400 body.
     #[error("{0}")]
     Validation(String),
     #[error("username is already taken")]
@@ -85,11 +73,7 @@ pub enum AuthError {
     RegistrationDisabled,
     #[error(transparent)]
     Db(#[from] sqlx::Error),
-    /// Crypto-layer failure: Argon2 hash/verify or CSPRNG byte
-    /// generation. The wrapped string carries the disambiguating
-    /// prefix (`"password hashing failed: …"` /
-    /// `"CSPRNG byte generation failed: …"`) so logs keep the original
-    /// wording. All callers map this to `500 Internal Server Error`.
+    /// Argon2 hash/verify or CSPRNG byte-generation failure (maps to 500).
     #[error("{0}")]
     Crypto(String),
 }

@@ -78,10 +78,6 @@ fn auth_error_to_response(e: AuthError) -> Response {
                 .into_response()
         }
         AuthError::UsernameTaken => (StatusCode::CONFLICT, "username taken").into_response(),
-        // All input-rule rejections (password policy, username policy,
-        // device-field bounds) carry their user-facing message verbatim
-        // on the wrapped string — hand it back as the 400 body so the
-        // pre-collapse copy stays byte-identical for the UI.
         AuthError::Validation(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
         AuthError::RegistrationDisabled => {
             (StatusCode::FORBIDDEN, "registration disabled").into_response()
