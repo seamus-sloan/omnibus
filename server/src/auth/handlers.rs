@@ -78,49 +78,17 @@ fn auth_error_to_response(e: AuthError) -> Response {
                 .into_response()
         }
         AuthError::UsernameTaken => (StatusCode::CONFLICT, "username taken").into_response(),
-        AuthError::UsernameEmpty => {
-            (StatusCode::BAD_REQUEST, "username must not be empty").into_response()
-        }
-        AuthError::UsernameTooLong { max } => (
-            StatusCode::BAD_REQUEST,
-            format!("username too long (max {max})"),
-        )
-            .into_response(),
-        AuthError::UsernameWhitespace => (
-            StatusCode::BAD_REQUEST,
-            "username must not have leading or trailing whitespace",
-        )
-            .into_response(),
-        AuthError::UsernameInvalidChar => (
-            StatusCode::BAD_REQUEST,
-            "username contains an invalid control character",
-        )
-            .into_response(),
-        AuthError::PasswordTooShort { min } => (
-            StatusCode::BAD_REQUEST,
-            format!("password too short (min {min})"),
-        )
-            .into_response(),
-        AuthError::PasswordTooLong { max } => (
-            StatusCode::BAD_REQUEST,
-            format!("password too long (max {max})"),
-        )
-            .into_response(),
-        AuthError::PasswordCommon => {
-            (StatusCode::BAD_REQUEST, "password is too common").into_response()
-        }
+        // All input-rule rejections (password policy, username policy,
+        // device-field bounds) carry their user-facing message verbatim
+        // on the wrapped string — hand it back as the 400 body so the
+        // pre-collapse copy stays byte-identical for the UI.
+        AuthError::Validation(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
         AuthError::RegistrationDisabled => {
             (StatusCode::FORBIDDEN, "registration disabled").into_response()
         }
         AuthError::SessionNotFound => (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
-        AuthError::DeviceFieldInvalid { field, reason } => (
-            StatusCode::BAD_REQUEST,
-            format!("invalid {field}: {reason}"),
-        )
-            .into_response(),
         AuthError::Db(e) => internal(e),
-        AuthError::Hash(e) => internal(e),
-        AuthError::TokenGeneration(e) => internal(e),
+        AuthError::Crypto(e) => internal(e),
     }
 }
 
@@ -437,7 +405,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_invalid_username_returns_400() {
-        // Cover each AuthError::Username* validation rejection at the HTTP
+        // Cover each AuthError::Validation username rejection at the HTTP
         // boundary (#276). Each case is a fresh app so the
         // first-registration / registration-disabled gate doesn't latch
         // between iterations.

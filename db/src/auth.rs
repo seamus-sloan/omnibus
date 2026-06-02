@@ -55,50 +55,48 @@ use sqlx::Row;
 // Errors
 // -----------------------------------------------------------------------------
 
+/// Auth-layer error space. Coarse variants by design (per
+/// `.claude/rules/05-rust-style.md#errors`): every input-rule rejection
+/// — password policy, username policy, and device-field bounds — folds
+/// into [`AuthError::Validation`] carrying the user-facing message
+/// verbatim. The remaining variants stay distinct because callers
+/// branch on them: [`AuthError::UsernameTaken`] maps to `409 Conflict`
+/// (a state collision, not a malformed input) while every other input
+/// rejection is `400 Bad Request`, and `InvalidCredentials` /
+/// `AccountLocked` / `SessionNotFound` / `RegistrationDisabled` each
+/// carry distinct HTTP semantics and/or structured data.
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
     #[error("invalid credentials")]
     InvalidCredentials,
-    #[error("account is temporarily locked")]
-    AccountLocked { until_unix: i64 },
+    /// Input-rule rejection — password policy, username policy, or
+    /// device-field bounds. The wrapped string is the user-facing
+    /// message that the HTTP layer hands back verbatim (always
+    /// `400 Bad Request`).
+    #[error("{0}")]
+    Validation(String),
     #[error("username is already taken")]
     UsernameTaken,
-    #[error("username must not be empty")]
-    UsernameEmpty,
-    #[error("username is too long (max {max} chars)")]
-    UsernameTooLong { max: usize },
-    #[error("username must not have leading or trailing whitespace")]
-    UsernameWhitespace,
-    #[error("username contains an invalid control character")]
-    UsernameInvalidChar,
-    #[error("password is too short (min {min} chars)")]
-    PasswordTooShort { min: usize },
-    #[error("password is too long (max {max} chars)")]
-    PasswordTooLong { max: usize },
-    #[error("password is on the common-passwords reject list")]
-    PasswordCommon,
-    #[error("registration is disabled")]
-    RegistrationDisabled,
     #[error("session not found or expired")]
     SessionNotFound,
-    #[error("invalid {field}: {reason}")]
-    DeviceFieldInvalid {
-        field: &'static str,
-        reason: &'static str,
-    },
+    #[error("account is temporarily locked")]
+    AccountLocked { until_unix: i64 },
+    #[error("registration is disabled")]
+    RegistrationDisabled,
     #[error(transparent)]
     Db(#[from] sqlx::Error),
-    #[error("password hashing failed: {0}")]
-    Hash(String),
-    // Covers both session-token and signing-key generation, so the message
-    // is phrased generically rather than naming "token".
-    #[error("CSPRNG byte generation failed: {0}")]
-    TokenGeneration(String),
+    /// Crypto-layer failure: Argon2 hash/verify or CSPRNG byte
+    /// generation. The wrapped string carries the disambiguating
+    /// prefix (`"password hashing failed: …"` /
+    /// `"CSPRNG byte generation failed: …"`) so logs keep the original
+    /// wording. All callers map this to `500 Internal Server Error`.
+    #[error("{0}")]
+    Crypto(String),
 }
 
 impl From<argon2::password_hash::Error> for AuthError {
     fn from(e: argon2::password_hash::Error) -> Self {
-        AuthError::Hash(e.to_string())
+        AuthError::Crypto(format!("password hashing failed: {e}"))
     }
 }
 
