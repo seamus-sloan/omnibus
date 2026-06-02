@@ -88,7 +88,7 @@ pub async fn search_ebooks(server_url: &str, q: &str) -> Result<EbookLibrary, Da
     Ok(response.json::<EbookLibrary>().await?)
 }
 
-/// Search palette — grouped results for the command-palette overlay (F1.5).
+/// Search palette — grouped results for the command-palette overlay.
 #[cfg(feature = "mobile")]
 pub async fn search_palette(server_url: &str, q: &str) -> Result<PaletteResults, DataError> {
     let encoded: String = q
@@ -189,8 +189,7 @@ pub async fn get_library(_server_url: &str) -> Result<LibraryContents, DataError
 
 /// Snapshot of the worker progress feed. Web calls the RPC; mobile returns
 /// an empty status because the corresponding REST endpoint doesn't exist
-/// yet (issue #69 keeps the mobile UI out of scope for v1, and the data
-/// stub keeps callers' types lined up across feature gates).
+/// yet — the stub keeps callers' types lined up across feature gates.
 #[cfg(not(feature = "mobile"))]
 pub async fn worker_status(_server_url: &str) -> Result<WorkerStatus, DataError> {
     crate::rpc::rpc_worker_status()
@@ -223,7 +222,7 @@ pub async fn search_ebooks(_server_url: &str, q: &str) -> Result<EbookLibrary, D
         .map_err(note_server_fn_err)
 }
 
-/// Search palette — grouped results for the command-palette overlay (F1.5).
+/// Search palette — grouped results for the command-palette overlay.
 #[cfg(not(feature = "mobile"))]
 pub async fn search_palette(_server_url: &str, q: &str) -> Result<PaletteResults, DataError> {
     crate::rpc::rpc_search_palette(q.to_string())

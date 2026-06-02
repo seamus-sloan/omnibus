@@ -1,9 +1,7 @@
-//! F2.1 reading/listening progress-sync transport.
-//!
-//! Wraps `POST /api/progress`, `GET /api/progress/{uuid}`, and
-//! `POST /api/progress/sessions` for mobile, plus the matching
-//! `rpc_save_progress` / `rpc_get_progress` / `rpc_record_sessions`
-//! server functions on the web/SSR path.
+//! Reading/listening progress-sync transport. Wraps `POST /api/progress`,
+//! `GET /api/progress/{uuid}`, and `POST /api/progress/sessions` for
+//! mobile, plus the matching `rpc_save_progress` / `rpc_get_progress` /
+//! `rpc_record_sessions` server functions on the web/SSR path.
 
 use omnibus_shared::{ProgressFormat, ProgressRecord, ProgressUpdate, SessionReport};
 

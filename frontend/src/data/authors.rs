@@ -27,8 +27,8 @@ pub async fn get_author(server_url: &str, id: i64) -> Result<Option<AuthorDetail
     Ok(Some(response.json::<AuthorDetail>().await?))
 }
 
-/// F1.11 follow-up: persist an author photo by URL. Server fetches and
-/// validates the URL — see `db::author_photos::fetch_remote_image`.
+/// Persist an author photo by URL. Server fetches and validates the URL —
+/// see `db::author_photos::fetch_remote_image`.
 #[cfg(feature = "mobile")]
 pub async fn set_author_photo_url(server_url: &str, id: i64, url: String) -> Result<(), DataError> {
     let endpoint = format!("{server_url}/api/authors/{id}/photo/url");
@@ -43,8 +43,8 @@ pub async fn set_author_photo_url(server_url: &str, id: i64, url: String) -> Res
     Ok(())
 }
 
-/// F1.11 follow-up: multipart upload of an author photo. Mobile mirrors the
-/// web FormData path — the same `/api/authors/:id/photo` PUT endpoint.
+/// Multipart upload of an author photo. Mobile mirrors the web FormData
+/// path — the same `/api/authors/:id/photo` PUT endpoint.
 #[cfg(feature = "mobile")]
 pub async fn upload_author_photo(
     server_url: &str,
@@ -69,7 +69,7 @@ pub async fn upload_author_photo(
     Ok(())
 }
 
-/// F1.11: admin "Scan for picture" — synchronously re-runs the Open Library
+/// Admin "Scan for picture" — synchronously re-runs the Open Library
 /// cascade and returns whether a photo was found.
 #[cfg(feature = "mobile")]
 pub async fn scan_author_photo(
@@ -116,13 +116,12 @@ pub async fn scan_author_photo(
         .map_err(note_server_fn_err)
 }
 
-/// F5.9-lite: admin "Delete author" (issue #159). Removes the author
-/// taxonomy row, drops every `books_authors_link` for it, and adds the
-/// name to `ignored_authors` so the next `indexer::reindex` does not
-/// silently resurrect the row. Returns the number of books that were
-/// un-linked (used by the confirmation modal's "this affects N books"
-/// copy). Web-only — mobile parity is a deliberate follow-up per the
-/// F5.9-lite plan.
+/// Admin "Delete author". Removes the author taxonomy row, drops every
+/// `books_authors_link` for it, and adds the name to `ignored_authors`
+/// so the next `indexer::reindex` does not silently resurrect the row.
+/// Returns the number of books that were un-linked (used by the
+/// confirmation modal's "this affects N books" copy). Web-only — mobile
+/// parity is a deliberate follow-up.
 #[cfg(not(feature = "mobile"))]
 pub async fn delete_author(_server_url: &str, id: i64) -> Result<u64, DataError> {
     crate::rpc::rpc_delete_author(id)
@@ -130,9 +129,9 @@ pub async fn delete_author(_server_url: &str, id: i64) -> Result<u64, DataError>
         .map_err(note_server_fn_err)
 }
 
-/// F1.11 follow-up: persist an author photo by URL. Web routes through the
-/// `#[post]` server function in `rpc.rs`, which performs the server-side
-/// fetch + validation and writes a `manual` row.
+/// Persist an author photo by URL. Web routes through the `#[post]`
+/// server function in `rpc.rs`, which performs the server-side fetch +
+/// validation and writes a `manual` row.
 #[cfg(not(feature = "mobile"))]
 pub async fn set_author_photo_url(
     _server_url: &str,
@@ -144,7 +143,7 @@ pub async fn set_author_photo_url(
         .map_err(note_server_fn_err)
 }
 
-/// F1.11 follow-up: multipart upload of an author photo on the web client.
+/// Multipart upload of an author photo on the web client.
 ///
 /// Server functions can't carry binary file uploads (they JSON-serialize
 /// their arguments), so this bypasses RPC and POSTs the bytes directly to
