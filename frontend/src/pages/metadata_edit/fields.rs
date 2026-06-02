@@ -7,24 +7,42 @@
 use dioxus::prelude::*;
 
 /// Label with optional "EDITED" badge and hint text.
-/// Renders a `<label for=…>` so screen readers associate it with the input.
+///
+/// Renders `<label for=…>` when `target` is set (associates with an
+/// input for screen readers), or a plain `<span>` when `target` is
+/// empty (used by chip rows that don't focus a single control).
 #[component]
 pub(super) fn MeLabel(
     text: String,
     #[props(default)] edited: bool,
     #[props(default)] hint: String,
-    /// The `id` of the input this label targets.
+    /// The `id` of the input this label targets. Leave empty when the
+    /// label heads a chip row or other multi-control group.
     #[props(default)]
     target: String,
 ) -> Element {
-    rsx! {
-        label { class: "me-label", r#for: target,
-            span { "{text}" }
-            if edited {
-                span { class: "mono me-label-edited", "\u{b7} EDITED" }
+    if target.is_empty() {
+        rsx! {
+            span { class: "me-label",
+                span { "{text}" }
+                if edited {
+                    span { class: "mono me-label-edited", "\u{b7} EDITED" }
+                }
+                if !hint.is_empty() {
+                    span { class: "mono me-label-hint", "{hint}" }
+                }
             }
-            if !hint.is_empty() {
-                span { class: "mono me-label-hint", "{hint}" }
+        }
+    } else {
+        rsx! {
+            label { class: "me-label", r#for: target,
+                span { "{text}" }
+                if edited {
+                    span { class: "mono me-label-edited", "\u{b7} EDITED" }
+                }
+                if !hint.is_empty() {
+                    span { class: "mono me-label-hint", "{hint}" }
+                }
             }
         }
     }

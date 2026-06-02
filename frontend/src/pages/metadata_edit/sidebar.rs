@@ -1,9 +1,7 @@
-//! Sticky right-column sidebar for the metadata edit page: cover preview
-//! card, identifiers card (when present), and the override-active card
-//! with the "Revert to scanned values" action.
-//!
-//! Revert click invokes the parent-provided `on_revert` so the async
-//! `delete_overrides` call and navigation stay in `MetadataEditForm`.
+//! Sticky right-column sidebar for the metadata edit page: cover preview,
+//! identifiers (when present), and the override-active card. Revert
+//! clicks bubble to the parent so the async `delete_overrides` call and
+//! navigation stay in `MetadataEditForm`.
 
 use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
@@ -18,7 +16,7 @@ pub(super) fn Sidebar(
     on_revert: EventHandler<()>,
 ) -> Element {
     let has_cover = book.cover_url.is_some();
-    let identifiers = book.identifiers.clone();
+    let identifiers = &book.identifiers;
     let has_override = book.has_override;
 
     rsx! {

@@ -1,9 +1,6 @@
-//! Form grid for the metadata edit page: title/sort-by/filename row,
-//! publisher/published/language row, author chips, description textarea,
-//! tags chip row, and the series sub-grid.
-//!
-//! All signals are owned by the parent `MetadataEditForm` and passed in;
-//! this module is markup-only.
+//! Form grid for the metadata edit page (title row, publisher row, author
+//! chips, description, tags, series). Markup-only: all signals are owned
+//! by the parent `MetadataEditForm` and passed in via props.
 
 use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
