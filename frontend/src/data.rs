@@ -14,12 +14,12 @@
 //! [`progress`], [`series`], and [`tags`] submodules and are re-exported
 //! here so callers keep importing through `omnibus_frontend::data::*`.
 
-pub mod auth;
-pub mod authors;
-pub mod books;
-pub mod progress;
-pub mod series;
-pub mod tags;
+mod auth;
+mod authors;
+mod books;
+mod progress;
+mod series;
+mod tags;
 
 #[allow(unused_imports)]
 pub use auth::*;
