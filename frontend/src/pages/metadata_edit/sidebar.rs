@@ -50,10 +50,10 @@ pub(super) fn Sidebar(
                                 key: "{ident.scheme:?}-{ident.value}",
                                 class: "me-ident-row",
                                 span { class: "label me-ident-key",
-                                    {ident.scheme.clone().unwrap_or_else(|| "ID".into())}
+                                    {ident.scheme.as_deref().unwrap_or("ID")}
                                 }
                                 span { class: "mono me-ident-val",
-                                    {ident.value.clone()}
+                                    {ident.value.as_str()}
                                 }
                             }
                         }
