@@ -131,7 +131,10 @@ pub fn parse_groups(
     groups: Vec<super::AudiobookGroup>,
     library_root: &Path,
 ) -> Vec<IndexedAudiobook> {
-    groups.into_iter().map(|g| parse_one_group(g, library_root)).collect()
+    groups
+        .into_iter()
+        .map(|g| parse_one_group(g, library_root))
+        .collect()
 }
 
 /// Parse a single [`super::AudiobookGroup`] into an [`IndexedAudiobook`].

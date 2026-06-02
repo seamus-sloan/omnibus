@@ -26,7 +26,7 @@ mod tests;
 
 pub use group::{group_into_books, AudiobookGroup};
 pub use parse::{
-    parse_audiobook_targets, parse_groups, AudiobookError, AudiobookPart, AudiobookParseTarget,
+    parse_audiobook_targets, parse_groups, AudiobookError, AudiobookParseTarget, AudiobookPart,
     IndexedAudiobook,
 };
 pub use stat::{stat_audiobook_library, AudiobookStatEntry, AudiobookStatScanResult};
