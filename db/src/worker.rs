@@ -1,8 +1,10 @@
 //! Background-worker primitive (F0.5).
 //!
 //! Single-process queue with two fairness knobs:
-//! - `scan_concurrency` caps how many `Task::Scan` jobs run concurrently
-//!   (acquired from a per-Worker [`Semaphore`]).
+//! - `scan_concurrency` caps how many `Task::Scan` / `Task::ScanAudiobooks`
+//!   jobs run concurrently (acquired from a per-Worker scan [`Semaphore`]).
+//! - `hls_concurrency` caps concurrent `Task::HlsTranscode` jobs (acquired
+//!   from a separate HLS [`Semaphore`]).
 //! - A per-resource keyed mutex map serializes any tasks that share the
 //!   same resource key, so e.g. two scans of the same library path queue
 //!   behind each other while different paths run in parallel.
@@ -59,6 +61,16 @@ pub enum Task {
     /// page views skip the network entirely. Keyed on
     /// `author-photo:{author_id}` and does not consume the scan semaphore.
     ResolveAuthorPhoto { author_id: i64 },
+    /// F2.3 HLS transcode for one `(book_id, profile)` pair. Acquires the
+    /// HLS semaphore (capped at [`WorkerConfig::hls_concurrency`]) and the
+    /// per-`(book_id, profile)` keyed mutex so duplicate transcode posts are
+    /// serialized rather than running concurrently.
+    HlsTranscode {
+        book_id: i64,
+        book_file_id: i64,
+        library_path: String,
+        profile: String,
+    },
     /// Test-only synthetic task: sleeps `latency_ms` and invokes the
     /// optional `on_run` / `on_done` hooks, with `resource` and
     /// `route_through_scan_sem` letting a test exercise the keyed mutex and
@@ -81,6 +93,9 @@ impl Task {
             Task::ScanAudiobooks { library_path } => Some(format!("audiobooks:{library_path}")),
             Task::GenerateThumbs { book_id, .. } => Some(format!("thumb:{book_id}")),
             Task::ResolveAuthorPhoto { author_id } => Some(format!("author-photo:{author_id}")),
+            Task::HlsTranscode {
+                book_id, profile, ..
+            } => Some(format!("hls:{book_id}:{profile}")),
             #[cfg(test)]
             Task::Test { resource, .. } => resource.clone(),
         }
@@ -92,12 +107,18 @@ impl Task {
             Task::ScanAudiobooks { .. } => true,
             Task::GenerateThumbs { .. } => false,
             Task::ResolveAuthorPhoto { .. } => false,
+            Task::HlsTranscode { .. } => false,
             #[cfg(test)]
             Task::Test {
                 route_through_scan_sem,
                 ..
             } => *route_through_scan_sem,
         }
+    }
+
+    /// `true` for tasks that should acquire the HLS concurrency semaphore.
+    fn uses_hls_sem(&self) -> bool {
+        matches!(self, Task::HlsTranscode { .. })
     }
 
     /// Wire-protocol discriminant exposed to the UI via
@@ -110,6 +131,9 @@ impl Task {
             Task::ScanAudiobooks { .. } => TaskKind::Scan,
             Task::GenerateThumbs { .. } => TaskKind::GenerateThumbs,
             Task::ResolveAuthorPhoto { .. } => TaskKind::ResolveAuthorPhoto,
+            // Reuse Scan kind for UI display until a dedicated HLS progress
+            // widget is added.
+            Task::HlsTranscode { .. } => TaskKind::Scan,
             #[cfg(test)]
             Task::Test { .. } => TaskKind::Scan,
         }
@@ -135,18 +159,33 @@ pub enum TaskOutcome {
 /// Construction-time tuning for a [`Worker`].
 #[derive(Clone, Debug)]
 pub struct WorkerConfig {
-    /// Maximum number of scan-semaphore tasks (currently [`Task::Scan`])
-    /// allowed to run concurrently. Clamped to at least 1 by
-    /// [`Worker::new`]. Other task types are unaffected by this cap.
+    /// Maximum number of scan-semaphore tasks (currently [`Task::Scan`] /
+    /// [`Task::ScanAudiobooks`]) allowed to run concurrently. Clamped to at
+    /// least 1 by [`Worker::new`]. Other task types are unaffected by this cap.
     pub scan_concurrency: usize,
+    /// Maximum number of concurrent [`Task::HlsTranscode`] jobs. Each
+    /// transcode drives one ffmpeg process; defaults to
+    /// `max(1, num_cpus / 2)` so a two-core machine runs one transcode at
+    /// a time while an eight-core machine can run four concurrently.
+    pub hls_concurrency: usize,
 }
 
 impl Default for WorkerConfig {
     fn default() -> Self {
+        let cpus = num_cpus();
         Self {
             scan_concurrency: 1,
+            hls_concurrency: (cpus / 2).max(1),
         }
     }
+}
+
+/// Number of logical CPUs. Reads `/proc/cpuinfo` via `std::thread` so we
+/// avoid adding a `num_cpus` crate for one call site.
+fn num_cpus() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
 }
 
 /// Single-process background-task runner shared behind an `Arc`.
@@ -170,6 +209,9 @@ impl Default for WorkerConfig {
 pub struct Worker {
     pool: SqlitePool,
     scan_sem: Arc<Semaphore>,
+    /// Semaphore capping concurrent `Task::HlsTranscode` runs. Separate from
+    /// `scan_sem` so HLS jobs don't compete with library scans for permits.
+    hls_sem: Arc<Semaphore>,
     resource_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     completions: Arc<StdMutex<HashMap<TaskId, watch::Receiver<Option<TaskOutcome>>>>>,
     /// Live snapshot of every posted task's lifecycle state. Holds entries
@@ -279,6 +321,7 @@ impl Worker {
         Arc::new(Self {
             pool,
             scan_sem: Arc::new(Semaphore::new(config.scan_concurrency.max(1))),
+            hls_sem: Arc::new(Semaphore::new(config.hls_concurrency.max(1))),
             resource_locks: Arc::new(Mutex::new(HashMap::new())),
             completions: Arc::new(StdMutex::new(HashMap::new())),
             progress: Arc::new(StdMutex::new(BTreeMap::new())),
@@ -441,6 +484,23 @@ impl Worker {
                         },
                     );
                     return TaskOutcome::Err("scan semaphore closed".into());
+                }
+            }
+        } else {
+            None
+        };
+
+        let _hls_permit = if task.uses_hls_sem() {
+            match self.hls_sem.clone().acquire_owned().await {
+                Ok(p) => Some(p),
+                Err(_) => {
+                    self.write_terminal_progress(
+                        id,
+                        ProgressState::Failed {
+                            message: "hls semaphore closed".into(),
+                        },
+                    );
+                    return TaskOutcome::Err("hls semaphore closed".into());
                 }
             }
         } else {
@@ -636,6 +696,25 @@ impl Worker {
                     }
                 }
             }
+            Task::HlsTranscode {
+                book_id,
+                book_file_id,
+                library_path,
+                profile,
+            } => {
+                match crate::hls::transcode_book(
+                    &self.pool,
+                    book_id,
+                    book_file_id,
+                    &library_path,
+                    &profile,
+                )
+                .await
+                {
+                    Ok(()) => TaskOutcome::Ok,
+                    Err(e) => TaskOutcome::Err(e.to_string()),
+                }
+            }
             #[cfg(test)]
             Task::Test {
                 tag: _,
@@ -779,6 +858,7 @@ mod tests {
             pool().await,
             WorkerConfig {
                 scan_concurrency: 1,
+                hls_concurrency: 1,
             },
         );
         let running = Arc::new(AtomicUsize::new(0));
