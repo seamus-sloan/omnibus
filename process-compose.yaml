@@ -13,6 +13,6 @@ processes:
     disabled: true
 
   playwright:
-    command: nix develop .#e2e --command npx playwright test --ui
+    command: nix develop ../..#e2e --command npx playwright test --ui
     working_dir: ui_tests/playwright
     disabled: true

@@ -26,7 +26,7 @@ layout {
     }
     tab name="playwright" {
         pane cwd="ui_tests/playwright" command="nix" start_suspended=true {
-            args "develop" ".#e2e" "--command" "npx" "playwright" "test" "--ui"
+            args "develop" "../..#e2e" "--command" "npx" "playwright" "test" "--ui"
         }
     }
 }
