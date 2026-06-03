@@ -126,13 +126,17 @@
           pkgs.just
         ];
 
-        # Web-build extras: dioxus-cli + matched wasm-bindgen + node.
+        # Web-build extras: dioxus-cli + matched wasm-bindgen + node + ffmpeg.
         # Node is here (not in `e2e`) because some web-only workflows shell
         # out to `npm`/`npx` (e.g. tooling under `ui_tests/playwright/tools/`).
+        # ffmpeg is the runtime backend for the F2.3 audiobook HLS pipeline
+        # (`db::hls` shells out via OMNIBUS_FFMPEG_PATH); kept out of slim
+        # `default` since daily cargo work doesn't need it.
         webExtras = [
           wasm-bindgen-cli-0_2_122
           pkgs-unstable.dioxus-cli
           pkgs-unstable.nodejs_22
+          pkgs.ffmpeg-headless
         ];
 
         # E2E extras layer on top of webExtras: Playwright's Nix-provided
@@ -171,6 +175,22 @@
             export CARGO_TARGET_DIR="$HOME/.cache/cargo-target/$(basename "$_cargo_root")"
           fi
 
+          # Per-workspace stable PORT — each known `jj workspace` gets its
+          # own base port so three agents in three workspaces don't compete
+          # for the same port. scripts/dev-server-up.sh port-walks within
+          # $PORT..$PORT+9 as a fallback for foreign-process / sibling
+          # collisions. Override by exporting PORT before `nix develop`.
+          if [ -z "''${PORT:-}" ]; then
+            _ws_name="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
+            case "$_ws_name" in
+              omnibus)        export PORT=3000 ;;
+              omnibus-xray)   export PORT=3010 ;;
+              omnibus-yankee) export PORT=3020 ;;
+              omnibus-zulu)   export PORT=3030 ;;
+              *)              export PORT=3000 ;;
+            esac
+          fi
+
           # `dx serve --fullstack` runs an HTTP proxy on $PORT that
           # rewrites Host: to the upstream backend's loopback address,
           # without setting X-Forwarded-Host. The CSRF origin_check
@@ -179,7 +199,7 @@
           # cookie-authed POST. Declare an allowlist so origin_check can
           # match the browser's Origin directly. Override or extend in
           # production deployments.
-          export OMNIBUS_PUBLIC_ORIGIN="http://localhost:''${PORT:-3000}"
+          export OMNIBUS_PUBLIC_ORIGIN="http://localhost:''${PORT}"
 
           # Source per-repo .env last so it can override any default set
           # above. Look in the worktree root (resolved via git so
