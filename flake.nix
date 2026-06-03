@@ -122,7 +122,10 @@
           pkgs.openssl
           rustCore
           pkgs.zellij
-          pkgs.process-compose
+          # process-compose comes from unstable: stable (25.05) ships v1.64.1,
+          # but `is_interactive: true` was added in v1.85.0 and our
+          # process-compose.yaml uses it to give `dx` panes a real TTY.
+          pkgs-unstable.process-compose
           pkgs.just
         ];
 
@@ -305,7 +308,7 @@
               pkgs.openssl
               rustMobile
               pkgs.zellij
-              pkgs.process-compose
+              pkgs-unstable.process-compose
               pkgs.just
             ] ++ mobileExtras;
             DATABASE_URL = "sqlite://omnibus.db?mode=rwc";
