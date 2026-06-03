@@ -3,16 +3,13 @@ version: "0.5"
 processes:
   server:
     command: nix develop .#web --command dx serve --platform web --fullstack --port 3000 --package omnibus
-    is_interactive: true
 
   android:
     command: nix develop .#mobile --command dx serve --platform android --package omnibus-mobile
-    is_interactive: true
     disabled: true
 
   ios:
     command: nix develop .#mobile --command dx serve --platform ios --package omnibus-mobile
-    is_interactive: true
     disabled: true
 
   playwright:
