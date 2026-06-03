@@ -2,29 +2,33 @@
 //!
 //! Sibling to [`crate::ebook`]: walks the configured audiobook library,
 //! reads container tags (title / artist / album / duration / cover) via
-//! `lofty`, and emits one [`IndexedBook`] per file. The same
-//! [`crate::sync::sync_books`] writer persists both kinds of rows — the
-//! per-file `format` ("M4B" / "MP3") is derived from the extension by
-//! [`crate::helpers::split_filename`], so no audiobook-specific write path
-//! is needed.
+//! `lofty`, and emits rows for the DB. Multi-file audiobooks (a folder of
+//! per-chapter mp3s) are grouped by [`group::group_into_books`] into a
+//! single [`AudiobookGroup`] then fully parsed by
+//! [`parse::parse_groups`] into [`parse::IndexedAudiobook`] rows ready for
+//! [`crate::sync::sync_audiobooks`].
 //!
-//! Scope (F2.3 basic player): title, primary author, album, duration in
-//! seconds, and the embedded artwork. Chapter atoms are NOT parsed here —
-//! the basic player has no chapter list UI, and the full chapter pipeline
-//! is deferred to the F2.3 follow-on.
+//! Scope (F2.3 HLS player): title, primary author, album, duration in
+//! seconds, embedded artwork, and per-part track ordering. Chapter atoms are
+//! NOT parsed here — the chapter-list UI is deferred to a later increment.
 
 use std::path::{Path, PathBuf};
 
 use omnibus_shared::{Contributor, EbookMetadata};
 
 mod cover;
+mod group;
 mod parse;
 mod stat;
 
 #[cfg(test)]
 mod tests;
 
-pub use parse::{parse_audiobook_targets, AudiobookError, AudiobookParseTarget};
+pub use group::{group_into_books, AudiobookGroup};
+pub use parse::{
+    parse_audiobook_targets, parse_groups, AudiobookError, AudiobookParseTarget, AudiobookPart,
+    IndexedAudiobook,
+};
 pub use stat::{stat_audiobook_library, AudiobookStatEntry, AudiobookStatScanResult};
 
 /// Filesystem extensions the audiobook scanner picks up. Mirrors

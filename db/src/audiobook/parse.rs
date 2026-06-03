@@ -6,6 +6,10 @@
 //! duration in seconds. Failures roll up as [`AudiobookError`] so the
 //! indexer surfaces the per-file error in the same shape the EPUB path
 //! uses.
+//!
+//! Phase B for multi-file audiobooks is handled by [`parse_groups`], which
+//! reads ID3 tags for every part, sorts by (track, filename), and assembles
+//! an [`IndexedAudiobook`] ready for [`crate::sync::sync_audiobooks`].
 
 use std::path::{Path, PathBuf};
 
@@ -76,6 +80,232 @@ pub struct AudiobookParseTarget {
     pub absolute: PathBuf,
     pub mtime_epoch: i64,
     pub size_bytes: i64,
+}
+
+/// One part of a multi-file audiobook, ready for a `book_file_parts` DB row.
+#[derive(Debug, Clone)]
+pub struct AudiobookPart {
+    /// Playlist ordering assigned after sort-by-(track, filename).
+    pub ordinal: i64,
+    /// Library-relative path (e.g. `"Author/Book/01.mp3"`).
+    pub filename: String,
+    pub size_bytes: i64,
+    pub mtime_epoch: i64,
+    pub duration_seconds: f64,
+}
+
+/// One fully-parsed audiobook group, ready for [`crate::sync::sync_audiobooks`].
+#[derive(Debug)]
+pub struct IndexedAudiobook {
+    /// Stable UUIDv5 for `(library_path, group_path)`.
+    pub uuid: String,
+    /// Group path (the library-relative parent dir for mp3 folders, or the
+    /// file path for single-file m4b/m4a).
+    pub group_path: String,
+    /// Uppercased format: `"M4B"`, `"M4A"`, or `"MP3"`.
+    pub format: String,
+    pub title: String,
+    pub creator_name: Option<String>,
+    /// `(mime, bytes)` from the first part's embedded artwork. `None` when
+    /// no artwork is present.
+    pub cover: Option<(String, Vec<u8>)>,
+    pub parts: Vec<AudiobookPart>,
+    pub total_size_bytes: i64,
+    pub max_mtime_epoch: i64,
+    /// Human-readable duration, e.g. `"Audiobook · 14h 07m"`.
+    pub description: Option<String>,
+    /// Whole-group error (parse failure affecting every part). Rare; the
+    /// normal per-part error path is to log a WARN and set
+    /// `duration_seconds = 0`.
+    pub error: Option<String>,
+}
+
+/// Phase B for multi-file audiobooks. Reads ID3 tags from every part in each
+/// [`super::AudiobookGroup`], sorts parts by (track_number, filename), and
+/// assembles one [`IndexedAudiobook`] per group.
+///
+/// A per-part lofty failure is logged as WARN and the part is still included
+/// with `duration_seconds = 0` so one corrupt file doesn't drop the whole
+/// book from the library.
+pub fn parse_groups(
+    groups: Vec<super::AudiobookGroup>,
+    library_root: &Path,
+) -> Vec<IndexedAudiobook> {
+    groups
+        .into_iter()
+        .map(|g| parse_one_group(g, library_root))
+        .collect()
+}
+
+/// Parse a single [`super::AudiobookGroup`] into an [`IndexedAudiobook`].
+fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> IndexedAudiobook {
+    // Per-part: (track_number_for_sort, filename, size_bytes, mtime_epoch, duration, metadata)
+    struct PartWork {
+        sort_track: u32,
+        filename: String,
+        size_bytes: i64,
+        mtime_epoch: i64,
+        duration_seconds: f64,
+        meta: AudiobookMetadata,
+    }
+
+    let mut parts_work: Vec<PartWork> = Vec::with_capacity(group.parts.len());
+    let mut first_cover: Option<(String, Vec<u8>)> = None;
+    let mut first_cover_fetched = false;
+
+    for stat_entry in &group.parts {
+        let absolute = library_root.join(&stat_entry.filename);
+
+        // Read track number separately via lofty for sort ordering.
+        let (meta_result, track_num) = match lofty::read_from_path(&absolute) {
+            Ok(tagged) => {
+                let dur = Some(tagged.properties().duration().as_secs_f64())
+                    .filter(|d| d.is_finite() && *d > 0.0);
+                let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
+                let mut m = AudiobookMetadata {
+                    duration_seconds: dur,
+                    ..Default::default()
+                };
+                let track = if let Some(t) = tag {
+                    m.title = t
+                        .title()
+                        .map(|c| c.trim().to_string())
+                        .filter(|s| !s.is_empty());
+                    m.artist = t
+                        .artist()
+                        .map(|c| c.trim().to_string())
+                        .filter(|s| !s.is_empty());
+                    m.album = t
+                        .album()
+                        .map(|c| c.trim().to_string())
+                        .filter(|s| !s.is_empty());
+                    t.track().unwrap_or(999_999)
+                } else {
+                    999_999
+                };
+                (Ok(m), track)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    file = %absolute.display(),
+                    error = %e,
+                    "audiobook part: failed to read tags"
+                );
+                (Err(e), 999_999u32)
+            }
+        };
+
+        // Fetch embedded cover from the very first readable part.
+        if !first_cover_fetched {
+            first_cover_fetched = true;
+            match super::cover::extract_cover(&absolute) {
+                Ok(Some(c)) => first_cover = Some(c),
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        file = %absolute.display(),
+                        error = %e,
+                        "audiobook part: failed to extract cover"
+                    );
+                }
+            }
+        }
+
+        let (meta, duration) = match meta_result {
+            Ok(m) => {
+                let d = m.duration_seconds.unwrap_or(0.0);
+                (m, d)
+            }
+            Err(_) => (AudiobookMetadata::default(), 0.0),
+        };
+
+        parts_work.push(PartWork {
+            sort_track: track_num,
+            filename: stat_entry.filename.clone(),
+            size_bytes: stat_entry.size_bytes,
+            mtime_epoch: stat_entry.mtime_epoch,
+            duration_seconds: duration,
+            meta,
+        });
+    }
+
+    // Sort by (track_number, filename) for stable playlist order.
+    parts_work.sort_by(|a, b| {
+        a.sort_track
+            .cmp(&b.sort_track)
+            .then_with(|| a.filename.cmp(&b.filename))
+    });
+
+    // Derive book-level metadata from the sorted parts.
+    let title = parts_work
+        .iter()
+        .find_map(|p| p.meta.album.clone())
+        .unwrap_or_else(|| leaf_name(&group.group_path));
+
+    let creator_name = parts_work
+        .iter()
+        .find_map(|p| p.meta.artist.clone())
+        .or_else(|| parent_name(&group.group_path));
+
+    let total_secs: f64 = parts_work.iter().map(|p| p.duration_seconds).sum();
+    let description = if total_secs > 0.0 {
+        let h = (total_secs / 3600.0) as i64;
+        let m = ((total_secs % 3600.0) / 60.0) as i64;
+        Some(format!("Audiobook · {h}h {m:02}m"))
+    } else {
+        None
+    };
+
+    let parts: Vec<AudiobookPart> = parts_work
+        .into_iter()
+        .enumerate()
+        .map(|(i, p)| AudiobookPart {
+            ordinal: i as i64,
+            filename: p.filename,
+            size_bytes: p.size_bytes,
+            mtime_epoch: p.mtime_epoch,
+            duration_seconds: p.duration_seconds,
+        })
+        .collect();
+
+    IndexedAudiobook {
+        uuid: group.uuid,
+        group_path: group.group_path,
+        format: group.format,
+        title,
+        creator_name,
+        cover: first_cover,
+        parts,
+        total_size_bytes: group.total_size_bytes,
+        max_mtime_epoch: group.max_mtime_epoch,
+        description,
+        error: None,
+    }
+}
+
+/// Leaf directory name or file stem from a group path (title fallback).
+fn leaf_name(group_path: &str) -> String {
+    PathBuf::from(group_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            PathBuf::from(group_path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(group_path)
+                .to_string()
+        })
+}
+
+/// Parent directory's leaf name (creator fallback for mp3 folder groups).
+fn parent_name(group_path: &str) -> Option<String> {
+    PathBuf::from(group_path)
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Phase B: parse each target sequentially and emit one
