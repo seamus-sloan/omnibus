@@ -16,7 +16,8 @@ pub async fn load_or_create_session_key(pool: &SqlitePool) -> AuthResult<Vec<u8>
         return Ok(bytes);
     }
     let mut key = vec![0u8; SESSION_KEY_LEN];
-    getrandom::getrandom(&mut key).map_err(|e| AuthError::TokenGeneration(e.to_string()))?;
+    getrandom::getrandom(&mut key)
+        .map_err(|e| AuthError::Crypto(format!("CSPRNG byte generation failed: {e}")))?;
     put_session_key(pool, &key).await?;
     Ok(key)
 }

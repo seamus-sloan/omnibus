@@ -94,18 +94,18 @@ pub fn validate_password(password: &str) -> AuthResult<()> {
     // separate limit; MAX_PASSWORD_LEN guards against unbounded CPU work.
     let char_count = password.chars().count();
     if char_count < MIN_PASSWORD_LEN {
-        return Err(AuthError::PasswordTooShort {
-            min: MIN_PASSWORD_LEN,
-        });
+        return Err(AuthError::Validation(format!(
+            "password too short (min {MIN_PASSWORD_LEN})"
+        )));
     }
     if char_count > MAX_PASSWORD_LEN {
-        return Err(AuthError::PasswordTooLong {
-            max: MAX_PASSWORD_LEN,
-        });
+        return Err(AuthError::Validation(format!(
+            "password too long (max {MAX_PASSWORD_LEN})"
+        )));
     }
     let lower = password.to_lowercase();
     if COMMON_PASSWORDS.iter().any(|c| *c == lower) {
-        return Err(AuthError::PasswordCommon);
+        return Err(AuthError::Validation("password is too common".to_string()));
     }
     Ok(())
 }
@@ -130,27 +130,35 @@ pub fn validate_password(password: &str) -> AuthResult<()> {
 /// this layer makes.
 pub fn validate_username(username: &str) -> AuthResult<()> {
     if username.is_empty() {
-        return Err(AuthError::UsernameEmpty);
+        return Err(AuthError::Validation(
+            "username must not be empty".to_string(),
+        ));
     }
     if username.trim() != username {
-        return Err(AuthError::UsernameWhitespace);
+        return Err(AuthError::Validation(
+            "username must not have leading or trailing whitespace".to_string(),
+        ));
     }
     // Re-check after trim in case the input was entirely whitespace —
     // `trim() != self` would have already caught that, but the empty check
     // here makes the intent explicit if the rules above ever reorder.
     if username.trim().is_empty() {
-        return Err(AuthError::UsernameEmpty);
+        return Err(AuthError::Validation(
+            "username must not be empty".to_string(),
+        ));
     }
     if username.chars().count() > MAX_USERNAME_LEN {
-        return Err(AuthError::UsernameTooLong {
-            max: MAX_USERNAME_LEN,
-        });
+        return Err(AuthError::Validation(format!(
+            "username too long (max {MAX_USERNAME_LEN})"
+        )));
     }
     if username
         .chars()
         .any(|c| (c as u32) <= 0x1F || c as u32 == 0x7F)
     {
-        return Err(AuthError::UsernameInvalidChar);
+        return Err(AuthError::Validation(
+            "username contains an invalid control character".to_string(),
+        ));
     }
     Ok(())
 }
@@ -188,18 +196,20 @@ mod tests {
 
     #[test]
     fn password_policy_rejects_short() {
-        assert!(matches!(
-            validate_password("short"),
-            Err(AuthError::PasswordTooShort { .. })
-        ));
+        let err = validate_password("short").unwrap_err();
+        assert!(
+            matches!(&err, AuthError::Validation(m) if m.contains("password too short")),
+            "expected validation `password too short …`, got {err:?}",
+        );
     }
 
     #[test]
     fn password_policy_rejects_common() {
-        assert!(matches!(
-            validate_password("password123"),
-            Err(AuthError::PasswordCommon)
-        ));
+        let err = validate_password("password123").unwrap_err();
+        assert!(
+            matches!(&err, AuthError::Validation(m) if m == "password is too common"),
+            "expected validation `password is too common`, got {err:?}",
+        );
     }
 
     #[test]
@@ -209,12 +219,20 @@ mod tests {
 
     // ---- username policy ----------------------------------------------------
 
+    /// Assert the validator rejects `input` with a `Validation` whose message
+    /// contains `needle` — keeps test failures debuggable by surfacing the
+    /// actual message when the substring drifts.
+    fn assert_validation_contains(input: &str, needle: &str) {
+        let err = validate_username(input).unwrap_err();
+        assert!(
+            matches!(&err, AuthError::Validation(m) if m.contains(needle)),
+            "input {input:?}: expected Validation containing {needle:?}, got {err:?}",
+        );
+    }
+
     #[test]
     fn username_policy_rejects_empty() {
-        assert!(matches!(
-            validate_username(""),
-            Err(AuthError::UsernameEmpty)
-        ));
+        assert_validation_contains("", "username must not be empty");
     }
 
     #[test]
@@ -231,77 +249,50 @@ mod tests {
     #[test]
     fn username_policy_rejects_over_max_length() {
         let name: String = "a".repeat(MAX_USERNAME_LEN + 1);
-        assert!(matches!(
-            validate_username(&name),
-            Err(AuthError::UsernameTooLong { .. })
-        ));
+        assert_validation_contains(&name, "username too long");
     }
 
     #[test]
     fn username_policy_rejects_leading_whitespace() {
-        assert!(matches!(
-            validate_username(" alice"),
-            Err(AuthError::UsernameWhitespace)
-        ));
+        assert_validation_contains(" alice", "leading or trailing whitespace");
     }
 
     #[test]
     fn username_policy_rejects_trailing_whitespace() {
-        assert!(matches!(
-            validate_username("alice "),
-            Err(AuthError::UsernameWhitespace)
-        ));
+        assert_validation_contains("alice ", "leading or trailing whitespace");
     }
 
     #[test]
     fn username_policy_rejects_only_whitespace() {
         // All-whitespace input has trim() != self, so it surfaces as the
-        // whitespace error rather than the empty error — either is a
-        // reject, but lock the variant to keep callers' error UX stable.
-        assert!(matches!(
-            validate_username("   "),
-            Err(AuthError::UsernameWhitespace)
-        ));
+        // whitespace message rather than the empty message — either is a
+        // reject, but lock the wording to keep callers' error UX stable.
+        assert_validation_contains("   ", "leading or trailing whitespace");
     }
 
     #[test]
     fn username_policy_rejects_embedded_tab() {
-        assert!(matches!(
-            validate_username("ali\tce"),
-            Err(AuthError::UsernameInvalidChar)
-        ));
+        assert_validation_contains("ali\tce", "invalid control character");
     }
 
     #[test]
     fn username_policy_rejects_embedded_newline() {
-        assert!(matches!(
-            validate_username("ali\nce"),
-            Err(AuthError::UsernameInvalidChar)
-        ));
+        assert_validation_contains("ali\nce", "invalid control character");
     }
 
     #[test]
     fn username_policy_rejects_embedded_null() {
-        assert!(matches!(
-            validate_username("ali\0ce"),
-            Err(AuthError::UsernameInvalidChar)
-        ));
+        assert_validation_contains("ali\0ce", "invalid control character");
     }
 
     #[test]
     fn username_policy_rejects_low_control_char() {
-        assert!(matches!(
-            validate_username("ali\x1fce"),
-            Err(AuthError::UsernameInvalidChar)
-        ));
+        assert_validation_contains("ali\x1fce", "invalid control character");
     }
 
     #[test]
     fn username_policy_rejects_delete_char() {
-        assert!(matches!(
-            validate_username("ali\x7fce"),
-            Err(AuthError::UsernameInvalidChar)
-        ));
+        assert_validation_contains("ali\x7fce", "invalid control character");
     }
 
     #[test]
