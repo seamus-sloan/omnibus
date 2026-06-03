@@ -9,7 +9,8 @@ use super::{AuthError, AuthResult, SessionKind};
 /// padding). ~43 chars, 256-bit entropy. Returned to the client exactly once.
 pub fn generate_token() -> AuthResult<String> {
     let mut bytes = [0u8; 32];
-    getrandom::getrandom(&mut bytes).map_err(|e| AuthError::TokenGeneration(e.to_string()))?;
+    getrandom::getrandom(&mut bytes)
+        .map_err(|e| AuthError::Crypto(format!("CSPRNG byte generation failed: {e}")))?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 

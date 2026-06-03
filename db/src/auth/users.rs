@@ -273,18 +273,20 @@ mod tests {
         // consuming the first-user-admin slot.
         let p = pool().await;
 
-        assert!(matches!(
-            create_user(&p, "", "hunter2-real-long").await,
-            Err(AuthError::UsernameEmpty)
-        ));
-        assert!(matches!(
-            create_user(&p, "ali\0ce", "hunter2-real-long").await,
-            Err(AuthError::UsernameInvalidChar)
-        ));
-        assert!(matches!(
-            create_user(&p, " alice", "hunter2-real-long").await,
-            Err(AuthError::UsernameWhitespace)
-        ));
+        let cases: &[(&str, &str)] = &[
+            ("", "username must not be empty"),
+            ("ali\0ce", "invalid control character"),
+            (" alice", "leading or trailing whitespace"),
+        ];
+        for (input, needle) in cases {
+            let err = create_user(&p, input, "hunter2-real-long")
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, AuthError::Validation(m) if m.contains(needle)),
+                "input {input:?}: expected Validation containing {needle:?}, got {err:?}",
+            );
+        }
 
         // None of the rejected attempts created a row, so the first valid
         // create still gets the admin slot.

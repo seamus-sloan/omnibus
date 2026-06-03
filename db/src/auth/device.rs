@@ -37,16 +37,12 @@ fn validate_device_field(
         return Ok(());
     };
     if v.chars().count() > max_chars {
-        return Err(AuthError::DeviceFieldInvalid {
-            field: label,
-            reason: "too long",
-        });
+        return Err(AuthError::Validation(format!("invalid {label}: too long")));
     }
     if v.chars().any(|c| c.is_control()) {
-        return Err(AuthError::DeviceFieldInvalid {
-            field: label,
-            reason: "contains control characters",
-        });
+        return Err(AuthError::Validation(format!(
+            "invalid {label}: contains control characters"
+        )));
     }
     Ok(())
 }
@@ -146,8 +142,11 @@ mod tests {
         let too_long: String = "a".repeat(MAX_DEVICE_NAME_CHARS + 1);
         let err = validate_device_name(Some(&too_long)).unwrap_err();
         match err {
-            AuthError::DeviceFieldInvalid { field, .. } => assert_eq!(field, "device_name"),
-            other => panic!("expected DeviceFieldInvalid, got {other:?}"),
+            AuthError::Validation(msg) => assert!(
+                msg.contains("invalid device_name") && msg.contains("too long"),
+                "expected Validation about device_name being too long, got {msg:?}",
+            ),
+            other => panic!("expected Validation, got {other:?}"),
         }
     }
 
@@ -164,7 +163,8 @@ mod tests {
         for raw in ["benign\nlog", "tab\there", "null\0byte", "bell\x07"] {
             let err = validate_device_name(Some(raw)).unwrap_err();
             assert!(
-                matches!(err, AuthError::DeviceFieldInvalid { .. }),
+                matches!(&err, AuthError::Validation(m)
+                    if m.contains("invalid device_name") && m.contains("control characters")),
                 "expected control-char rejection for {raw:?}, got {err:?}",
             );
         }
@@ -176,7 +176,9 @@ mod tests {
         let too_long: String = "1".repeat(MAX_CLIENT_VERSION_CHARS + 1);
         let err = validate_client_version(Some(&too_long)).unwrap_err();
         assert!(
-            matches!(err, AuthError::DeviceFieldInvalid { field, .. } if field == "client_version")
+            matches!(&err, AuthError::Validation(m)
+                if m.contains("invalid client_version") && m.contains("too long")),
+            "expected Validation about client_version being too long, got {err:?}",
         );
     }
 
@@ -190,7 +192,10 @@ mod tests {
         let err = register_device(&p, u.id, &too_long, "ios", None)
             .await
             .unwrap_err();
-        assert!(matches!(err, AuthError::DeviceFieldInvalid { .. }));
+        assert!(
+            matches!(&err, AuthError::Validation(m) if m.contains("invalid device_name")),
+            "expected Validation about device_name, got {err:?}",
+        );
         let list = list_devices_for_user(&p, u.id).await.unwrap();
         assert!(list.is_empty(), "rejection must not leave a partial row");
     }
@@ -202,9 +207,10 @@ mod tests {
         let err = register_device(&p, u.id, "Phone", "ios", Some("1.0\n0"))
             .await
             .unwrap_err();
-        assert!(matches!(
-            err,
-            AuthError::DeviceFieldInvalid { field, .. } if field == "client_version"
-        ));
+        assert!(
+            matches!(&err, AuthError::Validation(m)
+                if m.contains("invalid client_version") && m.contains("control characters")),
+            "expected Validation about client_version control chars, got {err:?}",
+        );
     }
 }
