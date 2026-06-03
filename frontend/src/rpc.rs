@@ -168,7 +168,7 @@ pub async fn rpc_save_settings(settings: Settings) -> Result<Settings> {
 }
 
 /// Snapshot of every in-flight and recently-completed background-worker
-/// task (F0.5). Polled at 1 Hz by the `WorkerStatusIndicator` component to
+/// task. Polled at 1 Hz by the `WorkerStatusIndicator` component to
 /// surface scan / thumbnail / author-photo / (future) cleanup progress
 /// under the Save button on `/settings`.
 ///
@@ -234,11 +234,11 @@ pub async fn rpc_get_ebook(uuid: String) -> Result<Option<EbookMetadata>> {
 /// `#[get]` server functions reject arg bodies because HTTP spec forbids
 /// bodies on GET.
 ///
-/// Issue #81: `search_books` is capped server-side at
-/// `db::MAX_BOOKS_RETURNED` hits. Server functions can't expose response
-/// headers, so — unlike `rpc_get_ebooks` — the search path threads the full
-/// hit count through `EbookLibrary::total` (issue #241), letting the web
-/// client show "N of M results" when the vec is truncated.
+/// `search_books` is capped server-side at `db::MAX_BOOKS_RETURNED` hits.
+/// Server functions can't expose response headers, so — unlike
+/// `rpc_get_ebooks` — the search path threads the full hit count through
+/// `EbookLibrary::total`, letting the web client show "N of M results"
+/// when the vec is truncated.
 #[post("/api/rpc/search", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_search(q: String) -> Result<EbookLibrary> {
     let settings = db::get_settings(&pool.0).await?;
@@ -262,8 +262,8 @@ pub async fn rpc_search(q: String) -> Result<EbookLibrary> {
 /// Fetch a single author and all their books. POST for the same reason as
 /// `rpc_get_ebook` — needs `id` in the body.
 ///
-/// F1.11: queues a background `Task::ResolveAuthorPhoto` when the author has
-/// no `author_photos` row yet so first-time visits trigger Open Library
+/// Queues a background `Task::ResolveAuthorPhoto` when the author has no
+/// `author_photos` row yet so first-time visits trigger Open Library
 /// resolution. A subsequent visit picks up the resolved photo (or the
 /// `letter` negative-cache marker), and the worker's per-author resource
 /// mutex prevents duplicate queueing while resolution is in flight.
@@ -286,16 +286,15 @@ pub async fn rpc_get_series(id: i64) -> Result<Option<SeriesDetail>> {
     Ok(db::get_series(&pool.0, id).await?)
 }
 
-/// F1.11: admin-triggered "Scan for picture" for an author. Clears any
-/// sticky `letter` negative-cache marker and runs the Open Library resolver
+/// Admin-triggered "Scan for picture" for an author. Clears any sticky
+/// `letter` negative-cache marker and runs the Open Library resolver
 /// inline, so the admin gets a definitive "found / not found" answer in a
 /// single round-trip without polling the worker.
 ///
 /// Manual uploads are treated as overrides: a `source = 'manual'` row is
-/// preserved (the F1.11 roadmap explicitly calls this out — "skips if a
-/// manual override exists"). Scan returns `resolved=true` in that case
-/// without touching the row, so admins can't accidentally wipe a manual
-/// upload by clicking the button.
+/// preserved and Scan returns `resolved=true` without touching the row,
+/// so admins can't accidentally wipe a manual upload by clicking the
+/// button.
 #[post("/api/rpc/author/scan-photo", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_scan_author_photo(id: i64) -> Result<AuthorPhotoScanResult> {
     if !user.is_admin {
@@ -311,8 +310,8 @@ pub async fn rpc_scan_author_photo(id: i64) -> Result<AuthorPhotoScanResult> {
     Ok(AuthorPhotoScanResult { resolved })
 }
 
-/// F1.11 follow-up: persist an author photo by URL. Admin-gated server-side
-/// (the `user.is_admin` check below mirrors `rpc_scan_author_photo`). The
+/// Persist an author photo by URL. Admin-gated server-side (the
+/// `user.is_admin` check below mirrors `rpc_scan_author_photo`). The
 /// server fetches the URL via `db::author_photos::fetch_remote_image`,
 /// validates the bytes with the same magic-byte sniff as the multipart
 /// upload path, and stores it as a `manual` row.
@@ -359,7 +358,7 @@ pub async fn rpc_get_tag_cloud() -> Result<Vec<TagWeight>> {
     Ok(db::get_tag_cloud(&pool.0).await?)
 }
 
-/// F1.12 — `/authors` index: every author in the configured library.
+/// `/authors` index: every author in the configured library.
 #[get("/api/rpc/authors", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_list_authors() -> Result<Vec<AuthorSummary>> {
     let settings = db::get_settings(&pool.0).await?;
@@ -369,7 +368,7 @@ pub async fn rpc_list_authors() -> Result<Vec<AuthorSummary>> {
     Ok(db::list_authors(&pool.0, &path).await?)
 }
 
-/// F1.12 — `/series` index: every series in the configured library.
+/// `/series` index: every series in the configured library.
 #[get("/api/rpc/series-list", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_list_series() -> Result<Vec<SeriesSummary>> {
     let settings = db::get_settings(&pool.0).await?;
@@ -379,8 +378,7 @@ pub async fn rpc_list_series() -> Result<Vec<SeriesSummary>> {
     Ok(db::list_series(&pool.0, &path).await?)
 }
 
-/// Save metadata overrides for a book (F5.1). Requires `can_edit` or admin.
-///
+/// Save metadata overrides for a book. Requires `can_edit` or admin.
 /// Returns the merged `EbookMetadata` so the client can update its state
 /// without a second round-trip.
 #[post("/api/rpc/ebook/overrides", pool: PoolExt, user: AuthUser)]
@@ -401,7 +399,7 @@ pub async fn rpc_save_overrides(
     Ok(db::get_book_by_uuid(&pool.0, &uuid).await?)
 }
 
-/// Delete metadata overrides for a book, reverting to scanned values (F5.1).
+/// Delete metadata overrides for a book, reverting to scanned values.
 #[post("/api/rpc/ebook/overrides/delete", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_delete_overrides(uuid: String) -> Result<Option<EbookMetadata>> {
     if !user.is_admin && !user.can_edit {
@@ -426,11 +424,11 @@ pub async fn rpc_delete_overrides(uuid: String) -> Result<Option<EbookMetadata>>
     Ok(db::get_book_by_uuid(&pool.0, &uuid).await?)
 }
 
-/// F5.9-lite: admin "Delete author" (issue #159). Removes the author row,
-/// drops every `books_authors_link` for it, and adds the name to
-/// `ignored_authors` so the next `indexer::reindex` does not silently
-/// resurrect the row. Returns the number of books that were un-linked
-/// (used by the confirmation modal in PR 5).
+/// Admin "Delete author". Removes the author row, drops every
+/// `books_authors_link` for it, and adds the name to `ignored_authors`
+/// so the next `indexer::reindex` does not silently resurrect the row.
+/// Returns the number of books that were un-linked (used by the
+/// confirmation modal).
 #[post("/api/rpc/author/delete", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_delete_author(id: i64) -> Result<u64> {
     Ok(db::delete_author(&pool.0, id).await?)
@@ -482,7 +480,7 @@ pub async fn rpc_record_sessions(reports: Vec<SessionReport>) -> Result<u64> {
 }
 
 /// Search palette — grouped results (books, authors, series, tags) for the
-/// command-palette overlay (F1.5).
+/// command-palette overlay.
 #[post("/api/rpc/search-palette", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_search_palette(q: String) -> Result<PaletteResults> {
     let settings = db::get_settings(&pool.0).await?;

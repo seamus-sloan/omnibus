@@ -1,15 +1,8 @@
-//! Metadata edit page — F5.1 Screen A (single-book edit form).
-//!
-//! Full-page route at `/books/:uuid/edit`. Two-column layout: a 4-column
-//! form grid (left) and a sticky sidebar with cover preview and
-//! identifiers (right). A sticky save bar at the bottom shows the dirty
-//! field count and provides Save / Discard buttons.
-//!
-//! Edits persist to the `metadata_overrides` table via
-//! [`data::save_overrides`]. The page loads the current merged
-//! [`EbookMetadata`] on mount and initializes per-field signals from it.
-//! The `dirty_count` memo compares each signal to the original value to
-//! drive the save bar state.
+//! Single-book metadata edit form at `/books/:uuid/edit`. Two-column
+//! layout (form grid + sticky cover/identifiers sidebar) with a sticky
+//! save bar showing the dirty field count. Edits persist via
+//! [`data::save_overrides`]; the `dirty_count` memo compares each per-field
+//! signal to the original merged [`EbookMetadata`] loaded on mount.
 
 use dioxus::prelude::*;
 use dioxus_router::{navigator, Link};

@@ -11,15 +11,10 @@ use omnibus_shared::{Contributor, EbookMetadata, Identifier};
 use crate::helpers::format_series_index;
 
 /// Hard server-side cap on the number of books any single list/search
-/// response returns. The F1.3 spec ([docs/roadmap/1-3-library-views.md])
-/// allows client-side sort/filter "for libraries up to ~10k books", but
-/// nothing previously enforced that — `list_books` / `search_books`
-/// streamed the entire library on every request, so a multi-thousand-book
-/// install paid the serialization cost on every poll. Issue #81.
-///
-/// 50k is well above the spec's client-side ceiling (anything beyond
-/// needs server-side pagination anyway) and small enough that JSON-
-/// encoding the response stays in a sensible memory envelope.
+/// response returns. 50k is well above the client-side sort/filter
+/// ceiling (anything beyond needs server-side pagination anyway) and
+/// small enough that JSON-encoding the response stays in a sensible
+/// memory envelope.
 ///
 /// Callers that need the *full* count (for "X books truncated" UI or the
 /// `X-Total-Count` header) should reach for `library_from_db_with_total`

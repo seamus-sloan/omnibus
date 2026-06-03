@@ -1,4 +1,4 @@
-//! F1.2 thumbnail pipeline — generation, caching, and eviction.
+//! Thumbnail pipeline — generation, caching, and eviction.
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -206,8 +206,7 @@ pub fn ensure_thumbnails_sync(
 }
 
 /// Delete all cached thumbnails for a book so the next request regenerates
-/// them. Called after a cover override upload (F5.1) so stale thumbs don't
-/// linger.
+/// them. Called after a cover override upload so stale thumbs don't linger.
 pub fn invalidate_thumbs(book_id: i64) {
     for size in ThumbSize::all() {
         let _ = std::fs::remove_file(thumb_path_for(book_id, size));

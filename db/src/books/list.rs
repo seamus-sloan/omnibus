@@ -227,7 +227,7 @@ pub async fn list_indexed_rows(
 /// `MAX_BOOKS_RETURNED`, so callers that need to surface a truncation
 /// hint (UI banner, `X-Total-Count` header) ask the count separately.
 /// Single scalar query — cheaper than re-running the full SELECT just
-/// to count rows. Issue #81.
+/// to count rows.
 pub async fn count_books(pool: &SqlitePool, library_path: &str) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar::<_, i64>(
         r#"
@@ -246,8 +246,8 @@ pub async fn count_books(pool: &SqlitePool, library_path: &str) -> Result<i64, s
 /// `library_path`. Returns an empty library (no error, no books) if the path
 /// is `None`.
 ///
-/// The returned `books` vec is capped at `MAX_BOOKS_RETURNED` (issue #81);
-/// callers that need to surface a truncation hint should use
+/// The returned `books` vec is capped at `MAX_BOOKS_RETURNED`; callers that
+/// need to surface a truncation hint should use
 /// [`library_from_db_with_total`] instead. This entrypoint deliberately
 /// avoids the extra `count_books` round-trip — non-REST callers (the RPC
 /// path, internal lookups) don't need the total and shouldn't pay for it.
@@ -270,7 +270,7 @@ pub async fn library_from_db(
 /// Same as `library_from_db` but also returns the *true* book count under
 /// `library_path` (before the `MAX_BOOKS_RETURNED` cap). Used by the REST
 /// handler to set `X-Total-Count` and `X-Total-Cap` response headers so
-/// the client can detect a truncated response. Issue #81.
+/// the client can detect a truncated response.
 pub async fn library_from_db_with_total(
     pool: &SqlitePool,
     library_path: Option<&str>,

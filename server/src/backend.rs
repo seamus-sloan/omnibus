@@ -47,8 +47,8 @@ pub const SEARCH_RATE_LIMIT_MAX: u32 = 30;
 /// Per-IP rate-limit budget for the binary-upload endpoints
 /// (`POST /api/ebooks/{id}/cover`, `PUT /api/authors/{id}/photo`,
 /// `PUT /api/authors/{id}/photo/url`). Each accepts a multi-MiB image and
-/// drives disk I/O, WebP transcoding CPU, and SQLite writes, so a tight loop
-/// from a single principal could exhaust resources (#168). 10 uploads per
+/// drives disk I/O, WebP transcoding CPU, and SQLite writes, so a tight
+/// loop from a single principal could exhaust resources. 10 uploads per
 /// 60 seconds per IP is generous for legitimate editing while still
 /// backstopping abuse. Surfaced as constants so callers / tests share a
 /// single source of truth.
@@ -138,7 +138,7 @@ pub fn rest_router(state: AppState) -> Router {
 }
 
 /// Build the `/api/*` REST router, sharing `search_limiter` with the caller so
-/// REST `/api/search/*` and RPC `/api/rpc/search-*` draw from one budget (#249).
+/// REST `/api/search/*` and RPC `/api/rpc/search-*` draw from one budget.
 pub fn rest_router_with_search_limiter(
     state: AppState,
     search_limiter: std::sync::Arc<RateLimiter>,
@@ -230,7 +230,7 @@ pub fn rest_router_with_search_limiter(
 /// `from_fn_with_state`, which doesn't propagate to the route handlers.
 ///
 /// The `limiter` is passed in so the live server can share one `Arc` across both
-/// search families (#249); `rest_router` supplies a fresh dedicated one.
+/// search families; `rest_router` supplies a fresh dedicated one.
 fn search_router(limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> {
     Router::new()
         .route("/api/search", get(search::get_search))
@@ -247,9 +247,9 @@ fn search_router(limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> {
 /// to the handlers), merged into [`rest_router`]. The three routes — cover
 /// `POST`, author-photo `PUT`, author-photo-URL `PUT` — each accept a
 /// multi-MiB payload and drive disk I/O, WebP transcoding, and SQLite
-/// writes, so they share a per-IP budget (#168). The `GET`/`DELETE` author-
-/// photo routes carry no upload body (DELETE mutates but cheaply), so they
-/// stay in `rest_router`, outside this limiter.
+/// writes, so they share a per-IP budget. The `GET`/`DELETE` author-photo
+/// routes carry no upload body (DELETE mutates but cheaply), so they stay
+/// in `rest_router`, outside this limiter.
 fn upload_router() -> Router<AppState> {
     let limiter = std::sync::Arc::new(RateLimiter::with_policy(
         UPLOAD_RATE_LIMIT_WINDOW,
@@ -340,7 +340,7 @@ fn current_dir_string() -> String {
         .unwrap_or_default()
 }
 
-/// Attach the issue-#81 pagination hint headers to a list/search response.
+/// Attach the pagination hint headers to a list/search response.
 ///
 /// * `X-Total-Count` — the true row count of the underlying query, before
 ///   the `MAX_BOOKS_RETURNED` server-side cap is applied.

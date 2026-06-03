@@ -1,18 +1,7 @@
-//! `AuthStrategy` — pluggable authentication back-ends.
-//!
-//! v1.0 ships the `PasswordStrategy` (username + argon2id PHC), but F5.x
-//! adds OIDC, and post-v1.0 could bring passkeys/WebAuthn. This trait
-//! exists now so those extensions drop in without reshaping the login flow.
-//!
-//! Design notes:
-//! - The trait returns a `UserId`, not `(username, password)` — keeping it
-//!   credential-agnostic is what makes WebAuthn/OIDC fit later.
-//! - `kind()` is a short stable tag (`"password"`, `"oidc"`, `"webauthn"`)
-//!   surfaced to the admin UI ("how did this user last log in?") and used
-//!   to gate strategy-specific settings.
-//! - Concrete `OidcStrategy` and `WebAuthnStrategy` are deferred. The trait
-//!   only needs to prove it's shaped right; implementations can land in
-//!   their own phases.
+//! `AuthStrategy` — pluggable authentication back-ends. Ships with the
+//! `PasswordStrategy` (username + argon2id PHC); OIDC and WebAuthn fit the
+//! same shape so they drop in without reshaping the login flow. Consumed
+//! by the handlers in [`super::handlers`].
 
 use omnibus_db::auth::AuthError;
 use sqlx::SqlitePool;

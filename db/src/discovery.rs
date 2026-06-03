@@ -1,19 +1,8 @@
-//! F1.8 discovery-detail reads: a single author or series with their
-//! books, plus the global tag cloud. Membership and ordering follow the
-//! merged (override-aware) view via the BOOK_COLUMNS template shared
-//! with the book read path.
-//!
-//! # Multi-tenancy invariant
-//!
-//! Every read in this module is **DB-wide**: it returns all matching rows
-//! without filtering by the requesting user's library access. The app is
-//! single-tenant and single-library today (see Phase 4 in
-//! `docs/roadmap/0-0-summary.md`), so every authenticated caller is
-//! implicitly authorised to see every author, series, and tag. Per-user
-//! ACL scoping — a `user_id` parameter on each signature plus an
-//! access-control join in each query — is deferred to F4.x and tracked by
-//! issue #232; each function carries a `# Multi-tenancy` rustdoc section
-//! and a `TODO(F4.x)` marker in its body until that work lands.
+//! Discovery-detail reads: a single author or series with their books,
+//! plus the global tag cloud. Membership and ordering follow the merged
+//! (override-aware) view via the BOOK_COLUMNS template shared with the
+//! book read path. Single-tenant today — every read returns all matching
+//! rows without per-user ACL filtering.
 
 use sqlx::{Row, SqlitePool};
 
@@ -30,52 +19,19 @@ pub enum DiscoveryError {
 }
 
 /// Hard cap on the nested `books` vec returned by the discovery-detail
-/// reads ([`get_author`] / [`get_series`]). Issue #150: these functions
-/// previously serialized *every* book attributed to an author or series
-/// in one payload — a prolific reference author or a giant Calibre series
-/// could nest thousands of `EbookMetadata` structs (each with its own
-/// `Vec<Contributor>` / `Vec` subjects / `Vec<Identifier>`) into a single
-/// response. 1 000 is far above any realistic single-author/series shelf a
-/// client renders in one grid, yet keeps the JSON envelope bounded.
-///
-/// Truncation is surfaced *without* a struct change: `AuthorDetail` /
-/// `SeriesDetail` already carry a `book_count` field. Both reads now set
-/// `book_count` from a dedicated uncapped `COUNT(*)`, so a caller detects
-/// truncation as `book_count > books.len()`. The `X-Total-Count` header
-/// floated in #150 doesn't fit here — these flow through Dioxus server
-/// functions (`frontend/src/rpc.rs`), not raw axum handlers, so there's no
-/// ergonomic place to set a response header. Cursor pagination is the
-/// intended F4.x follow-up; see `docs/roadmap/`.
+/// reads ([`get_author`] / [`get_series`]). Truncation is surfaced via
+/// `book_count` (uncapped `COUNT(*)`) so callers detect it as
+/// `book_count > books.len()`.
 pub const MAX_DISCOVERY_BOOKS: i64 = 1_000;
 
 /// Fetch an author by ID with their books across every library. Returns
-/// `None` if the author ID doesn't exist.
-///
-/// # Bounded reads (issue #150)
-///
-/// The nested `books` vec is hard-capped at [`MAX_DISCOVERY_BOOKS`]; a
-/// prolific reference author no longer serializes thousands of nested
-/// `EbookMetadata` structs in one payload. `book_count` is computed from a
-/// separate uncapped `COUNT(*)`, so it always reports the true shelf size
-/// and callers detect truncation as `book_count > books.len()`. Cursor
-/// pagination is the intended F4.x follow-up.
-///
-/// # Multi-tenancy
-///
-/// This function returns all matching rows without filtering by the
-/// requesting user's library access. The app is single-tenant and
-/// single-library today (see Phase 4 in `docs/roadmap/0-0-summary.md`),
-/// so every authenticated caller is implicitly authorised to see every
-/// author. When per-user ACLs land in the F4.x phase this function must
-/// accept a `user_id` parameter and filter both the `authors` row and
-/// the joined `books` via the access-control join. The `TODO(F4.x)`
-/// marker in the body stays in place until that work lands.
+/// `None` if the author ID doesn't exist. The nested `books` vec is
+/// capped at [`MAX_DISCOVERY_BOOKS`]; `book_count` is uncapped.
 pub async fn get_author(
     pool: &SqlitePool,
     author_id: i64,
 ) -> Result<Option<AuthorDetail>, DiscoveryError> {
-    // TODO(F4.x): scope by `user_id` once per-user ACLs land. See the
-    // function-level rustdoc above for the single-tenant rationale.
+    // TODO: scope by `user_id` once per-user ACLs land (single-tenant today).
     let author_row = sqlx::query("SELECT id, name, sort FROM authors WHERE id = ?")
         .bind(author_id)
         .fetch_optional(pool)
@@ -212,34 +168,13 @@ pub async fn get_author(
 }
 
 /// Fetch a series by ID with its books, ordered by series index. Returns
-/// `None` if the series ID doesn't exist.
-///
-/// # Bounded reads (issue #150)
-///
-/// The nested `books` vec is hard-capped at [`MAX_DISCOVERY_BOOKS`]; a
-/// giant Calibre series no longer serializes its entire shelf in one
-/// payload. `book_count` is computed from a separate uncapped `COUNT(*)`,
-/// so it reports the true series size and truncation is detectable as
-/// `book_count > books.len()`. Cursor pagination is the intended F4.x
-/// follow-up.
-///
-/// # Multi-tenancy
-///
-/// This function returns all matching rows without filtering by the
-/// requesting user's library access. The app is single-tenant and
-/// single-library today (see Phase 4 in `docs/roadmap/0-0-summary.md`),
-/// so every authenticated caller is implicitly authorised to see every
-/// series. When per-user ACLs land in the F4.x phase this function must
-/// accept a `user_id` parameter and filter both the `series` row and the
-/// joined `books` via the access-control join — same caveat as
-/// [`get_author`]. The `TODO(F4.x)` marker in the body stays in place
-/// until that work lands.
+/// `None` if the series ID doesn't exist. The nested `books` vec is
+/// capped at [`MAX_DISCOVERY_BOOKS`]; `book_count` is uncapped.
 pub async fn get_series(
     pool: &SqlitePool,
     series_id: i64,
 ) -> Result<Option<SeriesDetail>, DiscoveryError> {
-    // TODO(F4.x): scope by `user_id` once per-user ACLs land. See the
-    // function-level rustdoc above for the single-tenant rationale.
+    // TODO: scope by `user_id` once per-user ACLs land (single-tenant today).
     let series_row = sqlx::query("SELECT id, name, sort FROM series WHERE id = ?")
         .bind(series_id)
         .fetch_optional(pool)
@@ -400,27 +335,8 @@ const TAG_CLOUD_LIMIT: i64 = 500;
 
 /// Return up to [`TAG_CLOUD_LIMIT`] tags with their book counts, ordered
 /// by count descending then name ascending. Used by the tag cloud page.
-///
-/// # Bounded reads (issue #150)
-///
-/// Unlike [`get_author`] / [`get_series`], this read never nests book
-/// lists — it returns only `TagWeight { name, count }` rows — and the tag
-/// list itself is already capped at [`TAG_CLOUD_LIMIT`]. There is nothing
-/// unbounded to cap here; the #150 work is the discovery-detail reads.
-///
-/// # Multi-tenancy
-///
-/// This function returns the global tag distribution without filtering
-/// by the requesting user's library access. The app is single-tenant and
-/// single-library today (see Phase 4 in `docs/roadmap/0-0-summary.md`),
-/// so every authenticated caller sees the same tag cloud. When per-user
-/// ACLs land in the F4.x phase this function must accept a `user_id`
-/// parameter and count only books visible to that user via the
-/// access-control join. The `TODO(F4.x)` marker in the body stays in
-/// place until that work lands.
 pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, DiscoveryError> {
-    // TODO(F4.x): scope by `user_id` once per-user ACLs land. See the
-    // function-level rustdoc above for the single-tenant rationale.
+    // TODO: scope by `user_id` once per-user ACLs land (single-tenant today).
     //
     // F5.1: counts use the effective (override-aware) subject set, not
     // the raw `books_tags_link` rows — `overrides.subjects` replaces a

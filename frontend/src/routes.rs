@@ -74,7 +74,7 @@ pub fn MetadataEdit(uuid: String) -> Element {
     }
 }
 
-/// Route target for `/read/:uuid` — the F2.2 immersive EPUB reader.
+/// Route target for `/read/:uuid` — the immersive EPUB reader.
 /// Deliberately rendered **without** [`ScreenLayout`]: the reader is a
 /// full-screen surface with its own slim control bar, so the app's top/bottom
 /// nav is suppressed. Same uuid-keyed stability rationale as [`BookDetail`].
@@ -111,7 +111,7 @@ pub fn AuthorDetail(id: i64) -> Element {
     }
 }
 
-/// Route target for `/authors` — browse-all authors index (F1.12).
+/// Route target for `/authors` — browse-all authors index.
 #[component]
 pub fn AuthorsIndex() -> Element {
     rsx! {
@@ -127,7 +127,7 @@ pub fn SeriesDetail(id: i64) -> Element {
     }
 }
 
-/// Route target for `/series` — browse-all series index (F1.12).
+/// Route target for `/series` — browse-all series index.
 #[component]
 pub fn SeriesIndex() -> Element {
     rsx! {

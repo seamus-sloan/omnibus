@@ -1,19 +1,10 @@
-//! F1.11 author profile photo data layer plus the F5.9-lite admin
-//! `delete_author` primitive.
-//!
-//! `author_photos` holds at most one row per author (PK = author_id). The
-//! `source` column distinguishes:
-//! - `'manual'`     — admin upload via `PUT /api/authors/:id/photo`.
-//! - `'openlibrary'`— resolved by the background worker.
-//! - `'letter'`     — negative-cache marker: no usable image. `bytes` and
-//!   `mime` are NULL; `get_author_photo` returns `None` so the GET handler
-//!   404s and the letter avatar stays in place.
-//!
-//! Admin DELETE clears the row to force re-resolution on next view.
-//!
-//! The OL resolver itself lives in [`crate::author_photos`]; this file
-//! owns just the DB-side row CRUD and the related author-deletion
-//! primitive.
+//! Author profile photo data layer plus the admin `delete_author`
+//! primitive. `author_photos` holds at most one row per author (PK =
+//! author_id) with a `source` of `'manual'`, `'openlibrary'`, or
+//! `'letter'` (negative-cache marker — NULL bytes/mime so `get_author_photo`
+//! returns `None` and the letter avatar stays in place). Admin DELETE
+//! clears the row to force re-resolution. The OL resolver itself lives in
+//! [`crate::author_photos`]; this file owns just the row CRUD.
 
 use sqlx::SqlitePool;
 
@@ -131,10 +122,9 @@ pub async fn delete_author_photo(pool: &SqlitePool, author_id: i64) -> Result<()
 
 /// Delete an author by id and prevent reindex from re-creating the row.
 ///
-/// F5.9-lite durable junk-author removal (issue #159). One transaction:
-/// look up the name (for the blocklist insert) and affected book ids
-/// (for the post-commit FTS refresh), drop the link rows, drop the
-/// `authors` row, then `INSERT OR IGNORE` the name into
+/// One transaction: look up the name (for the blocklist insert) and
+/// affected book ids (for the post-commit FTS refresh), drop the link
+/// rows, drop the `authors` row, then `INSERT OR IGNORE` the name into
 /// `ignored_authors` so the next `indexer::reindex` does not silently
 /// re-create the row via `resolve_or_insert_author`.
 ///

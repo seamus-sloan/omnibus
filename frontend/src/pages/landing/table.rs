@@ -7,18 +7,16 @@ use super::sorting::{contributor_names, row_slug};
 use crate::components::chip_editor::{ChipEditor, SuggestionItem};
 use crate::{data, Route};
 
-/// Inline-editable field on a power-user-table row (F5.9-lite admin
-/// surface). Used by `EbookRow` to track which of its cells (if any) is
-/// in edit mode at any given time — single-cell-at-a-time keeps the
-/// keyboard/blur lifecycle simple and avoids fighting the row's
-/// click-to-navigate handler.
+/// Inline-editable field on a power-user-table row. Used by `EbookRow` to
+/// track which of its cells (if any) is in edit mode at any given time —
+/// single-cell-at-a-time keeps the keyboard/blur lifecycle simple and
+/// avoids fighting the row's click-to-navigate handler.
 ///
-/// `Series` edits the series *name* only — the series index ("#N")
-/// stays in the F5.1 metadata edit page on `/books/:uuid/edit` for v1
-/// to avoid adding a separate Series Index column to the power-user
-/// table. The user's stated cleanup pain (stripping series-prefix
-/// cruft from titles, renaming author/series variants) is satisfied
-/// by Title + Series + Authors.
+/// `Series` edits the series *name* only — the series index ("#N") stays
+/// in the full metadata edit page on `/books/:uuid/edit` to avoid adding a
+/// separate Series Index column to the power-user table. Title + Series +
+/// Authors covers the stated cleanup pain (stripping series-prefix cruft
+/// from titles, renaming author/series variants).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum EditField {
     Title,
@@ -565,7 +563,7 @@ fn EditableCell(
 /// a single-line text input), the Authors cell renders the full
 /// [`ChipEditor`] *inside* the `<td>` when the row's editing signal
 /// matches `EditField::Authors`. The cell grows vertically to fit the
-/// chips + input + dropdown, matching the F5.9-lite design comp.
+/// chips + input + dropdown, matching the design comp.
 ///
 /// Display mode: comma-joined names. Hover: dashed amber outline.
 /// Click: swaps to chip editor (auto-focused) with the library-wide

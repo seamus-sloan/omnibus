@@ -1,53 +1,29 @@
-//! F1.12 browse-all index pages: `/authors` and `/series`. Returns every
-//! row (capped at `INDEX_LIMIT`) so the UI's client-side sort/filter has
-//! the full list to work with; per-row counts come back override-aware so
-//! the index surfaces stay consistent with the discovery-detail reads.
-//!
-//! # Multi-tenancy invariant
-//!
-//! Both browse reads are **DB-wide**: they return every author / series in
-//! the configured library without filtering by the requesting user's
-//! access. The app is single-tenant and single-library today (see Phase 4
-//! in `docs/roadmap/0-0-summary.md`), so every authenticated caller sees
-//! the same index. Per-user ACL scoping — a `user_id` parameter plus an
-//! access-control join — is deferred to F4.x and tracked by issue #232;
-//! each function carries a `# Multi-tenancy` rustdoc section and a
-//! `TODO(F4.x)` marker in its body until that work lands.
+//! Browse-all index pages: `/authors` and `/series`. Returns every row
+//! (capped at `INDEX_LIMIT`) so the UI's client-side sort/filter has the
+//! full list to work with; per-row counts come back override-aware so the
+//! index stays consistent with the discovery-detail reads. Single-tenant
+//! today — no per-user ACL filtering.
 
 use sqlx::{Row, SqlitePool};
 
 use omnibus_shared::{AuthorSummary, SeriesSummary};
 
-/// Hard cap on rows returned by [`list_authors`] / [`list_series`]. The
-/// F1.12 roadmap notes a 5k+ author library is the upper bound we want to
-/// keep responsive on a single page; 10k leaves headroom while keeping
-/// the JSON envelope under ~1 MB even with the optional accent string.
+/// Hard cap on rows returned by [`list_authors`] / [`list_series`]. Keeps
+/// the JSON envelope under ~1 MB even with the optional accent string,
+/// while leaving headroom past a 5k+ author library.
 const INDEX_LIMIT: i64 = 10_000;
 
 /// Return every author with their book count and an optional cover-derived
-/// accent, scoped to `library_path`. Empty list when `library_path` does
-/// not match a configured library.
-///
-/// Ordered by name ascending. The UI does its own client-side sort/filter,
-/// so this returns the full list up to [`INDEX_LIMIT`] — see
-/// [docs/roadmap/1-12-browse-authors-series.md] for the per-library size
-/// expectations.
-///
-/// Accent: the `accent_color` of the first book by this author with a
-/// non-null value, by book sort/id order. `NULL` is returned when no book
-/// has one, and the UI falls back to the theme accent.
-///
-/// # Multi-tenancy
-///
-/// Single-tenant today — every authenticated caller sees the same list.
-/// When per-user ACLs land in F4.x this function must accept a `user_id`
-/// and join through the access-control table the same way
-/// [`crate::discovery::get_author`] will.
+/// accent, scoped to `library_path`, ordered by name ascending and capped
+/// at [`INDEX_LIMIT`]. Empty list when `library_path` doesn't match a
+/// configured library. Accent is the `accent_color` of the first book by
+/// this author with a non-null value (book sort/id order); `NULL` falls
+/// back to the theme accent in the UI.
 pub async fn list_authors(
     pool: &SqlitePool,
     library_path: &str,
 ) -> Result<Vec<AuthorSummary>, sqlx::Error> {
-    // TODO(F4.x): scope by `user_id` once per-user ACLs land.
+    // TODO: scope by `user_id` once per-user ACLs land.
     //
     // F5.1: count uses the effective (override-aware) creator set, not
     // the raw `books_authors_link` rows — otherwise an author whose books
@@ -129,24 +105,16 @@ pub async fn list_authors(
 }
 
 /// Return every series with book count, primary author, and an optional
-/// accent, scoped to `library_path`.
-///
-/// `primary_author` is the first creator of the lowest-`series_index`
-/// book in the series (with `book.sort, book.id` as deterministic
-/// tie-breakers). It can be `None` when every book in the series has only
-/// override-supplied creators that haven't been linked to an `authors`
-/// row yet — surface a plain text by-line in that case.
-///
-/// Ordered by name ascending. Capped at [`INDEX_LIMIT`].
-///
-/// # Multi-tenancy
-///
-/// Same single-tenant caveat as [`list_authors`].
+/// accent, scoped to `library_path`, ordered by name ascending and capped
+/// at [`INDEX_LIMIT`]. `primary_author` is the first creator of the
+/// lowest-`series_index` book (with `book.sort, book.id` as tie-breakers);
+/// `None` when every book in the series has only override-supplied
+/// creators not yet linked to an `authors` row.
 pub async fn list_series(
     pool: &SqlitePool,
     library_path: &str,
 ) -> Result<Vec<SeriesSummary>, sqlx::Error> {
-    // TODO(F4.x): scope by `user_id` once per-user ACLs land.
+    // TODO: scope by `user_id` once per-user ACLs land.
     //
     // F5.1: same overlay shape as `list_authors` and the palette series
     // query. `overrides.series` (string) drives membership for `book_count`;

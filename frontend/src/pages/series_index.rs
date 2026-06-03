@@ -1,5 +1,5 @@
-//! Series index page (F1.12). Lists every series in the library as a
-//! browsable surface, mirroring the `SeriesIndex` design comp from
+//! Series index page. Lists every series in the library as a browsable
+//! surface, mirroring the `SeriesIndex` design comp from
 //! `screens/indices.jsx`.
 
 use dioxus::prelude::*;

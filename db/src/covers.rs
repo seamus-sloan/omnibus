@@ -151,22 +151,17 @@ pub(crate) fn find_override_cover_file(uuid: &str) -> Option<(String, Vec<u8>)> 
 /// Load a book's cover image bytes + mime type from disk. The `id` parameter
 /// is the `books.id` primary key — the REST surface is uuid-keyed at
 /// `/api/covers/{uuid}` (`server/src/backend.rs`), where the handler resolves
-/// the uuid to an id via `resolve_book_id_by_uuid` before calling this. Inside,
-/// we look up the book's `uuid` again and read the cover file off disk.
+/// the uuid to an id via `resolve_book_id_by_uuid` before calling this.
 ///
-/// **F5.1:** User-uploaded override covers take precedence. When the
+/// User-uploaded override covers take precedence: when the
 /// `metadata_overrides` table flags `has_cover_override`, the override file
-/// at `covers_dir()/override-<uuid>.<ext>` is returned first.
+/// at `covers_dir()/override-<uuid>.<ext>` is returned first. The override
+/// flag is pulled in via a `LEFT JOIN` so the hot path stays at one query.
 ///
-/// Single round-trip: the override flag is pulled in via a `LEFT JOIN` on
-/// `metadata_overrides` rather than a second `get_metadata_overrides` call.
-/// Covers are fetched per grid tile and per detail page — the hot path
-/// stays at one query regardless of whether overrides exist.
-///
-/// The filesystem probes (`find_override_cover_file` / `find_cover_file`)
-/// are synchronous `std::fs` calls and run on the blocking pool via
+/// Filesystem probes (`find_override_cover_file` / `find_cover_file`) are
+/// synchronous `std::fs` calls and run on the blocking pool via
 /// [`tokio::task::spawn_blocking`] so a hot cover-fetch loop doesn't pin
-/// tokio worker threads (#106).
+/// tokio worker threads.
 pub async fn get_cover(
     pool: &SqlitePool,
     book_id: i64,
