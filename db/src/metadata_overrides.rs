@@ -1,6 +1,6 @@
-//! F5.1 metadata overrides: the user-editable layer on top of the
-//! canonical scanned metadata. Persists `MetadataOverrides` JSON per
-//! `book_uuid` and merges it on top of the read path.
+//! Metadata overrides: the user-editable layer on top of the canonical
+//! scanned metadata. Persists `MetadataOverrides` JSON per `book_uuid`
+//! and merges it on top of the read path.
 
 use std::collections::HashMap;
 
@@ -70,10 +70,11 @@ pub async fn upsert_metadata_overrides(
 
 /// Merge `incoming` field overrides on top of any existing overrides for
 /// `book_uuid` and persist the result inside one `BEGIN IMMEDIATE`
-/// transaction, so two concurrent edits to the same book can't interleave and
-/// silently drop each other's changes (#166). The existing `has_cover_override`
-/// flag is carried forward — a text-only edit must not clear a cover the user
-/// uploaded earlier. The `books_fts` rebuild runs best-effort after commit.
+/// transaction, so two concurrent edits to the same book can't interleave
+/// and silently drop each other's changes. The existing `has_cover_override`
+/// flag is carried forward — a text-only edit must not clear a cover the
+/// user uploaded earlier. The `books_fts` rebuild runs best-effort after
+/// commit.
 pub async fn merge_metadata_overrides(
     pool: &SqlitePool,
     book_uuid: &str,

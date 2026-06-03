@@ -615,7 +615,7 @@ fn BdFormatBadge(fmt: String) -> Element {
 }
 
 /// Read-only star display. Half-filled stars are rounded down to nearest
-/// integer in the stub; F3.2 replaces this with the interactive widget.
+/// integer in the stub; the interactive widget will replace this later.
 #[component]
 fn BdStars(value: f32) -> Element {
     let full = value.floor().clamp(0.0, 5.0) as u32;

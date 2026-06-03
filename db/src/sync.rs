@@ -461,10 +461,9 @@ async fn insert_book_row(
 /// inline by name (NOCASE) — no separate id-resolution `SELECT`. Each batched
 /// statement is chunked to stay under SQLite's bound-parameter limit. This
 /// collapses the old ~4-queries-per-author / 2-queries-per-tag fan-out into a
-/// constant handful per book, which keeps
-/// the SQLite write lock from being held for the whole of a bulk import
-/// (issue #242). Series / publisher / language are single-valued per book,
-/// so they keep the simple resolve-then-link path.
+/// constant handful per book, which keeps the SQLite write lock from being
+/// held for the whole of a bulk import. Series / publisher / language are
+/// single-valued per book, so they keep the simple resolve-then-link path.
 async fn insert_metadata_links(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,

@@ -1,4 +1,4 @@
-//! Global HTTP security response headers (#277).
+//! Global HTTP security response headers.
 //!
 //! Applies a single conservative set of headers to every response served by
 //! the axum router — covers SSR HTML, the Dioxus WASM bundle, server-function
@@ -37,9 +37,9 @@
 //!   * `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com` —
 //!     `'unsafe-inline'` because Dioxus emits inline `style=""` attributes;
 //!     the Google Fonts host because `atrium.css` `@import`s the Geist /
-//!     Instrument Serif stylesheet from it. Self-hosting the fonts (tracked as
-//!     an F1.7 follow-up in `atrium.css`) would let both the CDN host here and
-//!     in `font-src` drop back to `'self'`.
+//!     Instrument Serif stylesheet from it. Self-hosting the fonts (a
+//!     follow-up tracked in `atrium.css`) would let both the CDN host here
+//!     and in `font-src` drop back to `'self'`.
 //!   * `font-src 'self' data: https://fonts.gstatic.com` — Google serves the
 //!     actual WOFF2 files from `fonts.gstatic.com`; without it the `@import`ed
 //!     stylesheet resolves but the glyphs fall back to system fonts.

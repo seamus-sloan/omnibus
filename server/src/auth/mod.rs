@@ -1,27 +1,8 @@
-//! F0.3 auth — server-side axum glue on top of [`omnibus_db::auth`].
-//!
-//! Layout:
-//!
-//! * [`extractor`] — `AuthUser` / `AdminUser` `FromRequestParts` extractors
-//!   that resolve a live session from either the `omnibus_session` cookie
-//!   or an `Authorization: Bearer` header.
-//! * [`handlers`] — `/api/auth/{register,login,logout,me}` + [`auth_router`].
-//! * [`csrf`] — `origin_check` middleware for cookie-authed state-changing
-//!   requests.
-//! * [`strategy`] — `AuthStrategy` trait + `PasswordStrategy` impl. OIDC
-//!   and WebAuthn fit the same shape.
-//! * [`boot`] — `OMNIBUS_INITIAL_ADMIN` recovery hook.
-//!
-//! Per-IP rate limiting lives in the top-level [`crate::rate_limit`] module
-//! since it is shared by the auth endpoints and the search endpoints. The
-//! auth router mounts it via `rate_limit_by_ip` in `main.rs`.
-//!
-//! Per-route enforcement (F0.7): every protected handler in
-//! [`crate::backend`] and every server function in `omnibus_frontend::rpc`
-//! declares the strictest extractor it needs (`AuthUser` for read paths,
-//! `AdminUser` for state-changing ops on shared config). The middleware
-//! [`gate::require_auth`] is just the boundary; the per-route extractors
-//! are what actually enforce the permission columns.
+//! Server-side axum glue on top of [`omnibus_db::auth`]: cookie/bearer
+//! extractors ([`extractor`]), `/api/auth/*` handlers + router ([`handlers`]),
+//! CSRF origin check ([`csrf`]), pluggable auth backends ([`strategy`]),
+//! the initial-admin recovery hook ([`boot`]), and the `/api/*` gate
+//! middleware ([`gate`]). Mounted by [`crate::main`].
 
 pub mod boot;
 pub mod csrf;

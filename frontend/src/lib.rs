@@ -142,8 +142,8 @@ fn ScreenLayout(children: Element) -> Element {
     }
 }
 
-/// Atrium design-system stylesheet (F1.7). Served as a hashed static asset
-/// via Dioxus's Manganis pipeline so the browser caches it independently of
+/// Atrium design-system stylesheet. Served as a hashed static asset via
+/// Dioxus's Manganis pipeline so the browser caches it independently of
 /// the WASM bundle.
 const ATRIUM_CSS: Asset = asset!("/assets/atrium.css");
 

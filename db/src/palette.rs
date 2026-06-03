@@ -1,9 +1,8 @@
-//! F1.5 search palette: grouped command-palette results across books,
-//! authors, series, and tags. Books go through the FTS5 MATCH path
-//! (with override-aware overlays applied after hydration); the taxonomy
-//! categories use scoped `LIKE` substring matches against the name
-//! columns. All results are bounded per category and scoped to
-//! `library_path`.
+//! Search palette: grouped command-palette results across books, authors,
+//! series, and tags. Books go through the FTS5 MATCH path (with
+//! override-aware overlays applied after hydration); taxonomy categories
+//! use scoped `LIKE` substring matches against the name columns. Bounded
+//! per category and scoped to `library_path`.
 
 use sqlx::{Row, SqlitePool};
 
@@ -22,14 +21,10 @@ pub enum PaletteError {
     Db(#[from] sqlx::Error),
 }
 
-/// Search palette — grouped results for the command-palette overlay (F1.5).
-///
-/// Returns up to 5 results per category (books, authors, series, tags),
-/// with server-side timing in `duration_ms`. Books are matched via FTS5
-/// (`build_fts_match`); taxonomy categories use `LIKE '%q%'` against the
-/// name column. All results are scoped to `library_path`.
-///
-/// Returns `PaletteResults::default()` for empty/whitespace queries.
+/// Grouped command-palette results: up to 5 books, authors, series, and
+/// tags scoped to `library_path`, plus server-side timing in `duration_ms`.
+/// Books are matched via FTS5 (`build_fts_match`); taxonomy categories use
+/// `LIKE '%q%'`. Empty/whitespace queries return `PaletteResults::default()`.
 pub async fn search_palette(
     pool: &SqlitePool,
     library_path: &str,

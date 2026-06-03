@@ -1,25 +1,8 @@
-//! Auth data layer (F0.3).
-//!
-//! Pure SQL + hashing. No axum types, no cookies — those belong to
-//! `server::auth`. This module owns:
-//!
-//! * Argon2id password hashing + verification + PHC rotation on verify.
-//! * Password-policy validation (length + common-password reject-list).
-//! * Race-free first-user-admin creation (BEGIN IMMEDIATE).
-//! * Timing-safe login with per-account lockout + failure counter.
-//! * Session creation: raw 256-bit token returned once, SHA-256 hash stored.
-//! * Session lookup: exact SHA-256 hash match against the stored value
-//!   (the raw token is never persisted), with absolute expiry
-//!   (`expires_at`, set at create time from the caller's TTL — 30 days for
-//!   cookies, 90 days for bearer tokens) and idle expiry
-//!   (`SESSION_IDLE_TIMEOUT_SECS`, 7 days since `last_used_at`).
-//! * Device registration + listing.
-//! * `OMNIBUS_INITIAL_ADMIN` recovery hook (`promote_to_admin`).
-//! * Session-key secret load/create in `secrets`.
-//!
-//! Schema lives in `migrations/0004_auth.sql`. See
-//! `docs/roadmap/0-3-auth.md` for the security rationale behind every
-//! design decision here.
+//! Auth data layer: pure SQL + Argon2id hashing for users, devices, and
+//! sessions. No axum types, no cookies — those belong to `server::auth`.
+//! Covers password hashing/verify with PHC rotation, password-policy
+//! validation, first-user-admin creation, per-account lockout, and
+//! SHA-256-hashed session tokens with absolute + idle expiry.
 
 mod device;
 mod login;

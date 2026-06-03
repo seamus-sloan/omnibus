@@ -8,8 +8,8 @@ use omnibus_db::{self as db};
 use super::{internal, AppState};
 use crate::auth::AuthUser;
 
-/// F1.12 — `/series` index. Returns every series in the configured
-/// library with a book count, primary author, and optional accent.
+/// `/series` index. Returns every series in the configured library with
+/// a book count, primary author, and optional accent.
 pub(super) async fn get_series(_user: AuthUser, State(state): State<AppState>) -> Response {
     let settings = match db::get_settings(&state.pool).await {
         Ok(s) => s,

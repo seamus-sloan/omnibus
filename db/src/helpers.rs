@@ -8,15 +8,14 @@ use std::path::Path;
 /// (`search_books`, `count_search_books`, `search_palette`). Inputs beyond
 /// this are truncated before reaching [`build_fts_match`] / `LIKE` so the
 /// generated MATCH expression and pattern length stay bounded regardless of
-/// caller payload size (issue #189). Module-wide so the limit is tunable in
-/// one place across every search path.
+/// caller payload size. Module-wide so the limit is tunable in one place
+/// across every search path.
 pub(crate) const MAX_QUERY_LEN: usize = 256;
 
 /// Trim surrounding whitespace and cap a user query to [`MAX_QUERY_LEN`]
 /// chars before it reaches [`build_fts_match`] / `LIKE`. Collecting chars
 /// (not bytes) guarantees the truncation never lands mid-codepoint. Shared
-/// by every search entrypoint (`search_books`, `count_search_books`,
-/// `search_palette`) so the cap is applied identically everywhere (#189).
+/// by every search entrypoint so the cap is applied identically everywhere.
 pub(crate) fn cap_query_len(q: &str) -> String {
     q.trim().chars().take(MAX_QUERY_LEN).collect()
 }
@@ -24,15 +23,9 @@ pub(crate) fn cap_query_len(q: &str) -> String {
 /// Deterministic UUIDv5 derived from `(library_path, filename)` so reindexing
 /// the same file produces the same uuid. Keeps `/api/covers/{uuid}` URLs
 /// stable across reindex cycles even as the primary `books.id` renumbers.
-///
-/// Implemented as `Uuid::new_v5(NAMESPACE_URL, "{library_path}\0{filename}")`.
-/// Issue #94: the previous implementation used
-/// `std::collections::hash_map::DefaultHasher`, whose algorithm is documented
-/// as subject to change between Rust toolchain versions. A toolchain bump
-/// would silently rotate every cover UUID on the next reindex and orphan
-/// every cover file on disk. UUIDv5 (SHA-1 over a namespace + name, per
-/// RFC 4122 §4.3) is fixed across toolchains, sets the proper version/variant
-/// bits, and emits the canonical 8-4-4-4-12 hyphenated form.
+/// UUIDv5 (SHA-1 over a namespace + name, per RFC 4122 §4.3) is fixed
+/// across Rust toolchains — a previous `DefaultHasher` derivation rotated
+/// every cover UUID on toolchain bumps and orphaned cover files on disk.
 pub(crate) fn stable_uuid(library_path: &str, filename: &str) -> String {
     // NUL is the one byte that can't appear inside either side, so it's a
     // safe, unambiguous separator — no `(library_path, filename)` collision
@@ -66,7 +59,7 @@ pub(crate) fn parse_series_index(s: &str) -> Option<f64> {
     s.trim().parse::<f64>().ok()
 }
 
-/// Defense-in-depth gate on `books.accent_color` (#125). The indexer's
+/// Defense-in-depth gate on `books.accent_color`. The indexer's
 /// `extract_accent` emits strings of the exact shape `oklch(L C H)` with
 /// three space-separated decimal floats; consumers (Atrium cover tiles,
 /// palette rows, book detail) inline the value into an HTML `style`

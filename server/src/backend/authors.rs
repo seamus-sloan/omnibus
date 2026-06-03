@@ -44,9 +44,9 @@ pub(super) async fn get_author_by_id(
     }
 }
 
-/// F1.12 — `/authors` index. Returns every author in the configured
-/// library with a book count and optional accent. Empty list when no
-/// library is configured.
+/// `/authors` index. Returns every author in the configured library with
+/// a book count and optional accent. Empty list when no library is
+/// configured.
 pub(super) async fn get_authors(_user: AuthUser, State(state): State<AppState>) -> Response {
     let settings = match db::get_settings(&state.pool).await {
         Ok(s) => s,

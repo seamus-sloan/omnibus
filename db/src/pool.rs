@@ -1,6 +1,6 @@
 //! SQLite pool initialization for the omnibus data layer. Owns
 //! `init_db` (which runs the embedded migrations, applies per-connection
-//! PRAGMAs, and performs the one-time issue #94 cover-cache cleanup).
+//! PRAGMAs, and performs the one-time legacy cover-cache cleanup).
 
 use std::path::Path;
 
@@ -88,13 +88,14 @@ fn is_memory_url(database_url: &str) -> bool {
 }
 
 /// Sentinel filename written into `covers_dir()` after a one-time cleanup of
-/// pre-issue-#94 cover files. Presence of this file marks the directory as
-/// "already on the UUIDv5 scheme" and short-circuits the purge on subsequent
-/// boots. See `purge_legacy_covers_once`.
+/// legacy `DefaultHasher`-derived cover files. Presence of this file marks
+/// the directory as already on the UUIDv5 scheme and short-circuits the
+/// purge on subsequent boots. See `purge_legacy_covers_once`.
 const COVERS_SCHEME_SENTINEL: &str = ".omnibus-cover-scheme-v5";
 
-/// One-time cleanup for the cover cache when upgrading across the issue #94
-/// fix. The old `stable_uuid` derived ids from `DefaultHasher`, whose output
+/// One-time cleanup for the cover cache when upgrading from the legacy
+/// `DefaultHasher`-derived UUIDs to UUIDv5. The old derivation produced
+/// toolchain-dependent ids, whose output
 /// changes between Rust toolchains; the new derivation uses RFC 4122 UUIDv5,
 /// which produces different ids for the same `(library_path, filename)`
 /// inputs. Any cover files written under the old scheme are now unreachable

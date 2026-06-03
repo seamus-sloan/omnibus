@@ -1,5 +1,4 @@
-//! Search results page — full-page version of the F1.5 palette.
-//!
+//! Search results page — full-page version of the command palette.
 //! Reached from the palette by pressing Enter on the input (without
 //! arrow-key navigation), or by clicking a Tag result. Reuses the
 //! `data::search_palette` RPC and the same `PaletteResults` shape; each

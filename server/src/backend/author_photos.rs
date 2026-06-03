@@ -171,10 +171,9 @@ pub(super) async fn delete_author_photo(
 /// (a `letter` marker is now in place to skip future autoresolution).
 ///
 /// Manual uploads are treated as overrides: a `source = 'manual'` row is
-/// preserved (the F1.11 roadmap explicitly calls this out — "skips if a
-/// manual override exists"). Scan returns `resolved=true` in that case
-/// without touching the row, so admins can't accidentally wipe a manual
-/// upload by clicking the button.
+/// preserved and Scan returns `resolved=true` without touching the row,
+/// so admins can't accidentally wipe a manual upload by clicking the
+/// button.
 pub(super) async fn post_author_photo_scan(
     _admin: AdminUser,
     State(state): State<AppState>,
