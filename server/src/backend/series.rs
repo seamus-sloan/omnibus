@@ -1,3 +1,9 @@
+//! `/api/series/*` handlers.
+//!
+//! Cookie-gated reads returning the series browse-all index and
+//! per-series detail (books in series order, primary author, accent).
+//! Mounted on the mobile REST router in [`super::rest_router`].
+
 use axum::{
     extract::{Path, State},
     response::{IntoResponse, Response},

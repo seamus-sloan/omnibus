@@ -1,3 +1,10 @@
+//! Landing page (`/`) — the primary library surface.
+//!
+//! Hydrates the configured ebook library once, then renders either a dense
+//! table or a cover grid. Sort, filter, and faceting all happen client-side
+//! over the hydrated list; view mode + sort + filters persist per library
+//! path via [`crate::view_prefs`].
+
 use dioxus::prelude::*;
 use omnibus_shared::{EbookLibrary, SortKey, TagWeight, ViewFilters, ViewMode, ViewPrefs};
 

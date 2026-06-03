@@ -1,3 +1,9 @@
+//! Filter-sidebar UI components for the landing page.
+//!
+//! Renders the author / series / format facet checklist + format chips
+//! alongside an "empty after filtering" placeholder. The parent
+//! [`super::LandingPage`] owns the [`ViewFilters`] signal these emit into.
+
 use std::collections::HashSet;
 
 use dioxus::prelude::*;

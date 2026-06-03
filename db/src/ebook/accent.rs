@@ -1,3 +1,10 @@
+//! Cover-accent color extraction.
+//!
+//! Decodes cover bytes, bins pixels into hue buckets, and returns a single
+//! representative `oklch(L C H)` accent string. Called from the parse
+//! phase in [`super::parse`] so the indexer can persist it alongside the
+//! cover.
+
 /// Hard cap on embedded cover bytes we'll hand to the `image` decoder.
 /// Higher than the 10 MiB HTTP cap in `author_photos` because these are
 /// trusted local files; 20 MiB still covers uncompressed print-resolution

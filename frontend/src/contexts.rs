@@ -1,3 +1,9 @@
+//! App-wide Dioxus contexts and their typed accessors.
+//!
+//! Holds the small set of values every page reads: the API base URL (mobile
+//! injects, web is relative) and the cross-route search-query signal owned
+//! by [`crate::App`] and consumed by the nav and landing page.
+
 use dioxus::prelude::*;
 
 #[cfg(feature = "mobile")]

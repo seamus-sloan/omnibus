@@ -1,3 +1,9 @@
+//! Top-level [`Route`] enum and per-route path bindings.
+//!
+//! Single source of truth for navigation across every frontend target;
+//! each variant maps a URL pattern to a page in [`crate::pages`]. Wrapped
+//! by [`crate::ScreenLayout`] so the nav chrome stays consistent.
+
 use dioxus::prelude::*;
 use dioxus_router::Routable;
 

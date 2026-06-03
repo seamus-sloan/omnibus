@@ -1,3 +1,9 @@
+//! `GET /api/_health` handler.
+//!
+//! Unauthenticated liveness + build-fingerprint endpoint used by
+//! `scripts/dev-server-up.sh` to identify a running omnibus instance and
+//! its worktree. Whitelisted in `auth::gate::require_auth`.
+
 use axum::{
     response::{IntoResponse, Response},
     Json,

@@ -1,3 +1,9 @@
+//! Cover-grid view for the landing page.
+//!
+//! Renders the hydrated book list as Atrium `Cover` tiles, linking each to
+//! the book-detail page. Used by [`super::LandingPage`] when the view-mode
+//! toggle is set to grid.
+
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
 use omnibus_shared::EbookMetadata;

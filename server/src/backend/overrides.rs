@@ -1,3 +1,9 @@
+//! Per-book metadata override handlers (REST, mobile-facing).
+//!
+//! Edit-permitted users `POST` / `DELETE` overrides against a book's uuid;
+//! reads happen via the standard ebook endpoints, which merge overrides
+//! into the wire DTO. Mounted on the REST router in [`super::rest_router`].
+
 // ---------------------------------------------------------------------------
 // F5.1 Metadata overrides (REST — mobile client).
 // ---------------------------------------------------------------------------

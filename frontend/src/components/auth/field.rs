@@ -1,3 +1,9 @@
+//! Labeled form-field wrapper for the auth pages.
+//!
+//! Pairs a real `<label for=...>` with caller-supplied input markup and
+//! optional hint / error / success / action slots. Used by the login and
+//! register pages so every field has the same accessibility shape.
+
 use dioxus::prelude::*;
 
 /// Form field with shared label / hint / error / success states.

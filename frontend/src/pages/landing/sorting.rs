@@ -1,3 +1,9 @@
+//! Client-side sort helpers for the landing page.
+//!
+//! Pure functions over `Vec<EbookMetadata>` keyed on the user's selected
+//! [`SortKey`] / [`SortDir`]. Called from [`super::LandingPage`] before
+//! handing the list to the grid or table.
+
 use std::cmp::Ordering;
 
 use omnibus_shared::{Contributor, EbookMetadata, SortDir, SortKey};

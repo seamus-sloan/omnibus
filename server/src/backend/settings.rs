@@ -1,3 +1,9 @@
+//! `GET` / `POST /api/settings` handlers.
+//!
+//! Admin-gated read and write of the library-path settings KV. A successful
+//! save dispatches a `Task::Scan` on the shared worker so the indexer
+//! reflects any new library directory.
+
 use axum::{
     extract::State,
     response::{IntoResponse, Response},
