@@ -1,3 +1,9 @@
+//! Four-segment password-strength meter.
+//!
+//! Renders a clamped [`StrengthScore`] (0–4) as colored bar segments with
+//! an accessible label. Used by the register page next to the password
+//! input.
+
 use dioxus::prelude::*;
 
 /// Bounded password-strength score: 0 (none) through 4 (excellent).

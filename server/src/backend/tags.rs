@@ -1,3 +1,8 @@
+//! `GET /api/tags` handler.
+//!
+//! Cookie-gated read returning the tag cloud (tag name + weight) for the
+//! configured library. Powers the tag-cloud discovery page on mobile.
+
 use axum::{
     extract::State,
     response::{IntoResponse, Response},

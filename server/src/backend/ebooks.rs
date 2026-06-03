@@ -1,3 +1,9 @@
+//! `/api/ebooks/*` handlers.
+//!
+//! Cookie-gated reads that list the configured library, look up a single
+//! book by uuid, and stream the raw EPUB bytes for the in-app reader.
+//! Mounted on the mobile REST router in [`super::rest_router`].
+
 use axum::{
     extract::{Path, State},
     http::header,

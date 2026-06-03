@@ -1,3 +1,9 @@
+//! Phase B of the ebook scan: full OPF parse for new/changed files.
+//!
+//! Takes the [`ParseTarget`] entries the diff in [`crate::ebook`] flagged as
+//! needing fresh metadata, opens the EPUB, and produces an `IndexedBook`
+//! ready for the indexer to upsert.
+
 use std::path::{Path, PathBuf};
 
 use epub::doc::EpubDoc;

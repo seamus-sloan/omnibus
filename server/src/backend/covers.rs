@@ -1,3 +1,9 @@
+//! `/api/covers/*` and `/api/thumbs/*` handlers.
+//!
+//! Cookie-gated reads that resolve a book uuid through the db layer and
+//! stream the cached cover or WebP thumbnail bytes back to the client.
+//! Mounted on the mobile REST router in [`super::rest_router`].
+
 use axum::{
     extract::{Path, State},
     http::header,

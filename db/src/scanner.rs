@@ -1,3 +1,9 @@
+//! Recursive library-directory scanner.
+//!
+//! Walks a configured library root and returns per-extension file counts.
+//! Used by the settings page to surface live summaries and by
+//! [`crate::indexer`] when deciding what to reindex.
+
 pub use omnibus_shared::{LibraryContents, LibrarySection};
 
 /// Recursively walk `path` and return total file count plus per-extension

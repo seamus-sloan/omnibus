@@ -1,3 +1,8 @@
+//! Split-pane shell wrapping the login and register forms.
+//!
+//! Renders a decorative bookshelf alongside a slot for the form, so both
+//! auth pages share the same chrome. Consumed by [`crate::pages::auth`].
+
 use dioxus::prelude::*;
 
 /// One decorative book rendered on the shelf above the tagline. Pre-login

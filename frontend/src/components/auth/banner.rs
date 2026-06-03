@@ -1,3 +1,9 @@
+//! Severity-tiered callout banner for the auth pages.
+//!
+//! Renders an icon, color, and ARIA role per [`BannerKind`] (err / warn /
+//! info / ok). Consumed by [`super::AuthShell`] callers (login + register)
+//! to surface inline error and success messages.
+
 use dioxus::prelude::*;
 
 /// Severity tier for a [`Banner`]. Drives the color, icon, and ARIA role

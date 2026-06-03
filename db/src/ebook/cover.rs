@@ -1,3 +1,10 @@
+//! Cover-bytes resolver for the ebook scanner.
+//!
+//! Prefers a sidecar image next to the EPUB and falls back to the embedded
+//! cover. With [`super::ScanOptions::materialize_sidecars`] set, freshly
+//! extracted embedded covers are written back as a sidecar so the next
+//! scan skips the zip. Called from [`super::parse`].
+
 use std::path::{Path, PathBuf};
 
 use epub::doc::EpubDoc;

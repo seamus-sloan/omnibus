@@ -1,3 +1,8 @@
+//! Toolbar (view mode + sort key + sort direction) for the landing page.
+//!
+//! Stateless: emits a new [`ViewPrefs`] through the parent's `on_change`
+//! handler so [`super::LandingPage`] owns the canonical signal.
+
 use dioxus::prelude::*;
 use omnibus_shared::{SortDir, SortKey, ViewMode, ViewPrefs};
 

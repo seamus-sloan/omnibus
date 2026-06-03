@@ -1,3 +1,9 @@
+//! Client-side filter + facet-count helpers for the landing page.
+//!
+//! Applies the user's [`ViewFilters`] selections and tallies per-facet
+//! counts (authors / series / formats) for the sidebar. Consumed by
+//! [`super::LandingPage`] alongside the sort step.
+
 use std::collections::BTreeMap;
 
 use omnibus_shared::{EbookMetadata, ViewFilters};
