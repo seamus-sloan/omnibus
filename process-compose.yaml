@@ -2,17 +2,20 @@ version: "0.5"
 
 processes:
   server:
-    command: dx serve --platform web --fullstack --port 3000 --package omnibus
+    command: nix develop .#web --command dx serve --platform web --fullstack --port 3000 --package omnibus
+    is_interactive: true
 
   android:
-    command: dx serve --platform android --package omnibus-mobile
+    command: nix develop .#mobile --command dx serve --platform android --package omnibus-mobile
+    is_interactive: true
     disabled: true
 
   ios:
-    command: dx serve --platform ios --package omnibus-mobile
+    command: nix develop .#mobile --command dx serve --platform ios --package omnibus-mobile
+    is_interactive: true
     disabled: true
 
   playwright:
-    command: npx playwright test --ui
+    command: nix develop .#e2e --command npx playwright test --ui
     working_dir: ui_tests/playwright
     disabled: true

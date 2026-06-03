@@ -99,7 +99,7 @@ jobs:
 
       - name: Bundle web app
         if: steps.bundle-cache.outputs.cache-hit != 'true'
-        run: nix develop --command bash -c 'set -euo pipefail; dx bundle --platform web --package omnibus --fullstack'
+        run: nix develop .#e2e --command bash -c 'set -euo pipefail; dx bundle --platform web --package omnibus --fullstack'
 
       # Explicit save (not the combined cache action's post-step) so it runs
       # while `target/dx/omnibus/debug/web` still exists. See the restore step
@@ -164,13 +164,13 @@ jobs:
           fail-on-cache-miss: true
 
       - name: Install Playwright npm deps
-        run: nix develop --command bash -c 'set -euo pipefail; cd ui_tests/playwright && npm ci'
+        run: nix develop .#e2e --command bash -c 'set -euo pipefail; cd ui_tests/playwright && npm ci'
 
       # Backgrounded with `nohup ... &` + `disown` so the server survives the
       # step's shell exit and the next step can poll it.
       - name: Start server
         run: |
-          nix develop --command bash -c '
+          nix develop .#e2e --command bash -c '
             set -euo pipefail
             chmod +x ./target/dx/omnibus/debug/web/server
             nohup env PORT=3000 ./target/dx/omnibus/debug/web/server >server.log 2>&1 &
@@ -180,7 +180,7 @@ jobs:
 
       - name: Run Playwright tests
         run: |
-          nix develop --command bash -c '
+          nix develop .#e2e --command bash -c '
             set -euo pipefail
             cd ui_tests/playwright
             npx playwright test --shard=${{ matrix.shard }}/${{ env.TOTAL_SHARDS }}
