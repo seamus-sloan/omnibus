@@ -12,6 +12,17 @@ test.beforeAll(async ({ request }) => {
 // Alpha fixture: standalone, single author, has cover.
 const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "alpha")!;
 
+// Every test in this file mutates / reads override state on the same
+// `Alpha` book (the layout test reads the title, "edits title and saves"
+// writes "Alpha Edited", "reverts" deletes that override, "adds and
+// removes tags" writes + reverts a tag-only override, "discard" enters
+// the form). Under Playwright's default `fullyParallel: true` these tests
+// race across workers — "reverts" runs before "edits" commits the
+// override, so `fetchBookIdByTitle("Alpha Edited")` 404s and the revert
+// button never appears. `describe.serial` pins them to a single worker so
+// the source order is also the execution order.
+test.describe.serial("metadata edit flow", () => {
+
 // ---------------------------------------------------------------------------
 // Layout test
 // ---------------------------------------------------------------------------
@@ -400,3 +411,5 @@ test("surfaces error and stays on edit form when revert mutation fails", async (
   await gotoReady(page, `/books/${editId}/edit`);
   await expect(page.getByTestId("revert-overrides")).toHaveCount(0);
 });
+
+}); // test.describe.serial

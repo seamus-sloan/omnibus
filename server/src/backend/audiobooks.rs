@@ -43,12 +43,31 @@ pub(super) async fn get_audiobook_playlist(
         Err(e) => return internal("resolve_audiobook", e),
     };
 
-    let parts = match hls::get_parts(&state.pool, resolved.book_file_id).await {
-        Ok(p) => p,
-        Err(e) => return internal("get_parts", e),
+    // Once the transcode is complete, ffmpeg's own `index.m3u8` is the
+    // source of truth — its segment count matches what's actually on
+    // disk, which the DB-built manifest (rounded from
+    // `book_file_parts.duration_seconds`) can miss by ±1 because
+    // `-hls_time 10` is advisory (keyframe / packet boundaries). Falling
+    // back to the DB-built stub when the file is missing (eviction race,
+    // permissions) keeps the manifest available pre-transcode too.
+    let m3u8 = if hls::is_ready(resolved.book_id, hls::AUDIO64) {
+        match hls::read_ffmpeg_manifest(resolved.book_id, hls::AUDIO64) {
+            Some(s) => s,
+            None => {
+                let parts = match hls::get_parts(&state.pool, resolved.book_file_id).await {
+                    Ok(p) => p,
+                    Err(e) => return internal("get_parts", e),
+                };
+                hls::build_manifest(&parts)
+            }
+        }
+    } else {
+        let parts = match hls::get_parts(&state.pool, resolved.book_file_id).await {
+            Ok(p) => p,
+            Err(e) => return internal("get_parts", e),
+        };
+        hls::build_manifest(&parts)
     };
-
-    let m3u8 = hls::build_manifest(&parts);
     (
         axum::http::StatusCode::OK,
         [(
@@ -79,9 +98,12 @@ pub(super) async fn get_audiobook_status(
     let progress = hls::read_progress(book_id, hls::AUDIO64);
 
     // If neither ready nor in progress, kick off the transcode. The worker
-    // serializes duplicate posts via the per-resource keyed mutex so a second
-    // poll while the job is already running just enqueues behind it.
-    if !ready && progress < 0.05 {
+    // serializes duplicate posts via the per-resource keyed mutex so a
+    // second poll while the job is already running just enqueues behind
+    // it. Skip the kick entirely when a `.failed` marker is present —
+    // otherwise the frontend's 1 s status poll becomes an unbounded retry
+    // loop on a permanently-broken book (corrupt source, missing ffmpeg).
+    if !ready && progress < 0.05 && !hls::has_failed(book_id, hls::AUDIO64) {
         state.worker.post(Task::HlsTranscode {
             book_id,
             book_file_id: resolved.book_file_id,
@@ -121,6 +143,14 @@ pub(super) async fn get_audiobook_segment(
 
     // Fast path: segment already on disk.
     if !seg_path.exists() {
+        // Permanent failure short-circuits the kick: a previous transcode
+        // already cleaned the dir + wrote `.failed`, and any retry would
+        // immediately bail with the same error. Return 503 so hls.js
+        // surfaces a real failure to the user instead of stalling on a
+        // never-arriving segment.
+        if hls::has_failed(book_id, hls::AUDIO64) {
+            return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
         // Transcode hasn't produced this segment yet — trigger and wait.
         let task_id = state.worker.post(Task::HlsTranscode {
             book_id,

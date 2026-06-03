@@ -61,6 +61,39 @@ pub fn is_ready(book_id: i64, profile: &str) -> bool {
     (read_progress(book_id, profile) - 1.0_f32).abs() < 0.01
 }
 
+/// Path to the terminal-failure sentinel for `(book_id, profile)`. Lives
+/// at the `<book_id>/` level (one level above the segment dir) so the
+/// cleanup pass that wipes the segment dir on failure can still leave the
+/// flag behind. Removed when the parent `<book_id>/` dir is evicted, which
+/// is the explicit "give it a fresh chance" signal.
+pub fn failed_path(book_id: i64, profile: &str) -> PathBuf {
+    hls_dir()
+        .join(book_id.to_string())
+        .join(format!("{profile}.failed"))
+}
+
+/// `true` when a previous transcode for `(book_id, profile)` terminally
+/// failed (e.g. ffmpeg exited non-zero or timed out). Callers should NOT
+/// kick a fresh `Task::HlsTranscode` while this is true — the status
+/// endpoint's 1 s poll would otherwise become an unbounded retry loop on
+/// a corrupt source.
+pub fn has_failed(book_id: i64, profile: &str) -> bool {
+    failed_path(book_id, profile).exists()
+}
+
+/// Path of the ffmpeg-produced HLS manifest for `(book_id, profile)`.
+/// Available once `is_ready` is true.
+pub fn ffmpeg_manifest_path(book_id: i64, profile: &str) -> PathBuf {
+    segment_dir(book_id, profile).join("index.m3u8")
+}
+
+/// Read the ffmpeg-produced HLS manifest from disk. `None` when missing
+/// or unreadable (eviction race, fs error) — the caller falls back to
+/// the DB-built stub in that case.
+pub fn read_ffmpeg_manifest(book_id: i64, profile: &str) -> Option<String> {
+    std::fs::read_to_string(ffmpeg_manifest_path(book_id, profile)).ok()
+}
+
 /// One part of a multi-file audiobook as read from `book_file_parts`.
 /// Only the fields needed by the HLS manifest builder and transcode runner.
 #[derive(Debug, Clone)]
@@ -197,6 +230,19 @@ pub async fn transcode_book(
     library_path: &str,
     profile: &str,
 ) -> anyhow::Result<()> {
+    // Two early-returns before any ffmpeg work so N concurrent listeners
+    // of the same book don't re-transcode after the first finishes, and a
+    // permanently-broken book doesn't burn CPU on every status poll.
+    if is_ready(book_id, profile) {
+        return Ok(());
+    }
+    if has_failed(book_id, profile) {
+        anyhow::bail!(
+            "transcode previously failed; remove {} to retry",
+            failed_path(book_id, profile).display()
+        );
+    }
+
     let parts = get_parts(pool, book_file_id).await?;
     if parts.is_empty() {
         anyhow::bail!("book_id={book_id}: no book_file_parts rows found");
@@ -310,12 +356,28 @@ pub async fn transcode_book(
     }
 }
 
-/// Remove a `(book_id, profile)` segment directory and its sentinel on
-/// transcode failure, so a retry starts from a clean slate.
+/// Remove a `(book_id, profile)` segment directory and its `.progress`
+/// sentinel on transcode failure, then write a sibling `.failed` marker
+/// so the status / segment handlers stop kicking fresh transcodes for
+/// what is clearly a broken book (corrupt source, missing ffmpeg, …).
+///
+/// The `.failed` marker lives at the `<book_id>/` level (not inside the
+/// just-removed segment dir) so a retry is only possible after either
+/// (a) operator intervention removing the marker, or (b) a cache
+/// eviction sweep that wipes the entire `<book_id>/` directory.
 fn cleanup_segment_dir(book_id: i64, profile: &str) {
     let dir = segment_dir(book_id, profile);
     if let Err(e) = std::fs::remove_dir_all(&dir) {
         tracing::warn!(path = ?dir, error = %e, "failed to clean up segment dir after error");
+    }
+    let book_dir = hls_dir().join(book_id.to_string());
+    if let Err(e) = std::fs::create_dir_all(&book_dir) {
+        tracing::warn!(path = ?book_dir, error = %e, "failed to create book dir for .failed marker");
+        return;
+    }
+    let marker = failed_path(book_id, profile);
+    if let Err(e) = std::fs::write(&marker, "") {
+        tracing::warn!(path = ?marker, error = %e, "failed to write .failed marker");
     }
 }
 
@@ -442,5 +504,55 @@ mod tests {
     #[test]
     fn is_ready_returns_false_when_sentinel_absent() {
         assert!(!is_ready(i64::MAX, AUDIO64));
+    }
+
+    #[test]
+    fn has_failed_returns_false_when_marker_absent() {
+        // Mirror the existing `is_ready_returns_false_when_sentinel_absent`
+        // pattern — book id that will never exist on the test filesystem.
+        assert!(!has_failed(i64::MAX, AUDIO64));
+    }
+
+    #[test]
+    fn failed_path_lives_at_book_id_level_not_inside_segment_dir() {
+        // Invariant the `.failed` marker relies on:
+        // `cleanup_segment_dir` wipes the segment dir, then writes the
+        // marker one level up so the flag survives. If this path layout
+        // ever drifts the cleanup will silently lose the marker.
+        let p = failed_path(42, AUDIO64);
+        assert_eq!(
+            p.file_name().and_then(|s| s.to_str()),
+            Some("audio64.failed"),
+        );
+        assert_eq!(
+            p.parent()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str()),
+            Some("42"),
+            "marker must live at <hls_dir>/<book_id>/, not inside the segment dir",
+        );
+    }
+
+    #[test]
+    fn ffmpeg_manifest_path_lives_inside_segment_dir() {
+        // The post-transcode manifest is the file ffmpeg writes out via
+        // the positional argument; serving it directly is the fix for
+        // the DB-built manifest's segment-count drift.
+        let p = ffmpeg_manifest_path(42, AUDIO64);
+        assert_eq!(p.file_name().and_then(|s| s.to_str()), Some("index.m3u8"),);
+        assert_eq!(
+            p.parent()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str()),
+            Some(AUDIO64),
+        );
+    }
+
+    #[test]
+    fn read_ffmpeg_manifest_returns_none_when_file_absent() {
+        // The handler treats `None` as "fall back to DB-built stub", so
+        // missing-file → None must hold even when the parent book dir
+        // doesn't exist at all.
+        assert_eq!(read_ffmpeg_manifest(i64::MAX, AUDIO64), None);
     }
 }
