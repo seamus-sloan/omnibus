@@ -122,9 +122,12 @@
           pkgs.openssl
           rustCore
           pkgs.zellij
-          # process-compose comes from unstable: stable (25.05) ships v1.64.1,
-          # but `is_interactive: true` was added in v1.85.0 and our
-          # process-compose.yaml uses it to give `dx` panes a real TTY.
+          # process-compose pinned to unstable for a fresher build than the
+          # v1.64.1 that nixpkgs-stable (25.05) ships. The original driver
+          # (`is_interactive: true`) was reverted from process-compose.yaml
+          # because it pinned `dx` panes to a PTY that detached from the TUI
+          # log pane, but we keep the newer build for general quality-of-life
+          # fixes and to leave room for future config keys.
           pkgs-unstable.process-compose
           pkgs.just
         ];
