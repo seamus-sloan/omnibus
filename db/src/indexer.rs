@@ -231,78 +231,78 @@ pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()
     Ok(())
 }
 
-/// F2.3 sibling of [`reindex`] for the audiobook library. Same diff /
-/// sync machinery — the only differences are the Phase A walker (lofty
-/// extensions instead of `.epub`) and the Phase B tag parser. The output
-/// flows through [`sync::sync_books`] unchanged; per-file `format` is
-/// derived from the extension by [`crate::helpers::split_filename`] so
-/// rows land in `book_files` as `M4B` / `M4A` / `MP3`.
+/// F2.3 sibling of [`reindex`] for the audiobook library. Uses Phase A.5
+/// group-by-folder, Phase B multi-part tag-reads, and [`sync::sync_audiobooks`]
+/// which writes `book_file_parts` rows for the HLS pipeline.
 pub async fn reindex_audiobooks(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()> {
+    // Phase A: stat every audio file.
     let path_for_scan = library_path.to_owned();
-    let library_key_for_scan = library_path.to_owned();
+    let library_key = library_path.to_owned();
     let stat = tokio::task::spawn_blocking(move || {
-        audiobook::stat_audiobook_library(Some(&path_for_scan), &library_key_for_scan)
+        audiobook::stat_audiobook_library(Some(&path_for_scan), &library_key)
     })
     .await?;
     if let Some(msg) = stat.error {
         anyhow::bail!("audiobook scan of {library_path} failed: {msg}");
     }
 
+    // Phase A.5: group per-file entries into one AudiobookGroup per book.
+    let entries = stat.entries;
+    let library_key2 = library_path.to_owned();
+    let groups =
+        tokio::task::spawn_blocking(move || audiobook::group_into_books(entries, &library_key2))
+            .await?;
+
+    // Diff groups against DB rows (project groups to the ebook StatEntry shape
+    // so diff_library can be reused verbatim).
     let db_rows = books::list_indexed_rows(pool, library_path).await?;
     let library_root: PathBuf = PathBuf::from(library_path);
-
-    // Reuse the format-agnostic diff classifier by projecting the
-    // audiobook stat shape onto the ebook one. This stays a local
-    // adapter — generalizing both paths over a trait would be larger
-    // surface for no current win.
-    let stat_as_ebook: Vec<ebook::StatEntry> = stat
-        .entries
-        .into_iter()
-        .map(|e| ebook::StatEntry {
-            filename: e.filename,
-            uuid: e.uuid,
-            mtime_epoch: e.mtime_epoch,
-            size_bytes: e.size_bytes,
-            error: e.error,
+    let groups_as_stat: Vec<ebook::StatEntry> = groups
+        .iter()
+        .filter(|g| !g.uuid.is_empty())
+        .map(|g| ebook::StatEntry {
+            filename: g.group_path.clone(),
+            uuid: g.uuid.clone(),
+            mtime_epoch: g.max_mtime_epoch,
+            size_bytes: g.total_size_bytes,
+            error: None,
         })
         .collect();
-    let diff = diff_library(&stat_as_ebook, &db_rows, &library_root);
+    let diff = diff_library(&groups_as_stat, &db_rows, &library_root);
 
-    let new_targets: Vec<audiobook::AudiobookParseTarget> = diff
+    // Phase B: parse only the New and Changed groups.
+    let groups_by_group_path: std::collections::HashMap<String, audiobook::AudiobookGroup> = groups
+        .into_iter()
+        .filter(|g| !g.uuid.is_empty())
+        .map(|g| (g.group_path.clone(), g))
+        .collect();
+
+    let new_groups: Vec<audiobook::AudiobookGroup> = diff
         .new
         .iter()
-        .map(|t| audiobook::AudiobookParseTarget {
-            filename: t.filename.clone(),
-            absolute: t.absolute.clone(),
-            mtime_epoch: t.mtime_epoch,
-            size_bytes: t.size_bytes,
-        })
+        .filter_map(|t| groups_by_group_path.get(&t.filename).cloned())
         .collect();
-    let changed_targets: Vec<audiobook::AudiobookParseTarget> = diff
+    let changed_groups: Vec<audiobook::AudiobookGroup> = diff
         .changed
         .iter()
-        .map(|t| audiobook::AudiobookParseTarget {
-            filename: t.filename.clone(),
-            absolute: t.absolute.clone(),
-            mtime_epoch: t.mtime_epoch,
-            size_bytes: t.size_bytes,
-        })
+        .filter_map(|t| groups_by_group_path.get(&t.filename).cloned())
         .collect();
 
+    let root_for_parse = library_root.clone();
     let parsed = tokio::task::spawn_blocking(move || {
-        let new_books = audiobook::parse_audiobook_targets(new_targets);
-        let changed_books = audiobook::parse_audiobook_targets(changed_targets);
+        let new_books = audiobook::parse_groups(new_groups, &root_for_parse);
+        let changed_books = audiobook::parse_groups(changed_groups, &root_for_parse);
         (new_books, changed_books)
     })
     .await?;
 
-    let plan = sync::SyncPlan {
+    let plan = sync::AudiobookSyncPlan {
         new_books: parsed.0,
         changed_books: parsed.1,
         removed_uuids: diff.removed,
         backfill: diff.backfill,
     };
-    sync::sync_books(pool, library_path, plan).await?;
+    sync::sync_audiobooks(pool, library_path, plan).await?;
     Ok(())
 }
 

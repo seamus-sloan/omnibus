@@ -109,6 +109,13 @@
             pkgs.zellij
             pkgs.process-compose
             pkgs.just
+
+            # F2.3 audiobook HLS pipeline: transcodes source mp3/m4b into
+            # AAC-in-MPEG-TS segments + serves them via tower-http's
+            # ServeFile. Bundled with the dev shell so cold-start contributors
+            # can play any audiobook end-to-end; production deploys must ship
+            # the same binary in the runtime image (see docs/design/f2-3-audiobook-hls.md).
+            pkgs.ffmpeg-headless
           ];
 
           DATABASE_URL = "sqlite://omnibus.db?mode=rwc";

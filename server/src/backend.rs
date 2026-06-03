@@ -154,8 +154,16 @@ pub fn rest_router_with_search_limiter(
         .route("/api/ebooks/{uuid}", get(ebooks::get_ebook_by_uuid))
         .route("/api/ebooks/{uuid}/file", get(ebooks::get_ebook_file))
         .route(
-            "/api/audiobooks/{uuid}/file",
-            get(audiobooks::get_audiobook_file),
+            "/api/audiobooks/{uuid}/playlist.m3u8",
+            get(audiobooks::get_audiobook_playlist),
+        )
+        .route(
+            "/api/audiobooks/{uuid}/segments/{segment}",
+            get(audiobooks::get_audiobook_segment),
+        )
+        .route(
+            "/api/audiobooks/{uuid}/status",
+            get(audiobooks::get_audiobook_status),
         )
         .route(
             "/api/ebooks/{uuid}/overrides",
