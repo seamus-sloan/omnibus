@@ -1,0 +1,199 @@
+//! Posting and awaiting tasks: `Worker::post`, `await_completion`, and
+//! the RAII guards that keep the `completions` / `progress` maps bounded
+//! even when a spawned future unwinds.
+//!
+//! `prune_resource_lock` lives here too because it's the
+//! map-bookkeeping companion to the keyed-mutex acquire in
+//! [`super::exec`].
+
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex as StdMutex};
+
+use omnibus_shared::{ProgressState, TaskProgress};
+use tokio::sync::watch;
+
+use super::types::{
+    lock_unpoison, wall_clock_ms, ProgressEntry, Task, TaskId, TaskOutcome, Worker,
+};
+
+/// RAII guard that reclaims a `Worker::completions` slot when dropped.
+/// Used inside [`Worker::post`]'s spawned future so the slot is removed
+/// regardless of whether the future returned normally or unwound through
+/// a panic — keeping the map bounded on the panic path as well as the
+/// happy path.
+struct CompletionsPruneGuard {
+    completions: Arc<StdMutex<HashMap<TaskId, watch::Receiver<Option<TaskOutcome>>>>>,
+    id: TaskId,
+}
+
+impl Drop for CompletionsPruneGuard {
+    fn drop(&mut self) {
+        // Recover on poison via `lock_unpoison` so the slot is reclaimed even
+        // after another task panicked while holding this lock — otherwise the
+        // map would grow unbounded. `into_inner` never panics, so this stays
+        // safe on the unwinding path (no double-panic).
+        lock_unpoison(&self.completions).remove(&self.id);
+    }
+}
+
+/// RAII guard that records a terminal `Failed { "task panicked" }`
+/// progress entry if the spawned future unwinds before [`Worker::run`]
+/// writes one itself. Mirrors [`CompletionsPruneGuard`]'s shape — the
+/// "happy path completed first" check is the `terminal_at.is_some()`
+/// inspection so a clean run leaves the existing terminal alone.
+struct ProgressTerminalGuard {
+    progress: Arc<StdMutex<BTreeMap<TaskId, ProgressEntry>>>,
+    id: TaskId,
+}
+
+impl Drop for ProgressTerminalGuard {
+    fn drop(&mut self) {
+        // Recover on poison via `lock_unpoison` rather than skipping on `Err`:
+        // a poisoned `progress` map would otherwise leave this task's entry
+        // stuck in `Running` forever (never evicted, UI shows a stuck task),
+        // so the terminal "task panicked" write is exactly what must still
+        // happen. `into_inner` never panics, so there is no double-panic risk
+        // on the unwinding path.
+        let mut map = lock_unpoison(&self.progress);
+        if let Some(entry) = map.get_mut(&self.id) {
+            if entry.terminal_at.is_none() {
+                let now_ms = wall_clock_ms();
+                entry.progress.state = ProgressState::Failed {
+                    message: "task panicked".to_string(),
+                };
+                entry.progress.last_update_ms = now_ms;
+                entry.terminal_at = Some(std::time::Instant::now());
+            }
+        }
+    }
+}
+
+impl Worker {
+    /// Spawn `task` and return its [`TaskId`] immediately, without waiting
+    /// for it to run. The id can later be passed to
+    /// [`await_completion`](Worker::await_completion) to retrieve the
+    /// [`TaskOutcome`]. Scheduling (resource lock + scan semaphore) and
+    /// execution happen inside the spawned future, so a posted task may
+    /// queue behind same-resource or scan-capped peers before running. A
+    /// failed task is logged via `tracing` in addition to being reported to
+    /// awaiters.
+    pub fn post(self: &Arc<Self>, task: Task) -> TaskId {
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Store the receiver, not the sender: if the spawned task panics
+        // before sending, dropping `tx` closes the channel and any pending
+        // `await_completion` falls through to the "dropped" error branch.
+        let (tx, rx) = watch::channel(None);
+        lock_unpoison(&self.completions).insert(id, rx);
+
+        // Seed the progress map *before* spawning so a caller polling
+        // `progress_snapshot()` immediately after `post` returns always
+        // observes the task. The entry stays `Running { 0, None }` while
+        // the task queues behind the resource lock or scan semaphore,
+        // which is exactly the "queued behind another scan" state the UI
+        // wants to surface.
+        {
+            let now_ms = wall_clock_ms();
+            let entry = ProgressEntry {
+                progress: TaskProgress {
+                    task_id: id,
+                    kind: task.kind(),
+                    state: ProgressState::Running {
+                        processed: 0,
+                        total: None,
+                    },
+                    resource_key: task.resource_key(),
+                    started_at_ms: now_ms,
+                    last_update_ms: now_ms,
+                },
+                terminal_at: None,
+            };
+            lock_unpoison(&self.progress).insert(id, entry);
+        }
+
+        let this = self.clone();
+        let completions = self.completions.clone();
+        let progress = self.progress.clone();
+        tokio::spawn(async move {
+            // RAII guard so the slot is reclaimed on the normal happy path
+            // *and* on unwind from a panic inside `run`. Without this, a
+            // panicking handler would leave its slot in the map forever —
+            // one leaked entry per panic for fire-and-forget posts (the
+            // boot / settings-save reindex kicks and the per-author photo
+            // resolutions), which is exactly the unbounded growth this
+            // refactor exists to prevent.
+            let _prune = CompletionsPruneGuard { completions, id };
+            // Sister guard for the progress map: if `run` unwinds before
+            // recording its own terminal state, this writes a synthetic
+            // `Failed { "task panicked" }` so the UI's red-banner path
+            // fires the same way it does for an `Err(_)` outcome. On the
+            // happy path `run` records the real terminal and this drop is
+            // a no-op (terminal_at is already Some).
+            let _progress_guard = ProgressTerminalGuard {
+                progress: progress.clone(),
+                id,
+            };
+
+            let outcome = this.run(task, id).await;
+            if let TaskOutcome::Err(ref msg) = outcome {
+                tracing::error!(
+                    task_id = id,
+                    error = %msg,
+                    "worker: task failed"
+                );
+            }
+            // Publish the terminal outcome, then let `_prune` drop the map
+            // slot. A `watch::Receiver` that `await_completion` took out of
+            // the map *before* this runs keeps observing the final value
+            // even after `tx` drops and the slot is gone, so an in-flight
+            // awaiter still resolves.
+            let _ = tx.send(Some(outcome));
+        });
+
+        id
+    }
+
+    /// Wait for the task identified by `id` to finish and return its
+    /// [`TaskOutcome`]. Returns [`TaskOutcome::Err`] if `id` was never posted
+    /// (or already pruned) or if the spawned task was dropped before reporting
+    /// an outcome (e.g. it panicked, which closes the watch channel).
+    pub async fn await_completion(&self, id: TaskId) -> TaskOutcome {
+        // Take ownership of the receiver out of the map rather than cloning
+        // it. The held receiver observes the channel's final value regardless
+        // of whether the spawned task has already dropped its sender, so the
+        // outcome is never missed; removing the slot here bounds the map even
+        // when the run loop's own cleanup hasn't fired yet.
+        let mut rx = {
+            let mut map = lock_unpoison(&self.completions);
+            match map.remove(&id) {
+                Some(rx) => rx,
+                None => return TaskOutcome::Err("unknown task id".into()),
+            }
+        };
+        loop {
+            if let Some(outcome) = rx.borrow().clone() {
+                return outcome;
+            }
+            if rx.changed().await.is_err() {
+                return TaskOutcome::Err("worker dropped task before completion".into());
+            }
+        }
+    }
+
+    /// Reclaim a keyed resource mutex once no other task references it. Held
+    /// under the `resource_locks` map lock so a concurrent `run` can't be
+    /// mid-`entry()` for the same key: the map's own `Arc` plus any live
+    /// runner (each holds a clone before/while awaiting the keyed mutex) each
+    /// count as one strong reference, so a count of 1 — only the map — means
+    /// the slot is free to drop. A later task for the same key just
+    /// re-inserts a fresh mutex via `or_insert_with`.
+    pub(super) async fn prune_resource_lock(&self, key: &str) {
+        let mut map = self.resource_locks.lock().await;
+        if let Some(inner) = map.get(key) {
+            if Arc::strong_count(inner) == 1 {
+                map.remove(key);
+            }
+        }
+    }
+}

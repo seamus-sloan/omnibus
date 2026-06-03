@@ -1,0 +1,96 @@
+//! Progress tracking + eviction. Hosts `Worker::progress_snapshot` and
+//! the test-only retention seam, the internal `write_terminal_progress`
+//! invoked from both [`super::exec`] and the panic guard in
+//! [`super::queue`], and `report_progress` — the phase-2 seam tests use
+//! to exercise mid-task counts.
+
+use std::time::{Duration, Instant};
+
+use omnibus_shared::{ProgressState, WorkerStatus};
+
+use super::types::{lock_unpoison, wall_clock_ms, TaskId, Worker, TERMINAL_RETENTION};
+
+impl Worker {
+    /// Snapshot of every live worker task — non-terminal entries go in
+    /// `active`, terminal entries (`Done` / `Failed`) less than
+    /// [`TERMINAL_RETENTION`] old go in `recent_complete`. Older terminal
+    /// entries are evicted under the same lock. Both vecs are sorted by
+    /// `task_id` so a polling client renders a stable list across ticks.
+    ///
+    /// Auth-gated at the RPC layer; safe to call from any handler that
+    /// already has an `AuthUser`.
+    pub fn progress_snapshot(&self) -> WorkerStatus {
+        self.progress_snapshot_with_retention(TERMINAL_RETENTION)
+    }
+
+    /// Test-friendly variant of [`Worker::progress_snapshot`] that lets
+    /// callers supply a custom retention window. Production code always
+    /// uses [`TERMINAL_RETENTION`]; the unit-test suite passes a much
+    /// shorter window so the eviction assertion doesn't have to sleep
+    /// for the full 10 s of wall-clock time.
+    pub(super) fn progress_snapshot_with_retention(&self, retention: Duration) -> WorkerStatus {
+        let now = Instant::now();
+        let mut map = lock_unpoison(&self.progress);
+
+        // First pass: identify expired terminals so we don't hold the
+        // iterator while mutating the map.
+        let expired: Vec<TaskId> = map
+            .iter()
+            .filter_map(|(id, entry)| match entry.terminal_at {
+                Some(at) if now.saturating_duration_since(at) >= retention => Some(*id),
+                _ => None,
+            })
+            .collect();
+        for id in expired {
+            map.remove(&id);
+        }
+
+        let mut active = Vec::new();
+        let mut recent_complete = Vec::new();
+        for entry in map.values() {
+            if entry.terminal_at.is_some() {
+                recent_complete.push(entry.progress.clone());
+            } else {
+                active.push(entry.progress.clone());
+            }
+        }
+        // BTreeMap iteration is already key-ordered, so both vecs come out
+        // sorted by `task_id` without an explicit sort.
+        WorkerStatus {
+            active,
+            recent_complete,
+        }
+    }
+
+    /// Internal terminal write. Called from `run` (Ok/Err) and from the
+    /// `ProgressTerminalGuard` (panic). The `terminal_at` Instant is
+    /// monotonic so eviction is robust to wall-clock drift.
+    pub(super) fn write_terminal_progress(&self, id: TaskId, state: ProgressState) {
+        let mut map = lock_unpoison(&self.progress);
+        if let Some(entry) = map.get_mut(&id) {
+            entry.progress.last_update_ms = wall_clock_ms();
+            entry.progress.state = state;
+            entry.terminal_at = Some(Instant::now());
+        }
+    }
+
+    /// Phase-2 seam: write the in-flight progress count for `id`. The
+    /// terminal state is written separately at the end of [`Worker::run`]
+    /// so a mid-task report can't accidentally flip a task to `Done`.
+    /// Only exercised by tests today (see `report_progress_updates_running_count`),
+    /// so it lives behind `#[cfg(test)]` rather than an untraceable
+    /// `#[allow(dead_code)]`. Un-gate it — and drop this cfg — when
+    /// `indexer::reindex` learns to thread a progress callback through its
+    /// per-EPUB loop (#220).
+    #[cfg(test)]
+    pub(crate) fn report_progress(&self, id: TaskId, processed: u32, total: Option<u32>) {
+        let mut map = lock_unpoison(&self.progress);
+        if let Some(entry) = map.get_mut(&id) {
+            if entry.terminal_at.is_some() {
+                return; // race: terminal already recorded
+            }
+            entry.progress.state = ProgressState::Running { processed, total };
+            entry.progress.last_update_ms = wall_clock_ms();
+        }
+    }
+}
