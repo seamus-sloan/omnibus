@@ -4,8 +4,11 @@
 //!
 //! - `GET /api/audiobooks/{uuid}/manifest` — JSON describing how the
 //!   frontend should play this book: `direct` (per-part URLs the client
-//!   chains together) for m4b / m4a / mp3 / aac, or `hls` (playlist URL)
-//!   for anything else. See [`omnibus_db::audiobook::codec`] for the gate.
+//!   chains together) for m4b / m4a / mp3, or `hls` (playlist URL) for
+//!   anything else. See [`omnibus_db::audiobook::codec`] for the gate;
+//!   note that [`omnibus_db::hls::resolve_audiobook`] only admits books
+//!   whose top-level `book_files.format` is one of `M4B` / `M4A` / `MP3`,
+//!   so pure-AAC or pure-FLAC sources never reach this handler today.
 //! - `GET /api/audiobooks/{uuid}/parts/{ordinal}` — Range-served source
 //!   file for one part of a direct-play book.
 //! - `GET /api/audiobooks/{uuid}/playlist.m3u8` — fallback HLS manifest
@@ -87,11 +90,11 @@ pub(super) async fn get_audiobook_playlist(
 }
 
 /// Returns the playback manifest for `uuid`. Routes direct-playable
-/// books (m4b / m4a / mp3 / aac) to per-part HTTP Range URLs and
-/// everything else (flac / ac3 / …) to the legacy HLS playlist. The
-/// codec gate lives in [`omnibus_db::audiobook::codec`]; see
-/// [#339](https://github.com/seamus-sloan/omnibus/issues/339) for the
-/// design.
+/// books (m4b / m4a / mp3) to per-part HTTP Range URLs and everything
+/// else (mixed folders containing flac / ac3 / …) to the legacy HLS
+/// playlist. The codec gate lives in [`omnibus_db::audiobook::codec`];
+/// see [#339](https://github.com/seamus-sloan/omnibus/issues/339) for
+/// the design.
 pub(super) async fn get_audiobook_manifest(
     _user: AuthUser,
     State(state): State<AppState>,
@@ -144,7 +147,9 @@ pub(super) async fn get_audiobook_manifest(
 /// Mirrors the `get_audiobook_segment` HLS-segment path (same
 /// `ServeFile` + `oneshot` shape) but reads the source file from the
 /// library rather than the HLS cache. Out-of-range ordinal → 404;
-/// missing file on disk → 404 from `ServeFile` itself.
+/// missing file on disk → 404 from `ServeFile` itself. HLS-classified
+/// books (e.g. mixed folders containing flac) → 404, since `/manifest`
+/// already routed them to the HLS playlist.
 pub(super) async fn get_audiobook_part(
     _user: AuthUser,
     State(state): State<AppState>,
@@ -160,6 +165,14 @@ pub(super) async fn get_audiobook_part(
         Ok(p) => p,
         Err(e) => return internal("get_parts", e),
     };
+    // Mirror the manifest classifier: refuse to serve source files for
+    // a book that `/manifest` would have routed through HLS. Keeps the
+    // API contract honest — clients should never reach this endpoint
+    // for an HLS-mode book.
+    let filenames: Vec<&str> = parts.iter().map(|p| p.filename.as_str()).collect();
+    if audiobook::classify_filenames(&filenames) != PlaybackMode::Direct {
+        return axum::http::StatusCode::NOT_FOUND.into_response();
+    }
     let Some(part) = parts.into_iter().find(|p| p.ordinal == ordinal) else {
         return axum::http::StatusCode::NOT_FOUND.into_response();
     };
@@ -651,6 +664,36 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_get_audiobook_part_returns_404_when_book_is_hls_classified() {
+        // Mixed-codec folders classify as HLS — the parts endpoint
+        // must mirror that and 404 so clients can't bypass the
+        // transcode pipeline by hitting `/parts` directly.
+        let (_, _, pool) = fixture().await;
+        let user = auth_test_support::create_user(&pool, "alice").await;
+        let token = auth_test_support::bearer_token(&pool, user.id).await;
+        let uuid = seed_audiobook_with_parts(
+            &pool,
+            "/audiobooks",
+            "MP3",
+            &[
+                (0, "Author/Book/01.mp3", 100.0),
+                (1, "Author/Book/02.flac", 200.0),
+            ],
+        )
+        .await;
+
+        let app = crate::backend::rest_router(AppState::new(pool));
+        let res = app
+            .oneshot(get_with_bearer(
+                &format!("/api/audiobooks/{uuid}/parts/0"),
+                &token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
