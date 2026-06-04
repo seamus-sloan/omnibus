@@ -17,7 +17,7 @@ serve-pc:
 # Use `source .claude/runtime/env.sh` afterwards to pick up OMNIBUS_PORT
 # and PLAYWRIGHT_BASE_URL for follow-on commands (Playwright, preview).
 dev-up:
-    scripts/dev-server-up.sh
+    nix develop .#web --command scripts/dev-server-up.sh
 
 # Peek at THIS workspace's dev server without mutating anything.
 # Exit 0 + emit OMNIBUS_DEV_READY when healthy; exit 1 if no server is
@@ -36,4 +36,4 @@ dev-down:
 # migration (the running server boots its migrations at startup) or when
 # `dx serve` has wedged on a compile error and `dev-up` exits 2.
 dev-bounce:
-    scripts/dev-server-bounce.sh
+    nix develop .#web --command scripts/dev-server-bounce.sh

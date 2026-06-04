@@ -10,23 +10,23 @@ layout {
     }
 
     tab name="server" focus=true {
-        pane command="dx" {
-            args "serve" "--platform" "web" "--fullstack" "--port" "3000" "--package" "omnibus"
+        pane command="nix" {
+            args "develop" ".#web" "--command" "dx" "serve" "--platform" "web" "--fullstack" "--port" "3000" "--package" "omnibus"
         }
     }
     tab name="android" {
-        pane command="dx" start_suspended=true {
-            args "serve" "--platform" "android" "--package" "omnibus-mobile"
+        pane command="nix" start_suspended=true {
+            args "develop" ".#mobile" "--command" "dx" "serve" "--platform" "android" "--package" "omnibus-mobile"
         }
     }
     tab name="ios" {
-        pane command="dx" start_suspended=true {
-            args "serve" "--platform" "ios" "--package" "omnibus-mobile"
+        pane command="nix" start_suspended=true {
+            args "develop" ".#mobile" "--command" "dx" "serve" "--platform" "ios" "--package" "omnibus-mobile"
         }
     }
     tab name="playwright" {
-        pane cwd="ui_tests/playwright" command="npx" start_suspended=true {
-            args "playwright" "test" "--ui"
+        pane cwd="ui_tests/playwright" command="nix" start_suspended=true {
+            args "develop" "../..#e2e" "--command" "npx" "playwright" "test" "--ui"
         }
     }
 }

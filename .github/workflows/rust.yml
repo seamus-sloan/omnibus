@@ -161,7 +161,7 @@ jobs:
           # Redirect inside the nix-develop subshell so the shellHook's
           # informational echoes (`Nix dev shell ready.`, etc.) don't get
           # mixed into the JSON capture file.
-          nix develop --command bash -c 'cargo audit --json --ignore RUSTSEC-2023-0071 > audit.json'
+          nix develop .#audit --command bash -c 'cargo audit --json --ignore RUSTSEC-2023-0071 > audit.json'
           exit_code=$?
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
           # Deliberately succeed here so the report + sticky-comment steps run
@@ -254,4 +254,4 @@ jobs:
       # or the relevant `ignore`/`skip` list rather than re-introducing
       # `continue-on-error: true`.
       - name: cargo deny check
-        run: nix develop --command cargo deny check advisories sources bans
+        run: nix develop .#audit --command cargo deny check advisories sources bans
