@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use omnibus_shared::{Contributor, EbookMetadata};
 
+pub mod codec;
 mod cover;
 mod group;
 mod parse;
@@ -24,6 +25,7 @@ mod stat;
 #[cfg(test)]
 mod tests;
 
+pub use codec::{classify_filenames, is_direct_playable, mime_for_filename, PlaybackMode};
 pub use group::{group_into_books, AudiobookGroup};
 pub use parse::{
     parse_audiobook_targets, parse_groups, AudiobookError, AudiobookParseTarget, AudiobookPart,

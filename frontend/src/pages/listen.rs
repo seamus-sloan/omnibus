@@ -1,22 +1,25 @@
-//! F2.3 immersive audiobook player with HLS streaming.
+//! F2.3 immersive audiobook player with direct-play + HLS fallback (#339).
 //!
 //! Renders a full-screen "Now playing" surface: cover + title + author on the
-//! left, scrub bar + transport controls on the right. Audio is streamed via
-//! HLS from `/api/audiobooks/:uuid/playlist.m3u8` (built from stored
-//! `book_file_parts` durations; segments served from the ffmpeg transcode
-//! cache).
+//! left, scrub bar + transport controls on the right.
 //!
 //! Startup sequence:
-//! 1. Poll `GET /api/audiobooks/{uuid}/status` every second until `ready`.
-//! 2. Load hls.js and call `window.OmnibusAudio.initHls(playlistUrl)`.
-//! 3. The HLS manifest drives segment fetches; the player timeline is
-//!    continuous across all parts (a folder of mp3s appears as one book).
+//! 1. `GET /api/audiobooks/{uuid}/manifest` returns either
+//!    `{mode: "direct", parts}` (m4b/m4a/mp3/aac — instant) or
+//!    `{mode: "hls", playlist_url}` (everything else).
+//! 2. For direct mode, the JS shim chains per-part `<audio src>` URLs with
+//!    auto-advance on `ended`; the book's timeline is a cumulative sum of
+//!    per-part durations.
+//! 3. For HLS mode, fall back to the legacy `/status` poll + hls.js attach.
+//!    If `/status` reports `state: "failed"`, render an error overlay
+//!    instead of polling forever (Bug 4 from #338).
 //!
 //! Position lives in [`crate::audiobook_progress`] — localStorage on web,
 //! in-memory on mobile, no-op under SSR. Writes both there AND fire-and-
 //! forget POST `/api/rpc/progress` (F2.1) with `format: "audio"` +
 //! `audio_position_seconds`, so a position written on one device syncs
-//! forward on the next open.
+//! forward on the next open. Across direct-mode parts the JS shim reports
+//! absolute (cross-part) seconds so the same shape works for both modes.
 
 use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]
@@ -70,9 +73,17 @@ pub fn BookListenPage(uuid: String) -> Element {
         #[cfg_attr(not(feature = "web"), allow(unused_mut))]
         let mut playing = use_signal(|| false);
         let mut rate = use_signal(crate::audiobook_progress::load_rate);
-        // HLS readiness: false until /status returns ready=true.
+        // Playback readiness: false until initDirect / initHls has fired.
+        // For direct mode this flips on as soon as the manifest fetch
+        // returns; for HLS it waits for `/status` to report `ready`.
         #[cfg_attr(not(feature = "web"), allow(unused_mut))]
         let mut hls_ready = use_signal(|| false);
+        // Terminal playback failure: HLS transcode `.failed` marker
+        // present, or manifest fetch failed. Bug 4 from #338 — distinct
+        // from "preparing" so the UI can render an error rather than
+        // spinning forever.
+        #[cfg_attr(not(feature = "web"), allow(unused_mut))]
+        let mut playback_failed = use_signal(|| false);
 
         let url = server_url.clone();
         let uuid_for_fetch = uuid.clone();
@@ -171,14 +182,12 @@ pub fn BookListenPage(uuid: String) -> Element {
                 );
 
                 // Install the OmnibusAudio control surface immediately so
-                // the transport buttons are wired even before HLS attaches.
-                let pos_lit =
-                    serde_json::to_string(&initial_position).unwrap_or_else(|_| "0".into());
+                // the transport buttons are wired even before initDirect /
+                // initHls attaches. The two init paths are responsible for
+                // setting their own initial position (per-part for direct,
+                // absolute for hls) via one-shot loadedmetadata listeners.
                 let rate_lit = serde_json::to_string(&initial_rate).unwrap_or_else(|_| "1".into());
                 let uuid_lit = serde_json::to_string(&uuid).unwrap_or_else(|_| "\"\"".into());
-                let playlist_url = format!("/api/audiobooks/{uuid}/playlist.m3u8");
-                let playlist_lit =
-                    serde_json::to_string(&playlist_url).unwrap_or_else(|_| "\"\"".into());
 
                 let js = format!(
                     r#"
@@ -190,37 +199,148 @@ pub fn BookListenPage(uuid: String) -> Element {
     if (!el) {{ if (n++ < 200) {{ return setTimeout(mount, 50); }} else {{ return; }} }}
     el.preload = 'auto';
     el.playbackRate = {rate_lit};
+
+    // Helper: absolute seconds across the whole book. For direct mode
+    // this adds the current part's cumulative offset; for HLS the audio
+    // element's `currentTime` already IS absolute (one continuous
+    // timeline).
+    function absTime() {{
+      var oa = window.OmnibusAudio;
+      if (oa && oa._mode === 'direct' && oa._parts) {{
+        return (oa._cumOffsets[oa._index] || 0) + (el.currentTime || 0);
+      }}
+      return el.currentTime || 0;
+    }}
+
     el.addEventListener('loadedmetadata', function(){{
-      try {{ el.currentTime = {pos_lit}; }} catch(_) {{}}
+      // Initial seek is the job of init{{Direct,Hls}} via their own
+      // one-shot loadedmetadata listeners — this listener only reports
+      // duration. For direct mode we always report the book-level total
+      // so a part change does not collapse the scrub bar to per-part.
+      var oa = window.OmnibusAudio;
       if (window.__omnibusOnAudioDuration) {{
-        window.__omnibusOnAudioDuration(el.duration || 0);
+        var d = (oa && oa._mode === 'direct' && oa._totalDuration > 0)
+          ? oa._totalDuration
+          : (el.duration || 0);
+        window.__omnibusOnAudioDuration(d);
       }}
     }});
     el.addEventListener('timeupdate', function(){{
       if (window.__omnibusOnAudioTime) {{
-        window.__omnibusOnAudioTime(el.currentTime || 0);
+        window.__omnibusOnAudioTime(absTime());
       }}
     }});
     el.addEventListener('play', function(){{
       if (window.__omnibusOnAudioPlay) {{
-        window.__omnibusOnAudioPlay(el.currentTime || 0);
+        window.__omnibusOnAudioPlay(absTime());
       }}
     }});
     el.addEventListener('pause', function(){{
       if (window.__omnibusOnAudioPause) {{
-        window.__omnibusOnAudioPause(el.currentTime || 0);
+        window.__omnibusOnAudioPause(absTime());
+      }}
+    }});
+    // Cross-part advance — direct mode only. HLS treats the whole
+    // book as one continuous stream so `ended` only fires at the
+    // actual end (which we leave as-is so the UI naturally stops).
+    el.addEventListener('ended', function(){{
+      var oa = window.OmnibusAudio;
+      if (!oa || oa._mode !== 'direct' || !oa._parts) return;
+      if (oa._index + 1 < oa._parts.length) {{
+        oa._index += 1;
+        el.src = oa._parts[oa._index].url;
+        el.load();
+        var p = el.play(); if (p && p.catch) p.catch(function(){{}});
       }}
     }});
 
-    // HLS init helper — called by Rust once the /status endpoint says ready.
     window.OmnibusAudio = {{
+      // Playback mode. Set by initDirect / initHls; null before either fires.
+      _mode: null,
+      // Direct-mode state — null in HLS mode.
+      _parts: null,
+      _index: 0,
+      _cumOffsets: [],
+      _totalDuration: 0,
+
       play:    function(){{ var p = el.play(); if (p && p.catch) p.catch(function(){{}}); }},
       pause:   function(){{ el.pause(); }},
       toggle:  function(){{ if (el.paused) {{ this.play(); }} else {{ this.pause(); }} }},
-      seek:    function(s){{ try {{ el.currentTime = Math.max(0, s); }} catch(_) {{}} }},
-      skip:    function(d){{ try {{ el.currentTime = Math.max(0, (el.currentTime||0) + d); }} catch(_) {{}} }},
       setRate: function(r){{ try {{ el.playbackRate = r; }} catch(_) {{}} }},
-      initHls: function(url){{
+
+      // Seek to an absolute (cross-part) second offset. For direct mode
+      // this finds the target part by cumulative duration and switches
+      // `el.src` if it differs from the current part, preserving the
+      // play/pause state across the swap.
+      seek: function(absSeconds){{
+        var s = Math.max(0, absSeconds || 0);
+        if (this._mode === 'direct' && this._parts) {{
+          var i = 0;
+          while (i < this._cumOffsets.length - 1 && s >= this._cumOffsets[i + 1]) i++;
+          var local = s - this._cumOffsets[i];
+          if (i !== this._index) {{
+            var wasPlaying = !el.paused;
+            this._index = i;
+            var onMeta = function(){{
+              el.removeEventListener('loadedmetadata', onMeta);
+              try {{ el.currentTime = local; }} catch(_) {{}}
+              if (wasPlaying) {{
+                var p = el.play(); if (p && p.catch) p.catch(function(){{}});
+              }}
+            }};
+            el.addEventListener('loadedmetadata', onMeta);
+            el.src = this._parts[i].url;
+            el.load();
+          }} else {{
+            try {{ el.currentTime = local; }} catch(_) {{}}
+          }}
+        }} else {{
+          try {{ el.currentTime = s; }} catch(_) {{}}
+        }}
+      }},
+
+      // Relative skip (+30 / -30). Computed in absolute terms so a skip
+      // straddling a part boundary works correctly.
+      skip: function(d){{ this.seek(absTime() + d); }},
+
+      // Direct-play init: parts is the array from the manifest endpoint
+      // (`[{{ordinal, url, duration_seconds, mime}}]`), initialPositionAbs
+      // is the absolute resume position in seconds.
+      initDirect: function(parts, initialPositionAbs){{
+        this._mode = 'direct';
+        this._parts = parts;
+        var acc = 0;
+        this._cumOffsets = [];
+        for (var i = 0; i < parts.length; i++) {{
+          this._cumOffsets.push(acc);
+          acc += parts[i].duration_seconds || 0;
+        }}
+        this._totalDuration = acc;
+        // Push the total duration up to Rust eagerly so the scrub bar
+        // gets the right max before the first part's metadata loads.
+        if (window.__omnibusOnAudioDuration) {{
+          window.__omnibusOnAudioDuration(this._totalDuration);
+        }}
+        // Pick the starting part for the resume position.
+        var s = Math.max(0, initialPositionAbs || 0);
+        var idx = 0;
+        while (idx < this._cumOffsets.length - 1 && s >= this._cumOffsets[idx + 1]) idx++;
+        this._index = idx;
+        var local = s - this._cumOffsets[idx];
+        var onMeta = function(){{
+          el.removeEventListener('loadedmetadata', onMeta);
+          try {{ el.currentTime = local; }} catch(_) {{}}
+        }};
+        el.addEventListener('loadedmetadata', onMeta);
+        el.src = parts[idx].url;
+        el.load();
+      }},
+
+      // HLS init: legacy fallback path for codecs the browser does not
+      // play natively. `initialPositionAbs` is optional — Rust passes
+      // `null` to skip the seek.
+      initHls: function(url, initialPositionAbs){{
+        this._mode = 'hls';
         if (typeof Hls !== 'undefined' && Hls.isSupported()) {{
           var hls = new Hls();
           hls.loadSource(url);
@@ -235,10 +355,17 @@ pub fn BookListenPage(uuid: String) -> Element {
           el.src = url;
           el.load();
         }} else {{
-          // No HLS support — show an error (handled by the Rust side).
           console.warn('OmnibusAudio: no HLS support in this browser');
         }}
+        if (typeof initialPositionAbs === 'number' && initialPositionAbs > 0) {{
+          var onMeta = function(){{
+            el.removeEventListener('loadedmetadata', onMeta);
+            try {{ el.currentTime = Math.max(0, initialPositionAbs); }} catch(_) {{}}
+          }};
+          el.addEventListener('loadedmetadata', onMeta);
+        }}
       }},
+
       _uuid: {uuid_lit},
     }};
   }}
@@ -248,58 +375,92 @@ pub fn BookListenPage(uuid: String) -> Element {
                 );
                 let _ = dioxus::document::eval(&js);
 
-                // Reconcile server-authoritative position.
+                // Bootstrap: fetch the manifest once and branch on `mode`.
+                // Direct mode (m4b / m4a / mp3 / aac) → call initDirect,
+                // ready immediately. HLS mode (flac / ac3 / …) → fall
+                // back to the legacy /status poll until ready or failed.
                 let uuid_for_fetch = uuid.clone();
-                let playlist = playlist_lit.clone();
                 spawn(async move {
-                    // Poll /status until ready, then init HLS.
-                    loop {
-                        match gloo_net::http::Request::get(&format!(
-                            "/api/audiobooks/{}/status",
-                            uuid_for_fetch
-                        ))
-                        .send()
-                        .await
-                        {
-                            Ok(resp) if resp.status() == 200 => {
-                                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                                    let ready = json
-                                        .get("ready")
-                                        .and_then(|v| v.as_bool())
-                                        .unwrap_or(false);
-                                    if ready {
-                                        hls_ready.set(true);
-                                        // Init the HLS player on the JS side.
-                                        let init_js = format!(
-                                            "window.OmnibusAudio && window.OmnibusAudio.initHls({playlist});"
-                                        );
-                                        let _ = dioxus::document::eval(&init_js);
-                                        // Server-authoritative seek position.
-                                        let server_pos = data::get_progress(
-                                            "",
-                                            &uuid_for_fetch,
-                                            omnibus_shared::ProgressFormat::Audio,
-                                        )
-                                        .await
-                                        .ok()
-                                        .flatten()
-                                        .and_then(|r| r.audio_position_seconds);
-                                        if let Some(pos) = server_pos {
-                                            let pos_lit = serde_json::to_string(&pos)
-                                                .unwrap_or_else(|_| "0".into());
-                                            let seek_js = format!(
-                                                "window.OmnibusAudio && window.OmnibusAudio.seek({pos_lit});"
-                                            );
-                                            let _ = dioxus::document::eval(&seek_js);
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                            _ => {}
+                    // Reconcile resume position with the server upfront so
+                    // both init paths see the same starting point.
+                    let server_pos = data::get_progress(
+                        "",
+                        &uuid_for_fetch,
+                        omnibus_shared::ProgressFormat::Audio,
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|r| r.audio_position_seconds);
+                    let resume_pos = server_pos.unwrap_or(initial_position);
+                    let pos_lit = serde_json::to_string(&resume_pos).unwrap_or_else(|_| "0".into());
+
+                    let manifest_url = format!("/api/audiobooks/{}/manifest", uuid_for_fetch);
+                    let manifest: Option<omnibus_shared::AudiobookManifest> =
+                        match gloo_net::http::Request::get(&manifest_url).send().await {
+                            Ok(resp) if resp.status() == 200 => resp.json().await.ok(),
+                            _ => None,
+                        };
+
+                    match manifest {
+                        Some(omnibus_shared::AudiobookManifest::Direct { parts, .. }) => {
+                            // Hand the part list to JS; initDirect picks
+                            // the right starting part by cumulative offset.
+                            let parts_json =
+                                serde_json::to_string(&parts).unwrap_or_else(|_| "[]".into());
+                            let init_js = format!(
+                                "window.OmnibusAudio && window.OmnibusAudio.initDirect({parts_json}, {pos_lit});"
+                            );
+                            let _ = dioxus::document::eval(&init_js);
+                            hls_ready.set(true);
                         }
-                        // 1-second poll interval.
-                        gloo_timers::future::TimeoutFuture::new(1_000).await;
+                        Some(omnibus_shared::AudiobookManifest::Hls { playlist_url }) => {
+                            let playlist_lit = serde_json::to_string(&playlist_url)
+                                .unwrap_or_else(|_| "\"\"".into());
+                            loop {
+                                match gloo_net::http::Request::get(&format!(
+                                    "/api/audiobooks/{}/status",
+                                    uuid_for_fetch
+                                ))
+                                .send()
+                                .await
+                                {
+                                    Ok(resp) if resp.status() == 200 => {
+                                        if let Ok(json) = resp.json::<serde_json::Value>().await {
+                                            let state = json
+                                                .get("state")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("preparing");
+                                            // Bug 4 from #338: surface
+                                            // failed transcodes instead of
+                                            // polling forever.
+                                            if state == "failed" {
+                                                playback_failed.set(true);
+                                                break;
+                                            }
+                                            if state == "ready" {
+                                                let init_js = format!(
+                                                    "window.OmnibusAudio && window.OmnibusAudio.initHls({playlist_lit}, {pos_lit});"
+                                                );
+                                                let _ = dioxus::document::eval(&init_js);
+                                                hls_ready.set(true);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                                gloo_timers::future::TimeoutFuture::new(1_000).await;
+                            }
+                        }
+                        None => {
+                            // Manifest unreachable (network failure, 5xx,
+                            // 404 between settings save and reindex). Show
+                            // the same failure overlay as a terminal HLS
+                            // transcode failure — a manual refresh is the
+                            // recovery path either way.
+                            playback_failed.set(true);
+                        }
                     }
                 });
             }));
@@ -370,6 +531,7 @@ pub fn BookListenPage(uuid: String) -> Element {
         let rate_label = format!("{:.2}\u{00d7}", rate());
         let play_label = if playing() { "Pause" } else { "Play" };
         let ready = hls_ready();
+        let failed = playback_failed();
 
         rsx! {
             div {
@@ -404,8 +566,28 @@ pub fn BookListenPage(uuid: String) -> Element {
                     preload: "auto",
                 }
 
-                // "Preparing your audiobook…" overlay shown while HLS transcodes.
-                if !ready {
+                // Terminal failure (HLS .failed marker or manifest fetch
+                // failed). Distinct from "preparing" — manual reload is
+                // the recovery path. Bug 4 from #338.
+                if failed {
+                    div {
+                        "data-testid": "listen-failed",
+                        role: "alert",
+                        style: "position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; background:var(--bg-0); z-index:10; gap:0.5rem;",
+                        p {
+                            style: "font-family:var(--serif); font-size:1.2rem; color:var(--ink-1);",
+                            "Playback failed."
+                        }
+                        p {
+                            style: "font-family:var(--mono); font-size:0.85rem; color:var(--ink-3); max-width:32rem; text-align:center;",
+                            "The audiobook could not be prepared. Reload the page to try again, or check the server logs for a transcode failure."
+                        }
+                    }
+                } else if !ready {
+                    // Shown only while we wait for the HLS transcode —
+                    // direct-play books flip `ready` true as soon as the
+                    // manifest fetch returns, so this overlay never
+                    // renders for them.
                     div {
                         "data-testid": "listen-preparing",
                         style: "position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; background:var(--bg-0); z-index:10;",
