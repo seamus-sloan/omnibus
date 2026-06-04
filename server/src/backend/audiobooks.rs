@@ -196,6 +196,7 @@ pub(super) async fn get_audiobook_status(
 
     let book_id = resolved.book_id;
     let ready = hls::is_ready(book_id, hls::AUDIO64);
+    let failed = hls::has_failed(book_id, hls::AUDIO64);
     let progress = hls::read_progress(book_id, hls::AUDIO64);
 
     // If neither ready nor in progress, kick off the transcode. The worker
@@ -204,7 +205,7 @@ pub(super) async fn get_audiobook_status(
     // it. Skip the kick entirely when a `.failed` marker is present —
     // otherwise the frontend's 1 s status poll becomes an unbounded retry
     // loop on a permanently-broken book (corrupt source, missing ffmpeg).
-    if !ready && progress < 0.05 && !hls::has_failed(book_id, hls::AUDIO64) {
+    if !ready && progress < 0.05 && !failed {
         state.worker.post(Task::HlsTranscode {
             book_id,
             book_file_id: resolved.book_file_id,
@@ -213,7 +214,24 @@ pub(super) async fn get_audiobook_status(
         });
     }
 
-    Json(StatusResponse { ready, progress }).into_response()
+    // Discriminator the frontend uses to render preparing / ready / failed
+    // states without ambiguity. Fixes Bug 4 from #338 — the old shape
+    // (`ready: false, progress: 0`) was indistinguishable from
+    // "permanently failed" so the UI stuck on "Preparing" forever.
+    let status_state = if ready {
+        StatusState::Ready
+    } else if failed {
+        StatusState::Failed
+    } else {
+        StatusState::Preparing
+    };
+
+    Json(StatusResponse {
+        ready,
+        progress,
+        state: status_state,
+    })
+    .into_response()
 }
 
 /// Serves one `.ts` segment file from the HLS cache.
@@ -279,11 +297,32 @@ pub(super) async fn get_audiobook_segment(
     Response::from_parts(parts, Body::new(body))
 }
 
+/// Terminal-vs-in-flight discriminator for the status JSON. Lets the
+/// frontend distinguish "transcode is preparing" from "transcode
+/// permanently failed" — the legacy `{ready: false, progress: 0}`
+/// shape collapsed both into the same response, which is Bug 4 of #338.
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum StatusState {
+    /// Transcode is queued or running.
+    Preparing,
+    /// Transcode finished — segments + manifest are on disk.
+    Ready,
+    /// Transcode terminally failed (`.failed` marker present). The UI
+    /// renders an error with a retry affordance.
+    Failed,
+}
+
 /// JSON response body for `GET /api/audiobooks/{uuid}/status`.
+///
+/// `ready` and `progress` are kept for compatibility with any client
+/// that pre-dates the `state` field; new clients should branch on
+/// `state` only.
 #[derive(Serialize)]
 struct StatusResponse {
     ready: bool,
     progress: f32,
+    state: StatusState,
 }
 
 /// `true` if `name` matches `seg-NNNN.ts` exactly (4 decimal digits).
@@ -297,12 +336,21 @@ fn is_valid_segment_name(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use axum::http::StatusCode;
     use tower::ServiceExt;
 
     use super::*;
     use crate::auth::test_support as auth_test_support;
     use crate::backend::test_support::*;
+
+    /// Serializes the status-endpoint tests that mutate `OMNIBUS_DATA_DIR`.
+    /// `hls::has_failed` reads the env var on every call, so two tests
+    /// pointing at different tempdirs will race and one will see the
+    /// other's `.failed` marker. Mirrors the `ENV_LOCK` pattern in
+    /// `db/src/thumbs.rs`.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Seed one audiobook book + book_files + book_file_parts row for tests.
     async fn seed_one_audiobook(pool: &sqlx::SqlitePool) -> String {
@@ -430,7 +478,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn api_get_audiobook_status_returns_ready_false_when_not_transcoded() {
+    // Std mutex held across awaits is the intent — env vars are
+    // process-global and we serialize sibling tests that mutate
+    // `OMNIBUS_DATA_DIR`. Safe under tokio's current-thread test runtime.
+    #[allow(clippy::await_holding_lock)]
+    async fn api_get_audiobook_status_returns_preparing_when_not_transcoded() {
+        // Hold the env lock for the whole test so the `failed_marker`
+        // sibling test below can't interleave its `.failed` write into
+        // our `OMNIBUS_DATA_DIR`. Tempdir keeps us isolated from any
+        // pre-existing `./data/hls/*/audio64.failed` files on the host.
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var("OMNIBUS_DATA_DIR").ok();
+        // SAFETY: held under ENV_LOCK; no other thread mutates the env.
+        unsafe {
+            std::env::set_var("OMNIBUS_DATA_DIR", dir.path());
+        }
+
         let (_, _, pool) = fixture().await;
         let user = auth_test_support::create_user(&pool, "alice").await;
         let token = auth_test_support::bearer_token(&pool, user.id).await;
@@ -450,6 +514,68 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["ready"], serde_json::Value::Bool(false));
+        // New `state` field (#339 / Bug 4 of #338) — lets the UI
+        // distinguish "preparing" from "failed".
+        assert_eq!(json["state"], "preparing");
+
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("OMNIBUS_DATA_DIR", v),
+                None => std::env::remove_var("OMNIBUS_DATA_DIR"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // see sibling test for rationale
+    async fn api_get_audiobook_status_returns_failed_when_failed_marker_present() {
+        // Direct fs poke: write the `.failed` marker that
+        // `cleanup_segment_dir` writes on a terminal ffmpeg failure, then
+        // assert the status endpoint surfaces `state: "failed"` instead of
+        // the legacy `ready:false, progress:0` shape that the UI couldn't
+        // distinguish from "preparing".
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var("OMNIBUS_DATA_DIR").ok();
+        // SAFETY: held under ENV_LOCK; no other thread mutates the env.
+        unsafe {
+            std::env::set_var("OMNIBUS_DATA_DIR", dir.path());
+        }
+
+        let (_, _, pool) = fixture().await;
+        let user = auth_test_support::create_user(&pool, "alice").await;
+        let token = auth_test_support::bearer_token(&pool, user.id).await;
+        let uuid = seed_one_audiobook(&pool).await;
+        let book_id = sqlx::query_scalar::<_, i64>("SELECT id FROM books WHERE uuid = ?")
+            .bind(&uuid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let book_dir = dir.path().join("hls").join(book_id.to_string());
+        std::fs::create_dir_all(&book_dir).unwrap();
+        std::fs::write(book_dir.join("audio64.failed"), "").unwrap();
+
+        let app = crate::backend::rest_router(AppState::new(pool));
+        let res = app
+            .oneshot(get_with_bearer(
+                &format!("/api/audiobooks/{uuid}/status"),
+                &token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["state"], "failed");
+
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("OMNIBUS_DATA_DIR", v),
+                None => std::env::remove_var("OMNIBUS_DATA_DIR"),
+            }
+        }
     }
 
     /// Seed an audiobook with N custom parts. Used by the manifest tests
