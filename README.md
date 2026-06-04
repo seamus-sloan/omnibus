@@ -7,7 +7,7 @@ Self-hosted ebook and audiobook library — the Plex/Jellyfin for your book coll
 ## Running
 This project utilizes [Nix](https://wiki.nixos.org/wiki/NixOS_Wiki) to save all dependencies.
 ```bash
-# Launch the nix shell
+# Launch the nix shell (slim default — daily cargo/clippy/test)
 nix develop
 
 # Launch the nix shell manually (and keep your shell)
@@ -16,6 +16,18 @@ nix develop --command zsh
 # Auto-load the nix shell with direnv
 direnv allow # Only necessary once
 ```
+
+The flake exposes purpose-built shells so daily work doesn't pull Playwright + mobile + audit tooling. The default direnv-loaded shell is `default` (slim); opt in to a heavier shell only when you need it:
+
+| Shell | When to use |
+|---|---|
+| `default` | Daily `cargo` / editor — what direnv auto-loads |
+| `.#web` | `dx serve --platform web`, `just dev-up`, anything that bundles WASM |
+| `.#e2e` | `npx playwright test` (Chromium bundle is here) |
+| `.#mobile` | Android / iOS builds (rust cross-targets + JDK + Android NDK detect) |
+| `.#audit` | `cargo audit` / `cargo deny` |
+
+`just serve`, `just serve-pc`, `just dev-up`, and `just dev-bounce` self-wrap in the right shell, so they work from `default`.
 
 Multiplexers with ZelliJ and Process-Compose both leverage the same `.justfile` to launch all of the different platforms here (frontend, mobile, server, playwright).
 ```bash
@@ -50,10 +62,10 @@ The iOS pane in the multiplexer will be able to launch the simulator and install
 
 3. **Create an emulator** — in Android Studio: **Tools → Device Manager → Create Virtual Device**, pick a device with a recent API level (API 33+ recommended), then start it.
 
-4. **Enter the Nix dev shell** — the shellHook auto-detects `ANDROID_HOME` and `ANDROID_NDK_HOME` from the standard Android Studio install paths:
+4. **Enter the Nix mobile dev shell** — the `mobile` shellHook auto-detects `ANDROID_HOME` and `ANDROID_NDK_HOME` from the standard Android Studio install paths:
 
    ```bash
-   nix develop --command zsh
+   nix develop .#mobile --command zsh
    ```
 
    Verify the vars are set:

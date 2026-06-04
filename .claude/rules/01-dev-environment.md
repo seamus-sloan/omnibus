@@ -7,13 +7,40 @@ nix develop --command zsh   # preferred — keeps your shell prompt intact
 nix develop                 # also works; spawns a bash subshell
 ```
 
-The shell hook sets:
+## Shells
+
+The flake exposes five purpose-built shells so daily cargo work doesn't pay for Playwright + mobile + audit tooling. Pick the smallest one that has what you need:
+
+| Shell | Headline tools | When to use |
+|---|---|---|
+| `default` (slim) | rust core + sqlite + openssl + just + zellij + process-compose | Daily `cargo test`/`clippy`/`fmt`, editor, rust-analyzer — this is what direnv auto-loads via `.envrc` |
+| `web` | default + dioxus-cli + matched `wasm-bindgen` + node | `dx serve --platform web`, `just dev-up`, anything that bundles the WASM client |
+| `e2e` | web + Playwright Chromium bundle | `npx playwright test`, the `playwright` pane in the multiplexer, CI's E2E job |
+| `mobile` | default + Android + iOS rust-std targets + JDK 21 + Xcode/Android SDK auto-detect | `dx serve --platform ios`/`android`, `cargo build -p omnibus-mobile` |
+| `audit` | default + cargo-audit + cargo-deny | Local `cargo audit` / `cargo deny`, mirrors CI's security job |
+
+One-shot pattern for any non-default shell:
+
+```bash
+nix develop .#web    --command dx serve --platform web -p omnibus
+nix develop .#audit  --command cargo deny check advisories sources bans
+nix develop .#mobile                  # interactive shell with Android NDK + iOS targets
+```
+
+`.envrc` resolves `use flake` to `default`, so the editor stays on the slim shell at all times. `just serve` works from default because zellij + process-compose live there; each multiplexer pane internally wraps its command in the right `.#shell` (server → `.#web`, mobile → `.#mobile`, playwright → `.#e2e`), so only the panes you actually start realize their extras. `just dev-up` and `just dev-bounce` self-wrap in `.#web`, so they work straight from default too.
+
+## Common environment
+
+Every shell sets:
 
 - `DATABASE_URL=sqlite://omnibus.db?mode=rwc`
 - `CARGO_TARGET_DIR=$HOME/.cache/cargo-target/<worktree-root-name>` — keeps `target/` outside the repo so flake evaluations don't snapshot multi-GB build artifacts into `/nix/store` on every direnv reload. The worktree root is resolved via `git rev-parse --show-toplevel` (so `nix develop` from a subdir picks the same dir), and the basename keeps it per-worktree to avoid races between parallel worktrees.
-- `PLAYWRIGHT_BROWSERS_PATH` → Nix-provided Chromium (don't run `npx playwright install`)
 - `OMNIBUS_PUBLIC_ORIGIN=http://localhost:$PORT` — comma-separated allowlist consumed by `auth::origin_check`. Required for `dx serve --fullstack`: its HTTP proxy rewrites `Host` to the upstream backend's loopback address without setting `X-Forwarded-Host`, so without an allowlist every cookie-authed POST 403s. Override in production deployments behind a reverse proxy.
-- `ANDROID_HOME` and `ANDROID_NDK_HOME` (auto-detected from standard Android Studio install paths)
+
+Shell-specific additions:
+
+- `e2e` only — `PLAYWRIGHT_BROWSERS_PATH` → Nix-provided Chromium (don't run `npx playwright install`)
+- `mobile` only — `ANDROID_HOME`, `ANDROID_NDK_HOME` (auto-detected from standard Android Studio install paths), plus the Xcode `DEVELOPER_DIR`/`SDKROOT`/`PATH` shim on macOS
 
 Override `PORT` (default `3000`) if you need a different port. Playwright targets `$PLAYWRIGHT_BASE_URL` (set by `scripts/dev-server-up.sh`); it falls back to `http://127.0.0.1:3000` when unset.
 
@@ -34,7 +61,7 @@ Optional storage overrides:
 - `OMNIBUS_THUMBS_DIR` — where WebP thumbnails are cached (default `./thumbs`)
 - `OMNIBUS_THUMBS_CAP_BYTES` — eviction cap in bytes (default 5 GiB)
 
-If `ANDROID_HOME` / `ANDROID_NDK_HOME` come back empty, set them manually:
+If `ANDROID_HOME` / `ANDROID_NDK_HOME` come back empty inside `nix develop .#mobile`, set them manually:
 
 ```bash
 export ANDROID_HOME=$HOME/Library/Android/sdk
