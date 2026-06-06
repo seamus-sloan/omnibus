@@ -13,6 +13,13 @@ use omnibus_shared::{AuthorSummary, SeriesSummary};
 /// while leaving headroom past a 5k+ author library.
 const INDEX_LIMIT: i64 = 10_000;
 
+/// Build a `VALUES (?)` list for a CTE that materializes the library-path
+/// set once. At most two entries (ebook + audiobook), so the bind count
+/// stays trivial.
+fn placeholders(n: usize) -> String {
+    std::iter::repeat_n("(?)", n).collect::<Vec<_>>().join(", ")
+}
+
 /// Return every author with their book count and an optional cover-derived
 /// accent, scoped to `library_path`, ordered by name ascending and capped
 /// at [`INDEX_LIMIT`]. Empty list when `library_path` doesn't match a
@@ -25,32 +32,21 @@ const INDEX_LIMIT: i64 = 10_000;
 /// to books accessible to that user.
 pub async fn list_authors(
     pool: &SqlitePool,
-    library_path: &str,
+    library_paths: &[&str],
 ) -> Result<Vec<AuthorSummary>, sqlx::Error> {
-    // TODO: scope by `user_id` once per-user ACLs land.
-    //
-    // F5.1: count uses the effective (override-aware) creator set, not
-    // the raw `books_authors_link` rows — otherwise an author whose books
-    // were all reassigned through the metadata edit form keeps reporting
-    // the canonical count even though `/authors/:id` (override-aware
-    // since #153) shows the corrected list. Visibility still requires
-    // at least one canonical link in this library so we don't list
-    // authors that exist only inside override JSON — they'd have no
-    // navigable `authors.id`. The accent subquery is unchanged: accent
-    // comes from `books.accent_color` (cover-derived), which overrides
-    // can replace via `override_covers/<uuid>` materialisation but never
-    // by JSON edit, so the canonical-link lookup is still correct.
-    //
-    // Same shape as the palette author query (`search_palette`'s B
-    // block) so the two index surfaces report consistent counts.
-    let rows = sqlx::query(
+    if library_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ph = placeholders(library_paths.len());
+    let sql = format!(
         r#"
+        WITH lib_paths(p) AS (VALUES {ph})
         SELECT a.id, a.name, a.sort,
                (SELECT COUNT(*)
                   FROM books b
                   JOIN libraries l2 ON l2.id = b.library_id
                   LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-                 WHERE l2.path = ?1
+                 WHERE l2.path IN (SELECT p FROM lib_paths)
                    AND CASE
                          WHEN mo.book_uuid IS NOT NULL
                               AND json_type(mo.overrides, '$.creators') IS NOT NULL
@@ -69,7 +65,7 @@ pub async fn list_authors(
                   JOIN books b2 ON b2.id = bal2.book
                   JOIN libraries l2 ON l2.id = b2.library_id
                  WHERE bal2.author = a.id
-                   AND l2.path = ?1
+                   AND l2.path IN (SELECT p FROM lib_paths)
                    AND b2.accent_color IS NOT NULL
                  ORDER BY b2.sort, b2.id
                  LIMIT 1) AS accent,
@@ -84,16 +80,19 @@ pub async fn list_authors(
             SELECT 1 FROM books_authors_link bal
               JOIN books b ON b.id = bal.book
               JOIN libraries l ON l.id = b.library_id
-             WHERE bal.author = a.id AND l.path = ?1
+             WHERE bal.author = a.id
+               AND l.path IN (SELECT p FROM lib_paths)
           )
         ORDER BY COALESCE(a.sort, a.name) COLLATE NOCASE ASC
-        LIMIT ?2
-        "#,
-    )
-    .bind(library_path)
-    .bind(INDEX_LIMIT)
-    .fetch_all(pool)
-    .await?;
+        LIMIT ?
+        "#
+    );
+    let mut q = sqlx::query(&sql);
+    for path in library_paths {
+        q = q.bind(*path);
+    }
+    q = q.bind(INDEX_LIMIT);
+    let rows = q.fetch_all(pool).await?;
 
     Ok(rows
         .iter()
@@ -120,28 +119,21 @@ pub async fn list_authors(
 /// to books accessible to that user.
 pub async fn list_series(
     pool: &SqlitePool,
-    library_path: &str,
+    library_paths: &[&str],
 ) -> Result<Vec<SeriesSummary>, sqlx::Error> {
-    // TODO: scope by `user_id` once per-user ACLs land.
-    //
-    // F5.1: same overlay shape as `list_authors` and the palette series
-    // query. `overrides.series` (string) drives membership for `book_count`;
-    // `overrides.creators[0].name` drives `primary_author` when present so
-    // the by-line on the card matches what `/series/:id` (#153 + the
-    // empty-index follow-up) shows. Visibility still requires at least one
-    // canonical `books_series_link` row in this library — series that
-    // exist only as a string inside override JSON have no `series.id` to
-    // route to. Accent comes from cover-derived `books.accent_color`,
-    // which JSON overrides can't change, so the canonical-link lookup is
-    // still correct.
-    let rows = sqlx::query(
+    if library_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ph = placeholders(library_paths.len());
+    let sql = format!(
         r#"
+        WITH lib_paths(p) AS (VALUES {ph})
         SELECT s.id, s.name, s.sort,
                (SELECT COUNT(*)
                   FROM books b
                   JOIN libraries l2 ON l2.id = b.library_id
                   LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-                 WHERE l2.path = ?1
+                 WHERE l2.path IN (SELECT p FROM lib_paths)
                    AND CASE
                          WHEN mo.book_uuid IS NOT NULL
                               AND json_type(mo.overrides, '$.series') IS NOT NULL
@@ -166,7 +158,8 @@ pub async fn list_series(
                   JOIN books b2 ON b2.id = bsl2.book
                   JOIN libraries l2 ON l2.id = b2.library_id
                   LEFT JOIN metadata_overrides mo2 ON mo2.book_uuid = b2.uuid
-                 WHERE bsl2.series = s.id AND l2.path = ?1
+                 WHERE bsl2.series = s.id
+                   AND l2.path IN (SELECT p FROM lib_paths)
                  ORDER BY b2.series_index NULLS LAST, b2.sort, b2.id
                  LIMIT 1) AS primary_author,
                (SELECT b3.accent_color
@@ -174,7 +167,7 @@ pub async fn list_series(
                   JOIN books b3 ON b3.id = bsl3.book
                   JOIN libraries l3 ON l3.id = b3.library_id
                  WHERE bsl3.series = s.id
-                   AND l3.path = ?1
+                   AND l3.path IN (SELECT p FROM lib_paths)
                    AND b3.accent_color IS NOT NULL
                  ORDER BY b3.series_index NULLS LAST, b3.sort, b3.id
                  LIMIT 1) AS accent
@@ -183,16 +176,19 @@ pub async fn list_series(
             SELECT 1 FROM books_series_link bsl
               JOIN books b ON b.id = bsl.book
               JOIN libraries l ON l.id = b.library_id
-             WHERE bsl.series = s.id AND l.path = ?1
+             WHERE bsl.series = s.id
+               AND l.path IN (SELECT p FROM lib_paths)
           )
         ORDER BY COALESCE(s.sort, s.name) COLLATE NOCASE ASC
-        LIMIT ?2
-        "#,
-    )
-    .bind(library_path)
-    .bind(INDEX_LIMIT)
-    .fetch_all(pool)
-    .await?;
+        LIMIT ?
+        "#
+    );
+    let mut q = sqlx::query(&sql);
+    for path in library_paths {
+        q = q.bind(*path);
+    }
+    q = q.bind(INDEX_LIMIT);
+    let rows = q.fetch_all(pool).await?;
 
     Ok(rows
         .iter()
@@ -223,7 +219,7 @@ mod tests {
     #[tokio::test]
     async fn list_authors_returns_all_with_counts_and_alpha_order() {
         let (pool, _guard) = seed_discovery_fixture().await;
-        let authors = list_authors(&pool, "/lib").await.unwrap();
+        let authors = list_authors(&pool, &["/lib"]).await.unwrap();
 
         // Three distinct authors: Ada Lovelace, Grace Hopper, Niklaus Wirth.
         let names: Vec<_> = authors.iter().map(|a| a.name.clone()).collect();
@@ -252,7 +248,7 @@ mod tests {
     #[tokio::test]
     async fn list_authors_scopes_to_library_path() {
         let (pool, _guard) = seed_discovery_fixture().await;
-        let authors = list_authors(&pool, "/no-such-library").await.unwrap();
+        let authors = list_authors(&pool, &["/no-such-library"]).await.unwrap();
         assert!(
             authors.is_empty(),
             "unknown library path must yield empty list"
@@ -262,13 +258,13 @@ mod tests {
     async fn list_authors_returns_empty_for_empty_library() {
         let _guard = CoversTempDir::new("empty_authors");
         let pool = init_db("sqlite::memory:").await.unwrap();
-        let authors = list_authors(&pool, "/lib").await.unwrap();
+        let authors = list_authors(&pool, &["/lib"]).await.unwrap();
         assert!(authors.is_empty());
     }
     #[tokio::test]
     async fn list_series_returns_all_with_counts_and_alpha_order() {
         let (pool, _guard) = seed_discovery_fixture().await;
-        let series = list_series(&pool, "/lib").await.unwrap();
+        let series = list_series(&pool, &["/lib"]).await.unwrap();
 
         // Two series: Pioneers, Saga (NOCASE alpha).
         let names: Vec<_> = series.iter().map(|s| s.name.clone()).collect();
@@ -284,7 +280,7 @@ mod tests {
     #[tokio::test]
     async fn list_series_populates_primary_author_from_first_book() {
         let (pool, _guard) = seed_discovery_fixture().await;
-        let series = list_series(&pool, "/lib").await.unwrap();
+        let series = list_series(&pool, &["/lib"]).await.unwrap();
 
         let by_name: std::collections::HashMap<_, _> = series
             .iter()
@@ -298,7 +294,7 @@ mod tests {
     #[tokio::test]
     async fn list_series_scopes_to_library_path() {
         let (pool, _guard) = seed_discovery_fixture().await;
-        let series = list_series(&pool, "/no-such-library").await.unwrap();
+        let series = list_series(&pool, &["/no-such-library"]).await.unwrap();
         assert!(series.is_empty());
     }
     // F5.1 — index-page counts must follow the same override overlay
@@ -335,7 +331,7 @@ mod tests {
             .await
             .unwrap();
 
-        let authors = list_authors(&pool, "/lib").await.unwrap();
+        let authors = list_authors(&pool, &["/lib"]).await.unwrap();
         let by_name: std::collections::HashMap<_, _> = authors
             .iter()
             .map(|a| (a.name.clone(), a.book_count))
@@ -379,7 +375,7 @@ mod tests {
             .await
             .unwrap();
 
-        let authors = list_authors(&pool, "/lib").await.unwrap();
+        let authors = list_authors(&pool, &["/lib"]).await.unwrap();
         let ada = authors
             .iter()
             .find(|a| a.name == "Ada Lovelace")
@@ -415,7 +411,7 @@ mod tests {
             .await
             .unwrap();
 
-        let series = list_series(&pool, "/lib").await.unwrap();
+        let series = list_series(&pool, &["/lib"]).await.unwrap();
         let saga = series
             .iter()
             .find(|s| s.name == "Saga")
@@ -450,7 +446,7 @@ mod tests {
             .await
             .unwrap();
 
-        let series = list_series(&pool, "/lib").await.unwrap();
+        let series = list_series(&pool, &["/lib"]).await.unwrap();
         let saga = series
             .iter()
             .find(|s| s.name == "Saga")
@@ -470,14 +466,14 @@ mod tests {
         let (pool, _guard) = seed_discovery_fixture().await;
         let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;
 
-        let initial = list_authors(&pool, "/lib").await.unwrap();
+        let initial = list_authors(&pool, &["/lib"]).await.unwrap();
         let ada = initial.iter().find(|a| a.id == ada_id).unwrap();
         assert!(!ada.has_photo, "no row should yield has_photo = false");
 
         upsert_author_photo(&pool, ada_id, AuthorPhotoSource::Letter, None, None, None)
             .await
             .unwrap();
-        let after_letter = list_authors(&pool, "/lib").await.unwrap();
+        let after_letter = list_authors(&pool, &["/lib"]).await.unwrap();
         let ada = after_letter.iter().find(|a| a.id == ada_id).unwrap();
         assert!(
             !ada.has_photo,
@@ -494,8 +490,140 @@ mod tests {
         )
         .await
         .unwrap();
-        let after_upload = list_authors(&pool, "/lib").await.unwrap();
+        let after_upload = list_authors(&pool, &["/lib"]).await.unwrap();
         let ada = after_upload.iter().find(|a| a.id == ada_id).unwrap();
         assert!(ada.has_photo, "manual upload should yield has_photo = true");
+    }
+
+    // -----------------------------------------------------------------
+    // Audiobook authors/series in browse indexes
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn list_authors_includes_audiobook_authors_from_separate_library() {
+        let guard = CoversTempDir::new("ab_authors");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        crate::sync::replace_books(
+            &pool,
+            "/ebooks",
+            vec![indexed(
+                "novel.epub",
+                Some("A Novel"),
+                &["Ebook Author"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        crate::sync::sync_audiobooks(
+            &pool,
+            "/audiobooks",
+            crate::sync::AudiobookSyncPlan {
+                new_books: vec![indexed_audiobook(
+                    "narrator/book",
+                    "Audiobook Title",
+                    Some("Audio Author"),
+                )],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let ebook_only = list_authors(&pool, &["/ebooks"]).await.unwrap();
+        assert_eq!(ebook_only.len(), 1);
+        assert_eq!(ebook_only[0].name, "Ebook Author");
+
+        let audio_only = list_authors(&pool, &["/audiobooks"]).await.unwrap();
+        assert_eq!(audio_only.len(), 1);
+        assert_eq!(audio_only[0].name, "Audio Author");
+
+        let combined = list_authors(&pool, &["/ebooks", "/audiobooks"])
+            .await
+            .unwrap();
+        let names: Vec<_> = combined.iter().map(|a| a.name.clone()).collect();
+        assert!(names.contains(&"Audio Author".to_string()));
+        assert!(names.contains(&"Ebook Author".to_string()));
+        assert_eq!(combined.len(), 2);
+        drop(guard);
+    }
+
+    #[tokio::test]
+    async fn list_authors_returns_empty_for_no_paths() {
+        let _guard = CoversTempDir::new("no_paths");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let authors = list_authors(&pool, &[]).await.unwrap();
+        assert!(authors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_series_includes_series_from_audiobook_library() {
+        let guard = CoversTempDir::new("ab_series");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        crate::sync::replace_books(
+            &pool,
+            "/ebooks",
+            vec![indexed(
+                "dune.epub",
+                Some("Dune"),
+                &["Frank Herbert"],
+                &[],
+                Some(("Dune Chronicles", "1")),
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        // Seed an audiobook under a separate library, then add a series
+        // override that references the existing "Dune Chronicles" series.
+        crate::sync::sync_audiobooks(
+            &pool,
+            "/audiobooks",
+            crate::sync::AudiobookSyncPlan {
+                new_books: vec![indexed_audiobook(
+                    "herbert/dune-audio",
+                    "Dune (Audio)",
+                    Some("Frank Herbert"),
+                )],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+        upsert_metadata_overrides(
+            &pool,
+            "ab-uuid-herbert/dune-audio",
+            &MetadataOverrides {
+                series: Some("Dune Chronicles".into()),
+                series_index: Some("1".into()),
+                ..Default::default()
+            },
+            false,
+            user_id,
+        )
+        .await
+        .unwrap();
+
+        let ebook_series = list_series(&pool, &["/ebooks"]).await.unwrap();
+        assert_eq!(ebook_series.len(), 1);
+        assert_eq!(ebook_series[0].name, "Dune Chronicles");
+
+        let combined = list_series(&pool, &["/ebooks", "/audiobooks"])
+            .await
+            .unwrap();
+        assert_eq!(combined.len(), 1, "same series should not duplicate");
+        assert_eq!(
+            combined[0].book_count, 2,
+            "audiobook with series override should be counted"
+        );
+        drop(guard);
     }
 }

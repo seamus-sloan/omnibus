@@ -75,10 +75,9 @@ pub async fn upsert_metadata_overrides(
 ) -> Result<(), sqlx::Error> {
     let json = serde_json::to_string(overrides).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
     upsert_overrides_row(pool, book_uuid, &json, has_cover_override, user_id).await?;
-    // Best-effort FTS rebuild: log and continue on failure. The override
-    // write is the user's actual intent — a stale FTS row gets fixed on the
-    // next reindex, but surfacing a 500 here would make them think their
-    // save was lost. Matches the docstring contract above.
+    if let Err(e) = materialize_series_link(pool, book_uuid, overrides).await {
+        tracing::warn!(book_uuid, error = %e, "series link materialize after override upsert failed");
+    }
     if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
         tracing::warn!(book_uuid, error = %e, "books_fts rebuild after override upsert failed");
     }
@@ -126,8 +125,9 @@ pub async fn merge_metadata_overrides(
     upsert_overrides_row(&mut *tx, book_uuid, &json, has_cover_override, user_id).await?;
     tx.commit().await?;
 
-    // Best-effort FTS rebuild — same rationale as `upsert_metadata_overrides`.
-    // Kept outside the transaction so the write lock is released first.
+    if let Err(e) = materialize_series_link(pool, book_uuid, &merged).await {
+        tracing::warn!(book_uuid, error = %e, "series link materialize after override merge failed");
+    }
     if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
         tracing::warn!(book_uuid, error = %e, "books_fts rebuild after override merge failed");
     }
@@ -276,6 +276,53 @@ pub(crate) fn apply_overrides(
         book.cover_url = Some(format!("/api/covers/{uuid}"));
     }
     book.has_override = true;
+}
+
+/// When an override sets a series name, ensure a `series` row and
+/// `books_series_link` exist so the browse index and detail-page breadcrumb
+/// resolve. Without this, override-only series are invisible to
+/// `list_series` (which requires a canonical link for visibility) and the
+/// book detail page's `series_id` backfill can't find the `series.id`.
+async fn materialize_series_link(
+    pool: &SqlitePool,
+    book_uuid: &str,
+    overrides: &MetadataOverrides,
+) -> Result<(), sqlx::Error> {
+    let Some(ref series_name) = overrides.series else {
+        return Ok(());
+    };
+    if series_name.is_empty() {
+        return Ok(());
+    }
+    let Some(book_id) = sqlx::query_scalar::<_, i64>("SELECT id FROM books WHERE uuid = ?")
+        .bind(book_uuid)
+        .fetch_optional(pool)
+        .await?
+    else {
+        return Ok(());
+    };
+
+    sqlx::query(
+        "INSERT INTO series (name, sort) VALUES (?, ?) \
+         ON CONFLICT(name) DO UPDATE SET sort = COALESCE(series.sort, excluded.sort)",
+    )
+    .bind(series_name)
+    .bind(series_name)
+    .execute(pool)
+    .await?;
+
+    let series_id =
+        sqlx::query_scalar::<_, i64>("SELECT id FROM series WHERE name = ? COLLATE NOCASE")
+            .bind(series_name)
+            .fetch_one(pool)
+            .await?;
+
+    sqlx::query("INSERT OR IGNORE INTO books_series_link (book, series) VALUES (?, ?)")
+        .bind(book_id)
+        .bind(series_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Rebuild the `books_fts` row for the book identified by `book_uuid` using
@@ -785,5 +832,64 @@ mod tests {
         assert_eq!(merged.publisher.as_deref(), Some("Edited Publisher"));
         // unset in both stays None
         assert_eq!(merged.language, None);
+    }
+    #[tokio::test]
+    async fn upsert_overrides_materializes_series_link_for_new_series() {
+        let _covers = CoversTempDir::new("materialize_series");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+
+        crate::sync::sync_audiobooks(
+            &pool,
+            "/audio",
+            crate::sync::AudiobookSyncPlan {
+                new_books: vec![crate::test_support::indexed_audiobook(
+                    "author/book",
+                    "My Audiobook",
+                    Some("Narrator"),
+                )],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let book = list_books(&pool, "/audio").await.unwrap();
+        let uuid = book[0].unique_identifier.clone().unwrap();
+        let id = book[0].id;
+
+        assert!(
+            get_book(&pool, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .series_id
+                .is_none(),
+            "no series before override"
+        );
+
+        upsert_metadata_overrides(
+            &pool,
+            &uuid,
+            &MetadataOverrides {
+                series: Some("My Series".into()),
+                series_index: Some("1".into()),
+                ..Default::default()
+            },
+            false,
+            user_id,
+        )
+        .await
+        .unwrap();
+
+        let book = get_book(&pool, id).await.unwrap().unwrap();
+        assert_eq!(book.series.as_deref(), Some("My Series"));
+        assert!(
+            book.series_id.is_some(),
+            "series_id should be set after override materializes the link"
+        );
     }
 }

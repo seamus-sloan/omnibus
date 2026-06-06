@@ -368,24 +368,26 @@ pub async fn rpc_get_tag_cloud() -> Result<Vec<TagWeight>> {
     Ok(db::get_tag_cloud(&pool.0).await?)
 }
 
-/// `/authors` index: every author in the configured library.
+/// `/authors` index: every author across both ebook and audiobook libraries.
 #[get("/api/rpc/authors", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_list_authors() -> Result<Vec<AuthorSummary>> {
     let settings = db::get_settings(&pool.0).await?;
-    let Some(path) = settings.ebook_library_path else {
-        return Ok(Vec::new());
-    };
-    Ok(db::list_authors(&pool.0, &path).await?)
+    let paths = db::collect_paths(
+        settings.ebook_library_path.as_deref(),
+        settings.audiobook_library_path.as_deref(),
+    );
+    Ok(db::list_authors(&pool.0, &paths).await?)
 }
 
-/// `/series` index: every series in the configured library.
+/// `/series` index: every series across both ebook and audiobook libraries.
 #[get("/api/rpc/series-list", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_list_series() -> Result<Vec<SeriesSummary>> {
     let settings = db::get_settings(&pool.0).await?;
-    let Some(path) = settings.ebook_library_path else {
-        return Ok(Vec::new());
-    };
-    Ok(db::list_series(&pool.0, &path).await?)
+    let paths = db::collect_paths(
+        settings.ebook_library_path.as_deref(),
+        settings.audiobook_library_path.as_deref(),
+    );
+    Ok(db::list_series(&pool.0, &paths).await?)
 }
 
 /// Save metadata overrides for a book. Requires `can_edit` or admin.
