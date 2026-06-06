@@ -30,14 +30,10 @@ test("palette opens on Cmd+K", async ({ page }) => {
   await expect(panel).toBeVisible();
 });
 
-// Regression for #360: the ⌘K listener used to be registered inside
-// `SearchPaletteHost`, which re-mounts on every route change. After the
-// first navigation each press toggled the open signal twice (old + new
-// listener), so the hotkey appeared dead everywhere except the landing
-// page. Drive an in-app SPA navigation (not a full reload — which would
-// mask the bug by re-running App from scratch) into each of the other
-// pages that ships the search trigger, then verify ⌘K still opens the
-// palette.
+// Regression: drive an in-app SPA navigation (not a full reload — which
+// would mask the bug by re-running App from scratch) into each of the
+// other pages that ship the search trigger, then verify ⌘K still opens
+// the palette.
 for (const route of ["/authors", "/series"]) {
   test(`palette opens on Cmd+K after navigating to ${route}`, async ({
     page,

@@ -39,13 +39,10 @@ pub struct PaletteOpen(pub Signal<bool>);
 pub fn SearchPaletteHost() -> Element {
     let open = use_context::<PaletteOpen>();
 
-    // The global ⌘K / Ctrl+K listener is registered once at App scope
-    // (see `use_palette_global_shortcut`), not here. `SearchPaletteHost`
-    // is mounted by `TopNav`, which re-mounts on every route change — if
-    // we registered the listener here, each navigation would leak an
-    // extra `keydown` closure. With N listeners flipping the same signal,
-    // ⌘K toggles the open state N times per press and the palette only
-    // appears to react on the route where it was first mounted (#360).
+    // Hotkey lives at App scope (see `use_palette_global_shortcut`):
+    // `TopNav` re-mounts on every route, so registering here would leak
+    // a fresh listener per visit and flip the signal multiple times per
+    // press.
 
     rsx! {
         SpTriggerButton { open }
