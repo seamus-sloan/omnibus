@@ -115,7 +115,7 @@ struct AuthorSearchHit {
 ///      leave the row absent so the next page view can retry. Otherwise a
 ///      single Open Library outage would permanently brick resolution for
 ///      that author until an admin cleared it.
-pub async fn resolve(pool: &SqlitePool, author_id: i64) -> Result<(), sqlx::Error> {
+pub async fn resolve(pool: &SqlitePool, author_id: i64) -> anyhow::Result<()> {
     resolve_with(pool, author_id, &OpenLibraryConfig::default()).await
 }
 
@@ -123,7 +123,7 @@ pub async fn resolve_with(
     pool: &SqlitePool,
     author_id: i64,
     config: &OpenLibraryConfig,
-) -> Result<(), sqlx::Error> {
+) -> anyhow::Result<()> {
     // Existing row wins. `'letter'` markers are sticky so we don't re-hit
     // Open Library for authors with no entry on every page view.
     if author_photo_status(pool, author_id).await?.is_some() {
