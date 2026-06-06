@@ -4,9 +4,14 @@
 //! book read path. Single-tenant today — every read returns all matching
 //! rows without per-user ACL filtering.
 
-pub mod authors;
-pub mod series;
-pub mod tags;
+// Submodules are private — `db/src/lib.rs` does `pub use discovery::*`,
+// so any `pub mod` here would expose `omnibus_db::authors`, etc. to
+// downstream crates, which is a new public path that didn't exist
+// before the split. Matches the leaf-submodule-private precedent in
+// `db/src/books.rs`; only the named items are re-exported below.
+mod authors;
+mod series;
+mod tags;
 
 #[cfg(test)]
 mod tests;

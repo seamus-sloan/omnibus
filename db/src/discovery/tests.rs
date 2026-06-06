@@ -174,11 +174,8 @@ async fn get_tag_cloud_returns_empty_vec_when_no_tags() {
 }
 #[tokio::test]
 async fn get_tag_cloud_counts_reflect_overrides() {
-    // F5.1: per-tag counts in the cloud must follow the merged view.
-    // Without the override-aware count, the cloud kept showing the
-    // canonical totals — over-reporting tags the user had removed
-    // from books and missing books whose tags were reassigned via
-    // override.
+    // Per-tag counts follow the merged (override-aware) membership,
+    // not the canonical link rows.
     let _guard = CoversTempDir::new("tag_cloud_overrides");
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")

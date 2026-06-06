@@ -32,18 +32,19 @@ pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, Discover
     // global; if/when per-library scoping lands this picks up a path
     // filter alongside the existing `WHERE EXISTS`.
     //
-    // Issue #154: the per-row `COUNT(*)` correlated subquery (O(tags ×
-    // books)) is replaced with a single-pass `effective` membership CTE —
+    // Issue #154: counts are taken from an `effective` membership CTE —
     // the UNION of (1) canonical `books_tags_link` rows whose book has no
     // `subjects` override and (2) override-extracted `(tag_name, book_id)`
     // pairs from `json_each(mo.overrides, '$.subjects')`. The per-tag count
-    // is then a single scan of that union. The empty-array clear-all case
-    // falls out naturally: a `Some([])` override drops the book from arm
-    // (1) and yields no rows from `json_each` in arm (2). The override
-    // match stays BINARY (`je.value = t.name`, no COLLATE) to match the
-    // prior behavior. Visibility still requires ≥1 canonical link (the
-    // `EXISTS`), so a tag that exists only inside override JSON never
-    // surfaces.
+    // is a correlated scalar subquery against `effective` (one pass per
+    // tag, not one pass total — see the `t.id`/`t.name` join predicate),
+    // bounded by the `LIMIT ?` on the outer select. The empty-array
+    // clear-all case falls out naturally: a `Some([])` override drops the
+    // book from arm (1) and yields no rows from `json_each` in arm (2).
+    // Override match stays BINARY (`je.value = t.name`, no COLLATE) to
+    // match the prior behavior. Visibility still requires ≥1 canonical
+    // link (the `EXISTS`), so a tag that exists only inside override JSON
+    // never surfaces.
     let rows = sqlx::query(
         r#"WITH effective AS (
              -- (1) Canonical tag memberships with no subjects override.
