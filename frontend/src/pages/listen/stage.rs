@@ -8,13 +8,9 @@
 use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
 
-use super::controls::{Scrubber, TransportButtons};
+use super::controls::{Scrubber, Toolbar, TransportButtons};
 use crate::components::atrium::Cover;
 
-/// Right-column "now playing" panel: title, author, scrubber, transport row.
-///
-/// `book` is cloned into the [`Cover`] so the panel can stand on its own;
-/// the parent passes the same metadata into the cover column.
 #[allow(clippy::too_many_arguments)]
 #[component]
 pub(super) fn PlayerStage(
@@ -27,47 +23,60 @@ pub(super) fn PlayerStage(
     scrub_max: f64,
     play_label: String,
     rate_label: String,
+    rate_active: bool,
     on_seek: EventHandler<Event<FormData>>,
     on_toggle: EventHandler<MouseEvent>,
     on_skip_back: EventHandler<MouseEvent>,
     on_skip_forward: EventHandler<MouseEvent>,
     on_rate: EventHandler<MouseEvent>,
+    on_speed: EventHandler<MouseEvent>,
+    on_sleep: EventHandler<MouseEvent>,
+    on_bookmark: EventHandler<MouseEvent>,
+    on_chapters: EventHandler<MouseEvent>,
 ) -> Element {
+    let fill_pct = if scrub_max > 0.0 {
+        (elapsed / scrub_max * 100.0).min(100.0)
+    } else {
+        0.0
+    };
+
     rsx! {
-        div {
-            class: "player-stage",
-            style: "flex:1; min-height:0; display:grid; grid-template-columns: 1fr 1fr; align-items:center; gap:48px; padding:0 48px;",
-            div {
-                style: "display:grid; place-items:center;",
-                div { style: "width:min(380px, 80%);",
+        div { class: "lp-stage",
+            div { class: "lp-cover-col",
+                div { class: "lp-cover-ring",
                     Cover { book: book.clone() }
                 }
             }
-            div {
-                h1 {
-                    class: "player-title",
-                    style: "font-family:var(--serif); font-style:italic; font-size:clamp(36px, 6vw, 72px); line-height:0.95; margin:0;",
-                    "{title}"
-                }
-                div { style: "margin-top:12px; color:var(--ink-1); font-size:16px;",
-                    "by {author}"
-                }
+            div { class: "lp-info-col",
+                div { class: "lp-kicker", "Now playing" }
+                h1 { class: "lp-title", "{title}" }
+                div { class: "lp-author", "by {author}" }
+                div { class: "lp-chapter-sub" }
 
                 Scrubber {
                     elapsed,
                     duration,
                     remaining,
                     scrub_max,
+                    fill_pct,
                     on_seek,
                 }
 
                 TransportButtons {
                     play_label,
                     rate_label,
+                    rate_active,
                     on_toggle,
                     on_skip_back,
                     on_skip_forward,
                     on_rate,
+                }
+
+                Toolbar {
+                    on_speed,
+                    on_sleep,
+                    on_bookmark,
+                    on_chapters,
                 }
             }
         }

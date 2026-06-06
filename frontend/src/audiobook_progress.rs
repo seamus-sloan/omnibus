@@ -15,9 +15,6 @@
 
 #[cfg(feature = "web")]
 const STORAGE_PREFIX: &str = "omn.listening::";
-#[cfg(feature = "web")]
-const RATE_STORAGE_KEY: &str = "omn.listening.rate";
-
 /// Load the saved position (seconds) for `uuid`. Returns `None` when no
 /// record exists, when storage is unavailable, or under SSR.
 pub fn load(uuid: &str) -> Option<f64> {
@@ -30,15 +27,15 @@ pub fn save(uuid: &str, seconds: f64) {
     save_impl(uuid, seconds);
 }
 
-/// Load the saved playback-rate preference (single value, not per-book).
-/// Defaults to `1.0` when unset.
-pub fn load_rate() -> f64 {
-    load_rate_impl().unwrap_or(1.0)
+/// Load the saved playback-rate preference for `uuid`. Defaults to
+/// `1.0` when unset. Each book remembers its own speed.
+pub fn load_rate(uuid: &str) -> f64 {
+    load_rate_impl(uuid).unwrap_or(1.0)
 }
 
-/// Persist the playback-rate preference.
-pub fn save_rate(rate: f64) {
-    save_rate_impl(rate);
+/// Persist the playback-rate preference for `uuid`.
+pub fn save_rate(uuid: &str, rate: f64) {
+    save_rate_impl(uuid, rate);
 }
 
 // -----------------------------------------------------------------------------
@@ -73,10 +70,15 @@ fn save_impl(uuid: &str, seconds: f64) {
 }
 
 #[cfg(feature = "web")]
-fn load_rate_impl() -> Option<f64> {
+fn rate_key(uuid: &str) -> String {
+    format!("{STORAGE_PREFIX}rate::{uuid}")
+}
+
+#[cfg(feature = "web")]
+fn load_rate_impl(uuid: &str) -> Option<f64> {
     let storage = local_storage()?;
     storage
-        .get_item(RATE_STORAGE_KEY)
+        .get_item(&rate_key(uuid))
         .ok()
         .flatten()?
         .parse::<f64>()
@@ -85,11 +87,11 @@ fn load_rate_impl() -> Option<f64> {
 }
 
 #[cfg(feature = "web")]
-fn save_rate_impl(rate: f64) {
+fn save_rate_impl(uuid: &str, rate: f64) {
     let Some(storage) = local_storage() else {
         return;
     };
-    let _ = storage.set_item(RATE_STORAGE_KEY, &format!("{rate}"));
+    let _ = storage.set_item(&rate_key(uuid), &format!("{rate}"));
 }
 
 // -----------------------------------------------------------------------------
@@ -116,16 +118,18 @@ mod mobile_store {
         }
     }
 
-    static RATE: OnceLock<RwLock<f64>> = OnceLock::new();
-    fn rate() -> &'static RwLock<f64> {
-        RATE.get_or_init(|| RwLock::new(1.0))
+    fn rate_key(uuid: &str) -> String {
+        format!("rate::{uuid}")
     }
-    pub fn get_rate() -> Option<f64> {
-        rate().read().ok().map(|g| *g)
+    pub fn get_rate(uuid: &str) -> Option<f64> {
+        map()
+            .read()
+            .ok()
+            .and_then(|g| g.get(&rate_key(uuid)).copied())
     }
-    pub fn set_rate(r: f64) {
-        if let Ok(mut g) = rate().write() {
-            *g = r;
+    pub fn set_rate(uuid: &str, r: f64) {
+        if let Ok(mut g) = map().write() {
+            g.insert(rate_key(uuid), r);
         }
     }
 
@@ -148,13 +152,13 @@ fn save_impl(uuid: &str, seconds: f64) {
 }
 
 #[cfg(feature = "mobile")]
-fn load_rate_impl() -> Option<f64> {
-    mobile_store::get_rate()
+fn load_rate_impl(uuid: &str) -> Option<f64> {
+    mobile_store::get_rate(uuid)
 }
 
 #[cfg(feature = "mobile")]
-fn save_rate_impl(rate: f64) {
-    mobile_store::set_rate(rate);
+fn save_rate_impl(uuid: &str, rate: f64) {
+    mobile_store::set_rate(uuid, rate);
 }
 
 // -----------------------------------------------------------------------------
@@ -170,12 +174,12 @@ fn load_impl(_uuid: &str) -> Option<f64> {
 fn save_impl(_uuid: &str, _seconds: f64) {}
 
 #[cfg(not(any(feature = "web", feature = "mobile")))]
-fn load_rate_impl() -> Option<f64> {
+fn load_rate_impl(_uuid: &str) -> Option<f64> {
     None
 }
 
 #[cfg(not(any(feature = "web", feature = "mobile")))]
-fn save_rate_impl(_rate: f64) {}
+fn save_rate_impl(_uuid: &str, _rate: f64) {}
 
 // -----------------------------------------------------------------------------
 // Tests — only the in-memory mobile store can be exercised without a browser.
@@ -201,11 +205,14 @@ mod tests {
     }
 
     #[test]
-    fn rate_defaults_and_persists() {
-        // 1.0 default before any save.
-        assert!((load_rate() - 1.0).abs() < f64::EPSILON);
-        save_rate(1.5);
-        assert!((load_rate() - 1.5).abs() < f64::EPSILON);
+    fn rate_defaults_and_persists_per_book() {
+        mobile_store::clear();
+        assert!((load_rate("book-a") - 1.0).abs() < f64::EPSILON);
+        save_rate("book-a", 1.5);
+        save_rate("book-b", 2.0);
+        assert!((load_rate("book-a") - 1.5).abs() < f64::EPSILON);
+        assert!((load_rate("book-b") - 2.0).abs() < f64::EPSILON);
+        assert!((load_rate("book-c") - 1.0).abs() < f64::EPSILON);
     }
 }
 
@@ -226,6 +233,6 @@ mod ssr_tests {
 
     #[test]
     fn rate_defaults_to_one() {
-        assert!((load_rate() - 1.0).abs() < f64::EPSILON);
+        assert!((load_rate("any-book") - 1.0).abs() < f64::EPSILON);
     }
 }

@@ -1,24 +1,15 @@
 //! Shared helpers for the listen page: timestamp formatting, the audio
-//! progress POST shim, the rate-step cycle, and the audited
-//! `window.OmnibusAudio` poke. Consumed by `listen.rs`, `controls`, and
-//! `bootstrap`.
+//! progress POST shim, and the audited `window.OmnibusAudio` poke.
+//! Consumed by `listen.rs`, `controls`, `speed_panel`, and `bootstrap`.
 
 #[cfg(feature = "web")]
 use dioxus::prelude::*;
 
-/// Available playback-rate steps. Clicking the rate button cycles forward.
-#[cfg(not(feature = "mobile"))]
-pub(super) const RATE_STEPS: &[f64] = &[0.8, 1.0, 1.25, 1.5, 1.75, 2.0];
-
-/// Vendored hls.js for the HLS fallback path. Routed through `manganis::asset!`
-/// so `dx serve` exposes it under the hashed `/assets/...` URL it actually
-/// serves — a hard-coded `/assets/vendor/hls.min.js` 404s.
+/// Vendored hls.js for the HLS fallback path.
 #[cfg(feature = "web")]
 pub(super) const HLS_JS: Asset = asset!("/assets/vendor/hls.min.js");
 
-/// Single audited surface for poking `window.OmnibusAudio`. Same shape as
-/// `reader.rs::reader_call` — `method` is always a hard-coded identifier and
-/// `arg_js` is empty or a `serde_json`-encoded literal.
+/// Single audited surface for poking `window.OmnibusAudio`.
 #[cfg(feature = "web")]
 pub(super) fn audio_call(method: &str, arg_js: &str) {
     let js = format!("window.OmnibusAudio && window.OmnibusAudio.{method}({arg_js});");
@@ -26,7 +17,6 @@ pub(super) fn audio_call(method: &str, arg_js: &str) {
 }
 
 /// Format `seconds` as `H:MM:SS` (or `MM:SS` when under an hour).
-/// Negative / non-finite values clamp to `0:00`.
 #[cfg_attr(feature = "mobile", allow(dead_code))]
 pub(super) fn format_hms(seconds: f64) -> String {
     if !seconds.is_finite() || seconds < 0.0 {
@@ -44,9 +34,6 @@ pub(super) fn format_hms(seconds: f64) -> String {
 }
 
 /// Fire-and-forget POST `/api/rpc/progress` with the audio update.
-/// Mirrors the EPUB reader's payload pattern so both formats produce the same
-/// `ProgressUpdate` shape (`format: "audio"` + `audio_position_seconds`).
-/// Errors are intentionally ignored — the local cache is the safety net.
 #[cfg(feature = "web")]
 pub(super) fn post_audio_progress(uuid: String, seconds: f64) {
     wasm_bindgen_futures::spawn_local(async move {
