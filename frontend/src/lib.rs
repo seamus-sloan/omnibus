@@ -154,6 +154,15 @@ pub fn App() -> Element {
     #[cfg(not(feature = "mobile"))]
     use_context_provider(|| components::search_palette::PaletteOpen(Signal::new(false)));
 
+    // Register the global ⌘K / Ctrl+K palette shortcut at App scope so
+    // it survives route changes. `SearchPaletteHost` lives inside
+    // `TopNav`, which re-mounts on every navigation; registering the
+    // listener there accumulates one closure per visited route and each
+    // press then toggles the open signal N times — the hotkey appears
+    // dead on every screen except the first one visited (#360).
+    #[cfg(not(feature = "mobile"))]
+    components::search_palette::use_palette_global_shortcut();
+
     // Cached `/api/auth/me`. Provided unconditionally on non-mobile builds
     // so SSR can render the placeholder topbar without resolving anything;
     // the WASM hydration phase then runs the boot effect below to fill it
