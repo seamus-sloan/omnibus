@@ -39,10 +39,10 @@ pub struct PaletteOpen(pub Signal<bool>);
 pub fn SearchPaletteHost() -> Element {
     let open = use_context::<PaletteOpen>();
 
-    // Register global ⌘K / Ctrl+K listener here (always-mounted) so the
-    // shortcut can open the palette from the closed state.
-    #[cfg(feature = "web")]
-    use_global_shortcut(open);
+    // Hotkey lives at App scope (see `use_palette_global_shortcut`):
+    // `TopNav` re-mounts on every route, so registering here would leak
+    // a fresh listener per visit and flip the signal multiple times per
+    // press.
 
     rsx! {
         SpTriggerButton { open }
@@ -760,13 +760,17 @@ fn focus_palette_input(_evt: &MountedEvent) {
 // ── Global ⌘K shortcut (web only) ───────────────────────────────
 
 /// Register a global `keydown` listener that toggles the palette on `⌘K`
-/// (Mac) or `Ctrl+K` (other platforms). Only compiled for the web target
-/// so SSR builds don't pull in `web_sys`.
+/// (Mac) or `Ctrl+K` (other platforms).
+///
+/// Must be called from a component that mounts **exactly once** for the
+/// app's lifetime (i.e. `App`), not from a component that re-mounts on
+/// route changes. `use_hook` only guarantees "once per component
+/// instance", so a re-mounting host would accumulate listeners — each
+/// press would then toggle the signal N times and effectively no-op on
+/// the second route onward.
 #[cfg(feature = "web")]
-fn use_global_shortcut(open: PaletteOpen) {
-    let mut open = open;
-    // use_hook runs exactly once per component instance (not on re-renders),
-    // so the closure is registered once and leaked once — no duplicate listeners.
+pub fn use_palette_global_shortcut() {
+    let mut open = use_context::<PaletteOpen>();
     use_hook(move || {
         use wasm_bindgen::prelude::*;
 
@@ -790,3 +794,8 @@ fn use_global_shortcut(open: PaletteOpen) {
         closure.forget();
     });
 }
+
+/// Non-web no-op so the App component can call this unconditionally on
+/// non-mobile targets (SSR + native) without dragging in `web_sys`.
+#[cfg(all(not(feature = "web"), not(feature = "mobile")))]
+pub fn use_palette_global_shortcut() {}

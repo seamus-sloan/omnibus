@@ -154,6 +154,11 @@ pub fn App() -> Element {
     #[cfg(not(feature = "mobile"))]
     use_context_provider(|| components::search_palette::PaletteOpen(Signal::new(false)));
 
+    // App mounts once for the app's lifetime; registering the keydown
+    // listener here keeps a single closure alive across route changes.
+    #[cfg(not(feature = "mobile"))]
+    components::search_palette::use_palette_global_shortcut();
+
     // Cached `/api/auth/me`. Provided unconditionally on non-mobile builds
     // so SSR can render the placeholder topbar without resolving anything;
     // the WASM hydration phase then runs the boot effect below to fill it
