@@ -28,6 +28,14 @@ pub use accent::extract_accent;
 pub use parse::{parse_ebook_targets, ParseTarget};
 pub use stat::{stat_ebook_library, StatEntry, StatScanResult};
 
+/// `book_files.format` values produced by the ebook indexer. Used by
+/// [`crate::indexer::reindex`] to scope the diff's "currently indexed"
+/// view to ebook rows — prevents `sync_books` from classifying foreign
+/// (audiobook) rows under a shared `library_path` as Removed and
+/// deleting them. Uppercased to match
+/// [`crate::helpers::split_filename`]'s output.
+pub const EBOOK_FORMATS: &[&str] = &["EPUB"];
+
 /// A single scanner output row — metadata plus the raw cover image bytes
 /// (and mime), if the epub included one. Consumed by [`crate::sync::sync_books`].
 ///
