@@ -39,9 +39,9 @@ tempfile = "3"
 # Dioxus is a UI framework, not a network/crypto dep — but the gap is silent.
 # Mitigation: on every Dioxus bump, manually review the DioxusLabs changelog and
 # GitHub security advisories (https://github.com/DioxusLabs/dioxus/security/advisories)
-# for the new tag. Better long-term solution: `cargo deny` (see issue #214) has
-# first-class support for git-sourced crates and can detect advisories that
-# `cargo audit` misses here — adding it to CI would close this gap automatically.
+# for the new tag. `cargo deny` (issue #214, now in CI via `.github/workflows/rust.yml`)
+# covers git-sourced crates and detects advisories that `cargo audit` misses here —
+# that gap is closed as of the CI audit job added alongside this note.
 # Exit condition: once Dioxus publishes the matching version to crates.io, replace
 # these git patches with plain `version = "..."` entries and delete this whole
 # note (the audited path is then restored automatically).
