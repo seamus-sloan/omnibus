@@ -249,9 +249,6 @@ fn SpOverlay(open: PaletteOpen) -> Element {
 // ── Keyboard handler ─────────────────────────────────────────────
 
 /// Build the `onkeydown` event handler for the palette panel.
-///
-/// Extracted from `SpOverlay` to keep the component body under the ~80-line
-/// guideline. All arguments are `Copy` signal/memo handles — no allocation.
 fn make_keydown_handler(
     mut open: PaletteOpen,
     mut selected: Signal<usize>,
