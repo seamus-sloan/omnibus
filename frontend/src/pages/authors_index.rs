@@ -173,15 +173,33 @@ pub fn AuthorsIndexPage() -> Element {
                     }
                 }
 
-                // Letter jump strip
+                // Letter jump strip. Letters that have at least one author
+                // render as same-page anchors targeting the section's
+                // `id="letter-{L}"` below — clicking jumps via the browser's
+                // native fragment scroll, no JS required. Letters with no
+                // authors stay as plain spans so there's nothing to jump
+                // to.
                 if show_letters {
                     div { class: "idx-letters",
                         for l in alphabet.iter() {
                             {
                                 let has = present_letters.contains(l);
-                                let class = if has { "idx-letter idx-letter-on" } else { "idx-letter" };
-                                rsx! {
-                                    span { class: "{class}", "{l}" }
+                                // `#` is not valid inside a URL fragment, so the
+                                // non-alpha bucket gets a textual slug instead.
+                                let frag = letter_frag(*l);
+                                if has {
+                                    rsx! {
+                                        a {
+                                            class: "idx-letter idx-letter-on",
+                                            href: "#letter-{frag}",
+                                            "data-testid": "authors-letter-{frag}",
+                                            "{l}"
+                                        }
+                                    }
+                                } else {
+                                    rsx! {
+                                        span { class: "idx-letter", "{l}" }
+                                    }
                                 }
                             }
                         }
@@ -207,6 +225,7 @@ pub fn AuthorsIndexPage() -> Element {
                     for (letter, group) in letters.iter() {
                         section {
                             key: "{letter}",
+                            id: "letter-{letter_frag(*letter)}",
                             class: "idx-letter-section",
                             div { class: "idx-letter-rail",
                                 div { class: "idx-letter-rail-glyph", "{letter}" }
@@ -286,6 +305,17 @@ fn render_author_card(a: &AuthorSummary, server_url: &str) -> Element {
                 }
             }
         }
+    }
+}
+
+/// URL-fragment-safe slug for a letter glyph. `#` cannot appear inside a
+/// fragment identifier — it would be parsed as a second fragment — so the
+/// non-alpha bucket renders as `letter-hash` instead.
+fn letter_frag(c: char) -> String {
+    if c == '#' {
+        "hash".to_string()
+    } else {
+        c.to_string()
     }
 }
 
