@@ -164,9 +164,14 @@ impl MetadataOverrides {
     /// Maximum length (in chars) for the `description` field.
     pub const DESCRIPTION_MAX_LEN: usize = 50_000;
     /// Maximum length (in chars) for single-line name fields: `publisher`,
-    /// `published`, `language`, `series`, `series_index`, creator names, and
-    /// tag strings.
+    /// `published`, `language`, `series`, `series_index`, and creator names.
     pub const NAME_MAX_LEN: usize = 250;
+    /// Maximum length (in chars) for a single tag (subject) string. Preserved
+    /// from the pre-existing `MAX_SUBJECT_CHARS = 128` constant — tags are
+    /// typically short controlled-vocabulary terms, so the tighter cap is
+    /// intentional. `NAME_MAX_LEN = 250` applies to author/series/publisher
+    /// names as specified in issue #294.
+    pub const TAG_MAX_LEN: usize = 128;
     /// Maximum number of tags (subjects).
     const MAX_SUBJECTS: usize = 64;
     /// Maximum number of creators.
@@ -212,8 +217,8 @@ impl MetadataOverrides {
                 return Err(format!("too many tags (max {})", Self::MAX_SUBJECTS));
             }
             for s in subjects {
-                if s.chars().count() > Self::NAME_MAX_LEN {
-                    return Err(format!("tag exceeds {} characters", Self::NAME_MAX_LEN));
+                if s.chars().count() > Self::TAG_MAX_LEN {
+                    return Err(format!("tag exceeds {} characters", Self::TAG_MAX_LEN));
                 }
             }
         }
@@ -972,14 +977,27 @@ mod metadata_overrides_tests {
 
     #[test]
     fn validate_rejects_over_long_tag() {
+        // TAG_MAX_LEN = 128 (restored from the pre-existing MAX_SUBJECT_CHARS cap).
+        // Over-limit boundary: 129 chars must be rejected.
         let ov = MetadataOverrides {
-            subjects: Some(vec!["x".repeat(MetadataOverrides::NAME_MAX_LEN + 1)]),
+            subjects: Some(vec!["x".repeat(MetadataOverrides::TAG_MAX_LEN + 1)]),
             ..Default::default()
         };
         let err = ov
             .validate()
             .expect_err("over-length tag should be rejected");
         assert!(err.contains("tag"), "message should name the field: {err}");
+        assert!(err.contains("128"), "message should name the cap: {err}");
+    }
+
+    #[test]
+    fn validate_accepts_tag_at_length_cap() {
+        // Boundary: exactly TAG_MAX_LEN (128) chars is allowed.
+        let ov = MetadataOverrides {
+            subjects: Some(vec!["x".repeat(MetadataOverrides::TAG_MAX_LEN)]),
+            ..Default::default()
+        };
+        assert_eq!(ov.validate(), Ok(()));
     }
 
     // --- merge() -----------------------------------------------------------
