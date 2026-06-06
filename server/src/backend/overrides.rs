@@ -309,6 +309,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn api_post_overrides_rejects_over_length_title_with_400() {
+        // An admin submitting a title that exceeds TITLE_MAX_LEN must receive a
+        // 400 and no override row must be written. This exercises the
+        // `overrides.validate()` guard in the handler.
+        let (app, _state, pool) = fixture().await;
+        let (_id, uuid) = seed_book_with_uuid(&pool, "/lib", "Original").await;
+        let admin = auth_test_support::create_admin(&pool, "admin").await;
+        let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+        let over_limit_title = "x".repeat(omnibus_shared::MetadataOverrides::TITLE_MAX_LEN + 1);
+        let body = serde_json::json!({ "title": over_limit_title });
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/ebooks/{uuid}/overrides"))
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body = std::str::from_utf8(&bytes).unwrap_or("");
+        assert!(
+            body.contains("title"),
+            "400 body should name the offending field, got: {body:?}"
+        );
+
+        // No override row must have been written.
+        assert!(
+            db::get_metadata_overrides(&pool, &uuid)
+                .await
+                .unwrap()
+                .is_none(),
+            "validation failure must not persist any override row"
+        );
+    }
+
+    #[tokio::test]
     async fn api_post_overrides_saves_and_returns_merged_book() {
         // Admin (which carries `can_edit = true` via test_support::create_admin)
         // POSTs an override. The handler must persist it, return the merged
