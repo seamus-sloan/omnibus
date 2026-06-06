@@ -173,15 +173,30 @@ pub fn AuthorsIndexPage() -> Element {
                     }
                 }
 
-                // Letter jump strip
+                // Letter jump strip. Letters that have at least one author
+                // render as same-page anchors targeting the section's
+                // `id="letter-{L}"` below — clicking jumps via the browser's
+                // native fragment scroll, no JS required. Letters with no
+                // authors stay as plain spans so there's nothing to jump
+                // to.
                 if show_letters {
                     div { class: "idx-letters",
                         for l in alphabet.iter() {
                             {
                                 let has = present_letters.contains(l);
-                                let class = if has { "idx-letter idx-letter-on" } else { "idx-letter" };
-                                rsx! {
-                                    span { class: "{class}", "{l}" }
+                                if has {
+                                    rsx! {
+                                        a {
+                                            class: "idx-letter idx-letter-on",
+                                            href: "#letter-{l}",
+                                            "data-testid": "authors-letter-{l}",
+                                            "{l}"
+                                        }
+                                    }
+                                } else {
+                                    rsx! {
+                                        span { class: "idx-letter", "{l}" }
+                                    }
                                 }
                             }
                         }
@@ -207,6 +222,7 @@ pub fn AuthorsIndexPage() -> Element {
                     for (letter, group) in letters.iter() {
                         section {
                             key: "{letter}",
+                            id: "letter-{letter}",
                             class: "idx-letter-section",
                             div { class: "idx-letter-rail",
                                 div { class: "idx-letter-rail-glyph", "{letter}" }

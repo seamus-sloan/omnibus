@@ -1087,6 +1087,12 @@ body.atrium,
   opacity: 0.35;
 }
 .idx-letter-on { color: var(--ink-0); opacity: 1; font-weight: 500; }
+a.idx-letter-on { cursor: pointer; }
+a.idx-letter-on:hover { background: var(--bg-2); }
+a.idx-letter-on:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .idx-letters-spacer { flex: 1; }
 .idx-letters-count { font-size: 11px; color: var(--ink-3); }
 

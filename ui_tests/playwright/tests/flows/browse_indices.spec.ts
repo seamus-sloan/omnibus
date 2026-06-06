@@ -60,6 +60,27 @@ test("authors index filters by name", async ({ page }) => {
   }
 });
 
+test("authors index letter strip jumps to the matching section", async ({ page }) => {
+  await gotoReady(page, "/authors");
+
+  // Wait for the index to render so the letter strip has populated.
+  // Ada Lovelace is in the fixture set, so the surname-sort bucket "L"
+  // is guaranteed to be present.
+  await expect(page.getByTestId("author-card").first()).toBeVisible();
+
+  const letter = page.getByTestId("authors-letter-L");
+  await expect(letter).toBeVisible();
+  // Active letters render as same-page anchors so the browser scrolls
+  // natively to the matching section — no JS required.
+  await expect(letter).toHaveAttribute("href", "#letter-L");
+
+  await letter.click();
+
+  await expect(page).toHaveURL(/#letter-L$/);
+  const section = page.locator("#letter-L");
+  await expect(section).toBeInViewport();
+});
+
 test("authors index card navigates to the detail page", async ({ page }) => {
   await gotoReady(page, "/authors");
 
