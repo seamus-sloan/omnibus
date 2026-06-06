@@ -922,4 +922,220 @@ mod tests {
         assert!(is_valid_segment_name("seg-0000.ts"));
         assert!(is_valid_segment_name("seg-9999.ts"));
     }
+
+    // -------------------------------------------------------------------
+    // 5xx / DB-failure paths — induce sqlx errors by dropping the table
+    // that the first DB call in each handler touches. Auth gate uses
+    // `users`/`sessions` only, so it keeps passing; the handler's first
+    // query hits "no such table" and falls into `internal(...)` → 500.
+    // PRAGMA + DROP are pinned to a single pool connection because
+    // `PRAGMA foreign_keys` is per-connection in SQLite — executing via
+    // `&pool` would let the PRAGMA and the DROP land on different
+    // connections, leaving FK enforcement ON and causing the DROP to
+    // fail on FK constraints.
+    // -------------------------------------------------------------------
+
+    /// `get_audiobook_playlist` returns 500 when `resolve_audiobook` fails.
+    /// Drop the `books` table after seeding auth — the gate keeps passing
+    /// but the handler's JOIN hits "no such table: books".
+    #[tokio::test]
+    async fn api_get_audiobook_playlist_returns_500_when_db_fails() {
+        let (_, _, pool) = fixture().await;
+        let user = auth_test_support::create_user(&pool, "alice").await;
+        let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE books")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        drop(conn);
+
+        let app = crate::backend::rest_router(AppState::new(pool));
+        let res = app
+            .oneshot(get_with_bearer(
+                "/api/audiobooks/any-uuid/playlist.m3u8",
+                &token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// `get_audiobook_manifest` returns 500 when `resolve_audiobook` fails.
+    #[tokio::test]
+    async fn api_get_audiobook_manifest_returns_500_when_db_fails() {
+        let (_, _, pool) = fixture().await;
+        let user = auth_test_support::create_user(&pool, "alice").await;
+        let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE books")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        drop(conn);
+
+        let app = crate::backend::rest_router(AppState::new(pool));
+        let res = app
+            .oneshot(get_with_bearer("/api/audiobooks/any-uuid/manifest", &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// `get_audiobook_manifest` returns 500 when `get_parts` fails. Seed a
+    /// real audiobook so `resolve_audiobook` succeeds, then drop
+    /// `book_file_parts` so the subsequent `get_parts` call errors out.
+    #[tokio::test]
+    async fn api_get_audiobook_manifest_returns_500_when_get_parts_fails() {
+        let (_, _, pool) = fixture().await;
+        let user = auth_test_support::create_user(&pool, "alice").await;
+        let token = auth_test_support::bearer_token(&pool, user.id).await;
+        let uuid = seed_one_audiobook(&pool).await;
+
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE book_file_parts")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        drop(conn);
+
+        let app = crate::backend::rest_router(AppState::new(pool));
+        let res = app
+            .oneshot(get_with_bearer(
+                &format!("/api/audiobooks/{uuid}/manifest"),
+                &token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// `get_audiobook_part` returns 500 when `resolve_audiobook` fails.
+    #[tokio::test]
+    async fn api_get_audiobook_part_returns_500_when_db_fails() {
+        let (_, _, pool) = fixture().await;
+        let user = auth_test_support::create_user(&pool, "alice").await;
+        let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE books")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        drop(conn);
+
+        let app = crate::backend::rest_router(AppState::new(pool));
+        let res = app
+            .oneshot(get_with_bearer("/api/audiobooks/any-uuid/parts/0", &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// `get_audiobook_part` returns 500 when `get_parts` fails. Seed an mp3
+    /// audiobook so `resolve_audiobook` succeeds, then drop
+    /// `book_file_parts` so the subsequent `get_parts` call errors out.
+    #[tokio::test]
+    async fn api_get_audiobook_part_returns_500_when_get_parts_fails() {
+        let (_, _, pool) = fixture().await;
+        let user = auth_test_support::create_user(&pool, "alice").await;
+        let token = auth_test_support::bearer_token(&pool, user.id).await;
+        let uuid = seed_one_audiobook(&pool).await;
+
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE book_file_parts")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        drop(conn);
+
+        let app = crate::backend::rest_router(AppState::new(pool));
+        let res = app
+            .oneshot(get_with_bearer(
+                &format!("/api/audiobooks/{uuid}/parts/0"),
+                &token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// `get_audiobook_segment` returns 500 when `resolve_audiobook` fails.
+    /// Passes a valid segment name (`seg-0000.ts`) so the name-validation
+    /// guard passes before the DB call.
+    #[tokio::test]
+    async fn api_get_audiobook_segment_returns_500_when_db_fails() {
+        let (_, _, pool) = fixture().await;
+        let user = auth_test_support::create_user(&pool, "alice").await;
+        let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE books")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        drop(conn);
+
+        let app = crate::backend::rest_router(AppState::new(pool));
+        let res = app
+            .oneshot(get_with_bearer(
+                "/api/audiobooks/any-uuid/segments/seg-0000.ts",
+                &token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// `get_audiobook_status` returns 500 when `resolve_audiobook` fails.
+    #[tokio::test]
+    async fn api_get_audiobook_status_returns_500_when_db_fails() {
+        let (_, _, pool) = fixture().await;
+        let user = auth_test_support::create_user(&pool, "alice").await;
+        let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE books")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        drop(conn);
+
+        let app = crate::backend::rest_router(AppState::new(pool));
+        let res = app
+            .oneshot(get_with_bearer("/api/audiobooks/any-uuid/status", &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }
