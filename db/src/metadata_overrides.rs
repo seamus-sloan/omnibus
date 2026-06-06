@@ -288,12 +288,14 @@ async fn materialize_series_link(
     book_uuid: &str,
     overrides: &MetadataOverrides,
 ) -> Result<(), sqlx::Error> {
-    let Some(ref series_name) = overrides.series else {
+    let series_name = overrides
+        .series
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let Some(series_name) = series_name else {
         return Ok(());
     };
-    if series_name.is_empty() {
-        return Ok(());
-    }
     let Some(book_id) = sqlx::query_scalar::<_, i64>("SELECT id FROM books WHERE uuid = ?")
         .bind(book_uuid)
         .fetch_optional(pool)
@@ -302,14 +304,10 @@ async fn materialize_series_link(
         return Ok(());
     };
 
-    sqlx::query(
-        "INSERT INTO series (name, sort) VALUES (?, ?) \
-         ON CONFLICT(name) DO UPDATE SET sort = COALESCE(series.sort, excluded.sort)",
-    )
-    .bind(series_name)
-    .bind(series_name)
-    .execute(pool)
-    .await?;
+    sqlx::query("INSERT OR IGNORE INTO series (name) VALUES (?)")
+        .bind(series_name)
+        .execute(pool)
+        .await?;
 
     let series_id =
         sqlx::query_scalar::<_, i64>("SELECT id FROM series WHERE name = ? COLLATE NOCASE")

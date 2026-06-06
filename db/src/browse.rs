@@ -21,11 +21,8 @@ fn placeholders(n: usize) -> String {
 }
 
 /// Return every author with their book count and an optional cover-derived
-/// accent, scoped to `library_path`, ordered by name ascending and capped
-/// at [`INDEX_LIMIT`]. Empty list when `library_path` doesn't match a
-/// configured library. Accent is the `accent_color` of the first book by
-/// this author with a non-null value (book sort/id order); `NULL` falls
-/// back to the theme accent in the UI.
+/// accent, scoped to `library_paths`, ordered by name ascending and capped
+/// at [`INDEX_LIMIT`]. Empty list when no paths match or the slice is empty.
 ///
 /// Currently returns results across all users (single-tenant). When F4.x
 /// per-user ACL lands, add a `user_id: i64` parameter and scope the query
@@ -108,11 +105,8 @@ pub async fn list_authors(
 }
 
 /// Return every series with book count, primary author, and an optional
-/// accent, scoped to `library_path`, ordered by name ascending and capped
-/// at [`INDEX_LIMIT`]. `primary_author` is the first creator of the
-/// lowest-`series_index` book (with `book.sort, book.id` as tie-breakers);
-/// `None` when every book in the series has only override-supplied
-/// creators not yet linked to an `authors` row.
+/// accent, scoped to `library_paths`, ordered by name ascending and capped
+/// at [`INDEX_LIMIT`]. Empty list when no paths match or the slice is empty.
 ///
 /// Currently returns results across all users (single-tenant). When F4.x
 /// per-user ACL lands, add a `user_id: i64` parameter and scope the query
@@ -600,7 +594,7 @@ mod tests {
             .id;
         upsert_metadata_overrides(
             &pool,
-            "ab-uuid-herbert/dune-audio",
+            "ab-uuid-herbert-dune-audio",
             &MetadataOverrides {
                 series: Some("Dune Chronicles".into()),
                 series_index: Some("1".into()),

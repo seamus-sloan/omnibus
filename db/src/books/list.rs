@@ -433,6 +433,7 @@ pub async fn library_from_db_with_total_combined(
     ))
 }
 
+/// Merge ebook + audiobook library paths into a de-duplicated list.
 pub fn collect_paths<'a>(ebook: Option<&'a str>, audiobook: Option<&'a str>) -> Vec<&'a str> {
     // De-dup when the user points both at the same on-disk root — the
     // `IN` filter would still return one row per book, but the input

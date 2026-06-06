@@ -187,7 +187,7 @@ pub fn indexed_audiobook(
     creator: Option<&str>,
 ) -> crate::audiobook::IndexedAudiobook {
     crate::audiobook::IndexedAudiobook {
-        uuid: format!("ab-uuid-{group_path}"),
+        uuid: format!("ab-uuid-{}", group_path.replace('/', "-")),
         group_path: group_path.into(),
         format: "M4B".into(),
         title: title.into(),
