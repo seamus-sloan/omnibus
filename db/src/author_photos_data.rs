@@ -10,6 +10,16 @@ use sqlx::SqlitePool;
 
 use crate::metadata_overrides::rebuild_fts_for_book;
 
+/// Errors returned by the author-photos data layer. The single
+/// transparent `Db` variant honors the `02-error-handling` boundary rule
+/// (no raw `sqlx::Error` leaving the module) while keeping `?`
+/// propagation clean at the call sites.
+#[derive(Debug, thiserror::Error)]
+pub enum AuthorPhotosDataError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
 /// Source-of-truth marker for a cached author photo row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorPhotoSource {
@@ -112,7 +122,10 @@ pub async fn upsert_author_photo(
 
 /// Drop the cache row for an author so the next page view re-queues
 /// resolution. Used by admin DELETE.
-pub async fn delete_author_photo(pool: &SqlitePool, author_id: i64) -> Result<(), sqlx::Error> {
+pub async fn delete_author_photo(
+    pool: &SqlitePool,
+    author_id: i64,
+) -> Result<(), AuthorPhotosDataError> {
     sqlx::query("DELETE FROM author_photos WHERE author_id = ?")
         .bind(author_id)
         .execute(pool)
@@ -138,7 +151,10 @@ pub async fn delete_author_photo(pool: &SqlitePool, author_id: i64) -> Result<()
 /// [`crate::metadata_overrides::upsert_metadata_overrides`]: a stale FTS
 /// row is fixed on the next reindex, but a refresh failure must not undo
 /// the admin's intent.
-pub async fn delete_author(pool: &SqlitePool, author_id: i64) -> Result<u64, sqlx::Error> {
+pub async fn delete_author(
+    pool: &SqlitePool,
+    author_id: i64,
+) -> Result<u64, AuthorPhotosDataError> {
     let mut tx = pool.begin().await?;
 
     let Some(name): Option<String> = sqlx::query_scalar("SELECT name FROM authors WHERE id = ?")

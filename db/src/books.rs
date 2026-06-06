@@ -34,6 +34,17 @@ pub use list::{
 pub use projection::MAX_BOOKS_RETURNED;
 pub use search::{count_search_books, search_books, search_books_with_total};
 
+/// Errors returned by the book read paths (`get_book`, `count_books`).
+/// The single transparent `Db` variant honors the `02-error-handling`
+/// boundary rule (no raw `sqlx::Error` across the module boundary) while
+/// keeping `?` propagation clean at the call sites that still use sqlx
+/// internally.
+#[derive(Debug, thiserror::Error)]
+pub enum BooksError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
 // `pub(crate)` re-exports for sibling `db/` modules (`discovery`, `palette`,
 // `metadata_overrides`) that referenced these items at `crate::books::…`
 // before the split.

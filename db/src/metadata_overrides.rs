@@ -8,6 +8,24 @@ use sqlx::{Executor, SqlitePool};
 
 use omnibus_shared::{EbookMetadata, MetadataOverrides};
 
+/// Errors returned by the metadata-overrides data layer. The single
+/// transparent `Db` variant honors the `02-error-handling` boundary rule
+/// — `sqlx::Error` does not cross the module boundary — while keeping
+/// `?` propagation clean at the call sites.
+#[derive(Debug, thiserror::Error)]
+pub enum MetadataOverridesError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
+impl From<crate::books::BooksError> for MetadataOverridesError {
+    fn from(e: crate::books::BooksError) -> Self {
+        match e {
+            crate::books::BooksError::Db(inner) => MetadataOverridesError::Db(inner),
+        }
+    }
+}
+
 /// Execute the `metadata_overrides` INSERT…ON CONFLICT against any executor —
 /// a `&SqlitePool` for the fire-and-forget [`upsert_metadata_overrides`] path,
 /// or a transaction connection for the serialized [`merge_metadata_overrides`]
@@ -162,11 +180,14 @@ pub async fn delete_metadata_overrides(
 
 /// Look up the UUID for a given `books.id`. Used by the override-save
 /// endpoints to bridge the id-based API with the uuid-keyed overrides table.
-pub async fn get_book_uuid(pool: &SqlitePool, book_id: i64) -> Result<Option<String>, sqlx::Error> {
-    sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
+pub async fn get_book_uuid(
+    pool: &SqlitePool,
+    book_id: i64,
+) -> Result<Option<String>, MetadataOverridesError> {
+    Ok(sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
         .bind(book_id)
         .fetch_optional(pool)
-        .await
+        .await?)
 }
 
 /// Bulk-load overrides for a set of UUIDs. Returns a map from UUID to
@@ -269,7 +290,7 @@ pub(crate) fn apply_overrides(
 pub(crate) async fn rebuild_fts_for_book(
     pool: &SqlitePool,
     book_uuid: &str,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), MetadataOverridesError> {
     let Some(book_id) = sqlx::query_scalar::<_, i64>("SELECT id FROM books WHERE uuid = ?")
         .bind(book_uuid)
         .fetch_optional(pool)
