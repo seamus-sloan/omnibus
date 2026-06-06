@@ -207,6 +207,11 @@ pub async fn rpc_get_ebooks() -> Result<EbookLibrary> {
     // Served straight from the DB — the indexer is responsible for keeping
     // it up to date (startup + settings save triggers).
     //
+    // Unified landing: ebooks + audiobooks live in the same `books` table
+    // under different `library_id`s, so the unified grid is one query
+    // over the union. The format facet in `ViewFilters` does the per-format
+    // splitting on the client.
+    //
     // Issue #81: the underlying `list_books` query is capped at
     // `db::MAX_BOOKS_RETURNED` rows so a multi-thousand-book install
     // can't bandwidth-DoS itself on every poll. Dioxus server functions
@@ -214,7 +219,12 @@ pub async fn rpc_get_ebooks() -> Result<EbookLibrary> {
     // surface a "truncated" hint to the web client — the F1.3 spec
     // constrains the client-side sort/filter UX to ~10k books anyway,
     // which is well under the cap. Cursor pagination is the next step.
-    Ok(db::library_from_db(&pool.0, settings.ebook_library_path.as_deref()).await?)
+    Ok(db::library_from_db_combined(
+        &pool.0,
+        settings.ebook_library_path.as_deref(),
+        settings.audiobook_library_path.as_deref(),
+    )
+    .await?)
 }
 
 /// POST (not GET) for the same reason as `rpc_search`: Dioxus `#[get]`

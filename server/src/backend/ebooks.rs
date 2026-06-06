@@ -20,7 +20,12 @@ pub(super) async fn get_ebooks(_user: AuthUser, State(state): State<AppState>) -
         Ok(s) => s,
         Err(error) => return internal("read settings", error),
     };
-    match db::library_from_db_with_total(&state.pool, settings.ebook_library_path.as_deref()).await
+    match db::library_from_db_with_total_combined(
+        &state.pool,
+        settings.ebook_library_path.as_deref(),
+        settings.audiobook_library_path.as_deref(),
+    )
+    .await
     {
         Ok((library, total)) => with_pagination_headers(Json(library).into_response(), total),
         Err(error) => internal("read books", error),
