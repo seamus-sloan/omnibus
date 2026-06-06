@@ -168,7 +168,6 @@ pub(super) fn TransportButtons(
 /// placeholders until their backing PRs land.
 #[component]
 pub(super) fn Toolbar(
-    on_speed: EventHandler<MouseEvent>,
     on_sleep: EventHandler<MouseEvent>,
     on_bookmark: EventHandler<MouseEvent>,
     on_chapters: EventHandler<MouseEvent>,

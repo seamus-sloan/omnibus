@@ -109,7 +109,6 @@ pub(super) fn ReadyPlayer(
                 on_skip_back,
                 on_skip_forward,
                 on_rate,
-                on_speed: move |_| speed_panel_open.set(true),
                 on_sleep: move |_| {},
                 on_bookmark: move |_| {},
                 on_chapters: move |_| {},

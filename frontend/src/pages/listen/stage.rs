@@ -29,7 +29,6 @@ pub(super) fn PlayerStage(
     on_skip_back: EventHandler<MouseEvent>,
     on_skip_forward: EventHandler<MouseEvent>,
     on_rate: EventHandler<MouseEvent>,
-    on_speed: EventHandler<MouseEvent>,
     on_sleep: EventHandler<MouseEvent>,
     on_bookmark: EventHandler<MouseEvent>,
     on_chapters: EventHandler<MouseEvent>,
@@ -73,7 +72,6 @@ pub(super) fn PlayerStage(
                 }
 
                 Toolbar {
-                    on_speed,
                     on_sleep,
                     on_bookmark,
                     on_chapters,
