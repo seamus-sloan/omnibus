@@ -33,7 +33,7 @@ pub struct PaletteOpen(pub Signal<bool>);
 //   └─ (open) SpOverlay        — portal: scrim + panel
 //              ├─ SpInput       — autofocused serif italic input
 //              ├─ SpMeta        — "5 results · 18ms"
-//              ├─ SpResults     — scrollable grouped results
+//              ├─ SpResultsList — scrollable grouped results
 //              └─ SpFooter      — keyboard hints + "fts5 · ranked"
 #[component]
 pub fn SearchPaletteHost() -> Element {
@@ -113,92 +113,7 @@ fn SpOverlay(open: PaletteOpen) -> Element {
         open.0.set(false);
     };
 
-    // Navigate to the selected result. Books/Authors/Series go to their
-    // detail pages; Tags fall through to the full-page /search results
-    // (no per-tag detail page exists yet).
-    let navigate_to_item = {
-        move |item: &FlatItem| {
-            match item {
-                FlatItem::Book { uuid, .. } => {
-                    nav.push(Route::BookDetail { uuid: uuid.clone() });
-                }
-                FlatItem::Author { id, .. } => {
-                    nav.push(Route::AuthorDetail { id: *id });
-                }
-                FlatItem::Series { id, .. } => {
-                    nav.push(Route::SeriesDetail { id: *id });
-                }
-                FlatItem::Tag { name, .. } => {
-                    nav.push(Route::Search {
-                        query: facet_query("tag", name),
-                    });
-                }
-            }
-            open.0.set(false);
-        }
-    };
-
-    // Handle keyboard events on the panel.
-    let items_for_key = flat_items;
-    let mut nav_for_key = navigate_to_item;
-    let on_keydown = move |evt: Event<KeyboardData>| {
-        let key = evt.key();
-        match key {
-            Key::Escape => {
-                evt.prevent_default();
-                open.0.set(false);
-            }
-            Key::ArrowDown => {
-                evt.prevent_default();
-                let len = items_for_key.read().len();
-                if len > 0 {
-                    // First arrow press is a "begin navigation" gesture — it
-                    // should highlight the first item, not increment past it.
-                    // Subsequent presses wrap around as usual.
-                    if !has_navigated() {
-                        selected.set(0);
-                    } else {
-                        selected.set((selected() + 1) % len);
-                    }
-                    has_navigated.set(true);
-                }
-            }
-            Key::ArrowUp => {
-                evt.prevent_default();
-                let len = items_for_key.read().len();
-                if len > 0 {
-                    // Symmetric with ArrowDown: first press lands on the
-                    // last item; subsequent presses walk backward.
-                    if !has_navigated() {
-                        selected.set(len - 1);
-                    } else {
-                        selected.set(if selected() == 0 {
-                            len - 1
-                        } else {
-                            selected() - 1
-                        });
-                    }
-                    has_navigated.set(true);
-                }
-            }
-            Key::Enter => {
-                evt.prevent_default();
-                let items = items_for_key.read();
-                if has_navigated() {
-                    if let Some(item) = items.get(selected()) {
-                        nav_for_key(item);
-                    }
-                } else {
-                    let q = query().trim().to_string();
-                    if !q.is_empty() {
-                        nav.push(Route::Search { query: q });
-                        open.0.set(false);
-                    }
-                }
-            }
-            _ => {}
-        }
-    };
+    let on_keydown = make_keydown_handler(open, selected, has_navigated, flat_items, query, nav);
 
     // Debounced search. Uses gloo_timers on web, tokio::time on server.
     // Each keystroke cancels the prior task (debounce sleep + RPC) before
@@ -234,14 +149,11 @@ fn SpOverlay(open: PaletteOpen) -> Element {
     };
 
     let res = results.read();
-    let items = flat_items.read();
-    let sel = selected();
     // Only project `selected` into row class names once the user has driven
     // selection with arrow keys. Otherwise the first row would render with
     // the "selected" highlight on every fresh query (since `selected`
     // resets to 0 after each search response), and pressing ArrowDown
     // would visually jump to index 1 instead of 0.
-    let has_nav = has_navigated();
     let is_loading = loading();
 
     let total = res.as_ref().map(|r| r.total_count()).unwrap_or(0);
@@ -319,97 +231,218 @@ fn SpOverlay(open: PaletteOpen) -> Element {
                     }
                 }
 
-                // Results
-                div { class: "sp-results",
-                    if let Some(ref r) = *res {
-                        // Books
-                        if !r.books.is_empty() {
-                            SpGroupHead { label: "Books", count: r.books.len() }
-                            for book in r.books.iter() {
-                                SpBookRow {
-                                    key: "{book.id}",
-                                    book: book.clone(),
-                                    selected: has_nav && is_selected(&items, sel, &FlatItem::Book { uuid: book.uuid.clone(), title: book.title.clone() }),
-                                    on_click: {
-                                        let uuid = book.uuid.clone();
-                                        move |_| {
-                                            nav.push(Route::BookDetail { uuid: uuid.clone() });
-                                            open.0.set(false);
-                                        }
-                                    },
-                                }
-                            }
-                        }
-
-                        // Authors
-                        if !r.authors.is_empty() {
-                            SpGroupHead { label: "Authors", count: r.authors.len() }
-                            for author in r.authors.iter() {
-                                SpAuthorRow {
-                                    key: "{author.id}",
-                                    author: author.clone(),
-                                    selected: has_nav && is_selected(&items, sel, &FlatItem::Author { id: author.id, name: author.name.clone() }),
-                                    on_click: {
-                                        let id = author.id;
-                                        move |_| {
-                                            nav.push(Route::AuthorDetail { id });
-                                            open.0.set(false);
-                                        }
-                                    },
-                                }
-                            }
-                        }
-
-                        // Series
-                        if !r.series.is_empty() {
-                            SpGroupHead { label: "Series", count: r.series.len() }
-                            for s in r.series.iter() {
-                                SpSeriesRow {
-                                    key: "{s.id}",
-                                    series: s.clone(),
-                                    selected: has_nav && is_selected(&items, sel, &FlatItem::Series { id: s.id, name: s.name.clone() }),
-                                    on_click: {
-                                        let id = s.id;
-                                        move |_| {
-                                            nav.push(Route::SeriesDetail { id });
-                                            open.0.set(false);
-                                        }
-                                    },
-                                }
-                            }
-                        }
-
-                        // Tags
-                        if !r.tags.is_empty() {
-                            SpGroupHead { label: "Tags", count: r.tags.len() }
-                            for tag in r.tags.iter() {
-                                SpTagRow {
-                                    key: "{tag.id}",
-                                    tag: tag.clone(),
-                                    selected: has_nav && is_selected(&items, sel, &FlatItem::Tag { id: tag.id, name: tag.name.clone() }),
-                                    on_click: {
-                                        let name = tag.name.clone();
-                                        move |_| {
-                                            nav.push(Route::Search {
-                                                query: facet_query("tag", &name),
-                                            });
-                                            open.0.set(false);
-                                        }
-                                    },
-                                }
-                            }
-                        }
-
-                        // Inside text — placeholder
-                        SpGroupHead { label: "Inside text", count: 0 }
-                        div { class: "sp-coming-soon", "data-testid": "sp-coming-soon",
-                            "Coming soon"
-                        }
-                    }
+                SpResultsList {
+                    results,
+                    flat_items,
+                    selected,
+                    has_navigated,
+                    open,
                 }
 
                 // Footer
                 SpFooter {}
+            }
+        }
+    }
+}
+
+// ── Keyboard handler ─────────────────────────────────────────────
+
+/// Build the `onkeydown` event handler for the palette panel.
+fn make_keydown_handler(
+    mut open: PaletteOpen,
+    mut selected: Signal<usize>,
+    mut has_navigated: Signal<bool>,
+    flat_items: Memo<Vec<FlatItem>>,
+    query: Signal<String>,
+    nav: dioxus_router::Navigator,
+) -> impl FnMut(Event<KeyboardData>) {
+    move |evt: Event<KeyboardData>| {
+        let key = evt.key();
+        match key {
+            Key::Escape => {
+                evt.prevent_default();
+                open.0.set(false);
+            }
+            Key::ArrowDown => {
+                evt.prevent_default();
+                let len = flat_items.read().len();
+                if len > 0 {
+                    // First arrow press is a "begin navigation" gesture — it
+                    // should highlight the first item, not increment past it.
+                    // Subsequent presses wrap around as usual.
+                    if !has_navigated() {
+                        selected.set(0);
+                    } else {
+                        selected.set((selected() + 1) % len);
+                    }
+                    has_navigated.set(true);
+                }
+            }
+            Key::ArrowUp => {
+                evt.prevent_default();
+                let len = flat_items.read().len();
+                if len > 0 {
+                    // Symmetric with ArrowDown: first press lands on the
+                    // last item; subsequent presses walk backward.
+                    if !has_navigated() {
+                        selected.set(len - 1);
+                    } else {
+                        selected.set(if selected() == 0 {
+                            len - 1
+                        } else {
+                            selected() - 1
+                        });
+                    }
+                    has_navigated.set(true);
+                }
+            }
+            Key::Enter => {
+                evt.prevent_default();
+                let items = flat_items.read();
+                if has_navigated() {
+                    // Navigate to the selected result. Books/Authors/Series go
+                    // to their detail pages; Tags fall through to /search (no
+                    // per-tag detail page exists yet).
+                    if let Some(item) = items.get(selected()) {
+                        match item {
+                            FlatItem::Book { uuid, .. } => {
+                                nav.push(Route::BookDetail { uuid: uuid.clone() });
+                            }
+                            FlatItem::Author { id, .. } => {
+                                nav.push(Route::AuthorDetail { id: *id });
+                            }
+                            FlatItem::Series { id, .. } => {
+                                nav.push(Route::SeriesDetail { id: *id });
+                            }
+                            FlatItem::Tag { name, .. } => {
+                                nav.push(Route::Search {
+                                    query: facet_query("tag", name),
+                                });
+                            }
+                        }
+                        open.0.set(false);
+                    }
+                } else {
+                    let q = query().trim().to_string();
+                    if !q.is_empty() {
+                        nav.push(Route::Search { query: q });
+                        open.0.set(false);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// ── Grouped results list ─────────────────────────────────────────
+
+/// Scrollable grouped result list rendered inside the palette panel.
+///
+/// Owns the per-group heading + row layout. Each click callback closes the
+/// palette and navigates to the appropriate detail page via `use_navigator`.
+#[component]
+fn SpResultsList(
+    results: Signal<Option<PaletteResults>>,
+    flat_items: Memo<Vec<FlatItem>>,
+    selected: Signal<usize>,
+    has_navigated: Signal<bool>,
+    open: PaletteOpen,
+) -> Element {
+    let mut open = open;
+    let nav = use_navigator();
+    let res = results.read();
+    let items = flat_items.read();
+    let sel = selected();
+    let has_nav = has_navigated();
+
+    rsx! {
+        div { class: "sp-results",
+            if let Some(ref r) = *res {
+                // Books
+                if !r.books.is_empty() {
+                    SpGroupHead { label: "Books", count: r.books.len() }
+                    for book in r.books.iter() {
+                        SpBookRow {
+                            key: "{book.id}",
+                            book: book.clone(),
+                            selected: has_nav && is_selected(&items, sel, &FlatItem::Book { uuid: book.uuid.clone(), title: book.title.clone() }),
+                            on_click: {
+                                let uuid = book.uuid.clone();
+                                move |_| {
+                                    nav.push(Route::BookDetail { uuid: uuid.clone() });
+                                    open.0.set(false);
+                                }
+                            },
+                        }
+                    }
+                }
+
+                // Authors
+                if !r.authors.is_empty() {
+                    SpGroupHead { label: "Authors", count: r.authors.len() }
+                    for author in r.authors.iter() {
+                        SpAuthorRow {
+                            key: "{author.id}",
+                            author: author.clone(),
+                            selected: has_nav && is_selected(&items, sel, &FlatItem::Author { id: author.id, name: author.name.clone() }),
+                            on_click: {
+                                let id = author.id;
+                                move |_| {
+                                    nav.push(Route::AuthorDetail { id });
+                                    open.0.set(false);
+                                }
+                            },
+                        }
+                    }
+                }
+
+                // Series
+                if !r.series.is_empty() {
+                    SpGroupHead { label: "Series", count: r.series.len() }
+                    for s in r.series.iter() {
+                        SpSeriesRow {
+                            key: "{s.id}",
+                            series: s.clone(),
+                            selected: has_nav && is_selected(&items, sel, &FlatItem::Series { id: s.id, name: s.name.clone() }),
+                            on_click: {
+                                let id = s.id;
+                                move |_| {
+                                    nav.push(Route::SeriesDetail { id });
+                                    open.0.set(false);
+                                }
+                            },
+                        }
+                    }
+                }
+
+                // Tags
+                if !r.tags.is_empty() {
+                    SpGroupHead { label: "Tags", count: r.tags.len() }
+                    for tag in r.tags.iter() {
+                        SpTagRow {
+                            key: "{tag.id}",
+                            tag: tag.clone(),
+                            selected: has_nav && is_selected(&items, sel, &FlatItem::Tag { id: tag.id, name: tag.name.clone() }),
+                            on_click: {
+                                let name = tag.name.clone();
+                                move |_| {
+                                    nav.push(Route::Search {
+                                        query: facet_query("tag", &name),
+                                    });
+                                    open.0.set(false);
+                                }
+                            },
+                        }
+                    }
+                }
+
+                // Inside text — placeholder
+                SpGroupHead { label: "Inside text", count: 0 }
+                div { class: "sp-coming-soon", "data-testid": "sp-coming-soon",
+                    "Coming soon"
+                }
             }
         }
     }
