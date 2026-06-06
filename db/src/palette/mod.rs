@@ -18,10 +18,16 @@ pub mod tags;
 #[cfg(test)]
 mod tests;
 
-pub use authors::search_authors;
-pub use books::search_books;
-pub use series::search_series;
-pub use tags::search_tags;
+// Plain `use` (not `pub use`) — `db/src/lib.rs` does `pub use palette::*`,
+// so a `pub use authors::search_authors` here would promote the per-arm
+// helpers into the `omnibus_db::*` prelude. Only `search_palette` was
+// publicly exposed pre-split; the arm helpers stay reachable internally
+// for `search_palette` and externally only via the fully-qualified
+// `palette::authors::search_authors` path.
+use authors::search_authors;
+use books::search_books;
+use series::search_series;
+use tags::search_tags;
 
 /// Errors returned by the search palette.
 #[derive(Debug, thiserror::Error)]
