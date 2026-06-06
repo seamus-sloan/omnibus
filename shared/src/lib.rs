@@ -158,13 +158,11 @@ pub struct MetadataOverrides {
 }
 
 impl MetadataOverrides {
-    /// Maximum length (in Unicode scalar values, i.e. `chars`) for the `title`
-    /// field.
+    /// Maximum title length in Unicode scalar values (chars).
     pub const TITLE_MAX_LEN: usize = 500;
     /// Maximum length (in chars) for the `description` field.
     pub const DESCRIPTION_MAX_LEN: usize = 50_000;
-    /// Maximum length (in chars) for single-line name fields: `publisher`,
-    /// `published`, `language`, `series`, `series_index`, and creator names.
+    /// Maximum length in chars for single-line name fields: publisher, series, language, and creator names.
     pub const NAME_MAX_LEN: usize = 250;
     /// Maximum length (in chars) for a single tag (subject) string. Preserved
     /// from the pre-existing `MAX_SUBJECT_CHARS = 128` constant — tags are
@@ -209,6 +207,22 @@ impl MetadataOverrides {
                         "creator name exceeds {} characters",
                         Self::NAME_MAX_LEN
                     ));
+                }
+                if let Some(ref role) = c.role {
+                    if role.chars().count() > Self::NAME_MAX_LEN {
+                        return Err(format!(
+                            "creator role exceeds {} characters",
+                            Self::NAME_MAX_LEN
+                        ));
+                    }
+                }
+                if let Some(ref file_as) = c.file_as {
+                    if file_as.chars().count() > Self::NAME_MAX_LEN {
+                        return Err(format!(
+                            "creator file_as exceeds {} characters",
+                            Self::NAME_MAX_LEN
+                        ));
+                    }
                 }
             }
         }
@@ -973,6 +987,38 @@ mod metadata_overrides_tests {
             .validate()
             .expect_err("over-length creator name should be rejected");
         assert!(err.contains("creator name"), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_over_long_creator_role() {
+        let ov = MetadataOverrides {
+            creators: Some(vec![Contributor {
+                name: "Ada Lovelace".into(),
+                role: Some("x".repeat(MetadataOverrides::NAME_MAX_LEN + 1)),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let err = ov
+            .validate()
+            .expect_err("over-length creator role should be rejected");
+        assert!(err.contains("creator role"), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_over_long_creator_file_as() {
+        let ov = MetadataOverrides {
+            creators: Some(vec![Contributor {
+                name: "Ada Lovelace".into(),
+                file_as: Some("x".repeat(MetadataOverrides::NAME_MAX_LEN + 1)),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let err = ov
+            .validate()
+            .expect_err("over-length creator file_as should be rejected");
+        assert!(err.contains("creator file_as"), "unexpected message: {err}");
     }
 
     #[test]
