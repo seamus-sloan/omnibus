@@ -19,6 +19,10 @@ const INDEX_LIMIT: i64 = 10_000;
 /// configured library. Accent is the `accent_color` of the first book by
 /// this author with a non-null value (book sort/id order); `NULL` falls
 /// back to the theme accent in the UI.
+///
+/// Currently returns results across all users (single-tenant). When F4.x
+/// per-user ACL lands, add a `user_id: i64` parameter and scope the query
+/// to books accessible to that user.
 pub async fn list_authors(
     pool: &SqlitePool,
     library_path: &str,
@@ -110,6 +114,10 @@ pub async fn list_authors(
 /// lowest-`series_index` book (with `book.sort, book.id` as tie-breakers);
 /// `None` when every book in the series has only override-supplied
 /// creators not yet linked to an `authors` row.
+///
+/// Currently returns results across all users (single-tenant). When F4.x
+/// per-user ACL lands, add a `user_id: i64` parameter and scope the query
+/// to books accessible to that user.
 pub async fn list_series(
     pool: &SqlitePool,
     library_path: &str,
