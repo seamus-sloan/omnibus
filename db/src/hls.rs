@@ -12,6 +12,17 @@ use std::path::PathBuf;
 
 use sqlx::SqlitePool;
 
+/// Errors returned by `get_parts`. Other public functions in this module
+/// still return `sqlx::Error` directly (`resolve_audiobook`) or
+/// `anyhow::Result` (`transcode_book`, where ffmpeg + filesystem +
+/// timeouts dominate the failure space); widening the boundary cleanup
+/// is tracked separately.
+#[derive(Debug, thiserror::Error)]
+pub enum HlsError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
 /// The only HLS audio profile shipped today. Future: add `"audio128"` for
 /// music audiobooks that warrant higher fidelity.
 pub const AUDIO64: &str = "audio64";
@@ -146,7 +157,7 @@ pub async fn resolve_audiobook(
 }
 
 /// Fetch ordered `book_file_parts` for `book_file_id`.
-pub async fn get_parts(pool: &SqlitePool, book_file_id: i64) -> Result<Vec<HlsPart>, sqlx::Error> {
+pub async fn get_parts(pool: &SqlitePool, book_file_id: i64) -> Result<Vec<HlsPart>, HlsError> {
     let rows = sqlx::query_as::<_, (i64, String, f64)>(
         "SELECT ordinal, filename, duration_seconds \
          FROM book_file_parts \

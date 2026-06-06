@@ -28,7 +28,10 @@ use super::projection::{
 /// punctuation that a delimiter-based encoding would corrupt. The Rust side
 /// parses each blob with `serde_json`. Empty aggregates come back as `"[]"`,
 /// so the `Option<String>` path only fires when the column itself was NULL.
-pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata>, sqlx::Error> {
+pub async fn get_book(
+    pool: &SqlitePool,
+    id: i64,
+) -> Result<Option<EbookMetadata>, super::BooksError> {
     let row = sqlx::query(
         r#"
         SELECT
@@ -198,7 +201,7 @@ pub async fn get_book(pool: &SqlitePool, id: i64) -> Result<Option<EbookMetadata
 pub async fn get_book_by_uuid(
     pool: &SqlitePool,
     uuid: &str,
-) -> Result<Option<EbookMetadata>, sqlx::Error> {
+) -> Result<Option<EbookMetadata>, super::BooksError> {
     let Some(id) = resolve_book_id_by_uuid(pool, uuid).await? else {
         return Ok(None);
     };

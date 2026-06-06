@@ -16,10 +16,19 @@ pub use omnibus_shared::Settings;
 const EBOOK_LIBRARY_PATH_KEY: &str = "ebook_library_path";
 const AUDIOBOOK_LIBRARY_PATH_KEY: &str = "audiobook_library_path";
 
+/// Errors returned by `get_settings`, `set_settings`, and
+/// `seed_settings_from_env`. Other public functions in this module still
+/// return `sqlx::Error` directly — widening that is tracked separately.
+#[derive(Debug, thiserror::Error)]
+pub enum SettingsError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
 /// Read the ebook and audiobook library paths from the `settings` KV table.
 /// Missing keys map to `None` rather than an error — the first-run UI relies
 /// on this to detect an unconfigured server.
-pub async fn get_settings(pool: &SqlitePool) -> Result<Settings, sqlx::Error> {
+pub async fn get_settings(pool: &SqlitePool) -> Result<Settings, SettingsError> {
     let ebook_library_path =
         sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
             .bind(EBOOK_LIBRARY_PATH_KEY)
@@ -42,7 +51,7 @@ pub async fn get_settings(pool: &SqlitePool) -> Result<Settings, sqlx::Error> {
 /// the matching cover files from disk *after* commit so filesystem
 /// side-effects don't run inside the DB transaction. Callers should kick
 /// off a reindex afterwards — this function does not touch the indexer.
-pub async fn set_settings(pool: &SqlitePool, settings: &Settings) -> Result<(), sqlx::Error> {
+pub async fn set_settings(pool: &SqlitePool, settings: &Settings) -> Result<(), SettingsError> {
     let mut tx = pool.begin().await?;
     upsert_or_clear(
         &mut tx,
@@ -183,7 +192,7 @@ async fn upsert_or_clear(
 /// unset, so production deployments that configure libraries through the
 /// UI are unaffected. Delegates writes through [`set_settings`], so
 /// orphan-cleanup runs the same way as a user-initiated save.
-pub async fn seed_settings_from_env(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+pub async fn seed_settings_from_env(pool: &SqlitePool) -> Result<(), SettingsError> {
     let ebook_library_path = std::env::var("EBOOK_LIBRARY_PATH").ok();
     let audiobook_library_path = std::env::var("AUDIOBOOK_LIBRARY_PATH").ok();
     if ebook_library_path.is_some() || audiobook_library_path.is_some() {

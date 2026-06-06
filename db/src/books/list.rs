@@ -308,8 +308,8 @@ pub async fn list_indexed_rows_for_formats(
 
 /// Total number of books currently indexed under `library_path`. Thin
 /// wrapper around [`count_books_for_paths`] for single-library callers.
-pub async fn count_books(pool: &SqlitePool, library_path: &str) -> Result<i64, sqlx::Error> {
-    count_books_for_paths(pool, &[library_path]).await
+pub async fn count_books(pool: &SqlitePool, library_path: &str) -> Result<i64, super::BooksError> {
+    Ok(count_books_for_paths(pool, &[library_path]).await?)
 }
 
 /// Total number of books currently indexed under any of `library_paths`.

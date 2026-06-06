@@ -40,6 +40,18 @@ use sqlx::SqlitePool;
 
 use crate::{audiobook, books, ebook, sync};
 
+/// Errors returned by the pure-DB indexer reads (`is_stale`). The
+/// transparent `Db` variant honors the `02-error-handling` boundary rule
+/// — no raw `sqlx::Error` across the module boundary — while keeping the
+/// `?` propagation clean. `reindex` and `reindex_audiobooks` stay on
+/// `anyhow::Result` because they span filesystem scans + parsing
+/// (foreign-system failure space).
+#[derive(Debug, thiserror::Error)]
+pub enum IndexerError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
 /// Reindex if the last successful index is older than this. One hour is a
 /// compromise between responsiveness to on-disk changes and avoiding
 /// thrashing the disk for users who leave the app open all day.
@@ -65,7 +77,7 @@ pub const REFRESH_AFTER_SECS: i64 = 60 * 60;
 /// factored into the pure [`is_stale_decision`] so the window boundaries
 /// and this clock-failure fallback (`now == last`) are pinned by the
 /// `is_stale_decision_*` tests below; change it only with intent.
-pub async fn is_stale(pool: &SqlitePool, library_path: &str) -> Result<bool, sqlx::Error> {
+pub async fn is_stale(pool: &SqlitePool, library_path: &str) -> Result<bool, IndexerError> {
     let Some(last) = crate::settings::last_indexed_at(pool, library_path).await? else {
         return Ok(true);
     };
