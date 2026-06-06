@@ -16,10 +16,9 @@ pub use omnibus_shared::Settings;
 const EBOOK_LIBRARY_PATH_KEY: &str = "ebook_library_path";
 const AUDIOBOOK_LIBRARY_PATH_KEY: &str = "audiobook_library_path";
 
-/// Errors returned by the settings KV layer. The single transparent `Db`
-/// variant honors the `02-error-handling` boundary rule (no raw
-/// `sqlx::Error` leaking across the module boundary) while keeping `?`
-/// propagation clean for the internal call paths.
+/// Errors returned by `get_settings`, `set_settings`, and
+/// `seed_settings_from_env`. Other public functions in this module still
+/// return `sqlx::Error` directly — widening that is tracked separately.
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsError {
     #[error(transparent)]

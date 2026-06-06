@@ -8,10 +8,9 @@ use sqlx::{Executor, SqlitePool};
 
 use omnibus_shared::{EbookMetadata, MetadataOverrides};
 
-/// Errors returned by the metadata-overrides data layer. The single
-/// transparent `Db` variant honors the `02-error-handling` boundary rule
-/// — `sqlx::Error` does not cross the module boundary — while keeping
-/// `?` propagation clean at the call sites.
+/// Errors returned by `get_book_uuid` and `rebuild_fts_for_book`. Other
+/// public functions in this module still return `sqlx::Error` directly —
+/// widening that is tracked separately.
 #[derive(Debug, thiserror::Error)]
 pub enum MetadataOverridesError {
     #[error(transparent)]

@@ -12,12 +12,11 @@ use std::path::PathBuf;
 
 use sqlx::SqlitePool;
 
-/// Errors returned by the HLS data-layer reads (`get_parts`). Kept tiny —
-/// the transparent `Db` variant honors the `02-error-handling` boundary
-/// rule (no raw `sqlx::Error` across the module boundary) while letting
-/// internal call sites keep `?` propagation. `transcode_book` still
-/// returns `anyhow::Result` because it spans ffmpeg + filesystem +
-/// timeouts (foreign-system failure space).
+/// Errors returned by `get_parts`. Other public functions in this module
+/// still return `sqlx::Error` directly (`resolve_audiobook`) or
+/// `anyhow::Result` (`transcode_book`, where ffmpeg + filesystem +
+/// timeouts dominate the failure space); widening the boundary cleanup
+/// is tracked separately.
 #[derive(Debug, thiserror::Error)]
 pub enum HlsError {
     #[error(transparent)]
