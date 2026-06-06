@@ -487,6 +487,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn login_with_valid_credentials_returns_200_and_set_cookie() {
+        let (app, pool) = app().await;
+        db::auth::create_user(&pool, "alice", "correct horse battery staple")
+            .await
+            .unwrap();
+        let res = app
+            .oneshot(json_req(
+                "/api/auth/login",
+                "POST",
+                json!({"username": "alice", "password": "correct horse battery staple"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        // The response must include a Set-Cookie header with the session
+        // cookie. Under the default OMNIBUS_SECURE_COOKIES=true env the
+        // name uses the `__Host-` prefix.
+        let set_cookie: Vec<_> = res
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+        let expected_name = format!("{}=", super::session_cookie_name(true));
+        assert!(
+            set_cookie.iter().any(|c| c.starts_with(&expected_name)),
+            "expected Set-Cookie starting with {expected_name:?}, got {set_cookie:?}",
+        );
+
+        // Bearer flow must NOT be active: token field must be absent.
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: LoginResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body.user.username, "alice");
+        assert!(
+            body.token.is_none(),
+            "cookie flow must not return a bearer token in the body"
+        );
+    }
+
+    #[tokio::test]
     async fn login_wrong_password_returns_401() {
         let (app, pool) = app().await;
         db::auth::create_user(&pool, "alice", "correct horse battery staple")
@@ -501,6 +544,51 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn login_after_account_lockout_returns_429_with_retry_after() {
+        // After `LOCKOUT_MIN_AFTER` (5) consecutive failed attempts the DB
+        // sets `locked_until`; `auth_error_to_response` must map
+        // `AccountLocked` to 429 with a `Retry-After` header.
+        let (app, pool) = app().await;
+        db::auth::create_user(&pool, "alice", "correct horse battery staple")
+            .await
+            .unwrap();
+
+        // Exhaust the lockout threshold with wrong-password requests. Each
+        // attempt re-uses `app.clone()` because `oneshot` consumes the router.
+        for _ in 0..5 {
+            app.clone()
+                .oneshot(json_req(
+                    "/api/auth/login",
+                    "POST",
+                    json!({"username": "alice", "password": "wrong"}),
+                ))
+                .await
+                .unwrap();
+        }
+
+        // The next attempt — even with the correct password — must be locked out.
+        let res = app
+            .oneshot(json_req(
+                "/api/auth/login",
+                "POST",
+                json!({"username": "alice", "password": "correct horse battery staple"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(
+            res.headers().contains_key(header::RETRY_AFTER),
+            "locked-out response must include a Retry-After header"
+        );
+        // The body must use the same generic message as a wrong password so
+        // the response doesn't confirm the username exists.
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(bytes.as_ref(), b"invalid credentials");
     }
 
     #[tokio::test]
