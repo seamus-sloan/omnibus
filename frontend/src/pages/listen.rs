@@ -151,6 +151,15 @@ pub fn BookListenPage(uuid: String) -> Element {
                         crate::audiobook_progress::save(&uuid_for_pause, secs);
                         post_audio_progress(uuid_for_pause.clone(), secs);
                     });
+                    // Fired from the init-poll's `n >= 200` branch when
+                    // `window.OmnibusAudio` never appears (mount loop gave
+                    // up, JS eval failed, vendored asset 404'd, …). Mirrors
+                    // the `reader.rs::__omnibusOnStatus("error")` shape so
+                    // the UI surfaces a real failure instead of stalling
+                    // on a perpetually-not-ready state.
+                    let on_init_timeout = Closure::<dyn FnMut(f64)>::new(move |_: f64| {
+                        playback_failed.set(true);
+                    });
 
                     let _ = js_sys::Reflect::set(
                         &window,
@@ -172,7 +181,13 @@ pub fn BookListenPage(uuid: String) -> Element {
                         &JsValue::from_str("__omnibusOnAudioPause"),
                         on_pause.as_ref().unchecked_ref(),
                     );
-                    *cb_holder.borrow_mut() = vec![on_time, on_duration, on_play, on_pause];
+                    let _ = js_sys::Reflect::set(
+                        &window,
+                        &JsValue::from_str("__omnibusOnInitTimeout"),
+                        on_init_timeout.as_ref().unchecked_ref(),
+                    );
+                    *cb_holder.borrow_mut() =
+                        vec![on_time, on_duration, on_play, on_pause, on_init_timeout];
                 }
 
                 // Inject hls.js (one-time; the script tag is idempotent because
@@ -439,7 +454,7 @@ pub fn BookListenPage(uuid: String) -> Element {
                             let parts_json =
                                 serde_json::to_string(&parts).unwrap_or_else(|_| "[]".into());
                             let init_js = format!(
-                                r#"(function(){{ var n=0; (function go(){{ if (window.OmnibusAudio) {{ window.OmnibusAudio.initDirect({parts_json}, {pos_lit}); }} else if (n++ < 200) {{ setTimeout(go, 50); }} }})(); }})();"#
+                                r#"(function(){{ var n=0; (function go(){{ if (window.OmnibusAudio) {{ window.OmnibusAudio.initDirect({parts_json}, {pos_lit}); }} else if (n++ < 200) {{ setTimeout(go, 50); }} else {{ console.error('OmnibusAudio never installed; init timed out'); if (typeof window.__omnibusOnInitTimeout === 'function') {{ window.__omnibusOnInitTimeout(0); }} }} }})(); }})();"#
                             );
                             let _ = dioxus::document::eval(&init_js);
                             hls_ready.set(true);
@@ -475,7 +490,7 @@ pub fn BookListenPage(uuid: String) -> Element {
                                                 // rather than relying on it
                                                 // being installed already.
                                                 let init_js = format!(
-                                                    r#"(function(){{ var n=0; (function go(){{ if (window.OmnibusAudio) {{ window.OmnibusAudio.initHls({playlist_lit}, {pos_lit}); }} else if (n++ < 200) {{ setTimeout(go, 50); }} }})(); }})();"#
+                                                    r#"(function(){{ var n=0; (function go(){{ if (window.OmnibusAudio) {{ window.OmnibusAudio.initHls({playlist_lit}, {pos_lit}); }} else if (n++ < 200) {{ setTimeout(go, 50); }} else {{ console.error('OmnibusAudio never installed; HLS init timed out'); if (typeof window.__omnibusOnInitTimeout === 'function') {{ window.__omnibusOnInitTimeout(0); }} }} }})(); }})();"#
                                                 );
                                                 let _ = dioxus::document::eval(&init_js);
                                                 hls_ready.set(true);
