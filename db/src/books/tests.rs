@@ -78,6 +78,121 @@ async fn library_from_db_with_total_reports_zero_for_none_path() {
     assert!(lib.books.is_empty());
     assert_eq!(total, 0);
 }
+
+#[tokio::test]
+async fn library_from_db_combined_returns_books_from_both_paths() {
+    let _covers = CoversTempDir::new("combined_landing");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/ebooks",
+        vec![indexed("a.epub", Some("Ebook A"), &[], &[], None, None)],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/audiobooks",
+        vec![
+            indexed("b.m4b", Some("Audio B"), &[], &[], None, None),
+            indexed("c.m4b", Some("Audio C"), &[], &[], None, None),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let lib = library_from_db_combined(&pool, Some("/ebooks"), Some("/audiobooks"))
+        .await
+        .unwrap();
+    let titles: Vec<_> = lib.books.iter().filter_map(|b| b.title.clone()).collect();
+    assert!(titles.contains(&"Ebook A".to_string()));
+    assert!(titles.contains(&"Audio B".to_string()));
+    assert!(titles.contains(&"Audio C".to_string()));
+    assert_eq!(lib.books.len(), 3);
+    assert_eq!(lib.path.as_deref(), Some("/ebooks"));
+}
+
+#[tokio::test]
+async fn library_from_db_combined_falls_back_to_audiobook_path_for_subtitle() {
+    let _covers = CoversTempDir::new("combined_audio_only");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/audiobooks",
+        vec![indexed("a.m4b", Some("Audio Only"), &[], &[], None, None)],
+    )
+    .await
+    .unwrap();
+
+    let lib = library_from_db_combined(&pool, None, Some("/audiobooks"))
+        .await
+        .unwrap();
+    assert_eq!(lib.books.len(), 1);
+    assert_eq!(lib.path.as_deref(), Some("/audiobooks"));
+}
+
+#[tokio::test]
+async fn library_from_db_combined_returns_empty_when_both_paths_none() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = library_from_db_combined(&pool, None, None).await.unwrap();
+    assert!(lib.path.is_none());
+    assert!(lib.books.is_empty());
+}
+
+#[tokio::test]
+async fn library_from_db_with_total_combined_counts_books_across_paths() {
+    let _covers = CoversTempDir::new("combined_total");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/ebooks",
+        vec![indexed("a.epub", Some("E1"), &[], &[], None, None)],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/audiobooks",
+        vec![
+            indexed("b.m4b", Some("A1"), &[], &[], None, None),
+            indexed("c.m4b", Some("A2"), &[], &[], None, None),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let (lib, total) =
+        library_from_db_with_total_combined(&pool, Some("/ebooks"), Some("/audiobooks"))
+            .await
+            .unwrap();
+    assert_eq!(lib.books.len(), 3);
+    assert_eq!(total, 3);
+}
+
+#[tokio::test]
+async fn library_from_db_combined_dedupes_shared_path() {
+    let _covers = CoversTempDir::new("combined_shared");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/shared",
+        vec![
+            indexed("a.epub", Some("Ebook"), &[], &[], None, None),
+            indexed("b.m4b", Some("Audio"), &[], &[], None, None),
+        ],
+    )
+    .await
+    .unwrap();
+
+    // Both paths point at the same on-disk root — `IN (?, ?)` with a
+    // duplicate would still return one row per book, but the helper
+    // dedupes so the input shape stays consistent with single-library
+    // callsites that rely on `library_paths.len()`.
+    let lib = library_from_db_combined(&pool, Some("/shared"), Some("/shared"))
+        .await
+        .unwrap();
+    assert_eq!(lib.books.len(), 2);
+}
 #[tokio::test]
 async fn search_books_finds_by_title_and_ranks_by_bm25() {
     let _covers = CoversTempDir::new("fts_title");
