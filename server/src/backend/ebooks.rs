@@ -503,4 +503,85 @@ mod tests {
 
         std::fs::remove_dir_all(&tmp).ok();
     }
+
+    /// Drives the first `internal(...)` arm of `get_ebook_file`: when
+    /// `db::resolve_book_id_by_uuid` returns `Err`, the handler must
+    /// surface 500 (not 404). The induce-sqlx-error idiom is to drop
+    /// the `books` table out from under the live pool after seeding the
+    /// auth gate's `users`/`sessions` tables — the gate keeps passing,
+    /// the handler's first query hits "no such table: books" and the
+    /// response collapses into the shared `internal()` envelope. Same
+    /// pattern is reusable for any future 5xx test that needs to
+    /// isolate a single db call without a mock layer.
+    #[tokio::test]
+    async fn api_get_ebook_file_returns_500_when_resolve_book_id_by_uuid_fails() {
+        let (_, _, pool) = fixture().await;
+        let user = auth_test_support::create_user(&pool, "alice").await;
+        let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+        // FK cascade: dependents of `books` (book_files, etc.) reference
+        // it, so disable FK enforcement before dropping to keep the
+        // single DROP statement minimal. We don't touch `users` /
+        // `sessions`, so the auth gate's `lookup_session` still works.
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE books")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let app = crate::backend::rest_router(AppState::new(pool));
+        let res = app
+            .oneshot(get_with_bearer("/api/ebooks/any-uuid/file", &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// Drives the second `internal(...)` arm of `get_ebook_file`: when
+    /// `db::resolve_book_id_by_uuid` returns `Ok(Some(_))` but
+    /// `db::book_file_path` returns `Err`, the handler must surface 500.
+    /// Seed a book row so the first call succeeds, then drop the
+    /// `book_files` table so the second call's JOIN errors out.
+    #[tokio::test]
+    async fn api_get_ebook_file_returns_500_when_book_file_path_fails() {
+        let (_, _, pool) = fixture().await;
+        let user = auth_test_support::create_user(&pool, "alice").await;
+        let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+        let lib_id = sqlx::query("INSERT INTO libraries (path, display_name) VALUES (?, 'lib')")
+            .bind("/lib")
+            .execute(&pool)
+            .await
+            .unwrap()
+            .last_insert_rowid();
+        let uuid = "22222222-2222-2222-2222-222222222222";
+        sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, ?, 'B')")
+            .bind(uuid)
+            .bind(lib_id)
+            .bind("/lib")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // FKs off because `book_file_parts` references `book_files`;
+        // we want the single DROP to succeed without cascading further.
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE book_files")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let app = crate::backend::rest_router(AppState::new(pool));
+        let res = app
+            .oneshot(get_with_bearer(&format!("/api/ebooks/{uuid}/file"), &token))
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }
