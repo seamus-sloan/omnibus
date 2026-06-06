@@ -523,14 +523,20 @@ mod tests {
         // it, so disable FK enforcement before dropping to keep the
         // single DROP statement minimal. We don't touch `users` /
         // `sessions`, so the auth gate's `lookup_session` still works.
+        // `PRAGMA foreign_keys` is per-connection in SQLite, so acquire
+        // one connection and pin both statements to it — `execute(&pool)`
+        // would let the PRAGMA and the DROP land on different pool
+        // connections and the DROP could then trip an FK error.
+        let mut conn = pool.acquire().await.unwrap();
         sqlx::query("PRAGMA foreign_keys = OFF")
-            .execute(&pool)
+            .execute(&mut *conn)
             .await
             .unwrap();
         sqlx::query("DROP TABLE books")
-            .execute(&pool)
+            .execute(&mut *conn)
             .await
             .unwrap();
+        drop(conn);
 
         let app = crate::backend::rest_router(AppState::new(pool));
         let res = app
@@ -568,14 +574,18 @@ mod tests {
 
         // FKs off because `book_file_parts` references `book_files`;
         // we want the single DROP to succeed without cascading further.
+        // PRAGMA + DROP pinned to a single connection — see the sibling
+        // test above for the rationale.
+        let mut conn = pool.acquire().await.unwrap();
         sqlx::query("PRAGMA foreign_keys = OFF")
-            .execute(&pool)
+            .execute(&mut *conn)
             .await
             .unwrap();
         sqlx::query("DROP TABLE book_files")
-            .execute(&pool)
+            .execute(&mut *conn)
             .await
             .unwrap();
+        drop(conn);
 
         let app = crate::backend::rest_router(AppState::new(pool));
         let res = app
