@@ -13,15 +13,40 @@ use super::projection::{
     MAX_BOOKS_RETURNED,
 };
 
-/// Return every book indexed under `library_path`. One round-trip to SQLite:
-/// every multi-valued relation is pulled in a single statement using scalar
-/// subqueries (for single-valued joins) and `json_group_array` over ordered
-/// inner selects (for multi-valued lists), matching the pattern in `get_book`.
+/// Return every book indexed under `library_path`. Thin wrapper around
+/// [`list_books_for_paths`] kept for callers that only consult one library
+/// (ebook-only reindex paths, override tests).
 pub async fn list_books(
     pool: &SqlitePool,
     library_path: &str,
 ) -> Result<Vec<EbookMetadata>, sqlx::Error> {
-    let rows = sqlx::query(
+    list_books_for_paths(pool, &[library_path]).await
+}
+
+/// Return every book indexed under any of `library_paths`. One round-trip
+/// to SQLite: every multi-valued relation is pulled in a single statement
+/// using scalar subqueries (for single-valued joins) and `json_group_array`
+/// over ordered inner selects (for multi-valued lists), matching the
+/// pattern in `get_book`.
+///
+/// Empty `library_paths` returns an empty vec. The library filter uses
+/// `l.path IN (?, …)` so the unified landing path (ebook + audiobook)
+/// stays one query instead of two — `book_files.format` joins through
+/// unchanged, so per-format facet counts on the landing page still work.
+pub async fn list_books_for_paths(
+    pool: &SqlitePool,
+    library_paths: &[&str],
+) -> Result<Vec<EbookMetadata>, sqlx::Error> {
+    if library_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Inline placeholder list: `library_paths` is owned by the caller (at
+    // most two entries — ebook + audiobook), so there's no injection
+    // surface and a temp table would be heavier than the bind loop below.
+    let placeholders = std::iter::repeat_n("?", library_paths.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
         r#"
         SELECT b.id, b.uuid,
                b.title, b.description, b.series_index, b.has_cover,
@@ -81,15 +106,17 @@ pub async fn list_books(
                          ORDER BY format))                  AS formats_json
         FROM books b
         JOIN libraries l ON l.id = b.library_id
-        WHERE l.path = ?
+        WHERE l.path IN ({placeholders})
         ORDER BY b.sort, b.id
         LIMIT ?
-        "#,
-    )
-    .bind(library_path)
-    .bind(MAX_BOOKS_RETURNED)
-    .fetch_all(pool)
-    .await?;
+        "#
+    );
+    let mut q = sqlx::query(&sql);
+    for path in library_paths {
+        q = q.bind(*path);
+    }
+    q = q.bind(MAX_BOOKS_RETURNED);
+    let rows = q.fetch_all(pool).await?;
 
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
@@ -279,25 +306,42 @@ pub async fn list_indexed_rows_for_formats(
         .collect())
 }
 
-/// Total number of books currently indexed under `library_path`.
-///
-/// Companion to `list_books`: `list_books` caps the returned vec at
-/// `MAX_BOOKS_RETURNED`, so callers that need to surface a truncation
-/// hint (UI banner, `X-Total-Count` header) ask the count separately.
-/// Single scalar query — cheaper than re-running the full SELECT just
-/// to count rows.
+/// Total number of books currently indexed under `library_path`. Thin
+/// wrapper around [`count_books_for_paths`] for single-library callers.
 pub async fn count_books(pool: &SqlitePool, library_path: &str) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar::<_, i64>(
+    count_books_for_paths(pool, &[library_path]).await
+}
+
+/// Total number of books currently indexed under any of `library_paths`.
+///
+/// Companion to `list_books_for_paths`: `list_books_for_paths` caps the
+/// returned vec at `MAX_BOOKS_RETURNED`, so callers that need to surface a
+/// truncation hint (UI banner, `X-Total-Count` header) ask the count
+/// separately. Single scalar query — cheaper than re-running the full
+/// SELECT just to count rows.
+pub async fn count_books_for_paths(
+    pool: &SqlitePool,
+    library_paths: &[&str],
+) -> Result<i64, sqlx::Error> {
+    if library_paths.is_empty() {
+        return Ok(0);
+    }
+    let placeholders = std::iter::repeat_n("?", library_paths.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
         r#"
         SELECT COUNT(*)
           FROM books b
           JOIN libraries l ON l.id = b.library_id
-         WHERE l.path = ?
-        "#,
-    )
-    .bind(library_path)
-    .fetch_one(pool)
-    .await
+         WHERE l.path IN ({placeholders})
+        "#
+    );
+    let mut q = sqlx::query_scalar::<_, i64>(&sql);
+    for path in library_paths {
+        q = q.bind(*path);
+    }
+    q.fetch_one(pool).await
 }
 
 /// Build an `EbookLibrary` from whatever is currently in the DB for
@@ -313,16 +357,7 @@ pub async fn library_from_db(
     pool: &SqlitePool,
     library_path: Option<&str>,
 ) -> Result<EbookLibrary, sqlx::Error> {
-    let Some(path) = library_path else {
-        return Ok(EbookLibrary::default());
-    };
-    let books = list_books(pool, path).await?;
-    Ok(EbookLibrary {
-        path: Some(path.to_string()),
-        books,
-        error: None,
-        total: None,
-    })
+    library_from_db_combined(pool, library_path, None).await
 }
 
 /// Same as `library_from_db` but also returns the *true* book count under
@@ -333,18 +368,83 @@ pub async fn library_from_db_with_total(
     pool: &SqlitePool,
     library_path: Option<&str>,
 ) -> Result<(EbookLibrary, i64), sqlx::Error> {
-    let Some(path) = library_path else {
+    library_from_db_with_total_combined(pool, library_path, None).await
+}
+
+/// Build an `EbookLibrary` spanning the ebook and audiobook libraries
+/// together — both rows live in the same `books` table under different
+/// `library_id`s, so the unified landing grid is one query over the union.
+/// Either path may be `None` (no library configured for that format).
+///
+/// `EbookLibrary.path` reports the ebook path when set, otherwise the
+/// audiobook path; the landing page uses it to key per-library
+/// `view_prefs` and to render the subtitle, and treating ebooks as the
+/// "primary" key preserves prefs across an audiobook-path edit.
+pub async fn library_from_db_combined(
+    pool: &SqlitePool,
+    ebook_path: Option<&str>,
+    audiobook_path: Option<&str>,
+) -> Result<EbookLibrary, sqlx::Error> {
+    let paths = collect_paths(ebook_path, audiobook_path);
+    if paths.is_empty() {
+        return Ok(EbookLibrary::default());
+    }
+    let books = list_books_for_paths(pool, &paths).await?;
+    Ok(EbookLibrary {
+        path: Some(
+            ebook_path
+                .or(audiobook_path)
+                .unwrap_or_default()
+                .to_string(),
+        ),
+        books,
+        error: None,
+        total: None,
+    })
+}
+
+/// `library_from_db_combined` + the true total under the union (before the
+/// `MAX_BOOKS_RETURNED` cap), for the REST handler's `X-Total-Count` /
+/// `X-Total-Cap` headers.
+pub async fn library_from_db_with_total_combined(
+    pool: &SqlitePool,
+    ebook_path: Option<&str>,
+    audiobook_path: Option<&str>,
+) -> Result<(EbookLibrary, i64), sqlx::Error> {
+    let paths = collect_paths(ebook_path, audiobook_path);
+    if paths.is_empty() {
         return Ok((EbookLibrary::default(), 0));
-    };
-    let books = list_books(pool, path).await?;
-    let total = count_books(pool, path).await?;
+    }
+    let books = list_books_for_paths(pool, &paths).await?;
+    let total = count_books_for_paths(pool, &paths).await?;
     Ok((
         EbookLibrary {
-            path: Some(path.to_string()),
+            path: Some(
+                ebook_path
+                    .or(audiobook_path)
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
             books,
             error: None,
             total: None,
         },
         total,
     ))
+}
+
+fn collect_paths<'a>(ebook: Option<&'a str>, audiobook: Option<&'a str>) -> Vec<&'a str> {
+    // De-dup when the user points both at the same on-disk root — the
+    // `IN` filter would still return one row per book, but the input
+    // shape stays consistent with the single-library calls.
+    let mut paths: Vec<&str> = Vec::with_capacity(2);
+    if let Some(p) = ebook {
+        paths.push(p);
+    }
+    if let Some(p) = audiobook {
+        if !paths.contains(&p) {
+            paths.push(p);
+        }
+    }
+    paths
 }
