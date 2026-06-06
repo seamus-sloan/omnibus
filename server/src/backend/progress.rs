@@ -1,12 +1,8 @@
-// ---------------------------------------------------------------------------
-// F2.1 Progress sync (REST — mobile client).
-//
-// One unified `/api/progress` endpoint accepts a discriminated payload
-// (`{ format: "epub", epub_cfi }` or `{ format: "audio", audio_position_seconds }`)
-// and fans out to per-format write paths inside `db::progress`. The same
-// authenticated handler serves the (future) audiobook player. Web uses the
-// `/api/rpc/progress*` server functions in `omnibus_frontend::rpc`.
-// ---------------------------------------------------------------------------
+//! Progress-sync REST handlers for the mobile client (`/api/progress*`).
+//!
+//! Accepts a discriminated `{ format: "epub" | "audio" }` payload and fans
+//! out to per-format write paths in `omnibus_db::progress`. Web clients use
+//! the `/api/rpc/progress*` server functions in `omnibus_frontend::rpc`.
 
 use axum::{
     extract::{Path, Query, State},
