@@ -8,9 +8,8 @@
 use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
 
-use crate::components::atrium::Cover;
-
 use super::controls::{Scrubber, TransportButtons};
+use crate::components::atrium::Cover;
 
 /// Right-column "now playing" panel: title, author, scrubber, transport row.
 ///

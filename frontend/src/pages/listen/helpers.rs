@@ -1,10 +1,7 @@
-//! Cross-component helpers for the listen page: timestamp formatting, the
-//! audio progress POST shim, the rate-step cycle, and the audited
-//! `window.OmnibusAudio` poke.
-//!
-//! Kept here so the orchestrator in `listen.rs` and the sub-components
-//! (`controls`, `bootstrap`) all share the same surface without
-//! duplicating eval shapes or formatting rules.
+//! Shared helpers for the listen page: timestamp formatting, the audio
+//! progress POST shim, the rate-step cycle, and the audited
+//! `window.OmnibusAudio` poke. Consumed by `listen.rs`, `controls`, and
+//! `bootstrap`.
 
 #[cfg(feature = "web")]
 use dioxus::prelude::*;

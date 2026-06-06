@@ -1,12 +1,7 @@
-//! The post-load player chrome: top bar, hidden `<audio>` element, status
-//! overlays, and the two-column [`PlayerStage`]. Owns the per-action event
-//! handlers (back / toggle / skip / seek / rate) so the orchestrator in
-//! `listen.rs` stays under the 150-line component cap.
-//!
-//! All inputs are signals (Copy) plus the resolved book metadata — the
-//! orchestrator gates this component behind its `loading` / `error` /
-//! `book.is_none()` early returns, so by the time we render here we have
-//! a real [`EbookMetadata`].
+//! Post-load player chrome: top bar, hidden `<audio>`, status overlays,
+//! and the two-column [`PlayerStage`]. Owns the per-action handlers
+//! (back / toggle / skip / seek / rate). Rendered by the orchestrator
+//! after the `loading` / `error` / `book.is_none()` gates.
 
 #![cfg(not(feature = "mobile"))]
 

@@ -9,9 +9,8 @@
 use dioxus::prelude::*;
 use wasm_bindgen::prelude::*;
 
-use crate::data;
-
 use super::helpers::{post_audio_progress, HLS_JS};
+use crate::data;
 
 /// Install the `window.OmnibusAudio` shim and kick off the manifest-driven
 /// init effect. Returns nothing — all state lives in the passed-in signals.

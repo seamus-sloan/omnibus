@@ -1,9 +1,8 @@
 //! Transport controls + scrubber for the listen page.
 //!
-//! Split from `BookListenPage` to keep each component body under ~150 lines.
-//! Receives the playback-state signals plus per-action [`EventHandler`]s
-//! from the parent — the eval/interop layer stays in `bootstrap.rs` /
-//! the parent orchestrator so this module is pure presentation.
+//! Pure presentation: receives playback-state signals plus per-action
+//! handlers from `ready_player`. The eval/interop layer lives in
+//! `bootstrap.rs`.
 
 #![cfg(not(feature = "mobile"))]
 
