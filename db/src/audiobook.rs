@@ -39,6 +39,14 @@ pub use stat::{stat_audiobook_library, AudiobookStatEntry, AudiobookStatScanResu
 /// indexer would surface files the count display ignores, or vice versa.
 pub const AUDIOBOOK_EXTENSIONS: &[&str] = &["m4b", "m4a", "mp3"];
 
+/// `book_files.format` values produced by the audiobook indexer. Used by
+/// [`crate::indexer::reindex_audiobooks`] to scope the diff's "currently
+/// indexed" view to audiobook rows — prevents `sync_audiobooks` from
+/// classifying foreign (ebook) rows under a shared `library_path` as
+/// Removed and deleting them. Uppercased to match the values written
+/// in [`crate::sync::sync_audiobooks`].
+pub const AUDIOBOOK_FORMATS: &[&str] = &["M4B", "M4A", "MP3"];
+
 /// Re-export of [`crate::ebook::IndexedBook`] so callers using
 /// `audiobook::IndexedBook` and `ebook::IndexedBook` stay in sync. The
 /// sync writer is format-agnostic — it inspects the file extension via

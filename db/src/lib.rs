@@ -36,8 +36,8 @@ pub mod worker;
 pub use author_photos_data::*;
 pub use books::{
     book_file_path, count_books, count_search_books, get_book, get_book_by_uuid, library_from_db,
-    library_from_db_with_total, list_books, list_indexed_rows, resolve_book_id_by_uuid,
-    search_books, search_books_with_total, IndexedRow, MAX_BOOKS_RETURNED,
+    library_from_db_with_total, list_books, list_indexed_rows, list_indexed_rows_for_formats,
+    resolve_book_id_by_uuid, search_books, search_books_with_total, IndexedRow, MAX_BOOKS_RETURNED,
 };
 pub use browse::*;
 pub use covers::{covers_dir, get_cover, get_last_modified_epoch};

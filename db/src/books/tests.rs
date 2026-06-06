@@ -1538,3 +1538,98 @@ async fn book_file_path_returns_none_when_no_file_row_for_format() {
     let path = book_file_path(&pool, book_id, "EPUB").await.unwrap();
     assert!(path.is_none());
 }
+
+// ---------- list_indexed_rows_for_formats (#328) ----------
+
+#[tokio::test]
+async fn list_indexed_rows_for_formats_returns_only_matching_format_rows() {
+    // Regression for #328: when ebook and audiobook libraries share a
+    // path, the format-scoped read must return only the rows whose
+    // `book_files.format` is in the allow-list.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    // Seed one EPUB and one M4B row under the same library_path. Use
+    // separate library rows to keep the seed helper simple — they share
+    // the same `libraries.path` string only via the second seed adding
+    // its own row, so we instead insert both books under the same id.
+    let lib_id: i64 = sqlx::query_scalar(
+        "INSERT INTO libraries (path, display_name) VALUES ('/shared', '/shared') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let epub_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, library_id, path, title, sort) \
+         VALUES ('uuid-epub', ?, '/shared/epub', 'EpubTitle', 'EpubTitle') RETURNING id",
+    )
+    .bind(lib_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let m4b_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, library_id, path, title, sort) \
+         VALUES ('uuid-m4b', ?, '/shared/audio', 'AudioTitle', 'AudioTitle') RETURNING id",
+    )
+    .bind(lib_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime, mtime_epoch) \
+         VALUES (?, 'EPUB', 'EpubTitle', 100, '', 100), \
+                (?, 'M4B',  'AudioTitle', 200, '', 200)",
+    )
+    .bind(epub_id)
+    .bind(m4b_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let ebooks = list_indexed_rows_for_formats(&pool, "/shared", &["EPUB"])
+        .await
+        .unwrap();
+    assert_eq!(ebooks.len(), 1);
+    assert_eq!(ebooks[0].uuid, "uuid-epub");
+    assert_eq!(ebooks[0].mtime_epoch, 100);
+    assert_eq!(ebooks[0].size_bytes, 100);
+
+    let audiobooks = list_indexed_rows_for_formats(&pool, "/shared", &["M4B", "M4A", "MP3"])
+        .await
+        .unwrap();
+    assert_eq!(audiobooks.len(), 1);
+    assert_eq!(audiobooks[0].uuid, "uuid-m4b");
+}
+
+#[tokio::test]
+async fn list_indexed_rows_for_formats_returns_empty_for_empty_allow_list() {
+    // Defensive contract: callers passing an empty allow-list mean
+    // "no formats to match against" and must get an empty result, not
+    // every row (which would re-introduce the #328 bug).
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib_id: i64 = sqlx::query_scalar(
+        "INSERT INTO libraries (path, display_name) VALUES ('/lib', '/lib') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let book_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, library_id, path, title, sort) \
+         VALUES ('uuid-a', ?, '/lib/a', 'A', 'A') RETURNING id",
+    )
+    .bind(lib_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime, mtime_epoch) \
+         VALUES (?, 'EPUB', 'a', 0, '', 0)",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let rows = list_indexed_rows_for_formats(&pool, "/lib", &[])
+        .await
+        .unwrap();
+    assert!(rows.is_empty());
+}
