@@ -201,7 +201,10 @@ pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()
         anyhow::bail!("scan of {library_path} failed: {msg}");
     }
 
-    let db_rows = books::list_indexed_rows(pool, library_path).await?;
+    // Scope to ebook formats so a shared ebook + audiobook library_path
+    // does not classify audiobook rows here as Removed (#328 inverse).
+    let db_rows =
+        books::list_indexed_rows_for_formats(pool, library_path, ebook::EBOOK_FORMATS).await?;
     let library_root: PathBuf = PathBuf::from(library_path);
     let diff = diff_library(&stat.entries, &db_rows, &library_root);
 
@@ -254,8 +257,12 @@ pub async fn reindex_audiobooks(pool: &SqlitePool, library_path: &str) -> anyhow
             .await?;
 
     // Diff groups against DB rows (project groups to the ebook StatEntry shape
-    // so diff_library can be reused verbatim).
-    let db_rows = books::list_indexed_rows(pool, library_path).await?;
+    // so diff_library can be reused verbatim). Scope to audiobook formats so a
+    // shared ebook + audiobook library_path does not classify EPUB rows here
+    // as Removed (#328).
+    let db_rows =
+        books::list_indexed_rows_for_formats(pool, library_path, audiobook::AUDIOBOOK_FORMATS)
+            .await?;
     let library_root: PathBuf = PathBuf::from(library_path);
     let groups_as_stat: Vec<ebook::StatEntry> = groups
         .iter()
@@ -578,5 +585,145 @@ mod tests {
             "a failed scan must preserve the existing index"
         );
         assert_eq!(after[0].title.as_deref(), Some("Dracula"));
+    }
+
+    // ---------- #328: shared-path cross-format deletion guard ----------
+
+    /// Seed one `IndexedAudiobook` row into the DB at `library_path`.
+    /// Bypasses the full audiobook indexer (no real .m4b file needed) so
+    /// the cross-format-deletion regression tests can focus on the
+    /// reindex read-side filter, not on parsing real audio files.
+    async fn seed_audiobook_row(pool: &SqlitePool, library_path: &str, group_path: &str) {
+        let plan = crate::sync::AudiobookSyncPlan {
+            new_books: vec![crate::audiobook::IndexedAudiobook {
+                uuid: "uuid-m4b".to_string(),
+                group_path: group_path.to_string(),
+                format: "M4B".to_string(),
+                title: "AudioTitle".to_string(),
+                creator_name: None,
+                cover: None,
+                parts: vec![],
+                total_size_bytes: 100,
+                max_mtime_epoch: 100,
+                description: None,
+                error: None,
+            }],
+            changed_books: vec![],
+            removed_uuids: vec![],
+            backfill: vec![],
+        };
+        crate::sync::sync_audiobooks(pool, library_path, plan)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn reindex_audiobooks_does_not_delete_ebook_rows_when_libraries_share_a_path() {
+        // #328: when ebook_library_path == audiobook_library_path, an
+        // audiobook reindex must not classify every EPUB row as Removed
+        // and delete it. The fix scopes the diff's "currently indexed"
+        // view to the audiobook formats only.
+        let _covers = CoversTempDir::new("reindex-audio-shared");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+
+        // The audiobook reindex needs a real (but empty) directory to
+        // scan — `stat_audiobook_library` returns an error otherwise.
+        let shared = crate::test_support::make_test_dir("reindex-audio-shared-lib");
+        let shared_path = shared.to_string_lossy().into_owned();
+
+        // Pre-seed one EPUB row and one audiobook row at the same
+        // library_path — the exact configuration the bug reproduces on.
+        replace_books(
+            &pool,
+            &shared_path,
+            vec![indexed(
+                "dracula.epub",
+                Some("Dracula"),
+                &["Stoker"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+        seed_audiobook_row(&pool, &shared_path, "audio/AudioTitle.m4b").await;
+        assert_eq!(
+            list_books(&pool, &shared_path).await.unwrap().len(),
+            2,
+            "test precondition: two books (EPUB + M4B) seeded at the shared path"
+        );
+
+        // Run the audiobook reindex against the empty directory. The
+        // audiobook row should be classified as Removed (and deleted);
+        // the EPUB row must survive because its format is outside the
+        // audiobook allow-list.
+        reindex_audiobooks(&pool, &shared_path).await.unwrap();
+
+        let after = list_books(&pool, &shared_path).await.unwrap();
+        assert_eq!(
+            after.len(),
+            1,
+            "EPUB row must survive an audiobook-only reindex"
+        );
+        assert_eq!(after[0].title.as_deref(), Some("Dracula"));
+        assert!(
+            after[0].formats.iter().any(|f| f == "EPUB"),
+            "the surviving row must be the EPUB, not a stray audiobook"
+        );
+
+        let _ = std::fs::remove_dir_all(&shared);
+    }
+
+    #[tokio::test]
+    async fn reindex_ebooks_does_not_delete_audiobook_rows_when_libraries_share_a_path() {
+        // #328 inverse: an ebook reindex against a shared path must not
+        // delete audiobook rows for the same symmetric reason.
+        let _covers = CoversTempDir::new("reindex-ebook-shared");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+
+        let shared = crate::test_support::make_test_dir("reindex-ebook-shared-lib");
+        let shared_path = shared.to_string_lossy().into_owned();
+
+        replace_books(
+            &pool,
+            &shared_path,
+            vec![indexed(
+                "dracula.epub",
+                Some("Dracula"),
+                &["Stoker"],
+                &[],
+                None,
+                None,
+            )],
+        )
+        .await
+        .unwrap();
+        seed_audiobook_row(&pool, &shared_path, "audio/AudioTitle.m4b").await;
+        assert_eq!(
+            list_books(&pool, &shared_path).await.unwrap().len(),
+            2,
+            "test precondition: two books (EPUB + M4B) seeded at the shared path"
+        );
+
+        // Run the ebook reindex against the empty directory. The EPUB
+        // row should be classified as Removed (and deleted); the M4B
+        // row must survive because its format is outside the ebook
+        // allow-list.
+        reindex(&pool, &shared_path).await.unwrap();
+
+        let after = list_books(&pool, &shared_path).await.unwrap();
+        assert_eq!(
+            after.len(),
+            1,
+            "audiobook row must survive an ebook-only reindex"
+        );
+        assert_eq!(after[0].title.as_deref(), Some("AudioTitle"));
+        assert!(
+            after[0].formats.iter().any(|f| f == "M4B"),
+            "the surviving row must be the audiobook, not a stray ebook"
+        );
+
+        let _ = std::fs::remove_dir_all(&shared);
     }
 }

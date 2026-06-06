@@ -221,6 +221,64 @@ pub async fn list_indexed_rows(
         .collect())
 }
 
+/// Format-scoped variant of [`list_indexed_rows`]: returns only books
+/// that have **at least one** `book_files` row whose `format` is in
+/// `formats` (matched case-insensitively via the `COLLATE NOCASE`
+/// `book_files.format` column).
+///
+/// Used by the per-format reindex paths (ebook / audiobook) so that
+/// when the user configures the ebook and audiobook libraries to the
+/// same on-disk directory, an audiobook reindex does not classify the
+/// EPUB rows as Removed (and vice versa). With this filter the diff
+/// only sees the rows the current scan can legitimately account for.
+///
+/// `formats` is an allow-list of uppercase `book_files.format` values
+/// — see [`crate::ebook::EBOOK_FORMATS`] and
+/// [`crate::audiobook::AUDIOBOOK_FORMATS`]. An empty slice returns an
+/// empty vec (no formats to match against).
+pub async fn list_indexed_rows_for_formats(
+    pool: &SqlitePool,
+    library_path: &str,
+    formats: &[&str],
+) -> Result<Vec<IndexedRow>, sqlx::Error> {
+    if formats.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Inline placeholder list — formats is a small static slice owned by
+    // the caller, so there's no injection surface here and we avoid the
+    // overhead of a temp table or sqlx `Arguments` round-trip.
+    let placeholders = std::iter::repeat_n("?", formats.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        r#"
+        SELECT b.uuid                                  AS uuid,
+               COALESCE(MAX(bf.mtime_epoch), 0)        AS mtime_epoch,
+               COALESCE(MAX(bf.size_bytes), 0)         AS size_bytes
+          FROM books b
+          JOIN libraries l   ON l.id = b.library_id
+          JOIN book_files bf ON bf.book_id = b.id
+         WHERE l.path = ?
+           AND bf.format IN ({placeholders})
+         GROUP BY b.id, b.uuid
+        "#
+    );
+    let mut q = sqlx::query(&sql).bind(library_path);
+    for fmt in formats {
+        q = q.bind(*fmt);
+    }
+    let rows = q.fetch_all(pool).await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| IndexedRow {
+            uuid: r.get("uuid"),
+            mtime_epoch: r.get("mtime_epoch"),
+            size_bytes: r.get("size_bytes"),
+        })
+        .collect())
+}
+
 /// Total number of books currently indexed under `library_path`.
 ///
 /// Companion to `list_books`: `list_books` caps the returned vec at
