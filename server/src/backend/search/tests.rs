@@ -191,8 +191,7 @@ async fn api_search_palette_returns_429_after_budget_exceeded() {
         assert_eq!(
             res.status(),
             StatusCode::OK,
-            "request #{} (1-indexed: {}) should be within budget",
-            i,
+            "request #{} should be within budget",
             i + 1
         );
     }
