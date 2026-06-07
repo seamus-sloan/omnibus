@@ -32,13 +32,10 @@ pub(super) fn install_audio_bootstrap(
     let uuid_for_mount = book_uuid.clone();
     let uuid_for_cb = book_uuid;
     use_effect(use_reactive!(|uuid_for_mount| {
-        // SPA-nav from one audiobook to the next reruns this effect with the
-        // new `uuid_for_mount`, but the player signals still hold the prior
-        // book's values — stale `hls_ready=true` hides the preparing overlay,
-        // stale `playback_failed=true` flashes a failure on the next book,
-        // and the scrubber renders the previous elapsed/duration until the
-        // new manifest + `loadedmetadata` arrive. Reset every signal to its
-        // initial value here so the next bootstrap starts from a clean slate.
+        // SPA-nav reruns this effect with a new `uuid_for_mount` but the
+        // player signals still hold the prior book's values; reset before
+        // installing callbacks so a stale `hls_ready` / `playback_failed` /
+        // scrubber position can't leak across the boundary.
         duration.set(0.0_f64);
         elapsed.set(0.0_f64);
         playing.set(false);
