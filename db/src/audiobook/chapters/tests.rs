@@ -172,8 +172,8 @@ fn make_id3v2_chap_fixture(
         chap_body.extend_from_slice(element_id.as_bytes());
         chap_body.extend_from_slice(&start.to_be_bytes());
         chap_body.extend_from_slice(&end.to_be_bytes());
-        chap_body.extend_from_slice(&[0xFF; 4]); // start offset (unused)
-        chap_body.extend_from_slice(&[0xFF; 4]); // end offset (unused)
+        chap_body.extend_from_slice(&[0xFF; 4]);
+        chap_body.extend_from_slice(&[0xFF; 4]);
         // TIT2 sub-frame: 4 id + 4 size + 2 flags + body
         chap_body.extend_from_slice(b"TIT2");
         if major_version >= 4 {
@@ -205,9 +205,9 @@ fn make_id3v2_chap_fixture(
     let tag_size = frames.len() as u32;
     let mut data = Vec::new();
     data.extend_from_slice(b"ID3");
-    data.push(major_version); // version major
-    data.push(0);             // version revision
-    data.push(0);             // flags
+    data.push(major_version);
+    data.push(0);
+    data.push(0);
     // syncsafe tag size
     data.push(((tag_size >> 21) & 0x7F) as u8);
     data.push(((tag_size >> 14) & 0x7F) as u8);
