@@ -1,5 +1,6 @@
 import { expect, test } from "../fixtures/test";
 import { AUDIOBOOK_BOOKS, AUDIOBOOK_BOOK_COUNT } from "../fixtures/audiobooks";
+import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { audiobookFixturesDir, seedAudiobookLibrary } from "../utils/seed";
@@ -51,8 +52,12 @@ test("renders the listen page layout", async ({ page, request }) => {
 
   // The listen page is deliberately rendered WITHOUT the app's top-nav
   // chrome — same pattern as /read/:uuid. It owns its own slim top bar
-  // with a Back affordance, so the layout test pins that instead.
-  await expect(page.getByRole("button", { name: "Back" })).toBeVisible();
+  // with a Back affordance, so the layout test pins that instead. The
+  // testid (not getByRole with name "Back") is load-bearing because
+  // "Back" is a substring of both "Back 30 seconds" (the skip button)
+  // and "Playback speed" (the rate button), so the role+name match is
+  // ambiguous in this chrome.
+  await expect(page.getByTestId("listen-back")).toBeVisible();
   await expect(page.getByText("Now playing")).toBeVisible();
 
   // Title and author come from the book metadata via PlayerStage's
@@ -171,41 +176,43 @@ interface ProgressMutationOpts {
   expectedStatus: number;
 }
 
+// Match `/api/rpc/progress` exactly, NOT the sibling `/api/rpc/progress/get`
+// (initial server reconciliation, fires once on mount) nor
+// `/api/rpc/progress/sessions` (session batch — not exercised here). The
+// pattern is anchored so a substring containment match in `expectMutation`'s
+// URL filter can't accidentally swallow either neighbor.
+const PROGRESS_URL = /\/api\/rpc\/progress(?:\?|$)/;
+
 /**
- * Listen-page-flavored `expectMutation`: arms a waiter for the audio
- * progress POST, runs the action, then asserts payload + status. The
- * payload shape is the wire JSON `post_audio_progress` builds:
+ * Listen-page-flavored thin wrapper around the shared `expectMutation`
+ * helper from `utils/api.ts`. Encodes the wire-JSON shape
+ * `post_audio_progress` builds:
  *
  *   { "update": { "book_uuid", "format": "audio", "audio_position_seconds" } }
  *
- * Direct equivalent of the generic `expectMutation` from `utils/api.ts`,
- * specialized so the spec doesn't need to re-encode the payload shape
- * three times.
+ * so the spec doesn't need to repeat the payload three times. All the
+ * actual waiting / pairing / status assertions stay in `expectMutation`
+ * per `.claude/rules/04-playwright.md`.
  */
 async function expectMutationProgress(
   page: import("@playwright/test").Page,
   opts: ProgressMutationOpts,
   action: () => Promise<void>,
 ): Promise<void> {
-  // Match `/api/rpc/progress` exactly, NOT the sibling `/api/rpc/progress/get`
-  // (initial server reconciliation, fires once on mount) nor
-  // `/api/rpc/progress/sessions` (session batch — not exercised here).
-  const requestPromise = page.waitForRequest(
-    (req) => req.method() === "POST" && new URL(req.url()).pathname === "/api/rpc/progress",
-    { timeout: 5_000 },
-  );
-  await action();
-  const request = await requestPromise;
-  const response = await request.response();
-  expect(response, `progress POST should resolve with a response`).not.toBeNull();
-  expect(response!.status(), `progress POST should land with ${opts.expectedStatus}`).toBe(
-    opts.expectedStatus,
-  );
-  expect(request.postDataJSON()).toEqual({
-    update: {
-      book_uuid: opts.uuid,
-      format: "audio",
-      audio_position_seconds: opts.audioPositionSeconds,
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: PROGRESS_URL,
+      expectedStatus: opts.expectedStatus,
+      expectedBody: {
+        update: {
+          book_uuid: opts.uuid,
+          format: "audio",
+          audio_position_seconds: opts.audioPositionSeconds,
+        },
+      },
     },
-  });
+    action,
+  );
 }

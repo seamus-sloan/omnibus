@@ -1,7 +1,7 @@
 /**
  * Synthetic MP3 generator for Playwright audiobook fixtures.
  *
- * Produces minimal valid MPEG-1 Layer III silent MP3 files with an ID3v2.3
+ * Produces minimal valid MPEG-1 Layer III silent MP3 files with an ID3v2.4
  * tag block carrying TIT2 / TPE1 / TALB / TRCK so the omnibus indexer
  * (`db::audiobook::parse_groups`) can lift title / artist / album / track —
  * the same per-part fields the listen-page spec asserts against.
@@ -27,7 +27,9 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 interface AudiobookInput {
-  /** Output filename (no path). */
+  /** Relative path under the output directory, including any subdirectories
+   *  (e.g. `"ada_lovelace_solo/the_analytical_audiobook.mp3"`). The
+   *  parent dirs are created on demand by the driver. */
   filename: string;
   /** ID3 TIT2 (track / chapter title). For single-file audiobooks this is
    *  the book title; for multi-file mp3 folders this is the chapter title. */
@@ -125,39 +127,39 @@ function buildSilentMp3Body(nFrames: number): Buffer {
 }
 
 // -----------------------------------------------------------------------------
-// ID3v2.3 tag primitives
+// ID3v2.4 tag primitives
 // -----------------------------------------------------------------------------
 
 /**
  * Encode `n` as the 4-byte syncsafe integer ID3v2 sizes use (7 bits per
- * byte, MSB always 0).
+ * byte, MSB always 0). v2.4 frame sizes are syncsafe (v2.3 used regular
+ * big-endian — bumping to v2.4 is what lets us use `0x03` (UTF-8) as the
+ * text-encoding marker without misrepresenting the spec).
  */
 function syncsafe(n: number): Buffer {
   return Buffer.from([(n >> 21) & 0x7f, (n >> 14) & 0x7f, (n >> 7) & 0x7f, n & 0x7f]);
 }
 
 /**
- * Build one ID3v2.3 text-frame: 4-byte ID, 4-byte big-endian size, 2-byte
- * flags (`0x00 0x00`), 1-byte encoding marker (`0x03` = UTF-8), the UTF-8
- * payload, and a trailing NUL terminator. Sufficient for TIT2, TPE1,
- * TALB, TRCK — the four fields the audiobook indexer reads via
- * `lofty::tag::Accessor`.
+ * Build one ID3v2.4 text-frame: 4-byte ID, 4-byte syncsafe size, 2-byte
+ * flags (`0x00 0x00`), 1-byte encoding marker (`0x03` = UTF-8 — defined
+ * by v2.4, not v2.3), the UTF-8 payload, and a trailing NUL terminator.
+ * Sufficient for TIT2, TPE1, TALB, TRCK — the four fields the audiobook
+ * indexer reads via `lofty::tag::Accessor`.
  */
 function textFrame(id: string, text: string): Buffer {
-  const enc = Buffer.from([0x03]); // UTF-8
+  const enc = Buffer.from([0x03]); // UTF-8 (ID3v2.4)
   const body = Buffer.concat([enc, Buffer.from(text, "utf8"), Buffer.from([0x00])]);
   const flags = Buffer.from([0, 0]);
-  const size = Buffer.alloc(4);
-  size.writeUInt32BE(body.length, 0);
-  return Buffer.concat([Buffer.from(id, "ascii"), size, flags, body]);
+  return Buffer.concat([Buffer.from(id, "ascii"), syncsafe(body.length), flags, body]);
 }
 
 /**
- * Assemble the full ID3v2.3 header + frame block for an audiobook part.
+ * Assemble the full ID3v2.4 header + frame block for an audiobook part.
  * `track` rides as the TRCK frame which `lofty` reads as a `u32` —
  * drives the in-folder sort order in `db::audiobook::parse_groups`.
  */
-function buildId3v23Tag(input: AudiobookInput): Buffer {
+function buildId3v24Tag(input: AudiobookInput): Buffer {
   const frames = Buffer.concat([
     textFrame("TIT2", input.title),
     textFrame("TPE1", input.artist),
@@ -166,14 +168,14 @@ function buildId3v23Tag(input: AudiobookInput): Buffer {
   ]);
   const header = Buffer.concat([
     Buffer.from("ID3", "ascii"),
-    Buffer.from([0x03, 0x00, 0x00]), // version 2.3, revision 0, flags 0
+    Buffer.from([0x04, 0x00, 0x00]), // version 2.4, revision 0, flags 0
     syncsafe(frames.length),
   ]);
   return Buffer.concat([header, frames]);
 }
 
 function buildAudiobook(input: AudiobookInput): Buffer {
-  return Buffer.concat([buildId3v23Tag(input), buildSilentMp3Body(input.frames)]);
+  return Buffer.concat([buildId3v24Tag(input), buildSilentMp3Body(input.frames)]);
 }
 
 // -----------------------------------------------------------------------------
