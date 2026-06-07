@@ -150,6 +150,8 @@ body.atrium,
   position: sticky; top: 0;
   background: color-mix(in oklch, var(--bg-0) 92%, transparent);
   backdrop-filter: blur(10px); z-index: 5;
+  width: 100vw;
+  margin-left: calc(-50vw + 50%);
 }
 .atrium-brand {
   display: flex; align-items: center; gap: 10px;
