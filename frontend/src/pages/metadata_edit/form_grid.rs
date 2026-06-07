@@ -8,33 +8,53 @@ use omnibus_shared::EbookMetadata;
 use super::fields::{MeArea, MeField, MeLabel};
 use crate::components::chip_editor::{ChipEditor, SuggestionItem};
 
+/// Per-field editable signals owned by the parent `MetadataEditForm` and
+/// threaded through the form rows. Each signal is `Copy`, so this struct
+/// stays cheap to clone for Dioxus's `PartialEq` prop comparison.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct FormFields {
+    pub title: Signal<String>,
+    pub description: Signal<String>,
+    pub publisher: Signal<String>,
+    pub published: Signal<String>,
+    pub language: Signal<String>,
+    pub series: Signal<String>,
+    pub series_index: Signal<String>,
+    pub authors: Signal<Vec<String>>,
+    pub tags: Signal<Vec<String>>,
+    pub sort_by: Signal<String>,
+    pub filename: Signal<String>,
+}
+
+/// Suggestion pools backing the author + tag chip-editor dropdowns. Empty
+/// signals render no dropdown; populated by the parent's mount-time fetch.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct FormSuggestions {
+    pub authors: Signal<Vec<SuggestionItem>>,
+    pub tags: Signal<Vec<SuggestionItem>>,
+}
+
 /// Composed form grid plus the tags + series sections that live in the
 /// same left-column container on the page.
 #[component]
-#[allow(clippy::too_many_arguments)]
 pub(super) fn FormGrid(
     orig: Signal<EbookMetadata>,
-    title: Signal<String>,
-    description: Signal<String>,
-    publisher: Signal<String>,
-    published: Signal<String>,
-    language: Signal<String>,
-    series: Signal<String>,
-    series_index: Signal<String>,
-    authors: Signal<Vec<String>>,
-    tags: Signal<Vec<String>>,
-    sort_by: Signal<String>,
-    filename: Signal<String>,
-    author_suggestions: Signal<Vec<SuggestionItem>>,
-    tag_suggestions: Signal<Vec<SuggestionItem>>,
+    fields: FormFields,
+    suggestions: FormSuggestions,
 ) -> Element {
-    let mut title = title;
-    let mut description = description;
-    let mut publisher = publisher;
-    let mut published = published;
-    let mut language = language;
-    let mut series = series;
-    let mut series_index = series_index;
+    let mut title = fields.title;
+    let mut description = fields.description;
+    let mut publisher = fields.publisher;
+    let mut published = fields.published;
+    let mut language = fields.language;
+    let mut series = fields.series;
+    let mut series_index = fields.series_index;
+    let authors = fields.authors;
+    let tags = fields.tags;
+    let sort_by = fields.sort_by;
+    let filename = fields.filename;
+    let author_suggestions = suggestions.authors;
+    let tag_suggestions = suggestions.tags;
 
     rsx! {
         div { class: "me-form",
