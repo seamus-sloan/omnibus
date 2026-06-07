@@ -146,11 +146,18 @@ test("SPA-nav between audiobooks resets player signals (#369)", async ({
 
   // SPA-navigate to the second audiobook via a client-side link click.
   // Dioxus intercepts anchor clicks for same-origin routes, so this
-  // triggers a true SPA-nav (no full page reload).
+  // triggers a true SPA-nav (no full page reload). The anchor needs
+  // visible content + a fixed on-screen position because Playwright's
+  // actionability check requires the click target be visible — an empty
+  // anchor at the bottom of the document collapses to 0×0 and fails the
+  // visibility gate.
   await page.evaluate((url) => {
     const a = document.createElement("a");
     a.href = url;
     a.id = "__test-spa-nav";
+    a.textContent = "spa-nav";
+    a.style.cssText =
+      "position:fixed;top:0;left:0;padding:8px;background:#000;color:#fff;z-index:99999;";
     document.body.appendChild(a);
   }, `/listen/${uuid2}`);
   await page.locator("#__test-spa-nav").click();
