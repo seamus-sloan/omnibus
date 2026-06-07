@@ -14,26 +14,72 @@ export function fixturesDir(): string {
 }
 
 /**
- * Seed the running server: POST the fixtures path to `/api/rpc/settings`,
+ * Absolute path to the committed audiobook fixtures
+ * (`<repo>/test_data/audiobooks`). Contains both synthetic generated
+ * MP3s and real public-domain LibriVox recordings. The audiobook indexer
+ * walks this tree the same way the ebook scanner walks `epubs/`.
+ */
+export function audiobookFixturesDir(): string {
+  return resolve(__dirname, "..", "..", "..", "..", "test_data", "audiobooks");
+}
+
+/**
+ * Seed the running server: POST the fixtures path(s) to `/api/rpc/settings`,
  * then poll `GET /api/rpc/ebooks` until the indexer has surfaced
- * `expectedCount` books. Indexing runs in a `tokio::spawn` after the settings
- * write returns, so we cannot rely on the POST response alone.
+ * `expectedCount` books. Indexing runs in a `tokio::spawn` after the
+ * settings write returns, so we cannot rely on the POST response alone.
+ *
+ * `expectedCount` is the *total* number of books `/api/rpc/ebooks` should
+ * return — both ebooks and audiobooks ride on the unified landing-page
+ * query (`db::library_from_db_combined`). When `audiobookLibraryPath` is
+ * `null` (the default) the count is just the ebook total.
  */
 export async function seedLibrary(
   request: APIRequestContext,
   ebookLibraryPath: string,
   expectedCount: number,
+  audiobookLibraryPath: string | null = null,
 ): Promise<void> {
   const settingsResp = await request.post("/api/rpc/settings", {
     data: {
       settings: {
         ebook_library_path: ebookLibraryPath,
-        audiobook_library_path: null,
+        audiobook_library_path: audiobookLibraryPath,
       },
     },
   });
   expect(settingsResp.status(), "POST /api/rpc/settings failed").toBe(200);
 
+  await pollForBookCount(request, expectedCount);
+}
+
+/**
+ * Seed only the audiobook library — POST the path with
+ * `ebook_library_path: null`, then poll for `expectedCount` audiobook
+ * *groups*. Use from the listen spec, which doesn't need ebook fixtures.
+ */
+export async function seedAudiobookLibrary(
+  request: APIRequestContext,
+  audiobookLibraryPath: string,
+  expectedCount: number,
+): Promise<void> {
+  const settingsResp = await request.post("/api/rpc/settings", {
+    data: {
+      settings: {
+        ebook_library_path: null,
+        audiobook_library_path: audiobookLibraryPath,
+      },
+    },
+  });
+  expect(settingsResp.status(), "POST /api/rpc/settings failed").toBe(200);
+
+  await pollForBookCount(request, expectedCount);
+}
+
+async function pollForBookCount(
+  request: APIRequestContext,
+  expectedCount: number,
+): Promise<void> {
   // Poll until the indexer's reindex task has populated the DB. The 45s
   // budget covers cold starts on the GitHub-hosted Linux runner, where
   // indexing the full public-domain set (including an 84 MB Count of Monte
