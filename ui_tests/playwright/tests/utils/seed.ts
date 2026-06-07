@@ -14,6 +14,15 @@ export function fixturesDir(): string {
 }
 
 /**
+ * Absolute path to the committed audiobook fixtures
+ * (`<repo>/test_data/audiobooks`). Contains public domain LibriVox
+ * recordings in both MP3-folder and single-M4B layouts.
+ */
+export function audiobookFixturesDir(): string {
+  return resolve(__dirname, "..", "..", "..", "..", "test_data", "audiobooks");
+}
+
+/**
  * Seed the running server: POST the fixtures path to `/api/rpc/settings`,
  * then poll `GET /api/rpc/ebooks` until the indexer has surfaced
  * `expectedCount` books. Indexing runs in a `tokio::spawn` after the settings
@@ -34,6 +43,60 @@ export async function seedLibrary(
   });
   expect(settingsResp.status(), "POST /api/rpc/settings failed").toBe(200);
 
+  await pollForBookCount(request, expectedCount);
+}
+
+/**
+ * Seed both ebook and audiobook libraries in a single settings POST, then
+ * poll until the combined count arrives. The unified `/api/rpc/ebooks`
+ * endpoint returns both ebooks and audiobooks (they share the `books`
+ * table), so `expectedCount` is the total across both library types.
+ */
+export async function seedBothLibraries(
+  request: APIRequestContext,
+  ebookLibraryPath: string,
+  audiobookLibraryPath: string,
+  expectedCount: number,
+): Promise<void> {
+  const settingsResp = await request.post("/api/rpc/settings", {
+    data: {
+      settings: {
+        ebook_library_path: ebookLibraryPath,
+        audiobook_library_path: audiobookLibraryPath,
+      },
+    },
+  });
+  expect(settingsResp.status(), "POST /api/rpc/settings failed").toBe(200);
+
+  await pollForBookCount(request, expectedCount);
+}
+
+/**
+ * Seed only the audiobook library (no ebooks). Convenience wrapper for
+ * specs that only need audiobook fixtures.
+ */
+export async function seedAudiobookLibrary(
+  request: APIRequestContext,
+  audiobookLibraryPath: string,
+  expectedCount: number,
+): Promise<void> {
+  const settingsResp = await request.post("/api/rpc/settings", {
+    data: {
+      settings: {
+        ebook_library_path: null,
+        audiobook_library_path: audiobookLibraryPath,
+      },
+    },
+  });
+  expect(settingsResp.status(), "POST /api/rpc/settings failed").toBe(200);
+
+  await pollForBookCount(request, expectedCount);
+}
+
+async function pollForBookCount(
+  request: APIRequestContext,
+  expectedCount: number,
+): Promise<void> {
   // Poll until the indexer's reindex task has populated the DB. The 45s
   // budget covers cold starts on the GitHub-hosted Linux runner, where
   // indexing the full public-domain set (including an 84 MB Count of Monte
