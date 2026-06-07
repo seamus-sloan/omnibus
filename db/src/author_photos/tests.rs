@@ -1,10 +1,23 @@
-use super::*;
-use crate::author_photos_data::get_author_photo;
-use crate::pool::init_db;
+//! Tests for `db::author_photos` — cascade resolver, SSRF guard, and
+//! data-layer helpers. Exercises the Open Library wiremock, blocked-address
+//! variants, and the DB upsert path.
+
+use std::time::Duration;
+
+use sqlx::SqlitePool;
 use wiremock::{
     matchers::{method, path, query_param},
     Mock, MockServer, ResponseTemplate,
 };
+
+use super::cascade::{fetch_open_library, resolve_with, OpenLibraryConfig};
+use super::remote::{
+    fetch_remote_image_with, is_blocked_address, FetchRemoteImageError, RemoteImageConfig,
+};
+use crate::author_photos_data::{
+    author_photo_status, get_author_photo, upsert_author_photo, AuthorPhotoSource,
+};
+use crate::pool::init_db;
 
 async fn pool_with_author(name: &str) -> (SqlitePool, i64) {
     let pool = init_db("sqlite::memory:").await.unwrap();
