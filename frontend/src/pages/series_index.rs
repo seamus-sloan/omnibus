@@ -148,7 +148,7 @@ pub fn SeriesIndexPage() -> Element {
                 } else {
                     div { class: "idx-series-grid",
                         for s in filtered.iter() {
-                            {render_series_card(s)}
+                            div { key: "{s.id}", {render_series_card(s)} }
                         }
                     }
                 }
