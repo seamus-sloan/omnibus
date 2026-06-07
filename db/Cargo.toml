@@ -58,6 +58,7 @@ ammonia = "4"
 # ffprobe fallback.
 lofty = "0.22"
 
+
 # Stable, toolchain-independent UUIDv5 derivation for cover ids (issue #94).
 # `std::collections::hash_map::DefaultHasher` is documented as subject to
 # change between Rust versions, so a toolchain bump would silently rotate
