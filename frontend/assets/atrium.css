@@ -2096,22 +2096,6 @@ a.idx-letter-on:focus-visible {
     transparent 70%);
 }
 
-/* Top bar — reuses .omn-topbar tokens but stays local to the player */
-.lp-topbar {
-  display: flex; align-items: center; gap: 18px;
-  padding: 14px 28px;
-  border-bottom: 1px solid var(--line-2);
-  position: relative; z-index: 5;
-  background: color-mix(in oklch, var(--bg-0) 92%, transparent);
-  backdrop-filter: blur(10px);
-}
-.lp-topbar-brand {
-  display: flex; align-items: center; gap: 10px;
-  font-family: var(--serif); font-size: 22px;
-  font-style: italic; letter-spacing: -0.02em;
-  line-height: 1; padding-top: 3px; color: var(--ink-0);
-}
-
 /* Two-column stage */
 .lp-stage {
   flex: 1; min-height: 0; position: relative; z-index: 1;
@@ -2222,6 +2206,22 @@ a.idx-letter-on:focus-visible {
 .lp-btn-play:hover { transform: scale(1.04); }
 .lp-btn-play:active { transform: scale(0.97); }
 
+/* Play/pause icons inside the big round button */
+.lp-ico-pause {
+  display: flex; gap: 6px;
+}
+.lp-ico-pause-bar {
+  width: 6px; height: 22px;
+  background: currentColor; border-radius: 1px;
+}
+.lp-ico-play {
+  width: 0; height: 0;
+  border-top: 12px solid transparent;
+  border-bottom: 12px solid transparent;
+  border-left: 20px solid currentColor;
+  margin-left: 3px; /* optical center */
+}
+
 .lp-btn-ch {
   height: 42px; padding: 0 12px; border-radius: 999px;
   background: transparent; border: 1px solid transparent;
@@ -2264,6 +2264,10 @@ a.idx-letter-on:focus-visible {
 .lp-toolbar {
   display: flex; gap: 10px; margin-top: 28px;
   justify-content: center;
+}
+.lp-toolbar-btn.on {
+  background: var(--accent); color: var(--accent-ink);
+  border-color: transparent; font-weight: 600;
 }
 
 /* ── Overlay panels & scrim ───────────────────────────────────── */
@@ -2369,7 +2373,48 @@ a.idx-letter-on:focus-visible {
   text-align: center; min-width: 72px;
 }
 
-/* Drawer (chapters / bookmarks — base, wired in future PRs) */
+/* Sleep panel */
+.lp-sleep-panel {
+  right: 56px; bottom: 104px; width: 430px; padding: 28px;
+}
+.lp-sleep-status { text-align: right; }
+.lp-sleep-status-value {
+  font-family: var(--mono); font-size: 26px;
+  color: var(--ink-3); line-height: 1;
+}
+.lp-sleep-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+}
+.lp-sleep-btn {
+  height: 44px; border-radius: 10px; cursor: pointer;
+  display: grid; place-items: center;
+  font-size: 12.5px; font-weight: 500; padding: 0 4px;
+  background: var(--bg-2); color: var(--ink-1);
+  border: 1px solid var(--line-2);
+  transition: background .15s, border-color .15s, color .15s;
+}
+.lp-sleep-btn:hover:not(:disabled) { background: var(--bg-3); border-color: var(--line); }
+.lp-sleep-btn:disabled { opacity: .5; cursor: not-allowed; }
+.lp-sleep-btn.on {
+  background: var(--accent); color: var(--accent-ink);
+  border-color: transparent; font-weight: 600; opacity: 1;
+}
+.lp-sleep-eoc {
+  width: 100%; height: 44px; margin-top: 8px;
+  display: flex; align-items: center; justify-content: center;
+  gap: 8px; font-size: 13px; cursor: pointer;
+  background: var(--bg-2); color: var(--ink-1);
+  border: 1px solid var(--line-2); border-radius: 10px;
+  transition: background .15s;
+}
+.lp-sleep-eoc:hover:not(:disabled) { background: var(--bg-3); }
+.lp-sleep-eoc:disabled { opacity: .5; cursor: not-allowed; }
+.lp-sleep-eoc-dot {
+  width: 6px; height: 6px; border-radius: 999px;
+  background: var(--accent);
+}
+
+/* Drawer (chapters / bookmarks) */
 .lp-drawer {
   position: absolute; top: 0; right: 0; bottom: 0;
   width: 440px; z-index: 40;
@@ -2378,6 +2423,28 @@ a.idx-letter-on:focus-visible {
   border-left: 1px solid var(--line);
   display: flex; flex-direction: column;
   padding: 28px 0 0;
+}
+.lp-drawer-head {
+  display: flex; justify-content: space-between;
+  align-items: flex-end; padding: 0 28px 18px;
+  border-bottom: 1px solid var(--line-2);
+}
+.lp-drawer-body {
+  flex: 1; overflow: auto; padding: 8px 16px 24px;
+}
+.lp-drawer-empty {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  text-align: center; padding: 64px 24px;
+  min-height: 200px;
+}
+.lp-drawer-empty-title {
+  font-family: var(--serif); font-style: italic;
+  font-size: 22px; color: var(--ink-1);
+}
+.lp-drawer-empty-detail {
+  margin-top: 10px; font-size: 14px;
+  color: var(--ink-3); max-width: 28ch; line-height: 1.5;
 }
 
 /* Overlay status (failed / preparing) */
@@ -2404,5 +2471,6 @@ a.idx-letter-on:focus-visible {
   .lp-cover-ring { width: min(280px, 60%); }
   .lp-title { font-size: clamp(28px, 8vw, 48px); }
   .lp-speed-panel { width: calc(100vw - 48px); right: 24px; bottom: 80px; }
+  .lp-sleep-panel { width: calc(100vw - 48px); right: 24px; bottom: 80px; }
   .lp-drawer { width: 100%; }
 }

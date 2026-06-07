@@ -30,8 +30,12 @@ use omnibus_shared::EbookMetadata;
 #[cfg(not(feature = "mobile"))]
 use crate::{data, use_server_url, Route};
 
+#[cfg(not(feature = "mobile"))]
+mod bookmarks_drawer;
 #[cfg(feature = "web")]
 mod bootstrap;
+#[cfg(not(feature = "mobile"))]
+mod chapters_drawer;
 #[cfg(not(feature = "mobile"))]
 mod controls;
 mod helpers;
@@ -39,6 +43,8 @@ mod helpers;
 mod overlays;
 #[cfg(not(feature = "mobile"))]
 mod ready_player;
+#[cfg(not(feature = "mobile"))]
+mod sleep_panel;
 #[cfg(not(feature = "mobile"))]
 mod speed_panel;
 #[cfg(not(feature = "mobile"))]

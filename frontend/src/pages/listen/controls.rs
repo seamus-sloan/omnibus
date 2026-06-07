@@ -9,28 +9,6 @@ use dioxus::prelude::*;
 
 use super::helpers::format_hms;
 
-/// Top control bar styled to match the Omnibus brand bar. Renders the brand
-/// wordmark on the left with a back button, and "Now playing" on the right.
-#[component]
-pub(super) fn TopBar(on_back: EventHandler<MouseEvent>) -> Element {
-    rsx! {
-        div { class: "lp-topbar",
-            div { class: "lp-topbar-brand",
-                button {
-                    class: "btn ghost sm",
-                    r#type: "button",
-                    "data-testid": "listen-back",
-                    "aria-label": "Back",
-                    onclick: move |evt| on_back.call(evt),
-                    "\u{2190} Back"
-                }
-            }
-            div { style: "flex:1;" }
-            span { class: "lp-kicker", "Now playing" }
-        }
-    }
-}
-
 /// The hidden HTML5 `<audio>` element bound by the JS shim.
 #[component]
 pub(super) fn AudioElement() -> Element {
@@ -85,6 +63,7 @@ pub(super) fn Scrubber(
 #[component]
 pub(super) fn TransportButtons(
     play_label: String,
+    playing: bool,
     rate_label: String,
     rate_active: bool,
     on_toggle: EventHandler<MouseEvent>,
@@ -127,7 +106,14 @@ pub(super) fn TransportButtons(
                 "data-testid": "listen-toggle",
                 "aria-label": "{play_label}",
                 onclick: move |evt| on_toggle.call(evt),
-                "{play_label}"
+                if playing {
+                    div { class: "lp-ico-pause",
+                        div { class: "lp-ico-pause-bar" }
+                        div { class: "lp-ico-pause-bar" }
+                    }
+                } else {
+                    div { class: "lp-ico-play" }
+                }
             }
 
             button {
@@ -164,36 +150,63 @@ pub(super) fn TransportButtons(
 }
 
 /// Toolbar row beneath transport: Sleep, Bookmark, Chapters.
-/// All handlers are wired by `ready_player`; the buttons themselves are inert
-/// placeholders until their backing PRs land.
+/// Each button toggles its overlay panel; `*_active` props drive the
+/// highlighted state. The panels themselves are visual shells until
+/// their backing infrastructure ships (PRs 3–5).
 #[component]
 pub(super) fn Toolbar(
+    sleep_active: bool,
+    bookmarks_active: bool,
+    chapters_active: bool,
     on_sleep: EventHandler<MouseEvent>,
     on_bookmark: EventHandler<MouseEvent>,
     on_chapters: EventHandler<MouseEvent>,
 ) -> Element {
+    let sleep_class = if sleep_active {
+        "btn sm lp-toolbar-btn on"
+    } else {
+        "btn sm lp-toolbar-btn"
+    };
+    let bm_class = if bookmarks_active {
+        "btn sm lp-toolbar-btn on"
+    } else {
+        "btn sm lp-toolbar-btn"
+    };
+    let ch_class = if chapters_active {
+        "btn sm lp-toolbar-btn on"
+    } else {
+        "btn sm lp-toolbar-btn"
+    };
+    let sleep_label = if sleep_active {
+        "Sleep \u{00b7} on"
+    } else {
+        "Sleep \u{00b7} off"
+    };
+    let ch_label = if chapters_active {
+        "Chapters \u{2193}"
+    } else {
+        "Chapters \u{2191}"
+    };
+
     rsx! {
         div { class: "lp-toolbar",
             button {
-                class: "btn sm",
+                class: sleep_class,
                 r#type: "button",
                 onclick: move |evt| on_sleep.call(evt),
-                disabled: true,
-                "Sleep \u{00b7} off"
+                "{sleep_label}"
             }
             button {
-                class: "btn sm",
+                class: bm_class,
                 r#type: "button",
                 onclick: move |evt| on_bookmark.call(evt),
-                disabled: true,
                 "Bookmark"
             }
             button {
-                class: "btn sm",
+                class: ch_class,
                 r#type: "button",
                 onclick: move |evt| on_chapters.call(evt),
-                disabled: true,
-                "Chapters"
+                "{ch_label}"
             }
         }
     }

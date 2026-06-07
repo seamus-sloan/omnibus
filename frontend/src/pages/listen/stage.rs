@@ -22,6 +22,7 @@ pub(super) fn PlayerStage(
     remaining: f64,
     scrub_max: f64,
     play_label: String,
+    playing: bool,
     rate_label: String,
     rate_active: bool,
     on_seek: EventHandler<Event<FormData>>,
@@ -29,6 +30,9 @@ pub(super) fn PlayerStage(
     on_skip_back: EventHandler<MouseEvent>,
     on_skip_forward: EventHandler<MouseEvent>,
     on_rate: EventHandler<MouseEvent>,
+    sleep_active: bool,
+    bookmarks_active: bool,
+    chapters_active: bool,
     on_sleep: EventHandler<MouseEvent>,
     on_bookmark: EventHandler<MouseEvent>,
     on_chapters: EventHandler<MouseEvent>,
@@ -63,6 +67,7 @@ pub(super) fn PlayerStage(
 
                 TransportButtons {
                     play_label,
+                    playing,
                     rate_label,
                     rate_active,
                     on_toggle,
@@ -72,6 +77,9 @@ pub(super) fn PlayerStage(
                 }
 
                 Toolbar {
+                    sleep_active,
+                    bookmarks_active,
+                    chapters_active,
                     on_sleep,
                     on_bookmark,
                     on_chapters,
