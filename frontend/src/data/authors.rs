@@ -85,6 +85,18 @@ pub async fn scan_author_photo(
     Ok(response.json::<AuthorPhotoScanResult>().await?)
 }
 
+/// Admin: bulk re-resolve all author photos via the background worker.
+#[cfg(feature = "mobile")]
+pub async fn refetch_author_photos(server_url: &str) -> Result<(), DataError> {
+    let url = format!("{server_url}/api/authors/refetch-photos");
+    let response = with_bearer(http_client().post(&url)).send().await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(())
+}
+
 /// GET `/api/authors` — fetch the full authors index for browse / autocomplete.
 #[cfg(feature = "mobile")]
 pub async fn list_authors(server_url: &str) -> Result<Vec<AuthorSummary>, DataError> {
@@ -112,6 +124,14 @@ pub async fn scan_author_photo(
     id: i64,
 ) -> Result<AuthorPhotoScanResult, DataError> {
     crate::rpc::rpc_scan_author_photo(id)
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Web/SSR `refetch_author_photos` — posts a worker task via server function.
+#[cfg(not(feature = "mobile"))]
+pub async fn refetch_author_photos(_server_url: &str) -> Result<(), DataError> {
+    crate::rpc::rpc_refetch_author_photos()
         .await
         .map_err(note_server_fn_err)
 }

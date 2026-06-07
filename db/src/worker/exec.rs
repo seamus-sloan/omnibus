@@ -62,7 +62,7 @@ impl Worker {
             None
         };
 
-        let outcome = self.execute(task).await;
+        let outcome = self.execute(task, id).await;
         // Project the outcome into the wire-facing terminal state. We pull
         // the last reported `processed` count out of the progress map so a
         // Phase-2 in-flight progress report stays reflected in the final

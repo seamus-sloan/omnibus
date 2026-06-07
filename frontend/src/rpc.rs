@@ -320,6 +320,16 @@ pub async fn rpc_scan_author_photo(id: i64) -> Result<AuthorPhotoScanResult> {
     Ok(AuthorPhotoScanResult { resolved })
 }
 
+/// Admin-only: bulk re-resolve all author photos. Posts a single
+/// `Task::RefetchAuthorPhotos` to the background worker and returns
+/// immediately. Progress is surfaced via the existing `rpc_worker_status`
+/// polling loop.
+#[post("/api/rpc/refetch-author-photos", _pool: PoolExt, worker: WorkerExt, _admin: AdminUser)]
+pub async fn rpc_refetch_author_photos() -> Result<()> {
+    worker.0.post(omnibus_db::worker::Task::RefetchAuthorPhotos);
+    Ok(())
+}
+
 /// Persist an author photo by URL. Admin-gated server-side (the
 /// `user.is_admin` check below mirrors `rpc_scan_author_photo`). The
 /// server fetches the URL via `db::author_photos::fetch_remote_image`,

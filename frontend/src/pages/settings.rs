@@ -21,6 +21,7 @@ pub fn SettingsPage() -> Element {
     let mut status = use_signal(|| None::<String>);
     let mut status_is_error = use_signal(|| false);
     let mut library = use_signal(LibraryContents::default);
+    let mut refetch_in_flight = use_signal(|| false);
     // Bumped after a successful save to re-trigger the library-refresh effect.
     let mut library_refresh = use_signal(|| 0u32);
 
@@ -51,6 +52,8 @@ pub fn SettingsPage() -> Element {
             }
         });
     });
+
+    let url_for_refetch = server_url.clone();
 
     let worker_status_slot: Element = {
         #[cfg(not(feature = "mobile"))]
@@ -134,7 +137,35 @@ pub fn SettingsPage() -> Element {
                 // Element outside the macro and embedded by reference.
                 {worker_status_slot}
 
-                button { r#type: "submit", class: "btn", "Save" }
+                div { class: "settings-actions",
+                    button { r#type: "submit", class: "btn", "Save" }
+                    button {
+                        r#type: "button",
+                        class: "btn ghost",
+                        disabled: refetch_in_flight(),
+                        "data-testid": "refetch-author-photos",
+                        onclick: {
+                            let url = url_for_refetch.clone();
+                            move |_| {
+                                let url = url.clone();
+                                refetch_in_flight.set(true);
+                                spawn(async move {
+                                    match data::refetch_author_photos(&url).await {
+                                        Ok(()) => {
+                                            refetch_in_flight.set(false);
+                                        }
+                                        Err(e) => {
+                                            status.set(Some(format!("Failed to start photo refetch: {e}")));
+                                            status_is_error.set(true);
+                                            refetch_in_flight.set(false);
+                                        }
+                                    }
+                                });
+                            }
+                        },
+                        "Refetch Author Pictures"
+                    }
+                }
             }
 
             p {

@@ -206,6 +206,8 @@ fn kind_label(kind: TaskKind, running: bool) -> &'static str {
         (TaskKind::GenerateThumbs, false) => "Thumbnail generation",
         (TaskKind::ResolveAuthorPhoto, true) => "Resolving author photo",
         (TaskKind::ResolveAuthorPhoto, false) => "Author photo lookup",
+        (TaskKind::RefetchAuthorPhotos, true) => "Refetching author photos",
+        (TaskKind::RefetchAuthorPhotos, false) => "Author photo refetch",
         // `#[non_exhaustive]` on the shared enum means new variants
         // compile against existing client builds — render an opaque
         // fallback rather than panicking.
@@ -242,6 +244,7 @@ mod tests {
             TaskKind::Scan,
             TaskKind::GenerateThumbs,
             TaskKind::ResolveAuthorPhoto,
+            TaskKind::RefetchAuthorPhotos,
         ] {
             assert!(!kind_label(kind, true).is_empty());
             assert!(!kind_label(kind, false).is_empty());

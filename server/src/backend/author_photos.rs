@@ -222,6 +222,17 @@ pub(super) async fn post_author_photo_scan(
     Json(omnibus_shared::AuthorPhotoScanResult { resolved }).into_response()
 }
 
+/// Admin: bulk re-resolve all author photos via the background worker.
+/// Returns 202 Accepted immediately; progress is polled via
+/// `/api/rpc/worker_status`.
+pub(super) async fn post_refetch_author_photos(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+) -> Response {
+    state.worker.post(Task::RefetchAuthorPhotos);
+    axum::http::StatusCode::ACCEPTED.into_response()
+}
+
 /// JSON body for [`put_author_photo_url`]. Kept inline because the shape is
 /// trivial and not shared with any other call site (the RPC server function
 /// passes the URL as a positional arg).

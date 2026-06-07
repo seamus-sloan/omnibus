@@ -3,10 +3,10 @@
 //! the owning module (`indexer::reindex`, `author_photos::resolve`,
 //! `thumbs::ensure_thumbnails_sync`).
 
-use super::types::{Task, TaskOutcome, Worker};
+use super::types::{Task, TaskId, TaskOutcome, Worker};
 
 impl Worker {
-    pub(super) async fn execute(&self, task: Task) -> TaskOutcome {
+    pub(super) async fn execute(&self, task: Task, id: TaskId) -> TaskOutcome {
         match task {
             Task::Scan { library_path } => {
                 match crate::indexer::reindex(&self.pool, &library_path).await {
@@ -41,6 +41,16 @@ impl Worker {
             }
             Task::ResolveAuthorPhoto { author_id } => {
                 match crate::author_photos::resolve(&self.pool, author_id).await {
+                    Ok(()) => TaskOutcome::Ok,
+                    Err(e) => TaskOutcome::Err(e.to_string()),
+                }
+            }
+            Task::RefetchAuthorPhotos => {
+                match crate::author_photos::refetch_all(&self.pool, |processed, total| {
+                    self.report_progress(id, processed, total);
+                })
+                .await
+                {
                     Ok(()) => TaskOutcome::Ok,
                     Err(e) => TaskOutcome::Err(e.to_string()),
                 }

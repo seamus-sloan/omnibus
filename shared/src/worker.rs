@@ -18,6 +18,7 @@ pub enum TaskKind {
     Scan,
     GenerateThumbs,
     ResolveAuthorPhoto,
+    RefetchAuthorPhotos,
 }
 
 /// Lifecycle state of a single worker task as exposed to the UI.
