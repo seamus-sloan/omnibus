@@ -500,24 +500,30 @@ async fn run_ffmpeg_with_progress(
     )
     .await;
 
-    // The progress reader either finishes naturally when stdout EOFs (ffmpeg
-    // exited / dropped the pipe) or hits an I/O error; either way we just
-    // join it so a panicked task surfaces.
-    let _ = progress_task.await;
-
     match wait_result {
-        Ok(Ok(output)) if output.status.success() => Ok(FfmpegOutcome::Success),
+        Ok(Ok(output)) if output.status.success() => {
+            let _ = progress_task.await;
+            Ok(FfmpegOutcome::Success)
+        }
         Ok(Ok(output)) => {
+            let _ = progress_task.await;
             let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
             Ok(FfmpegOutcome::NonZero {
                 status: output.status,
                 stderr,
             })
         }
-        Ok(Err(io_err)) => Err(format!("ffmpeg wait failed: {io_err}")),
+        Ok(Err(io_err)) => {
+            let _ = progress_task.await;
+            Err(format!("ffmpeg wait failed: {io_err}"))
+        }
         Err(_elapsed) => {
-            // `kill_on_drop(true)` (set on spawn) reaps the process when
-            // the future is dropped on the timeout return path.
+            // `kill_on_drop(true)` reaps the child when the wait future
+            // dropped on the timeout return path; abort the progress
+            // reader explicitly so we don't depend on the kill → EOF
+            // chain to unblock its `next_line` await.
+            progress_task.abort();
+            let _ = progress_task.await;
             Ok(FfmpegOutcome::Timeout { timeout_secs })
         }
     }
@@ -551,7 +557,7 @@ async fn stream_progress(
                     continue;
                 }
                 let pct = ffmpeg_progress_fraction(us, total_secs);
-                let _ = std::fs::write(&progress_file, format!("{pct}"));
+                let _ = tokio::fs::write(&progress_file, format!("{pct}")).await;
                 last_write = Some(std::time::Instant::now());
             }
             Ok(None) => break, // EOF: ffmpeg closed stdout, we're done.
