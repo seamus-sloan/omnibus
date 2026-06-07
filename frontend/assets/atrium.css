@@ -827,7 +827,7 @@ body.atrium,
 
 /* Hero — accent-gradient backdrop, avatar + name + stat */
 .disc-hero {
-  padding: 48px clamp(20px, 4vw, 56px) 24px;
+  padding: 48px 0 24px;
 }
 .disc-hero-grid {
   display: grid;
@@ -911,7 +911,7 @@ body.atrium,
 
 /* Body and sections */
 .disc-body {
-  padding: 32px clamp(20px, 4vw, 56px) 0;
+  padding: 32px 0 0;
 }
 .disc-section { margin-bottom: 40px; }
 .disc-section-head {
@@ -933,7 +933,7 @@ body.atrium,
 
 /* Series header (no avatar, simpler layout) */
 .disc-series-header {
-  padding: 48px clamp(20px, 4vw, 56px) 32px;
+  padding: 48px 0 32px;
 }
 .disc-series-head-row {
   display: flex;
@@ -989,7 +989,7 @@ body.atrium,
 
 /* Tag cloud page */
 .disc-tag-header {
-  padding: 48px clamp(20px, 4vw, 56px) 24px;
+  padding: 48px 0 24px;
 }
 .disc-tag-subtitle {
   margin-top: 8px;
@@ -999,7 +999,7 @@ body.atrium,
 
 /* Two-column layout for tag cloud + sidebar */
 .disc-two-col {
-  padding: 12px clamp(20px, 4vw, 56px) 48px;
+  padding: 12px 0 48px;
   display: grid;
   grid-template-columns: 1fr 280px;
   gap: 40px;
@@ -1040,7 +1040,7 @@ body.atrium,
 
 .idx-page { padding-bottom: 60px; }
 
-.idx-header { padding: 32px clamp(20px, 4vw, 56px) 20px; }
+.idx-header { padding: 32px 0 20px; }
 .idx-head-row {
   display: grid;
   grid-template-columns: 1fr;
@@ -1127,7 +1127,7 @@ a.idx-letter-on:focus-visible {
 .idx-letters-count { font-size: 11px; color: var(--ink-3); }
 
 /* Body */
-.idx-body { padding: 0 clamp(20px, 4vw, 56px); }
+.idx-body { padding: 0; }
 .idx-empty {
   padding: 48px 0;
   text-align: center;
@@ -2519,11 +2519,10 @@ body {
 }
 
 .app-shell {
-  max-width: 1400px;
-  margin: 0 auto;
+  width: 100%;
 }
 .app-shell > main {
-  padding: 0 clamp(1rem, 4vw, 2.5rem);
+  padding: 0 clamp(1.25rem, 4vw, 3.5rem);
 }
 
 .screen {
