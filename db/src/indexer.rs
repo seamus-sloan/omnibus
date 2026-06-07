@@ -325,6 +325,82 @@ pub async fn reindex_audiobooks(pool: &SqlitePool, library_path: &str) -> anyhow
     Ok(())
 }
 
+/// Fill `file_chapters` for audiobook `book_files` rows that have none.
+///
+/// The chapter extraction pipeline was added after the initial audiobook
+/// indexer, so books indexed before the migration have zero `file_chapters`
+/// rows. The normal diff-based reindex skips unchanged files, so this
+/// backfill runs as a separate worker task and is a no-op once all books
+/// have chapters. `on_progress(processed, total)` is called after each
+/// book so the UI can render a progress bar.
+pub(crate) async fn backfill_chapters(
+    pool: &SqlitePool,
+    library_path: &str,
+    on_progress: impl Fn(u32, u32),
+) -> anyhow::Result<()> {
+    let rows: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT bf.id, bfp.filename, bf.format \
+         FROM book_files bf \
+         JOIN books b ON bf.book_id = b.id \
+         JOIN libraries l ON b.library_id = l.id \
+         JOIN book_file_parts bfp ON bfp.book_file_id = bf.id \
+         WHERE l.path = ? \
+           AND bf.format IN ('M4B', 'M4A', 'MP3') \
+           AND bfp.ordinal = 0 \
+           AND NOT EXISTS (SELECT 1 FROM file_chapters fc WHERE fc.book_file_id = bf.id) \
+         ORDER BY bf.id",
+    )
+    .bind(library_path)
+    .fetch_all(pool)
+    .await?;
+
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let total = rows.len() as u32;
+    tracing::info!(
+        count = total,
+        "backfilling chapters for existing audiobooks"
+    );
+
+    let lib_root = PathBuf::from(library_path);
+    for (i, (book_file_id, first_part_filename, format)) in rows.iter().enumerate() {
+        let abs = lib_root.join(first_part_filename);
+        let chapters = audiobook::extract_chapters(&abs, format);
+
+        let parts: Vec<crate::audiobook::AudiobookPart> =
+            sqlx::query_as::<_, (i64, String, i64, i64, f64)>(
+                "SELECT ordinal, filename, size_bytes, mtime_epoch, duration_seconds \
+                 FROM book_file_parts WHERE book_file_id = ? ORDER BY ordinal",
+            )
+            .bind(book_file_id)
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .map(
+                |(ordinal, filename, size_bytes, mtime_epoch, duration_seconds)| {
+                    crate::audiobook::AudiobookPart {
+                        ordinal,
+                        filename,
+                        size_bytes,
+                        mtime_epoch,
+                        duration_seconds,
+                    }
+                },
+            )
+            .collect();
+
+        let mut tx = pool.begin().await?;
+        sync::insert_chapters(&mut tx, *book_file_id, &chapters, &parts).await?;
+        tx.commit().await?;
+
+        on_progress(i as u32 + 1, total);
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

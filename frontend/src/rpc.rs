@@ -160,9 +160,12 @@ pub async fn rpc_save_settings(settings: Settings) -> Result<Settings> {
             .post(omnibus_db::worker::Task::Scan { library_path });
     }
     if let Some(library_path) = updated.audiobook_library_path.clone() {
+        worker.0.post(omnibus_db::worker::Task::ScanAudiobooks {
+            library_path: library_path.clone(),
+        });
         worker
             .0
-            .post(omnibus_db::worker::Task::ScanAudiobooks { library_path });
+            .post(omnibus_db::worker::Task::BackfillChapters { library_path });
     }
     Ok(updated)
 }

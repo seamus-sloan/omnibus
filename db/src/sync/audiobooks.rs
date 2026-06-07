@@ -79,8 +79,7 @@ pub async fn sync_audiobooks(
             // TOCTOU: promote to New insert.
             let inserted = insert_audiobook_row(&mut tx, library_id, b).await?;
             insert_audiobook_parts(&mut tx, inserted.book_file_id, &b.parts).await?;
-            insert_audiobook_chapters(&mut tx, inserted.book_file_id, &b.chapters, &b.parts)
-                .await?;
+            insert_chapters(&mut tx, inserted.book_file_id, &b.chapters, &b.parts).await?;
             insert_audiobook_author_link(&mut tx, inserted.book_id, b.creator_name.as_deref())
                 .await?;
             insert_audiobook_fts_row(&mut tx, inserted.book_id, b).await?;
@@ -108,7 +107,7 @@ pub async fn sync_audiobooks(
 
         let book_file_id = insert_audiobook_file_row(&mut tx, book_id, b).await?;
         insert_audiobook_parts(&mut tx, book_file_id, &b.parts).await?;
-        insert_audiobook_chapters(&mut tx, book_file_id, &b.chapters, &b.parts).await?;
+        insert_chapters(&mut tx, book_file_id, &b.chapters, &b.parts).await?;
         insert_audiobook_author_link(&mut tx, book_id, b.creator_name.as_deref()).await?;
         insert_audiobook_fts_row(&mut tx, book_id, b).await?;
 
@@ -122,7 +121,7 @@ pub async fn sync_audiobooks(
     for b in &plan.new_books {
         let inserted = insert_audiobook_row(&mut tx, library_id, b).await?;
         insert_audiobook_parts(&mut tx, inserted.book_file_id, &b.parts).await?;
-        insert_audiobook_chapters(&mut tx, inserted.book_file_id, &b.chapters, &b.parts).await?;
+        insert_chapters(&mut tx, inserted.book_file_id, &b.chapters, &b.parts).await?;
         insert_audiobook_author_link(&mut tx, inserted.book_id, b.creator_name.as_deref()).await?;
         insert_audiobook_fts_row(&mut tx, inserted.book_id, b).await?;
         if let Some((mime, bytes)) = &b.cover {
@@ -277,7 +276,7 @@ async fn insert_audiobook_parts(
 
 /// Insert `file_chapters` rows. If no chapters were extracted, synthesize
 /// one chapter per part so the frontend always gets `chapters.len() >= 1`.
-async fn insert_audiobook_chapters(
+pub async fn insert_chapters(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_file_id: i64,
     chapters: &[crate::audiobook::RawChapter],

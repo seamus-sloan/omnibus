@@ -55,6 +55,20 @@ impl Worker {
                     Err(e) => TaskOutcome::Err(e.to_string()),
                 }
             }
+            Task::BackfillChapters { library_path } => {
+                match crate::indexer::backfill_chapters(
+                    &self.pool,
+                    &library_path,
+                    |processed, total| {
+                        self.report_progress(id, processed, Some(total));
+                    },
+                )
+                .await
+                {
+                    Ok(()) => TaskOutcome::Ok,
+                    Err(e) => TaskOutcome::Err(e.to_string()),
+                }
+            }
             Task::GenerateThumbs {
                 book_id,
                 last_modified_epoch,

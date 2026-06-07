@@ -32,7 +32,7 @@ mod books;
 #[cfg(test)]
 mod tests;
 
-pub use audiobooks::{sync_audiobooks, AudiobookSyncPlan};
+pub use audiobooks::{insert_chapters, sync_audiobooks, AudiobookSyncPlan};
 pub use books::{replace_books, sync_books, SyncError, SyncPlan};
 
 // `pub(crate)` re-export for sibling `db/` modules (currently
