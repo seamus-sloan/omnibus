@@ -57,10 +57,9 @@ pub fn BookDetailPage(uuid: String) -> Element {
                     loading.set(false);
                     if let Some((Some(aid), current_uuid)) = author_fetch {
                         if let Ok(Some(ad)) = data::get_author(&url, aid).await {
-                            let still_current = book()
-                                .as_ref()
-                                .and_then(|b| b.unique_identifier.as_ref())
-                                == current_uuid.as_ref();
+                            let still_current =
+                                book().as_ref().and_then(|b| b.unique_identifier.as_ref())
+                                    == current_uuid.as_ref();
                             if still_current {
                                 let others: Vec<EbookMetadata> = ad
                                     .books
