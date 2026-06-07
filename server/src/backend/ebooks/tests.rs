@@ -1,7 +1,7 @@
-//! Integration tests for the ebook-listing endpoints. Covers
-//! `GET /api/library`, `GET /api/ebooks/{uuid}/file` (raw EPUB serving for
-//! the reader), and the cover/thumbnail routes — auth gating, 4xx client
-//! errors, and 5xx DB-failure paths.
+//! Integration tests for the ebook-listing endpoints — `GET /api/library`
+//! and `GET /api/ebooks/{uuid}/file` (raw EPUB serving for the reader).
+//! Covers auth gating, 4xx client errors, and 5xx DB-failure paths.
+//! Cover/thumbnail routes live in `backend/covers.rs` with their own tests.
 
 use axum::{body::to_bytes, http::StatusCode};
 use omnibus_shared::Settings;
