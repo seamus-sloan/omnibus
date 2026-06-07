@@ -11,8 +11,7 @@ use omnibus_shared::EbookMetadata;
 use super::controls::{Scrubber, Toolbar, TransportButtons};
 use crate::components::atrium::Cover;
 
-/// Scrubber timing: current position plus the derived totals the bar
-/// renders alongside it (duration, remaining, and the slider's max).
+/// Scrubber timing — elapsed plus the derived totals (duration, remaining, slider max).
 #[derive(Clone, PartialEq)]
 pub(super) struct PlaybackPosition {
     pub elapsed: f64,
@@ -21,8 +20,7 @@ pub(super) struct PlaybackPosition {
     pub scrub_max: f64,
 }
 
-/// Play/skip/rate button labels and on/off state shared by the
-/// transport row.
+/// Play/skip/rate button labels and on/off state shared by the transport row.
 #[derive(Clone, PartialEq)]
 pub(super) struct TransportState {
     pub play_label: String,
@@ -31,8 +29,7 @@ pub(super) struct TransportState {
     pub rate_active: bool,
 }
 
-/// Transport-row event handlers wired through to the scrubber + play /
-/// skip / rate buttons.
+/// Transport-row event handlers wired through to the scrubber + play/skip/rate buttons.
 #[derive(Clone, PartialEq)]
 pub(super) struct PlayerCallbacks {
     pub on_seek: EventHandler<Event<FormData>>,
@@ -42,8 +39,7 @@ pub(super) struct PlayerCallbacks {
     pub on_rate: EventHandler<MouseEvent>,
 }
 
-/// Toolbar row (sleep / bookmark / chapters): per-button highlight state
-/// plus the toggle handlers their containing panels listen on.
+/// Toolbar row (sleep/bookmark/chapters) — per-button highlight state plus toggle handlers.
 #[derive(Clone, PartialEq)]
 pub(super) struct ToolbarState {
     pub sleep_active: bool,

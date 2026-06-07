@@ -8,9 +8,7 @@ use omnibus_shared::EbookMetadata;
 use super::fields::{MeArea, MeField, MeLabel};
 use crate::components::chip_editor::{ChipEditor, SuggestionItem};
 
-/// Per-field editable signals owned by the parent `MetadataEditForm` and
-/// threaded through the form rows. Each signal is `Copy`, so this struct
-/// stays cheap to clone for Dioxus's `PartialEq` prop comparison.
+/// Per-field editable signals threaded through the form rows from `MetadataEditForm`.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct FormFields {
     pub title: Signal<String>,
@@ -26,8 +24,7 @@ pub(super) struct FormFields {
     pub filename: Signal<String>,
 }
 
-/// Suggestion pools backing the author + tag chip-editor dropdowns. Empty
-/// signals render no dropdown; populated by the parent's mount-time fetch.
+/// Suggestion pools backing the author + tag chip-editor dropdowns.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct FormSuggestions {
     pub authors: Signal<Vec<SuggestionItem>>,
