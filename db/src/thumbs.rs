@@ -193,12 +193,10 @@ pub fn ensure_thumbnails_sync(
         }
         let img = match decoded.as_ref() {
             Some(img) => img,
-            None => {
-                let d = image::load_from_memory(&cover_bytes)
-                    .map_err(|e| ThumbError::Decode(e.to_string()))?;
-                decoded = Some(d);
-                decoded.as_ref().unwrap()
-            }
+            None => decoded.insert(
+                image::load_from_memory(&cover_bytes)
+                    .map_err(|e| ThumbError::Decode(e.to_string()))?,
+            ),
         };
         write_thumbnail(book_id, size, img)?;
     }
