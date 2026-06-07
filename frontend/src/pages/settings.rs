@@ -152,6 +152,8 @@ pub fn SettingsPage() -> Element {
                                 spawn(async move {
                                     match data::refetch_author_photos(&url).await {
                                         Ok(()) => {
+                                            status.set(Some("Author photo refetch queued.".into()));
+                                            status_is_error.set(false);
                                             refetch_in_flight.set(false);
                                         }
                                         Err(e) => {
