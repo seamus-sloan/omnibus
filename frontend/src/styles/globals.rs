@@ -19,8 +19,10 @@ body {
 .app-shell {
   max-width: 1400px;
   margin: 0 auto;
-  padding: 2rem clamp(1rem, 4vw, 2.5rem);
-  overflow-x: hidden;
+  padding: 2rem 0;
+}
+.app-shell > main {
+  padding: 0 clamp(1rem, 4vw, 2.5rem);
 }
 
 .screen {
