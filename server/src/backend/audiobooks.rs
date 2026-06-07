@@ -132,10 +132,7 @@ pub(super) async fn get_audiobook_manifest(
                 .collect();
             let chapters = match hls::get_chapters(&state.pool, resolved.book_file_id).await {
                 Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!(uuid = %uuid, error = %e, "failed to fetch chapters");
-                    Vec::new()
-                }
+                Err(e) => return internal("get_chapters", e),
             };
             AudiobookManifest::Direct {
                 parts: manifest_parts,

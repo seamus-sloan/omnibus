@@ -284,12 +284,15 @@ async fn insert_audiobook_chapters(
     parts: &[crate::audiobook::AudiobookPart],
 ) -> Result<(), sqlx::Error> {
     if !chapters.is_empty() {
+        let total_duration: f64 = parts.iter().map(|p| p.duration_seconds).sum();
         for (i, ch) in chapters.iter().enumerate() {
             let start_seconds = ch.start_ms as f64 / 1000.0;
             let duration_seconds = if ch.end_ms > ch.start_ms {
                 (ch.end_ms - ch.start_ms) as f64 / 1000.0
+            } else if i + 1 < chapters.len() {
+                (chapters[i + 1].start_ms - ch.start_ms) as f64 / 1000.0
             } else {
-                0.0
+                (total_duration - start_seconds).max(0.0)
             };
             sqlx::query(
                 "INSERT INTO file_chapters \

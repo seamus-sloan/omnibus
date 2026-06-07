@@ -58,9 +58,6 @@ ammonia = "4"
 # ffprobe fallback.
 lofty = "0.22"
 
-# F2.3b chapter extraction: parse MP4 box tree (moov/udta/chpl Nero chapters
-# and QuickTime chapter tracks) from m4b/m4a containers.
-mp4parse = { version = "0.17", features = ["unstable-api"] }
 
 # Stable, toolchain-independent UUIDv5 derivation for cover ids (issue #94).
 # `std::collections::hash_map::DefaultHasher` is documented as subject to

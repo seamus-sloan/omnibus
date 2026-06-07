@@ -59,9 +59,9 @@ fn make_chpl_fixture(chapters: &[(u64, &str)]) -> (tempfile::NamedTempFile, Path
 fn extract_mp4_chapters_parses_nero_chpl() {
     let chapters = vec![
         (0u64, "Introduction"),
-        (300_000_0000u64, "Chapter 1"),   // 5 min in 100ns units
-        (900_000_0000u64, "Chapter 2"),   // 15 min
-        (1_800_000_0000u64, "Chapter 3"), // 30 min
+        (3_000_000_000u64, "Chapter 1"),  // 5 min in 100ns units
+        (9_000_000_000u64, "Chapter 2"),  // 15 min
+        (18_000_000_000u64, "Chapter 3"), // 30 min
     ];
     let (_file, path) = make_chpl_fixture(&chapters);
 
@@ -153,4 +153,99 @@ fn extract_mp4_chapters_handles_version_1_chpl() {
     assert_eq!(result[0].start_ms, 0);
     assert_eq!(result[1].title, "Act One");
     assert_eq!(result[1].start_ms, 600_000); // 10 min in ms
+}
+
+/// Build a minimal ID3v2.3 tag with one CHAP frame containing a TIT2 sub-frame.
+fn make_id3v2_chap_fixture(
+    major_version: u8,
+    chapters: &[(u32, u32, &str)], // (start_ms, end_ms, title)
+) -> Vec<u8> {
+    let mut frames = Vec::new();
+    for (i, (start, end, title)) in chapters.iter().enumerate() {
+        // CHAP frame body: element_id(null-terminated) + start(4) + end(4) + offsets(8) + TIT2
+        let element_id = format!("ch{i}\0");
+        let mut tit2_body = vec![3u8]; // encoding = UTF-8
+        tit2_body.extend_from_slice(title.as_bytes());
+        let tit2_size = tit2_body.len() as u32;
+
+        let mut chap_body = Vec::new();
+        chap_body.extend_from_slice(element_id.as_bytes());
+        chap_body.extend_from_slice(&start.to_be_bytes());
+        chap_body.extend_from_slice(&end.to_be_bytes());
+        chap_body.extend_from_slice(&[0xFF; 4]); // start offset (unused)
+        chap_body.extend_from_slice(&[0xFF; 4]); // end offset (unused)
+        // TIT2 sub-frame: 4 id + 4 size + 2 flags + body
+        chap_body.extend_from_slice(b"TIT2");
+        if major_version >= 4 {
+            // syncsafe size
+            chap_body.push(((tit2_size >> 21) & 0x7F) as u8);
+            chap_body.push(((tit2_size >> 14) & 0x7F) as u8);
+            chap_body.push(((tit2_size >> 7) & 0x7F) as u8);
+            chap_body.push((tit2_size & 0x7F) as u8);
+        } else {
+            chap_body.extend_from_slice(&tit2_size.to_be_bytes());
+        }
+        chap_body.extend_from_slice(&[0u8; 2]); // flags
+        chap_body.extend_from_slice(&tit2_body);
+
+        let chap_size = chap_body.len() as u32;
+        frames.extend_from_slice(b"CHAP");
+        if major_version >= 4 {
+            frames.push(((chap_size >> 21) & 0x7F) as u8);
+            frames.push(((chap_size >> 14) & 0x7F) as u8);
+            frames.push(((chap_size >> 7) & 0x7F) as u8);
+            frames.push((chap_size & 0x7F) as u8);
+        } else {
+            frames.extend_from_slice(&chap_size.to_be_bytes());
+        }
+        frames.extend_from_slice(&[0u8; 2]); // flags
+        frames.extend_from_slice(&chap_body);
+    }
+
+    let tag_size = frames.len() as u32;
+    let mut data = Vec::new();
+    data.extend_from_slice(b"ID3");
+    data.push(major_version); // version major
+    data.push(0);             // version revision
+    data.push(0);             // flags
+    // syncsafe tag size
+    data.push(((tag_size >> 21) & 0x7F) as u8);
+    data.push(((tag_size >> 14) & 0x7F) as u8);
+    data.push(((tag_size >> 7) & 0x7F) as u8);
+    data.push((tag_size & 0x7F) as u8);
+    data.extend_from_slice(&frames);
+    data
+}
+
+#[test]
+fn extract_id3v2_3_chap_frames() {
+    let data = make_id3v2_chap_fixture(3, &[(0, 60_000, "Intro"), (60_000, 180_000, "Chapter 1")]);
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&data).unwrap();
+    file.flush().unwrap();
+
+    let result = extract_chapters(file.path(), "MP3");
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].title, "Intro");
+    assert_eq!(result[0].start_ms, 0);
+    assert_eq!(result[0].end_ms, 60_000);
+    assert_eq!(result[1].title, "Chapter 1");
+    assert_eq!(result[1].start_ms, 60_000);
+    assert_eq!(result[1].end_ms, 180_000);
+}
+
+#[test]
+fn extract_id3v2_4_chap_uses_syncsafe_sizes() {
+    let data = make_id3v2_chap_fixture(4, &[(0, 120_000, "Part A"), (120_000, 300_000, "Part B")]);
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&data).unwrap();
+    file.flush().unwrap();
+
+    let result = extract_chapters(file.path(), "MP3");
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].title, "Part A");
+    assert_eq!(result[0].start_ms, 0);
+    assert_eq!(result[1].title, "Part B");
+    assert_eq!(result[1].start_ms, 120_000);
+    assert_eq!(result[1].end_ms, 300_000);
 }

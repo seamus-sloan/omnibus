@@ -1,9 +1,9 @@
 //! Chapter extraction from audiobook containers.
 //!
-//! M4B/M4A files store chapters as Nero `chpl` atoms (`moov/udta/chpl`) or
-//! QuickTime chapter tracks. MP3 files may embed ID3v2 CHAP/CTOC frames.
-//! This module extracts both via a unified [`RawChapter`] output that the
-//! sync layer converts to absolute-timeline `file_chapters` rows.
+//! M4B/M4A: extracts Nero `chpl` atoms (`moov/udta/chpl`).
+//! MP3: extracts ID3v2 CHAP frames (v2.3 big-endian and v2.4 syncsafe sizes).
+//! Returns [`RawChapter`] entries that the sync layer converts to
+//! absolute-timeline `file_chapters` rows.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -168,10 +168,11 @@ fn extract_id3_chapters(path: &Path) -> Option<Vec<RawChapter>> {
 
 /// Scan raw file bytes for an ID3v2 tag and extract CHAP frames.
 fn parse_id3v2_chap_frames(data: &[u8]) -> Option<Vec<RawChapter>> {
-    // ID3v2 header: "ID3" + version(2) + flags(1) + size(4 syncsafe)
+    // ID3v2 header: "ID3" + major_version(1) + revision(1) + flags(1) + size(4 syncsafe)
     if data.len() < 10 || &data[0..3] != b"ID3" {
         return None;
     }
+    let major_version = data[3];
     let tag_size = syncsafe_u32(&data[6..10]) as usize;
     let tag_end = (10 + tag_size).min(data.len());
     let mut pos = 10;
@@ -180,7 +181,12 @@ fn parse_id3v2_chap_frames(data: &[u8]) -> Option<Vec<RawChapter>> {
 
     while pos + 10 <= tag_end {
         let frame_id = &data[pos..pos + 4];
-        let frame_size = u32::from_be_bytes(data[pos + 4..pos + 8].try_into().ok()?) as usize;
+        // v2.4 uses syncsafe integers for frame sizes; v2.3 uses plain BE u32
+        let frame_size = if major_version >= 4 {
+            syncsafe_u32(&data[pos + 4..pos + 8]) as usize
+        } else {
+            u32::from_be_bytes(data[pos + 4..pos + 8].try_into().ok()?) as usize
+        };
         let content_start = pos + 10; // 4 id + 4 size + 2 flags
         let content_end = content_start + frame_size;
 
