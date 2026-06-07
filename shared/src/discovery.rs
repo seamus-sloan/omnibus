@@ -1,0 +1,180 @@
+//! Discovery / browse / search-palette wire types.
+//!
+//! Covers the F1.8 author / series / tag detail pages, the F1.12 author and
+//! series indexes, the library landing payload, and the F1.5 command-palette
+//! grouped result shape. Each card-level type stays slim so list endpoints
+//! avoid the N+1 cost of returning a full `EbookMetadata`.
+
+use serde::{Deserialize, Serialize};
+
+use crate::ebook::EbookMetadata;
+
+/// Response payload for `GET /api/ebooks` and `rpc_get_ebooks`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EbookLibrary {
+    pub path: Option<String>,
+    pub books: Vec<EbookMetadata>,
+    pub error: Option<String>,
+    /// Total FTS5 hit count *before* the server-side `MAX_BOOKS_RETURNED` cap,
+    /// set by the search paths so the web client can show "N of M results"
+    /// even when `books` is truncated. `None` for the full-library
+    /// (`/api/ebooks`, `rpc_get_ebooks`) responses, which surface truncation
+    /// via the `X-Total-Count` header instead. Issue #241.
+    #[serde(default)]
+    pub total: Option<i64>,
+}
+
+/// Author detail payload for `GET /api/authors/:id` and `rpc_get_author`.
+/// Contains the author row plus every book by that author.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthorDetail {
+    pub id: i64,
+    pub name: String,
+    pub sort: Option<String>,
+    pub book_count: usize,
+    pub books: Vec<EbookMetadata>,
+    /// F1.11: `true` when a usable profile photo is cached for this author
+    /// (a `manual` or `openlibrary` row in `author_photos`). The frontend
+    /// hero swaps the letter avatar for `<img src="/api/authors/:id/photo">`
+    /// when set. `'letter'` negative-cache rows do not set this flag.
+    #[serde(default)]
+    pub has_photo: bool,
+}
+
+/// Result of an admin-triggered "Scan for picture" run. The endpoint
+/// clears any cached row and runs the Open Library cascade inline; a
+/// `false` here means Open Library had nothing to offer for this author
+/// and a sticky `letter` marker has been written to skip future
+/// autoresolution.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthorPhotoScanResult {
+    pub resolved: bool,
+}
+
+/// Series detail payload for `GET /api/series/:id` and `rpc_get_series`.
+/// Books are ordered by `series_index`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SeriesDetail {
+    pub id: i64,
+    pub name: String,
+    pub sort: Option<String>,
+    pub book_count: usize,
+    pub books: Vec<EbookMetadata>,
+}
+
+/// Single tag with its book count, for the tag cloud.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TagWeight {
+    pub name: String,
+    pub count: usize,
+}
+
+/// Lightweight author row for the `/authors` index. Carries only what the
+/// card needs — no joined book list. The detail page (`AuthorDetail`) is
+/// fetched on click.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthorSummary {
+    pub id: i64,
+    pub name: String,
+    pub sort: Option<String>,
+    pub book_count: usize,
+    /// Cover-derived accent color borrowed from the author's first book
+    /// with a non-null `accent_color`. `None` when no owned book has one
+    /// — the UI falls back to the theme accent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+    /// `true` when a usable profile photo is cached for this author (a
+    /// `manual` or `openlibrary` row in `author_photos`). Same semantics
+    /// as `AuthorDetail::has_photo` — `'letter'` negative-cache rows do
+    /// not set this flag. Lets the `/authors` index render a real `<img>`
+    /// in one round trip instead of fetching the detail payload per card.
+    #[serde(default)]
+    pub has_photo: bool,
+}
+
+/// Lightweight series row for the `/series` index. Carries the primary
+/// author of the series (first book's first creator) so the card can
+/// render the by-line without a second fetch.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SeriesSummary {
+    pub id: i64,
+    pub name: String,
+    pub sort: Option<String>,
+    pub book_count: usize,
+    /// Primary author display string (first book's first creator). `None`
+    /// when the series has no books with a linked author.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_author: Option<String>,
+    /// Accent color borrowed from the first book in the series with one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+}
+
+/// Search-palette response — grouped results with server-side timing.
+///
+/// Each category is capped at 5 hits server-side. The slim per-hit types
+/// (`PaletteBookHit` etc.) carry only display data — no N+1 joins for
+/// description / identifiers / subjects.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PaletteResults {
+    pub query: String,
+    pub books: Vec<PaletteBookHit>,
+    pub authors: Vec<PaletteAuthorHit>,
+    pub series: Vec<PaletteSeriesHit>,
+    pub tags: Vec<PaletteTagHit>,
+    pub duration_ms: u64,
+}
+
+impl PaletteResults {
+    /// Total number of hits across every result category.
+    pub fn total_count(&self) -> usize {
+        self.books.len() + self.authors.len() + self.series.len() + self.tags.len()
+    }
+}
+
+/// Slim book hit for the search palette. No description, no identifiers,
+/// no subjects — just what the result row needs to render.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PaletteBookHit {
+    pub id: i64,
+    /// Stable UUID — what the frontend should use to construct
+    /// `/books/:uuid` and `/api/covers/:uuid` URLs.
+    #[serde(default)]
+    pub uuid: String,
+    pub title: String,
+    /// Pre-joined author names (e.g. "Grace Hopper, Margaret Hamilton").
+    pub author_display: String,
+    /// Four-digit year extracted from `pubdate`, if present.
+    pub year: Option<String>,
+    pub formats: Vec<String>,
+    pub cover_url: Option<String>,
+    pub accent: Option<String>,
+}
+
+/// Author hit for the search palette.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PaletteAuthorHit {
+    pub id: i64,
+    pub name: String,
+    /// Number of books by this author in the active library.
+    pub book_count: u32,
+}
+
+/// Series hit for the search palette.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PaletteSeriesHit {
+    pub id: i64,
+    pub name: String,
+    pub book_count: u32,
+    /// Primary author of the first book in the series, if any.
+    pub author_display: Option<String>,
+}
+
+/// Tag hit for the search palette.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PaletteTagHit {
+    pub id: i64,
+    pub name: String,
+    /// Number of books with this tag in the active library.
+    pub book_count: u32,
+}
