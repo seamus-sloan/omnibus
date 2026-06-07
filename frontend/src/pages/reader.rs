@@ -1,5 +1,5 @@
-//! Immersive full-screen EPUB reader. Loads the vendored epub.js + JSZip
-//! glue (`window.OmnibusReader`) via `dioxus::document::eval`, streams
+//! Immersive full-screen EPUB reader (F2.4). Loads the vendored epub.js +
+//! JSZip glue (`window.OmnibusReader`) via `dioxus::document::eval`, streams
 //! bytes from cookie-gated `GET /api/ebooks/:uuid/file`, and persists
 //! position via [`crate::reader_progress`]. Chrome compiles on every
 //! target; the JS interop that mounts a book is web-only.
@@ -9,25 +9,15 @@ use dioxus::prelude::*;
 use dioxus_router::use_navigator;
 
 use crate::components::atrium::{persist_theme, Theme};
+use crate::contexts::use_server_url;
+use crate::data;
 
-// Vendored reader runtime, loaded only on this page (≈300 KB) so the rest of
-// the app never pays for it. Order matters: JSZip and epub.js define the
-// globals (`JSZip`, `ePub`) that the glue closes over, so they're emitted as
-// siblings ahead of the glue script. The readiness-poll in the mount effect
-// tolerates their async load order.
+use omnibus_shared::EbookMetadata;
+
 const JSZIP_JS: Asset = asset!("/assets/vendor/jszip.min.js");
 const EPUBJS_JS: Asset = asset!("/assets/vendor/epub.min.js");
 const READER_GLUE_JS: Asset = asset!("/assets/vendor/epub-reader-glue.js");
 
-/// Lifecycle of the in-iframe book render. Drives the loading / error overlay
-/// so a slow network, a 404 file route, or a malformed EPUB shows feedback
-/// instead of a blank viewer. The glue reports `ready` / `error` through the
-/// `__omnibusOnStatus` callback; the readiness poll reports `error` if the
-/// vendored scripts never load.
-///
-/// Only the `web` build transitions through `Loading`/`Failed` (driven by the
-/// glue); SSR/mobile have no interop and sit at `Ready`, so those variants read
-/// as never-constructed there.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(feature = "web"), allow(dead_code))]
 enum ReaderStatus {
@@ -36,10 +26,20 @@ enum ReaderStatus {
     Failed,
 }
 
-/// Single audited surface for calling into `window.OmnibusReader`. `method` is
-/// always a hard-coded identifier and `arg_js` is either empty, an integer, or
-/// a `serde_json`-encoded literal — so this is the one place JS is built for
-/// reader commands (the bootstrap `init` poll below is the only other eval).
+/// Relocated event data from epub.js glue (deserialized from JSON).
+#[derive(Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct RelocateData {
+    cfi: Option<String>,
+    page: u32,
+    total_pages: u32,
+    pct: u32,
+    chapter: u32,
+    total_chapters: u32,
+    chapter_title: String,
+}
+
 #[cfg(feature = "web")]
 fn reader_call(method: &str, arg_js: &str) {
     let js = format!("window.OmnibusReader && window.OmnibusReader.{method}({arg_js});");
@@ -50,8 +50,6 @@ fn reader_call(method: &str, arg_js: &str) {
 pub fn BookReadPage(uuid: String) -> Element {
     let theme = use_context::<Signal<Theme>>();
 
-    // Book-render lifecycle. Web starts Loading and the glue/poll resolve it;
-    // other targets have no interop, so they render the (empty) viewer as Ready.
     #[cfg_attr(not(feature = "web"), allow(unused_mut))]
     let mut status = use_signal(|| {
         #[cfg(feature = "web")]
@@ -64,22 +62,37 @@ pub fn BookReadPage(uuid: String) -> Element {
         }
     });
 
-    // Font size in px; clamped to a sane reading range on adjust. Declared on
-    // every target so the chrome buttons can read/write it; only the web build
-    // actually pushes it into the reader runtime.
     #[cfg_attr(not(feature = "web"), allow(unused_variables, unused_mut))]
     let mut font_size = use_signal(|| 18i32);
+
+    let mut show_aa = use_signal(|| false);
+
+    // Relocated data from epub.js (page, chapter, pct).
+    #[cfg_attr(not(feature = "web"), allow(unused_mut))]
+    let mut loc = use_signal(RelocateData::default);
+
+    // Book metadata for the top-bar title.
+    let book_meta: Signal<Option<EbookMetadata>> = use_signal(|| None);
+    let server_url = use_server_url();
+    let uuid_for_meta = uuid.clone();
+    {
+        let mut book_meta = book_meta;
+        use_effect(use_reactive!(|uuid_for_meta| {
+            let url = server_url.clone();
+            let uuid = uuid_for_meta.clone();
+            spawn(async move {
+                if let Ok(Some(b)) = data::get_ebook(&url, &uuid).await {
+                    book_meta.set(Some(b));
+                }
+            });
+        }));
+    }
 
     // ── Web interop: mount the reader once the async scripts are ready. ──
     #[cfg(feature = "web")]
     {
         use wasm_bindgen::prelude::*;
 
-        // Component-lifetime owner for the JS callbacks. Replacing the vec on a
-        // re-mount (uuid change) drops the previous generation, and the holder
-        // drops on unmount — so callbacks are never leaked with `forget()`.
-        // `use_hook` hands back a clone of the `Rc` each render; the inner
-        // `RefCell<Vec<..>>` is the single live store.
         let cb_holder: std::rc::Rc<std::cell::RefCell<Vec<Closure<dyn FnMut(String)>>>> =
             use_hook(|| std::rc::Rc::new(std::cell::RefCell::new(Vec::new())));
 
@@ -88,58 +101,40 @@ pub fn BookReadPage(uuid: String) -> Element {
         use_effect(use_reactive!(|uuid_for_mount| {
             let uuid = uuid_for_mount.clone();
             let uuid_cb = uuid_for_cb.clone();
-
-            // Re-entering a book restarts the lifecycle (Loading until the glue
-            // reports ready/error, or the poll times out).
             status.set(ReaderStatus::Loading);
 
             let local_saved = crate::reader_progress::load(&uuid);
             let size = font_size();
             let theme_name = theme.read().as_attr();
-            // Build every JS literal with serde_json so untrusted input (the
-            // route-controlled `uuid`, the persisted `cfi`) can never break out
-            // of string context in the `document::eval` payload. `theme` is a
-            // fixed enum attr but is encoded the same way for uniformity.
             let url_lit = serde_json::to_string(&format!("/api/ebooks/{uuid}/file"))
                 .unwrap_or_else(|_| "\"\"".into());
             let theme_lit = serde_json::to_string(theme_name).unwrap_or_else(|_| "\"dark\"".into());
 
-            // (Re)build the callbacks the glue invokes — relocate (persist CFI
-            // locally + fire-and-forget POST to the server) and status (drive
-            // the loading/error overlay) — owning them in the holder so the
-            // previous generation is dropped, never leaked.
             if let Some(window) = web_sys::window() {
                 let uuid_for_save = uuid_cb.clone();
-                let relocate = Closure::<dyn FnMut(String)>::new(move |cfi: String| {
-                    // Local cache-aside write — instant first-paint for the
-                    // next open even if the server is unreachable.
-                    crate::reader_progress::save(&uuid_for_save, &cfi);
-                    // Fire-and-forget server write. Posted directly via
-                    // gloo-net (not the Dioxus server-fn client) because this
-                    // closure is invoked by epub.js from the JS event loop —
-                    // outside any Dioxus reactive scope. The JS glue already
-                    // debounces 400ms so write volume is bounded; errors are
-                    // ignored, the local cache is the safety net.
-                    let uuid_for_post = uuid_for_save.clone();
-                    let cfi_for_post = cfi.clone();
-                    wasm_bindgen_futures::spawn_local(async move {
-                        // Dioxus' #[post] macro wraps args as
-                        // `{ "<arg_name>": <value> }` — `rpc_save_progress`
-                        // takes `update: ProgressUpdate`, so the request body
-                        // must be `{ "update": { … } }`.
-                        let body = serde_json::json!({
-                            "update": {
-                                "book_uuid": uuid_for_post,
-                                "format": "epub",
-                                "epub_cfi": cfi_for_post,
-                            }
-                        });
-                        if let Ok(req) =
-                            gloo_net::http::Request::post("/api/rpc/progress").json(&body)
-                        {
-                            let _ = req.send().await;
+                let relocate = Closure::<dyn FnMut(String)>::new(move |json: String| {
+                    if let Ok(data) = serde_json::from_str::<RelocateData>(&json) {
+                        if let Some(ref cfi) = data.cfi {
+                            crate::reader_progress::save(&uuid_for_save, cfi);
+                            let uuid_for_post = uuid_for_save.clone();
+                            let cfi_for_post = cfi.clone();
+                            wasm_bindgen_futures::spawn_local(async move {
+                                let body = serde_json::json!({
+                                    "update": {
+                                        "book_uuid": uuid_for_post,
+                                        "format": "epub",
+                                        "epub_cfi": cfi_for_post,
+                                    }
+                                });
+                                if let Ok(req) =
+                                    gloo_net::http::Request::post("/api/rpc/progress").json(&body)
+                                {
+                                    let _ = req.send().await;
+                                }
+                            });
                         }
-                    });
+                        loc.set(data);
+                    }
                 });
                 let on_status = Closure::<dyn FnMut(String)>::new(move |state: String| {
                     status.set(match state.as_str() {
@@ -158,19 +153,9 @@ pub fn BookReadPage(uuid: String) -> Element {
                     &JsValue::from_str("__omnibusOnStatus"),
                     on_status.as_ref().unchecked_ref(),
                 );
-                // Window now references the new closures; replacing the holder
-                // drops the previous generation's.
                 *cb_holder.borrow_mut() = vec![relocate, on_status];
             }
 
-            // Cache-aside reconciliation: hit the server for the
-            // authoritative position before mounting. On success the server
-            // CFI wins (so a position written on another device syncs
-            // forward); on failure we fall back to the local cache so the
-            // reader never blocks on the network. Uses `spawn` (not
-            // `wasm_bindgen_futures::spawn_local`) so the future inherits
-            // the current Dioxus runtime scope — `dioxus::document::eval`
-            // requires that scope and panics otherwise.
             let uuid_for_fetch = uuid.clone();
             spawn(async move {
                 let server_cfi = crate::data::get_progress(
@@ -184,10 +169,6 @@ pub fn BookReadPage(uuid: String) -> Element {
                 .and_then(|r| r.epub_cfi);
                 let chosen = server_cfi.or(local_saved);
                 let cfi_arg = serde_json::to_string(&chosen).unwrap_or_else(|_| "null".into());
-                // Poll until the vendored globals load (async) then init.
-                // Bounded (~10s) so a failed asset load reports an error via
-                // the status callback instead of spinning on a blank viewer
-                // forever.
                 let js = format!(
                     r#"(function(){{ var n=0; (function go(){{ if (window.OmnibusReader && window.ePub) {{ window.OmnibusReader.init("omnibus-viewer", {url_lit}, {{ cfi: {cfi_arg}, fontSize: {size}, theme: {theme_lit} }}); }} else if (n++ < 200) {{ setTimeout(go, 50); }} else if (typeof window.__omnibusOnStatus === "function") {{ window.__omnibusOnStatus("error"); }} }})(); }})();"#
                 );
@@ -195,7 +176,6 @@ pub fn BookReadPage(uuid: String) -> Element {
             });
         }));
 
-        // Flow app theme changes into the reader content.
         use_effect(move || {
             let attr_lit =
                 serde_json::to_string(theme.read().as_attr()).unwrap_or_else(|_| "\"dark\"".into());
@@ -240,125 +220,319 @@ pub fn BookReadPage(uuid: String) -> Element {
         persist_theme(t);
     };
 
+    let on_keydown = move |evt: KeyboardEvent| match evt.key() {
+        Key::ArrowLeft => {
+            #[cfg(feature = "web")]
+            reader_call("prev", "");
+        }
+        Key::ArrowRight => {
+            #[cfg(feature = "web")]
+            reader_call("next", "");
+        }
+        Key::Escape => {
+            if show_aa() {
+                show_aa.set(false);
+            } else {
+                #[cfg(not(feature = "mobile"))]
+                nav.go_back();
+            }
+        }
+        _ => {}
+    };
+
+    let current = loc.read();
+    let pct = current.pct;
+    let page_str = if current.total_pages > 0 {
+        format!(
+            "p.\u{a0}{} of {}\u{a0}\u{b7}\u{a0}{}%",
+            current.page, current.total_pages, pct
+        )
+    } else if pct > 0 {
+        format!("{}%", pct)
+    } else {
+        String::new()
+    };
+    let chapter_str = if current.total_chapters > 0 {
+        format!("Ch\u{a0}{} of {}", current.chapter, current.total_chapters)
+    } else {
+        String::new()
+    };
+    let chapter_title_display = current.chapter_title.clone();
+
+    let book_title = book_meta
+        .read()
+        .as_ref()
+        .and_then(|b| b.title.clone())
+        .unwrap_or_default();
+
+    let font_pct = ((font_size() - 12) as f32 / 20.0 * 100.0).clamp(0.0, 100.0);
+
     rsx! {
-        // Vendored runtime — emitted ahead of any interop. Loaded only on
-        // this page so the rest of the app never ships epub.js.
         document::Script { src: JSZIP_JS }
         document::Script { src: EPUBJS_JS }
         document::Script { src: READER_GLUE_JS }
 
         div {
-            class: "reader-root",
-            style: "display:flex; flex-direction:column; height:100vh; width:100%;",
+            class: "rd-surface",
+            tabindex: "0",
+            autofocus: true,
+            onkeydown: on_keydown,
 
-            // Slim top control bar.
+            // Accent wash gradient.
+            div { class: "rd-wash" }
+
+            // Top chrome.
             div {
-                class: "reader-bar",
-                style: "display:flex; align-items:center; gap:0.5rem; padding:0.5rem 0.75rem; border-bottom:1px solid var(--line);",
+                class: "rd-top",
                 button {
-                    class: "btn ghost sm",
+                    class: "rd-tool",
                     r#type: "button",
                     "data-testid": "reader-back",
-                    "aria-label": "Back",
+                    "aria-label": "Back to book",
                     onclick: on_back,
-                    "\u{2190} Back"
-                }
-                div { style: "flex:1;" }
-                button {
-                    class: "btn ghost sm",
-                    r#type: "button",
-                    "data-testid": "reader-font-decrease",
-                    "aria-label": "Decrease font size",
-                    onclick: on_font_decrease,
-                    "A\u{2212}"
-                }
-                button {
-                    class: "btn ghost sm",
-                    r#type: "button",
-                    "data-testid": "reader-font-increase",
-                    "aria-label": "Increase font size",
-                    onclick: on_font_increase,
-                    "A+"
+                    svg {
+                        width: "19", height: "19", view_box: "0 0 24 24",
+                        fill: "none", stroke: "currentColor",
+                        stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                        path { d: "M15 5l-7 7 7 7" }
+                    }
                 }
                 div {
-                    class: "reader-theme-seg",
-                    style: "display:flex; gap:0.25rem;",
-                    button {
-                        class: "btn ghost sm",
-                        r#type: "button",
-                        "data-testid": "reader-theme-dark",
-                        "aria-label": "Dark theme",
-                        onclick: move |_| set_theme(Theme::Dark),
-                        "Dark"
-                    }
-                    button {
-                        class: "btn ghost sm",
-                        r#type: "button",
-                        "data-testid": "reader-theme-light",
-                        "aria-label": "Light theme",
-                        onclick: move |_| set_theme(Theme::Light),
-                        "Light"
-                    }
-                    button {
-                        class: "btn ghost sm",
-                        r#type: "button",
-                        "data-testid": "reader-theme-sepia",
-                        "aria-label": "Sepia theme",
-                        onclick: move |_| set_theme(Theme::Sepia),
-                        "Sepia"
+                    class: "rd-title-center",
+                    span { class: "rd-title-book", "{book_title}" }
+                    if !chapter_title_display.is_empty() {
+                        span { class: "rd-title-sep", "\u{b7}" }
+                        span { class: "rd-title-ch", "{chapter_title_display}" }
                     }
                 }
-                div { style: "flex:1;" }
-                button {
-                    class: "btn ghost sm",
-                    r#type: "button",
-                    "data-testid": "reader-prev",
-                    "aria-label": "Previous page",
-                    onclick: on_prev,
-                    "\u{2039} Prev"
-                }
-                button {
-                    class: "btn ghost sm",
-                    r#type: "button",
-                    "data-testid": "reader-next",
-                    "aria-label": "Next page",
-                    onclick: on_next,
-                    "Next \u{203a}"
+                div {
+                    style: "display:flex; align-items:center; gap:2px;",
+                    button {
+                        class: if show_aa() { "rd-tool rd-aa on" } else { "rd-tool rd-aa" },
+                        r#type: "button",
+                        "data-testid": "reader-aa",
+                        "aria-label": "Display settings",
+                        onclick: move |_| show_aa.set(!show_aa()),
+                        "Aa"
+                    }
+                    button {
+                        class: "rd-tool",
+                        r#type: "button",
+                        "data-testid": "reader-bookmark",
+                        "aria-label": "Bookmark",
+                        svg {
+                            width: "19", height: "19", view_box: "0 0 24 24",
+                            fill: "none", stroke: "currentColor",
+                            stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                            path { d: "M7 4h10v16l-5-3.6L7 20V4z" }
+                        }
+                    }
                 }
             }
 
-            // Viewer fills the remaining space; epub.js renders into this id.
-            // A status overlay sits on top until the first page paints (or on
-            // failure) so a slow/missing/broken book shows feedback, not a
-            // blank box.
+            // Viewer stage.
             div {
-                class: "reader-stage",
-                style: "flex:1; min-height:0; width:100%; position:relative;",
+                class: "rd-stage",
+                style: "top:60px; bottom:54px;",
                 div {
                     id: "omnibus-viewer",
-                    class: "reader-viewer",
+                    class: "rd-viewer",
                     "data-testid": "reader-viewer",
-                    style: "position:absolute; inset:0;",
                 }
                 match status() {
                     ReaderStatus::Loading => rsx! {
                         div {
-                            class: "reader-overlay",
+                            class: "rd-overlay",
                             "data-testid": "reader-loading",
-                            style: "position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--ink-2); background:var(--bg-0);",
                             "Loading\u{2026}"
                         }
                     },
                     ReaderStatus::Failed => rsx! {
                         div {
-                            class: "reader-overlay",
+                            class: "rd-overlay",
                             "data-testid": "reader-error",
                             role: "alert",
-                            style: "position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--ink-2); background:var(--bg-0);",
                             "This book couldn\u{2019}t be loaded."
                         }
                     },
                     ReaderStatus::Ready => rsx! {},
+                }
+            }
+
+            // Page-turn gutters.
+            button {
+                class: "rd-turn rd-turn-l",
+                r#type: "button",
+                "data-testid": "reader-prev",
+                "aria-label": "Previous page",
+                onclick: on_prev,
+                svg {
+                    width: "20", height: "20", view_box: "0 0 24 24",
+                    fill: "none", stroke: "currentColor",
+                    stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                    path { d: "M14.5 5l-7 7 7 7" }
+                }
+            }
+            button {
+                class: "rd-turn rd-turn-r",
+                r#type: "button",
+                "data-testid": "reader-next",
+                "aria-label": "Next page",
+                onclick: on_next,
+                svg {
+                    width: "20", height: "20", view_box: "0 0 24 24",
+                    fill: "none", stroke: "currentColor",
+                    stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                    path { d: "M9.5 5l7 7-7 7" }
+                }
+            }
+
+            // Bottom chrome.
+            div {
+                class: "rd-bottom",
+                span {
+                    style: "color:var(--ink-2);",
+                    "{page_str}"
+                }
+                div { style: "flex:1; text-align:center; letter-spacing:.08em;",
+                    "{chapter_str}"
+                }
+                span {}
+            }
+            div {
+                class: "rd-ribbon",
+                i { style: "width:{pct}%;" }
+            }
+
+            // Aa typography panel.
+            if show_aa() {
+                div {
+                    class: "rd-scrim",
+                    onclick: move |_| show_aa.set(false),
+                }
+                div {
+                    class: "rd-aa-panel",
+                    onclick: move |evt: MouseEvent| evt.stop_propagation(),
+
+                    // Theme.
+                    div {
+                        class: "rd-aa-row",
+                        div { class: "rd-aa-label", "Theme" }
+                        div {
+                            class: "rd-seg",
+                            button {
+                                class: if *theme.read() == Theme::Dark { "on" } else { "" },
+                                r#type: "button",
+                                onclick: move |_| set_theme(Theme::Dark),
+                                "Dark"
+                            }
+                            button {
+                                class: if *theme.read() == Theme::Light { "on" } else { "" },
+                                r#type: "button",
+                                onclick: move |_| set_theme(Theme::Light),
+                                "Light"
+                            }
+                            button {
+                                class: if *theme.read() == Theme::Sepia { "on" } else { "" },
+                                r#type: "button",
+                                onclick: move |_| set_theme(Theme::Sepia),
+                                "Sepia"
+                            }
+                        }
+                    }
+
+                    // Typeface (visual only).
+                    div {
+                        class: "rd-aa-row",
+                        div { class: "rd-aa-label", "Typeface" }
+                        div {
+                            style: "display:flex; gap:6px;",
+                            button {
+                                class: "rd-typeface-chip on",
+                                r#type: "button",
+                                span { class: "preview", style: "font-family:'Instrument Serif',serif;", "Aa" }
+                                span { class: "name", "Editorial" }
+                            }
+                            button {
+                                class: "rd-typeface-chip",
+                                r#type: "button",
+                                span { class: "preview", style: "font-family:'EB Garamond',serif;", "Aa" }
+                                span { class: "name", "Classic" }
+                            }
+                            button {
+                                class: "rd-typeface-chip",
+                                r#type: "button",
+                                span { class: "preview", style: "font-family:Georgia,serif;", "Aa" }
+                                span { class: "name", "Modern" }
+                            }
+                        }
+                    }
+
+                    // Text size.
+                    div {
+                        class: "rd-aa-row",
+                        div { class: "rd-aa-label", "Text size" }
+                        div {
+                            style: "display:flex; align-items:center; gap:12px;",
+                            button {
+                                class: "rd-tool",
+                                r#type: "button",
+                                "aria-label": "Decrease font size",
+                                "data-testid": "reader-font-decrease",
+                                onclick: on_font_decrease,
+                                style: "font-family:var(--serif); font-size:13px; color:var(--ink-2); min-width:24px; height:24px; padding:0;",
+                                "A"
+                            }
+                            div {
+                                class: "rd-size-track",
+                                div { class: "rd-size-fill", style: "width:{font_pct}%;" }
+                                div { class: "rd-size-thumb", style: "left:{font_pct}%;" }
+                            }
+                            button {
+                                class: "rd-tool",
+                                r#type: "button",
+                                "aria-label": "Increase font size",
+                                "data-testid": "reader-font-increase",
+                                onclick: on_font_increase,
+                                style: "font-family:var(--serif); font-size:24px; color:var(--ink-1); min-width:24px; height:24px; padding:0;",
+                                "A"
+                            }
+                        }
+                    }
+
+                    // Line spacing (visual only).
+                    div {
+                        class: "rd-aa-row",
+                        div { class: "rd-aa-label", "Line spacing" }
+                        div {
+                            class: "rd-seg",
+                            button { r#type: "button", "Tight" }
+                            button { class: "on", r#type: "button", "Cozy" }
+                            button { r#type: "button", "Airy" }
+                        }
+                    }
+
+                    // Margins (visual only).
+                    div {
+                        class: "rd-aa-row",
+                        div { class: "rd-aa-label", "Margins" }
+                        div {
+                            class: "rd-seg",
+                            button { r#type: "button", "Narrow" }
+                            button { class: "on", r#type: "button", "Normal" }
+                            button { r#type: "button", "Wide" }
+                        }
+                    }
+
+                    // Justify toggle (visual only).
+                    div {
+                        class: "rd-toggle-row",
+                        span { style: "font-size:13px; color:var(--ink-1);", "Justify text" }
+                        div {
+                            class: "rd-toggle-track",
+                            div { class: "rd-toggle-knob" }
+                        }
+                    }
                 }
             }
         }
