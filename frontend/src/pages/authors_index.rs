@@ -233,7 +233,7 @@ pub fn AuthorsIndexPage() -> Element {
                             }
                             div { class: "idx-card-grid",
                                 for a in group.iter() {
-                                    {render_author_card(a, &server_url_for_cards)}
+                                    div { key: "{a.id}", {render_author_card(a, &server_url_for_cards)} }
                                 }
                             }
                         }
@@ -241,7 +241,7 @@ pub fn AuthorsIndexPage() -> Element {
                 } else {
                     div { class: "idx-card-grid idx-card-grid--flat",
                         for a in filtered.iter() {
-                            {render_author_card(a, &server_url_for_cards)}
+                            div { key: "{a.id}", {render_author_card(a, &server_url_for_cards)} }
                         }
                     }
                 }
