@@ -46,29 +46,37 @@ pub fn BookDetailPage(uuid: String) -> Element {
             author_books.set(Vec::new());
             match data::get_ebook(&url, &uuid).await {
                 Ok(b) => {
-                    if let Some(ref inner) = b {
-                        let author_id = inner.creators.first().and_then(|c| c.id);
-                        let current_uuid = inner.unique_identifier.clone();
-                        if let Some(aid) = author_id {
-                            let url2 = url.clone();
-                            spawn(async move {
-                                if let Ok(Some(ad)) = data::get_author(&url2, aid).await {
-                                    let others: Vec<EbookMetadata> = ad
-                                        .books
-                                        .into_iter()
-                                        .filter(|ab| ab.unique_identifier != current_uuid)
-                                        .collect();
-                                    author_books.set(others);
-                                }
-                            });
-                        }
-                    }
+                    let author_fetch = b.as_ref().map(|inner| {
+                        (
+                            inner.creators.first().and_then(|c| c.id),
+                            inner.unique_identifier.clone(),
+                        )
+                    });
                     book.set(b);
                     error.set(None);
+                    loading.set(false);
+                    if let Some((Some(aid), current_uuid)) = author_fetch {
+                        if let Ok(Some(ad)) = data::get_author(&url, aid).await {
+                            let still_current = book()
+                                .as_ref()
+                                .and_then(|b| b.unique_identifier.as_ref())
+                                == current_uuid.as_ref();
+                            if still_current {
+                                let others: Vec<EbookMetadata> = ad
+                                    .books
+                                    .into_iter()
+                                    .filter(|ab| ab.unique_identifier != current_uuid)
+                                    .collect();
+                                author_books.set(others);
+                            }
+                        }
+                    }
                 }
-                Err(e) => error.set(Some(e.to_string())),
+                Err(e) => {
+                    error.set(Some(e.to_string()));
+                    loading.set(false);
+                }
             }
-            loading.set(false);
         });
     }));
 
