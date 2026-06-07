@@ -1206,8 +1206,7 @@ async fn get_book_backfills_creator_ids_case_insensitively() {
 #[tokio::test]
 async fn get_book_leaves_creator_id_none_when_override_author_unknown() {
     // If the override sets an author name that doesn't exist in the
-    // `authors` table, backfill must leave the id None — same shape
-    // as get_book_leaves_series_id_none_when_override_series_unknown.
+    // `authors` table, backfill must leave the id None.
     let (pool, _guard) = seed_discovery_fixture().await;
     let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
         .await
@@ -1301,10 +1300,10 @@ async fn get_book_backfills_series_id_from_override_when_series_exists() {
     );
 }
 #[tokio::test]
-async fn get_book_leaves_series_id_none_when_override_series_unknown() {
-    // If the override sets a series name that no other book uses, the
-    // series table won't have a row to point at — backfill must
-    // leave series_id None rather than fabricating one.
+async fn get_book_populates_series_id_when_override_creates_series() {
+    // When an override sets a series name, `upsert_metadata_overrides`
+    // materializes the `series` row + `books_series_link` so the
+    // detail-page breadcrumb is clickable and `/series` lists it.
     let _covers = CoversTempDir::new("override_series_unknown");
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
@@ -1345,7 +1344,10 @@ async fn get_book_leaves_series_id_none_when_override_series_unknown() {
         merged.series.as_deref(),
         Some("A Series That Does Not Yet Exist")
     );
-    assert_eq!(merged.series_id, None);
+    assert!(
+        merged.series_id.is_some(),
+        "override should materialize series row so breadcrumb is clickable"
+    );
 }
 #[tokio::test]
 async fn list_books_merges_overrides_in_bulk() {

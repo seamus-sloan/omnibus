@@ -177,6 +177,37 @@ pub fn indexed_with_stat(
 }
 
 // ---------------------------------------------------------------------------
+// IndexedAudiobook factories
+// ---------------------------------------------------------------------------
+
+/// Shared `IndexedAudiobook` builder for tests that need audiobook rows.
+pub fn indexed_audiobook(
+    group_path: &str,
+    title: &str,
+    creator: Option<&str>,
+) -> crate::audiobook::IndexedAudiobook {
+    crate::audiobook::IndexedAudiobook {
+        uuid: format!("ab-uuid-{}", group_path.replace('/', "-")),
+        group_path: group_path.into(),
+        format: "M4B".into(),
+        title: title.into(),
+        creator_name: creator.map(Into::into),
+        cover: None,
+        parts: vec![crate::audiobook::AudiobookPart {
+            ordinal: 0,
+            filename: format!("{group_path}/part1.m4b"),
+            size_bytes: 1000,
+            mtime_epoch: 100,
+            duration_seconds: 3600.0,
+        }],
+        total_size_bytes: 1000,
+        max_mtime_epoch: 100,
+        description: Some("Audiobook · 1h 00m".into()),
+        error: None,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Discovery fixture seeders (formerly `discovery::test_helpers`)
 // ---------------------------------------------------------------------------
 

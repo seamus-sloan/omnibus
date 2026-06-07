@@ -14,17 +14,18 @@ use omnibus_db::{self as db};
 use super::{internal, AppState};
 use crate::auth::AuthUser;
 
-/// `/series` index. Returns every series in the configured library with
-/// a book count, primary author, and optional accent.
+/// `/series` index. Returns every series across both ebook and audiobook
+/// libraries with a book count, primary author, and optional accent.
 pub(super) async fn get_series(_user: AuthUser, State(state): State<AppState>) -> Response {
     let settings = match db::get_settings(&state.pool).await {
         Ok(s) => s,
         Err(e) => return internal("read settings", e),
     };
-    let Some(path) = settings.ebook_library_path else {
-        return Json(Vec::<omnibus_shared::SeriesSummary>::new()).into_response();
-    };
-    match db::list_series(&state.pool, &path).await {
+    let paths = db::collect_paths(
+        settings.ebook_library_path.as_deref(),
+        settings.audiobook_library_path.as_deref(),
+    );
+    match db::list_series(&state.pool, &paths).await {
         Ok(series) => Json(series).into_response(),
         Err(e) => internal("list series", e),
     }
