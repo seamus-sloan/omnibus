@@ -1,4 +1,4 @@
-//! HLS transcode cache for audiobooks (F2.3).
+//! HLS transcode cache for audiobooks.
 //!
 //! One ffmpeg invocation per `(book_id, profile)` writes all segments
 //! atomically to `$OMNIBUS_DATA_DIR/hls/<book_id>/<profile>/`. The only
@@ -8,9 +8,11 @@
 //! `book_file_parts.duration_seconds` values so it is always accurate even
 //! before a transcode completes.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use sqlx::SqlitePool;
+use tokio::io::AsyncBufReadExt;
 
 /// Errors returned by `get_parts`. Other public functions in this module
 /// still return `sqlx::Error` directly (`resolve_audiobook`) or
@@ -26,6 +28,18 @@ pub enum HlsError {
 /// The only HLS audio profile shipped today. Future: add `"audio128"` for
 /// music audiobooks that warrant higher fidelity.
 pub const AUDIO64: &str = "audio64";
+
+/// Heartbeat cadence written to the `.progress` sentinel while ffmpeg is
+/// alive. Long enough to keep filesystem traffic negligible; short enough
+/// that [`STALE_PROGRESS_THRESHOLD`] can be three heartbeats wide without
+/// the orphan detector mistaking a slow disk for a dead transcode.
+const HEARTBEAT_PERIOD: Duration = Duration::from_secs(5);
+
+/// Mtime age past which an in-flight `.progress` sentinel is treated as
+/// orphaned (server crashed / hot-reloaded mid-transcode, leaving the
+/// `0.x` value pinned forever without a live ffmpeg behind it).
+/// Three heartbeats wide so transient I/O stalls don't trip it.
+const STALE_PROGRESS_THRESHOLD: Duration = Duration::from_secs(30);
 
 /// Root directory for the HLS segment cache.
 ///
@@ -51,19 +65,40 @@ pub fn cap_bytes() -> u64 {
 }
 
 /// Path to the `.progress` sentinel file for `(book_id, profile)`. The file
-/// contains a single `f32` as a decimal string (`0.1` = started, `1.0` =
-/// complete).
+/// contains a single `f32` as a decimal string. While ffmpeg is running
+/// the value advances from `0.0+` toward `0.95` (live heartbeat from the
+/// `-progress pipe:1` parser); on success the sentinel is overwritten with
+/// `1.0`.
 pub fn progress_path(book_id: i64, profile: &str) -> PathBuf {
     segment_dir(book_id, profile).join(".progress")
 }
 
 /// Read transcode progress `[0.0, 1.0]` from the sentinel file. Returns
-/// `0.0` if the file is absent or unreadable.
+/// `0.0` if the file is absent, unreadable, or stale (mtime older than
+/// [`STALE_PROGRESS_THRESHOLD`] and value < 1.0). Treating stale sentinels
+/// as zero lets the status handler's `progress < 0.05` re-kick gate fire
+/// naturally after a crashed/restarted transcode — without that, an orphan
+/// `.progress=0.1` left over from a previous run would pin the book in
+/// "preparing" forever.
 pub fn read_progress(book_id: i64, profile: &str) -> f32 {
-    std::fs::read_to_string(progress_path(book_id, profile))
+    let path = progress_path(book_id, profile);
+    let raw: f32 = match std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0.0)
+    {
+        Some(v) => v,
+        None => return 0.0,
+    };
+    // Treat a complete transcode as live no matter the mtime — eviction is
+    // mtime-driven (FIFO) and we don't want a long-idle book to look like
+    // an orphan to a polling client.
+    if raw >= 1.0 {
+        return raw;
+    }
+    if is_progress_stale_at(&path) {
+        return 0.0;
+    }
+    raw
 }
 
 /// `true` when the transcode for `(book_id, profile)` is complete
@@ -103,6 +138,25 @@ pub fn ffmpeg_manifest_path(book_id: i64, profile: &str) -> PathBuf {
 /// the DB-built stub in that case.
 pub fn read_ffmpeg_manifest(book_id: i64, profile: &str) -> Option<String> {
     std::fs::read_to_string(ffmpeg_manifest_path(book_id, profile)).ok()
+}
+
+/// `true` when `path` exists, its mtime is older than
+/// [`STALE_PROGRESS_THRESHOLD`]. Used by [`read_progress`] (so the status
+/// endpoint's re-kick gate fires naturally) and [`transcode_book`] (so a
+/// worker picking up the task can wipe the orphan sentinel before
+/// retrying).
+fn is_progress_stale_at(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    let Ok(mtime) = meta.modified() else {
+        return false;
+    };
+    let Ok(age) = SystemTime::now().duration_since(mtime) else {
+        // mtime is in the future (clock skew). Don't call that stale.
+        return false;
+    };
+    age >= STALE_PROGRESS_THRESHOLD
 }
 
 /// One part of a multi-file audiobook as read from `book_file_parts`.
@@ -224,12 +278,56 @@ pub fn build_manifest(parts: &[HlsPart]) -> String {
     m3u8
 }
 
+/// Parse one ffmpeg `-progress pipe:1` line and return the encode timeline
+/// position in microseconds when the line is the `out_time_us=<int>` (or
+/// `out_time_ms=<int>`, ffmpeg confusingly uses microseconds for both)
+/// progress key. Returns `None` for every other key — `frame=`, `bitrate=`,
+/// `progress=continue`, etc. Public for unit testing.
+pub fn parse_ffmpeg_progress_us(line: &str) -> Option<u64> {
+    let line = line.trim();
+    let (key, value) = line.split_once('=')?;
+    // ffmpeg has historically emitted both `out_time_us=` (named correctly
+    // since ~5.0) and `out_time_ms=` (a long-standing typo that actually
+    // carries microseconds). Accept both so the parser keeps working across
+    // versions.
+    if key != "out_time_us" && key != "out_time_ms" {
+        return None;
+    }
+    let value = value.trim();
+    // `N/A` shows up during the initial warmup before ffmpeg has produced
+    // any output frames. Drop it cleanly rather than treating it as 0.
+    if value == "N/A" {
+        return None;
+    }
+    value.parse::<u64>().ok()
+}
+
+/// Compute the heartbeat fraction to write to `.progress` from an
+/// `out_time_us` value and the total duration in seconds. Clamped to
+/// `[0.01, 0.95]` so the orphan detector always sees motion and the
+/// success sentinel `1.0` is reserved for [`finalize_transcode`].
+/// Public for unit testing.
+pub fn ffmpeg_progress_fraction(out_time_us: u64, total_secs: f64) -> f32 {
+    if total_secs <= 0.0 {
+        return 0.05;
+    }
+    let elapsed_secs = (out_time_us as f64) / 1_000_000.0;
+    (elapsed_secs / total_secs).clamp(0.01, 0.95) as f32
+}
+
 /// Transcode all parts for `(book_id, profile)` to HLS segments via ffmpeg.
 ///
-/// Writes a `.progress` sentinel (`0.1` = started, `1.0` = done) so the
-/// status endpoint can surface readiness without scanning the segment dir.
+/// Writes a `.progress` sentinel that heartbeats every
+/// [`HEARTBEAT_PERIOD`] (~5 s) while ffmpeg is alive, and `1.0` on
+/// success. If a previous run left a `.progress` sentinel pinned to a
+/// non-terminal value (server restart mid-transcode), the orphan is
+/// detected via [`is_progress_stale_at`] and wiped before retrying so the
+/// status endpoint's `progress < 0.05` re-kick gate can fire on the next
+/// poll.
+///
 /// On failure the sentinel and all partial segments are cleaned up so a
-/// retry produces a clean slate.
+/// retry produces a clean slate, and a sibling `.failed` marker is left
+/// behind so subsequent polls don't burn CPU on a corrupt source.
 ///
 /// Configurable via:
 /// - `OMNIBUS_FFMPEG_PATH` — path or name of the ffmpeg binary (default `ffmpeg`)
@@ -262,23 +360,85 @@ pub async fn transcode_book(
     let outdir = segment_dir(book_id, profile);
     std::fs::create_dir_all(&outdir)?;
 
-    // Write a concat input file so ffmpeg stitches all parts into one timeline.
-    let concat_path = outdir.join("concat.txt");
-    {
-        let mut content = String::new();
-        for p in &parts {
-            let abs = std::path::Path::new(library_path).join(&p.filename);
-            // ffmpeg concat demuxer requires single-quotes escaped as '\'' and
-            // the rest of the path double-escaped for the `file` directive.
-            let abs_str = abs.to_string_lossy().replace('\'', "'\\''");
-            content.push_str(&format!("file '{}'\n", abs_str));
+    // Self-healing: if a previous run left an orphan `.progress` (server
+    // restart mid-transcode), wipe it before spawning a fresh ffmpeg so
+    // the next status poll sees the kick land as a brand-new transcode.
+    // Safe to do unconditionally — we hold the worker's per-resource
+    // `hls:{book_id}:{profile}` mutex, so no other transcode for this book
+    // can be live behind the sentinel.
+    let progress_file = progress_path(book_id, profile);
+    if progress_file.exists() && is_progress_stale_at(&progress_file) {
+        if let Err(e) = std::fs::remove_file(&progress_file) {
+            tracing::warn!(
+                book_id = book_id,
+                profile = profile,
+                error = %e,
+                "failed to remove orphan .progress sentinel"
+            );
         }
-        std::fs::write(&concat_path, &content)?;
     }
 
-    // Signal "transcode started" so a racing status poll sees non-zero progress.
-    std::fs::write(progress_path(book_id, profile), "0.1")?;
+    let concat_path = write_concat_input(&outdir, library_path, &parts)?;
 
+    // Bootstrap heartbeat: write a tiny non-zero value so a racing
+    // status-poll between `post(...)` and the first parsed `out_time_us`
+    // line still sees motion. The async progress task will overwrite this
+    // on its first tick.
+    let _ = std::fs::write(&progress_file, "0.01");
+
+    let total_secs: f64 = parts.iter().map(|p| p.duration_seconds).sum();
+    let outcome = run_ffmpeg_with_progress(book_id, profile, &concat_path, &outdir, total_secs)
+        .await
+        .map_err(anyhow::Error::msg);
+    finalize_transcode(book_id, profile, outcome)
+}
+
+/// Possible outcomes of one ffmpeg invocation, as observed by
+/// [`run_ffmpeg_with_progress`].
+enum FfmpegOutcome {
+    Success,
+    /// ffmpeg exited non-zero. Carries the captured stderr for the log.
+    NonZero {
+        status: std::process::ExitStatus,
+        stderr: String,
+    },
+    /// The watchdog elapsed before ffmpeg finished.
+    Timeout {
+        timeout_secs: u64,
+    },
+}
+
+/// Write the `concat.txt` input that ffmpeg's concat demuxer reads. Each
+/// part becomes one `file '<abs-path>'` line with single-quote escaping.
+fn write_concat_input(
+    outdir: &Path,
+    library_path: &str,
+    parts: &[HlsPart],
+) -> std::io::Result<PathBuf> {
+    let concat_path = outdir.join("concat.txt");
+    let mut content = String::new();
+    for p in parts {
+        let abs = Path::new(library_path).join(&p.filename);
+        // ffmpeg concat demuxer requires single-quotes escaped as '\'' and
+        // the rest of the path double-escaped for the `file` directive.
+        let abs_str = abs.to_string_lossy().replace('\'', "'\\''");
+        content.push_str(&format!("file '{}'\n", abs_str));
+    }
+    std::fs::write(&concat_path, &content)?;
+    Ok(concat_path)
+}
+
+/// Spawn ffmpeg with `-progress pipe:1 -nostats`, drain its stdout into
+/// a heartbeat task that writes [`progress_path`] every
+/// [`HEARTBEAT_PERIOD`], and wait for the process under a wall-clock
+/// timeout (`OMNIBUS_HLS_TRANSCODE_TIMEOUT_SECS`, default 1800 s).
+async fn run_ffmpeg_with_progress(
+    book_id: i64,
+    profile: &str,
+    concat_path: &Path,
+    outdir: &Path,
+    total_secs: f64,
+) -> Result<FfmpegOutcome, String> {
     let ffmpeg = std::env::var("OMNIBUS_FFMPEG_PATH").unwrap_or_else(|_| "ffmpeg".into());
     let timeout_secs: u64 = std::env::var("OMNIBUS_HLS_TRANSCODE_TIMEOUT_SECS")
         .ok()
@@ -288,73 +448,147 @@ pub async fn transcode_book(
     let seg_pattern = outdir.join("seg-%04d.ts");
     let manifest_out = outdir.join("index.m3u8");
 
-    let result: Result<std::io::Result<std::process::Output>, tokio::time::error::Elapsed> =
-        tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
-            tokio::process::Command::new(&ffmpeg)
-                .args([
-                    "-f",
-                    "concat",
-                    "-safe",
-                    "0",
-                    "-i",
-                    &concat_path.to_string_lossy(),
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    "64k",
-                    "-ac",
-                    "1",
-                    "-ar",
-                    "44100",
-                    "-hls_time",
-                    "10",
-                    "-hls_playlist_type",
-                    "vod",
-                    "-hls_segment_type",
-                    "mpegts",
-                    "-hls_segment_filename",
-                    &seg_pattern.to_string_lossy(),
-                    "-start_number",
-                    "0",
-                    "-y",
-                    &manifest_out.to_string_lossy(),
-                ])
-                .stderr(std::process::Stdio::piped())
-                .spawn()?
-                .wait_with_output(),
-        )
-        .await;
+    let mut child = tokio::process::Command::new(&ffmpeg)
+        .args([
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            &concat_path.to_string_lossy(),
+            "-c:a",
+            "aac",
+            "-b:a",
+            "64k",
+            "-ac",
+            "1",
+            "-ar",
+            "44100",
+            "-hls_time",
+            "10",
+            "-hls_playlist_type",
+            "vod",
+            "-hls_segment_type",
+            "mpegts",
+            "-hls_segment_filename",
+            &seg_pattern.to_string_lossy(),
+            "-start_number",
+            "0",
+            "-progress",
+            "pipe:1",
+            "-nostats",
+            "-y",
+            &manifest_out.to_string_lossy(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("ffmpeg spawn failed: {e}"))?;
 
-    match result {
-        Ok(Ok(output)) if output.status.success() => {
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "ffmpeg stdout pipe missing".to_string())?;
+
+    let progress_file = progress_path(book_id, profile);
+    let progress_task = tokio::spawn(stream_progress(stdout, progress_file, total_secs));
+
+    let wait_result = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        child.wait_with_output(),
+    )
+    .await;
+
+    // The progress reader either finishes naturally when stdout EOFs (ffmpeg
+    // exited / dropped the pipe) or hits an I/O error; either way we just
+    // join it so a panicked task surfaces.
+    let _ = progress_task.await;
+
+    match wait_result {
+        Ok(Ok(output)) if output.status.success() => Ok(FfmpegOutcome::Success),
+        Ok(Ok(output)) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            Ok(FfmpegOutcome::NonZero {
+                status: output.status,
+                stderr,
+            })
+        }
+        Ok(Err(io_err)) => Err(format!("ffmpeg wait failed: {io_err}")),
+        Err(_elapsed) => {
+            // `kill_on_drop(true)` (set on spawn) reaps the process when
+            // the future is dropped on the timeout return path.
+            Ok(FfmpegOutcome::Timeout { timeout_secs })
+        }
+    }
+}
+
+/// Read ffmpeg's `-progress pipe:1` stream line-by-line and write the
+/// current encode fraction to [`progress_path`] no more than once per
+/// [`HEARTBEAT_PERIOD`]. The cadence is throttled so a slow source
+/// doesn't burn fs syscalls on every `out_time_us=` tick.
+async fn stream_progress(
+    stdout: tokio::process::ChildStdout,
+    progress_file: PathBuf,
+    total_secs: f64,
+) {
+    let mut reader = tokio::io::BufReader::new(stdout).lines();
+    // Allow the first parsed tick to write immediately so a racing
+    // status-poll sees real motion within the first ~second instead of
+    // waiting an entire heartbeat period for the bootstrap to lift.
+    let mut last_write: Option<std::time::Instant> = None;
+    loop {
+        match reader.next_line().await {
+            Ok(Some(line)) => {
+                let Some(us) = parse_ffmpeg_progress_us(&line) else {
+                    continue;
+                };
+                let due = match last_write {
+                    None => true,
+                    Some(t) => t.elapsed() >= HEARTBEAT_PERIOD,
+                };
+                if !due {
+                    continue;
+                }
+                let pct = ffmpeg_progress_fraction(us, total_secs);
+                let _ = std::fs::write(&progress_file, format!("{pct}"));
+                last_write = Some(std::time::Instant::now());
+            }
+            Ok(None) => break, // EOF: ffmpeg closed stdout, we're done.
+            Err(_) => break,
+        }
+    }
+}
+
+/// Apply the success / failure / timeout side-effects of one ffmpeg run.
+/// Split out of [`transcode_book`] so the spawn + heartbeat + wait stages
+/// can stay under the function-length cap.
+fn finalize_transcode(
+    book_id: i64,
+    profile: &str,
+    outcome: Result<FfmpegOutcome, anyhow::Error>,
+) -> anyhow::Result<()> {
+    match outcome {
+        Ok(FfmpegOutcome::Success) => {
             std::fs::write(progress_path(book_id, profile), "1.0")?;
-            // Non-fatal: eviction failure is logged but does not roll back the
-            // successful transcode.
             let cap = cap_bytes();
             if let Err(e) = evict_if_over_cap(cap) {
                 tracing::warn!(error = %e, "HLS eviction failed after successful transcode");
             }
             Ok(())
         }
-        Ok(Ok(output)) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        Ok(FfmpegOutcome::NonZero { status, stderr }) => {
             tracing::error!(
                 book_id = book_id,
                 profile = profile,
-                status = ?output.status,
+                status = ?status,
                 stderr = %stderr,
                 "ffmpeg transcode failed"
             );
             cleanup_segment_dir(book_id, profile);
-            anyhow::bail!("ffmpeg exited with status {}", output.status)
+            anyhow::bail!("ffmpeg exited with status {status}")
         }
-        Ok(Err(io_err)) => {
-            tracing::error!(book_id = book_id, error = %io_err, "ffmpeg spawn/wait error");
-            cleanup_segment_dir(book_id, profile);
-            Err(io_err.into())
-        }
-        Err(_timeout) => {
+        Ok(FfmpegOutcome::Timeout { timeout_secs }) => {
             tracing::error!(
                 book_id = book_id,
                 profile = profile,
@@ -363,6 +597,11 @@ pub async fn transcode_book(
             );
             cleanup_segment_dir(book_id, profile);
             anyhow::bail!("ffmpeg transcode timed out after {timeout_secs}s")
+        }
+        Err(e) => {
+            tracing::error!(book_id = book_id, error = %e, "ffmpeg spawn/wait error");
+            cleanup_segment_dir(book_id, profile);
+            Err(e)
         }
     }
 }
@@ -466,104 +705,4 @@ fn dir_size(path: &std::path::Path) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn build_manifest_with_zero_duration_emits_stub() {
-        let m = build_manifest(&[HlsPart {
-            ordinal: 0,
-            filename: "track.mp3".into(),
-            duration_seconds: 0.0,
-        }]);
-        assert!(m.contains("#EXTM3U"));
-        assert!(m.contains("seg-0000.ts"));
-        assert!(m.contains("#EXT-X-ENDLIST"));
-    }
-
-    #[test]
-    fn build_manifest_calculates_correct_segment_count() {
-        // 25 seconds → 3 segments (10, 10, 5).
-        let parts = vec![
-            HlsPart {
-                ordinal: 0,
-                filename: "p1.mp3".into(),
-                duration_seconds: 15.0,
-            },
-            HlsPart {
-                ordinal: 1,
-                filename: "p2.mp3".into(),
-                duration_seconds: 10.0,
-            },
-        ];
-        let m = build_manifest(&parts);
-        let extinf_count = m.lines().filter(|l| l.starts_with("#EXTINF:")).count();
-        assert_eq!(extinf_count, 3, "expected 3 segments for 25 s total");
-        // Last segment duration = 25 - 20 = 5.
-        assert!(
-            m.contains("#EXTINF:5.000,"),
-            "last segment should be 5.000 s"
-        );
-    }
-
-    #[test]
-    fn read_progress_returns_zero_when_sentinel_absent() {
-        // Use a book_id that will never exist on the test filesystem.
-        assert_eq!(read_progress(i64::MAX, AUDIO64), 0.0);
-    }
-
-    #[test]
-    fn is_ready_returns_false_when_sentinel_absent() {
-        assert!(!is_ready(i64::MAX, AUDIO64));
-    }
-
-    #[test]
-    fn has_failed_returns_false_when_marker_absent() {
-        // Mirror the existing `is_ready_returns_false_when_sentinel_absent`
-        // pattern — book id that will never exist on the test filesystem.
-        assert!(!has_failed(i64::MAX, AUDIO64));
-    }
-
-    #[test]
-    fn failed_path_lives_at_book_id_level_not_inside_segment_dir() {
-        // Invariant the `.failed` marker relies on:
-        // `cleanup_segment_dir` wipes the segment dir, then writes the
-        // marker one level up so the flag survives. If this path layout
-        // ever drifts the cleanup will silently lose the marker.
-        let p = failed_path(42, AUDIO64);
-        assert_eq!(
-            p.file_name().and_then(|s| s.to_str()),
-            Some("audio64.failed"),
-        );
-        assert_eq!(
-            p.parent()
-                .and_then(|p| p.file_name())
-                .and_then(|s| s.to_str()),
-            Some("42"),
-            "marker must live at <hls_dir>/<book_id>/, not inside the segment dir",
-        );
-    }
-
-    #[test]
-    fn ffmpeg_manifest_path_lives_inside_segment_dir() {
-        // The post-transcode manifest is the file ffmpeg writes out via
-        // the positional argument; serving it directly is the fix for
-        // the DB-built manifest's segment-count drift.
-        let p = ffmpeg_manifest_path(42, AUDIO64);
-        assert_eq!(p.file_name().and_then(|s| s.to_str()), Some("index.m3u8"),);
-        assert_eq!(
-            p.parent()
-                .and_then(|p| p.file_name())
-                .and_then(|s| s.to_str()),
-            Some(AUDIO64),
-        );
-    }
-
-    #[test]
-    fn read_ffmpeg_manifest_returns_none_when_file_absent() {
-        // The handler treats `None` as "fall back to DB-built stub", so
-        // missing-file → None must hold even when the parent book dir
-        // doesn't exist at all.
-        assert_eq!(read_ffmpeg_manifest(i64::MAX, AUDIO64), None);
-    }
-}
+mod tests;
