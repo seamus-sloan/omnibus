@@ -8,7 +8,7 @@ mod shared;
 pub mod cascade;
 pub mod remote;
 
-pub use cascade::{resolve, resolve_with, OpenLibraryConfig};
+pub use cascade::{refetch_all, resolve, resolve_with, OpenLibraryConfig};
 pub use remote::{
     fetch_remote_image, fetch_remote_image_with, FetchRemoteImageError, RemoteImageConfig,
     REMOTE_IMAGE_MAX_BYTES,

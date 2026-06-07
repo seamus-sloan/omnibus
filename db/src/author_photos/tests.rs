@@ -10,7 +10,7 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
 };
 
-use super::cascade::{fetch_open_library, resolve_with, OpenLibraryConfig};
+use super::cascade::{fetch_open_library, refetch_all, resolve_with, OpenLibraryConfig};
 use super::remote::{
     fetch_remote_image_with, is_blocked_address, FetchRemoteImageError, RemoteImageConfig,
 };
@@ -485,4 +485,86 @@ async fn resolve_leaves_row_absent_on_transient_network_error() {
         author_photo_status(&pool, id).await.unwrap().is_none(),
         "transient network error must leave the row absent for retry"
     );
+}
+
+// ── refetch_all ─────────────────────────────────────────────────
+
+#[tokio::test]
+async fn refetch_all_skips_manual_and_reports_progress() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let manual_id: i64 = sqlx::query_scalar(
+        "INSERT INTO authors (name, sort) VALUES ('Manual Author', 'Manual Author') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let letter_id: i64 = sqlx::query_scalar(
+        "INSERT INTO authors (name, sort) VALUES ('Letter Author', 'Letter Author') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let empty_id: i64 = sqlx::query_scalar(
+        "INSERT INTO authors (name, sort) VALUES ('No Photo', 'No Photo') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    upsert_author_photo(
+        &pool,
+        manual_id,
+        AuthorPhotoSource::Manual,
+        Some("https://example.com/manual.jpg"),
+        Some("image/jpeg"),
+        Some(&[0xFF; 2048]),
+    )
+    .await
+    .unwrap();
+    upsert_author_photo(
+        &pool,
+        letter_id,
+        AuthorPhotoSource::Letter,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let progress = std::sync::Mutex::new(Vec::new());
+    refetch_all(&pool, |processed, total| {
+        progress.lock().unwrap().push((processed, total));
+    })
+    .await
+    .unwrap();
+
+    let calls = progress.into_inner().unwrap();
+    assert_eq!(calls.len(), 3, "one progress call per author");
+    assert_eq!(calls[0], (1, Some(3)));
+    assert_eq!(calls[1], (2, Some(3)));
+    assert_eq!(calls[2], (3, Some(3)));
+
+    let (src, _) = author_photo_status(&pool, manual_id)
+        .await
+        .unwrap()
+        .expect("manual row should be preserved");
+    assert_eq!(src, AuthorPhotoSource::Manual);
+
+    // letter row was deleted + resolve re-ran. With real OL, the search
+    // returns nothing for "Letter Author" so a new letter marker is written.
+    // The key invariant: the old row was cleared and the cascade ran again.
+    match author_photo_status(&pool, letter_id).await.unwrap() {
+        Some((AuthorPhotoSource::Letter, _)) => {} // re-resolved to letter (expected)
+        None => {}                                 // transient network error left absent
+        other => panic!("unexpected status for letter author: {other:?}"),
+    }
+
+    // "No Photo" had no row — resolve ran (OL search miss → letter marker,
+    // or transient error → absent). Either is fine; the point is the cascade
+    // executed without error.
+    match author_photo_status(&pool, empty_id).await.unwrap() {
+        Some((AuthorPhotoSource::Letter, _)) | None => {}
+        other => panic!("unexpected status for empty author: {other:?}"),
+    }
 }

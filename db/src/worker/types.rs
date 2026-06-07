@@ -67,6 +67,12 @@ pub enum Task {
         library_path: String,
         profile: String,
     },
+    /// Bulk re-resolve all author photos. Clears non-manual cached photos
+    /// and re-runs the Open Library cascade for every author. Reports
+    /// progress as `(processed, total)` for the UI indicator. Keyed on a
+    /// fixed resource so concurrent clicks serialize; does not consume the
+    /// scan semaphore.
+    RefetchAuthorPhotos,
     /// Test-only synthetic task: sleeps `latency_ms` and invokes the
     /// optional `on_run` / `on_done` hooks, with `resource` and
     /// `route_through_scan_sem` letting a test exercise the keyed mutex and
@@ -92,6 +98,7 @@ impl Task {
             Task::HlsTranscode {
                 book_id, profile, ..
             } => Some(format!("hls:{book_id}:{profile}")),
+            Task::RefetchAuthorPhotos => Some("refetch-author-photos".into()),
             #[cfg(test)]
             Task::Test { resource, .. } => resource.clone(),
         }
@@ -104,6 +111,7 @@ impl Task {
             Task::GenerateThumbs { .. } => false,
             Task::ResolveAuthorPhoto { .. } => false,
             Task::HlsTranscode { .. } => false,
+            Task::RefetchAuthorPhotos => false,
             #[cfg(test)]
             Task::Test {
                 route_through_scan_sem,
@@ -127,6 +135,7 @@ impl Task {
             Task::ScanAudiobooks { .. } => TaskKind::Scan,
             Task::GenerateThumbs { .. } => TaskKind::GenerateThumbs,
             Task::ResolveAuthorPhoto { .. } => TaskKind::ResolveAuthorPhoto,
+            Task::RefetchAuthorPhotos => TaskKind::RefetchAuthorPhotos,
             // Reuse Scan kind for UI display until a dedicated HLS progress
             // widget is added.
             Task::HlsTranscode { .. } => TaskKind::Scan,
