@@ -1,4 +1,4 @@
-//! Two-column player stage: cover on the left, title / author / scrubber /
+//! Two-column player stage: cover on the left, title / author / chapter map /
 //! transport on the right. Receives the resolved display data + per-action
 //! [`EventHandler`]s so the parent orchestrator stays under the component
 //! line-count cap.
@@ -6,9 +6,10 @@
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;
-use omnibus_shared::EbookMetadata;
+use omnibus_shared::{ChapterInfo, EbookMetadata};
 
-use super::controls::{Scrubber, Toolbar, TransportButtons};
+use super::chapter_map::ChapterMap;
+use super::controls::{Toolbar, TransportButtons};
 use crate::components::atrium::Cover;
 
 /// Scrubber timing — elapsed plus the derived totals (duration, remaining, slider max).
@@ -27,6 +28,7 @@ pub(super) struct TransportState {
     pub playing: bool,
     pub rate_label: String,
     pub rate_active: bool,
+    pub has_chapters: bool,
 }
 
 /// Transport-row event handlers wired through to the scrubber + play/skip/rate buttons.
@@ -37,6 +39,9 @@ pub(super) struct PlayerCallbacks {
     pub on_skip_back: EventHandler<MouseEvent>,
     pub on_skip_forward: EventHandler<MouseEvent>,
     pub on_rate: EventHandler<MouseEvent>,
+    pub on_chapter_prev: EventHandler<MouseEvent>,
+    pub on_chapter_next: EventHandler<MouseEvent>,
+    pub on_chapter_seek: EventHandler<f64>,
 }
 
 /// Toolbar row (sleep/bookmark/chapters) — per-button highlight state plus toggle handlers.
@@ -59,12 +64,24 @@ pub(super) fn PlayerStage(
     transport: TransportState,
     callbacks: PlayerCallbacks,
     toolbar: ToolbarState,
+    chapters: Vec<ChapterInfo>,
+    current_chapter_index: usize,
 ) -> Element {
-    let fill_pct = if position.scrub_max > 0.0 {
-        (position.elapsed / position.scrub_max * 100.0).min(100.0)
+    let ch_count = chapters.len();
+    let kicker = if ch_count > 0 {
+        format!(
+            "Now playing \u{00b7} Chapter {} of {}",
+            current_chapter_index + 1,
+            ch_count
+        )
     } else {
-        0.0
+        "Now playing".to_string()
     };
+
+    let chapter_sub = chapters
+        .get(current_chapter_index)
+        .filter(|c| !c.title.is_empty())
+        .map(|c| format!("Ch. {} \u{00b7} {}", current_chapter_index + 1, c.title));
 
     rsx! {
         div { class: "lp-stage",
@@ -74,18 +91,20 @@ pub(super) fn PlayerStage(
                 }
             }
             div { class: "lp-info-col",
-                div { class: "lp-kicker", "Now playing" }
+                div { class: "lp-kicker", "{kicker}" }
                 h1 { class: "lp-title", "{title}" }
                 div { class: "lp-author", "by {author}" }
-                div { class: "lp-chapter-sub" }
+                if let Some(sub) = chapter_sub {
+                    div { class: "lp-chapter-sub", "{sub}" }
+                }
 
-                Scrubber {
+                ChapterMap {
+                    chapters: chapters.clone(),
                     elapsed: position.elapsed,
                     duration: position.duration,
                     remaining: position.remaining,
-                    scrub_max: position.scrub_max,
-                    fill_pct,
-                    on_seek: callbacks.on_seek,
+                    current_chapter_index,
+                    on_seek: callbacks.on_chapter_seek,
                 }
 
                 TransportButtons {
@@ -93,10 +112,13 @@ pub(super) fn PlayerStage(
                     playing: transport.playing,
                     rate_label: transport.rate_label,
                     rate_active: transport.rate_active,
+                    has_chapters: transport.has_chapters,
                     on_toggle: callbacks.on_toggle,
                     on_skip_back: callbacks.on_skip_back,
                     on_skip_forward: callbacks.on_skip_forward,
                     on_rate: callbacks.on_rate,
+                    on_chapter_prev: callbacks.on_chapter_prev,
+                    on_chapter_next: callbacks.on_chapter_next,
                 }
 
                 Toolbar {
