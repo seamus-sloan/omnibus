@@ -35,7 +35,7 @@ pub(super) fn install_audio_bootstrap(
         let uuid = uuid_for_mount.clone();
         let uuid_cb = uuid_for_cb.clone();
         let initial_position = crate::audiobook_progress::load(&uuid).unwrap_or(0.0);
-        let initial_rate = crate::audiobook_progress::load_rate();
+        let initial_rate = crate::audiobook_progress::load_rate(&uuid);
 
         register_js_callbacks(
             &cb_holder,

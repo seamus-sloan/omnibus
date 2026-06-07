@@ -30,8 +30,12 @@ use omnibus_shared::EbookMetadata;
 #[cfg(not(feature = "mobile"))]
 use crate::{data, use_server_url, Route};
 
+#[cfg(not(feature = "mobile"))]
+mod bookmarks_drawer;
 #[cfg(feature = "web")]
 mod bootstrap;
+#[cfg(not(feature = "mobile"))]
+mod chapters_drawer;
 #[cfg(not(feature = "mobile"))]
 mod controls;
 mod helpers;
@@ -39,6 +43,10 @@ mod helpers;
 mod overlays;
 #[cfg(not(feature = "mobile"))]
 mod ready_player;
+#[cfg(not(feature = "mobile"))]
+mod sleep_panel;
+#[cfg(not(feature = "mobile"))]
+mod speed_panel;
 #[cfg(not(feature = "mobile"))]
 mod stage;
 
@@ -49,9 +57,6 @@ use ready_player::ReadyPlayer;
 pub fn BookListenPage(uuid: String) -> Element {
     #[cfg(feature = "mobile")]
     {
-        // Mobile native shell has no `<audio>` element binding yet — same
-        // gate as the EPUB reader. Stub a placeholder so the route still
-        // compiles for the mobile target.
         let _ = uuid;
         return rsx! {
             div { class: "screen",
@@ -72,16 +77,10 @@ pub fn BookListenPage(uuid: String) -> Element {
         let elapsed = use_signal(|| 0.0_f64);
         #[cfg_attr(not(feature = "web"), allow(unused_mut))]
         let playing = use_signal(|| false);
-        let rate = use_signal(crate::audiobook_progress::load_rate);
-        // Playback readiness: false until initDirect / initHls has fired.
-        // For direct mode this flips on as soon as the manifest fetch
-        // returns; for HLS it waits for `/status` to report `ready`.
+        let uuid_for_rate = uuid.clone();
+        let rate = use_signal(move || crate::audiobook_progress::load_rate(&uuid_for_rate));
         #[cfg_attr(not(feature = "web"), allow(unused_mut))]
         let hls_ready = use_signal(|| false);
-        // Terminal playback failure: HLS transcode `.failed` marker
-        // present, or manifest fetch failed. Bug 4 from #338 — distinct
-        // from "preparing" so the UI can render an error rather than
-        // spinning forever.
         #[cfg_attr(not(feature = "web"), allow(unused_mut))]
         let playback_failed = use_signal(|| false);
 
@@ -103,7 +102,6 @@ pub fn BookListenPage(uuid: String) -> Element {
             });
         }));
 
-        // Web interop: install OmnibusAudio + manifest-driven init effect.
         #[cfg(feature = "web")]
         bootstrap::install_audio_bootstrap(
             uuid.clone(),
@@ -133,6 +131,7 @@ pub fn BookListenPage(uuid: String) -> Element {
         rsx! {
             ReadyPlayer {
                 book: b,
+                uuid: uuid.clone(),
                 duration,
                 elapsed,
                 playing,
