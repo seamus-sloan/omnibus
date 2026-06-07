@@ -1,18 +1,169 @@
 import { expect, test } from "../fixtures/test";
+import { AUDIOBOOK_BOOKS, AUDIOBOOK_BOOK_COUNT } from "../fixtures/audiobooks";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
-import { fetchBookIdByTitle, getRow } from "../utils/ebooks";
+import { fetchBookUuidByTitle, getRow } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
-import { fixturesDir, seedLibrary } from "../utils/seed";
+import {
+  audiobookFixturesDir,
+  fixturesDir,
+  seedAudiobookLibrary,
+  seedLibrary,
+} from "../utils/seed";
 
 // Re-seed in this spec's beforeAll so the running server is indexed against
 // the committed EPUB fixtures before any assertion runs — independent of
-// whatever other specs in the same worker did before us.
+// whatever other specs in the same worker did before us. The audiobook
+// library is seeded in a separate beforeAll (sharded by test.describe) so the
+// listen-CTA test gets MP3/M4B-only books to land on.
 test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
 });
 
-// A fixture with predictable, distinctive metadata to drive both tests.
+// A fixture with predictable, distinctive metadata to drive the layout and
+// breadcrumb tests. `alpha` is a single-author standalone ebook (Ada
+// Lovelace) so the breadcrumb is Home > Ada Lovelace > Alpha — and we can
+// reuse it for the "From the same hand" empty-state test because it's the
+// only book by that author in the seed.
 const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "alpha")!;
+
+// Niklaus Wirth has four books in FIXTURE_BOOKS (the Code Quartet) — three
+// where he's the sole/lead author and one (Quartet III) where he's the lead
+// of a multi-author group. `data::get_author` returns every book under the
+// primary author's id, so visiting any Wirth book should surface the other
+// three under "From the same hand".
+const WIRTH_LEAD = FIXTURE_BOOKS.find((b) => b.slug === "code-quartet-1")!;
+const WIRTH_OTHERS = FIXTURE_BOOKS.filter(
+  (b) => b.authors[0] === "Niklaus Wirth" && b.slug !== WIRTH_LEAD.slug,
+);
+
+// ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
+
+test("renders the book detail layout", async ({ page, request }) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  // Hero — title heading is the H1.
+  await expect(page.getByRole("heading", { level: 1, name: TARGET.title })).toBeVisible();
+
+  // Hero — author appears in the dedicated authors line as a router link
+  // (creators[0] has an id in the seeded DB). Scoped to `book-authors`
+  // because the breadcrumb also renders the same name.
+  const primaryAuthor = TARGET.authors[0]!;
+  const authorsLine = page.getByTestId("book-authors");
+  await expect(authorsLine).toContainText(primaryAuthor);
+  await expect(
+    authorsLine.getByRole("link", { name: primaryAuthor }),
+  ).toBeVisible();
+
+  // Hero — cover renders inside the cover column. There's also one cover
+  // per "From the same hand" tile, so we just assert at least one is
+  // attached rather than .first() being visible (alpha's empty-state case
+  // has no tile covers).
+  await expect(page.getByTestId("cover").first()).toBeVisible();
+
+  // Hero — primary CTA: alpha is EPUB-only, so the "Start reading" link
+  // must be present and href into the /read/:uuid reader route.
+  const startReading = page.getByTestId("start-reading");
+  await expect(startReading).toBeVisible();
+  await expect(startReading).toHaveAttribute("href", new RegExp(`/read/${uuid}$`));
+
+  // Hero — breadcrumb landmark with Home link.
+  const crumb = page.getByRole("navigation", { name: "breadcrumb" });
+  await expect(crumb).toBeVisible();
+  await expect(crumb.getByRole("link", { name: "Home" })).toBeVisible();
+
+  // Body — "From the same hand" section heading is always rendered.
+  await expect(page.getByRole("heading", { name: "From the same hand" })).toBeVisible();
+
+  // Footer — Back to library link.
+  await expect(page.getByRole("link", { name: "Back to library" })).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// Action — start reading (ebook)
+// ---------------------------------------------------------------------------
+
+test("Start reading navigates to /read/:uuid for ebook-format books", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  // The hero CTA is a router Link — clicking it triggers SPA navigation.
+  // The reader page mounts the full-screen reader chrome, so we just
+  // assert the URL flips to /read/:uuid; the reader spec covers its
+  // contents in detail.
+  await page.getByTestId("start-reading").click();
+  await expect(page).toHaveURL(new RegExp(`/read/${uuid}$`));
+});
+
+// ---------------------------------------------------------------------------
+// Action — "From the same hand" populated row
+// ---------------------------------------------------------------------------
+
+test("From the same hand row renders other books by the same author", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, WIRTH_LEAD.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  // The author-fetch is awaited after the initial render, so poll for the
+  // populated row rather than asserting visibility synchronously.
+  const row = page.getByTestId("from-same-hand");
+  await expect(row).toBeVisible();
+  // Empty-state marker must NOT be present once the row is populated.
+  await expect(page.getByTestId("from-same-hand-empty")).toHaveCount(0);
+
+  // The row should hold exactly the other Wirth books — never the current
+  // book (the page filters by `unique_identifier` to drop the self-tile).
+  const tiles = row.getByTestId("from-same-hand-tile");
+  await expect(tiles).toHaveCount(WIRTH_OTHERS.length);
+
+  // The current book's cover-of-{title} alt must not appear under any of
+  // the row's tiles — verifies the self-exclusion behaviour from
+  // `pages/book_detail.rs::BookDetailPage`.
+  await expect(
+    row.getByRole("img", { name: `Cover of ${WIRTH_LEAD.title}` }),
+  ).toHaveCount(0);
+
+  // Clicking any sibling tile must navigate to its /books/:uuid page —
+  // tiles are router Links that swap the route param in place.
+  await tiles.first().click();
+  await expect(page).toHaveURL(/\/books\/[0-9a-fA-F-]{36}$/);
+  await expect(page).not.toHaveURL(new RegExp(`/books/${uuid}$`));
+});
+
+// ---------------------------------------------------------------------------
+// Action — "From the same hand" empty state
+// ---------------------------------------------------------------------------
+
+test("From the same hand shows empty state for single-book authors", async ({
+  page,
+  request,
+}) => {
+  // Ada Lovelace is the only author of `alpha` in the fixture set — so the
+  // author-fetch returns one book, filtering it out yields an empty list,
+  // and the page renders `from-same-hand-empty` instead of the row.
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  // Wait for the heading to confirm the section rendered.
+  await expect(page.getByRole("heading", { name: "From the same hand" })).toBeVisible();
+
+  // Empty-state card must be visible; the populated row must be absent.
+  await expect(page.getByTestId("from-same-hand-empty")).toBeVisible();
+  await expect(page.getByTestId("from-same-hand")).toHaveCount(0);
+});
+
+// ---------------------------------------------------------------------------
+// Pre-existing coverage — kept so the spec remains a single source of truth
+// for the book detail page. These post-date the original landing-row entry
+// from #297; the new tests above were added for #385.
+// ---------------------------------------------------------------------------
 
 test("navigates from a landing row to the detail page and back", async ({ page }) => {
   await gotoReady(page, "/");
@@ -41,12 +192,12 @@ test("navigates from a landing row to the detail page and back", async ({ page }
 });
 
 test("renders the detail contents for the selected book", async ({ page, request }) => {
-  // Resolve the backend id the same way a real click would: read it out of
-  // the same RPC the landing page consumes. Deep-linking by id keeps this
-  // test independent of the landing page's row order.
-  const id = await fetchBookIdByTitle(request, TARGET.title);
+  // Resolve the backend uuid the same way a real click would: read it out
+  // of the same RPC the landing page consumes. Deep-linking by uuid keeps
+  // this test independent of the landing page's row order.
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
 
-  await gotoReady(page, `/books/${id}`);
+  await gotoReady(page, `/books/${uuid}`);
 
   // Title heading matches the fixture
   await expect(page.getByRole("heading", { level: 1, name: TARGET.title })).toBeVisible();
@@ -81,8 +232,10 @@ test("renders the detail contents for the selected book", async ({ page, request
   await expect(kindleBtn).toBeVisible();
   await expect(kindleBtn).toBeDisabled();
 
-  // No M4B fixture in the seed — the Listen CTA must NOT render.
-  await expect(page.getByTestId("action-listen")).toHaveCount(0);
+  // No M4B fixture in the ebook seed — the per-format Listen CTA must NOT
+  // render. (Scoped to the format switcher; the hero "Listen" secondary
+  // button only renders when both formats are present.)
+  await expect(switcher.getByTestId("action-listen")).toHaveCount(0);
 
   // F3.2 / F3.3 placeholder slots must be in the DOM (may be invisible)
   await expect(page.getByTestId("ratings-slot")).toBeAttached();
@@ -100,8 +253,8 @@ test("breadcrumb author segment links to the author page", async ({ page, reques
   // `alpha` has a single author (Ada Lovelace) and no series, so the
   // breadcrumb shape is Home > Ada Lovelace > Alpha and the author segment
   // must be a router link to /authors/:id.
-  const id = await fetchBookIdByTitle(request, TARGET.title);
-  await gotoReady(page, `/books/${id}`);
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
 
   const crumb = page.getByRole("navigation", { name: "breadcrumb" });
   const authorLink = crumb.getByRole("link", { name: TARGET.authors[0] });
@@ -115,12 +268,55 @@ test("breadcrumb series segment links to the series page", async ({ page, reques
   // Home > Grace Hopper > Pioneers #1 > Beta in the Series. The series
   // segment must be a router link to /series/:id.
   const beta = FIXTURE_BOOKS.find((b) => b.slug === "beta")!;
-  const id = await fetchBookIdByTitle(request, beta.title);
-  await gotoReady(page, `/books/${id}`);
+  const uuid = await fetchBookUuidByTitle(request, beta.title);
+  await gotoReady(page, `/books/${uuid}`);
 
   const crumb = page.getByRole("navigation", { name: "breadcrumb" });
   const seriesLink = crumb.getByRole("link", { name: /Pioneers/ });
   await expect(seriesLink).toBeVisible();
   await seriesLink.click();
   await expect(page).toHaveURL(/\/series\/\d+$/);
+});
+
+// ---------------------------------------------------------------------------
+// Audiobook-only seed: re-seeds the server with the audiobook fixtures so
+// the audio-only "Start listening" CTA can be exercised. Sharded into a
+// `describe` block so the audiobook re-seed only runs for the listen-CTA
+// test — the rest of the spec keeps the ebook library it set up above.
+// ---------------------------------------------------------------------------
+
+test.describe("audiobook-only seed", () => {
+  test.beforeAll(async ({ request }) => {
+    await seedAudiobookLibrary(
+      request,
+      audiobookFixturesDir(),
+      AUDIOBOOK_BOOK_COUNT,
+    );
+  });
+
+  test("Start listening navigates to /listen/:uuid for audio-only books", async ({
+    page,
+    request,
+  }) => {
+    // Pick an MP3 audiobook with no ebook companion — has_audio is true
+    // and has_ebook is false, so the hero renders "Start listening" as
+    // the primary CTA (the secondary "Listen" button only appears when
+    // both formats coexist).
+    const mp3Book = AUDIOBOOK_BOOKS.find(
+      (b) => b.format === "MP3" && b.source === "generated",
+    )!;
+    const uuid = await fetchBookUuidByTitle(request, mp3Book.title);
+    await gotoReady(page, `/books/${uuid}`);
+
+    const startListening = page.getByTestId("start-listening");
+    await expect(startListening).toBeVisible();
+    await expect(startListening).toHaveAttribute(
+      "href",
+      new RegExp(`/listen/${uuid}$`),
+    );
+
+    // Clicking the primary CTA must SPA-navigate to the listen page.
+    await startListening.click();
+    await expect(page).toHaveURL(new RegExp(`/listen/${uuid}$`));
+  });
 });
