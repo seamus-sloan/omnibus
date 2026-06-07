@@ -232,6 +232,36 @@ pub async fn get_parts(pool: &SqlitePool, book_file_id: i64) -> Result<Vec<HlsPa
         .collect())
 }
 
+/// Fetch chapter markers for a `book_file_id`. Always returns at least one
+/// row because the sync layer writes synthetic chapters when none are
+/// extracted from the container.
+pub async fn get_chapters(
+    pool: &SqlitePool,
+    book_file_id: i64,
+) -> Result<Vec<omnibus_shared::ChapterInfo>, HlsError> {
+    let rows = sqlx::query_as::<_, (i64, String, f64, f64)>(
+        "SELECT ordinal, title, start_seconds, duration_seconds \
+         FROM file_chapters \
+         WHERE book_file_id = ? \
+         ORDER BY ordinal",
+    )
+    .bind(book_file_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(ordinal, title, start_seconds, duration_seconds)| omnibus_shared::ChapterInfo {
+                ordinal,
+                title,
+                start_seconds,
+                duration_seconds,
+            },
+        )
+        .collect())
+}
+
 /// Build an HLS VOD manifest from the stored part durations.
 ///
 /// Each segment is 10 seconds; the last segment gets the remainder.

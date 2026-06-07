@@ -616,6 +616,7 @@ mod tests {
                 cover: None,
                 accent: None,
                 parts: vec![],
+                chapters: vec![],
                 total_size_bytes: 100,
                 max_mtime_epoch: 100,
                 description: None,

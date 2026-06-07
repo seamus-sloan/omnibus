@@ -79,6 +79,8 @@ pub async fn sync_audiobooks(
             // TOCTOU: promote to New insert.
             let inserted = insert_audiobook_row(&mut tx, library_id, b).await?;
             insert_audiobook_parts(&mut tx, inserted.book_file_id, &b.parts).await?;
+            insert_audiobook_chapters(&mut tx, inserted.book_file_id, &b.chapters, &b.parts)
+                .await?;
             insert_audiobook_author_link(&mut tx, inserted.book_id, b.creator_name.as_deref())
                 .await?;
             insert_audiobook_fts_row(&mut tx, inserted.book_id, b).await?;
@@ -106,6 +108,7 @@ pub async fn sync_audiobooks(
 
         let book_file_id = insert_audiobook_file_row(&mut tx, book_id, b).await?;
         insert_audiobook_parts(&mut tx, book_file_id, &b.parts).await?;
+        insert_audiobook_chapters(&mut tx, book_file_id, &b.chapters, &b.parts).await?;
         insert_audiobook_author_link(&mut tx, book_id, b.creator_name.as_deref()).await?;
         insert_audiobook_fts_row(&mut tx, book_id, b).await?;
 
@@ -119,6 +122,7 @@ pub async fn sync_audiobooks(
     for b in &plan.new_books {
         let inserted = insert_audiobook_row(&mut tx, library_id, b).await?;
         insert_audiobook_parts(&mut tx, inserted.book_file_id, &b.parts).await?;
+        insert_audiobook_chapters(&mut tx, inserted.book_file_id, &b.chapters, &b.parts).await?;
         insert_audiobook_author_link(&mut tx, inserted.book_id, b.creator_name.as_deref()).await?;
         insert_audiobook_fts_row(&mut tx, inserted.book_id, b).await?;
         if let Some((mime, bytes)) = &b.cover {
@@ -267,6 +271,61 @@ async fn insert_audiobook_parts(
         .bind(p.duration_seconds)
         .execute(&mut **tx)
         .await?;
+    }
+    Ok(())
+}
+
+/// Insert `file_chapters` rows. If no chapters were extracted, synthesize
+/// one chapter per part so the frontend always gets `chapters.len() >= 1`.
+async fn insert_audiobook_chapters(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_file_id: i64,
+    chapters: &[crate::audiobook::RawChapter],
+    parts: &[crate::audiobook::AudiobookPart],
+) -> Result<(), sqlx::Error> {
+    if !chapters.is_empty() {
+        let total_duration: f64 = parts.iter().map(|p| p.duration_seconds).sum();
+        for (i, ch) in chapters.iter().enumerate() {
+            let start_seconds = ch.start_ms as f64 / 1000.0;
+            let duration_seconds = if ch.end_ms > ch.start_ms {
+                (ch.end_ms - ch.start_ms) as f64 / 1000.0
+            } else if i + 1 < chapters.len() {
+                (chapters[i + 1].start_ms - ch.start_ms) as f64 / 1000.0
+            } else {
+                (total_duration - start_seconds).max(0.0)
+            };
+            sqlx::query(
+                "INSERT INTO file_chapters \
+                    (book_file_id, ordinal, title, start_seconds, duration_seconds) \
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(book_file_id)
+            .bind(i as i64)
+            .bind(&ch.title)
+            .bind(start_seconds)
+            .bind(duration_seconds)
+            .execute(&mut **tx)
+            .await?;
+        }
+    } else {
+        // Synthetic fallback: one chapter per part.
+        let mut cumulative = 0.0f64;
+        for p in parts {
+            let title = format!("Part {}", p.ordinal + 1);
+            sqlx::query(
+                "INSERT INTO file_chapters \
+                    (book_file_id, ordinal, title, start_seconds, duration_seconds) \
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(book_file_id)
+            .bind(p.ordinal)
+            .bind(&title)
+            .bind(cumulative)
+            .bind(p.duration_seconds)
+            .execute(&mut **tx)
+            .await?;
+            cumulative += p.duration_seconds;
+        }
     }
     Ok(())
 }

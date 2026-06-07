@@ -115,6 +115,9 @@ pub struct IndexedAudiobook {
     /// has no chromatic content or no cover was found.
     pub accent: Option<String>,
     pub parts: Vec<AudiobookPart>,
+    /// Chapters extracted from container metadata. Empty when the format has
+    /// no embedded chapter markers (the sync layer synthesizes one-per-part).
+    pub chapters: Vec<super::chapters::RawChapter>,
     pub total_size_bytes: i64,
     pub max_mtime_epoch: i64,
     /// Human-readable duration, e.g. `"Audiobook · 14h 07m"`.
@@ -277,6 +280,16 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
         .as_ref()
         .and_then(|(_mime, bytes)| extract_accent(bytes));
 
+    // Extract chapters from the first part (single-file M4B/M4A) or from
+    // the first MP3 (rare: ID3v2 CHAP frames). Multi-file MP3 folders
+    // without embedded CHAP frames get the synthetic fallback at sync time.
+    let chapters = if let Some(first) = group.parts.first() {
+        let abs = library_root.join(&first.filename);
+        super::chapters::extract_chapters(&abs, &group.format)
+    } else {
+        Vec::new()
+    };
+
     IndexedAudiobook {
         uuid: group.uuid,
         group_path: group.group_path,
@@ -286,6 +299,7 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
         cover: first_cover,
         accent,
         parts,
+        chapters,
         total_size_bytes: group.total_size_bytes,
         max_mtime_epoch: group.max_mtime_epoch,
         description,
