@@ -25,6 +25,7 @@ pub(super) fn install_audio_bootstrap(
     mut playing: Signal<bool>,
     mut hls_ready: Signal<bool>,
     mut playback_failed: Signal<bool>,
+    chapters: Signal<Vec<omnibus_shared::ChapterInfo>>,
 ) {
     let cb_holder: std::rc::Rc<std::cell::RefCell<Vec<Closure<dyn FnMut(f64)>>>> =
         use_hook(|| std::rc::Rc::new(std::cell::RefCell::new(Vec::new())));
@@ -64,7 +65,14 @@ pub(super) fn install_audio_bootstrap(
         // back to the legacy /status poll until ready or failed.
         let uuid_for_fetch = uuid.clone();
         spawn(async move {
-            run_manifest_init(uuid_for_fetch, initial_position, hls_ready, playback_failed).await;
+            run_manifest_init(
+                uuid_for_fetch,
+                initial_position,
+                hls_ready,
+                playback_failed,
+                chapters,
+            )
+            .await;
         });
     }));
 }
@@ -381,6 +389,7 @@ async fn run_manifest_init(
     initial_position: f64,
     mut hls_ready: Signal<bool>,
     mut playback_failed: Signal<bool>,
+    mut chapters_sig: Signal<Vec<omnibus_shared::ChapterInfo>>,
 ) {
     // Reconcile resume position with the server upfront so
     // both init paths see the same starting point.
@@ -400,17 +409,14 @@ async fn run_manifest_init(
         };
 
     match manifest {
-        Some(omnibus_shared::AudiobookManifest::Direct { parts, .. }) => {
+        Some(omnibus_shared::AudiobookManifest::Direct {
+            parts, chapters, ..
+        }) => {
+            // Populate chapter signal from manifest data.
+            chapters_sig.set(chapters);
+
             // Hand the part list to JS; initDirect picks
             // the right starting part by cumulative offset.
-            // Poll for `window.OmnibusAudio` because the
-            // mount script above sits behind a `setTimeout`
-            // polling loop for the `<audio>` element — when
-            // the manifest fetch resolves before the first
-            // 50 ms tick fires (~15 ms RTT vs 50 ms),
-            // OmnibusAudio is still undefined and a bare
-            // `OmnibusAudio && …` short-circuits silently.
-            // Mirrors the reader.rs pattern.
             let parts_json = serde_json::to_string(&parts).unwrap_or_else(|_| "[]".into());
             let init_js = format!(
                 r#"(function(){{ var n=0; (function go(){{ if (window.OmnibusAudio) {{ window.OmnibusAudio.initDirect({parts_json}, {pos_lit}); }} else if (n++ < 200) {{ setTimeout(go, 50); }} else {{ console.error('OmnibusAudio never installed; init timed out'); if (typeof window.__omnibusOnInitTimeout === 'function') {{ window.__omnibusOnInitTimeout(0); }} }} }})(); }})();"#

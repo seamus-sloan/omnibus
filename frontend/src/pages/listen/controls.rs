@@ -59,17 +59,20 @@ pub(super) fn Scrubber(
     }
 }
 
-/// Transport row: chapter-skip placeholders, ±30s seek, play/pause, rate.
+/// Transport row: chapter-skip, ±30s seek, play/pause, rate.
 #[component]
 pub(super) fn TransportButtons(
     play_label: String,
     playing: bool,
     rate_label: String,
     rate_active: bool,
+    has_chapters: bool,
     on_toggle: EventHandler<MouseEvent>,
     on_skip_back: EventHandler<MouseEvent>,
     on_skip_forward: EventHandler<MouseEvent>,
     on_rate: EventHandler<MouseEvent>,
+    on_chapter_prev: EventHandler<MouseEvent>,
+    on_chapter_next: EventHandler<MouseEvent>,
 ) -> Element {
     let rate_class = if rate_active {
         "lp-btn-rate on"
@@ -79,13 +82,13 @@ pub(super) fn TransportButtons(
 
     rsx! {
         div { class: "lp-transport",
-            // Previous chapter (disabled until chapter data ships)
             button {
                 class: "lp-btn-ch",
                 r#type: "button",
-                disabled: true,
+                disabled: !has_chapters,
                 "aria-label": "Previous chapter",
                 title: "Previous chapter",
+                onclick: move |evt| on_chapter_prev.call(evt),
                 span { class: "lp-ch-bar" }
                 span { class: "lp-ch-tri-left" }
                 span { "CH" }
@@ -125,13 +128,13 @@ pub(super) fn TransportButtons(
                 "+30"
             }
 
-            // Next chapter (disabled until chapter data ships)
             button {
                 class: "lp-btn-ch",
                 r#type: "button",
-                disabled: true,
+                disabled: !has_chapters,
                 "aria-label": "Next chapter",
                 title: "Next chapter",
+                onclick: move |evt| on_chapter_next.call(evt),
                 span { "CH" }
                 span { class: "lp-ch-tri-right" }
                 span { class: "lp-ch-bar" }

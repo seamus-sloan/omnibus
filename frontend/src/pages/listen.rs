@@ -35,6 +35,8 @@ mod bookmarks_drawer;
 #[cfg(feature = "web")]
 mod bootstrap;
 #[cfg(not(feature = "mobile"))]
+mod chapter_map;
+#[cfg(not(feature = "mobile"))]
 mod chapters_drawer;
 #[cfg(not(feature = "mobile"))]
 mod controls;
@@ -83,6 +85,8 @@ pub fn BookListenPage(uuid: String) -> Element {
         let hls_ready = use_signal(|| false);
         #[cfg_attr(not(feature = "web"), allow(unused_mut))]
         let playback_failed = use_signal(|| false);
+        #[cfg_attr(not(feature = "web"), allow(unused_mut))]
+        let chapters: Signal<Vec<omnibus_shared::ChapterInfo>> = use_signal(Vec::new);
 
         let url = server_url.clone();
         let uuid_for_fetch = uuid.clone();
@@ -110,6 +114,7 @@ pub fn BookListenPage(uuid: String) -> Element {
             playing,
             hls_ready,
             playback_failed,
+            chapters,
         );
 
         if loading() {
@@ -138,6 +143,7 @@ pub fn BookListenPage(uuid: String) -> Element {
                 rate,
                 hls_ready,
                 playback_failed,
+                chapters,
             }
         }
     }

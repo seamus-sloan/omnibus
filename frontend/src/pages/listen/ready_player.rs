@@ -7,7 +7,7 @@
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;
-use omnibus_shared::EbookMetadata;
+use omnibus_shared::{ChapterInfo, EbookMetadata};
 
 use super::bookmarks_drawer::BookmarksDrawer;
 use super::chapters_drawer::ChaptersDrawer;
@@ -30,11 +30,23 @@ pub(super) fn ReadyPlayer(
     rate: Signal<f64>,
     hls_ready: Signal<bool>,
     playback_failed: Signal<bool>,
+    chapters: Signal<Vec<ChapterInfo>>,
 ) -> Element {
     let mut speed_panel_open = use_signal(|| false);
     let mut sleep_panel_open = use_signal(|| false);
     let mut bookmarks_open = use_signal(|| false);
     let mut chapters_open = use_signal(|| false);
+
+    // Derive current chapter index from elapsed position.
+    let current_chapter_index = use_memo(move || {
+        let chs = chapters();
+        let elapsed_now = elapsed();
+        if chs.is_empty() {
+            return 0usize;
+        }
+        chs.partition_point(|c| c.start_seconds <= elapsed_now)
+            .saturating_sub(1)
+    });
 
     let on_toggle = move |_| {
         #[cfg(feature = "web")]
@@ -64,6 +76,37 @@ pub(super) fn ReadyPlayer(
         }
     };
 
+    let on_chapter_prev = move |_: MouseEvent| {
+        let chs = chapters();
+        let idx = current_chapter_index();
+        if chs.is_empty() {
+            return;
+        }
+        let _target = if elapsed() - chs[idx].start_seconds > 3.0 {
+            chs[idx].start_seconds
+        } else if idx > 0 {
+            chs[idx - 1].start_seconds
+        } else {
+            0.0
+        };
+        #[cfg(feature = "web")]
+        super::helpers::audio_call("seek", &_target.to_string());
+    };
+
+    let on_chapter_next = move |_: MouseEvent| {
+        let chs = chapters();
+        let idx = current_chapter_index();
+        if idx + 1 < chs.len() {
+            #[cfg(feature = "web")]
+            super::helpers::audio_call("seek", &chs[idx + 1].start_seconds.to_string());
+        }
+    };
+
+    let on_chapter_seek = move |_secs: f64| {
+        #[cfg(feature = "web")]
+        super::helpers::audio_call("seek", &_secs.to_string());
+    };
+
     let title = book.title.clone().unwrap_or_else(|| book.filename.clone());
     let author = book
         .creators
@@ -84,6 +127,9 @@ pub(super) fn ReadyPlayer(
         .as_deref()
         .map(|a| format!("--accent: {a};"))
         .unwrap_or_default();
+
+    let chs = chapters();
+    let ch_idx = current_chapter_index();
 
     rsx! {
         div { class: "lp-root", style: "{accent_style}",
@@ -113,6 +159,7 @@ pub(super) fn ReadyPlayer(
                     playing: playing(),
                     rate_label,
                     rate_active: speed_panel_open(),
+                    has_chapters: !chs.is_empty(),
                 },
                 callbacks: PlayerCallbacks {
                     on_seek: EventHandler::new(on_seek),
@@ -120,6 +167,9 @@ pub(super) fn ReadyPlayer(
                     on_skip_back: EventHandler::new(on_skip_back),
                     on_skip_forward: EventHandler::new(on_skip_forward),
                     on_rate: EventHandler::new(on_rate),
+                    on_chapter_prev: EventHandler::new(on_chapter_prev),
+                    on_chapter_next: EventHandler::new(on_chapter_next),
+                    on_chapter_seek: EventHandler::new(on_chapter_seek),
                 },
                 toolbar: ToolbarState {
                     sleep_active: sleep_panel_open(),
@@ -153,6 +203,8 @@ pub(super) fn ReadyPlayer(
                         }
                     }),
                 },
+                chapters: chs.clone(),
+                current_chapter_index: ch_idx,
             }
 
             if speed_panel_open() {
@@ -174,6 +226,10 @@ pub(super) fn ReadyPlayer(
             }
             if chapters_open() {
                 ChaptersDrawer {
+                    chapters: chs.clone(),
+                    current_chapter_index: ch_idx,
+                    elapsed: elapsed_now,
+                    on_seek: EventHandler::new(on_chapter_seek),
                     on_close: move |_| chapters_open.set(false),
                 }
             }
