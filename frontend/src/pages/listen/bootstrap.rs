@@ -20,11 +20,11 @@ use crate::data;
 /// one audiobook to the next).
 pub(super) fn install_audio_bootstrap(
     book_uuid: String,
-    duration: Signal<f64>,
-    elapsed: Signal<f64>,
-    playing: Signal<bool>,
-    hls_ready: Signal<bool>,
-    playback_failed: Signal<bool>,
+    mut duration: Signal<f64>,
+    mut elapsed: Signal<f64>,
+    mut playing: Signal<bool>,
+    mut hls_ready: Signal<bool>,
+    mut playback_failed: Signal<bool>,
 ) {
     let cb_holder: std::rc::Rc<std::cell::RefCell<Vec<Closure<dyn FnMut(f64)>>>> =
         use_hook(|| std::rc::Rc::new(std::cell::RefCell::new(Vec::new())));
@@ -32,6 +32,19 @@ pub(super) fn install_audio_bootstrap(
     let uuid_for_mount = book_uuid.clone();
     let uuid_for_cb = book_uuid;
     use_effect(use_reactive!(|uuid_for_mount| {
+        // SPA-nav from one audiobook to the next reruns this effect with the
+        // new `uuid_for_mount`, but the player signals still hold the prior
+        // book's values — stale `hls_ready=true` hides the preparing overlay,
+        // stale `playback_failed=true` flashes a failure on the next book,
+        // and the scrubber renders the previous elapsed/duration until the
+        // new manifest + `loadedmetadata` arrive. Reset every signal to its
+        // initial value here so the next bootstrap starts from a clean slate.
+        duration.set(0.0_f64);
+        elapsed.set(0.0_f64);
+        playing.set(false);
+        hls_ready.set(false);
+        playback_failed.set(false);
+
         let uuid = uuid_for_mount.clone();
         let uuid_cb = uuid_for_cb.clone();
         let initial_position = crate::audiobook_progress::load(&uuid).unwrap_or(0.0);
