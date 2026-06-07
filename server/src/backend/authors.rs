@@ -50,18 +50,18 @@ pub(super) async fn get_author_by_id(
     }
 }
 
-/// `/authors` index. Returns every author in the configured library with
-/// a book count and optional accent. Empty list when no library is
-/// configured.
+/// `/authors` index. Returns every author across both ebook and audiobook
+/// libraries with a book count and optional accent.
 pub(super) async fn get_authors(_user: AuthUser, State(state): State<AppState>) -> Response {
     let settings = match db::get_settings(&state.pool).await {
         Ok(s) => s,
         Err(e) => return internal("read settings", e),
     };
-    let Some(path) = settings.ebook_library_path else {
-        return Json(Vec::<omnibus_shared::AuthorSummary>::new()).into_response();
-    };
-    match db::list_authors(&state.pool, &path).await {
+    let paths = db::collect_paths(
+        settings.ebook_library_path.as_deref(),
+        settings.audiobook_library_path.as_deref(),
+    );
+    match db::list_authors(&state.pool, &paths).await {
         Ok(authors) => Json(authors).into_response(),
         Err(e) => internal("list authors", e),
     }
