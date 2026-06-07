@@ -499,7 +499,11 @@ body.atrium,
  * book has no extracted accent.
  */
 
-.bd-root { width: 100%; }
+.bd-root {
+  width: 100%;
+  margin-left: calc(-1 * clamp(1rem, 4vw, 2.5rem));
+  margin-right: calc(-1 * clamp(1rem, 4vw, 2.5rem));
+}
 
 /* Hero */
 .bd-hero {
@@ -711,6 +715,31 @@ body.atrium,
 .bd-stub-strip {
   padding: 22px 24px;
   text-align: center;
+}
+
+/* "From the same hand" horizontal cover scroll */
+.bd-author-books-row {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  padding: 4px 0 12px;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+}
+.bd-author-book-tile {
+  flex: 0 0 140px;
+  scroll-snap-align: start;
+  display: block;
+  text-decoration: none;
+  cursor: pointer;
+}
+.bd-author-book-tile:hover .cover-wrap {
+  transform: translateY(-4px) scale(1.01);
+  filter: drop-shadow(0 22px 26px color-mix(in oklch, black 55%, transparent))
+          drop-shadow(0 2px 0 color-mix(in oklch, black 30%, transparent));
+}
+.bd-author-books-empty {
+  padding: 22px 24px;
 }
 
 /* Body — rail */

@@ -20,6 +20,7 @@ body {
   max-width: 1400px;
   margin: 0 auto;
   padding: 2rem clamp(1rem, 4vw, 2.5rem);
+  overflow-x: hidden;
 }
 
 .screen {
