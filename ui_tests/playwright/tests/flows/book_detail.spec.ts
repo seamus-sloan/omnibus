@@ -10,6 +10,13 @@ import {
   seedLibrary,
 } from "../utils/seed";
 
+// Force serial mode for this file. The audiobook re-seed inside the
+// `describe("audiobook-only seed", …)` block below mutates shared server
+// state (re-points the library at the audiobook fixtures), so it must
+// not race the ebook-seeded tests above — `playwright.config.ts` runs
+// with `fullyParallel: true`, which otherwise interleaves them.
+test.describe.configure({ mode: "serial" });
+
 // Re-seed in this spec's beforeAll so the running server is indexed against
 // the committed EPUB fixtures before any assertion runs — independent of
 // whatever other specs in the same worker did before us. The audiobook
@@ -58,9 +65,8 @@ test("renders the book detail layout", async ({ page, request }) => {
   ).toBeVisible();
 
   // Hero — cover renders inside the cover column. There's also one cover
-  // per "From the same hand" tile, so we just assert at least one is
-  // attached rather than .first() being visible (alpha's empty-state case
-  // has no tile covers).
+  // per "From the same hand" tile when populated, so scope to `.first()`
+  // — it's the hero cover (alpha's empty-state case has no tile covers).
   await expect(page.getByTestId("cover").first()).toBeVisible();
 
   // Hero — primary CTA: alpha is EPUB-only, so the "Start reading" link
