@@ -197,6 +197,10 @@ pub fn rest_router_with_search_limiter(
         .route("/api/thumbs/{uuid}/{size}", get(covers::get_thumb))
         .route("/api/authors", get(authors::get_authors))
         .route(
+            "/api/authors/refetch-photos",
+            post(author_photos::post_refetch_author_photos),
+        )
+        .route(
             "/api/authors/{id}/photo/scan",
             post(author_photos::post_author_photo_scan),
         )

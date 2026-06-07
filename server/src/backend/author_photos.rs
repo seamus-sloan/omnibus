@@ -222,6 +222,17 @@ pub(super) async fn post_author_photo_scan(
     Json(omnibus_shared::AuthorPhotoScanResult { resolved }).into_response()
 }
 
+/// Admin: bulk re-resolve all author photos via the background worker.
+/// Returns 202 Accepted immediately; progress is polled via
+/// `/api/rpc/worker_status`.
+pub(super) async fn post_refetch_author_photos(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+) -> Response {
+    state.worker.post(Task::RefetchAuthorPhotos);
+    axum::http::StatusCode::ACCEPTED.into_response()
+}
+
 /// JSON body for [`put_author_photo_url`]. Kept inline because the shape is
 /// trivial and not shared with any other call site (the RPC server function
 /// passes the URL as a positional arg).
@@ -929,5 +940,61 @@ mod tests {
         let author: omnibus_shared::AuthorDetail = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(author.id, id);
         assert!(!author.has_photo, "no row yet means has_photo = false");
+    }
+
+    #[tokio::test]
+    async fn api_refetch_author_photos_requires_auth() {
+        let (app, _state, _pool) = fixture().await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/authors/refetch-photos")
+                    .method("POST")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_refetch_author_photos_requires_admin() {
+        let (app, _state, pool) = fixture().await;
+        let user = auth_test_support::create_user(&pool, "alice").await;
+        let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/authors/refetch-photos")
+                    .method("POST")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn api_refetch_author_photos_returns_202_for_admin() {
+        let (app, _state, pool) = fixture().await;
+        let admin = auth_test_support::create_admin(&pool, "admin").await;
+        let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/authors/refetch-photos")
+                    .method("POST")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
     }
 }

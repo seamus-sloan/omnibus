@@ -8,7 +8,9 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 
 use crate::author_photos::shared::{default_user_agent, shared_client};
-use crate::author_photos_data::{author_photo_status, upsert_author_photo, AuthorPhotoSource};
+use crate::author_photos_data::{
+    author_photo_status, delete_author_photo, upsert_author_photo, AuthorPhotoSource,
+};
 
 /// Default request timeout for the Open Library search + cover calls.
 const OPEN_LIBRARY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -124,6 +126,45 @@ pub async fn resolve_with(
                 "open library resolution failed (transient); leaving row absent for retry"
             );
         }
+    }
+    Ok(())
+}
+
+/// Bulk re-resolve all author photos. Clears non-manual cached photos and
+/// re-runs the Open Library cascade for every author. Manual uploads are
+/// preserved. Per-author errors are logged and skipped so a single failure
+/// does not abort the batch.
+pub async fn refetch_all(
+    pool: &SqlitePool,
+    on_progress: impl Fn(u32, Option<u32>),
+) -> Result<(), sqlx::Error> {
+    let author_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM authors ORDER BY id")
+        .fetch_all(pool)
+        .await?;
+    let total = author_ids.len() as u32;
+
+    for (i, author_id) in author_ids.iter().enumerate() {
+        match author_photo_status(pool, *author_id).await {
+            Ok(Some((AuthorPhotoSource::Manual, _))) => {
+                on_progress((i + 1) as u32, Some(total));
+                continue;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(author_id, error = %e, "refetch_all: status check failed, skipping");
+                on_progress((i + 1) as u32, Some(total));
+                continue;
+            }
+        }
+        if let Err(e) = delete_author_photo(pool, *author_id).await {
+            tracing::warn!(author_id, error = %e, "refetch_all: delete failed, skipping");
+            on_progress((i + 1) as u32, Some(total));
+            continue;
+        }
+        if let Err(e) = resolve(pool, *author_id).await {
+            tracing::warn!(author_id, error = %e, "refetch_all: resolve failed, continuing");
+        }
+        on_progress((i + 1) as u32, Some(total));
     }
     Ok(())
 }
