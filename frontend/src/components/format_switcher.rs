@@ -25,7 +25,7 @@ pub fn FormatSwitcher(formats: Vec<String>, uuid: String) -> Element {
             aria_label: "Available formats",
             "data-testid": "format-switcher",
             for row in rows {
-                FormatRow { kind: row, uuid: uuid.clone() }
+                FormatRow { key: "{row.label()}", kind: row, uuid: uuid.clone() }
             }
         }
     }
