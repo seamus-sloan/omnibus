@@ -41,6 +41,25 @@ cd ui_tests/playwright
 npx tsx tools/make_audiobook.ts
 ```
 
-The public-domain M4B was converted from LibriVox MP3s via ffmpeg — see
-`tools/make_audiobook.sh` for provenance. The M4B is committed as-is
-and does not need regeneration.
+## Public-domain M4B provenance
+
+The M4B (`Arthur Conan Doyle/A Womans Love.m4b`) was converted from
+three LibriVox MP3 tracks via ffmpeg and is committed as-is:
+
+```bash
+# Sources: https://archive.org/details/womanslove_2605.poem_librivox
+ffmpeg -f concat -safe 0 -i <(printf "file '%s'\n" \
+  womanslove_doyle_ac_64kb.mp3 \
+  womanslove_doyle_al_64kb.mp3 \
+  womanslove_doyle_bk_64kb.mp3) \
+  -c:a aac -b:a 64k -f ipod \
+  -metadata title="A Woman's Love" \
+  -metadata artist="Sir Arthur Conan Doyle" \
+  -metadata album="A Woman's Love" \
+  -metadata genre="speech" \
+  "A Womans Love.m4b"
+```
+
+The MP3 folder (`James Whitcomb Riley/A Song of Long Ago/`) contains
+unmodified tracks from
+[archive.org](https://archive.org/details/songoflongago_2605.poem_librivox).
