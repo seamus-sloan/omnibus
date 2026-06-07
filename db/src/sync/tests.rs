@@ -6,7 +6,7 @@ use crate::helpers::stable_uuid;
 use crate::metadata_overrides::upsert_metadata_overrides;
 use crate::pool::init_db;
 use crate::settings::last_indexed_at;
-use crate::test_support::{indexed, indexed_with_stat, CoversTempDir};
+use crate::test_support::{indexed, indexed_audiobook, indexed_with_stat, CoversTempDir};
 use omnibus_shared::{Contributor, EbookMetadata, MetadataOverrides};
 
 #[tokio::test]
@@ -912,5 +912,111 @@ async fn reindex_blocklist_matches_case_insensitively() {
         names,
         vec!["Real Author"],
         "the mixed-case blocked contributor must be skipped"
+    );
+}
+
+#[tokio::test]
+async fn sync_audiobooks_round_trips_accent_color() {
+    let _covers = CoversTempDir::new("ab_accent_round_trip");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    let mut with_accent = indexed_audiobook("Author/Book.m4b", "Accented Book", Some("Author"));
+    with_accent.accent = Some("oklch(0.660 0.130 245.0)".into());
+
+    let mut no_accent = indexed_audiobook("Author/Plain.m4b", "Plain Book", Some("Author"));
+    no_accent.accent = None;
+
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            new_books: vec![with_accent, no_accent],
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("sync should succeed");
+
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let accented = books
+        .iter()
+        .find(|b| b.title.as_deref() == Some("Accented Book"))
+        .unwrap();
+    let plain = books
+        .iter()
+        .find(|b| b.title.as_deref() == Some("Plain Book"))
+        .unwrap();
+    assert_eq!(accented.accent.as_deref(), Some("oklch(0.660 0.130 245.0)"));
+    assert_eq!(plain.accent, None);
+
+    let detail = get_book(&pool, accented.id).await.unwrap().unwrap();
+    assert_eq!(detail.accent.as_deref(), Some("oklch(0.660 0.130 245.0)"));
+}
+
+#[tokio::test]
+async fn sync_audiobooks_updates_accent_color_on_changed() {
+    let _covers = CoversTempDir::new("ab_accent_update");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    let book = indexed_audiobook("Author/Book.m4b", "Book", Some("Author"));
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            new_books: vec![book],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let books = list_books(&pool, "/lib").await.unwrap();
+    assert_eq!(books[0].accent, None, "initially no accent");
+
+    let mut updated = indexed_audiobook("Author/Book.m4b", "Book", Some("Author"));
+    updated.accent = Some("oklch(0.700 0.100 180.0)".into());
+
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            changed_books: vec![updated],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let books = list_books(&pool, "/lib").await.unwrap();
+    assert_eq!(
+        books[0].accent.as_deref(),
+        Some("oklch(0.700 0.100 180.0)"),
+        "accent should be set after update"
+    );
+}
+
+#[tokio::test]
+async fn sync_audiobooks_drops_unsafe_accent_color() {
+    let _covers = CoversTempDir::new("ab_accent_unsafe");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    let mut book = indexed_audiobook("Author/Shady.m4b", "Shady", Some("Author"));
+    book.accent = Some("red; background: url(x)".into());
+
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            new_books: vec![book],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let books = list_books(&pool, "/lib").await.unwrap();
+    assert_eq!(
+        books[0].accent, None,
+        "unsafe accent must be sanitized to NULL"
     );
 }
