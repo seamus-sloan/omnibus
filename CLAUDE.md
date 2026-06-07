@@ -57,9 +57,19 @@ Default `cargo build` / `clippy` covers `server`, `shared`, `frontend` only. Mob
 
 ### shared/src/
 
+Domain types are split by sub-topic and re-exported flat from `lib.rs`, so callers keep using `omnibus_shared::Foo` regardless of which submodule `Foo` lives in.
+
 ```
-lib.rs              — Settings, ValueResponse, LibraryContents, LibrarySection, EbookMetadata, EbookLibrary, AuthorDetail, SeriesDetail, TagWeight, ViewPrefs, ViewFilters, MetadataOverrides, Contributor, Identifier, PaletteResults + palette hit types (F1.5); re-exports image_format::detect_image_format
+lib.rs              — thin module index: pub mod / pub use audiobook::*, auth::*, discovery::*, ebook::*, progress::*, settings::*, view_prefs::*, worker::* + image_format::detect_image_format
 image_format.rs     — magic-byte image-format sniff (detect_image_format); pure &[u8] inspection, single source of truth for both server::backend and frontend::rpc upload paths
+settings.rs         — Settings, LibrarySection, LibraryContents (library config + GET /api/library payload)
+ebook/              — Contributor, Identifier, EbookMetadata (metadata.rs) + MetadataOverrides w/ validate + merge (overrides.rs); tests.rs sibling
+discovery.rs        — EbookLibrary, AuthorDetail, AuthorPhotoScanResult, SeriesDetail, TagWeight, AuthorSummary, SeriesSummary + PaletteResults / Palette*Hit (F1.5 grouped command-palette results)
+progress.rs         — F2.1 ProgressFormat, ProgressUpdate (+validate), ProgressRecord, SessionReport (+validate); tests.rs sibling
+audiobook.rs        — F2.3 ManifestPart, AudiobookManifest::{Direct,Hls} (GET /api/audiobooks/:uuid/manifest payload)
+view_prefs.rs       — F1.3 ViewMode, SortKey, SortDir, ViewFilters, ViewPrefs (persisted landing-page sort/filter state)
+auth.rs             — UserSummary, LoginRequest, RegisterRequest, LoginResponse (LoginRequest/RegisterRequest deliberately do not derive Debug — they carry plaintext passwords)
+worker.rs           — TaskKind, ProgressState (Running/Done/Failed), TaskProgress, WorkerStatus (worker progress feed wire shape)
 ```
 
 ### db/src/
