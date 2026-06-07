@@ -17,7 +17,7 @@ mod header;
 mod save_bar;
 mod sidebar;
 
-use form_grid::FormGrid;
+use form_grid::{FormFields, FormGrid, FormSuggestions};
 use header::{Breadcrumb, PageHeader};
 use save_bar::SaveBar;
 use sidebar::Sidebar;
@@ -274,19 +274,23 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
             div { class: "me-layout",
                 FormGrid {
                     orig,
-                    title,
-                    description,
-                    publisher,
-                    published,
-                    language,
-                    series,
-                    series_index,
-                    authors,
-                    tags,
-                    sort_by,
-                    filename,
-                    author_suggestions,
-                    tag_suggestions,
+                    fields: FormFields {
+                        title,
+                        description,
+                        publisher,
+                        published,
+                        language,
+                        series,
+                        series_index,
+                        authors,
+                        tags,
+                        sort_by,
+                        filename,
+                    },
+                    suggestions: FormSuggestions {
+                        authors: author_suggestions,
+                        tags: tag_suggestions,
+                    },
                 }
                 Sidebar {
                     book: book.clone(),

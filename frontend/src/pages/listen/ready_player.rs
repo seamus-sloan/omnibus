@@ -15,7 +15,7 @@ use super::controls::AudioElement;
 use super::overlays::{FailedOverlay, PreparingOverlay};
 use super::sleep_panel::SleepPanel;
 use super::speed_panel::SpeedPanel;
-use super::stage::PlayerStage;
+use super::stage::{PlaybackPosition, PlayerCallbacks, PlayerStage, ToolbarState, TransportState};
 use crate::Nav;
 
 /// Render the ready-state player chrome and bind the transport handlers.
@@ -102,48 +102,56 @@ pub(super) fn ReadyPlayer(
                 book: book.clone(),
                 title,
                 author,
-                elapsed: elapsed_now,
-                duration: dur,
-                remaining,
-                scrub_max,
-                play_label,
-                playing: playing(),
-                rate_label,
-                rate_active: speed_panel_open(),
-                sleep_active: sleep_panel_open(),
-                bookmarks_active: bookmarks_open(),
-                chapters_active: chapters_open(),
-                on_seek,
-                on_toggle,
-                on_skip_back,
-                on_skip_forward,
-                on_rate,
-                on_sleep: move |_| {
-                    let cur = *sleep_panel_open.peek();
-                    sleep_panel_open.set(!cur);
-                    if !cur {
-                        speed_panel_open.set(false);
-                        bookmarks_open.set(false);
-                        chapters_open.set(false);
-                    }
+                position: PlaybackPosition {
+                    elapsed: elapsed_now,
+                    duration: dur,
+                    remaining,
+                    scrub_max,
                 },
-                on_bookmark: move |_| {
-                    let cur = *bookmarks_open.peek();
-                    bookmarks_open.set(!cur);
-                    if !cur {
-                        speed_panel_open.set(false);
-                        sleep_panel_open.set(false);
-                        chapters_open.set(false);
-                    }
+                transport: TransportState {
+                    play_label,
+                    playing: playing(),
+                    rate_label,
+                    rate_active: speed_panel_open(),
                 },
-                on_chapters: move |_| {
-                    let cur = *chapters_open.peek();
-                    chapters_open.set(!cur);
-                    if !cur {
-                        speed_panel_open.set(false);
-                        sleep_panel_open.set(false);
-                        bookmarks_open.set(false);
-                    }
+                callbacks: PlayerCallbacks {
+                    on_seek: EventHandler::new(on_seek),
+                    on_toggle: EventHandler::new(on_toggle),
+                    on_skip_back: EventHandler::new(on_skip_back),
+                    on_skip_forward: EventHandler::new(on_skip_forward),
+                    on_rate: EventHandler::new(on_rate),
+                },
+                toolbar: ToolbarState {
+                    sleep_active: sleep_panel_open(),
+                    bookmarks_active: bookmarks_open(),
+                    chapters_active: chapters_open(),
+                    on_sleep: EventHandler::new(move |_| {
+                        let cur = *sleep_panel_open.peek();
+                        sleep_panel_open.set(!cur);
+                        if !cur {
+                            speed_panel_open.set(false);
+                            bookmarks_open.set(false);
+                            chapters_open.set(false);
+                        }
+                    }),
+                    on_bookmark: EventHandler::new(move |_| {
+                        let cur = *bookmarks_open.peek();
+                        bookmarks_open.set(!cur);
+                        if !cur {
+                            speed_panel_open.set(false);
+                            sleep_panel_open.set(false);
+                            chapters_open.set(false);
+                        }
+                    }),
+                    on_chapters: EventHandler::new(move |_| {
+                        let cur = *chapters_open.peek();
+                        chapters_open.set(!cur);
+                        if !cur {
+                            speed_panel_open.set(false);
+                            sleep_panel_open.set(false);
+                            bookmarks_open.set(false);
+                        }
+                    }),
                 },
             }
 
