@@ -126,6 +126,24 @@ test("SPA-nav between audiobooks resets player signals (#369)", async ({
   await expect(page.getByRole("heading", { name: MP3_BOOK.title })).toBeVisible();
   await waitForPlayerReady(page);
 
+  // Delay the second audiobook's manifest fetch so the preparing overlay
+  // stays visible long enough to assert. Without this, direct-play books
+  // flip hls_ready=true in <10 ms and the overlay is never observable.
+  // The delay proves hls_ready was actually reset to false by the fix —
+  // if it leaked as true from the first book, the overlay would never
+  // appear regardless of the delay.
+  let releaseManifest!: () => void;
+  const manifestGate = new Promise<void>((resolve) => {
+    releaseManifest = resolve;
+  });
+  await page.route(
+    (url) => url.pathname.includes("/manifest") && url.pathname.includes(uuid2),
+    async (route) => {
+      await manifestGate;
+      await route.continue();
+    },
+  );
+
   // SPA-navigate to the second audiobook via a client-side link click.
   // Dioxus intercepts anchor clicks for same-origin routes, so this
   // triggers a true SPA-nav (no full page reload).
@@ -142,9 +160,17 @@ test("SPA-nav between audiobooks resets player signals (#369)", async ({
     timeout: 10_000,
   });
 
-  // The fix from #369: stale signals from the first book must not leak.
-  // A stale playback_failed=true would flash the failure overlay; a stale
-  // playing=true would show "Pause" instead of "Play".
+  // The preparing overlay MUST be visible while the manifest is held —
+  // this is the positive proof that hls_ready was reset to false. If the
+  // stale hls_ready=true from the first book leaked, this would fail.
+  await expect(page.getByTestId("listen-preparing")).toBeVisible();
+  await expect(page.getByTestId("listen-failed")).not.toBeVisible();
+
+  // Release the manifest and let the player finish initializing.
+  releaseManifest();
+  await waitForPlayerReady(page);
+
+  // After init completes: no failure overlay, toggle says "Play".
   await expect(page.getByTestId("listen-failed")).not.toBeVisible();
   await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible();
 });
