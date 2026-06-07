@@ -457,16 +457,21 @@ fn render_loaded(b: EbookMetadata, author_books: Vec<EbookMetadata>) -> Element 
                         title: "From the same hand".to_string(),
                     }
                     if author_books.is_empty() {
-                        div { class: "bd-author-books-empty card",
+                        div {
+                            class: "bd-author-books-empty card",
+                            "data-testid": "from-same-hand-empty",
                             p { class: "mono", "No other books by this author in your library." }
                         }
                     } else {
-                        div { class: "bd-author-books-row",
+                        div {
+                            class: "bd-author-books-row",
+                            "data-testid": "from-same-hand",
                             for ab in author_books.iter() {
                                 Link {
                                     key: "{ab.id}",
                                     to: Route::BookDetail { uuid: ab.unique_identifier.clone().unwrap_or_default() },
                                     class: "bd-author-book-tile",
+                                    "data-testid": "from-same-hand-tile",
                                     Cover { book: ab.clone() }
                                 }
                             }
