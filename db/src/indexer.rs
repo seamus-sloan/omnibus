@@ -614,6 +614,7 @@ mod tests {
                 title: "AudioTitle".to_string(),
                 creator_name: None,
                 cover: None,
+                accent: None,
                 parts: vec![],
                 total_size_bytes: 100,
                 max_mtime_epoch: 100,

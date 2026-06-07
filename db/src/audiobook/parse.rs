@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::tag::Accessor;
 
+use crate::ebook::extract_accent;
+
 /// Predictable failure space for the audiobook parse + indexer dispatch.
 /// `Io` covers "could not open file"; `Tag` covers any lofty decode /
 /// container error; `Unsupported` is reserved for files whose extension
@@ -109,6 +111,9 @@ pub struct IndexedAudiobook {
     /// `(mime, bytes)` from the first part's embedded artwork. `None` when
     /// no artwork is present.
     pub cover: Option<(String, Vec<u8>)>,
+    /// Cover-derived `oklch(L C H)` accent color, or `None` when the cover
+    /// has no chromatic content or no cover was found.
+    pub accent: Option<String>,
     pub parts: Vec<AudiobookPart>,
     pub total_size_bytes: i64,
     pub max_mtime_epoch: i64,
@@ -268,6 +273,10 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
         })
         .collect();
 
+    let accent = first_cover
+        .as_ref()
+        .and_then(|(_mime, bytes)| extract_accent(bytes));
+
     IndexedAudiobook {
         uuid: group.uuid,
         group_path: group.group_path,
@@ -275,6 +284,7 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
         title,
         creator_name,
         cover: first_cover,
+        accent,
         parts,
         total_size_bytes: group.total_size_bytes,
         max_mtime_epoch: group.max_mtime_epoch,

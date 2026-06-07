@@ -4,6 +4,7 @@
 use sqlx::{SqlitePool, Transaction};
 
 use crate::covers::delete_cover_files_for;
+use crate::helpers::sanitize_accent_color;
 use crate::settings::upsert_library;
 
 use super::books::materialize_new_covers;
@@ -193,8 +194,8 @@ async fn insert_audiobook_row(
 
     let book_id = sqlx::query_scalar::<_, i64>(
         "INSERT INTO books \
-            (uuid, library_id, path, title, sort, author_sort, has_cover, description) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+            (uuid, library_id, path, title, sort, author_sort, has_cover, description, accent_color) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id",
     )
     .bind(&b.uuid)
@@ -205,6 +206,7 @@ async fn insert_audiobook_row(
     .bind(&b.creator_name)
     .bind(has_cover)
     .bind(&b.description)
+    .bind(sanitize_accent_color(b.accent.as_deref()))
     .fetch_one(&mut **tx)
     .await?;
 
@@ -336,7 +338,7 @@ async fn update_audiobook_row(
     sqlx::query(
         "UPDATE books SET \
             path = ?, title = ?, sort = ?, author_sort = ?, has_cover = ?, \
-            description = ?, last_modified = datetime('now') \
+            description = ?, accent_color = ?, last_modified = datetime('now') \
          WHERE id = ?",
     )
     .bind(&book_path)
@@ -345,6 +347,7 @@ async fn update_audiobook_row(
     .bind(&b.creator_name)
     .bind(has_cover)
     .bind(&b.description)
+    .bind(sanitize_accent_color(b.accent.as_deref()))
     .bind(book_id)
     .execute(&mut **tx)
     .await?;
