@@ -1,3 +1,7 @@
+//! Tests for `db::author_photos` — cascade resolver, SSRF guard, and
+//! data-layer helpers. Exercises the Open Library wiremock, blocked-address
+//! variants, and the DB upsert path.
+
 use std::time::Duration;
 
 use sqlx::SqlitePool;

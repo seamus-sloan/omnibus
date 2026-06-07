@@ -1,7 +1,10 @@
-//! Shared HTTP client for outbound requests in `author_photos`. A single
-//! process-wide `reqwest::Client` is built once and cloned so all OL cascade
-//! resolutions and admin "paste URL" fetches share one connection pool and
-//! TLS session cache.
+//! Shared HTTP client for the Open Library cascade in `author_photos`. A
+//! single process-wide `reqwest::Client` is built once and cloned so cascade
+//! resolutions share one connection pool and TLS session cache.
+//!
+//! The admin "paste URL" path (`remote.rs`) deliberately builds a per-call
+//! client — it pins `reqwest` to pre-validated addresses for SSRF protection
+//! and cannot reuse a shared handle.
 
 use std::sync::OnceLock;
 
@@ -21,11 +24,13 @@ pub(super) fn default_user_agent() -> String {
 /// reused no connections across the search + cover-download pair, or across
 /// the many author-photo resolutions a deployment fires in sequence.
 ///
-/// We hand out clones of this single client so all outbound HTTP in
-/// `db::author_photos` — the Worker's cascade resolutions *and* the admin
-/// "paste image URL" endpoint — shares one pool. The per-request timeout
-/// differs between call sites, so it's applied on the `RequestBuilder`
-/// rather than baked into the client.
+/// We hand out clones of this single client so cascade resolutions share one
+/// pool. The per-request timeout differs between call sites, so it's applied
+/// on the `RequestBuilder` rather than baked into the client.
+///
+/// Note: the admin "paste image URL" path (`remote::fetch_remote_image_with`)
+/// does **not** use this client — it builds a per-call client pinned to
+/// pre-validated socket addresses to prevent SSRF via DNS rebinding.
 ///
 /// Fallible: `reqwest::Client::builder().build()` can fail at runtime (TLS
 /// backend init, platform config). Callers propagate the error via `?`
