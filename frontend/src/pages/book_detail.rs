@@ -33,29 +33,49 @@ use crate::{data, use_server_url, Route};
 pub fn BookDetailPage(uuid: String) -> Element {
     let server_url = use_server_url();
     let mut book: Signal<Option<EbookMetadata>> = use_signal(|| None);
+    let mut author_books: Signal<Vec<EbookMetadata>> = use_signal(Vec::new);
     let mut loading = use_signal(|| true);
     let mut error: Signal<Option<String>> = use_signal(|| None);
 
-    // `use_reactive!` declares `uuid` as an explicit dependency so the
-    // effect re-runs when the router swaps the route param in place.
-    // Without this, navigating `/books/A` → `/books/B` reuses the same
-    // component instance and leaves the page rendering the stale book —
-    // Dioxus' implicit subscription tracking only covers signals, not
-    // plain props.
     let url = server_url.clone();
     use_effect(use_reactive!(|uuid| {
         let url = url.clone();
         let uuid = uuid.clone();
         spawn(async move {
             loading.set(true);
+            author_books.set(Vec::new());
             match data::get_ebook(&url, &uuid).await {
                 Ok(b) => {
+                    let author_fetch = b.as_ref().map(|inner| {
+                        (
+                            inner.creators.first().and_then(|c| c.id),
+                            inner.unique_identifier.clone(),
+                        )
+                    });
                     book.set(b);
                     error.set(None);
+                    loading.set(false);
+                    if let Some((Some(aid), current_uuid)) = author_fetch {
+                        if let Ok(Some(ad)) = data::get_author(&url, aid).await {
+                            let still_current =
+                                book().as_ref().and_then(|b| b.unique_identifier.as_ref())
+                                    == current_uuid.as_ref();
+                            if still_current {
+                                let others: Vec<EbookMetadata> = ad
+                                    .books
+                                    .into_iter()
+                                    .filter(|ab| ab.unique_identifier != current_uuid)
+                                    .collect();
+                                author_books.set(others);
+                            }
+                        }
+                    }
                 }
-                Err(e) => error.set(Some(e.to_string())),
+                Err(e) => {
+                    error.set(Some(e.to_string()));
+                    loading.set(false);
+                }
             }
-            loading.set(false);
         });
     }));
 
@@ -77,7 +97,7 @@ pub fn BookDetailPage(uuid: String) -> Element {
         };
     };
 
-    render_loaded(b)
+    render_loaded(b, author_books())
 }
 
 // ---------------------------------------------------------------------------
@@ -131,7 +151,7 @@ mod tests {
     }
 }
 
-fn render_loaded(b: EbookMetadata) -> Element {
+fn render_loaded(b: EbookMetadata, author_books: Vec<EbookMetadata>) -> Element {
     let title = b.title.clone().unwrap_or_else(|| b.filename.clone());
     let primary_author = b
         .creators
@@ -288,21 +308,49 @@ fn render_loaded(b: EbookMetadata) -> Element {
                                     start_reading
                                 }
                             } else if has_audio {
-                                button {
-                                    class: "btn primary lg",
-                                    disabled: true,
-                                    title: "Audio player coming soon",
-                                    // TODO(F2.3): open audiobook player
-                                    "Start listening"
+                                {
+                                    #[cfg(not(feature = "mobile"))]
+                                    let start_listening = rsx! {
+                                        Link {
+                                            to: Route::BookListen { uuid: b.unique_identifier.clone().unwrap_or_default() },
+                                            class: "btn primary lg",
+                                            "data-testid": "start-listening",
+                                            "Start listening"
+                                        }
+                                    };
+                                    #[cfg(feature = "mobile")]
+                                    let start_listening = rsx! {
+                                        button {
+                                            class: "btn primary lg",
+                                            disabled: true,
+                                            title: "Listening on mobile coming soon",
+                                            "Start listening"
+                                        }
+                                    };
+                                    start_listening
                                 }
                             }
                             if has_audio && has_ebook {
-                                button {
-                                    class: "btn lg",
-                                    disabled: true,
-                                    title: "Audio player coming soon",
-                                    // TODO(F2.3): open audiobook player
-                                    "Listen"
+                                {
+                                    #[cfg(not(feature = "mobile"))]
+                                    let listen_btn = rsx! {
+                                        Link {
+                                            to: Route::BookListen { uuid: b.unique_identifier.clone().unwrap_or_default() },
+                                            class: "btn lg",
+                                            "data-testid": "listen-secondary",
+                                            "Listen"
+                                        }
+                                    };
+                                    #[cfg(feature = "mobile")]
+                                    let listen_btn = rsx! {
+                                        button {
+                                            class: "btn lg",
+                                            disabled: true,
+                                            title: "Listening on mobile coming soon",
+                                            "Listen"
+                                        }
+                                    };
+                                    listen_btn
                                 }
                             }
                             button {
@@ -404,13 +452,25 @@ fn render_loaded(b: EbookMetadata) -> Element {
 
                     div { class: "divider" }
 
-                    // More by this author — TODO(F3.3)
                     BdSectionHead {
                         kicker: if primary_author.is_empty() { "More to read".to_string() } else { format!("More by {primary_author}") },
                         title: "From the same hand".to_string(),
                     }
-                    div { class: "bd-stub-strip card", aria_hidden: "true",
-                        p { class: "bd-stub-hint mono", "Author pages land in F3.3." }
+                    if author_books.is_empty() {
+                        div { class: "bd-author-books-empty card",
+                            p { class: "mono", "No other books by this author in your library." }
+                        }
+                    } else {
+                        div { class: "bd-author-books-row",
+                            for ab in author_books.iter() {
+                                Link {
+                                    key: "{ab.id}",
+                                    to: Route::BookDetail { uuid: ab.unique_identifier.clone().unwrap_or_default() },
+                                    class: "bd-author-book-tile",
+                                    Cover { book: ab.clone() }
+                                }
+                            }
+                        }
                     }
 
                     div { class: "divider" }
