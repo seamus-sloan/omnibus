@@ -2070,3 +2070,407 @@ a.idx-letter-on:focus-visible {
 .um-theme-btn:hover:not([disabled]) { color: var(--ink-0); }
 .um-theme-btn.on { background: var(--bg-0); color: var(--ink-0); }
 .um-theme-btn[disabled] { opacity: .45; cursor: not-allowed; }
+
+/* ── Listen player (F2.3 redesign) ──────────────────────────────────
+ *
+ * Full-screen audiobook player: two-column cover + controls layout
+ * with accent-derived gradient, frosted-glass overlay panels, and
+ * a toolbar row for secondary actions.
+ *
+ * `--accent` is set inline on `.lp-root` from EbookMetadata.accent
+ * (the oklch value computed during indexing), same pattern as
+ * `.bd-root` on the book-detail page.
+ */
+
+.lp-root {
+  display: flex; flex-direction: column;
+  height: 100vh; width: 100%;
+  background: var(--bg-0);
+  position: relative; overflow: hidden;
+}
+
+.lp-backdrop {
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(50% 70% at 30% 40%,
+    color-mix(in oklch, var(--accent) 28%, transparent),
+    transparent 70%);
+}
+
+/* Two-column stage */
+.lp-stage {
+  flex: 1; min-height: 0; position: relative; z-index: 1;
+  display: grid; grid-template-columns: 1fr 1fr;
+  align-items: center; gap: 80px; padding: 0 56px;
+}
+
+.lp-cover-col { display: grid; place-items: center; }
+
+.lp-cover-ring {
+  width: min(360px, 80%); position: relative;
+}
+.lp-cover-ring::after {
+  content: ''; position: absolute; inset: -12px;
+  border-radius: 6px; border: 1px solid var(--line-2);
+  pointer-events: none;
+}
+
+.lp-info-col { min-width: 0; }
+
+.lp-kicker {
+  font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--accent); font-weight: 500;
+}
+
+.lp-title {
+  font-family: var(--serif); font-style: italic;
+  font-size: clamp(36px, 5vw, 64px);
+  line-height: 0.95; letter-spacing: -0.025em;
+  margin: 12px 0 0; color: var(--ink-0);
+}
+
+.lp-author {
+  margin-top: 12px; color: var(--ink-1); font-size: 16px;
+}
+
+.lp-chapter-sub {
+  margin-top: 6px; font-family: var(--serif);
+  font-style: italic; font-size: 22px; color: var(--ink-2);
+}
+
+/* Scrubber */
+.lp-scrubber { margin-top: 32px; }
+
+.lp-scrub-input {
+  width: 100%; height: 4px;
+  -webkit-appearance: none; appearance: none;
+  background: var(--bg-3); border-radius: 999px;
+  outline: none; cursor: pointer;
+}
+.lp-scrub-input::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 999px;
+  background: linear-gradient(to right,
+    var(--accent) 0%, var(--accent) var(--fill, 0%),
+    var(--bg-3) var(--fill, 0%), var(--bg-3) 100%);
+}
+.lp-scrub-input::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 14px; height: 14px;
+  border-radius: 50%; background: var(--ink-0);
+  border: 2px solid var(--bg-0);
+  box-shadow: 0 2px 6px rgba(0,0,0,.4);
+  margin-top: -5px; cursor: pointer;
+}
+.lp-scrub-input::-moz-range-track {
+  height: 4px; border-radius: 999px; background: var(--bg-3);
+}
+.lp-scrub-input::-moz-range-progress {
+  height: 4px; border-radius: 999px; background: var(--accent);
+}
+.lp-scrub-input::-moz-range-thumb {
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--ink-0); border: 2px solid var(--bg-0);
+  box-shadow: 0 2px 6px rgba(0,0,0,.4); cursor: pointer;
+}
+
+.lp-scrub-times {
+  display: flex; justify-content: space-between;
+  margin-top: 12px; font-family: var(--mono);
+  font-size: 12px; color: var(--ink-2);
+}
+.lp-scrub-remaining { color: var(--ink-3); }
+
+/* Transport row */
+.lp-transport {
+  display: flex; align-items: center;
+  justify-content: center; gap: 16px; margin-top: 26px;
+}
+
+.lp-btn-skip {
+  width: 48px; height: 48px; padding: 0;
+  border-radius: 999px; background: transparent;
+  border: 1px solid transparent; color: var(--ink-1);
+  font-family: var(--mono); font-size: 11px;
+  cursor: pointer; display: grid; place-items: center;
+  transition: color .15s, background .15s;
+}
+.lp-btn-skip:hover { color: var(--ink-0); background: var(--bg-1); }
+
+.lp-btn-play {
+  width: 72px; height: 72px; border-radius: 999px;
+  background: var(--accent); color: var(--accent-ink);
+  border: 0; cursor: pointer; font-size: 16px; font-weight: 600;
+  display: grid; place-items: center;
+  box-shadow: 0 18px 30px -10px color-mix(in oklch, var(--accent) 50%, transparent);
+  transition: transform .12s;
+}
+.lp-btn-play:hover { transform: scale(1.04); }
+.lp-btn-play:active { transform: scale(0.97); }
+
+/* Play/pause icons inside the big round button */
+.lp-ico-pause {
+  display: flex; gap: 6px;
+}
+.lp-ico-pause-bar {
+  width: 6px; height: 22px;
+  background: currentColor; border-radius: 1px;
+}
+.lp-ico-play {
+  width: 0; height: 0;
+  border-top: 12px solid transparent;
+  border-bottom: 12px solid transparent;
+  border-left: 20px solid currentColor;
+  margin-left: 3px; /* optical center */
+}
+
+.lp-btn-ch {
+  height: 42px; padding: 0 12px; border-radius: 999px;
+  background: transparent; border: 1px solid transparent;
+  color: var(--ink-2); cursor: pointer;
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.1em; transition: color .15s;
+}
+.lp-btn-ch:hover:not(:disabled) { color: var(--ink-0); }
+.lp-btn-ch:disabled { opacity: .35; cursor: not-allowed; }
+/* Bar element for the chapter-skip icon */
+.lp-ch-bar {
+  width: 2.5px; height: 12px;
+  background: currentColor; border-radius: 1px;
+}
+/* Triangle for the chapter-skip icon */
+.lp-ch-tri-left {
+  width: 0; height: 0;
+  border-top: 5px solid transparent; border-bottom: 5px solid transparent;
+  border-right: 8px solid currentColor;
+}
+.lp-ch-tri-right {
+  width: 0; height: 0;
+  border-top: 5px solid transparent; border-bottom: 5px solid transparent;
+  border-left: 8px solid currentColor;
+}
+
+.lp-btn-rate {
+  min-width: 48px; height: 40px; padding: 0 12px;
+  border-radius: 999px; background: transparent;
+  border: 1px solid transparent; color: var(--ink-1);
+  font-family: var(--mono); font-size: 12px;
+  cursor: pointer; display: grid; place-items: center;
+  transition: color .15s, background .15s;
+}
+.lp-btn-rate:hover { color: var(--ink-0); background: var(--bg-1); }
+.lp-btn-rate.on { color: var(--accent); background: var(--bg-1); }
+
+/* Toolbar (Sleep / Bookmark / Chapters) */
+.lp-toolbar {
+  display: flex; gap: 10px; margin-top: 28px;
+  justify-content: center;
+}
+.lp-toolbar-btn.on {
+  background: var(--accent); color: var(--accent-ink);
+  border-color: transparent; font-weight: 600;
+}
+
+/* ── Overlay panels & scrim ───────────────────────────────────── */
+
+.lp-scrim {
+  position: absolute; inset: 0; z-index: 30;
+  background: color-mix(in oklch, var(--bg-0) 48%, transparent);
+}
+
+.lp-panel {
+  position: absolute; z-index: 40;
+  background: color-mix(in oklch, var(--bg-1) 96%, transparent);
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--line); border-radius: var(--r-xl);
+  box-shadow: 0 30px 70px -16px rgba(0,0,0,.7);
+}
+
+.lp-panel-head {
+  display: flex; align-items: flex-end;
+  justify-content: space-between; margin-bottom: 18px;
+}
+.lp-panel-kicker {
+  font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--accent); font-weight: 500;
+}
+.lp-panel-title {
+  font-family: var(--serif); font-style: italic;
+  font-size: 30px; margin-top: 4px; color: var(--ink-0);
+}
+
+/* Speed panel */
+.lp-speed-panel {
+  right: 56px; bottom: 104px; width: 468px; padding: 28px;
+}
+.lp-speed-value {
+  font-family: var(--mono); font-size: 40px;
+  color: var(--accent); line-height: 1;
+}
+.lp-speed-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+}
+.lp-speed-btn {
+  height: 44px; border-radius: 10px; cursor: pointer;
+  display: grid; place-items: center;
+  font-family: var(--mono); font-size: 14px; font-weight: 500;
+  background: var(--bg-2); color: var(--ink-1);
+  border: 1px solid var(--line-2);
+  transition: background .15s, border-color .15s, color .15s;
+}
+.lp-speed-btn:hover { background: var(--bg-3); border-color: var(--line); }
+.lp-speed-btn.on {
+  background: var(--accent); color: var(--accent-ink);
+  border-color: transparent; font-weight: 600;
+}
+
+.lp-speed-fine { margin-top: 24px; }
+.lp-speed-fine-header {
+  display: flex; justify-content: space-between; margin-bottom: 10px;
+}
+.lp-speed-fine-track {
+  position: relative; height: 28px;
+  display: flex; align-items: center;
+}
+.lp-speed-fine-ticks {
+  position: absolute; inset: 0; display: flex;
+  justify-content: space-between; align-items: center;
+  pointer-events: none;
+}
+.lp-speed-fine-tick {
+  width: 1px; background: var(--line);
+}
+.lp-speed-fine-rail {
+  position: absolute; left: 0; right: 0;
+  height: 4px; border-radius: 999px; background: var(--bg-3);
+}
+.lp-speed-fine-fill {
+  position: absolute; left: 0; height: 4px;
+  border-radius: 999px; background: var(--accent);
+}
+.lp-speed-fine-thumb {
+  position: absolute; width: 18px; height: 18px;
+  border-radius: 999px; background: var(--accent);
+  border: 3px solid var(--bg-1);
+  box-shadow: 0 2px 8px rgba(0,0,0,.5);
+  transform: translateX(-9px);
+}
+
+.lp-speed-stepper {
+  display: flex; align-items: center;
+  justify-content: center; gap: 16px; margin-top: 22px;
+}
+.lp-speed-step-btn {
+  width: 40px; height: 40px; padding: 0;
+  border-radius: 10px; cursor: pointer;
+  display: grid; place-items: center; font-size: 20px;
+  background: var(--bg-2); color: var(--ink-0);
+  border: 1px solid var(--line-2);
+  transition: background .15s;
+}
+.lp-speed-step-btn:hover { background: var(--bg-3); }
+.lp-speed-step-value {
+  text-align: center; min-width: 72px;
+}
+
+/* Sleep panel */
+.lp-sleep-panel {
+  right: 56px; bottom: 104px; width: 430px; padding: 28px;
+}
+.lp-sleep-status { text-align: right; }
+.lp-sleep-status-value {
+  font-family: var(--mono); font-size: 26px;
+  color: var(--ink-3); line-height: 1;
+}
+.lp-sleep-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+}
+.lp-sleep-btn {
+  height: 44px; border-radius: 10px; cursor: pointer;
+  display: grid; place-items: center;
+  font-size: 12.5px; font-weight: 500; padding: 0 4px;
+  background: var(--bg-2); color: var(--ink-1);
+  border: 1px solid var(--line-2);
+  transition: background .15s, border-color .15s, color .15s;
+}
+.lp-sleep-btn:hover:not(:disabled) { background: var(--bg-3); border-color: var(--line); }
+.lp-sleep-btn:disabled { opacity: .5; cursor: not-allowed; }
+.lp-sleep-btn.on {
+  background: var(--accent); color: var(--accent-ink);
+  border-color: transparent; font-weight: 600; opacity: 1;
+}
+.lp-sleep-eoc {
+  width: 100%; height: 44px; margin-top: 8px;
+  display: flex; align-items: center; justify-content: center;
+  gap: 8px; font-size: 13px; cursor: pointer;
+  background: var(--bg-2); color: var(--ink-1);
+  border: 1px solid var(--line-2); border-radius: 10px;
+  transition: background .15s;
+}
+.lp-sleep-eoc:hover:not(:disabled) { background: var(--bg-3); }
+.lp-sleep-eoc:disabled { opacity: .5; cursor: not-allowed; }
+.lp-sleep-eoc-dot {
+  width: 6px; height: 6px; border-radius: 999px;
+  background: var(--accent);
+}
+
+/* Drawer (chapters / bookmarks) */
+.lp-drawer {
+  position: absolute; top: 0; right: 0; bottom: 0;
+  width: 440px; z-index: 40;
+  background: color-mix(in oklch, var(--bg-1) 96%, transparent);
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  border-left: 1px solid var(--line);
+  display: flex; flex-direction: column;
+  padding: 28px 0 0;
+}
+.lp-drawer-head {
+  display: flex; justify-content: space-between;
+  align-items: flex-end; padding: 0 28px 18px;
+  border-bottom: 1px solid var(--line-2);
+}
+.lp-drawer-body {
+  flex: 1; overflow: auto; padding: 8px 16px 24px;
+}
+.lp-drawer-empty {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  text-align: center; padding: 64px 24px;
+  min-height: 200px;
+}
+.lp-drawer-empty-title {
+  font-family: var(--serif); font-style: italic;
+  font-size: 22px; color: var(--ink-1);
+}
+.lp-drawer-empty-detail {
+  margin-top: 10px; font-size: 14px;
+  color: var(--ink-3); max-width: 28ch; line-height: 1.5;
+}
+
+/* Overlay status (failed / preparing) */
+.lp-overlay {
+  position: absolute; inset: 0; z-index: 10;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  background: var(--bg-0); gap: 0.5rem;
+}
+.lp-overlay-title {
+  font-family: var(--serif); font-size: 1.2rem; color: var(--ink-1);
+}
+.lp-overlay-detail {
+  font-family: var(--mono); font-size: 0.85rem; color: var(--ink-3);
+  max-width: 32rem; text-align: center;
+}
+
+/* ── Responsive ─────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .lp-stage {
+    grid-template-columns: 1fr; gap: 32px;
+    padding: 24px 24px;
+  }
+  .lp-cover-ring { width: min(280px, 60%); }
+  .lp-title { font-size: clamp(28px, 8vw, 48px); }
+  .lp-speed-panel { width: calc(100vw - 48px); right: 24px; bottom: 80px; }
+  .lp-sleep-panel { width: calc(100vw - 48px); right: 24px; bottom: 80px; }
+  .lp-drawer { width: 100%; }
+}
