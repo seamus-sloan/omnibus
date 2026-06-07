@@ -66,10 +66,13 @@ test("renders the listen page layout", async ({ page, request }) => {
   await expect(page.getByText(`by ${TARGET.author}`)).toBeVisible();
 
   // Transport: scrubber + skip-back / play / skip-forward / rate.
+  // The play toggle uses an exact-match selector because "Play" is a
+  // substring of "Playback speed" (the rate button label), so the
+  // default fuzzy role+name lookup would match both.
   await expect(page.getByRole("slider", { name: "Seek" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Back 30 seconds" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Forward 30 seconds" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Play" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Playback speed" })).toBeVisible();
 
   // Hidden <audio> element — present in the DOM (display:none) and
