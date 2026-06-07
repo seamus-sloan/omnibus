@@ -21,10 +21,12 @@ A new user-facing feature typically needs **both** (mobile+web parity), since th
 
 ## 2. Add the shared request/response types
 
-In [shared/src/lib.rs](../../../shared/src/lib.rs):
+Pick the right submodule under `shared/src/` ([lib.rs](../../../shared/src/lib.rs) is just a re-export index):
+`settings.rs` (library paths), `ebook/` (book metadata + overrides), `discovery.rs` (browse / search-palette / author / series), `progress.rs` (F2.1 reading/listening), `audiobook.rs` (F2.3 manifest), `view_prefs.rs` (landing-page sort/filter state), `auth.rs` (login/register payloads), `worker.rs` (worker progress feed). If the new type doesn't fit any of those, add a new submodule alongside them and re-export from `lib.rs`.
 
-- Define the request/response bodies with `#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]`.
+- Define the request/response bodies with `#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]`. Add `Eq` when every field supports it (skip it on any payload that carries `f64` or another non-`Eq` type).
 - Keep this crate dioxus-free — pure serde only.
+- The flat re-exports in `lib.rs` mean callers keep writing `omnibus_shared::Foo` regardless of which submodule `Foo` lives in.
 
 ## 3. Add the server function (web transport)
 

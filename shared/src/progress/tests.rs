@@ -1,0 +1,59 @@
+use super::*;
+
+#[test]
+fn progress_update_rejects_cross_format_audio_field_on_epub() {
+    let u = ProgressUpdate {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
+        audio_position_seconds: Some(12.0),
+    };
+    let err = u
+        .validate()
+        .expect_err("epub payload must reject audio_position_seconds");
+    assert!(err.contains("audio_position_seconds"), "got: {err}");
+}
+
+#[test]
+fn progress_update_rejects_cross_format_cfi_on_audio() {
+    let u = ProgressUpdate {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Audio,
+        epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
+        audio_position_seconds: Some(12.0),
+    };
+    let err = u
+        .validate()
+        .expect_err("audio payload must reject epub_cfi");
+    assert!(err.contains("epub_cfi"), "got: {err}");
+}
+
+#[test]
+fn session_report_rejects_inverted_time_range() {
+    let r = SessionReport {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        started_at: 500,
+        ended_at: 200,
+        progress_units: 0,
+        device_id: None,
+    };
+    let err = r.validate().expect_err("ended < started must be rejected");
+    assert!(err.contains("ended_at"), "got: {err}");
+}
+
+#[test]
+fn session_report_rejects_negative_progress_units() {
+    let r = SessionReport {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Audio,
+        started_at: 100,
+        ended_at: 200,
+        progress_units: -5,
+        device_id: None,
+    };
+    let err = r
+        .validate()
+        .expect_err("negative progress_units must be rejected");
+    assert!(err.contains("progress_units"), "got: {err}");
+}
