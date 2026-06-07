@@ -1,7 +1,7 @@
 //! Discovery / browse / search-palette wire types.
 //!
-//! Covers the F1.8 author / series / tag detail pages, the F1.12 author and
-//! series indexes, the library landing payload, and the F1.5 command-palette
+//! Covers the author / series / tag detail pages, the author and series
+//! browse indexes, the library landing payload, and the command-palette
 //! grouped result shape. Each card-level type stays slim so list endpoints
 //! avoid the N+1 cost of returning a full `EbookMetadata`.
 

@@ -1,4 +1,4 @@
-//! F2.1 reading / listening progress wire types.
+//! Reading / listening progress wire types.
 //!
 //! Used by `POST /api/progress`, `GET /api/progress/{uuid}`, and
 //! `POST /api/progress/sessions`. The `ProgressFormat` discriminator selects
