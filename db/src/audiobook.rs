@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 
 use omnibus_shared::{Contributor, EbookMetadata};
 
+use crate::ebook::extract_accent;
+
 pub mod codec;
 mod cover;
 mod group;
@@ -77,6 +79,9 @@ pub fn build_indexed_book(path: &Path, filename: String) -> Result<IndexedBook, 
         let m = ((d % 3600.0) / 60.0) as i64;
         format!("Audiobook · {h}h {m:02}m")
     });
+    let accent = cover
+        .as_ref()
+        .and_then(|(_mime, bytes)| extract_accent(bytes));
 
     Ok(IndexedBook {
         metadata: EbookMetadata {
@@ -84,6 +89,7 @@ pub fn build_indexed_book(path: &Path, filename: String) -> Result<IndexedBook, 
             title: Some(title),
             description,
             creators,
+            accent,
             ..Default::default()
         },
         cover,

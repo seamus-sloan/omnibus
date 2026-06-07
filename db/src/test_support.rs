@@ -193,6 +193,7 @@ pub fn indexed_audiobook(
         title: title.into(),
         creator_name: creator.map(Into::into),
         cover: None,
+        accent: None,
         parts: vec![crate::audiobook::AudiobookPart {
             ordinal: 0,
             filename: format!("{group_path}/part1.m4b"),
