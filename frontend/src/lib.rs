@@ -15,7 +15,6 @@ pub mod pages;
 pub mod reader_progress;
 pub mod routes;
 pub mod rpc;
-pub mod styles;
 pub mod view_prefs;
 
 pub use components::Nav;
@@ -26,7 +25,6 @@ pub use pages::{
     SettingsPage, TagCloudPage,
 };
 pub use routes::*;
-pub use styles::ALL_STYLES;
 
 #[cfg(feature = "mobile")]
 pub use data::ServerUrl;
@@ -218,9 +216,6 @@ pub fn App() -> Element {
     rsx! {
         document::Title { "Omnibus" }
         document::Stylesheet { href: ATRIUM_CSS }
-        for &chunk in ALL_STYLES {
-            style { {chunk} }
-        }
         components::atrium::AtriumRoot {
             dioxus_router::Router::<Route> {}
         }
