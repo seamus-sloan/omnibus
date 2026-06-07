@@ -500,8 +500,8 @@ body.atrium,
  */
 
 .bd-root {
-  margin-left: calc(-1 * clamp(1rem, 4vw, 2.5rem));
-  margin-right: calc(-1 * clamp(1rem, 4vw, 2.5rem));
+  width: 100vw;
+  margin-left: calc(-50vw + 50%);
 }
 
 /* Hero */
