@@ -107,9 +107,10 @@ fn extract_chapters_returns_empty_for_unknown_format() {
 
 #[test]
 fn extract_mp4_chapters_handles_version_1_chpl() {
-    // Version 1 uses a 1-byte count instead of 4-byte
+    // Version 1: 4-byte reserved field before the 1-byte count
     let mut chpl_body = Vec::new();
     chpl_body.extend_from_slice(&[1, 0, 0, 0]); // version=1, flags=0
+    chpl_body.extend_from_slice(&[0u8; 4]); // reserved
     chpl_body.push(2); // 1-byte count = 2
 
     // Chapter 1: start at 0

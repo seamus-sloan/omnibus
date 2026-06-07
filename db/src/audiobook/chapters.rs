@@ -102,7 +102,7 @@ fn find_child_box(
 /// v0, 1 byte for v1) + N entries of (start_100ns: u64, title_len: u8,
 /// title: [u8; title_len]).
 fn parse_chpl_payload(file: &mut std::fs::File, offset: u64, size: u64) -> Option<Vec<RawChapter>> {
-    if size < 5 {
+    if size < 9 {
         return None;
     }
     file.seek(SeekFrom::Start(offset)).ok()?;
@@ -111,6 +111,8 @@ fn parse_chpl_payload(file: &mut std::fs::File, offset: u64, size: u64) -> Optio
     let version = ver_flags[0];
 
     let count = if version >= 1 {
+        let mut _reserved = [0u8; 4];
+        file.read_exact(&mut _reserved).ok()?;
         let mut buf = [0u8; 1];
         file.read_exact(&mut buf).ok()?;
         buf[0] as usize
