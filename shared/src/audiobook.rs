@@ -15,6 +15,15 @@ pub struct ManifestPart {
     pub mime: String,
 }
 
+/// Chapter marker within an audiobook's timeline.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChapterInfo {
+    pub ordinal: i64,
+    pub title: String,
+    pub start_seconds: f64,
+    pub duration_seconds: f64,
+}
+
 /// Response payload for `GET /api/audiobooks/{uuid}/manifest`.
 ///
 /// `direct` lists per-part URLs the client streams over HTTP Range —
@@ -27,6 +36,8 @@ pub enum AudiobookManifest {
     Direct {
         parts: Vec<ManifestPart>,
         total_duration_seconds: f64,
+        #[serde(default)]
+        chapters: Vec<ChapterInfo>,
     },
     Hls {
         playlist_url: String,

@@ -201,6 +201,7 @@ pub fn indexed_audiobook(
             mtime_epoch: 100,
             duration_seconds: 3600.0,
         }],
+        chapters: vec![],
         total_size_bytes: 1000,
         max_mtime_epoch: 100,
         description: Some("Audiobook · 1h 00m".into()),

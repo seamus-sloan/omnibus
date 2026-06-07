@@ -8,9 +8,9 @@
 //! [`parse::parse_groups`] into [`parse::IndexedAudiobook`] rows ready for
 //! [`crate::sync::sync_audiobooks`].
 //!
-//! Scope (F2.3 HLS player): title, primary author, album, duration in
-//! seconds, embedded artwork, and per-part track ordering. Chapter atoms are
-//! NOT parsed here — the chapter-list UI is deferred to a later increment.
+//! Scope (F2.3 + F2.3b): title, primary author, album, duration in
+//! seconds, embedded artwork, per-part track ordering, and chapter extraction
+//! from Nero chpl atoms (M4B) and ID3v2 CHAP frames (MP3).
 
 use std::path::{Path, PathBuf};
 
@@ -18,6 +18,7 @@ use omnibus_shared::{Contributor, EbookMetadata};
 
 use crate::ebook::extract_accent;
 
+pub mod chapters;
 pub mod codec;
 mod cover;
 mod group;
@@ -27,6 +28,7 @@ mod stat;
 #[cfg(test)]
 mod tests;
 
+pub use chapters::{extract_chapters, RawChapter};
 pub use codec::{classify_filenames, is_direct_playable, mime_for_filename, PlaybackMode};
 pub use group::{group_into_books, AudiobookGroup};
 pub use parse::{
