@@ -160,12 +160,9 @@ pub async fn rpc_save_settings(settings: Settings) -> Result<Settings> {
             .post(omnibus_db::worker::Task::Scan { library_path });
     }
     if let Some(library_path) = updated.audiobook_library_path.clone() {
-        worker.0.post(omnibus_db::worker::Task::ScanAudiobooks {
-            library_path: library_path.clone(),
-        });
         worker
             .0
-            .post(omnibus_db::worker::Task::BackfillChapters { library_path });
+            .post(omnibus_db::worker::Task::ScanAudiobooks { library_path });
     }
     Ok(updated)
 }
@@ -330,6 +327,21 @@ pub async fn rpc_scan_author_photo(id: i64) -> Result<AuthorPhotoScanResult> {
 #[post("/api/rpc/refetch-author-photos", _pool: PoolExt, worker: WorkerExt, _admin: AdminUser)]
 pub async fn rpc_refetch_author_photos() -> Result<()> {
     worker.0.post(omnibus_db::worker::Task::RefetchAuthorPhotos);
+    Ok(())
+}
+
+/// Admin: manually trigger chapter extraction for audiobooks missing
+/// chapters. Posts `Task::BackfillChapters` to the background worker and
+/// returns immediately.
+#[post("/api/rpc/backfill-chapters", pool: PoolExt, worker: WorkerExt, _admin: AdminUser)]
+pub async fn rpc_backfill_chapters() -> Result<()> {
+    let settings = db::get_settings(&pool.0).await?;
+    let Some(library_path) = settings.audiobook_library_path else {
+        return Err(ServerFnError::new("no audiobook library configured").into());
+    };
+    worker
+        .0
+        .post(omnibus_db::worker::Task::BackfillChapters { library_path });
     Ok(())
 }
 

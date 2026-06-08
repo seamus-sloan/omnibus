@@ -208,8 +208,8 @@ fn kind_label(kind: TaskKind, running: bool) -> &'static str {
         (TaskKind::ResolveAuthorPhoto, false) => "Author photo lookup",
         (TaskKind::RefetchAuthorPhotos, true) => "Refetching author photos",
         (TaskKind::RefetchAuthorPhotos, false) => "Author photo refetch",
-        (TaskKind::BackfillChapters, true) => "Extracting chapters",
-        (TaskKind::BackfillChapters, false) => "Chapter extraction",
+        (TaskKind::BackfillChapters, true) => "Extracting audiobook chapters",
+        (TaskKind::BackfillChapters, false) => "Audiobook chapter extraction",
         // `#[non_exhaustive]` on the shared enum means new variants
         // compile against existing client builds — render an opaque
         // fallback rather than panicking.

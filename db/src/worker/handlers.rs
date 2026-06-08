@@ -3,10 +3,12 @@
 //! the owning module (`indexer::reindex`, `author_photos::resolve`,
 //! `thumbs::ensure_thumbnails_sync`).
 
+use std::sync::Arc;
+
 use super::types::{Task, TaskId, TaskOutcome, Worker};
 
 impl Worker {
-    pub(super) async fn execute(&self, task: Task, id: TaskId) -> TaskOutcome {
+    pub(super) async fn execute(self: &Arc<Self>, task: Task, id: TaskId) -> TaskOutcome {
         match task {
             Task::Scan { library_path } => {
                 match crate::indexer::reindex(&self.pool, &library_path).await {
@@ -16,7 +18,17 @@ impl Worker {
             }
             Task::ScanAudiobooks { library_path } => {
                 match crate::indexer::reindex_audiobooks(&self.pool, &library_path).await {
-                    Ok(()) => TaskOutcome::Ok,
+                    Ok(()) => {
+                        // Post a follow-up chapter backfill task now that the
+                        // scan has populated book_file_parts rows. Same resource
+                        // key means it won't run until this task fully finishes
+                        // (including the terminal-state write in `run`), but
+                        // the post itself is instant.
+                        self.post(Task::BackfillChapters {
+                            library_path: library_path.clone(),
+                        });
+                        TaskOutcome::Ok
+                    }
                     Err(e) => TaskOutcome::Err(e.to_string()),
                 }
             }

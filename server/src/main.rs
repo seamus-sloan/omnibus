@@ -82,11 +82,8 @@ fn main() {
                 if let Some(path) = settings.audiobook_library_path {
                     let stale = indexer::is_stale(&pool, &path).await.unwrap_or(true);
                     if stale {
-                        worker.post(Task::ScanAudiobooks {
-                            library_path: path.clone(),
-                        });
+                        worker.post(Task::ScanAudiobooks { library_path: path });
                     }
-                    worker.post(Task::BackfillChapters { library_path: path });
                 }
             }
 
