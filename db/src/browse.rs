@@ -8,6 +8,13 @@ use sqlx::{Row, SqlitePool};
 
 use omnibus_shared::{AuthorSummary, SeriesSummary};
 
+/// Errors returned by the browse index queries.
+#[derive(Debug, thiserror::Error)]
+pub enum BrowseError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
 /// Hard cap on rows returned by [`list_authors`] / [`list_series`]. Keeps
 /// the JSON envelope under ~1 MB even with the optional accent string,
 /// while leaving headroom past a 5k+ author library.
@@ -30,7 +37,7 @@ fn placeholders(n: usize) -> String {
 pub async fn list_authors(
     pool: &SqlitePool,
     library_paths: &[&str],
-) -> Result<Vec<AuthorSummary>, sqlx::Error> {
+) -> Result<Vec<AuthorSummary>, BrowseError> {
     if library_paths.is_empty() {
         return Ok(Vec::new());
     }
@@ -114,7 +121,7 @@ pub async fn list_authors(
 pub async fn list_series(
     pool: &SqlitePool,
     library_paths: &[&str],
-) -> Result<Vec<SeriesSummary>, sqlx::Error> {
+) -> Result<Vec<SeriesSummary>, BrowseError> {
     if library_paths.is_empty() {
         return Ok(Vec::new());
     }

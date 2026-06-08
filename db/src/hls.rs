@@ -14,11 +14,9 @@ use std::time::{Duration, SystemTime};
 use sqlx::SqlitePool;
 use tokio::io::AsyncBufReadExt;
 
-/// Errors returned by `get_parts`. Other public functions in this module
-/// still return `sqlx::Error` directly (`resolve_audiobook`) or
-/// `anyhow::Result` (`transcode_book`, where ffmpeg + filesystem +
-/// timeouts dominate the failure space); widening the boundary cleanup
-/// is tracked separately.
+/// Errors returned by the HLS DB queries. `transcode_book` uses
+/// `anyhow::Result` because ffmpeg + filesystem + timeouts dominate its
+/// failure space and callers just propagate.
 #[derive(Debug, thiserror::Error)]
 pub enum HlsError {
     #[error(transparent)]
@@ -187,7 +185,7 @@ pub struct ResolvedAudiobook {
 pub async fn resolve_audiobook(
     pool: &SqlitePool,
     uuid: &str,
-) -> Result<Option<ResolvedAudiobook>, sqlx::Error> {
+) -> Result<Option<ResolvedAudiobook>, HlsError> {
     let row = sqlx::query_as::<_, (i64, i64, String)>(
         "SELECT b.id, bf.id, l.path \
          FROM books b \

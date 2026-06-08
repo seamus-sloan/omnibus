@@ -16,9 +16,7 @@ pub use omnibus_shared::Settings;
 const EBOOK_LIBRARY_PATH_KEY: &str = "ebook_library_path";
 const AUDIOBOOK_LIBRARY_PATH_KEY: &str = "audiobook_library_path";
 
-/// Errors returned by `get_settings`, `set_settings`, and
-/// `seed_settings_from_env`. Other public functions in this module still
-/// return `sqlx::Error` directly — widening that is tracked separately.
+/// Errors returned by the settings data layer.
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsError {
     #[error(transparent)]
@@ -102,7 +100,7 @@ pub async fn set_settings(pool: &SqlitePool, settings: &Settings) -> Result<(), 
 pub(crate) async fn prune_orphan_libraries(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     keep: &[Option<&str>],
-) -> Result<Vec<String>, sqlx::Error> {
+) -> Result<Vec<String>, SettingsError> {
     let orphans: Vec<(i64, String)> = sqlx::query_as("SELECT id, path FROM libraries")
         .fetch_all(&mut **tx)
         .await?
@@ -213,7 +211,7 @@ pub async fn seed_settings_from_env(pool: &SqlitePool) -> Result<(), SettingsErr
 pub(crate) async fn upsert_library(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     path: &str,
-) -> Result<i64, sqlx::Error> {
+) -> Result<i64, SettingsError> {
     let display_name = Path::new(path)
         .file_name()
         .and_then(|s| s.to_str())
@@ -240,12 +238,14 @@ pub(crate) async fn upsert_library(
 pub async fn last_indexed_at(
     pool: &SqlitePool,
     library_path: &str,
-) -> Result<Option<i64>, sqlx::Error> {
-    sqlx::query_scalar::<_, Option<i64>>("SELECT last_indexed FROM libraries WHERE path = ?")
-        .bind(library_path)
-        .fetch_optional(pool)
-        .await
-        .map(|opt| opt.flatten())
+) -> Result<Option<i64>, SettingsError> {
+    Ok(
+        sqlx::query_scalar::<_, Option<i64>>("SELECT last_indexed FROM libraries WHERE path = ?")
+            .bind(library_path)
+            .fetch_optional(pool)
+            .await?
+            .flatten(),
+    )
 }
 
 #[cfg(test)]
