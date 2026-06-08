@@ -374,22 +374,26 @@ pub(crate) async fn backfill_chapters(
         "backfilling chapters for existing audiobooks"
     );
 
-    // Bulk-fetch all parts for the backfill set in one query, then group by
-    // book_file_id — avoids N per-book SELECT round-trips.
+    // Bulk-fetch all parts for the backfill set, then group by book_file_id —
+    // avoids N per-book SELECT round-trips. Chunk at 500 to stay well under
+    // SQLite's 999 bind-parameter limit.
     let book_file_ids: Vec<i64> = rows.iter().map(|(id, _, _)| *id).collect();
-    let placeholders = std::iter::repeat_n("?", book_file_ids.len())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let parts_sql = format!(
-        "SELECT book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds \
-         FROM book_file_parts WHERE book_file_id IN ({placeholders}) \
-         ORDER BY book_file_id, ordinal"
-    );
-    let mut parts_query = sqlx::query_as::<_, (i64, i64, String, i64, i64, f64)>(&parts_sql);
-    for id in &book_file_ids {
-        parts_query = parts_query.bind(id);
+    let mut all_parts_rows: Vec<(i64, i64, String, i64, i64, f64)> = Vec::new();
+    for chunk in book_file_ids.chunks(500) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let parts_sql = format!(
+            "SELECT book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds \
+             FROM book_file_parts WHERE book_file_id IN ({placeholders}) \
+             ORDER BY book_file_id, ordinal"
+        );
+        let mut parts_query = sqlx::query_as::<_, (i64, i64, String, i64, i64, f64)>(&parts_sql);
+        for id in chunk {
+            parts_query = parts_query.bind(id);
+        }
+        all_parts_rows.extend(parts_query.fetch_all(pool).await?);
     }
-    let all_parts_rows = parts_query.fetch_all(pool).await?;
 
     // Group parts by book_file_id.
     let mut parts_by_id: std::collections::HashMap<i64, Vec<crate::audiobook::AudiobookPart>> =
@@ -424,13 +428,16 @@ pub(crate) async fn backfill_chapters(
                         tracing::warn!(
                             book_file_id,
                             %join_err,
-                            "chapter extraction task panicked; using synthetic fallback"
+                            is_panic = join_err.is_panic(),
+                            "chapter extraction task failed; using synthetic fallback"
                         );
                         Vec::new()
                     });
 
-            let empty = Vec::new();
-            let parts = parts_by_id.get(book_file_id).unwrap_or(&empty);
+            let parts = parts_by_id
+                .get(book_file_id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
             sync::insert_chapters(&mut tx, *book_file_id, &chapters, parts).await?;
 
             let global_idx = batch_idx * 250 + i;
