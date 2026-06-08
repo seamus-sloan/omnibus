@@ -8,7 +8,7 @@
 
 use sqlx::SqlitePool;
 
-use crate::metadata_overrides::rebuild_fts_for_book;
+use crate::metadata_overrides::rebuild_fts_for_books_batch;
 
 /// Errors returned by the author-photos data layer. The single
 /// transparent `Db` variant honors the `02-error-handling` boundary rule
@@ -198,10 +198,16 @@ pub async fn delete_author(
 
     tx.commit().await?;
 
-    for uuid in &affected_uuids {
-        if let Err(e) = rebuild_fts_for_book(pool, uuid).await {
-            tracing::warn!(uuid = uuid.as_str(), error = %e, "books_fts rebuild after delete_author failed");
-        }
+    // Batch-rebuild FTS in at most 2 write statements per 100-UUID chunk
+    // (one DELETE + one INSERT) so an author linked to N books never produces
+    // N×2 sequential write-lock acquisitions.
+    if let Err(e) = rebuild_fts_for_books_batch(pool, &affected_uuids).await {
+        tracing::warn!(
+            author_id,
+            book_count = affected_uuids.len(),
+            error = %e,
+            "books_fts batch rebuild after delete_author failed"
+        );
     }
 
     Ok(affected_uuids.len() as u64)
@@ -455,5 +461,62 @@ mod tests {
         let books = list_books(&pool, "/lib").await.unwrap();
         let creators: Vec<&str> = books[0].creators.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(creators, vec!["Real Author"]);
+    }
+    #[tokio::test]
+    async fn delete_author_rebuilds_fts_for_all_affected_books_in_batch() {
+        // Verifies the batch FTS path: after deleting an author linked to
+        // multiple books, each book's FTS row must exist and no longer contain
+        // the deleted author's name.
+        let _covers = CoversTempDir::new("delete_author_fts_batch");
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        replace_books(
+            &pool,
+            "/lib",
+            vec![
+                indexed(
+                    "a.epub",
+                    Some("Alpha"),
+                    &["Junk Author", "Keep Me"],
+                    &[],
+                    None,
+                    None,
+                ),
+                indexed("b.epub", Some("Beta"), &["Junk Author"], &[], None, None),
+                indexed("c.epub", Some("Gamma"), &["Keep Me"], &[], None, None),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let junk_id: i64 = sqlx::query_scalar("SELECT id FROM authors WHERE name = ?")
+            .bind("Junk Author")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        let unlinked = delete_author(&pool, junk_id).await.unwrap();
+        assert_eq!(unlinked, 2, "two books were linked to Junk Author");
+
+        // All three books should still have an FTS row after the batch rebuild.
+        let fts_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books_fts")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            fts_count, 3,
+            "every book must have an FTS row after the batch rebuild"
+        );
+
+        // The FTS rows for the two affected books must no longer contain the
+        // deleted author's name.
+        let junk_fts_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM books_fts WHERE authors MATCH 'junk'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            junk_fts_count, 0,
+            "deleted author must not appear in any FTS row"
+        );
     }
 }

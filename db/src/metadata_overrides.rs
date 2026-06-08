@@ -367,6 +367,124 @@ pub(crate) async fn rebuild_fts_for_book(
     Ok(())
 }
 
+/// Rebuild `books_fts` rows for all books identified by `book_uuids` using at
+/// most **2 SQL write statements per chunk** regardless of how many UUIDs are
+/// supplied: one batched `DELETE … WHERE rowid IN (…)` then one multi-row
+/// `INSERT`. Chunks at 100 UUIDs to stay well under SQLite's 999 bind-
+/// parameter cap (each FTS row uses 7 params, so 100 rows = 700 params).
+///
+/// The per-book merged metadata is fetched individually (N reads) before the
+/// writes so that overrides are applied correctly, but those reads do not hold
+/// the write lock.
+///
+/// UUIDs with no matching `books` row are silently skipped. Returns
+/// immediately without opening a write transaction if the resolved list is
+/// empty.
+pub(crate) async fn rebuild_fts_for_books_batch(
+    pool: &SqlitePool,
+    book_uuids: &[String],
+) -> Result<(), MetadataOverridesError> {
+    if book_uuids.is_empty() {
+        return Ok(());
+    }
+
+    // Phase 1 (reads): resolve each UUID to a book_id and fetch its merged
+    // metadata. Skips any UUID that no longer maps to a live book row.
+    struct FtsRow {
+        book_id: i64,
+        title: String,
+        authors: String,
+        series: String,
+        tags: String,
+        description: String,
+        isbn: String,
+    }
+
+    let mut rows: Vec<FtsRow> = Vec::with_capacity(book_uuids.len());
+    for uuid in book_uuids {
+        let Some(book_id) = sqlx::query_scalar::<_, i64>("SELECT id FROM books WHERE uuid = ?")
+            .bind(uuid)
+            .fetch_optional(pool)
+            .await?
+        else {
+            continue;
+        };
+        let Some(merged) = crate::books::get_book(pool, book_id).await? else {
+            continue;
+        };
+
+        let title = merged.title.clone().unwrap_or_default();
+        let isbn = merged
+            .identifiers
+            .iter()
+            .find(|i| {
+                i.scheme
+                    .as_deref()
+                    .is_some_and(|s| s.eq_ignore_ascii_case("ISBN"))
+            })
+            .map(|i| i.value.clone())
+            .unwrap_or_default();
+        let authors = crate::helpers::join_names(merged.creators.iter().map(|c| c.name.as_str()));
+        let series = merged.series.clone().unwrap_or_default();
+        let tags = crate::helpers::join_names(merged.subjects.iter().map(String::as_str));
+        let description = merged.description.clone().unwrap_or_default();
+
+        rows.push(FtsRow {
+            book_id,
+            title,
+            authors,
+            series,
+            tags,
+            description,
+            isbn,
+        });
+    }
+
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    // Phase 2 (writes): one DELETE + one multi-row INSERT per chunk of 100.
+    // 100 rows × 7 params = 700 bind parameters, safely under the 999 cap.
+    let mut tx = pool.begin().await?;
+    for chunk in rows.chunks(100) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        // One batched DELETE for the whole chunk.
+        let delete_sql = format!("DELETE FROM books_fts WHERE rowid IN ({placeholders})");
+        let mut q = sqlx::query(&delete_sql);
+        for row in chunk {
+            q = q.bind(row.book_id);
+        }
+        q.execute(&mut *tx).await?;
+
+        // One multi-row INSERT for the whole chunk.
+        let value_placeholders = std::iter::repeat_n("(?, ?, ?, ?, ?, ?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let insert_sql = format!(
+            "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn) \
+             VALUES {value_placeholders}"
+        );
+        let mut q = sqlx::query(&insert_sql);
+        for row in chunk {
+            q = q
+                .bind(row.book_id)
+                .bind(&row.title)
+                .bind(&row.authors)
+                .bind(&row.series)
+                .bind(&row.tags)
+                .bind(&row.description)
+                .bind(&row.isbn);
+        }
+        q.execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Write a user-uploaded override cover to disk.
 pub fn write_override_cover(uuid: &str, mime: &str, bytes: &[u8]) -> std::io::Result<()> {
     let ext = crate::covers::ImageFormat::from_mime(mime).to_ext();
