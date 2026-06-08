@@ -487,11 +487,6 @@ async fn run_ffmpeg_with_progress(
 }
 
 /// Spawn the ffmpeg child process for HLS transcoding with piped stdout/stderr.
-///
-/// Arguments encode the audio64 profile: AAC-LC 64 kbps mono, 10 s segments,
-/// `vod` playlist type. `-progress pipe:1 -nostats` routes the machine-readable
-/// progress stream to stdout so [`stream_progress`] can parse it without
-/// interleaving with stderr log output.
 fn spawn_ffmpeg(concat_path: &Path, outdir: &Path) -> Result<tokio::process::Child, String> {
     let ffmpeg = std::env::var("OMNIBUS_FFMPEG_PATH").unwrap_or_else(|_| "ffmpeg".into());
     let seg_pattern = outdir.join("seg-%04d.ts");
