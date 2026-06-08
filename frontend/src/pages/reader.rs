@@ -78,6 +78,9 @@ pub fn BookReadPage(uuid: String) -> Element {
     {
         let mut book_meta = book_meta;
         use_effect(use_reactive!(|uuid_for_meta| {
+            // Clear stale title immediately so SPA navigations between books
+            // don't flash the previous book's name while the fetch is in flight.
+            book_meta.set(None);
             let url = server_url.clone();
             let uuid = uuid_for_meta.clone();
             spawn(async move {
@@ -222,14 +225,17 @@ pub fn BookReadPage(uuid: String) -> Element {
 
     let on_keydown = move |evt: KeyboardEvent| match evt.key() {
         Key::ArrowLeft => {
+            evt.prevent_default();
             #[cfg(feature = "web")]
             reader_call("prev", "");
         }
         Key::ArrowRight => {
+            evt.prevent_default();
             #[cfg(feature = "web")]
             reader_call("next", "");
         }
         Key::Escape => {
+            evt.prevent_default();
             if show_aa() {
                 show_aa.set(false);
             } else {
