@@ -16,7 +16,7 @@ use super::links::materialize_series_link;
 #[derive(Debug, thiserror::Error)]
 pub enum MetadataOverridesError {
     /// A JSON serialization or deserialization failure on the `overrides` blob.
-    #[error("serialization failed: {0}")]
+    #[error("JSON (de)serialization failed: {0}")]
     Serialization(#[from] serde_json::Error),
     #[error(transparent)]
     Db(#[from] sqlx::Error),

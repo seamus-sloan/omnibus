@@ -34,7 +34,6 @@ pub use list::{
 pub use projection::MAX_BOOKS_RETURNED;
 pub use search::{count_search_books, search_books, search_books_with_total};
 
-/// Errors returned by the book read paths (`get_book`, `count_books`).
 /// Errors returned by the books read path.
 #[derive(Debug, thiserror::Error)]
 pub enum BooksError {
