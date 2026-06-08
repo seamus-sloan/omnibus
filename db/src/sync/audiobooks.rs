@@ -276,7 +276,7 @@ async fn insert_audiobook_parts(
 
 /// Insert `file_chapters` rows. If no chapters were extracted, synthesize
 /// one chapter per part so the frontend always gets `chapters.len() >= 1`.
-pub async fn insert_chapters(
+pub(crate) async fn insert_chapters(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_file_id: i64,
     chapters: &[crate::audiobook::RawChapter],

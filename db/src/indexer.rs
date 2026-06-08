@@ -367,7 +367,10 @@ pub(crate) async fn backfill_chapters(
     let lib_root = PathBuf::from(library_path);
     for (i, (book_file_id, first_part_filename, format)) in rows.iter().enumerate() {
         let abs = lib_root.join(first_part_filename);
-        let chapters = audiobook::extract_chapters(&abs, format);
+        let fmt = format.clone();
+        let chapters = tokio::task::spawn_blocking(move || audiobook::extract_chapters(&abs, &fmt))
+            .await
+            .unwrap_or_default();
 
         let parts: Vec<crate::audiobook::AudiobookPart> =
             sqlx::query_as::<_, (i64, String, i64, i64, f64)>(

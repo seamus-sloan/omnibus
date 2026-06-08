@@ -74,9 +74,11 @@ pub enum Task {
     /// scan semaphore.
     RefetchAuthorPhotos,
     /// Backfill `file_chapters` rows for audiobooks that were indexed before
-    /// the chapter pipeline existed. Keyed on `audiobooks:{library_path}` so
-    /// it serializes behind any in-flight [`Task::ScanAudiobooks`] on the
-    /// same library. Does not consume the scan semaphore (lightweight IO).
+    /// the chapter pipeline existed. Posted by the [`Task::ScanAudiobooks`]
+    /// handler on success so it always runs after the scan completes. Also
+    /// triggerable manually from the settings page. Keyed on
+    /// `audiobooks:{library_path}` (mutual exclusion with scans on the same
+    /// library). Does not consume the scan semaphore (lightweight IO).
     BackfillChapters { library_path: String },
     /// Test-only synthetic task: sleeps `latency_ms` and invokes the
     /// optional `on_run` / `on_done` hooks, with `resource` and
