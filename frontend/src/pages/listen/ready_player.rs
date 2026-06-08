@@ -19,7 +19,6 @@ use super::stage::{PlaybackPosition, PlayerCallbacks, PlayerStage, ToolbarState,
 use crate::Nav;
 
 /// Render the ready-state player chrome and bind the transport handlers.
-#[allow(clippy::too_many_lines)]
 #[component]
 pub(super) fn ReadyPlayer(
     book: EbookMetadata,

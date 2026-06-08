@@ -21,17 +21,13 @@ mod progress;
 mod series;
 mod tags;
 
-#[allow(unused_imports)]
+// auth exports only exist under web or mobile; under server-only the module is empty.
+#[cfg(any(feature = "web", feature = "mobile"))]
 pub use auth::*;
-#[allow(unused_imports)]
 pub use authors::*;
-#[allow(unused_imports)]
 pub use books::*;
-#[allow(unused_imports)]
 pub use progress::*;
-#[allow(unused_imports)]
 pub use series::*;
-#[allow(unused_imports)]
 pub use tags::*;
 
 // ===== Typed transport error (#96) =====
