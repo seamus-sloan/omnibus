@@ -333,11 +333,21 @@ pub async fn reindex_audiobooks(pool: &SqlitePool, library_path: &str) -> anyhow
 /// backfill runs as a separate worker task and is a no-op once all books
 /// have chapters. `on_progress(processed, total)` is called after each
 /// book so the UI can render a progress bar.
+///
+/// ## Query efficiency
+///
+/// All `book_file_parts` rows for the backfill set are fetched in a single
+/// `WHERE book_file_id IN (…)` bulk query before the loop rather than one
+/// per book, and all chapter inserts are committed in batches of 250 books
+/// to avoid per-book WAL flushes (mirrors the sync/audiobooks.rs backfill
+/// pattern).
 pub(crate) async fn backfill_chapters(
     pool: &SqlitePool,
     library_path: &str,
-    on_progress: impl Fn(u32, u32),
+    mut on_progress: impl FnMut(u32, u32),
 ) -> anyhow::Result<()> {
+    // One query: the first-part filename (ordinal=0) and format for every
+    // book that needs chapters.
     let rows: Vec<(i64, String, String)> = sqlx::query_as(
         "SELECT bf.id, bfp.filename, bf.format \
          FROM book_files bf \
@@ -364,41 +374,69 @@ pub(crate) async fn backfill_chapters(
         "backfilling chapters for existing audiobooks"
     );
 
+    // Bulk-fetch all parts for the backfill set in one query, then group by
+    // book_file_id — avoids N per-book SELECT round-trips.
+    let book_file_ids: Vec<i64> = rows.iter().map(|(id, _, _)| *id).collect();
+    let placeholders = std::iter::repeat_n("?", book_file_ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let parts_sql = format!(
+        "SELECT book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds \
+         FROM book_file_parts WHERE book_file_id IN ({placeholders}) \
+         ORDER BY book_file_id, ordinal"
+    );
+    let mut parts_query = sqlx::query_as::<_, (i64, i64, String, i64, i64, f64)>(&parts_sql);
+    for id in &book_file_ids {
+        parts_query = parts_query.bind(id);
+    }
+    let all_parts_rows = parts_query.fetch_all(pool).await?;
+
+    // Group parts by book_file_id.
+    let mut parts_by_id: std::collections::HashMap<i64, Vec<crate::audiobook::AudiobookPart>> =
+        std::collections::HashMap::new();
+    for (book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds) in
+        all_parts_rows
+    {
+        parts_by_id
+            .entry(book_file_id)
+            .or_default()
+            .push(crate::audiobook::AudiobookPart {
+                ordinal,
+                filename,
+                size_bytes,
+                mtime_epoch,
+                duration_seconds,
+            });
+    }
+
+    // Process books in batches of 250 to bound transaction size (mirrors the
+    // sync/audiobooks.rs backfill pattern).
     let lib_root = PathBuf::from(library_path);
-    for (i, (book_file_id, first_part_filename, format)) in rows.iter().enumerate() {
-        let abs = lib_root.join(first_part_filename);
-        let fmt = format.clone();
-        let chapters = tokio::task::spawn_blocking(move || audiobook::extract_chapters(&abs, &fmt))
-            .await
-            .unwrap_or_default();
-
-        let parts: Vec<crate::audiobook::AudiobookPart> =
-            sqlx::query_as::<_, (i64, String, i64, i64, f64)>(
-                "SELECT ordinal, filename, size_bytes, mtime_epoch, duration_seconds \
-                 FROM book_file_parts WHERE book_file_id = ? ORDER BY ordinal",
-            )
-            .bind(book_file_id)
-            .fetch_all(pool)
-            .await?
-            .into_iter()
-            .map(
-                |(ordinal, filename, size_bytes, mtime_epoch, duration_seconds)| {
-                    crate::audiobook::AudiobookPart {
-                        ordinal,
-                        filename,
-                        size_bytes,
-                        mtime_epoch,
-                        duration_seconds,
-                    }
-                },
-            )
-            .collect();
-
+    for (batch_idx, chunk) in rows.chunks(250).enumerate() {
         let mut tx = pool.begin().await?;
-        sync::insert_chapters(&mut tx, *book_file_id, &chapters, &parts).await?;
-        tx.commit().await?;
+        for (i, (book_file_id, first_part_filename, format)) in chunk.iter().enumerate() {
+            let abs = lib_root.join(first_part_filename);
+            let fmt = format.clone();
+            let chapters =
+                tokio::task::spawn_blocking(move || audiobook::extract_chapters(&abs, &fmt))
+                    .await
+                    .unwrap_or_else(|join_err| {
+                        tracing::warn!(
+                            book_file_id,
+                            %join_err,
+                            "chapter extraction task panicked; using synthetic fallback"
+                        );
+                        Vec::new()
+                    });
 
-        on_progress(i as u32 + 1, total);
+            let empty = Vec::new();
+            let parts = parts_by_id.get(book_file_id).unwrap_or(&empty);
+            sync::insert_chapters(&mut tx, *book_file_id, &chapters, parts).await?;
+
+            let global_idx = batch_idx * 250 + i;
+            on_progress(global_idx as u32 + 1, total);
+        }
+        tx.commit().await?;
     }
 
     Ok(())
@@ -818,5 +856,159 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&shared);
+    }
+
+    // ---------- backfill_chapters batch behaviour ----------
+
+    /// Seed an audiobook with `book_file_parts` rows but no `file_chapters`,
+    /// bypassing the full indexer so the test focuses on backfill logic only.
+    async fn seed_audiobook_for_backfill(
+        pool: &SqlitePool,
+        library_path: &str,
+        uuid: &str,
+        first_part_filename: &str,
+        format: &str,
+    ) -> i64 {
+        // Ensure the library row exists.
+        sqlx::query(
+            "INSERT INTO libraries (path, display_name) VALUES (?, ?) \
+             ON CONFLICT(path) DO NOTHING",
+        )
+        .bind(library_path)
+        .bind(library_path)
+        .execute(pool)
+        .await
+        .unwrap();
+
+        let lib_id: i64 = sqlx::query_scalar("SELECT id FROM libraries WHERE path = ?")
+            .bind(library_path)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+
+        let book_id: i64 = sqlx::query_scalar(
+            "INSERT INTO books (uuid, library_id, path, title, sort) \
+             VALUES (?, ?, ?, ?, ?) RETURNING id",
+        )
+        .bind(uuid)
+        .bind(lib_id)
+        .bind(library_path)
+        .bind(uuid)
+        .bind(uuid)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+
+        let book_file_id: i64 = sqlx::query_scalar(
+            "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime, mtime_epoch) \
+             VALUES (?, ?, ?, 100, '', 100) RETURNING id",
+        )
+        .bind(book_id)
+        .bind(format)
+        .bind(uuid)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO book_file_parts \
+                (book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds) \
+             VALUES (?, 0, ?, 100, 100, 3600.0)",
+        )
+        .bind(book_file_id)
+        .bind(first_part_filename)
+        .execute(pool)
+        .await
+        .unwrap();
+
+        book_file_id
+    }
+
+    #[tokio::test]
+    async fn backfill_chapters_inserts_synthetic_chapters_for_all_books_in_batch() {
+        // Seed two audiobooks that need chapters. Point first_part_filename at
+        // a path that does not exist on disk — extract_chapters returns an
+        // empty Vec (no panic), which triggers the synthetic "one chapter per
+        // part" fallback. The test verifies that both books get chapters and
+        // that progress is reported for each book.
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let lib = "/tmp/backfill_test_lib";
+
+        let bfid_a =
+            seed_audiobook_for_backfill(&pool, lib, "book-a", "book-a/part.m4b", "M4B").await;
+        let bfid_b =
+            seed_audiobook_for_backfill(&pool, lib, "book-b", "book-b/part.m4b", "M4B").await;
+
+        let mut progress_calls: Vec<(u32, u32)> = Vec::new();
+        backfill_chapters(&pool, lib, |processed, total| {
+            progress_calls.push((processed, total));
+        })
+        .await
+        .unwrap();
+
+        // Both books should now have at least one synthetic chapter.
+        let chapters_a: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM file_chapters WHERE book_file_id = ?")
+                .bind(bfid_a)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let chapters_b: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM file_chapters WHERE book_file_id = ?")
+                .bind(bfid_b)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(
+            chapters_a >= 1,
+            "book-a must have at least one synthetic chapter after backfill"
+        );
+        assert!(
+            chapters_b >= 1,
+            "book-b must have at least one synthetic chapter after backfill"
+        );
+
+        // Progress must be reported once per book.
+        assert_eq!(
+            progress_calls.len(),
+            2,
+            "on_progress must be called once per book"
+        );
+        assert_eq!(progress_calls[0], (1, 2));
+        assert_eq!(progress_calls[1], (2, 2));
+    }
+
+    #[tokio::test]
+    async fn backfill_chapters_is_idempotent_after_all_books_have_chapters() {
+        // After all books already have chapters the initial query returns empty
+        // and the function exits early without touching anything.
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        let lib = "/tmp/backfill_idempotent_lib";
+
+        let bfid =
+            seed_audiobook_for_backfill(&pool, lib, "book-c", "book-c/part.m4b", "M4B").await;
+
+        // Pre-insert a chapter so the book is already covered.
+        sqlx::query(
+            "INSERT INTO file_chapters \
+                (book_file_id, ordinal, title, start_seconds, duration_seconds) \
+             VALUES (?, 0, 'Chapter 1', 0.0, 3600.0)",
+        )
+        .bind(bfid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut progress_calls = 0u32;
+        backfill_chapters(&pool, lib, |_, _| {
+            progress_calls += 1;
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            progress_calls, 0,
+            "on_progress must not be called when all books already have chapters"
+        );
     }
 }
