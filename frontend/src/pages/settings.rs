@@ -22,6 +22,7 @@ pub fn SettingsPage() -> Element {
     let mut status_is_error = use_signal(|| false);
     let mut library = use_signal(LibraryContents::default);
     let mut refetch_in_flight = use_signal(|| false);
+    let mut backfill_in_flight = use_signal(|| false);
     // Bumped after a successful save to re-trigger the library-refresh effect.
     let mut library_refresh = use_signal(|| 0u32);
 
@@ -54,6 +55,7 @@ pub fn SettingsPage() -> Element {
     });
 
     let url_for_refetch = server_url.clone();
+    let url_for_backfill = server_url.clone();
 
     let worker_status_slot: Element = {
         #[cfg(not(feature = "mobile"))]
@@ -166,6 +168,34 @@ pub fn SettingsPage() -> Element {
                             }
                         },
                         "Refetch Author Pictures"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "btn ghost",
+                        disabled: backfill_in_flight(),
+                        "data-testid": "backfill-chapters",
+                        onclick: {
+                            let url = url_for_backfill.clone();
+                            move |_| {
+                                let url = url.clone();
+                                backfill_in_flight.set(true);
+                                spawn(async move {
+                                    match data::backfill_chapters(&url).await {
+                                        Ok(()) => {
+                                            status.set(Some("Chapter extraction queued.".into()));
+                                            status_is_error.set(false);
+                                            backfill_in_flight.set(false);
+                                        }
+                                        Err(e) => {
+                                            status.set(Some(format!("Failed to start chapter extraction: {e}")));
+                                            status_is_error.set(true);
+                                            backfill_in_flight.set(false);
+                                        }
+                                    }
+                                });
+                            }
+                        },
+                        "Extract Audiobook Chapters"
                     }
                 }
             }

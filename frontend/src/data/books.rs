@@ -206,6 +206,26 @@ pub async fn worker_status(_server_url: &str) -> Result<WorkerStatus, DataError>
     Ok(WorkerStatus::default())
 }
 
+/// Admin: manually trigger chapter extraction for audiobooks missing chapters.
+#[cfg(not(feature = "mobile"))]
+pub async fn backfill_chapters(_server_url: &str) -> Result<(), DataError> {
+    crate::rpc::rpc_backfill_chapters()
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Mobile stub for `backfill_chapters`.
+#[cfg(feature = "mobile")]
+pub async fn backfill_chapters(server_url: &str) -> Result<(), DataError> {
+    let url = format!("{server_url}/api/audiobooks/backfill-chapters");
+    let response = with_bearer(http_client().post(&url)).send().await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(())
+}
+
 /// Web/SSR `get_ebooks` — server-function wrapper that proxies to `rpc_get_ebooks`.
 #[cfg(not(feature = "mobile"))]
 pub async fn get_ebooks(_server_url: &str) -> Result<EbookLibrary, DataError> {

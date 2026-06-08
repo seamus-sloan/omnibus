@@ -73,6 +73,13 @@ pub enum Task {
     /// fixed resource so concurrent clicks serialize; does not consume the
     /// scan semaphore.
     RefetchAuthorPhotos,
+    /// Backfill `file_chapters` rows for audiobooks that were indexed before
+    /// the chapter pipeline existed. Posted by the [`Task::ScanAudiobooks`]
+    /// handler on success so it always runs after the scan completes. Also
+    /// triggerable manually from the settings page. Keyed on
+    /// `audiobooks:{library_path}` (mutual exclusion with scans on the same
+    /// library). Does not consume the scan semaphore (lightweight IO).
+    BackfillChapters { library_path: String },
     /// Test-only synthetic task: sleeps `latency_ms` and invokes the
     /// optional `on_run` / `on_done` hooks, with `resource` and
     /// `route_through_scan_sem` letting a test exercise the keyed mutex and
@@ -99,6 +106,7 @@ impl Task {
                 book_id, profile, ..
             } => Some(format!("hls:{book_id}:{profile}")),
             Task::RefetchAuthorPhotos => Some("refetch-author-photos".into()),
+            Task::BackfillChapters { library_path } => Some(format!("audiobooks:{library_path}")),
             #[cfg(test)]
             Task::Test { resource, .. } => resource.clone(),
         }
@@ -112,6 +120,7 @@ impl Task {
             Task::ResolveAuthorPhoto { .. } => false,
             Task::HlsTranscode { .. } => false,
             Task::RefetchAuthorPhotos => false,
+            Task::BackfillChapters { .. } => false,
             #[cfg(test)]
             Task::Test {
                 route_through_scan_sem,
@@ -136,6 +145,7 @@ impl Task {
             Task::GenerateThumbs { .. } => TaskKind::GenerateThumbs,
             Task::ResolveAuthorPhoto { .. } => TaskKind::ResolveAuthorPhoto,
             Task::RefetchAuthorPhotos => TaskKind::RefetchAuthorPhotos,
+            Task::BackfillChapters { .. } => TaskKind::BackfillChapters,
             // Reuse Scan kind for UI display until a dedicated HLS progress
             // widget is added.
             Task::HlsTranscode { .. } => TaskKind::Scan,

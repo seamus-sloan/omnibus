@@ -32,6 +32,7 @@ mod books;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use audiobooks::insert_chapters;
 pub use audiobooks::{sync_audiobooks, AudiobookSyncPlan};
 pub use books::{replace_books, sync_books, SyncError, SyncPlan};
 
