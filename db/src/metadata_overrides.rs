@@ -367,19 +367,10 @@ pub(crate) async fn rebuild_fts_for_book(
     Ok(())
 }
 
-/// Rebuild `books_fts` rows for all books identified by `book_uuids` using at
-/// most **2 SQL write statements per chunk** regardless of how many UUIDs are
-/// supplied: one batched `DELETE … WHERE rowid IN (…)` then one multi-row
-/// `INSERT`. Chunks at 100 UUIDs to stay well under SQLite's 999 bind-
-/// parameter cap (each FTS row uses 7 params, so 100 rows = 700 params).
+/// Rebuild `books_fts` for all given UUIDs: one batched DELETE + INSERT per chunk of 100.
 ///
-/// The per-book merged metadata is fetched individually (N reads) before the
-/// writes so that overrides are applied correctly, but those reads do not hold
-/// the write lock.
-///
-/// UUIDs with no matching `books` row are silently skipped. Returns
-/// immediately without opening a write transaction if the resolved list is
-/// empty.
+/// Fetches merged metadata per-book (N reads, no write lock) before the write phase.
+/// UUIDs with no matching `books` row are silently skipped.
 pub(crate) async fn rebuild_fts_for_books_batch(
     pool: &SqlitePool,
     book_uuids: &[String],
@@ -387,19 +378,28 @@ pub(crate) async fn rebuild_fts_for_books_batch(
     if book_uuids.is_empty() {
         return Ok(());
     }
-
-    // Phase 1 (reads): resolve each UUID to a book_id and fetch its merged
-    // metadata. Skips any UUID that no longer maps to a live book row.
-    struct FtsRow {
-        book_id: i64,
-        title: String,
-        authors: String,
-        series: String,
-        tags: String,
-        description: String,
-        isbn: String,
+    let rows = resolve_fts_rows(pool, book_uuids).await?;
+    if rows.is_empty() {
+        return Ok(());
     }
+    write_fts_chunks(pool, &rows).await
+}
 
+struct FtsRow {
+    book_id: i64,
+    title: String,
+    authors: String,
+    series: String,
+    tags: String,
+    description: String,
+    isbn: String,
+}
+
+/// Resolve UUIDs to merged FTS data, skipping UUIDs with no live book row.
+async fn resolve_fts_rows(
+    pool: &SqlitePool,
+    book_uuids: &[String],
+) -> Result<Vec<FtsRow>, MetadataOverridesError> {
     let mut rows: Vec<FtsRow> = Vec::with_capacity(book_uuids.len());
     for uuid in book_uuids {
         let Some(book_id) = sqlx::query_scalar::<_, i64>("SELECT id FROM books WHERE uuid = ?")
@@ -439,20 +439,19 @@ pub(crate) async fn rebuild_fts_for_books_batch(
             isbn,
         });
     }
+    Ok(rows)
+}
 
-    if rows.is_empty() {
-        return Ok(());
-    }
-
-    // Phase 2 (writes): one DELETE + one multi-row INSERT per chunk of 100.
-    // 100 rows × 7 params = 700 bind parameters, safely under the 999 cap.
+/// Write FTS rows in chunks of 100: one DELETE + one multi-row INSERT per chunk.
+async fn write_fts_chunks(
+    pool: &SqlitePool,
+    rows: &[FtsRow],
+) -> Result<(), MetadataOverridesError> {
     let mut tx = pool.begin().await?;
     for chunk in rows.chunks(100) {
         let placeholders = std::iter::repeat_n("?", chunk.len())
             .collect::<Vec<_>>()
             .join(", ");
-
-        // One batched DELETE for the whole chunk.
         let delete_sql = format!("DELETE FROM books_fts WHERE rowid IN ({placeholders})");
         let mut q = sqlx::query(&delete_sql);
         for row in chunk {
@@ -460,7 +459,6 @@ pub(crate) async fn rebuild_fts_for_books_batch(
         }
         q.execute(&mut *tx).await?;
 
-        // One multi-row INSERT for the whole chunk.
         let value_placeholders = std::iter::repeat_n("(?, ?, ?, ?, ?, ?, ?)", chunk.len())
             .collect::<Vec<_>>()
             .join(", ");
