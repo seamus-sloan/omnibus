@@ -330,6 +330,21 @@ pub async fn rpc_refetch_author_photos() -> Result<()> {
     Ok(())
 }
 
+/// Admin: manually trigger chapter extraction for audiobooks missing
+/// chapters. Posts `Task::BackfillChapters` to the background worker and
+/// returns immediately.
+#[post("/api/rpc/backfill-chapters", pool: PoolExt, worker: WorkerExt, _admin: AdminUser)]
+pub async fn rpc_backfill_chapters() -> Result<()> {
+    let settings = db::get_settings(&pool.0).await?;
+    let Some(library_path) = settings.audiobook_library_path else {
+        return Err(ServerFnError::new("no audiobook library configured").into());
+    };
+    worker
+        .0
+        .post(omnibus_db::worker::Task::BackfillChapters { library_path });
+    Ok(())
+}
+
 /// Persist an author photo by URL. Admin-gated server-side (the
 /// `user.is_admin` check below mirrors `rpc_scan_author_photo`). The
 /// server fetches the URL via `db::author_photos::fetch_remote_image`,
