@@ -1,12 +1,21 @@
 import { expect, type APIRequestContext } from "@playwright/test";
 
-// A single shared test user. The server gates all `/api/*` routes behind
-// authentication and disables registration after the first user is created,
-// so every spec shares one seeded user. The globalSetup registers it (or logs
-// in if registration is closed) and writes the session cookie to
-// `.auth/storage.json`, which Playwright then loads for every test context.
-export const TEST_USERNAME = "playwright";
-export const TEST_PASSWORD = "playwright-test-pw-00";
+// When `OMNIBUS_DEV_SEED_USER` is set (local dev via `just dev-up`), the
+// seeded user is the first registered account and therefore admin. Playwright
+// must use those credentials so `seedLibrary` and other admin-gated calls
+// succeed. On CI where no seed user exists, the fallback `playwright` user
+// is the first registered (admin) user instead.
+function resolveTestCredentials(): { username: string; password: string } {
+  const seed = process.env.OMNIBUS_DEV_SEED_USER;
+  if (seed) {
+    const [username, password] = seed.split(":");
+    if (username && password) return { username, password };
+  }
+  return { username: "playwright", password: "playwright-test-pw-00" };
+}
+
+const { username: TEST_USERNAME, password: TEST_PASSWORD } = resolveTestCredentials();
+export { TEST_USERNAME, TEST_PASSWORD };
 
 /**
  * Ensure the shared test user is logged in on `request`. Registers the user

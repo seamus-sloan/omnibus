@@ -32,11 +32,10 @@ async fn api_get_series_returns_200_with_detail() {
     .await
     .unwrap();
 
-    let series_id: i64 =
-        sqlx::query_scalar("SELECT id FROM series WHERE name = 'Dune Chronicles'")
-            .fetch_one(&pool)
-            .await
-            .expect("series should exist");
+    let series_id: i64 = sqlx::query_scalar("SELECT id FROM series WHERE name = 'Dune Chronicles'")
+        .fetch_one(&pool)
+        .await
+        .expect("series should exist");
 
     let response = app
         .oneshot(get_with_bearer(&format!("/api/series/{series_id}"), &token))

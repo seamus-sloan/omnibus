@@ -119,6 +119,7 @@ Phase 6  Mobile                   (feature parity on native)
 - [F2.2 In-browser epub reader](2-2-epub-reader.md)
 - [F2.3 In-browser audiobook player](2-3-audiobook-player.md)
 - [F2.4 Reader experience](2-4-reader-experience.md)
+- [F2.4b Reader interactive features](2-4b-reader-interactive.md)
 
 ### Phase 3 — Personalization
 
