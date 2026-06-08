@@ -370,8 +370,7 @@ async fn api_post_cover_rejects_undetectable_format() {
     let token = auth_test_support::bearer_token(&pool, admin.id).await;
 
     // image/png header, but the body is not a real image.
-    let (content_type, body) =
-        build_cover_multipart("image/png", b"definitely not image bytes");
+    let (content_type, body) = build_cover_multipart("image/png", b"definitely not image bytes");
     let res = app
         .oneshot(
             Request::builder()

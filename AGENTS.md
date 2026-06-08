@@ -1,36 +1,36 @@
-# CLAUDE.md
+# AGENTS.md
 
-Guidance for Claude Code when working in this repo. This file is an index — detailed rules and recipes live in [.claude/](.claude/).
+Guidance for Codex when working in this repo. This file is an index — detailed rules and recipes live in [.Codex/](.Codex/).
 
 Omnibus is a self-hosted ebook/audiobook library (see [docs/roadmap/0-0-summary.md](docs/roadmap/0-0-summary.md)). The current counter app is a placeholder.
 
 ## Rules
 
-Numbered rules in [.claude/rules/](.claude/rules/), applied in order. Follow them mechanically.
+Numbered rules in [.Codex/rules/](.Codex/rules/), applied in order. Follow them mechanically.
 
-- [01-dev-environment.md](.claude/rules/01-dev-environment.md) — always work inside `nix develop`; env vars the shellHook sets.
-- [02-error-handling.md](.claude/rules/02-error-handling.md) — `thiserror` for predictable failures, `anyhow` for unpredictable ones and handlers.
-- [03-unit-testing.md](.claude/rules/03-unit-testing.md) — sibling `<mod>/tests.rs`, `test_support` per crate, happy + per-variant coverage.
-- [04-playwright.md](.claude/rules/04-playwright.md) — full E2E conventions (selectors, fixtures, `expectMutation`, error paths).
-- [05-rust-style.md](.claude/rules/05-rust-style.md) — Rust style guide: comments, function/file shape, errors, tests, mechanics. Long-form rationale in [docs/style-guide.md](docs/style-guide.md).
-- [98-keep-skills-fresh.md](.claude/rules/98-keep-skills-fresh.md) — update skills when the code they reference changes.
-- [99-end-of-session.md](.claude/rules/99-end-of-session.md) — end-of-session checklist (docs sync, fmt/clippy, coverage, line-count cap).
+- [01-dev-environment.md](.Codex/rules/01-dev-environment.md) — always work inside `nix develop`; env vars the shellHook sets.
+- [02-error-handling.md](.Codex/rules/02-error-handling.md) — `thiserror` for predictable failures, `anyhow` for unpredictable ones and handlers.
+- [03-unit-testing.md](.Codex/rules/03-unit-testing.md) — sibling `<mod>/tests.rs`, `test_support` per crate, happy + per-variant coverage.
+- [04-playwright.md](.Codex/rules/04-playwright.md) — full E2E conventions (selectors, fixtures, `expectMutation`, error paths).
+- [05-rust-style.md](.Codex/rules/05-rust-style.md) — Rust style guide: comments, function/file shape, errors, tests, mechanics. Long-form rationale in [docs/style-guide.md](docs/style-guide.md).
+- [98-keep-skills-fresh.md](.Codex/rules/98-keep-skills-fresh.md) — update skills when the code they reference changes.
+- [99-end-of-session.md](.Codex/rules/99-end-of-session.md) — end-of-session checklist (docs sync, fmt/clippy, coverage, line-count cap).
 
-**Line-count cap:** every file in `CLAUDE.md` / `.claude/` stays under ~200 lines. Split by topic when it grows past that — enforced by rule 99.
+**Line-count cap:** every file in `AGENTS.md` / `.Codex/` stays under ~200 lines. Split by topic when it grows past that — enforced by rule 99.
 
 ## Skills
 
-Auto-discoverable skills in [.claude/skills/](.claude/skills/) — Claude Code loads each `SKILL.md` automatically, and each is invokable via `/<name>` (e.g. `/ui-validate`).
+Auto-discoverable skills in [.Codex/skills/](.Codex/skills/) — Codex loads each `SKILL.md` automatically, and each is invokable via `/<name>` (e.g. `/ui-validate`).
 
-- [add-backend-route](.claude/skills/add-backend-route/SKILL.md) — adding an Axum page or API endpoint end-to-end.
-- [add-playwright-flow](.claude/skills/add-playwright-flow/SKILL.md) — adding a new E2E spec.
-- [ui-validate](.claude/skills/ui-validate/SKILL.md) — bring up a port-walking dev server, log in as the seeded admin, drive the browser, poll `/api/_health` for rebuild signal.
+- [add-backend-route](.Codex/skills/add-backend-route/SKILL.md) — adding an Axum page or API endpoint end-to-end.
+- [add-playwright-flow](.Codex/skills/add-playwright-flow/SKILL.md) — adding a new E2E spec.
+- [ui-validate](.Codex/skills/ui-validate/SKILL.md) — bring up a port-walking dev server, log in as the seeded admin, drive the browser, poll `/api/_health` for rebuild signal.
 
 ### Browser tools
 
-When you need to drive the running web app to verify a UI change, use **[`ui-validate`](.claude/skills/ui-validate/SKILL.md)**. It uses **Claude Preview** (`mcp__Claude_Preview__preview_*`) — each agent gets its own isolated headless Chromium, so parallel agents across workspaces never share a browser.
+When you need to drive the running web app to verify a UI change, use **[`ui-validate`](.Codex/skills/ui-validate/SKILL.md)**. It uses **Codex Preview** (`mcp__Claude_Preview__preview_*`) — each agent gets its own isolated headless Chromium, so parallel agents across workspaces never share a browser.
 
-Do not use Chrome DevTools MCP or Claude in Chrome for routine agent verification — both share a single browser instance (one at a time), so they break down with parallel agents. Use `qa-browser` only when you explicitly want to watch the agent work in your real browser for a one-off session.
+Do not use Chrome DevTools MCP or Codex in Chrome for routine agent verification — both share a single browser instance (one at a time), so they break down with parallel agents. Use `qa-browser` only when you explicitly want to watch the agent work in your real browser for a one-off session.
 
 ## Architecture
 
@@ -66,7 +66,7 @@ settings.rs         — Settings, LibrarySection, LibraryContents (library confi
 ebook/              — Contributor, Identifier, EbookMetadata (metadata.rs) + MetadataOverrides w/ validate + merge (overrides.rs); tests.rs sibling
 discovery.rs        — EbookLibrary, AuthorDetail, AuthorPhotoScanResult, SeriesDetail, TagWeight, AuthorSummary, SeriesSummary + PaletteResults / Palette*Hit (F1.5 grouped command-palette results)
 progress.rs         — F2.1 ProgressFormat, ProgressUpdate (+validate), ProgressRecord, SessionReport (+validate); tests.rs sibling
-audiobook.rs        — F2.3 ManifestPart, ChapterInfo, AudiobookManifest::{Direct(+chapters),Hls} (GET /api/audiobooks/:uuid/manifest payload)
+audiobook.rs        — F2.3 ManifestPart, AudiobookManifest::{Direct,Hls} (GET /api/audiobooks/:uuid/manifest payload)
 view_prefs.rs       — F1.3 ViewMode, SortKey, SortDir, ViewFilters, ViewPrefs (persisted landing-page sort/filter state)
 auth.rs             — UserSummary, LoginRequest, RegisterRequest, LoginResponse (LoginRequest/RegisterRequest deliberately do not derive Debug — they carry plaintext passwords)
 worker.rs           — TaskKind, ProgressState (Running/Done/Failed), TaskProgress, WorkerStatus (worker progress feed wire shape)
@@ -81,8 +81,8 @@ progress.rs         — F2.1 server-authoritative reading/listening position + b
 auth.rs             — F0.3 auth data layer (users/devices/sessions): Argon2id hash + verify with PHC rotation, password-policy validation, race-free first-user-admin (BEGIN IMMEDIATE), per-account lockout, SHA-256-hashed session tokens with absolute + idle expiry, `promote_to_admin` recovery hook. Pure SQL + hashing — cookies/axum live in `server/src/auth/`. `validate_session(pool, authorization, cookie_header) -> Result<(User,Session), SessionAuthError>` is the single consolidated cookie/bearer → live-session surface (axum-free, pure-string headers) that both HTTP auth extractors (`server::auth::extractor` + `omnibus_frontend::rpc`) delegate to so they can't drift. Schema: migrations/0004_auth.sql
 scanner.rs          — library directory scanning
 ebook.rs            — EPUB OPF metadata + cover extraction; sidecar-first cover with opt-in materialization (ScanOptions)
-audiobook.rs        — F2.3 audiobook metadata extraction via `lofty` (m4b/m4a/mp3): title/artist/album/duration + embedded artwork. Phase A.5 `group_into_books` groups per-file stat entries into one `AudiobookGroup` per book (folder-of-mp3s = one group). Phase B `parse_groups` reads ID3 tags for every part, sorts by (track, filename), and emits `IndexedAudiobook` rows for `sync::sync_audiobooks`. Submodule `audiobook::codec` (#339) hosts `PlaybackMode`, `classify_filenames`, `mime_for_filename` — the gate that decides direct-play vs HLS for the new manifest endpoint. Submodule `audiobook::chapters` extracts Nero `chpl` atoms (M4B/M4A) and ID3v2 CHAP frames (MP3) into `RawChapter` structs; called during Phase B parse.
-hls.rs              — F2.3 HLS transcode cache (fallback path after #339): `resolve_audiobook` (only admits books whose `book_files.format` is M4B/M4A/MP3), `get_parts`, `get_chapters` (file_chapters query for manifest), `build_manifest` (VOD m3u8 from stored durations), `transcode_book` (ffmpeg concat→AAC-LC 64 kbps mono, 10 s segments), `evict_if_over_cap` (FIFO-by-mtime). Only invoked for non-natively-playable parts (a flac mixed into an mp3 folder, etc.); m4b/m4a/mp3 direct-play via `/api/audiobooks/:uuid/parts/:ordinal`. Reads `OMNIBUS_DATA_DIR`, `OMNIBUS_HLS_CAP_BYTES`, `OMNIBUS_FFMPEG_PATH`, `OMNIBUS_HLS_TRANSCODE_TIMEOUT_SECS` — see `.env.example` for defaults.
+audiobook.rs        — F2.3 audiobook metadata extraction via `lofty` (m4b/m4a/mp3): title/artist/album/duration + embedded artwork. Phase A.5 `group_into_books` groups per-file stat entries into one `AudiobookGroup` per book (folder-of-mp3s = one group). Phase B `parse_groups` reads ID3 tags for every part, sorts by (track, filename), and emits `IndexedAudiobook` rows for `sync::sync_audiobooks`. Submodule `audiobook::codec` (#339) hosts `PlaybackMode`, `classify_filenames`, `mime_for_filename` — the gate that decides direct-play vs HLS for the new manifest endpoint.
+hls.rs              — F2.3 HLS transcode cache (fallback path after #339): `resolve_audiobook` (only admits books whose `book_files.format` is M4B/M4A/MP3), `get_parts`, `build_manifest` (VOD m3u8 from stored durations), `transcode_book` (ffmpeg concat→AAC-LC 64 kbps mono, 10 s segments), `evict_if_over_cap` (FIFO-by-mtime). Only invoked for non-natively-playable parts (a flac mixed into an mp3 folder, etc.); m4b/m4a/mp3 direct-play via `/api/audiobooks/:uuid/parts/:ordinal`. Reads `OMNIBUS_DATA_DIR`, `OMNIBUS_HLS_CAP_BYTES`, `OMNIBUS_FFMPEG_PATH`, `OMNIBUS_HLS_TRANSCODE_TIMEOUT_SECS` — see `.env.example` for defaults.
 thumbs.rs           — F1.2 thumbnail pipeline: decode cover → resize to Sm/Md/Lg (2:3) → atomic per-(book,size) WebP writes under OMNIBUS_THUMBS_DIR; FIFO-by-mtime eviction once total cache exceeds OMNIBUS_THUMBS_CAP_BYTES (default 5 GiB). Backs backend.rs's cover-to-WebP serving path
 indexer.rs          — scan → DB indexing, staleness checks (is_stale + reindex); reindex opts into materialize_sidecars. F2.3 `reindex_audiobooks` uses Phase A.5 group_into_books + Phase B parse_groups + sync_audiobooks (writes book_file_parts rows).
 library_layout.rs   — F0.6 canonical layout: slugify, canonical_path, sidecar_cover_for, allocate_canonical_path (collision suffix)
@@ -102,7 +102,7 @@ view_prefs.rs       — F1.3 per-library ViewPrefs/ViewFilters persistence for t
 reader_progress.rs  — F2.2 reading-position **cache-aside layer** for the F2.1 progress-sync endpoint: web → localStorage keyed by uuid, mobile → in-memory map, SSR → no-op. The reader reads this sync for instant first-paint then reconciles against `GET /api/progress/{uuid}` (server wins on success), and writes here AND fire-and-forget POSTs to `/api/rpc/progress` on every page turn.
 audiobook_progress.rs — F2.3 listening-position cache-aside layer, audio analogue of `reader_progress`. Stores seconds (float) keyed by uuid (`omn.listening::{uuid}`), plus per-book playback-rate preference (`omn.listening::rate::{uuid}`). Same web/mobile/SSR split; the listen page reads the local value for instant first-paint, reconciles against `GET /api/progress/{uuid}?format=audio`, and writes locally + fire-and-forget POSTs to `/api/rpc/progress` on every 5 s of playback plus on pause.
 rpc.rs              — #[get]/#[post] server functions (mounted by dioxus::server::router); server bodies call into omnibus_db
-pages/{landing,settings,book_detail,metadata_edit,reader,listen,auth,author,authors_index,series,series_index,tag_cloud,search}.rs  — auth.rs hosts LoginPage + RegisterPage. reader.rs is the F2.4 immersive full-screen EPUB reader at /read/:uuid (no app nav; frosted-glass top/bottom chrome, Aa typography panel, circular page-turn buttons + ArrowLeft/ArrowRight keyboard nav, bottom bar with real page numbers via `book.locations.generate(1024)` + chapter data from `book.navigation.toc`, 2px progress ribbon; loads the vendored epub.js runtime, drives window.OmnibusReader via dioxus::document::eval, persists position via reader_progress; web-only interop, chrome compiles on every target). CSS lives in `atrium.css` under `.rd-*` classes. Vendored reader runtime lives at frontend/assets/vendor/{jszip.min.js,epub.min.js,epub-reader-glue.js} and is loaded only on the reader page. listen.rs is the F2.3 immersive audiobook player at /listen/:uuid — plain HTML5 `<audio>` element (no vendored library), inline `dioxus::document::eval` bootstrap exposes `window.OmnibusAudio` (play/pause/seek/skip/setRate plus `initDirect`/`initHls`). Boots by fetching `/api/audiobooks/:uuid/manifest` and branching: `mode:"direct"` chains Range-served per-part URLs (m4b/m4a/mp3, instant) with `ended`-driven advance; `mode:"hls"` falls back to status-polling + hls.js attach. Surfaces `state:"failed"` from the /status endpoint as a real failure overlay (Bug 4 of #338). Persists position via audiobook_progress + the F2.1 endpoint. Split into submodules: `bootstrap.rs` (web JS interop), `controls.rs` (AudioElement/Scrubber/TransportButtons/Toolbar), `stage.rs` (two-column layout), `chapter_map.rs` (segmented chapter progress bar replacing the range scrubber — flex segments sized by duration, accent fill for played portions, click-to-seek), `speed_panel.rs` (frosted-glass speed overlay with preset grid + fine-tune slider), `sleep_panel.rs` (sleep-timer overlay with duration presets), `chapters_drawer.rs` (right-side chapters drawer with played/current/upcoming row states, click-to-seek), `bookmarks_drawer.rs` (right-side bookmarks drawer, empty state), `overlays.rs` (failed/preparing states), `helpers.rs` (format_hms, audio_call), `ready_player.rs` (post-load orchestrator; owns chapter tracking via use_memo + chapter skip handlers; mounts the app-wide TopNav instead of a custom bar). CSS lives in `atrium.css` under `.lp-*` classes. Landing is the primary Atrium consumer (cover grid + power-user table) and the source of format-faceted filtering (ViewFilters.formats in shared). metadata_edit.rs is the F5.1 single-book edit form at /books/:id/edit. Discovery pages (author, series, tag_cloud) are F1.8. authors_index.rs and series_index.rs are the F1.12 `/authors` and `/series` browse-all index surfaces. search.rs is the full-page /search/:query results view that the F1.5 palette routes into when the user presses Enter without arrow-key navigation, or when a Tag row is selected.
+pages/{landing,settings,book_detail,metadata_edit,reader,listen,auth,author,authors_index,series,series_index,tag_cloud,search}.rs  — auth.rs hosts LoginPage + RegisterPage. reader.rs is the F2.4 immersive full-screen EPUB reader at /read/:uuid (no app nav; frosted-glass top/bottom chrome, Aa typography panel, circular page-turn buttons + ArrowLeft/ArrowRight keyboard nav, bottom bar with real page numbers via `book.locations.generate(1024)` + chapter data from `book.navigation.toc`, 2px progress ribbon; loads the vendored epub.js runtime, drives window.OmnibusReader via dioxus::document::eval, persists position via reader_progress; web-only interop, chrome compiles on every target). CSS lives in `atrium.css` under `.rd-*` classes. Vendored reader runtime lives at frontend/assets/vendor/{jszip.min.js,epub.min.js,epub-reader-glue.js} and is loaded only on the reader page. listen.rs is the F2.3 immersive audiobook player at /listen/:uuid — plain HTML5 `<audio>` element (no vendored library), inline `dioxus::document::eval` bootstrap exposes `window.OmnibusAudio` (play/pause/seek/skip/setRate plus `initDirect`/`initHls`). Boots by fetching `/api/audiobooks/:uuid/manifest` and branching: `mode:"direct"` chains Range-served per-part URLs (m4b/m4a/mp3, instant) with `ended`-driven advance; `mode:"hls"` falls back to status-polling + hls.js attach. Surfaces `state:"failed"` from the /status endpoint as a real failure overlay (Bug 4 of #338). Persists position via audiobook_progress + the F2.1 endpoint. Split into submodules: `bootstrap.rs` (web JS interop), `controls.rs` (AudioElement/Scrubber/TransportButtons/Toolbar), `stage.rs` (two-column layout), `speed_panel.rs` (frosted-glass speed overlay with preset grid + fine-tune slider), `sleep_panel.rs` (sleep-timer overlay with duration presets), `chapters_drawer.rs` (right-side chapters drawer, empty state), `bookmarks_drawer.rs` (right-side bookmarks drawer, empty state), `overlays.rs` (failed/preparing states), `helpers.rs` (format_hms, audio_call), `ready_player.rs` (post-load orchestrator; mounts the app-wide TopNav instead of a custom bar). CSS lives in `atrium.css` under `.lp-*` classes. Landing is the primary Atrium consumer (cover grid + power-user table) and the source of format-faceted filtering (ViewFilters.formats in shared). metadata_edit.rs is the F5.1 single-book edit form at /books/:id/edit. Discovery pages (author, series, tag_cloud) are F1.8. authors_index.rs and series_index.rs are the F1.12 `/authors` and `/series` browse-all index surfaces. search.rs is the full-page /search/:query results view that the F1.5 palette routes into when the user presses Enter without arrow-key navigation, or when a Tag row is selected.
 components/{top_nav,bottom_nav}.rs  — feature = web / mobile respectively
 components/atrium.rs  — F1.7 design-system primitives (AtriumRoot, Cover); the app-wide `Theme` enum (Dark/Light/Sepia) + init_theme/persist_theme; CSS at frontend/assets/atrium.css. Live theme switcher is UmThemeSeg in user_menu.rs.
 components/search_palette.rs — F1.5 command-palette search overlay (⌘K trigger, grouped FTS5 results, keyboard nav); web-only (not(mobile))
@@ -165,10 +165,10 @@ just serve-pc                                               # process-compose
 
 # Idempotent dev-server bring-up — port-walks from $PORT (default 3000)
 # up to PORT+20, reuses an existing omnibus server if found, seeds the
-# admin user from $OMNIBUS_DEV_SEED_USER, writes .claude/runtime/{port,env.sh}.
+# admin user from $OMNIBUS_DEV_SEED_USER, writes .Codex/runtime/{port,env.sh}.
 # Used by the `ui-validate` skill; safe to re-run.
 just dev-up
-source .claude/runtime/env.sh                               # picks up OMNIBUS_PORT + PLAYWRIGHT_BASE_URL
+source .Codex/runtime/env.sh                               # picks up OMNIBUS_PORT + PLAYWRIGHT_BASE_URL
 
 # Fullstack dev (serves SSR + WASM hydration at http://localhost:8080 by default)
 dx serve --platform web -p omnibus

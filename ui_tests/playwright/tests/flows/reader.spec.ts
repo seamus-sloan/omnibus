@@ -20,19 +20,26 @@ test("renders the reader layout", async ({ page, request }) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await gotoReady(page, `/read/${uuid}`);
 
-  // The immersive reader mounts a viewer container plus a control bar. We
+  // The immersive reader mounts a viewer container plus chrome bars. We
   // assert only on the chrome — never on rendered EPUB text — because the
   // epub.js render is JS-engine-driven and may not paint headlessly (and the
   // book file may be absent in some seed states). The container/controls are
   // SSR markup and are robust to that.
   await expect(page.getByTestId("reader-viewer")).toBeVisible();
 
-  // Control-bar affordances: back, font sizing, and page turn.
+  // Top chrome: back button, Aa display settings, bookmark.
   await expect(page.getByTestId("reader-back")).toBeVisible();
-  await expect(page.getByTestId("reader-font-decrease")).toBeVisible();
-  await expect(page.getByTestId("reader-font-increase")).toBeVisible();
+  await expect(page.getByTestId("reader-aa")).toBeVisible();
+  await expect(page.getByTestId("reader-bookmark")).toBeVisible();
+
+  // Page-turn gutters.
   await expect(page.getByTestId("reader-prev")).toBeVisible();
   await expect(page.getByTestId("reader-next")).toBeVisible();
+
+  // Font controls are inside the Aa panel — open it first.
+  await page.getByTestId("reader-aa").click();
+  await expect(page.getByTestId("reader-font-decrease")).toBeVisible();
+  await expect(page.getByTestId("reader-font-increase")).toBeVisible();
 });
 
 test("opens the reader from the book detail Read action", async ({ page, request }) => {

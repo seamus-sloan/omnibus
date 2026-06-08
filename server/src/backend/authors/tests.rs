@@ -37,11 +37,10 @@ async fn api_get_author_returns_200_with_detail() {
     .unwrap();
 
     // Look up the author id from the DB.
-    let author_id: i64 =
-        sqlx::query_scalar("SELECT id FROM authors WHERE name = 'Jane Austen'")
-            .fetch_one(&pool)
-            .await
-            .expect("author should exist");
+    let author_id: i64 = sqlx::query_scalar("SELECT id FROM authors WHERE name = 'Jane Austen'")
+        .fetch_one(&pool)
+        .await
+        .expect("author should exist");
 
     let response = app
         .oneshot(get_with_bearer(

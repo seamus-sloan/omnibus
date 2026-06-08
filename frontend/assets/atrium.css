@@ -3590,3 +3590,92 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .identifier-list dt { color: rgba(255,255,255,.5); font-family: monospace; }
 .identifier-list dd { margin: 0; font-family: monospace; }
 .ratings-slot, .suggestions-slot { min-height: 1px; }
+
+/* ── Reader chrome (F2.4) ─────────────────────────────────────── */
+.rd-surface { position: relative; height: 100vh; width: 100%; overflow: hidden;
+  background: var(--bg-0); color: var(--ink-0); font-family: var(--sans); }
+.rd-top, .rd-bottom { position: absolute; left: 0; right: 0; z-index: 6;
+  display: flex; align-items: center; gap: 16px; padding: 0 26px;
+  background: color-mix(in oklch, var(--bg-0) 80%, transparent);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.rd-top { top: 0; height: 60px; border-bottom: 1px solid var(--line-2); }
+.rd-bottom { bottom: 0; height: 54px; border-top: 1px solid var(--line-2);
+  font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.rd-tool { display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  height: 34px; min-width: 34px; padding: 0 8px; border-radius: 9px; cursor: pointer;
+  background: transparent; border: 1px solid transparent; color: var(--ink-2);
+  font-family: var(--sans); font-size: 13px; transition: .14s; }
+.rd-tool:hover { color: var(--ink-0); background: var(--bg-1); }
+.rd-tool.on { color: var(--ink-0); background: var(--bg-2); border-color: var(--line-2); }
+.rd-tool .rd-badge { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.rd-aa { font-family: var(--serif); font-size: 19px; line-height: 1; padding-bottom: 2px; }
+.rd-stage { position: absolute; inset: 0; overflow: hidden; }
+.rd-viewer { position: absolute; inset: 0; }
+.rd-turn { position: absolute; top: 50%; transform: translateY(-50%); z-index: 5;
+  width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center;
+  background: color-mix(in oklch, var(--bg-1) 70%, transparent);
+  border: 1px solid var(--line-2); color: var(--ink-2); cursor: pointer;
+  backdrop-filter: blur(6px); transition: .16s; }
+.rd-turn:hover { color: var(--ink-0); background: var(--bg-2); border-color: var(--line); }
+.rd-turn-l { left: 22px; }
+.rd-turn-r { right: 22px; }
+.rd-ribbon { position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
+  background: var(--bg-2); z-index: 7; }
+.rd-ribbon > i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+.rd-overlay { position: absolute; inset: 0; z-index: 8; display: flex;
+  align-items: center; justify-content: center; color: var(--ink-2); background: var(--bg-0); }
+.rd-wash { position: absolute; top: 0; left: 0; right: 0; height: 200px; z-index: 0;
+  background: radial-gradient(70% 120% at 50% -20%,
+    color-mix(in oklch, var(--accent) 16%, transparent), transparent 70%);
+  pointer-events: none; }
+.rd-title-center { flex: 1; text-align: center; min-width: 0; overflow: hidden;
+  white-space: nowrap; text-overflow: ellipsis; }
+.rd-title-book { font-family: var(--serif); font-style: italic; font-size: 16px;
+  color: var(--ink-0); }
+.rd-title-sep { font-family: var(--mono); font-size: 11px; color: var(--ink-3);
+  margin: 0 10px; }
+.rd-title-ch { font-size: 13px; color: var(--ink-2); }
+
+/* Aa typography panel */
+.rd-aa-panel { position: absolute; top: 66px; right: 26px; width: 320px; z-index: 16;
+  background: var(--bg-1); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: 0 24px 60px -20px rgba(0,0,0,.7); padding: 18px; }
+.rd-aa-panel::before { content: ''; position: absolute; top: -7px; right: 96px;
+  width: 13px; height: 13px; background: var(--bg-1);
+  border-left: 1px solid var(--line); border-top: 1px solid var(--line);
+  transform: rotate(45deg); }
+.rd-aa-row { margin-bottom: 16px; }
+.rd-aa-label { font-family: var(--mono); font-size: 10px; color: var(--ink-3);
+  margin-bottom: 8px; letter-spacing: .08em; text-transform: uppercase; }
+.rd-seg { display: flex; gap: 4px; background: var(--bg-2); padding: 3px; border-radius: 9px; }
+.rd-seg > button { flex: 1; height: 30px; border: 0; border-radius: 7px; cursor: pointer;
+  font-family: var(--sans); font-size: 12.5px; background: transparent; color: var(--ink-2); }
+.rd-seg > button.on { background: var(--bg-0); color: var(--ink-0);
+  box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+.rd-typeface-chip { flex: 1; display: flex; flex-direction: column; align-items: center;
+  gap: 2px; padding: 8px 4px; border-radius: 9px; cursor: pointer;
+  border: 1px solid var(--line-2); background: transparent; color: var(--ink-2);
+  transition: .14s; }
+.rd-typeface-chip:hover { border-color: var(--line); color: var(--ink-1); }
+.rd-typeface-chip.on { border-color: var(--accent); color: var(--ink-0); }
+.rd-typeface-chip .preview { font-size: 20px; font-style: italic; }
+.rd-typeface-chip .name { font-family: var(--sans); font-size: 10px; }
+.rd-size-track { flex: 1; height: 4px; background: var(--bg-2); border-radius: 999px;
+  position: relative; }
+.rd-size-fill { position: absolute; left: 0; top: 0; bottom: 0;
+  background: var(--accent); border-radius: 999px; }
+.rd-size-thumb { position: absolute; top: 50%; transform: translate(-50%,-50%);
+  width: 16px; height: 16px; border-radius: 50%; background: var(--ink-0);
+  box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+.rd-toggle-row { display: flex; align-items: center; justify-content: space-between;
+  padding-top: 14px; border-top: 1px solid var(--line-2); }
+.rd-toggle-track { width: 40px; height: 23px; border-radius: 999px; background: var(--bg-3);
+  position: relative; cursor: pointer; transition: background .2s; }
+.rd-toggle-track.on { background: var(--accent); }
+.rd-toggle-knob { position: absolute; top: 2.5px; width: 18px; height: 18px;
+  border-radius: 50%; background: var(--ink-2); transition: left .2s; }
+.rd-toggle-track:not(.on) .rd-toggle-knob { left: 2.5px; }
+.rd-toggle-track.on .rd-toggle-knob { left: 19.5px; background: var(--accent-ink); }
+.rd-scrim { position: absolute; inset: 0; z-index: 8;
+  background: color-mix(in oklch, var(--bg-0) 55%, transparent);
+  backdrop-filter: blur(1.5px); }
