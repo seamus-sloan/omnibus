@@ -1,6 +1,8 @@
 //! Multi-file audiobook sync. Mirrors `sync_books` but writes
 //! `book_file_parts` rows in addition to `books` and `book_files`.
 
+use std::collections::HashMap;
+
 use sqlx::{SqlitePool, Transaction};
 
 use crate::covers::delete_cover_files_for;
@@ -68,51 +70,64 @@ pub async fn sync_audiobooks(
 
     // --- Changed ----------------------------------------------------------
     let mut changed_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
-    for b in &plan.changed_books {
-        let Some(book_id) =
-            sqlx::query_scalar::<_, i64>("SELECT id FROM books WHERE library_id = ? AND uuid = ?")
-                .bind(library_id)
-                .bind(&b.uuid)
-                .fetch_optional(&mut *tx)
-                .await?
-        else {
-            // TOCTOU: promote to New insert.
-            let inserted = insert_audiobook_row(&mut tx, library_id, b).await?;
-            insert_audiobook_parts(&mut tx, inserted.book_file_id, &b.parts).await?;
-            insert_chapters(&mut tx, inserted.book_file_id, &b.chapters, &b.parts).await?;
-            insert_audiobook_author_link(&mut tx, inserted.book_id, b.creator_name.as_deref())
+    if !plan.changed_books.is_empty() {
+        // Pre-fetch all book ids in one batch query (chunked at 499 to stay
+        // under SQLite's 999-parameter cap). Audiobook UUIDs come from
+        // `b.uuid` directly — no stable_uuid call needed.
+        let all_uuids: Vec<String> = plan.changed_books.iter().map(|b| b.uuid.clone()).collect();
+        let mut id_map: HashMap<String, i64> = HashMap::new();
+        for chunk in all_uuids.chunks(499) {
+            let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+            let id_sql = format!(
+                "SELECT uuid, id FROM books WHERE library_id = ? AND uuid IN ({placeholders})"
+            );
+            let mut q = sqlx::query_as::<_, (String, i64)>(&id_sql).bind(library_id);
+            for uuid in chunk {
+                q = q.bind(uuid);
+            }
+            id_map.extend(q.fetch_all(&mut *tx).await?);
+        }
+
+        for b in &plan.changed_books {
+            let Some(&book_id) = id_map.get(&b.uuid) else {
+                // TOCTOU: promote to New insert.
+                let inserted = insert_audiobook_row(&mut tx, library_id, b).await?;
+                insert_audiobook_parts(&mut tx, inserted.book_file_id, &b.parts).await?;
+                insert_chapters(&mut tx, inserted.book_file_id, &b.chapters, &b.parts).await?;
+                insert_audiobook_author_link(&mut tx, inserted.book_id, b.creator_name.as_deref())
+                    .await?;
+                insert_audiobook_fts_row(&mut tx, inserted.book_id, b).await?;
+                if let Some((mime, bytes)) = &b.cover {
+                    changed_covers.push((b.uuid.clone(), mime.clone(), bytes.clone()));
+                }
+                continue;
+            };
+
+            update_audiobook_row(&mut tx, book_id, b).await?;
+            // Wipe dependent rows; ON DELETE CASCADE handles book_file_parts when
+            // book_files is deleted.
+            sqlx::query("DELETE FROM books_authors_link WHERE book = ?")
+                .bind(book_id)
+                .execute(&mut *tx)
                 .await?;
-            insert_audiobook_fts_row(&mut tx, inserted.book_id, b).await?;
+            sqlx::query("DELETE FROM book_files WHERE book_id = ?")
+                .bind(book_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM books_fts WHERE rowid = ?")
+                .bind(book_id)
+                .execute(&mut *tx)
+                .await?;
+
+            let book_file_id = insert_audiobook_file_row(&mut tx, book_id, b).await?;
+            insert_audiobook_parts(&mut tx, book_file_id, &b.parts).await?;
+            insert_chapters(&mut tx, book_file_id, &b.chapters, &b.parts).await?;
+            insert_audiobook_author_link(&mut tx, book_id, b.creator_name.as_deref()).await?;
+            insert_audiobook_fts_row(&mut tx, book_id, b).await?;
+
             if let Some((mime, bytes)) = &b.cover {
                 changed_covers.push((b.uuid.clone(), mime.clone(), bytes.clone()));
             }
-            continue;
-        };
-
-        update_audiobook_row(&mut tx, book_id, b).await?;
-        // Wipe dependent rows; ON DELETE CASCADE handles book_file_parts when
-        // book_files is deleted.
-        sqlx::query("DELETE FROM books_authors_link WHERE book = ?")
-            .bind(book_id)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("DELETE FROM book_files WHERE book_id = ?")
-            .bind(book_id)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("DELETE FROM books_fts WHERE rowid = ?")
-            .bind(book_id)
-            .execute(&mut *tx)
-            .await?;
-
-        let book_file_id = insert_audiobook_file_row(&mut tx, book_id, b).await?;
-        insert_audiobook_parts(&mut tx, book_file_id, &b.parts).await?;
-        insert_chapters(&mut tx, book_file_id, &b.chapters, &b.parts).await?;
-        insert_audiobook_author_link(&mut tx, book_id, b.creator_name.as_deref()).await?;
-        insert_audiobook_fts_row(&mut tx, book_id, b).await?;
-
-        if let Some((mime, bytes)) = &b.cover {
-            changed_covers.push((b.uuid.clone(), mime.clone(), bytes.clone()));
         }
     }
 
