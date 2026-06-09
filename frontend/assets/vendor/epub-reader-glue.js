@@ -6,8 +6,9 @@
  *   - `JSZip` (jszip@3.10.1)   — vendored at ./jszip.min.js
  *
  * The Rust reader page sets two optional callbacks on `window`:
- *   - `__omnibusOnRelocate(cfi)` — invoked (debounced) on every epub.js
- *     "relocated" event so the position can be persisted.
+ *   - `__omnibusOnRelocate(json)` — invoked (debounced) on every epub.js
+ *     "relocated" event with a JSON string containing CFI + page/chapter
+ *     data so the Rust side can update the bottom bar and persist position.
  *   - `__omnibusOnStatus(state)` — invoked with "ready" once the first page
  *     paints, or "error" if the book fails to open/render. Lets the Rust side
  *     drive a loading/error UI instead of leaving a blank viewer.
@@ -28,9 +29,9 @@
   var book = null;
   var rendition = null;
   var relocateTimer = null;
+  var locationsReady = false;
+  var tocFlat = [];
 
-  // Report a lifecycle state to the Rust side if it registered a handler.
-  // Defensive: a throwing/absent callback must never break rendering.
   function emitStatus(state) {
     if (typeof window.__omnibusOnStatus === "function") {
       try {
@@ -46,6 +47,8 @@
       clearTimeout(relocateTimer);
       relocateTimer = null;
     }
+    locationsReady = false;
+    tocFlat = [];
     if (rendition) {
       try {
         rendition.destroy();
@@ -64,6 +67,47 @@
     }
   }
 
+  function flattenToc(items, out) {
+    if (!items) return;
+    for (var i = 0; i < items.length; i++) {
+      out.push(items[i]);
+      if (items[i].subitems) flattenToc(items[i].subitems, out);
+    }
+  }
+
+  function findChapter(href) {
+    if (!tocFlat.length || !href) return null;
+    var clean = href.split("#")[0];
+    for (var i = tocFlat.length - 1; i >= 0; i--) {
+      var tocHref = (tocFlat[i].href || "").split("#")[0];
+      if (tocHref === clean) {
+        return { index: i + 1, total: tocFlat.length, title: tocFlat[i].label.trim() };
+      }
+    }
+    return null;
+  }
+
+  function buildRelocateData(location) {
+    var cfi = location && location.start ? location.start.cfi : undefined;
+    var pct = location && location.start ? Math.round((location.start.percentage || 0) * 100) : 0;
+    var page = 0;
+    var totalPages = 0;
+    if (locationsReady && book && book.locations) {
+      page = book.locations.locationFromCfi(cfi) || 0;
+      totalPages = book.locations.total || 0;
+    }
+    var ch = location && location.start ? findChapter(location.start.href) : null;
+    return {
+      cfi: cfi,
+      page: page + 1,
+      totalPages: totalPages,
+      pct: pct,
+      chapter: ch ? ch.index : 0,
+      totalChapters: ch ? ch.total : tocFlat.length,
+      chapterTitle: ch ? ch.title : "",
+    };
+  }
+
   function init(elementId, fileUrl, opts) {
     opts = opts || {};
 
@@ -72,14 +116,9 @@
       throw new Error("OmnibusReader.init: global `ePub` is not available");
     }
 
-    // Re-init guard: tear down any prior rendition/book first.
     teardown();
 
     try {
-      // `openAs: "epub"` is required: epub.js otherwise sniffs the URL's file
-      // extension to decide how to open, and our route (/api/ebooks/:uuid/file)
-      // has no `.epub` extension — without this it never fetches+unzips the
-      // binary, so book.ready hangs and nothing renders.
       book = ePub(fileUrl, { openAs: "epub" });
       rendition = book.renderTo(elementId, {
         width: "100%",
@@ -90,13 +129,13 @@
       });
 
       rendition.themes.register("light", {
-        body: { background: "#ffffff", color: "#141414" },
+        body: { background: "#fcfbfa", color: "#2a2725" },
       });
       rendition.themes.register("dark", {
-        body: { background: "#0f1115", color: "#e6e6e6" },
+        body: { background: "#201e1b", color: "#f5f3f0" },
       });
       rendition.themes.register("sepia", {
-        body: { background: "#f4ecd8", color: "#5b4636" },
+        body: { background: "#ede4d0", color: "#3b3029" },
       });
       rendition.themes.select(opts.theme || "dark");
 
@@ -108,11 +147,26 @@
       return;
     }
 
-    // A bad fetch (404/expired session) or a malformed EPUB rejects here;
-    // surface it instead of spinning on a blank viewer forever.
-    book.ready.catch(function () {
-      emitStatus("error");
-    });
+    book.ready
+      .then(function () {
+        tocFlat = [];
+        if (book.navigation && book.navigation.toc) {
+          flattenToc(book.navigation.toc, tocFlat);
+        }
+        return book.locations.generate(1024);
+      })
+      .then(function () {
+        locationsReady = true;
+        // Re-emit current location now that locations are resolved so the
+        // Rust side gets real page numbers on first load.
+        if (rendition && rendition.location) {
+          emitRelocate(rendition.location);
+        }
+      })
+      .catch(function () {
+        emitStatus("error");
+      });
+
     rendition.display(opts.cfi || undefined).then(
       function () {
         emitStatus("ready");
@@ -128,13 +182,16 @@
       }
       relocateTimer = setTimeout(function () {
         relocateTimer = null;
-        var cfi =
-          location && location.start ? location.start.cfi : undefined;
-        if (cfi && typeof window.__omnibusOnRelocate === "function") {
-          window.__omnibusOnRelocate(cfi);
-        }
+        emitRelocate(location);
       }, 400);
     });
+  }
+
+  function emitRelocate(location) {
+    var data = buildRelocateData(location);
+    if (data.cfi && typeof window.__omnibusOnRelocate === "function") {
+      window.__omnibusOnRelocate(JSON.stringify(data));
+    }
   }
 
   function next() {

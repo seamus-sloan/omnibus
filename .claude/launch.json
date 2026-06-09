@@ -4,8 +4,8 @@
     {
       "name": "omnibus-fullstack",
       "runtimeExecutable": "nix",
-      "runtimeArgs": ["develop", ".#web", "--command", "bash", "-c", "PORT=3010 OMNIBUS_PUBLIC_ORIGIN=http://localhost:3010,http://127.0.0.1:3010 exec dx serve --platform web --fullstack --port 3010 --package omnibus"],
-      "port": 3010
+      "runtimeArgs": ["develop", ".#web", "--command", "bash", "-c", "PORT=3030 OMNIBUS_PUBLIC_ORIGIN=http://localhost:3030,http://127.0.0.1:3030 exec dx serve --platform web --fullstack --port 3030 --package omnibus"],
+      "port": 3030
     }
   ]
 }
