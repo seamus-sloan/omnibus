@@ -13,8 +13,9 @@ const PRESETS: &[&str] = &[
 ];
 
 // Pure presentational shell — no branching logic to unit-test.
-// Active/inactive state is owned by `ready_player` (already tested).
-// Covered by Playwright at ui_tests/playwright/tests/flows/.
+// Open/close state is owned by `ready_player`. No Playwright spec opens
+// this panel today (listen.spec.ts only asserts the player chrome and
+// overlays); smoke coverage of the preset grid is tracked as follow-up.
 
 /// Frosted-glass sleep-timer panel with duration presets.
 #[component]

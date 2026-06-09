@@ -8,9 +8,10 @@
 use dioxus::prelude::*;
 
 // Pure presentational — no branching logic to unit-test here.
-// Overlay visibility is controlled by the booleans in `ready_player` (already
-// tested) and rendered output is covered by Playwright at
-// ui_tests/playwright/tests/flows/.
+// Overlay visibility is gated by booleans owned in `ready_player`; rendered
+// output is exercised by ui_tests/playwright/tests/flows/listen.spec.ts
+// (preparing + failed states). Unit coverage of the boolean wiring itself
+// would need component-render infra and is intentionally not in scope.
 
 /// Terminal failure overlay shown when the HLS `.failed` marker is present
 /// or the manifest fetch failed outright.

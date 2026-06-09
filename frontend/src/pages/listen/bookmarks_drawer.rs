@@ -9,7 +9,8 @@
 use dioxus::prelude::*;
 
 // Pure presentational shell — no branching logic to unit-test.
-// Covered by Playwright at ui_tests/playwright/tests/flows/.
+// No Playwright spec opens this drawer today; smoke coverage of the
+// empty state will ship alongside the bookmarks-persistence backend.
 
 /// Bookmarks drawer — empty state until bookmark persistence ships.
 #[component]

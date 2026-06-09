@@ -34,19 +34,19 @@ pub(super) fn chapter_index_for_elapsed(chapters: &[ChapterInfo], elapsed: f64) 
 /// - If within 3 s of the start and not the first chapter, go to the previous.
 /// - Otherwise seek to 0.
 ///
-/// Returns `None` when `chapters` is empty.
+/// Returns `None` when `chapters` is empty or `idx` is out of bounds
+/// (the click handler computes `idx` from a separate signal, so a chapter
+/// list refresh in between can leave it stale).
 pub(super) fn chapter_prev_target(
     chapters: &[ChapterInfo],
     elapsed: f64,
     idx: usize,
 ) -> Option<f64> {
-    if chapters.is_empty() {
-        return None;
-    }
-    let target = if elapsed - chapters[idx].start_seconds > 3.0 {
-        chapters[idx].start_seconds
-    } else if idx > 0 {
-        chapters[idx - 1].start_seconds
+    let current = chapters.get(idx)?;
+    let target = if elapsed - current.start_seconds > 3.0 {
+        current.start_seconds
+    } else if let Some(prev) = idx.checked_sub(1).and_then(|i| chapters.get(i)) {
+        prev.start_seconds
     } else {
         0.0
     };
@@ -119,6 +119,13 @@ mod tests {
     fn chapter_prev_target_returns_zero_when_at_first_chapter_start() {
         let chs = vec![ch(1, "Intro", 0.0, 300.0)];
         assert_eq!(chapter_prev_target(&chs, 1.0, 0), Some(0.0));
+    }
+
+    #[test]
+    fn chapter_prev_target_returns_none_when_idx_is_out_of_bounds() {
+        let chs = vec![ch(1, "Intro", 0.0, 300.0)];
+        // idx came from a stale signal — chapters list shrunk under it.
+        assert_eq!(chapter_prev_target(&chs, 1.0, 5), None);
     }
 
     #[test]
