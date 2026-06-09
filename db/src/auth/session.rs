@@ -15,6 +15,7 @@ const SESSION_TOUCH_THRESHOLD_SECS: i64 = 5 * 60;
 /// (cookie absolute TTL is 30 days; bearer is 90).
 pub(crate) const SESSION_IDLE_TIMEOUT_SECS: i64 = 7 * 24 * 60 * 60;
 
+/// Create a new session for `user_id`, returning the session record and the raw (unhashed) token.
 pub async fn create_session(
     pool: &SqlitePool,
     user_id: i64,
@@ -230,6 +231,7 @@ pub async fn validate_session(
     }
 }
 
+/// Revoke a single session by id, setting its `revoked_at` timestamp so `lookup_session` rejects it.
 pub async fn revoke_session(pool: &SqlitePool, session_id: i64) -> AuthResult<()> {
     sqlx::query("UPDATE sessions SET revoked_at = ? WHERE id = ?")
         .bind(now_unix())
@@ -239,6 +241,7 @@ pub async fn revoke_session(pool: &SqlitePool, session_id: i64) -> AuthResult<()
     Ok(())
 }
 
+/// Revoke all active sessions for a user; returns the number of rows updated.
 pub async fn revoke_all_sessions_for_user(pool: &SqlitePool, user_id: i64) -> AuthResult<u64> {
     let r =
         sqlx::query("UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL")

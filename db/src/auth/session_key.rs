@@ -22,6 +22,7 @@ pub async fn load_or_create_session_key(pool: &SqlitePool) -> AuthResult<Vec<u8>
     Ok(key)
 }
 
+/// Retrieve the session signing key from the database, returning `None` if it has not been set yet.
 pub async fn get_session_key(pool: &SqlitePool) -> AuthResult<Option<Vec<u8>>> {
     let v: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM secrets WHERE name = ?")
         .bind(SESSION_KEY_NAME)
@@ -30,6 +31,7 @@ pub async fn get_session_key(pool: &SqlitePool) -> AuthResult<Option<Vec<u8>>> {
     Ok(v)
 }
 
+/// Store or replace the session signing key in the database.
 pub async fn put_session_key(pool: &SqlitePool, key: &[u8]) -> AuthResult<()> {
     sqlx::query(
         "INSERT INTO secrets (name, value) VALUES (?, ?)

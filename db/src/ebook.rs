@@ -72,6 +72,7 @@ pub struct ScanOptions {
     pub materialize_sidecars: bool,
 }
 
+/// Scan an ebook library directory and extract EPUB metadata, using default `ScanOptions`.
 pub fn scan_ebook_library(path: Option<&str>) -> ScanResult {
     scan_ebook_library_with(path, ScanOptions::default())
 }
