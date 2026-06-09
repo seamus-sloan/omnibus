@@ -18,6 +18,7 @@ enum Sort {
     BookCount,
 }
 
+/// Authors index page — browse all authors in the library.
 #[component]
 pub fn AuthorsIndexPage() -> Element {
     let server_url = use_server_url();
@@ -117,132 +118,173 @@ pub fn AuthorsIndexPage() -> Element {
     let present_letters: std::collections::HashSet<char> =
         letters.iter().map(|(l, _)| *l).collect();
 
+    let any_in_library = !all.is_empty();
+
     rsx! {
         div { class: "idx-page",
-            // Header
-            div { class: "idx-header",
-                nav {
-                    class: "breadcrumb",
-                    aria_label: "breadcrumb",
-                    Link { to: Route::Landing {}, "Library" }
-                    span { class: "breadcrumb-sep", " › " }
-                    span { "Authors" }
-                }
-                div { class: "idx-head-row",
-                    div {
-                        span { class: "label", "Library lens" }
-                        h1 { class: "disc-hero-title",
-                            "By "
-                            em { "author" }
-                            "."
-                        }
-                        p { class: "idx-subtitle",
-                            "{total_authors} authors across {total_books} books \u{b7} the people in your shelves."
-                        }
-                    }
-                }
+            AuthorsIndexHeader {
+                total_authors,
+                total_books,
+                filter: filter(),
+                sort: sort(),
+                show_letters,
+                alphabet: alphabet.clone(),
+                present_letters: present_letters.clone(),
+                letter_count: letters.len(),
+                filtered_count: filtered.len(),
+                on_filter: move |v| filter.set(v),
+                on_sort: move |s| sort.set(s),
+            }
+            {authors_index_body(&filtered, &letters, show_letters, any_in_library, &server_url_for_cards)}
+        }
+    }
+}
 
-                // Toolbar
-                div { class: "idx-toolbar",
-                    div { class: "idx-search",
-                        input {
-                            r#type: "search",
-                            placeholder: "Filter authors by name\u{2026}",
-                            aria_label: "Filter authors by name",
-                            value: "{filter}",
-                            "data-testid": "authors-filter",
-                            oninput: move |e| filter.set(e.value()),
-                        }
-                    }
-                    div { class: "idx-sort",
-                        span { class: "label", "Sort" }
-                        button {
-                            class: "idx-btn",
-                            "aria-pressed": if sort() == Sort::Name { "true" } else { "false" },
-                            "data-testid": "authors-sort-name",
-                            onclick: move |_| sort.set(Sort::Name),
-                            "Last name A\u{2013}Z"
-                        }
-                        button {
-                            class: "idx-btn",
-                            "aria-pressed": if sort() == Sort::BookCount { "true" } else { "false" },
-                            "data-testid": "authors-sort-count",
-                            onclick: move |_| sort.set(Sort::BookCount),
-                            "Most books"
-                        }
+/// Body section (plain fn, not `#[component]`, so we can keep the borrow-only
+/// slices from `AuthorsIndexPage`'s signal read guard without per-render clones).
+fn authors_index_body<'a>(
+    filtered: &[&'a AuthorSummary],
+    letters: &[(char, Vec<&'a AuthorSummary>)],
+    show_letters: bool,
+    any_in_library: bool,
+    server_url: &str,
+) -> Element {
+    rsx! {
+        div { class: "idx-body",
+            if filtered.is_empty() {
+                p { class: "subtitle idx-empty",
+                    if !any_in_library {
+                        "No authors yet \u{2014} the library is empty."
+                    } else {
+                        "No authors match that filter."
                     }
                 }
-
-                // Letter jump strip. Letters that have at least one author
-                // render as same-page anchors targeting the section's
-                // `id="letter-{L}"` below — clicking jumps via the browser's
-                // native fragment scroll, no JS required. Letters with no
-                // authors stay as plain spans so there's nothing to jump
-                // to.
-                if show_letters {
-                    div { class: "idx-letters",
-                        for l in alphabet.iter() {
-                            {
-                                let has = present_letters.contains(l);
-                                // `#` is not valid inside a URL fragment, so the
-                                // non-alpha bucket gets a textual slug instead.
-                                let frag = letter_frag(*l);
-                                if has {
-                                    rsx! {
-                                        a {
-                                            class: "idx-letter idx-letter-on",
-                                            href: "#letter-{frag}",
-                                            "data-testid": "authors-letter-{frag}",
-                                            "{l}"
-                                        }
-                                    }
-                                } else {
-                                    rsx! {
-                                        span { class: "idx-letter", "{l}" }
-                                    }
-                                }
+            } else if show_letters {
+                for (letter, group) in letters.iter() {
+                    section {
+                        key: "{letter}",
+                        id: "letter-{letter_frag(*letter)}",
+                        class: "idx-letter-section",
+                        div { class: "idx-letter-rail",
+                            div { class: "idx-letter-rail-glyph", "{letter}" }
+                            div { class: "idx-letter-rail-count mono", "{group.len()}" }
+                        }
+                        div { class: "idx-card-grid",
+                            for a in group.iter() {
+                                div { key: "{a.id}", {render_author_card(a, server_url)} }
                             }
                         }
-                        span { class: "idx-letters-spacer" }
-                        span { class: "mono idx-letters-count",
-                            "{letters.len()} letters \u{b7} {filtered.len()} authors"
-                        }
+                    }
+                }
+            } else {
+                div { class: "idx-card-grid idx-card-grid--flat",
+                    for a in filtered.iter() {
+                        div { key: "{a.id}", {render_author_card(a, server_url)} }
                     }
                 }
             }
+        }
+    }
+}
 
-            // Body
-            div { class: "idx-body",
-                if filtered.is_empty() {
-                    p { class: "subtitle idx-empty",
-                        if all.is_empty() {
-                            "No authors yet \u{2014} the library is empty."
-                        } else {
-                            "No authors match that filter."
-                        }
+/// Header: breadcrumb, hero, filter/sort toolbar, optional A–Z letter strip.
+#[component]
+fn AuthorsIndexHeader(
+    total_authors: usize,
+    total_books: usize,
+    filter: String,
+    sort: Sort,
+    show_letters: bool,
+    alphabet: Vec<char>,
+    present_letters: std::collections::HashSet<char>,
+    letter_count: usize,
+    filtered_count: usize,
+    on_filter: EventHandler<String>,
+    on_sort: EventHandler<Sort>,
+) -> Element {
+    rsx! {
+        div { class: "idx-header",
+            nav {
+                class: "breadcrumb",
+                aria_label: "breadcrumb",
+                Link { to: Route::Landing {}, "Library" }
+                span { class: "breadcrumb-sep", " › " }
+                span { "Authors" }
+            }
+            div { class: "idx-head-row",
+                div {
+                    span { class: "label", "Library lens" }
+                    h1 { class: "disc-hero-title",
+                        "By "
+                        em { "author" }
+                        "."
                     }
-                } else if show_letters {
-                    for (letter, group) in letters.iter() {
-                        section {
-                            key: "{letter}",
-                            id: "letter-{letter_frag(*letter)}",
-                            class: "idx-letter-section",
-                            div { class: "idx-letter-rail",
-                                div { class: "idx-letter-rail-glyph", "{letter}" }
-                                div { class: "idx-letter-rail-count mono", "{group.len()}" }
-                            }
-                            div { class: "idx-card-grid",
-                                for a in group.iter() {
-                                    div { key: "{a.id}", {render_author_card(a, &server_url_for_cards)} }
+                    p { class: "idx-subtitle",
+                        "{total_authors} authors across {total_books} books \u{b7} the people in your shelves."
+                    }
+                }
+            }
+            div { class: "idx-toolbar",
+                div { class: "idx-search",
+                    input {
+                        r#type: "search",
+                        placeholder: "Filter authors by name\u{2026}",
+                        aria_label: "Filter authors by name",
+                        value: "{filter}",
+                        "data-testid": "authors-filter",
+                        oninput: move |e| on_filter.call(e.value()),
+                    }
+                }
+                div { class: "idx-sort",
+                    span { class: "label", "Sort" }
+                    button {
+                        class: "idx-btn",
+                        "aria-pressed": if sort == Sort::Name { "true" } else { "false" },
+                        "data-testid": "authors-sort-name",
+                        onclick: move |_| on_sort.call(Sort::Name),
+                        "Last name A\u{2013}Z"
+                    }
+                    button {
+                        class: "idx-btn",
+                        "aria-pressed": if sort == Sort::BookCount { "true" } else { "false" },
+                        "data-testid": "authors-sort-count",
+                        onclick: move |_| on_sort.call(Sort::BookCount),
+                        "Most books"
+                    }
+                }
+            }
+            // Letter jump strip. Letters that have at least one author
+            // render as same-page anchors targeting the section's
+            // `id="letter-{L}"` below — clicking jumps via the browser's
+            // native fragment scroll, no JS required. Letters with no
+            // authors stay as plain spans so there's nothing to jump to.
+            if show_letters {
+                div { class: "idx-letters",
+                    for l in alphabet.iter() {
+                        {
+                            let has = present_letters.contains(l);
+                            // `#` is not valid inside a URL fragment, so the
+                            // non-alpha bucket gets a textual slug instead.
+                            let frag = letter_frag(*l);
+                            if has {
+                                rsx! {
+                                    a {
+                                        class: "idx-letter idx-letter-on",
+                                        href: "#letter-{frag}",
+                                        "data-testid": "authors-letter-{frag}",
+                                        "{l}"
+                                    }
+                                }
+                            } else {
+                                rsx! {
+                                    span { class: "idx-letter", "{l}" }
                                 }
                             }
                         }
                     }
-                } else {
-                    div { class: "idx-card-grid idx-card-grid--flat",
-                        for a in filtered.iter() {
-                            div { key: "{a.id}", {render_author_card(a, &server_url_for_cards)} }
-                        }
+                    span { class: "idx-letters-spacer" }
+                    span { class: "mono idx-letters-count",
+                        "{letter_count} letters \u{b7} {filtered_count} authors"
                     }
                 }
             }
