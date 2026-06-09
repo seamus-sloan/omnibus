@@ -139,6 +139,9 @@ test("series index filters by name", async ({ page }) => {
 test("series index card navigates to the detail page", async ({ page }) => {
   await gotoReady(page, "/series");
 
+  // Wait for cards to render before filtering (hydration may lag networkidle).
+  await expect(page.getByTestId("series-card").first()).toBeVisible();
+
   await page.getByTestId("series-filter").fill("Pioneers");
   const card = page.getByTestId("series-card").first();
   await expect(card).toBeVisible();
