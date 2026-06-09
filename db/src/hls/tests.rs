@@ -13,7 +13,7 @@ use crate::test_support::EnvVarGuard;
 /// alive until the end of the test).
 fn data_dir_guard() -> (EnvVarGuard, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
-    let guard = EnvVarGuard::set("OMNIBUS_DATA_DIR", Some(dir.path().to_str().unwrap()));
+    let guard = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(dir.path().as_os_str()));
     (guard, dir)
 }
 

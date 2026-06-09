@@ -34,7 +34,7 @@ fn is_stale_returns_true_when_file_missing() {
 #[test]
 fn is_stale_returns_false_when_mtime_is_newer() {
     let tmp = tempfile::tempdir().unwrap();
-    let _guard = EnvVarGuard::set("OMNIBUS_THUMBS_DIR", Some(tmp.path().to_str().unwrap()));
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
     std::fs::write(tmp.path().join("1_sm.webp"), b"x").unwrap();
     let mtime = std::fs::metadata(tmp.path().join("1_sm.webp"))
         .unwrap()
@@ -49,7 +49,7 @@ fn is_stale_returns_false_when_mtime_is_newer() {
 #[test]
 fn is_stale_returns_true_when_mtime_is_older() {
     let tmp = tempfile::tempdir().unwrap();
-    let _guard = EnvVarGuard::set("OMNIBUS_THUMBS_DIR", Some(tmp.path().to_str().unwrap()));
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
     std::fs::write(tmp.path().join("2_md.webp"), b"x").unwrap();
     let mtime = std::fs::metadata(tmp.path().join("2_md.webp"))
         .unwrap()
@@ -84,7 +84,7 @@ fn generate_thumbnail_produces_valid_webp() {
     .unwrap();
 
     let tmp = tempfile::tempdir().unwrap();
-    let _guard = EnvVarGuard::set("OMNIBUS_THUMBS_DIR", Some(tmp.path().to_str().unwrap()));
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
     let bytes_written = generate_thumbnail(10, ThumbSize::Sm, &png_bytes).unwrap();
 
     assert!(bytes_written > 0);
@@ -97,7 +97,7 @@ fn generate_thumbnail_produces_valid_webp() {
 #[test]
 fn evict_if_over_cap_removes_oldest_files() {
     let tmp = tempfile::tempdir().unwrap();
-    let _guard = EnvVarGuard::set("OMNIBUS_THUMBS_DIR", Some(tmp.path().to_str().unwrap()));
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
 
     // Write 3 files with staggered mtimes (we can only guarantee ordering,
     // not specific times, so write sequentially and trust OS mtime).

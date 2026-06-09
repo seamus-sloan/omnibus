@@ -8,6 +8,7 @@
 
 #![cfg(any(test, feature = "test-support"))]
 
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -50,9 +51,15 @@ pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// value)` for additional vars — all managed under the single `ENV_LOCK`
 /// acquisition. Pass `None` for `value` to _remove_ a variable for the
 /// test's duration (the previous value is still restored on drop).
+///
+/// Use the `_os` variants when the value is an `OsStr` (e.g. a
+/// `tempfile::TempDir`'s path) to avoid `to_str().unwrap()` at call sites
+/// and to round-trip non-UTF-8 pre-existing values correctly.
 pub struct EnvVarGuard {
     /// `(var_name, previous_value)` pairs, restored in reverse on drop.
-    vars: Vec<(&'static str, Option<String>)>,
+    /// Snapshots use `OsString` via `var_os` so a pre-existing non-UTF-8
+    /// value is restored verbatim instead of being treated as "unset".
+    vars: Vec<(&'static str, Option<OsString>)>,
     _lock: std::sync::MutexGuard<'static, ()>,
 }
 
@@ -60,10 +67,17 @@ impl EnvVarGuard {
     /// Acquire `ENV_LOCK`, save the current value of `var`, and set it to
     /// `value` (or remove it when `value` is `None`).
     pub fn set(var: &'static str, value: Option<&str>) -> Self {
+        Self::set_os(var, value.map(OsStr::new))
+    }
+
+    /// `OsStr` variant of [`set`] — accepts paths (e.g.
+    /// `tmp.path().as_os_str()`) without forcing the caller through
+    /// `to_str().unwrap()`.
+    pub fn set_os(var: &'static str, value: Option<&OsStr>) -> Self {
         let lock = ENV_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let prev = std::env::var(var).ok();
+        let prev = std::env::var_os(var);
         // SAFETY: ENV_LOCK is held; no other thread in this process
         // mutates the environment concurrently.
         unsafe { Self::apply(var, value) }
@@ -75,8 +89,13 @@ impl EnvVarGuard {
 
     /// Set an additional env var under the already-held `ENV_LOCK`. The
     /// previous value is restored (in LIFO order) when the guard drops.
-    pub fn also_set(mut self, var: &'static str, value: Option<&str>) -> Self {
-        let prev = std::env::var(var).ok();
+    pub fn also_set(self, var: &'static str, value: Option<&str>) -> Self {
+        self.also_set_os(var, value.map(OsStr::new))
+    }
+
+    /// `OsStr` variant of [`also_set`].
+    pub fn also_set_os(mut self, var: &'static str, value: Option<&OsStr>) -> Self {
+        let prev = std::env::var_os(var);
         // SAFETY: ENV_LOCK is still held via `self._lock`.
         unsafe { Self::apply(var, value) }
         self.vars.push((var, prev));
@@ -84,7 +103,7 @@ impl EnvVarGuard {
     }
 
     /// Inner: apply one set/remove under an already-held lock.
-    unsafe fn apply(var: &'static str, value: Option<&str>) {
+    unsafe fn apply(var: &'static str, value: Option<&OsStr>) {
         match value {
             Some(v) => std::env::set_var(var, v),
             None => std::env::remove_var(var),
