@@ -144,6 +144,28 @@ pub fn rest_router_with_search_limiter(
     search_limiter: std::sync::Arc<RateLimiter>,
 ) -> Router {
     let pool = state.pool().clone();
+    content_routes()
+        .merge(data_routes(search_limiter))
+        .with_state(state)
+        // `AuthUser`/`AdminUser` read the pool from `Extension<SqlitePool>`.
+        // Layer it here so the router is self-contained for integration
+        // tests; in the live server `main.rs` adds the same Extension at
+        // the top, which is harmless overlap.
+        .layer(Extension(pool))
+        // Global guards against slow / oversized clients. `main.rs` layers
+        // the same protections at the very top so the auth router and
+        // Dioxus server functions are covered too; duplicating them here
+        // means integration tests (which use `rest_router` directly) also
+        // exercise the limits.
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            std::time::Duration::from_secs(30),
+        ))
+        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024))
+}
+
+/// Health check, settings, ebooks, and audiobook playback routes.
+fn content_routes() -> Router<AppState> {
     Router::new()
         .route("/api/_health", get(health::get_health))
         .route("/api/settings", get(settings::get_settings))
@@ -173,6 +195,12 @@ pub fn rest_router_with_search_limiter(
             "/api/audiobooks/{uuid}/status",
             get(audiobooks::get_audiobook_status),
         )
+}
+
+/// Metadata overrides, progress sync, author/cover/series/tag discovery routes,
+/// upload-rate-limited endpoints, and the search sub-router.
+fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> {
+    Router::new()
         .route(
             "/api/ebooks/{uuid}/overrides",
             post(overrides::post_ebook_overrides).delete(overrides::delete_ebook_overrides),
@@ -208,22 +236,6 @@ pub fn rest_router_with_search_limiter(
         .route("/api/series", get(series::get_series))
         .route("/api/series/{id}", get(series::get_series_by_id))
         .route("/api/tags", get(tags::get_tags))
-        .with_state(state)
-        // `AuthUser`/`AdminUser` read the pool from `Extension<SqlitePool>`.
-        // Layer it here so the router is self-contained for integration
-        // tests; in the live server `main.rs` adds the same Extension at
-        // the top, which is harmless overlap.
-        .layer(Extension(pool))
-        // Global guards against slow / oversized clients. `main.rs` layers
-        // the same protections at the very top so the auth router and
-        // Dioxus server functions are covered too; duplicating them here
-        // means integration tests (which use `rest_router` directly) also
-        // exercise the limits.
-        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
-            axum::http::StatusCode::REQUEST_TIMEOUT,
-            std::time::Duration::from_secs(30),
-        ))
-        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024))
 }
 
 /// Sub-router for `/api/search/*` carrying its own per-IP rate-limit layer.
