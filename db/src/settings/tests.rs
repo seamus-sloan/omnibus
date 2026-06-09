@@ -8,56 +8,7 @@ use crate::books::list_books;
 use crate::covers::{cover_path_for, delete_cover_files_for, write_cover_file};
 use crate::pool::init_db;
 use crate::sync::replace_books;
-use crate::test_support::{indexed, CoversTempDir};
-
-// ---------------------------------------------------------------------------
-// Process-global env guard
-// ---------------------------------------------------------------------------
-//
-// Serialization + restore guard for the `seed_settings_from_env_*` tests.
-// They mutate `EBOOK_LIBRARY_PATH` / `AUDIOBOOK_LIBRARY_PATH`, which is
-// process-global; under `cargo test`'s default parallel execution two
-// tests racing those vars can observe a torn state. Mirrors
-// `test_support::CoversTempDir`: acquiring the guard locks `ENV_LOCK` and
-// snapshots both vars, and dropping it restores their prior values (so
-// the rest of the test run — and local dev — sees them unchanged) before
-// releasing the lock. Keeping the `MutexGuard` in a struct field (rather
-// than a bare `let _g`) also keeps it off the await points in the async
-// tests.
-
-static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// RAII guard that serializes and restores the library-path env vars.
-struct LibraryEnvGuard {
-    prev_ebook: Option<String>,
-    prev_audiobook: Option<String>,
-    _guard: std::sync::MutexGuard<'static, ()>,
-}
-
-impl LibraryEnvGuard {
-    fn acquire() -> Self {
-        let guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        Self {
-            prev_ebook: std::env::var("EBOOK_LIBRARY_PATH").ok(),
-            prev_audiobook: std::env::var("AUDIOBOOK_LIBRARY_PATH").ok(),
-            _guard: guard,
-        }
-    }
-}
-
-impl Drop for LibraryEnvGuard {
-    fn drop(&mut self) {
-        for (key, prev) in [
-            ("EBOOK_LIBRARY_PATH", self.prev_ebook.take()),
-            ("AUDIOBOOK_LIBRARY_PATH", self.prev_audiobook.take()),
-        ] {
-            match prev {
-                Some(v) => std::env::set_var(key, v),
-                None => std::env::remove_var(key),
-            }
-        }
-    }
-}
+use crate::test_support::{indexed, CoversTempDir, EnvVarGuard};
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -136,14 +87,13 @@ async fn set_settings_none_clears_existing_value() {
 
 #[tokio::test]
 async fn seed_settings_from_env_writes_env_vars_to_db() {
-    // The guard serializes the process-global env mutation against the
-    // other `seed_settings_from_env` test and restores prior values on
+    // The guards serialize the process-global env mutation against the
+    // other `seed_settings_from_env` test and restore prior values on
     // drop, so this test can't leak `EBOOK_LIBRARY_PATH` into the rest of
     // the run.
-    let _env = LibraryEnvGuard::acquire();
+    let _env = EnvVarGuard::set("EBOOK_LIBRARY_PATH", Some("/env/books"))
+        .also_set("AUDIOBOOK_LIBRARY_PATH", Some("/env/audio"));
     let pool = init_db("sqlite::memory:").await.unwrap();
-    std::env::set_var("EBOOK_LIBRARY_PATH", "/env/books");
-    std::env::set_var("AUDIOBOOK_LIBRARY_PATH", "/env/audio");
     seed_settings_from_env(&pool).await.unwrap();
     let result = get_settings(&pool).await.unwrap();
     assert_eq!(result.ebook_library_path, Some("/env/books".into()));
@@ -152,12 +102,11 @@ async fn seed_settings_from_env_writes_env_vars_to_db() {
 
 #[tokio::test]
 async fn seed_settings_from_env_is_noop_when_vars_unset() {
-    // Guard restores prior values on drop. We still clear the vars here to
+    // Guard restores prior values on drop. Both vars are removed to
     // establish the "unset" precondition this test exercises.
-    let _env = LibraryEnvGuard::acquire();
+    let _env =
+        EnvVarGuard::set("EBOOK_LIBRARY_PATH", None).also_set("AUDIOBOOK_LIBRARY_PATH", None);
     let pool = init_db("sqlite::memory:").await.unwrap();
-    std::env::remove_var("EBOOK_LIBRARY_PATH");
-    std::env::remove_var("AUDIOBOOK_LIBRARY_PATH");
     seed_settings_from_env(&pool).await.unwrap();
     let result = get_settings(&pool).await.unwrap();
     assert_eq!(result.ebook_library_path, None);

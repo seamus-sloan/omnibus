@@ -8,6 +8,7 @@
 
 #![cfg(any(test, feature = "test-support"))]
 
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -34,11 +35,107 @@ pub fn make_test_dir(suffix: &str) -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
+// Generic env-var guard
+// ---------------------------------------------------------------------------
+
+/// Process-wide lock serializing all env-var mutations in tests. A single
+/// lock is used so guards for different variables still serialize against
+/// one another — env-var space is process-global.
+pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// RAII guard that sets one or more env vars for the lifetime of the
+/// test, then restores each previous value on drop. Acquires `ENV_LOCK`
+/// so parallel `cargo test` runs can't race on shared variables.
+///
+/// Create with `EnvVarGuard::set(var, value)`, then chain `.also_set(var,
+/// value)` for additional vars — all managed under the single `ENV_LOCK`
+/// acquisition. Pass `None` for `value` to _remove_ a variable for the
+/// test's duration (the previous value is still restored on drop).
+///
+/// Use the `_os` variants when the value is an `OsStr` (e.g. a
+/// `tempfile::TempDir`'s path) to avoid `to_str().unwrap()` at call sites
+/// and to round-trip non-UTF-8 pre-existing values correctly.
+pub struct EnvVarGuard {
+    /// `(var_name, previous_value)` pairs, restored in reverse on drop.
+    /// Snapshots use `OsString` via `var_os` so a pre-existing non-UTF-8
+    /// value is restored verbatim instead of being treated as "unset".
+    vars: Vec<(&'static str, Option<OsString>)>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl EnvVarGuard {
+    /// Acquire `ENV_LOCK`, save the current value of `var`, and set it to
+    /// `value` (or remove it when `value` is `None`).
+    pub fn set(var: &'static str, value: Option<&str>) -> Self {
+        Self::set_os(var, value.map(OsStr::new))
+    }
+
+    /// `OsStr` variant of [`set`] — accepts paths (e.g.
+    /// `tmp.path().as_os_str()`) without forcing the caller through
+    /// `to_str().unwrap()`.
+    pub fn set_os(var: &'static str, value: Option<&OsStr>) -> Self {
+        let lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let prev = std::env::var_os(var);
+        // SAFETY: ENV_LOCK is held; no other thread in this process
+        // mutates the environment concurrently.
+        unsafe { Self::apply(var, value) }
+        Self {
+            vars: vec![(var, prev)],
+            _lock: lock,
+        }
+    }
+
+    /// Set an additional env var under the already-held `ENV_LOCK`. The
+    /// previous value is restored (in LIFO order) when the guard drops.
+    pub fn also_set(self, var: &'static str, value: Option<&str>) -> Self {
+        self.also_set_os(var, value.map(OsStr::new))
+    }
+
+    /// `OsStr` variant of [`also_set`].
+    pub fn also_set_os(mut self, var: &'static str, value: Option<&OsStr>) -> Self {
+        let prev = std::env::var_os(var);
+        // SAFETY: ENV_LOCK is still held via `self._lock`.
+        unsafe { Self::apply(var, value) }
+        self.vars.push((var, prev));
+        self
+    }
+
+    /// Inner: apply one set/remove under an already-held lock.
+    unsafe fn apply(var: &'static str, value: Option<&OsStr>) {
+        match value {
+            Some(v) => std::env::set_var(var, v),
+            None => std::env::remove_var(var),
+        }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        // SAFETY: ENV_LOCK is still held via `_lock`; no other thread
+        // can mutate the environment while we restore. Restore in reverse
+        // insertion order so nested also_set chains unwind correctly.
+        for (var, prev) in self.vars.drain(..).rev() {
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var(var, v),
+                    None => std::env::remove_var(var),
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Covers env guard
 // ---------------------------------------------------------------------------
 
 /// Process-wide lock for `OMNIBUS_COVERS_DIR`. Tests that touch the
 /// covers directory must serialize, since the env var is global.
+///
+/// Prefer `EnvVarGuard` + `ENV_LOCK` for new callers. This alias is
+/// retained for test code that still references it directly.
 pub static COVERS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// RAII guard that points `OMNIBUS_COVERS_DIR` at a unique temp dir for
@@ -64,7 +161,10 @@ impl CoversTempDir {
         let path = std::env::temp_dir().join(format!("omnibus_covers_{tag}_{pid}_{seq}"));
         let _ = std::fs::remove_dir_all(&path);
         let prev = std::env::var("OMNIBUS_COVERS_DIR").ok();
-        std::env::set_var("OMNIBUS_COVERS_DIR", &path);
+        // SAFETY: COVERS_ENV_LOCK is held; no other thread mutates the env.
+        unsafe {
+            std::env::set_var("OMNIBUS_COVERS_DIR", &path);
+        }
         Self {
             path,
             prev,
@@ -76,9 +176,12 @@ impl CoversTempDir {
 impl Drop for CoversTempDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
-        match self.prev.take() {
-            Some(v) => std::env::set_var("OMNIBUS_COVERS_DIR", v),
-            None => std::env::remove_var("OMNIBUS_COVERS_DIR"),
+        // SAFETY: COVERS_ENV_LOCK is still held via `_guard`.
+        unsafe {
+            match self.prev.take() {
+                Some(v) => std::env::set_var("OMNIBUS_COVERS_DIR", v),
+                None => std::env::remove_var("OMNIBUS_COVERS_DIR"),
+            }
         }
     }
 }
