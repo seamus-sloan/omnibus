@@ -37,6 +37,7 @@ fn has_session_cookie(jar: &CookieJar) -> bool {
     jar.get(SESSION_COOKIE_HOST_PREFIXED).is_some() || jar.get(SESSION_COOKIE).is_some()
 }
 
+/// Reject state-changing cookie-authed requests whose `Origin`/`Referer` doesn't match the allowlist or `Host`.
 pub async fn origin_check(req: Request, next: Next) -> Response {
     let method = req.method();
     if matches!(method, &Method::GET | &Method::HEAD | &Method::OPTIONS) {

@@ -459,7 +459,7 @@ mod tests {
             &["Frank Herbert".to_string(), "Brian Herbert".to_string()],
             &["scifi".to_string(), "classic".to_string()],
         );
-        let creators = ov.creators.expect("creators should be set");
+        let creators = ov.creators.unwrap_or_default();
         assert_eq!(creators.len(), 2);
         assert_eq!(creators[0].name, "Frank Herbert");
         assert_eq!(creators[1].name, "Brian Herbert");
