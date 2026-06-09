@@ -28,6 +28,7 @@ pub struct AuthUser {
 }
 
 impl AuthUser {
+    /// Project this extractor result to the wire-shape `UserSummary` returned by `/api/auth/me`.
     pub fn summary(&self) -> UserSummary {
         UserSummary {
             id: self.id,
