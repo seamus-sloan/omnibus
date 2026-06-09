@@ -26,6 +26,14 @@ pub enum SyncError {
     Db(#[from] sqlx::Error),
 }
 
+impl From<crate::settings::SettingsError> for SyncError {
+    fn from(e: crate::settings::SettingsError) -> Self {
+        match e {
+            crate::settings::SettingsError::Db(inner) => SyncError::Db(inner),
+        }
+    }
+}
+
 /// Per-bucket payload for [`sync_books`]. Built by
 /// `crate::indexer::diff_library` (plus the Phase-B parse for new + changed).
 ///

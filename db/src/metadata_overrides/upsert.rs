@@ -12,11 +12,12 @@ use omnibus_shared::{EbookMetadata, MetadataOverrides};
 use super::fts::rebuild_fts_for_book;
 use super::links::materialize_series_link;
 
-/// Errors returned by `get_book_uuid` and `rebuild_fts_for_book`. Other
-/// public functions in this module still return `sqlx::Error` directly —
-/// widening that is tracked separately.
+/// Errors returned by the metadata overrides data layer.
 #[derive(Debug, thiserror::Error)]
 pub enum MetadataOverridesError {
+    /// A JSON serialization or deserialization failure on the `overrides` blob.
+    #[error("JSON (de)serialization failed: {0}")]
+    Serialization(#[from] serde_json::Error),
     #[error(transparent)]
     Db(#[from] sqlx::Error),
 }
@@ -25,6 +26,9 @@ impl From<crate::books::BooksError> for MetadataOverridesError {
     fn from(e: crate::books::BooksError) -> Self {
         match e {
             crate::books::BooksError::Db(inner) => MetadataOverridesError::Db(inner),
+            crate::books::BooksError::OverridesJson(inner) => {
+                MetadataOverridesError::Serialization(inner)
+            }
         }
     }
 }
@@ -76,8 +80,8 @@ pub async fn upsert_metadata_overrides(
     overrides: &MetadataOverrides,
     has_cover_override: bool,
     user_id: i64,
-) -> Result<(), sqlx::Error> {
-    let json = serde_json::to_string(overrides).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+) -> Result<(), MetadataOverridesError> {
+    let json = serde_json::to_string(overrides)?;
     upsert_overrides_row(pool, book_uuid, &json, has_cover_override, user_id).await?;
     if let Err(e) = materialize_series_link(pool, book_uuid, overrides).await {
         tracing::warn!(book_uuid, error = %e, "series link materialize after override upsert failed");
@@ -100,7 +104,7 @@ pub async fn merge_metadata_overrides(
     book_uuid: &str,
     incoming: &MetadataOverrides,
     user_id: i64,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), MetadataOverridesError> {
     // `begin_with("BEGIN IMMEDIATE")` gives the same RESERVED-lock-at-start
     // semantics as the old hand-rolled statement (so concurrent edits to the
     // same book serialize instead of interleaving), but returns a real
@@ -118,14 +122,13 @@ pub async fn merge_metadata_overrides(
 
     let (merged, has_cover_override) = match existing {
         Some((json, has_cover)) => {
-            let prior: MetadataOverrides =
-                serde_json::from_str(&json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+            let prior: MetadataOverrides = serde_json::from_str(&json)?;
             (prior.merge(incoming), has_cover != 0)
         }
         None => (incoming.clone(), false),
     };
 
-    let json = serde_json::to_string(&merged).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+    let json = serde_json::to_string(&merged)?;
     upsert_overrides_row(&mut *tx, book_uuid, &json, has_cover_override, user_id).await?;
     tx.commit().await?;
 
@@ -143,7 +146,7 @@ pub async fn merge_metadata_overrides(
 pub async fn get_metadata_overrides(
     pool: &SqlitePool,
     book_uuid: &str,
-) -> Result<Option<(MetadataOverrides, bool)>, sqlx::Error> {
+) -> Result<Option<(MetadataOverrides, bool)>, MetadataOverridesError> {
     let row: Option<(String, i64)> = sqlx::query_as(
         "SELECT overrides, has_cover_override FROM metadata_overrides WHERE book_uuid = ?",
     )
@@ -153,8 +156,7 @@ pub async fn get_metadata_overrides(
 
     match row {
         Some((json, has_cover)) => {
-            let ov: MetadataOverrides =
-                serde_json::from_str(&json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+            let ov: MetadataOverrides = serde_json::from_str(&json)?;
             Ok(Some((ov, has_cover != 0)))
         }
         None => Ok(None),
@@ -169,7 +171,7 @@ pub async fn get_metadata_overrides(
 pub async fn delete_metadata_overrides(
     pool: &SqlitePool,
     book_uuid: &str,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), MetadataOverridesError> {
     sqlx::query("DELETE FROM metadata_overrides WHERE book_uuid = ?")
         .bind(book_uuid)
         .execute(pool)

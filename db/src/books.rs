@@ -34,15 +34,25 @@ pub use list::{
 pub use projection::MAX_BOOKS_RETURNED;
 pub use search::{count_search_books, search_books, search_books_with_total};
 
-/// Errors returned by the book read paths (`get_book`, `count_books`).
-/// The single transparent `Db` variant honors the `02-error-handling`
-/// boundary rule (no raw `sqlx::Error` across the module boundary) while
-/// keeping `?` propagation clean at the call sites that still use sqlx
-/// internally.
+/// Errors returned by the books read path.
 #[derive(Debug, thiserror::Error)]
 pub enum BooksError {
     #[error(transparent)]
     Db(#[from] sqlx::Error),
+    /// Corrupt JSON in the `metadata_overrides` blob.
+    #[error("overrides deserialization failed: {0}")]
+    OverridesJson(serde_json::Error),
+}
+
+impl From<crate::metadata_overrides::MetadataOverridesError> for BooksError {
+    fn from(e: crate::metadata_overrides::MetadataOverridesError) -> Self {
+        match e {
+            crate::metadata_overrides::MetadataOverridesError::Db(inner) => BooksError::Db(inner),
+            crate::metadata_overrides::MetadataOverridesError::Serialization(inner) => {
+                BooksError::OverridesJson(inner)
+            }
+        }
+    }
 }
 
 // `pub(crate)` re-exports for sibling `db/` modules (`discovery`, `palette`,

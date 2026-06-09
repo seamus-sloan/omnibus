@@ -7,7 +7,7 @@ use crate::covers::delete_cover_files_for;
 use crate::helpers::sanitize_accent_color;
 use crate::settings::upsert_library;
 
-use super::books::materialize_new_covers;
+use super::books::{materialize_new_covers, SyncError};
 
 /// Per-bucket payload for [`sync_audiobooks`]. Mirrors [`SyncPlan`] for
 /// the ebook path but carries [`crate::audiobook::IndexedAudiobook`] rows
@@ -38,7 +38,7 @@ pub async fn sync_audiobooks(
     pool: &SqlitePool,
     library_path: &str,
     plan: AudiobookSyncPlan,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), SyncError> {
     let mut tx = pool.begin().await?;
     let library_id = upsert_library(&mut tx, library_path).await?;
 
@@ -281,7 +281,7 @@ pub(crate) async fn insert_chapters(
     book_file_id: i64,
     chapters: &[crate::audiobook::RawChapter],
     parts: &[crate::audiobook::AudiobookPart],
-) -> Result<(), sqlx::Error> {
+) -> Result<(), SyncError> {
     if !chapters.is_empty() {
         let total_duration: f64 = parts.iter().map(|p| p.duration_seconds).sum();
         for (i, ch) in chapters.iter().enumerate() {

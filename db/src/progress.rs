@@ -92,7 +92,7 @@ pub async fn get_progress(
     user_id: i64,
     book_uuid: &str,
     format: ProgressFormat,
-) -> Result<Option<ProgressRecord>, sqlx::Error> {
+) -> Result<Option<ProgressRecord>, ProgressError> {
     let Some(book_id) = resolve_book_id_by_uuid(pool, book_uuid).await? else {
         return Ok(None);
     };
@@ -129,7 +129,7 @@ pub async fn record_session(
     pool: &SqlitePool,
     user_id: i64,
     report: &SessionReport,
-) -> Result<bool, sqlx::Error> {
+) -> Result<bool, ProgressError> {
     let Some(book_id) = resolve_book_id_by_uuid(pool, &report.book_uuid).await? else {
         return Ok(false);
     };

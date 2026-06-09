@@ -52,6 +52,14 @@ pub enum IndexerError {
     Db(#[from] sqlx::Error),
 }
 
+impl From<crate::settings::SettingsError> for IndexerError {
+    fn from(e: crate::settings::SettingsError) -> Self {
+        match e {
+            crate::settings::SettingsError::Db(inner) => IndexerError::Db(inner),
+        }
+    }
+}
+
 /// Reindex if the last successful index is older than this. One hour is a
 /// compromise between responsiveness to on-disk changes and avoiding
 /// thrashing the disk for users who leave the app open all day.
