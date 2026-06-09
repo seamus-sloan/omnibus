@@ -15,6 +15,7 @@ test.beforeAll(async ({ request }) => {
 
 const MP3_BOOK = AUDIOBOOK_BOOKS.find((b) => b.format === "MP3" && b.source === "generated")!;
 const M4B_BOOK = AUDIOBOOK_BOOKS.find((b) => b.format === "M4B")!;
+const MULTIPART_MP3_BOOK = AUDIOBOOK_BOOKS.find((b) => b.format === "MP3" && b.parts > 1)!;
 
 /**
  * Wait until the listen page's manifest fetch has resolved and
@@ -280,6 +281,90 @@ test("shows not-found message for unknown audiobook uuid", async ({ page }) => {
   await expect(
     page.getByRole("link", { name: "Back to library" }),
   ).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// 8. Sleep panel
+// ---------------------------------------------------------------------------
+
+test("opens sleep panel and shows preset duration rail", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  // Open the sleep panel via the toolbar button.
+  await page.getByRole("button", { name: /^sleep/i }).click();
+
+  // Panel container is in the DOM.
+  await expect(page.getByTestId("sleep-panel")).toBeVisible();
+
+  // Preset rail: Off through 4 hours.
+  await expect(page.getByRole("button", { name: "Off" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "15 min" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "30 min" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "45 min" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "1 hour" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "2 hours" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "3 hours" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "4 hours" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "End of chapter" })).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// 9. Bookmarks drawer
+// ---------------------------------------------------------------------------
+
+test("opens bookmarks drawer and shows empty state", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  // Open the bookmarks drawer via the toolbar button.
+  await page.getByRole("button", { name: "Bookmark" }).click();
+
+  // Drawer container is in the DOM.
+  await expect(page.getByTestId("bookmarks-drawer")).toBeVisible();
+
+  // Empty state copy — no bookmarks have been saved yet.
+  await expect(page.getByText("No bookmarks yet")).toBeVisible();
+  await expect(
+    page.getByText("Tap the Bookmark button while listening to save"),
+  ).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// 10. Chapters drawer
+// ---------------------------------------------------------------------------
+
+test("opens chapters drawer and shows played/current/upcoming row states", async ({
+  page,
+  request,
+}) => {
+  // Use the multi-part MP3 book so at least two synthetic chapters are
+  // present (one per part): the first is "current" at elapsed=0, the
+  // second is "upcoming". The synthetic fallback always produces
+  // file_chapters.len() >= 1, so even books without embedded markers work.
+  const uuid = await fetchBookUuidByTitle(request, MULTIPART_MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  // Open the chapters drawer via the toolbar button.
+  await page.getByRole("button", { name: /^chapters/i }).click();
+
+  // Drawer container is in the DOM.
+  await expect(page.getByTestId("chapters-drawer")).toBeVisible();
+
+  // At elapsed=0 the first chapter is current and the rest are upcoming.
+  // getByTestId returns all matching elements; we need at least one current
+  // and at least one upcoming row.
+  await expect(page.getByTestId("chapter-row-current").first()).toBeVisible();
+  await expect(page.getByTestId("chapter-row-upcoming").first()).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
