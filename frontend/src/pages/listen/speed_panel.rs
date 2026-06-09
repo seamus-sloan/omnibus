@@ -55,6 +55,7 @@ pub(super) fn SpeedPanel(rate: Signal<f64>, uuid: String, on_close: EventHandler
                         let class = if is_on { "lp-speed-btn on" } else { "lp-speed-btn" };
                         rsx! {
                             button {
+                                key: "{val}",
                                 class: class,
                                 r#type: "button",
                                 onclick: move |_| apply_rate(&mut rate, &uuid, val),

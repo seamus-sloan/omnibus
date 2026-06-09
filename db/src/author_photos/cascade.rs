@@ -10,6 +10,7 @@ use sqlx::SqlitePool;
 use crate::author_photos::shared::{default_user_agent, shared_client};
 use crate::author_photos_data::{
     author_photo_status, delete_author_photo, upsert_author_photo, AuthorPhotoSource,
+    AuthorPhotosDataError,
 };
 
 /// Default request timeout for the Open Library search + cover calls.
@@ -137,7 +138,7 @@ pub async fn resolve_with(
 pub async fn refetch_all(
     pool: &SqlitePool,
     on_progress: impl Fn(u32, Option<u32>),
-) -> Result<(), sqlx::Error> {
+) -> Result<(), AuthorPhotosDataError> {
     let author_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM authors ORDER BY id")
         .fetch_all(pool)
         .await?;
