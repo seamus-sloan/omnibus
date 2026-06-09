@@ -1,6 +1,6 @@
 //! Unit tests for the `indexer` module — `diff_library` classifiers,
 //! `is_stale` window logic, `reindex` preservation-on-failure, and the
-//! #328 shared-path cross-format deletion guard.
+//! shared-path cross-format deletion guard.
 
 use super::*;
 use crate::books::{list_books, IndexedRow};

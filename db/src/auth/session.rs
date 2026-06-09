@@ -644,7 +644,7 @@ mod tests {
         assert_eq!(again, 0);
     }
 
-    /// #248: the idle DELETE must use `idx_sessions_last_used_at`, not scan.
+    /// The idle DELETE must use `idx_sessions_last_used_at`, not scan.
     /// Guards against regressing to the OR'd form (migration 0012).
     #[tokio::test]
     async fn prune_idle_delete_uses_last_used_index() {
@@ -666,7 +666,7 @@ mod tests {
         );
     }
 
-    /// #248: the revoked DELETE must use the partial `idx_sessions_revoked_at`,
+    /// The revoked DELETE must use the partial `idx_sessions_revoked_at`,
     /// not scan. Guards against regressing to the OR'd form (migration 0012).
     #[tokio::test]
     async fn prune_revoked_delete_uses_revoked_index() {

@@ -16,9 +16,9 @@ pub(crate) async fn fixture() -> (Router, AppState, sqlx::SqlitePool) {
     (app, state, pool)
 }
 
-/// Variant of [`fixture`] that flips the SSRF guard off (issue #275) so
-/// the wiremock-backed `put_author_photo_url` tests can drive the
-/// handler against a server bound to `127.0.0.1`. Production paths
+/// Variant of [`fixture`] that flips the SSRF guard off so the
+/// wiremock-backed `put_author_photo_url` tests can drive the handler
+/// against a server bound to `127.0.0.1`. Production paths
 /// always construct `AppState::new` and therefore always block private
 /// IPs.
 pub(crate) async fn fixture_loopback_remote_image() -> (Router, AppState, sqlx::SqlitePool) {

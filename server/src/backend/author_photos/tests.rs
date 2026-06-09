@@ -1,7 +1,7 @@
-//! Integration tests for the F1.11 author profile photo endpoints. Covers
-//! GET / PUT / DELETE on `/api/authors/{id}/photo` plus the rescan-from-
-//! Open-Library trigger, including auth + admin gating, upload-validation
-//! failure paths, and 5xx DB-failure paths.
+//! Integration tests for the author profile photo endpoints. Covers GET /
+//! PUT / DELETE on `/api/authors/{id}/photo` plus the rescan-from-Open-
+//! Library trigger, including auth + admin gating, upload-validation failure
+//! paths, and 5xx DB-failure paths.
 
 use axum::{
     body::{to_bytes, Body},
@@ -303,9 +303,9 @@ async fn api_put_author_photo_url_rejects_empty_url() {
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
 
-/// Issue #275 — admin SSRF regression. The default `AppState` (built by
-/// `fixture()`) must reject IP-literal URLs that point at the loopback /
-/// cloud-metadata / RFC1918 address space *before* any TCP connect.
+/// SSRF regression: the default `AppState` (built by `fixture()`) must
+/// reject IP-literal URLs that point at the loopback / cloud-metadata /
+/// RFC1918 address space *before* any TCP connect.
 /// Every URL listed below is one a hostile or compromised admin could
 /// plausibly try; each must surface 400.
 #[tokio::test]

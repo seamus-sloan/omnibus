@@ -1,13 +1,13 @@
-//! F2.3 listening-position persistence — the saved `currentTime`
-//! (seconds, float) for each audiobook.
+//! Listening-position persistence — the saved `currentTime` (seconds, float)
+//! for each audiobook.
 //!
 //! Mirrors [`crate::reader_progress`] in shape: web persists to
 //! `localStorage` keyed by uuid; mobile keeps an in-memory map (resets on
 //! cold launch); server (SSR) is a no-op so the rendered markup never
 //! depends on a stored position.
 //!
-//! Also the offline / first-paint cache layer for the F2.1 progress-sync
-//! endpoint (`POST /api/progress` with `format: "audio"` and
+//! Also the offline / first-paint cache layer for the progress-sync endpoint
+//! (`POST /api/progress` with `format: "audio"` and
 //! `audio_position_seconds`): the listen page reads this synchronously
 //! for an instant local position, then reconciles against the server
 //! before mounting. Saves write here AND fire-and-forget POST to the

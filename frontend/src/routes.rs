@@ -91,9 +91,9 @@ pub fn BookRead(uuid: String) -> Element {
     }
 }
 
-/// Route target for `/listen/:uuid` — the F2.3 immersive audiobook
-/// player. Same uuid-keyed stability + no-chrome rationale as
-/// [`BookRead`]; the player owns its own slim top bar.
+/// Route target for `/listen/:uuid` — the immersive audiobook player.
+/// Same uuid-keyed stability + no-chrome rationale as [`BookRead`]; the
+/// player owns its own slim top bar.
 #[component]
 pub fn BookListen(uuid: String) -> Element {
     rsx! {

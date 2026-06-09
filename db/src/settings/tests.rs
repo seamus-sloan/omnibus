@@ -290,9 +290,9 @@ async fn set_settings_none_removes_library_data() {
         .unwrap();
     assert_eq!(library_count, 0);
 }
-/// Exercises the batched (#149) `prune_orphan_libraries` path across more
-/// than one chunk. The IN-list is chunked at 500 ids to stay under
-/// SQLite's bind-parameter cap, so seeding more orphaned libraries than a
+/// Exercises the batched `prune_orphan_libraries` path across more than
+/// one chunk. The IN-list is chunked at 500 ids to stay under SQLite's
+/// bind-parameter cap, so seeding more orphaned libraries than a
 /// single chunk holds is what actually verifies the chunking loop iterates
 /// (a regression that dropped or mis-bound a later chunk would otherwise go
 /// undetected). Seeds 1001 libraries — three chunks of 500 / 500 / 1 — each

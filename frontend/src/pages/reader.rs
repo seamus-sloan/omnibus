@@ -1,4 +1,4 @@
-//! Immersive full-screen EPUB reader (F2.4). Loads the vendored epub.js +
+//! Immersive full-screen EPUB reader. Loads the vendored epub.js +
 //! JSZip glue (`window.OmnibusReader`) via `dioxus::document::eval`, streams
 //! bytes from cookie-gated `GET /api/ebooks/:uuid/file`, and persists
 //! position via [`crate::reader_progress`]. Chrome compiles on every

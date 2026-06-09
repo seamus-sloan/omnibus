@@ -1,5 +1,5 @@
-//! F2.3 audiobook streaming — direct-play manifest (#339) + Range-served
-//! part files, with the legacy HLS pipeline retained as a fallback for
+//! Audiobook streaming routes: direct-play manifest + Range-served part
+//! files, with the legacy HLS pipeline retained as a fallback for
 //! non-natively-playable codecs.
 //!
 //! - `GET /api/audiobooks/{uuid}/manifest` — JSON describing how the
@@ -89,12 +89,10 @@ pub(super) async fn get_audiobook_playlist(
         .into_response()
 }
 
-/// Returns the playback manifest for `uuid`. Routes direct-playable
-/// books (m4b / m4a / mp3) to per-part HTTP Range URLs and everything
-/// else (mixed folders containing flac / ac3 / …) to the legacy HLS
-/// playlist. The codec gate lives in [`omnibus_db::audiobook::codec`];
-/// see [#339](https://github.com/seamus-sloan/omnibus/issues/339) for
-/// the design.
+/// Returns the playback manifest for `uuid`. Routes direct-playable books
+/// (m4b / m4a / mp3) to per-part HTTP Range URLs and everything else (mixed
+/// folders containing flac / ac3 / …) to the legacy HLS playlist. The codec
+/// gate lives in [`omnibus_db::audiobook::codec`].
 pub(super) async fn get_audiobook_manifest(
     _user: AuthUser,
     State(state): State<AppState>,
@@ -317,8 +315,8 @@ pub(super) async fn get_audiobook_segment(
 
 /// Terminal-vs-in-flight discriminator for the status JSON. Lets the
 /// frontend distinguish "transcode is preparing" from "transcode
-/// permanently failed" — the legacy `{ready: false, progress: 0}`
-/// shape collapsed both into the same response, which is Bug 4 of #338.
+/// permanently failed" — the legacy `{ready: false, progress: 0}` shape
+/// collapsed both into the same ambiguous response.
 #[derive(Serialize)]
 #[serde(rename_all = "lowercase")]
 enum StatusState {

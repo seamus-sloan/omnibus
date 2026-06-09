@@ -276,10 +276,10 @@ mod tests {
         let _ = std::fs::remove_file(cover_path_for(&uuid, "jpg"));
         assert!(get_cover(&pool, books[0].id).await.unwrap().is_none());
     }
-    /// F5.1 / #107: when a `metadata_overrides` row sets
-    /// `has_cover_override = 1` and an `override-<uuid>.<ext>` file exists
-    /// on disk, `get_cover` returns the override bytes — not the scanned
-    /// cover. Single-query form must preserve this precedence.
+    /// When a `metadata_overrides` row sets `has_cover_override = 1` and an
+    /// `override-<uuid>.<ext>` file exists on disk, `get_cover` returns the
+    /// override bytes — not the scanned cover. Single-query form must
+    /// preserve this precedence.
     #[tokio::test]
     async fn cover_returns_override_when_flag_set() {
         let _covers = CoversTempDir::new("override_set");
@@ -316,9 +316,9 @@ mod tests {
         let cover = get_cover(&pool, books[0].id).await.unwrap();
         assert_eq!(cover, Some(("image/png".into(), b"OVERRIDE".to_vec())));
     }
-    /// F5.1 / #107: with no `metadata_overrides` row, `get_cover` falls
-    /// through to the scanned `<uuid>.<ext>` cover. The LEFT JOIN must
-    /// not filter the book out when no override row exists.
+    /// With no `metadata_overrides` row, `get_cover` falls through to the
+    /// scanned `<uuid>.<ext>` cover. The LEFT JOIN must not filter the book
+    /// out when no override row exists.
     #[tokio::test]
     async fn cover_returns_original_when_no_override_row() {
         let _covers = CoversTempDir::new("override_absent");
@@ -343,9 +343,9 @@ mod tests {
         let cover = get_cover(&pool, books[0].id).await.unwrap();
         assert_eq!(cover, Some(("image/jpeg".into(), b"ORIGINAL".to_vec())));
     }
-    /// F5.1 / #107: a `metadata_overrides` row with
-    /// `has_cover_override = 0` (text-only edits, no cover swap) must
-    /// resolve to the scanned cover, not the override path.
+    /// A `metadata_overrides` row with `has_cover_override = 0` (text-only
+    /// edits, no cover swap) must resolve to the scanned cover, not the
+    /// override path.
     #[tokio::test]
     async fn cover_returns_original_when_override_flag_unset() {
         let _covers = CoversTempDir::new("override_flag_off");
@@ -390,8 +390,8 @@ mod tests {
         let cover = get_cover(&pool, books[0].id).await.unwrap();
         assert_eq!(cover, Some(("image/jpeg".into(), b"ORIGINAL".to_vec())));
     }
-    /// #107: `get_cover` for a non-existent book id returns `Ok(None)`
-    /// (not an error). The LEFT JOIN must not change this contract.
+    /// `get_cover` for a non-existent book id returns `Ok(None)` (not an
+    /// error). The LEFT JOIN must not change this contract.
     #[tokio::test]
     async fn cover_returns_none_for_missing_book_id() {
         let _covers = CoversTempDir::new("missing_book");

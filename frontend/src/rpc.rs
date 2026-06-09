@@ -72,8 +72,8 @@ mod server_auth {
     pub struct AuthUser {
         pub id: i64,
         pub is_admin: bool,
-        /// F5.1: metadata edit permission. `true` for the first user (admin)
-        /// and any user explicitly granted `can_edit`.
+        /// Metadata edit permission. `true` for the first user (admin) and
+        /// any user explicitly granted `can_edit`.
         pub can_edit: bool,
     }
 
