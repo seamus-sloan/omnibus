@@ -77,15 +77,73 @@ allow = [
 # ---------------------------------------------------------------------------
 # Bans
 # ---------------------------------------------------------------------------
-# Using "warn" for duplicate versions because this workspace has ~31
-# git-pinned Dioxus crates that pull in multiple transitive versions of
-# several common crates. Promoting to "deny" after the Dioxus patches are
-# replaced with plain crates.io versions.
+# Duplicates are audited in docs/dependency-audit.md — every entry below
+# corresponds to a row in that table with a classification and rationale.
+# Warn rather than deny so new first-party skew is visible without blocking
+# CI until the Dioxus patches are replaced with plain crates.io versions.
 [bans]
 multiple-versions = "warn"
 # Deny crates that should never appear in the dependency tree.
 deny = []
-skip = []
+
+# ---------------------------------------------------------------------------
+# Accepted / blocked duplicate families (see docs/dependency-audit.md)
+# ---------------------------------------------------------------------------
+skip = [
+    # --- WebSocket stack split (Dioxus vs Axum) ---
+    # tungstenite: 0.27 (async-tungstenite/dioxus-fullstack), 0.28
+    # (dioxus-devtools), 0.29 (axum). Blocked by upstream Dioxus.
+    { name = "tungstenite", version = "0.27.0" },
+    { name = "tungstenite", version = "0.28.0" },
+    # tokio-tungstenite: 0.28 (dioxus), 0.29 (axum). Same root cause.
+    { name = "tokio-tungstenite", version = "0.28.0" },
+
+    # --- thiserror v1 ---
+    # Sole consumer is gloo-net (Dioxus WASM dep). Our crates use v2.
+    # Blocked until gloo-net / Dioxus bumps to thiserror 2.
+    { name = "thiserror", version = "1.0.69" },
+    { name = "thiserror-impl", version = "1.0.69" },
+
+    # --- const-serialize alpha ---
+    # 0.7.2 from crates.io manganis; 0.8.0-alpha.0 bundled in Dioxus git tag.
+    # Blocked by Dioxus pin.
+    { name = "const-serialize", version = "0.7.2" },
+    { name = "const-serialize-macro", version = "0.7.2" },
+
+    # --- getrandom three-way split ---
+    # 0.2 intentionally kept for argon2/rand_core 0.6 auth path in db.
+    # 0.3 from tungstenite/rand 0.9. 0.4 from tempfile (dev-dep only).
+    # See docs/dependency-audit.md for upgrade trigger conditions.
+    { name = "getrandom", version = "0.2.17" },
+    { name = "getrandom", version = "0.3.4" },
+    { name = "rand_core", version = "0.6.4" },
+
+    # --- hashbrown four-way split ---
+    # 0.14 from dashmap (dioxus-server), 0.15 from sqlx-core,
+    # 0.16 from lru (dioxus-server), 0.17 from indexmap.
+    # All internal impl details — not in any public API surface.
+    { name = "hashbrown", version = "0.14.5" },
+    { name = "hashbrown", version = "0.15.5" },
+    { name = "hashbrown", version = "0.16.1" },
+    # foldhash mirrors hashbrown minor versions (each hashbrown ships its own)
+    { name = "foldhash", version = "0.1.5" },
+
+    # --- convert_case (proc-macro only) ---
+    # 0.8 from Dioxus proc-macro crates; 0.10 from derive_more (dioxus-fullstack).
+    # Not in any runtime binary.
+    { name = "convert_case", version = "0.8.0" },
+
+    # --- rand 0.8 (build-dep only) ---
+    # phf_generator (build dep of ammonia→html5ever) uses rand 0.8.
+    # Never links into the runtime binary.
+    { name = "rand", version = "0.8.6" },
+
+    # --- webpki-roots ---
+    # 0.26 from sqlx-core; 1.0 from hyper-rustls (reqwest).
+    # Collapses when sqlx bumps its rustls deps.
+    { name = "webpki-roots", version = "0.26.11" },
+]
+
 skip-tree = []
 
 # ---------------------------------------------------------------------------
