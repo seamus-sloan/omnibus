@@ -122,7 +122,9 @@ fn render_series(s: SeriesDetail) -> Element {
             div { class: "disc-body",
                 div { class: "series-cards",
                     for book in s.books.iter() {
-                        article { class: "card series-card",
+                        article {
+                            key: "{book.id}",
+                            class: "card series-card",
                             div { class: "series-card-cover",
                                 Link {
                                     to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
