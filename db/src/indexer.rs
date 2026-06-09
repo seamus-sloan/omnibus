@@ -341,11 +341,21 @@ pub async fn reindex_audiobooks(pool: &SqlitePool, library_path: &str) -> anyhow
 /// backfill runs as a separate worker task and is a no-op once all books
 /// have chapters. `on_progress(processed, total)` is called after each
 /// book so the UI can render a progress bar.
+///
+/// ## Query efficiency
+///
+/// All `book_file_parts` rows for the backfill set are fetched in a single
+/// `WHERE book_file_id IN (…)` bulk query before the loop rather than one
+/// per book, and all chapter inserts are committed in batches of 250 books
+/// to avoid per-book WAL flushes (mirrors the sync/audiobooks.rs backfill
+/// pattern).
 pub(crate) async fn backfill_chapters(
     pool: &SqlitePool,
     library_path: &str,
-    on_progress: impl Fn(u32, u32),
+    mut on_progress: impl FnMut(u32, u32),
 ) -> anyhow::Result<()> {
+    // One query: the first-part filename (ordinal=0) and format for every
+    // book that needs chapters.
     let rows: Vec<(i64, String, String)> = sqlx::query_as(
         "SELECT bf.id, bfp.filename, bf.format \
          FROM book_files bf \
@@ -372,41 +382,76 @@ pub(crate) async fn backfill_chapters(
         "backfilling chapters for existing audiobooks"
     );
 
+    // Bulk-fetch all parts for the backfill set, then group by book_file_id —
+    // avoids N per-book SELECT round-trips. Chunk at 500 to stay well under
+    // SQLite's 999 bind-parameter limit.
+    let book_file_ids: Vec<i64> = rows.iter().map(|(id, _, _)| *id).collect();
+    let mut all_parts_rows: Vec<(i64, i64, String, i64, i64, f64)> = Vec::new();
+    for chunk in book_file_ids.chunks(500) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let parts_sql = format!(
+            "SELECT book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds \
+             FROM book_file_parts WHERE book_file_id IN ({placeholders}) \
+             ORDER BY book_file_id, ordinal"
+        );
+        let mut parts_query = sqlx::query_as::<_, (i64, i64, String, i64, i64, f64)>(&parts_sql);
+        for id in chunk {
+            parts_query = parts_query.bind(id);
+        }
+        all_parts_rows.extend(parts_query.fetch_all(pool).await?);
+    }
+
+    // Group parts by book_file_id.
+    let mut parts_by_id: std::collections::HashMap<i64, Vec<crate::audiobook::AudiobookPart>> =
+        std::collections::HashMap::new();
+    for (book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds) in
+        all_parts_rows
+    {
+        parts_by_id
+            .entry(book_file_id)
+            .or_default()
+            .push(crate::audiobook::AudiobookPart {
+                ordinal,
+                filename,
+                size_bytes,
+                mtime_epoch,
+                duration_seconds,
+            });
+    }
+
+    // Process books in batches of 250 to bound transaction size (mirrors the
+    // sync/audiobooks.rs backfill pattern).
     let lib_root = PathBuf::from(library_path);
-    for (i, (book_file_id, first_part_filename, format)) in rows.iter().enumerate() {
-        let abs = lib_root.join(first_part_filename);
-        let fmt = format.clone();
-        let chapters = tokio::task::spawn_blocking(move || audiobook::extract_chapters(&abs, &fmt))
-            .await
-            .unwrap_or_default();
-
-        let parts: Vec<crate::audiobook::AudiobookPart> =
-            sqlx::query_as::<_, (i64, String, i64, i64, f64)>(
-                "SELECT ordinal, filename, size_bytes, mtime_epoch, duration_seconds \
-                 FROM book_file_parts WHERE book_file_id = ? ORDER BY ordinal",
-            )
-            .bind(book_file_id)
-            .fetch_all(pool)
-            .await?
-            .into_iter()
-            .map(
-                |(ordinal, filename, size_bytes, mtime_epoch, duration_seconds)| {
-                    crate::audiobook::AudiobookPart {
-                        ordinal,
-                        filename,
-                        size_bytes,
-                        mtime_epoch,
-                        duration_seconds,
-                    }
-                },
-            )
-            .collect();
-
+    for (batch_idx, chunk) in rows.chunks(250).enumerate() {
         let mut tx = pool.begin().await?;
-        sync::insert_chapters(&mut tx, *book_file_id, &chapters, &parts).await?;
-        tx.commit().await?;
+        for (i, (book_file_id, first_part_filename, format)) in chunk.iter().enumerate() {
+            let abs = lib_root.join(first_part_filename);
+            let fmt = format.clone();
+            let chapters =
+                tokio::task::spawn_blocking(move || audiobook::extract_chapters(&abs, &fmt))
+                    .await
+                    .unwrap_or_else(|join_err| {
+                        tracing::warn!(
+                            book_file_id,
+                            %join_err,
+                            is_panic = join_err.is_panic(),
+                            "chapter extraction task failed; using synthetic fallback"
+                        );
+                        Vec::new()
+                    });
 
-        on_progress(i as u32 + 1, total);
+            let parts = parts_by_id
+                .get(book_file_id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            sync::insert_chapters(&mut tx, *book_file_id, &chapters, parts).await?;
+
+            let global_idx = batch_idx * 250 + i;
+            on_progress(global_idx as u32 + 1, total);
+        }
+        tx.commit().await?;
     }
 
     Ok(())
