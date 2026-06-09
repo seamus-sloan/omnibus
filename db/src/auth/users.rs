@@ -96,6 +96,7 @@ pub async fn create_user(pool: &SqlitePool, username: &str, password: &str) -> A
     })
 }
 
+/// Look up a user record by username (case-insensitive); returns `None` if no match.
 pub async fn get_user_by_username(pool: &SqlitePool, username: &str) -> AuthResult<Option<User>> {
     let row = sqlx::query(
         "SELECT id, username, is_admin, can_upload, can_edit, can_download
@@ -107,6 +108,7 @@ pub async fn get_user_by_username(pool: &SqlitePool, username: &str) -> AuthResu
     Ok(row.as_ref().map(row_to_user))
 }
 
+/// Look up a user record by primary key; returns `None` if no match.
 pub async fn get_user_by_id(pool: &SqlitePool, id: i64) -> AuthResult<Option<User>> {
     let row = sqlx::query(
         "SELECT id, username, is_admin, can_upload, can_edit, can_download
@@ -129,6 +131,7 @@ pub async fn promote_to_admin(pool: &SqlitePool, username: &str) -> AuthResult<b
     Ok(result.rows_affected() > 0)
 }
 
+/// Enable or disable new user self-registration; persists the setting to the `settings` table.
 pub async fn set_registration_enabled(pool: &SqlitePool, enabled: bool) -> AuthResult<()> {
     let v = if enabled { "1" } else { "0" };
     sqlx::query(
@@ -141,6 +144,7 @@ pub async fn set_registration_enabled(pool: &SqlitePool, enabled: bool) -> AuthR
     Ok(())
 }
 
+/// Return whether new user self-registration is currently enabled.
 pub async fn registration_enabled(pool: &SqlitePool) -> AuthResult<bool> {
     let v: Option<String> =
         sqlx::query_scalar("SELECT value FROM settings WHERE key = 'registration_enabled'")

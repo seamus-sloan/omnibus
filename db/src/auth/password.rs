@@ -88,6 +88,7 @@ pub(crate) fn argon2_hasher() -> Argon2<'static> {
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
 }
 
+/// Validate a plaintext password against the policy rules (length bounds and common-password reject-list).
 pub fn validate_password(password: &str) -> AuthResult<()> {
     // Count Unicode scalar values, not bytes, so a few emoji can't satisfy
     // a byte-length floor. Argon2 itself is byte-oriented and imposes no
@@ -163,6 +164,7 @@ pub fn validate_username(username: &str) -> AuthResult<()> {
     Ok(())
 }
 
+/// Hash `password` with Argon2id using OWASP-recommended parameters; returns a PHC-format string suitable for storage.
 pub fn hash_password(password: &str) -> AuthResult<String> {
     let salt = SaltString::generate(&mut PhcOsRng);
     let phc = argon2_hasher()

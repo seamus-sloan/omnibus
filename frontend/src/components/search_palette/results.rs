@@ -299,8 +299,8 @@ fn book_thumb_url(server_url: &str, book: &PaletteBookHit) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::model::build_flat_items;
+    use super::*;
 
     #[test]
     fn book_thumb_url_uses_uuid_not_id() {

@@ -29,6 +29,7 @@ pub enum AuthorPhotoSource {
 }
 
 impl AuthorPhotoSource {
+    /// Return the database string representation of this photo source variant.
     pub fn as_str(&self) -> &'static str {
         match self {
             AuthorPhotoSource::Manual => "manual",
@@ -37,6 +38,7 @@ impl AuthorPhotoSource {
         }
     }
 
+    /// Parse a database string into an `AuthorPhotoSource` variant; returns `None` for unrecognised values.
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "manual" => Some(Self::Manual),
