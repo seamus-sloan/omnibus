@@ -33,8 +33,9 @@ concurrency:
 
 jobs:
   # Compile the fullstack web bundle (native server binary + WASM client)
-  # once and stash it in the GHA cache. The shard jobs below restore from
-  # the same key and skip the ~3-minute `dx bundle` entirely on a hit.
+  # in release mode once and stash it in the GHA cache. Release mode strips
+  # the Dioxus hot-reload client from the WASM bundle, which otherwise
+  # injects a "Your app is being rebuilt" overlay that corrupts the DOM.
   # Cache key covers every input that can change compiled output: the
   # lockfile, per-crate manifests, the workspace crates that feed the web
   # build, the Dioxus bundle config, the flake (toolchain pin), and this
@@ -68,7 +69,7 @@ jobs:
         id: bundle-cache
         uses: actions/cache/restore@v4
         with:
-          path: target/dx/omnibus/debug/web
+          path: target/dx/omnibus/release/web
           key: ${{ steps.bundle-key.outputs.key }}
 
       - name: Install Nix
@@ -99,16 +100,16 @@ jobs:
 
       - name: Bundle web app
         if: steps.bundle-cache.outputs.cache-hit != 'true'
-        run: nix develop .#e2e --command bash -c 'set -euo pipefail; dx bundle --platform web --package omnibus --fullstack'
+        run: nix develop .#e2e --command bash -c 'set -euo pipefail; dx bundle --platform web --package omnibus --fullstack --release'
 
       # Explicit save (not the combined cache action's post-step) so it runs
-      # while `target/dx/omnibus/debug/web` still exists. See the restore step
+      # while `target/dx/omnibus/release/web` still exists. See the restore step
       # above for the rust-cache cleanup race we're dodging.
       - name: Save dx bundle cache
         if: steps.bundle-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: target/dx/omnibus/debug/web
+          path: target/dx/omnibus/release/web
           key: ${{ steps.bundle-key.outputs.key }}
 
   playwright:
@@ -159,7 +160,7 @@ jobs:
       - name: Restore dx bundle cache
         uses: actions/cache@v4
         with:
-          path: target/dx/omnibus/debug/web
+          path: target/dx/omnibus/release/web
           key: ${{ needs.bundle.outputs.cache-key }}
           fail-on-cache-miss: true
 
@@ -172,8 +173,8 @@ jobs:
         run: |
           nix develop .#e2e --command bash -c '
             set -euo pipefail
-            chmod +x ./target/dx/omnibus/debug/web/server
-            nohup env PORT=3000 ./target/dx/omnibus/debug/web/server >server.log 2>&1 &
+            chmod +x ./target/dx/omnibus/release/web/server
+            nohup env PORT=3000 ./target/dx/omnibus/release/web/server >server.log 2>&1 &
             disown
             npx --yes wait-on -t 60000 http://127.0.0.1:3000
           '
