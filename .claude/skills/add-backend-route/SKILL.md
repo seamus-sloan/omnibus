@@ -89,4 +89,4 @@ If this route is hit by a UI page, drive that page via [`ui-validate`](../ui-val
 
 ## 10. End-of-session
 
-Run [99-end-of-session.md](../../rules/99-end-of-session.md). Update [.claude/architecture.md](../../architecture.md) if a new module was introduced.
+Run [99-end-of-session.md](../../rules/99-end-of-session.md). If a new module was introduced, update [.claude/architecture.md](../../architecture.md) (per-crate module maps), and add a link to it from [CLAUDE.md](../../../CLAUDE.md) if it's a top-level crate or concept worth listing in the index.
