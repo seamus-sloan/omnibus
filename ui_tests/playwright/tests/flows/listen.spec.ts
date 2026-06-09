@@ -71,10 +71,8 @@ test("renders the listen page layout for an mp3 audiobook", async ({
   await expect(page.getByRole("heading", { name: MP3_BOOK.title })).toBeVisible();
   await expect(page.getByText(`by ${MP3_BOOK.author}`)).toBeVisible();
 
-  // Transport: scrubber + skip-back / play / skip-forward / rate.
-  // Use data-testid rather than getByRole("slider") — Chromium on Linux
-  // sometimes omits the slider role for appearance:none range inputs.
-  await expect(page.getByTestId("listen-scrub")).toBeVisible();
+  // Transport: chapter map + skip-back / play / skip-forward / rate.
+  await expect(page.getByTestId("chapter-map")).toBeVisible();
   await expect(page.getByRole("button", { name: "Back 30 seconds" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Forward 30 seconds" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible();
