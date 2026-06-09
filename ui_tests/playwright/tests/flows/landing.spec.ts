@@ -60,6 +60,7 @@ test("toggles to grid view and persists across reload", async ({ page }) => {
   await expect(page.getByTestId("view-toggle-grid")).toHaveAttribute("aria-pressed", "true");
 
   await page.reload();
+  await page.waitForLoadState("networkidle");
   await expect(page.getByTestId("lib-grid")).toBeVisible();
   await expect(page.getByTestId("ebook-table")).toHaveCount(0);
 });

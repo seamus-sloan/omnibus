@@ -53,6 +53,14 @@ test("renders the listen page layout for an mp3 audiobook", async ({
   const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
   await gotoReady(page, `/listen/${uuid}`);
 
+  // Hidden <audio> element is in the DOM immediately.
+  await expect(page.getByTestId("listen-audio")).toBeAttached();
+
+  // Wait for the preparing overlay to clear — it covers the controls with
+  // position:absolute inset:0 until the JS bootstrap calls initDirect.
+  await waitForPlayerReady(page);
+  await expect(page.getByTestId("listen-failed")).toHaveCount(0);
+
   // App-wide top-nav is mounted by ReadyPlayer.
   await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
 
@@ -69,13 +77,6 @@ test("renders the listen page layout for an mp3 audiobook", async ({
   await expect(page.getByRole("button", { name: "Forward 30 seconds" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Playback speed" })).toBeVisible();
-
-  // Hidden <audio> element.
-  await expect(page.getByTestId("listen-audio")).toBeAttached();
-
-  // Direct-mode init removes the preparing overlay.
-  await waitForPlayerReady(page);
-  await expect(page.getByTestId("listen-failed")).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------
