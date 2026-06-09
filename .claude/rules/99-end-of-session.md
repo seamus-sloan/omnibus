@@ -2,11 +2,11 @@
 
 Before ending a session where code changed, run this checklist:
 
-1. **Docs sync.** Update [CLAUDE.md](../../CLAUDE.md) or the relevant rule file if any of these happened:
-   - New module or subdirectory
-   - New dependency in `Cargo.toml`
-   - New environment variable or configuration key
-   - New or changed convention (error handling, test patterns, etc.)
+1. **Docs sync.** Update the right file for the change:
+   - New module or subdirectory → add it to [.claude/architecture.md](../architecture.md) (per-crate module map). If it adds a new top-level crate or top-level concept worth listing in the index, also link it from [CLAUDE.md](../../CLAUDE.md).
+   - New dependency in `Cargo.toml` → call it out wherever it's relevant (CLAUDE.md if it affects build commands, the matching rule file if it shifts a convention).
+   - New environment variable or configuration key → [.claude/rules/01-dev-environment.md](01-dev-environment.md) and [.env.example](../../.env.example).
+   - New or changed convention (error handling, test patterns, etc.) → the matching rule file under [.claude/rules/](.) and the [CLAUDE.md](../../CLAUDE.md) rules index if it's a new file.
 2. **Skill freshness.** Run [98-keep-skills-fresh.md](98-keep-skills-fresh.md) — verify no skill file got stale.
 3. **Nix sync.** If a new system dependency was added, update [flake.nix](../../flake.nix). If the shellHook changed, update [01-dev-environment.md](01-dev-environment.md).
 4. **Format & lint.** Run `cargo fmt` and `cargo clippy` on anything touched in the server/mobile crates.
