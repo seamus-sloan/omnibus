@@ -104,13 +104,13 @@ async fn merge_metadata_overrides_creates_row_when_absent() {
     assert_eq!(loaded.title, Some("Fresh".into()));
     assert!(!has_cover, "a brand-new merged row has no cover override");
 }
-/// #243: two concurrent saves to the same book (e.g. the F5.1 edit form
-/// open in two tabs, or a network retry firing twice) each touch a
-/// different field. Because the rpc/REST save paths route through
-/// `merge_metadata_overrides` — whose read-merge-write runs under a single
-/// `BEGIN IMMEDIATE` — neither write may be silently dropped: both fields
-/// must survive regardless of interleaving. A barrier releases both tasks
-/// into the merge at the same instant so the test exercises real contention
+/// Two concurrent saves to the same book (e.g. the edit form open in two
+/// tabs, or a network retry firing twice) each touch a different field.
+/// Because the rpc/REST save paths route through `merge_metadata_overrides`
+/// — whose read-merge-write runs under a single `BEGIN IMMEDIATE` — neither
+/// write may be silently dropped: both fields must survive regardless of
+/// interleaving. A barrier releases both tasks into the merge at the same
+/// instant so the test exercises real contention
 /// rather than letting the first save finish before the second starts.
 #[tokio::test]
 async fn merge_metadata_overrides_concurrent_saves_dont_drop_writes() {

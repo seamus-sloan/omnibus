@@ -74,14 +74,13 @@ pub struct ChipEditorProps {
     /// dropdown surfaces on first paint. Used by the landing-page
     /// Authors cell so admins don't have to click twice (once to
     /// enter edit mode, once to focus the input). Off by default to
-    /// keep the F5.1 metadata-edit page from stealing focus from the
-    /// page's other fields on mount.
+    /// keep the metadata-edit page from stealing focus from the page's
+    /// other fields on mount.
     #[props(default = false)]
     pub autofocus: bool,
     /// Optional uppercase mini-header rendered at the top of the
-    /// suggestion dropdown — "ADD AUTHOR" / "ADD TAG" in the F5.9-lite
-    /// design comp. Empty string (the default) suppresses the header
-    /// entirely.
+    /// suggestion dropdown — "ADD AUTHOR" / "ADD TAG". Empty string (the
+    /// default) suppresses the header entirely.
     #[props(default)]
     pub dropdown_header: String,
     /// Fired when the user presses Escape inside the input. Useful for

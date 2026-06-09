@@ -1,5 +1,5 @@
-//! F2.1 progress sync — server-authoritative reading/listening position and
-//! batched session reports.
+//! Server-authoritative reading and listening position sync, plus batched
+//! session reports.
 //!
 //! Position upserts are last-write-wins on `(user_id, book_id, format)`; the
 //! upsert always bumps `updated_at` to now so a newly-opened client can sync

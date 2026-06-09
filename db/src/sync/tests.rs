@@ -78,11 +78,10 @@ async fn replace_books_inserts_metadata_and_covers() {
 
     assert!(last_indexed_at(&pool, "/lib").await.unwrap().is_some());
 }
-/// F1.7 Atrium accent round-trip. `replace_books` writes
-/// `metadata.accent` into `books.accent_color`; `list_books` /
-/// `get_book` / `search_books` read it back into
-/// `EbookMetadata.accent`. Verify the column survives the trip and
-/// `None` stays `None` (not coerced to an empty string).
+/// Atrium accent round-trip. `replace_books` writes `metadata.accent`
+/// into `books.accent_color`; `list_books` / `get_book` / `search_books`
+/// read it back into `EbookMetadata.accent`. Verify the column survives
+/// the trip and `None` stays `None` (not coerced to an empty string).
 #[tokio::test]
 async fn replace_books_round_trips_accent_color() {
     let _covers = CoversTempDir::new("accent_round_trip");
@@ -141,9 +140,9 @@ async fn replace_books_round_trips_accent_color() {
     let detail_plain = get_book(&pool, plain.id).await.unwrap().unwrap();
     assert_eq!(detail_plain.accent, None);
 }
-/// #125: the write-boundary gate must accept the exact `oklch(L C H)`
-/// shape the indexer emits, and reject anything else — including raw
-/// hex, CSS keywords, and injection payloads that try to break out of
+/// The write-boundary gate must accept the exact `oklch(L C H)` shape
+/// the indexer emits, and reject anything else — including raw hex, CSS
+/// keywords, and injection payloads that try to break out of
 /// the `style="background: {bg}"` attribute used by Atrium consumers.
 ///
 /// End-to-end gate: writing an `IndexedBook` whose `accent` carries an

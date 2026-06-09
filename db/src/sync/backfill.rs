@@ -7,9 +7,9 @@ use sqlx::Transaction;
 /// Apply the Backfill bucket as a single `UPDATE ... FROM (VALUES ..)`
 /// per chunk. One statement per chunk instead of one per book so a
 /// post-migration run over a large library doesn't hold the write lock
-/// for thousands of individual writes (issue #245). Chunked to stay
-/// well under SQLite's bound-parameter limit (3 binds per row, plus 1
-/// for library_id).
+/// for thousands of individual writes. Chunked to stay well under
+/// SQLite's bound-parameter limit (3 binds per row, plus 1 for
+/// library_id).
 pub(super) async fn backfill_stat_chunks(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_id: i64,
