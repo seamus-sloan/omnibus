@@ -368,7 +368,9 @@ fn ReaderTopChrome(
                     class: "rd-tool",
                     r#type: "button",
                     "data-testid": "reader-bookmark",
-                    "aria-label": "Bookmark",
+                    "aria-label": "Bookmark (coming soon)",
+                    title: "Bookmark — coming soon",
+                    disabled: true,
                     svg {
                         width: "19", height: "19", view_box: "0 0 24 24",
                         fill: "none", stroke: "currentColor",
