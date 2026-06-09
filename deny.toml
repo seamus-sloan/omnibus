@@ -77,8 +77,10 @@ allow = [
 # ---------------------------------------------------------------------------
 # Bans
 # ---------------------------------------------------------------------------
-# Duplicates are audited in docs/dependency-audit.md — every entry below
-# corresponds to a row in that table with a classification and rationale.
+# Duplicates are audited in docs/dependency-audit.md — entries below cover
+# the families listed there plus their proc-macro/companion crates
+# (e.g. `thiserror-impl`, `rand_core`, `foldhash`, `const-serialize-macro`)
+# that ship in lockstep with the duplicated runtime crate.
 # Warn rather than deny so new first-party skew is visible without blocking
 # CI until the Dioxus patches are replaced with plain crates.io versions.
 [bans]
@@ -99,8 +101,9 @@ skip = [
     { name = "tokio-tungstenite", version = "0.28.0" },
 
     # --- thiserror v1 ---
-    # Sole consumer is gloo-net (Dioxus WASM dep). Our crates use v2.
-    # Blocked until gloo-net / Dioxus bumps to thiserror 2.
+    # Pulled by cairo-rs, gio, glib, gloo-net, jni, ndk — all transitive
+    # through the Dioxus WASM/desktop/mobile stacks. Our first-party crates
+    # use v2. Blocked until those upstream crates bump to thiserror 2.
     { name = "thiserror", version = "1.0.69" },
     { name = "thiserror-impl", version = "1.0.69" },
 
@@ -110,12 +113,16 @@ skip = [
     { name = "const-serialize", version = "0.7.2" },
     { name = "const-serialize-macro", version = "0.7.2" },
 
-    # --- getrandom three-way split ---
+    # --- getrandom + rand_core (four-way getrandom split) ---
+    # 0.1 from rand 0.7.3 (phf_generator, build-dep only).
     # 0.2 intentionally kept for argon2/rand_core 0.6 auth path in db.
     # 0.3 from tungstenite/rand 0.9. 0.4 from tempfile (dev-dep only).
+    # rand_core 0.5/0.6/0.9 mirror those paths.
     # See docs/dependency-audit.md for upgrade trigger conditions.
+    { name = "getrandom", version = "0.1.16" },
     { name = "getrandom", version = "0.2.17" },
     { name = "getrandom", version = "0.3.4" },
+    { name = "rand_core", version = "0.5.1" },
     { name = "rand_core", version = "0.6.4" },
 
     # --- hashbrown four-way split ---
@@ -129,13 +136,17 @@ skip = [
     { name = "foldhash", version = "0.1.5" },
 
     # --- convert_case (proc-macro only) ---
+    # 0.4 from derive_more 0.99.20 (transitive via Dioxus desktop/mobile);
     # 0.8 from Dioxus proc-macro crates; 0.10 from derive_more (dioxus-fullstack).
     # Not in any runtime binary.
+    { name = "convert_case", version = "0.4.0" },
     { name = "convert_case", version = "0.8.0" },
 
-    # --- rand 0.8 (build-dep only) ---
-    # phf_generator (build dep of ammonia→html5ever) uses rand 0.8.
+    # --- rand 0.7 / 0.8 (build-dep only) ---
+    # phf_generator (build dep of ammonia→html5ever) uses rand 0.7 and 0.8
+    # via two separate phf_generator versions on the codegen path.
     # Never links into the runtime binary.
+    { name = "rand", version = "0.7.3" },
     { name = "rand", version = "0.8.6" },
 
     # --- webpki-roots ---
