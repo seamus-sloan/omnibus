@@ -5,6 +5,8 @@
 //! (`insert_book_row` / `update_book_row`) plus the metadata-link
 //! dispatcher, FTS row insert, and post-commit cover materialization.
 
+use std::collections::HashMap;
+
 use sqlx::{SqlitePool, Transaction};
 
 use omnibus_shared::EbookMetadata;
@@ -169,25 +171,42 @@ async fn sync_changed(
     library_path: &str,
     changed_books: &[crate::ebook::IndexedBook],
 ) -> Result<Vec<(String, String, Vec<u8>)>, sqlx::Error> {
+    if changed_books.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Pre-compute all UUIDs up front so we can batch the id lookup.
+    let all_uuids: Vec<String> = changed_books
+        .iter()
+        .map(|b| stable_uuid(library_path, &b.metadata.filename))
+        .collect();
+
+    // One batch SELECT per chunk (chunked at 499 to stay under SQLite's
+    // 999-parameter cap: 1 bind for library_id + up to 499 uuid binds).
+    // `sync_removed` uses the same pattern.
+    let mut id_map: HashMap<String, i64> = HashMap::new();
+    for chunk in all_uuids.chunks(499) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let id_sql =
+            format!("SELECT uuid, id FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
+        let mut q = sqlx::query_as::<_, (String, i64)>(&id_sql).bind(library_id);
+        for uuid in chunk {
+            q = q.bind(uuid);
+        }
+        id_map.extend(q.fetch_all(&mut **tx).await?);
+    }
+
     // Wipe-and-rewrite the per-book link rows for each Changed entry,
     // then UPDATE the `books` row and re-insert FTS. This trades two
     // small per-book deletes for the much simpler "compute the link
     // diff" alternative, while preserving `books.id` — which is the
     // only invariant any external caller depends on.
     let mut changed_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
-    for b in changed_books {
-        let uuid = stable_uuid(library_path, &b.metadata.filename);
-        let Some(book_id) =
-            sqlx::query_scalar::<_, i64>("SELECT id FROM books WHERE library_id = ? AND uuid = ?")
-                .bind(library_id)
-                .bind(&uuid)
-                .fetch_optional(&mut **tx)
-                .await?
-        else {
-            // The diff said this uuid existed in the DB, but a concurrent
-            // process removed it between Phase A and the write. Promote
-            // to a New insert so the file still gets indexed; cleaner
-            // than failing the whole sync over a TOCTOU.
+    for (b, uuid) in changed_books.iter().zip(all_uuids.iter()) {
+        let Some(&book_id) = id_map.get(uuid) else {
+            // TOCTOU: the diff said this uuid existed in the DB, but a
+            // concurrent process removed it between Phase A and the write.
+            // Promote to a New insert so the file still gets indexed.
             let inserted = insert_book_row(tx, library_id, library_path, b).await?;
             insert_metadata_links(tx, inserted.book_id, &b.metadata).await?;
             insert_fts_row(
@@ -219,7 +238,7 @@ async fn sync_changed(
         insert_fts_row(tx, book_id, &title, first_isbn.as_deref(), &b.metadata).await?;
 
         if let Some((mime, bytes)) = &b.cover {
-            changed_covers.push((uuid, mime.clone(), bytes.clone()));
+            changed_covers.push((uuid.clone(), mime.clone(), bytes.clone()));
         }
     }
     Ok(changed_covers)
