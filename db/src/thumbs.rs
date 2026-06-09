@@ -21,6 +21,7 @@ impl ThumbSize {
         }
     }
 
+    /// Returns the string key for this thumbnail size variant (`"sm"`, `"md"`, or `"lg"`).
     pub fn as_str(self) -> &'static str {
         match self {
             ThumbSize::Sm => "sm",
@@ -29,6 +30,7 @@ impl ThumbSize {
         }
     }
 
+    /// Returns a fixed-size array of all `ThumbSize` variants in ascending size order.
     pub fn all() -> [ThumbSize; 3] {
         [ThumbSize::Sm, ThumbSize::Md, ThumbSize::Lg]
     }

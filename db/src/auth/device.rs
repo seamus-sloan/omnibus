@@ -47,14 +47,17 @@ fn validate_device_field(
     Ok(())
 }
 
+/// Validate a device name against format rules (max length, no control characters); `None` is accepted.
 pub fn validate_device_name(name: Option<&str>) -> AuthResult<()> {
     validate_device_field(name, MAX_DEVICE_NAME_CHARS, "device_name")
 }
 
+/// Validate a client version string against format rules (max length, no control characters); `None` is accepted.
 pub fn validate_client_version(version: Option<&str>) -> AuthResult<()> {
     validate_device_field(version, MAX_CLIENT_VERSION_CHARS, "client_version")
 }
 
+/// Register a new device for a user after validating the name and client version; returns the inserted device record.
 pub async fn register_device(
     pool: &SqlitePool,
     user_id: i64,
@@ -88,6 +91,7 @@ pub async fn register_device(
     })
 }
 
+/// List all registered devices for a user, ordered by most-recently-seen first.
 pub async fn list_devices_for_user(pool: &SqlitePool, user_id: i64) -> AuthResult<Vec<Device>> {
     let rows = sqlx::query(
         "SELECT id, user_id, name, client_kind, client_version, created_at, last_seen_at

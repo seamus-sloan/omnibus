@@ -76,6 +76,7 @@ pub fn list_files(path: Option<&str>, extensions: &[&str]) -> LibrarySection {
 pub const EBOOK_EXTENSIONS: &[&str] = &["epub", "pdf"];
 pub const AUDIOBOOK_EXTENSIONS: &[&str] = &["m4b", "mp3"];
 
+/// Scan all configured library directories and return a combined `LibraryContents` with ebook and audiobook stat entries.
 pub fn scan_libraries(ebook_path: Option<&str>, audiobook_path: Option<&str>) -> LibraryContents {
     LibraryContents {
         ebooks: list_files(ebook_path, EBOOK_EXTENSIONS),
