@@ -120,8 +120,7 @@ pub mod token_store {
     //! persisted to a plaintext file under the user's home directory.
     //! Release builds skip persistence entirely. Replace with iOS Keychain /
     //! Android Keystore via a platform-specific abstraction before flipping
-    //! persistence on for release builds. Tracked in
-    //! `docs/roadmap/0-3-auth.md`.
+    //! persistence on for release builds.
     use std::path::{Path, PathBuf};
     use std::sync::{mpsc, LockResult, Mutex, OnceLock, RwLock};
     use tokio::sync::watch;

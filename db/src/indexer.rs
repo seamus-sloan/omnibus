@@ -254,9 +254,9 @@ pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()
     Ok(())
 }
 
-/// Audiobook-library sibling of [`reindex`]. Uses Phase A.5 group-by-folder,
-/// Phase B multi-part tag-reads, and [`sync::sync_audiobooks`] which writes
-/// `book_file_parts` rows for the HLS pipeline.
+/// Audiobook-library sibling of [`reindex`]. Groups audio files by folder,
+/// reads multi-part tags, then calls [`sync::sync_audiobooks`] to write
+/// `book_file_parts` rows.
 pub async fn reindex_audiobooks(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()> {
     // Phase A: stat every audio file.
     let path_for_scan = library_path.to_owned();
