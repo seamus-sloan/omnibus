@@ -193,8 +193,12 @@ fn inject_hls_script() {
 fn install_control_surface(uuid: &str, initial_rate: f64) {
     let rate_lit = serde_json::to_string(&initial_rate).unwrap_or_else(|_| "1".into());
     let uuid_lit = serde_json::to_string(uuid).unwrap_or_else(|_| "\"\"".into());
+    let _ = dioxus::document::eval(&control_surface_js(&rate_lit, &uuid_lit));
+}
 
-    let js = format!(
+/// Build the `window.OmnibusAudio` IIFE script (one self-contained JS module).
+fn control_surface_js(rate_lit: &str, uuid_lit: &str) -> String {
+    format!(
         r#"
 (function(){{
   // SPA-nav from another page leaves a stale `window.OmnibusAudio` from
@@ -389,8 +393,7 @@ fn install_control_surface(uuid: &str, initial_rate: f64) {
   mount();
 }})();
 "#
-    );
-    let _ = dioxus::document::eval(&js);
+    )
 }
 
 /// Fetch `/api/audiobooks/{uuid}/manifest` and either:

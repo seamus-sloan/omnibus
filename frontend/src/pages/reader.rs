@@ -46,6 +46,7 @@ fn reader_call(method: &str, arg_js: &str) {
     let _ = dioxus::document::eval(&js);
 }
 
+/// Full-screen EPUB reader page (web-feature interop, all-target chrome).
 #[component]
 pub fn BookReadPage(uuid: String) -> Element {
     let theme = use_context::<Signal<Theme>>();
@@ -284,261 +285,293 @@ pub fn BookReadPage(uuid: String) -> Element {
             autofocus: true,
             onkeydown: on_keydown,
 
-            // Accent wash gradient.
             div { class: "rd-wash" }
 
-            // Top chrome.
+            ReaderTopChrome {
+                book_title: book_title.clone(),
+                chapter_title: chapter_title_display.clone(),
+                show_aa: show_aa(),
+                on_back,
+                on_toggle_aa: move |_| show_aa.set(!show_aa()),
+            }
+
+            ReaderViewerStage { status: status() }
+
+            ReaderPageTurnButtons { on_prev, on_next }
+
             div {
-                class: "rd-top",
+                class: "rd-bottom",
+                span { style: "color:var(--ink-2);", "{page_str}" }
+                div { style: "flex:1; text-align:center; letter-spacing:.08em;", "{chapter_str}" }
+                span {}
+            }
+            div { class: "rd-ribbon", i { style: "width:{pct}%;" } }
+
+            if show_aa() {
+                ReaderAaPanel {
+                    theme: *theme.read(),
+                    font_pct,
+                    on_set_theme: set_theme,
+                    on_font_decrease,
+                    on_font_increase,
+                    on_close: move |_| show_aa.set(false),
+                }
+            }
+        }
+    }
+}
+
+/// Top navigation bar: back button, title + chapter display, Aa + bookmark tools.
+#[component]
+fn ReaderTopChrome(
+    book_title: String,
+    chapter_title: String,
+    show_aa: bool,
+    on_back: EventHandler<MouseEvent>,
+    on_toggle_aa: EventHandler<MouseEvent>,
+) -> Element {
+    rsx! {
+        div {
+            class: "rd-top",
+            button {
+                class: "rd-tool",
+                r#type: "button",
+                "data-testid": "reader-back",
+                "aria-label": "Back to book",
+                onclick: on_back,
+                svg {
+                    width: "19", height: "19", view_box: "0 0 24 24",
+                    fill: "none", stroke: "currentColor",
+                    stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                    path { d: "M15 5l-7 7 7 7" }
+                }
+            }
+            div {
+                class: "rd-title-center",
+                span { class: "rd-title-book", "{book_title}" }
+                if !chapter_title.is_empty() {
+                    span { class: "rd-title-sep", "\u{b7}" }
+                    span { class: "rd-title-ch", "{chapter_title}" }
+                }
+            }
+            div {
+                style: "display:flex; align-items:center; gap:2px;",
+                button {
+                    class: if show_aa { "rd-tool rd-aa on" } else { "rd-tool rd-aa" },
+                    r#type: "button",
+                    "data-testid": "reader-aa",
+                    "aria-label": "Display settings",
+                    onclick: on_toggle_aa,
+                    "Aa"
+                }
                 button {
                     class: "rd-tool",
                     r#type: "button",
-                    "data-testid": "reader-back",
-                    "aria-label": "Back to book",
-                    onclick: on_back,
+                    "data-testid": "reader-bookmark",
+                    "aria-label": "Bookmark (coming soon)",
+                    title: "Bookmark — coming soon",
+                    disabled: true,
                     svg {
                         width: "19", height: "19", view_box: "0 0 24 24",
                         fill: "none", stroke: "currentColor",
                         stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
-                        path { d: "M15 5l-7 7 7 7" }
+                        path { d: "M7 4h10v16l-5-3.6L7 20V4z" }
                     }
                 }
-                div {
-                    class: "rd-title-center",
-                    span { class: "rd-title-book", "{book_title}" }
-                    if !chapter_title_display.is_empty() {
-                        span { class: "rd-title-sep", "\u{b7}" }
-                        span { class: "rd-title-ch", "{chapter_title_display}" }
+            }
+        }
+    }
+}
+
+/// epub.js mount target plus loading/error/ready overlay.
+#[component]
+fn ReaderViewerStage(status: ReaderStatus) -> Element {
+    rsx! {
+        div {
+            class: "rd-stage",
+            style: "top:60px; bottom:54px;",
+            div { id: "omnibus-viewer", class: "rd-viewer", "data-testid": "reader-viewer" }
+            match status {
+                ReaderStatus::Loading => rsx! {
+                    div { class: "rd-overlay", "data-testid": "reader-loading", "Loading\u{2026}" }
+                },
+                ReaderStatus::Failed => rsx! {
+                    div {
+                        class: "rd-overlay",
+                        "data-testid": "reader-error",
+                        role: "alert",
+                        "This book couldn\u{2019}t be loaded."
                     }
-                }
+                },
+                ReaderStatus::Ready => rsx! {},
+            }
+        }
+    }
+}
+
+/// Left and right circular page-turn gutter buttons.
+#[component]
+fn ReaderPageTurnButtons(
+    on_prev: EventHandler<MouseEvent>,
+    on_next: EventHandler<MouseEvent>,
+) -> Element {
+    rsx! {
+        button {
+            class: "rd-turn rd-turn-l",
+            r#type: "button",
+            "data-testid": "reader-prev",
+            "aria-label": "Previous page",
+            onclick: on_prev,
+            svg {
+                width: "20", height: "20", view_box: "0 0 24 24",
+                fill: "none", stroke: "currentColor",
+                stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                path { d: "M14.5 5l-7 7 7 7" }
+            }
+        }
+        button {
+            class: "rd-turn rd-turn-r",
+            r#type: "button",
+            "data-testid": "reader-next",
+            "aria-label": "Next page",
+            onclick: on_next,
+            svg {
+                width: "20", height: "20", view_box: "0 0 24 24",
+                fill: "none", stroke: "currentColor",
+                stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                path { d: "M9.5 5l7 7-7 7" }
+            }
+        }
+    }
+}
+
+/// Frosted-glass typography settings panel: theme switcher, typeface,
+/// text size, line spacing, margins, and justify toggle.
+#[component]
+fn ReaderAaPanel(
+    theme: Theme,
+    font_pct: f32,
+    on_set_theme: EventHandler<Theme>,
+    on_font_decrease: EventHandler<MouseEvent>,
+    on_font_increase: EventHandler<MouseEvent>,
+    on_close: EventHandler<MouseEvent>,
+) -> Element {
+    rsx! {
+        div { class: "rd-scrim", onclick: on_close }
+        div {
+            class: "rd-aa-panel",
+            onclick: move |evt: MouseEvent| evt.stop_propagation(),
+
+            div { class: "rd-aa-row",
+                div { class: "rd-aa-label", "Theme" }
                 div {
-                    style: "display:flex; align-items:center; gap:2px;",
+                    class: "rd-seg",
                     button {
-                        class: if show_aa() { "rd-tool rd-aa on" } else { "rd-tool rd-aa" },
+                        class: if theme == Theme::Dark { "on" } else { "" },
                         r#type: "button",
-                        "data-testid": "reader-aa",
-                        "aria-label": "Display settings",
-                        onclick: move |_| show_aa.set(!show_aa()),
-                        "Aa"
+                        onclick: move |_| on_set_theme.call(Theme::Dark),
+                        "Dark"
+                    }
+                    button {
+                        class: if theme == Theme::Light { "on" } else { "" },
+                        r#type: "button",
+                        onclick: move |_| on_set_theme.call(Theme::Light),
+                        "Light"
+                    }
+                    button {
+                        class: if theme == Theme::Sepia { "on" } else { "" },
+                        r#type: "button",
+                        onclick: move |_| on_set_theme.call(Theme::Sepia),
+                        "Sepia"
+                    }
+                }
+            }
+
+            // Typeface (visual only).
+            div { class: "rd-aa-row",
+                div { class: "rd-aa-label", "Typeface" }
+                div {
+                    style: "display:flex; gap:6px;",
+                    button {
+                        class: "rd-typeface-chip on",
+                        r#type: "button",
+                        span { class: "preview", style: "font-family:'Instrument Serif',serif;", "Aa" }
+                        span { class: "name", "Editorial" }
+                    }
+                    button {
+                        class: "rd-typeface-chip",
+                        r#type: "button",
+                        span { class: "preview", style: "font-family:'EB Garamond',serif;", "Aa" }
+                        span { class: "name", "Classic" }
+                    }
+                    button {
+                        class: "rd-typeface-chip",
+                        r#type: "button",
+                        span { class: "preview", style: "font-family:Georgia,serif;", "Aa" }
+                        span { class: "name", "Modern" }
+                    }
+                }
+            }
+
+            div { class: "rd-aa-row",
+                div { class: "rd-aa-label", "Text size" }
+                div {
+                    style: "display:flex; align-items:center; gap:12px;",
+                    button {
+                        class: "rd-tool",
+                        r#type: "button",
+                        "aria-label": "Decrease font size",
+                        "data-testid": "reader-font-decrease",
+                        onclick: on_font_decrease,
+                        style: "font-family:var(--serif); font-size:13px; color:var(--ink-2); min-width:24px; height:24px; padding:0;",
+                        "A"
+                    }
+                    div {
+                        class: "rd-size-track",
+                        div { class: "rd-size-fill", style: "width:{font_pct}%;" }
+                        div { class: "rd-size-thumb", style: "left:{font_pct}%;" }
                     }
                     button {
                         class: "rd-tool",
                         r#type: "button",
-                        "data-testid": "reader-bookmark",
-                        "aria-label": "Bookmark",
-                        svg {
-                            width: "19", height: "19", view_box: "0 0 24 24",
-                            fill: "none", stroke: "currentColor",
-                            stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
-                            path { d: "M7 4h10v16l-5-3.6L7 20V4z" }
-                        }
+                        "aria-label": "Increase font size",
+                        "data-testid": "reader-font-increase",
+                        onclick: on_font_increase,
+                        style: "font-family:var(--serif); font-size:24px; color:var(--ink-1); min-width:24px; height:24px; padding:0;",
+                        "A"
                     }
                 }
             }
 
-            // Viewer stage.
-            div {
-                class: "rd-stage",
-                style: "top:60px; bottom:54px;",
+            // Line spacing (visual only).
+            div { class: "rd-aa-row",
+                div { class: "rd-aa-label", "Line spacing" }
                 div {
-                    id: "omnibus-viewer",
-                    class: "rd-viewer",
-                    "data-testid": "reader-viewer",
-                }
-                match status() {
-                    ReaderStatus::Loading => rsx! {
-                        div {
-                            class: "rd-overlay",
-                            "data-testid": "reader-loading",
-                            "Loading\u{2026}"
-                        }
-                    },
-                    ReaderStatus::Failed => rsx! {
-                        div {
-                            class: "rd-overlay",
-                            "data-testid": "reader-error",
-                            role: "alert",
-                            "This book couldn\u{2019}t be loaded."
-                        }
-                    },
-                    ReaderStatus::Ready => rsx! {},
+                    class: "rd-seg",
+                    button { r#type: "button", "Tight" }
+                    button { class: "on", r#type: "button", "Cozy" }
+                    button { r#type: "button", "Airy" }
                 }
             }
 
-            // Page-turn gutters.
-            button {
-                class: "rd-turn rd-turn-l",
-                r#type: "button",
-                "data-testid": "reader-prev",
-                "aria-label": "Previous page",
-                onclick: on_prev,
-                svg {
-                    width: "20", height: "20", view_box: "0 0 24 24",
-                    fill: "none", stroke: "currentColor",
-                    stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
-                    path { d: "M14.5 5l-7 7 7 7" }
-                }
-            }
-            button {
-                class: "rd-turn rd-turn-r",
-                r#type: "button",
-                "data-testid": "reader-next",
-                "aria-label": "Next page",
-                onclick: on_next,
-                svg {
-                    width: "20", height: "20", view_box: "0 0 24 24",
-                    fill: "none", stroke: "currentColor",
-                    stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
-                    path { d: "M9.5 5l7 7-7 7" }
-                }
-            }
-
-            // Bottom chrome.
-            div {
-                class: "rd-bottom",
-                span {
-                    style: "color:var(--ink-2);",
-                    "{page_str}"
-                }
-                div { style: "flex:1; text-align:center; letter-spacing:.08em;",
-                    "{chapter_str}"
-                }
-                span {}
-            }
-            div {
-                class: "rd-ribbon",
-                i { style: "width:{pct}%;" }
-            }
-
-            // Aa typography panel.
-            if show_aa() {
+            // Margins (visual only).
+            div { class: "rd-aa-row",
+                div { class: "rd-aa-label", "Margins" }
                 div {
-                    class: "rd-scrim",
-                    onclick: move |_| show_aa.set(false),
+                    class: "rd-seg",
+                    button { r#type: "button", "Narrow" }
+                    button { class: "on", r#type: "button", "Normal" }
+                    button { r#type: "button", "Wide" }
                 }
+            }
+
+            // Justify toggle (visual only).
+            div {
+                class: "rd-toggle-row",
+                span { style: "font-size:13px; color:var(--ink-1);", "Justify text" }
                 div {
-                    class: "rd-aa-panel",
-                    onclick: move |evt: MouseEvent| evt.stop_propagation(),
-
-                    // Theme.
-                    div {
-                        class: "rd-aa-row",
-                        div { class: "rd-aa-label", "Theme" }
-                        div {
-                            class: "rd-seg",
-                            button {
-                                class: if *theme.read() == Theme::Dark { "on" } else { "" },
-                                r#type: "button",
-                                onclick: move |_| set_theme(Theme::Dark),
-                                "Dark"
-                            }
-                            button {
-                                class: if *theme.read() == Theme::Light { "on" } else { "" },
-                                r#type: "button",
-                                onclick: move |_| set_theme(Theme::Light),
-                                "Light"
-                            }
-                            button {
-                                class: if *theme.read() == Theme::Sepia { "on" } else { "" },
-                                r#type: "button",
-                                onclick: move |_| set_theme(Theme::Sepia),
-                                "Sepia"
-                            }
-                        }
-                    }
-
-                    // Typeface (visual only).
-                    div {
-                        class: "rd-aa-row",
-                        div { class: "rd-aa-label", "Typeface" }
-                        div {
-                            style: "display:flex; gap:6px;",
-                            button {
-                                class: "rd-typeface-chip on",
-                                r#type: "button",
-                                span { class: "preview", style: "font-family:'Instrument Serif',serif;", "Aa" }
-                                span { class: "name", "Editorial" }
-                            }
-                            button {
-                                class: "rd-typeface-chip",
-                                r#type: "button",
-                                span { class: "preview", style: "font-family:'EB Garamond',serif;", "Aa" }
-                                span { class: "name", "Classic" }
-                            }
-                            button {
-                                class: "rd-typeface-chip",
-                                r#type: "button",
-                                span { class: "preview", style: "font-family:Georgia,serif;", "Aa" }
-                                span { class: "name", "Modern" }
-                            }
-                        }
-                    }
-
-                    // Text size.
-                    div {
-                        class: "rd-aa-row",
-                        div { class: "rd-aa-label", "Text size" }
-                        div {
-                            style: "display:flex; align-items:center; gap:12px;",
-                            button {
-                                class: "rd-tool",
-                                r#type: "button",
-                                "aria-label": "Decrease font size",
-                                "data-testid": "reader-font-decrease",
-                                onclick: on_font_decrease,
-                                style: "font-family:var(--serif); font-size:13px; color:var(--ink-2); min-width:24px; height:24px; padding:0;",
-                                "A"
-                            }
-                            div {
-                                class: "rd-size-track",
-                                div { class: "rd-size-fill", style: "width:{font_pct}%;" }
-                                div { class: "rd-size-thumb", style: "left:{font_pct}%;" }
-                            }
-                            button {
-                                class: "rd-tool",
-                                r#type: "button",
-                                "aria-label": "Increase font size",
-                                "data-testid": "reader-font-increase",
-                                onclick: on_font_increase,
-                                style: "font-family:var(--serif); font-size:24px; color:var(--ink-1); min-width:24px; height:24px; padding:0;",
-                                "A"
-                            }
-                        }
-                    }
-
-                    // Line spacing (visual only).
-                    div {
-                        class: "rd-aa-row",
-                        div { class: "rd-aa-label", "Line spacing" }
-                        div {
-                            class: "rd-seg",
-                            button { r#type: "button", "Tight" }
-                            button { class: "on", r#type: "button", "Cozy" }
-                            button { r#type: "button", "Airy" }
-                        }
-                    }
-
-                    // Margins (visual only).
-                    div {
-                        class: "rd-aa-row",
-                        div { class: "rd-aa-label", "Margins" }
-                        div {
-                            class: "rd-seg",
-                            button { r#type: "button", "Narrow" }
-                            button { class: "on", r#type: "button", "Normal" }
-                            button { r#type: "button", "Wide" }
-                        }
-                    }
-
-                    // Justify toggle (visual only).
-                    div {
-                        class: "rd-toggle-row",
-                        span { style: "font-size:13px; color:var(--ink-1);", "Justify text" }
-                        div {
-                            class: "rd-toggle-track",
-                            div { class: "rd-toggle-knob" }
-                        }
-                    }
+                    class: "rd-toggle-track",
+                    div { class: "rd-toggle-knob" }
                 }
             }
         }
