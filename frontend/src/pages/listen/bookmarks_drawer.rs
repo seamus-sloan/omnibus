@@ -17,7 +17,7 @@ pub(super) fn BookmarksDrawer(on_close: EventHandler<()>) -> Element {
             onclick: move |_| on_close.call(()),
         }
 
-        div { class: "lp-drawer",
+        div { class: "lp-drawer", "data-testid": "bookmarks-drawer",
             div { class: "lp-drawer-head",
                 div {
                     div { class: "lp-panel-kicker", "Bookmarks" }

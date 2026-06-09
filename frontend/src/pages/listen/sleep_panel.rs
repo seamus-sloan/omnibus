@@ -21,7 +21,7 @@ pub(super) fn SleepPanel(on_close: EventHandler<()>) -> Element {
             onclick: move |_| on_close.call(()),
         }
 
-        div { class: "lp-panel lp-sleep-panel",
+        div { class: "lp-panel lp-sleep-panel", "data-testid": "sleep-panel",
             div { class: "lp-panel-head",
                 div {
                     div { class: "lp-panel-kicker", "Sleep timer" }
