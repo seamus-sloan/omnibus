@@ -12,6 +12,11 @@ const PRESETS: &[&str] = &[
     "Off", "15 min", "30 min", "45 min", "1 hour", "2 hours", "3 hours", "4 hours",
 ];
 
+// Pure presentational shell — no branching logic to unit-test.
+// Open/close state is owned by `ready_player`. No Playwright spec opens
+// this panel today (listen.spec.ts only asserts the player chrome and
+// overlays); smoke coverage of the preset grid is tracked as follow-up.
+
 /// Frosted-glass sleep-timer panel with duration presets.
 #[component]
 pub(super) fn SleepPanel(on_close: EventHandler<()>) -> Element {

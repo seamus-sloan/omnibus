@@ -13,13 +13,52 @@ const STEP: f64 = 0.05;
 const MIN_RATE: f64 = 0.5;
 const MAX_RATE: f64 = 3.0;
 
-fn apply_rate(rate: &mut Signal<f64>, uuid: &str, new_rate: f64) {
+/// Clamp `new_rate` to `[MIN_RATE, MAX_RATE]` and snap to the nearest `STEP`.
+/// Pure logic extracted for unit testing — no signal or JS side-effects.
+fn clamp_and_round_rate(new_rate: f64) -> f64 {
     let clamped = new_rate.clamp(MIN_RATE, MAX_RATE);
-    let rounded = (clamped / STEP).round() * STEP;
+    (clamped / STEP).round() * STEP
+}
+
+fn apply_rate(rate: &mut Signal<f64>, uuid: &str, new_rate: f64) {
+    let rounded = clamp_and_round_rate(new_rate);
     rate.set(rounded);
     crate::audiobook_progress::save_rate(uuid, rounded);
     #[cfg(feature = "web")]
     super::helpers::audio_call("setRate", &rounded.to_string());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_and_round_rate_accepts_value_within_range() {
+        let result = clamp_and_round_rate(1.0);
+        assert!((result - 1.0).abs() < f64::EPSILON * 10.0);
+    }
+
+    #[test]
+    fn clamp_and_round_rate_clamps_below_minimum() {
+        let result = clamp_and_round_rate(0.0);
+        assert!((result - MIN_RATE).abs() < f64::EPSILON * 10.0);
+    }
+
+    #[test]
+    fn clamp_and_round_rate_clamps_above_maximum() {
+        let result = clamp_and_round_rate(10.0);
+        assert!((result - MAX_RATE).abs() < f64::EPSILON * 10.0);
+    }
+
+    #[test]
+    fn clamp_and_round_rate_rounds_to_nearest_step() {
+        // 1.07 rounds to 1.05
+        let result = clamp_and_round_rate(1.07);
+        assert!((result - 1.05).abs() < 0.001);
+        // 1.08 rounds to 1.10
+        let result2 = clamp_and_round_rate(1.08);
+        assert!((result2 - 1.10).abs() < 0.001);
+    }
 }
 
 /// Frosted-glass speed panel with preset grid, fine-tune slider, and stepper.

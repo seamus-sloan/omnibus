@@ -12,6 +12,22 @@ use wasm_bindgen::prelude::*;
 use super::helpers::{post_audio_progress, HLS_JS};
 use crate::data;
 
+// ---------------------------------------------------------------------------
+// Pure helpers — extracted so they can be tested without a browser.
+// Everything else in this module is a JS interop seam:
+//   * `register_js_callbacks` — writes closures into `window.*` properties.
+//   * `inject_hls_script` / `install_control_surface` — call `eval()`.
+//   * `run_manifest_init` — async manifest fetch + `/status` poll loop.
+// Those three functions cannot be unit-tested without a WASM runtime.
+// The logic below is the Rust-side decision surface that *can* be tested.
+// ---------------------------------------------------------------------------
+
+/// Select the resume position: prefer the server-authoritative value when
+/// available, fall back to the locally cached initial position.
+fn resolve_resume_pos(server_pos: Option<f64>, local_pos: f64) -> f64 {
+    server_pos.unwrap_or(local_pos)
+}
+
 /// Install the `window.OmnibusAudio` shim and kick off the manifest-driven
 /// init effect. Returns nothing — all state lives in the passed-in signals.
 ///
@@ -398,7 +414,7 @@ async fn run_manifest_init(
         .ok()
         .flatten()
         .and_then(|r| r.audio_position_seconds);
-    let resume_pos = server_pos.unwrap_or(initial_position);
+    let resume_pos = resolve_resume_pos(server_pos, initial_position);
     let pos_lit = serde_json::to_string(&resume_pos).unwrap_or_else(|_| "0".into());
 
     let manifest_url = format!("/api/audiobooks/{}/manifest", uuid_for_fetch);
@@ -476,5 +492,29 @@ async fn run_manifest_init(
             // recovery path either way.
             playback_failed.set(true);
         }
+    }
+}
+
+// Tests for the pure Rust-side logic only. The JS interop seams
+// (register_js_callbacks, inject_hls_script, install_control_surface,
+// run_manifest_init) require a WASM runtime and are covered by Playwright
+// at ui_tests/playwright/tests/flows/.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_resume_pos_prefers_server_position_when_present() {
+        assert!((resolve_resume_pos(Some(120.0), 5.0) - 120.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn resolve_resume_pos_falls_back_to_local_when_server_absent() {
+        assert!((resolve_resume_pos(None, 42.5) - 42.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn resolve_resume_pos_returns_zero_local_when_both_absent() {
+        assert!((resolve_resume_pos(None, 0.0)).abs() < f64::EPSILON);
     }
 }

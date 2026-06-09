@@ -9,6 +9,50 @@ use dioxus::prelude::*;
 
 use super::helpers::format_hms;
 
+// --- Pure helpers extracted so they can be unit-tested without a renderer.
+
+/// CSS class for the rate button — appends `" on"` when the speed panel is open.
+pub(super) fn rate_btn_class(active: bool) -> &'static str {
+    if active {
+        "lp-btn-rate on"
+    } else {
+        "lp-btn-rate"
+    }
+}
+
+/// CSS class for any toolbar toggle button — appends `" on"` when the panel is open.
+pub(super) fn toolbar_btn_class(active: bool) -> &'static str {
+    if active {
+        "btn sm lp-toolbar-btn on"
+    } else {
+        "btn sm lp-toolbar-btn"
+    }
+}
+
+/// Label for the sleep toolbar button, reflecting active state.
+pub(super) fn sleep_label(active: bool) -> &'static str {
+    if active {
+        "Sleep \u{00b7} on"
+    } else {
+        "Sleep \u{00b7} off"
+    }
+}
+
+/// Label for the chapters toolbar button, reflecting open/closed state.
+pub(super) fn chapters_toggle_label(open: bool) -> &'static str {
+    if open {
+        "Chapters \u{2193}"
+    } else {
+        "Chapters \u{2191}"
+    }
+}
+
+/// CSS fill style string for the scrubber track (0–100 range).
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
+pub(super) fn scrub_fill_style(pct: f64) -> String {
+    format!("--fill: {pct:.1}%")
+}
+
 /// The hidden HTML5 `<audio>` element bound by the JS shim.
 #[component]
 pub(super) fn AudioElement() -> Element {
@@ -32,7 +76,7 @@ pub(super) fn Scrubber(
     fill_pct: f64,
     on_seek: EventHandler<Event<FormData>>,
 ) -> Element {
-    let fill_style = format!("--fill: {fill_pct:.1}%");
+    let fill_style = scrub_fill_style(fill_pct);
 
     rsx! {
         div { class: "lp-scrubber",
@@ -74,11 +118,7 @@ pub(super) fn TransportButtons(
     on_chapter_prev: EventHandler<MouseEvent>,
     on_chapter_next: EventHandler<MouseEvent>,
 ) -> Element {
-    let rate_class = if rate_active {
-        "lp-btn-rate on"
-    } else {
-        "lp-btn-rate"
-    };
+    let rate_class = rate_btn_class(rate_active);
 
     rsx! {
         div { class: "lp-transport",
@@ -152,6 +192,61 @@ pub(super) fn TransportButtons(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rate_btn_class_inactive_returns_base_class() {
+        assert_eq!(rate_btn_class(false), "lp-btn-rate");
+    }
+
+    #[test]
+    fn rate_btn_class_active_appends_on() {
+        assert_eq!(rate_btn_class(true), "lp-btn-rate on");
+    }
+
+    #[test]
+    fn toolbar_btn_class_inactive_returns_base_class() {
+        assert_eq!(toolbar_btn_class(false), "btn sm lp-toolbar-btn");
+    }
+
+    #[test]
+    fn toolbar_btn_class_active_appends_on() {
+        assert_eq!(toolbar_btn_class(true), "btn sm lp-toolbar-btn on");
+    }
+
+    #[test]
+    fn sleep_label_inactive_shows_off() {
+        assert_eq!(sleep_label(false), "Sleep \u{00b7} off");
+    }
+
+    #[test]
+    fn sleep_label_active_shows_on() {
+        assert_eq!(sleep_label(true), "Sleep \u{00b7} on");
+    }
+
+    #[test]
+    fn chapters_toggle_label_closed_shows_up_arrow() {
+        assert_eq!(chapters_toggle_label(false), "Chapters \u{2191}");
+    }
+
+    #[test]
+    fn chapters_toggle_label_open_shows_down_arrow() {
+        assert_eq!(chapters_toggle_label(true), "Chapters \u{2193}");
+    }
+
+    #[test]
+    fn scrub_fill_style_formats_css_custom_property() {
+        assert_eq!(scrub_fill_style(42.5), "--fill: 42.5%");
+    }
+
+    #[test]
+    fn scrub_fill_style_formats_zero_fill() {
+        assert_eq!(scrub_fill_style(0.0), "--fill: 0.0%");
+    }
+}
+
 /// Toolbar row beneath transport: Sleep, Bookmark, Chapters.
 /// Each button toggles its overlay panel; `*_active` props drive the
 /// highlighted state. The panels themselves are visual shells until
@@ -165,39 +260,19 @@ pub(super) fn Toolbar(
     on_bookmark: EventHandler<MouseEvent>,
     on_chapters: EventHandler<MouseEvent>,
 ) -> Element {
-    let sleep_class = if sleep_active {
-        "btn sm lp-toolbar-btn on"
-    } else {
-        "btn sm lp-toolbar-btn"
-    };
-    let bm_class = if bookmarks_active {
-        "btn sm lp-toolbar-btn on"
-    } else {
-        "btn sm lp-toolbar-btn"
-    };
-    let ch_class = if chapters_active {
-        "btn sm lp-toolbar-btn on"
-    } else {
-        "btn sm lp-toolbar-btn"
-    };
-    let sleep_label = if sleep_active {
-        "Sleep \u{00b7} on"
-    } else {
-        "Sleep \u{00b7} off"
-    };
-    let ch_label = if chapters_active {
-        "Chapters \u{2193}"
-    } else {
-        "Chapters \u{2191}"
-    };
+    let sleep_cls = toolbar_btn_class(sleep_active);
+    let bm_class = toolbar_btn_class(bookmarks_active);
+    let ch_class = toolbar_btn_class(chapters_active);
+    let slp_label = sleep_label(sleep_active);
+    let ch_label = chapters_toggle_label(chapters_active);
 
     rsx! {
         div { class: "lp-toolbar",
             button {
-                class: sleep_class,
+                class: sleep_cls,
                 r#type: "button",
                 onclick: move |evt| on_sleep.call(evt),
-                "{sleep_label}"
+                "{slp_label}"
             }
             button {
                 class: bm_class,
