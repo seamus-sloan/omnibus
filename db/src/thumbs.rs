@@ -30,7 +30,7 @@ impl ThumbSize {
         }
     }
 
-    /// Returns a slice of all `ThumbSize` variants in ascending size order.
+    /// Returns a fixed-size array of all `ThumbSize` variants in ascending size order.
     pub fn all() -> [ThumbSize; 3] {
         [ThumbSize::Sm, ThumbSize::Md, ThumbSize::Lg]
     }

@@ -13,7 +13,8 @@ use crate::covers::covers_dir;
 /// versions are recorded in the `_sqlx_migrations` table.
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
-/// Initialize or open the SQLite pool at `database_url`, apply per-connection PRAGMAs, and run any pending schema migrations.
+/// Initialize or open the SQLite pool at `database_url`, apply per-connection PRAGMAs, run pending
+/// migrations, and — on non-memory databases — perform a one-time legacy cover-cache directory purge.
 pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     // PRAGMAs `foreign_keys`, `busy_timeout`, and `synchronous` are
     // *per-connection* settings — they only apply to the connection that
