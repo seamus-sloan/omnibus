@@ -8,9 +8,9 @@
 //! [`parse::parse_groups`] into [`parse::IndexedAudiobook`] rows ready for
 //! [`crate::sync::sync_audiobooks`].
 //!
-//! Scope (F2.3 + F2.3b): title, primary author, album, duration in
-//! seconds, embedded artwork, per-part track ordering, and chapter extraction
-//! from Nero chpl atoms (M4B) and ID3v2 CHAP frames (MP3).
+//! Covers title, primary author, album, duration in seconds, embedded
+//! artwork, per-part track ordering, and chapter extraction from Nero chpl
+//! atoms (M4B) and ID3v2 CHAP frames (MP3).
 
 use std::path::{Path, PathBuf};
 

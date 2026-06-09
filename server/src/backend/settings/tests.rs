@@ -175,12 +175,11 @@ async fn post_settings_triggers_scan_via_worker() {
     // it) cleans up on Drop here.
 }
 
-/// Regression test for issue #112: when the worker's scan fails (here,
-/// because the configured library path doesn't exist on disk), the
-/// `/api/reindex` handler must surface the failure as a 500 via the
-/// `internal()` helper rather than panicking the spawned task or
-/// returning a misleading 200. This is the live request path the
-/// original `panic!("worker scan failed: ...")` was masking.
+/// When the worker's scan fails (here, because the configured library path
+/// doesn't exist on disk), the `/api/reindex` handler must surface the
+/// failure as a 500 via the `internal()` helper rather than panicking the
+/// spawned task or returning a misleading 200. This is the live request
+/// path the original `panic!("worker scan failed: ...")` was masking.
 #[tokio::test]
 async fn reindex_returns_500_when_worker_fails() {
     let (app, _state, pool) = fixture().await;

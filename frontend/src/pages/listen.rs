@@ -1,4 +1,4 @@
-//! F2.3 immersive audiobook player with direct-play + HLS fallback (#339).
+//! Immersive audiobook player with direct-play and HLS fallback.
 //!
 //! Renders a full-screen "Now playing" surface: cover + title + author on the
 //! left, scrub bar + transport controls on the right.
@@ -12,11 +12,11 @@
 //!    per-part durations.
 //! 3. For HLS mode, fall back to the legacy `/status` poll + hls.js attach.
 //!    If `/status` reports `state: "failed"`, render an error overlay
-//!    instead of polling forever (Bug 4 from #338).
+//!    instead of polling forever.
 //!
 //! Position lives in [`crate::audiobook_progress`] — localStorage on web,
 //! in-memory on mobile, no-op under SSR. Writes both there AND fire-and-
-//! forget POST `/api/rpc/progress` (F2.1) with `format: "audio"` +
+//! forget POST `/api/rpc/progress` with `format: "audio"` +
 //! `audio_position_seconds`, so a position written on one device syncs
 //! forward on the next open. Across direct-mode parts the JS shim reports
 //! absolute (cross-part) seconds so the same shape works for both modes.

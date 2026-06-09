@@ -39,9 +39,9 @@ pub enum Task {
     /// library serialize while different libraries scan in parallel; counts
     /// against the scan-concurrency semaphore.
     Scan { library_path: String },
-    /// F2.3 sibling of [`Task::Scan`] for the audiobook library. Same
-    /// keying (one resource lock per path) and same scan-semaphore
-    /// participation; routes to [`crate::indexer::reindex_audiobooks`].
+    /// Audiobook-library sibling of [`Task::Scan`]. Same keying (one
+    /// resource lock per path) and same scan-semaphore participation;
+    /// routes to [`crate::indexer::reindex_audiobooks`].
     ScanAudiobooks { library_path: String },
     /// (Re)generate cached WebP thumbnails for `book_id`'s cover.
     /// `last_modified_epoch` lets the handler skip work when the cached
@@ -51,14 +51,14 @@ pub enum Task {
         book_id: i64,
         last_modified_epoch: i64,
     },
-    /// F1.11: resolve and cache an author's profile photo. The resolver
-    /// hits Open Library at most once per author per (admin-DELETE-able)
-    /// cache window; a `'letter'` marker is written on any miss so future
-    /// page views skip the network entirely. Keyed on
-    /// `author-photo:{author_id}` and does not consume the scan semaphore.
+    /// Resolve and cache an author's profile photo. The resolver hits Open
+    /// Library at most once per author per (admin-DELETE-able) cache window;
+    /// a `'letter'` marker is written on any miss so future page views skip
+    /// the network entirely. Keyed on `author-photo:{author_id}` and does
+    /// not consume the scan semaphore.
     ResolveAuthorPhoto { author_id: i64 },
-    /// F2.3 HLS transcode for one `(book_id, profile)` pair. Acquires the
-    /// HLS semaphore (capped at [`WorkerConfig::hls_concurrency`]) and the
+    /// HLS transcode for one `(book_id, profile)` pair. Acquires the HLS
+    /// semaphore (capped at [`WorkerConfig::hls_concurrency`]) and the
     /// per-`(book_id, profile)` keyed mutex so duplicate transcode posts are
     /// serialized rather than running concurrently.
     HlsTranscode {

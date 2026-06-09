@@ -484,9 +484,9 @@ async fn palette_duration_populated() {
     // duration_ms should be populated (at least 0 — we just check it's set)
     assert!(results.duration_ms < 10000, "duration should be reasonable");
 }
-/// #127 regression coverage: after collapsing the correlated
-/// `book_count` / `EXISTS` subqueries into a single JOIN+GROUP BY,
-/// `l.path = ?1` must still be applied **before** the aggregate so the
+/// Regression coverage: after collapsing the correlated `book_count` /
+/// `EXISTS` subqueries into a single JOIN+GROUP BY, `l.path = ?1` must
+/// still be applied **before** the aggregate so the
 /// scoped library's count doesn't pick up rows from sibling libraries.
 /// This exercises all three taxonomies (authors, series, tags) plus
 /// ordering — the seeded set has 3 matching books in /lib-a and 2 in
@@ -878,9 +878,9 @@ async fn palette_series_author_display_reflects_override() {
         "palette author line must follow override.creators, got {results:?}",
     );
 }
-/// #127: capture `EXPLAIN QUERY PLAN` for each of the three rewritten
-/// taxonomy queries and assert the planner uses the link-table indexes.
-/// This is a structural check — it doesn't pin the literal plan string
+/// Capture `EXPLAIN QUERY PLAN` for each of the three rewritten taxonomy
+/// queries and assert the planner uses the link-table indexes. This is a
+/// structural check — it doesn't pin the literal plan string
 /// (SQLite's wording can shift across point releases) but it does fail
 /// loudly if any of the link tables fall back to a full SCAN, which
 /// would defeat the whole point of this optimization.

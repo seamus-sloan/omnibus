@@ -26,8 +26,8 @@ const REMOTE_IMAGE_TIMEOUT: Duration = Duration::from_secs(15);
 pub enum FetchRemoteImageError {
     #[error("URL must start with http:// or https://")]
     BadScheme,
-    /// Issue #275 — SSRF guard. The supplied URL parsed cleanly, but either
-    /// its host could not be resolved or one of the resolved IPs falls into a
+    /// SSRF guard triggered. The supplied URL parsed cleanly, but either its
+    /// host could not be resolved or one of the resolved IPs falls into a
     /// blocked range (loopback / private RFC1918 / link-local / multicast /
     /// IPv6 ULA / IPv6 site-local / unspecified / broadcast / documentation).
     /// We reject *before* any TCP connect so a hostile admin URL can't be
