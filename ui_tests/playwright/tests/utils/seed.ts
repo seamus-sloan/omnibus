@@ -40,6 +40,16 @@ export async function seedLibrary(
   expectedCount: number,
   audiobookLibraryPath: string | null = null,
 ): Promise<void> {
+  // When no explicit audiobook path is passed, preserve whatever the
+  // server already has so parallel specs don't wipe each other's data.
+  if (audiobookLibraryPath === null) {
+    const current = await request.get("/api/rpc/settings");
+    if (current.status() === 200) {
+      const body = (await current.json()) as { audiobook_library_path?: string | null };
+      audiobookLibraryPath = body.audiobook_library_path ?? null;
+    }
+  }
+
   const settingsResp = await request.post("/api/rpc/settings", {
     data: {
       settings: {
@@ -54,19 +64,24 @@ export async function seedLibrary(
 }
 
 /**
- * Seed only the audiobook library — POST the path with
- * `ebook_library_path: null`, then poll for `expectedCount` audiobook
- * *groups*. Use from the listen spec, which doesn't need ebook fixtures.
+ * Seed only the audiobook library while preserving any existing ebook
+ * library path. Reads the current settings first so parallel specs that
+ * share the same server don't lose their ebook data.
  */
 export async function seedAudiobookLibrary(
   request: APIRequestContext,
   audiobookLibraryPath: string,
   expectedCount: number,
 ): Promise<void> {
+  const current = await request.get("/api/rpc/settings");
+  const currentSettings = current.status() === 200
+    ? ((await current.json()) as { ebook_library_path?: string | null })
+    : {};
+
   const settingsResp = await request.post("/api/rpc/settings", {
     data: {
       settings: {
-        ebook_library_path: null,
+        ebook_library_path: currentSettings.ebook_library_path ?? null,
         audiobook_library_path: audiobookLibraryPath,
       },
     },
@@ -93,10 +108,10 @@ async function pollForBookCount(
         return Array.isArray(body.books) ? body.books.length : -1;
       },
       {
-        message: `expected ${expectedCount} books from /api/rpc/ebooks after seeding`,
+        message: `expected at least ${expectedCount} books from /api/rpc/ebooks after seeding`,
         timeout: 45_000,
         intervals: [100, 200, 500, 1_000, 2_000],
       },
     )
-    .toBe(expectedCount);
+    .toBeGreaterThanOrEqual(expectedCount);
 }

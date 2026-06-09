@@ -53,27 +53,30 @@ test("renders the listen page layout for an mp3 audiobook", async ({
   const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
   await gotoReady(page, `/listen/${uuid}`);
 
-  // Top bar — own slim chrome, not the app's top-nav.
-  await expect(page.getByTestId("listen-back")).toBeVisible();
+  // Hidden <audio> element is in the DOM immediately.
+  await expect(page.getByTestId("listen-audio")).toBeAttached();
+
+  // Wait for the preparing overlay to clear — it covers the controls with
+  // position:absolute inset:0 until the JS bootstrap calls initDirect.
+  await waitForPlayerReady(page);
+  await expect(page.getByTestId("listen-failed")).toHaveCount(0);
+
+  // App-wide top-nav is mounted by ReadyPlayer.
+  await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
+
+  // "Now playing" kicker above the book title.
   await expect(page.getByText("Now playing")).toBeVisible();
 
   // Book metadata in the player stage.
   await expect(page.getByRole("heading", { name: MP3_BOOK.title })).toBeVisible();
   await expect(page.getByText(`by ${MP3_BOOK.author}`)).toBeVisible();
 
-  // Transport: scrubber + skip-back / play / skip-forward / rate.
-  await expect(page.getByRole("slider", { name: "Seek" })).toBeVisible();
+  // Transport: chapter map + skip-back / play / skip-forward / rate.
+  await expect(page.getByTestId("chapter-map")).toBeVisible();
   await expect(page.getByRole("button", { name: "Back 30 seconds" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Forward 30 seconds" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Playback speed" })).toBeVisible();
-
-  // Hidden <audio> element.
-  await expect(page.getByTestId("listen-audio")).toBeAttached();
-
-  // Direct-mode init removes the preparing overlay.
-  await waitForPlayerReady(page);
-  await expect(page.getByTestId("listen-failed")).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------
