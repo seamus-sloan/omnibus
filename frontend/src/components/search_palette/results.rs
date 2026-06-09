@@ -147,7 +147,7 @@ fn SpBookRow(book: PaletteBookHit, selected: bool, on_click: EventHandler<MouseE
     };
     let server_url = use_server_url();
     let cover = if book.cover_url.is_some() {
-        let url = format!("{server_url}/api/thumbs/{}/sm", book.id);
+        let url = book_thumb_url(&server_url, &book);
         rsx! {
             img {
                 class: "sp-row-cover",
@@ -284,5 +284,44 @@ fn SpTagRow(tag: PaletteTagHit, selected: bool, on_click: EventHandler<MouseEven
                 }
             }
         }
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────
+
+/// Build the small-thumbnail URL for a palette book row.
+///
+/// Extracted so the URL shape — `/api/thumbs/{uuid}/sm` — has a test that
+/// can't silently regress to the old `id`-based form.
+fn book_thumb_url(server_url: &str, book: &PaletteBookHit) -> String {
+    format!("{server_url}/api/thumbs/{}/sm", book.uuid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::model::build_flat_items;
+
+    #[test]
+    fn book_thumb_url_uses_uuid_not_id() {
+        let book = PaletteBookHit {
+            id: 99,
+            uuid: "abc-def-uuid".to_string(),
+            title: "Test Book".to_string(),
+            ..PaletteBookHit::default()
+        };
+        let url = book_thumb_url("http://localhost:3000", &book);
+        assert_eq!(url, "http://localhost:3000/api/thumbs/abc-def-uuid/sm");
+        // Guard: the integer id must never appear in the thumb URL.
+        assert!(
+            !url.contains("99"),
+            "thumb URL must not contain the numeric id"
+        );
+    }
+
+    #[test]
+    fn build_flat_items_is_empty_when_results_are_none() {
+        let items = build_flat_items(&None);
+        assert!(items.is_empty());
     }
 }
