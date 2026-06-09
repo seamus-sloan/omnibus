@@ -24,7 +24,4 @@ pub use upsert::{
     MetadataOverridesError,
 };
 
-// `pub(crate)` re-export so sibling `db/` modules and the colocated tests
-// keep importing `rebuild_fts_for_book` through `crate::metadata_overrides`
-// after the split. Not part of the downstream public surface.
-pub(crate) use fts::rebuild_fts_for_book;
+pub(crate) use fts::rebuild_fts_for_books_batch;
