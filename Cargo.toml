@@ -16,6 +16,7 @@ resolver = "2"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+thiserror = "2"
 # Declared with no features at the workspace level — `default-features = false`
 # is preserved so the frontend WASM build doesn't accidentally pull the
 # multi-thread runtime in. Consumers opt into the features they need
