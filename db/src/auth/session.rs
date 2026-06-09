@@ -63,6 +63,25 @@ pub async fn lookup_session(pool: &SqlitePool, raw_token: &str) -> AuthResult<(U
     let hash = hash_token(raw_token);
     let now = now_unix();
 
+    let row = fetch_session_row(pool, &hash).await?;
+    check_session_validity(&row, now)?;
+
+    let session_id: i64 = row.get("s_id");
+    let last_used_at: i64 = row.get("last_used_at");
+
+    let user = build_user_from_row(&row);
+    let session = build_session_from_row(&row, session_id, last_used_at)?;
+
+    if now - last_used_at >= SESSION_TOUCH_THRESHOLD_SECS {
+        touch_last_used(pool, session_id, now).await?;
+    }
+
+    Ok((user, session))
+}
+
+/// Fetch the joined session+user row for a token hash. Returns `SessionNotFound`
+/// when no row matches — the caller treats any absence as an invalid token.
+async fn fetch_session_row(pool: &SqlitePool, hash: &[u8]) -> AuthResult<sqlx::sqlite::SqliteRow> {
     let row = sqlx::query(
         "SELECT s.id AS s_id, s.user_id, s.device_id, s.kind, s.created_at,
                 s.last_used_at, s.expires_at, s.revoked_at,
@@ -70,23 +89,24 @@ pub async fn lookup_session(pool: &SqlitePool, raw_token: &str) -> AuthResult<(U
          FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = ?",
     )
-    .bind(&hash)
+    .bind(hash)
     .fetch_optional(pool)
     .await?;
 
-    let Some(row) = row else {
-        return Err(AuthError::SessionNotFound);
-    };
+    row.ok_or(AuthError::SessionNotFound)
+}
 
+/// Reject a session row that is revoked, absolutely expired, or idle-expired.
+/// Returns `SessionNotFound` for any disqualifying condition so callers see
+/// one error variant and the specific reason isn't leaked to the wire.
+fn check_session_validity(row: &sqlx::sqlite::SqliteRow, now: i64) -> AuthResult<()> {
     let revoked_at: Option<i64> = row.get("revoked_at");
     let expires_at: i64 = row.get("expires_at");
     if revoked_at.is_some() || expires_at <= now {
         return Err(AuthError::SessionNotFound);
     }
 
-    let session_id: i64 = row.get("s_id");
     let last_used_at: i64 = row.get("last_used_at");
-
     // Idle expiry: a session that hasn't been touched in
     // `SESSION_IDLE_TIMEOUT_SECS` is treated as expired regardless of its
     // absolute `expires_at`. `last_used_at` is updated opportunistically
@@ -96,52 +116,66 @@ pub async fn lookup_session(pool: &SqlitePool, raw_token: &str) -> AuthResult<(U
         return Err(AuthError::SessionNotFound);
     }
 
-    let user = User {
+    Ok(())
+}
+
+/// Build a `User` from the joined session+user query row.
+fn build_user_from_row(row: &sqlx::sqlite::SqliteRow) -> User {
+    User {
         id: row.get("u_id"),
         username: row.get("username"),
         is_admin: row.get::<i64, _>("is_admin") != 0,
         can_upload: row.get::<i64, _>("can_upload") != 0,
         can_edit: row.get::<i64, _>("can_edit") != 0,
         can_download: row.get::<i64, _>("can_download") != 0,
-    };
+    }
+}
 
+/// Build a `Session` from the joined query row. Returns `SessionNotFound` if
+/// the `kind` column holds an unrecognised value — the migration enforces the
+/// CHECK constraint, so an unknown kind means DB corruption or a hand-edited row.
+fn build_session_from_row(
+    row: &sqlx::sqlite::SqliteRow,
+    session_id: i64,
+    last_used_at: i64,
+) -> AuthResult<Session> {
+    let expires_at: i64 = row.get("expires_at");
     let kind_str: String = row.get("kind");
     let kind = match kind_str.as_str() {
         "cookie" => SessionKind::Cookie,
         "bearer" => SessionKind::Bearer,
-        // The migration enforces this via CHECK, so an unknown value here
-        // means DB corruption or a hand-edited row. Fail closed rather
-        // than silently apply the wrong semantics.
         _ => return Err(AuthError::SessionNotFound),
     };
-    let session = Session {
+    Ok(Session {
         id: session_id,
-        user_id: user.id,
+        user_id: row.get("u_id"),
         device_id: row.get("device_id"),
         kind,
         created_at: row.get("created_at"),
         last_used_at,
         expires_at,
-    };
+    })
+}
 
-    if now - last_used_at >= SESSION_TOUCH_THRESHOLD_SECS {
-        // Re-assert validity inside the touch UPDATE so a session that is
-        // revoked or (absolute-)expired between the SELECT above and this
-        // write can't have its `last_used_at` bumped by a racing lookup.
-        // The threshold guard stays the gate for *whether* we touch, so this
-        // remains rate-limited and a 0-row result here is benign.
-        sqlx::query(
-            "UPDATE sessions SET last_used_at = ?
-             WHERE id = ? AND revoked_at IS NULL AND expires_at > ?",
-        )
-        .bind(now)
-        .bind(session_id)
-        .bind(now)
-        .execute(pool)
-        .await?;
-    }
-
-    Ok((user, session))
+/// Write the current timestamp to `sessions.last_used_at` for `session_id`,
+/// guarded by `revoked_at IS NULL AND expires_at > now` so a session revoked
+/// or expired between the outer SELECT and this UPDATE can't have its
+/// activity timestamp bumped by a racing lookup. A 0-row result is benign —
+/// the threshold guard in `lookup_session` controls whether we write at all.
+async fn touch_last_used(pool: &SqlitePool, session_id: i64, now: i64) -> AuthResult<()> {
+    // Re-assert validity inside the UPDATE WHERE clause so a session that is
+    // revoked or (absolute-)expired between the SELECT above and this write
+    // can't have its `last_used_at` bumped by a racing lookup.
+    sqlx::query(
+        "UPDATE sessions SET last_used_at = ?
+         WHERE id = ? AND revoked_at IS NULL AND expires_at > ?",
+    )
+    .bind(now)
+    .bind(session_id)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Outcome of [`validate_session`], collapsed to the only two dispositions
