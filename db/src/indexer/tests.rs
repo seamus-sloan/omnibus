@@ -482,10 +482,8 @@ async fn backfill_chapters_inserts_synthetic_chapters_for_all_books_in_batch() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let lib = "/tmp/backfill_test_lib";
 
-    let bfid_a =
-        seed_audiobook_for_backfill(&pool, lib, "book-a", "book-a/part.m4b", "M4B").await;
-    let bfid_b =
-        seed_audiobook_for_backfill(&pool, lib, "book-b", "book-b/part.m4b", "M4B").await;
+    let bfid_a = seed_audiobook_for_backfill(&pool, lib, "book-a", "book-a/part.m4b", "M4B").await;
+    let bfid_b = seed_audiobook_for_backfill(&pool, lib, "book-b", "book-b/part.m4b", "M4B").await;
 
     let mut progress_calls: Vec<(u32, u32)> = Vec::new();
     backfill_chapters(&pool, lib, |processed, total| {
@@ -529,8 +527,7 @@ async fn backfill_chapters_is_idempotent_after_all_books_have_chapters() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let lib = "/tmp/backfill_idempotent_lib";
 
-    let bfid =
-        seed_audiobook_for_backfill(&pool, lib, "book-c", "book-c/part.m4b", "M4B").await;
+    let bfid = seed_audiobook_for_backfill(&pool, lib, "book-c", "book-c/part.m4b", "M4B").await;
 
     sqlx::query(
         "INSERT INTO file_chapters \
