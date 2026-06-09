@@ -177,8 +177,18 @@ fn inject_hls_script() {
 fn install_control_surface(uuid: &str, initial_rate: f64) {
     let rate_lit = serde_json::to_string(&initial_rate).unwrap_or_else(|_| "1".into());
     let uuid_lit = serde_json::to_string(uuid).unwrap_or_else(|_| "\"\"".into());
+    let _ = dioxus::document::eval(&control_surface_js(&rate_lit, &uuid_lit));
+}
 
-    let js = format!(
+/// Build the `window.OmnibusAudio` IIFE script string. Parameterised by
+/// `rate_lit` (JSON-serialised playback rate) and `uuid_lit` (JSON-serialised
+/// book UUID) so the Rust call site stays a single line.
+///
+/// The JS module is self-contained: it waits for `#omnibus-audio` to appear
+/// in the DOM, wires all event listeners, and installs the control object.
+/// Splitting the string further would break the JavaScript scoping model.
+fn control_surface_js(rate_lit: &str, uuid_lit: &str) -> String {
+    format!(
         r#"
 (function(){{
   // SPA-nav from another page leaves a stale `window.OmnibusAudio` from
@@ -373,8 +383,7 @@ fn install_control_surface(uuid: &str, initial_rate: f64) {
   mount();
 }})();
 "#
-    );
-    let _ = dioxus::document::eval(&js);
+    )
 }
 
 /// Fetch `/api/audiobooks/{uuid}/manifest` and either:

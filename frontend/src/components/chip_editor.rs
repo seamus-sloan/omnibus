@@ -91,6 +91,7 @@ pub struct ChipEditorProps {
     pub on_close: EventHandler<()>,
 }
 
+/// Add/remove chip editor with autocomplete dropdown.
 #[component]
 pub fn ChipEditor(props: ChipEditorProps) -> Element {
     let mut input = use_signal(String::new);
@@ -116,54 +117,14 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
     // interaction.
     let mut suppress_open = use_signal(|| false);
 
-    // Filter on every render. Reads the suggestion pool by reference
-    // so we never clone the underlying Vec — only the ≤5 matches that
-    // actually make it into the dropdown get cloned out.
-    //
-    // When `query_lc` is empty AND the input is focused, we surface
-    // the first `MAX_SUGGESTIONS` not-already-chosen items so the
-    // dropdown is useful on first focus. When `query_lc` is non-empty
-    // we substring-filter as before.
     let query_lc = input().trim().to_lowercase();
-    let filtered: Vec<SuggestionItem> = {
-        let suggestions = props.suggestions.read();
-        if suggestions.is_empty() {
-            Vec::new()
-        } else {
-            // Normalize via `to_lowercase()` (Unicode-aware) so the
-            // dedup-against-existing-values check matches what
-            // `commit()` uses. The old `eq_ignore_ascii_case` path
-            // could let non-ASCII variants ("Maas"/"Máas") slip past.
-            let current: std::collections::HashSet<String> = props
-                .values
-                .read()
-                .iter()
-                .map(|s| s.to_lowercase())
-                .collect();
-            if query_lc.is_empty() {
-                if focused() && !suppress_open() {
-                    suggestions
-                        .iter()
-                        .filter(|item| !current.contains(&item.name.to_lowercase()))
-                        .take(MAX_SUGGESTIONS)
-                        .cloned()
-                        .collect()
-                } else {
-                    Vec::new()
-                }
-            } else {
-                suggestions
-                    .iter()
-                    .filter(|item| {
-                        let lc = item.name.to_lowercase();
-                        lc.contains(&query_lc) && !current.contains(&lc)
-                    })
-                    .take(MAX_SUGGESTIONS)
-                    .cloned()
-                    .collect()
-            }
-        }
-    };
+    let filtered = compute_suggestions(
+        &props.suggestions.read(),
+        &props.values.read(),
+        &query_lc,
+        focused(),
+        suppress_open(),
+    );
 
     // Render the "+ Create '<query>'" footer row when the user has typed
     // something but no entry in the *full* suggestion pool (and no
@@ -198,6 +159,7 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
 
     let mut values_sig = props.values;
     let on_change = props.on_change;
+    let on_change_remove = on_change;
     let mut commit = move |name: String| {
         let trimmed = name.trim().to_string();
         if trimmed.is_empty() {
@@ -233,38 +195,14 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
 
     rsx! {
         Fragment {
-            for (i, value) in props.values.read().iter().cloned().enumerate() {
-                div {
-                    class: "chip me-chip-item",
-                    key: "{i}-{value}",
-                    if props.show_avatar {
-                        span { class: "me-avatar",
-                            {value.chars().filter(|c| c.is_uppercase()).take(2).collect::<String>()}
-                        }
-                    }
-                    // The label is its own element (not a bare text node) so
-                    // the chip exposes a node whose text is *exactly* the
-                    // value — `getByText(value, { exact: true })` in the E2E
-                    // specs would otherwise match nothing, since the chip
-                    // `div` also contains the avatar initials and the remove
-                    // button's "✕". Visually identical: `.chip` is an
-                    // inline-flex row, so the span is the same flex item the
-                    // bare text already was.
-                    span { class: "me-chip-label", "{value}" }
-                    button {
-                        class: "me-chip-remove",
-                        "aria-label": "{props.aria_remove_prefix} {value}",
-                        onclick: move |_| {
-                            let mut new_values = values_sig.read().clone();
-                            if i < new_values.len() {
-                                new_values.remove(i);
-                                values_sig.set(new_values.clone());
-                                on_change.call(new_values);
-                            }
-                        },
-                        "\u{2715}"
-                    }
-                }
+            ChipList {
+                values: values_sig,
+                show_avatar: props.show_avatar,
+                aria_remove_prefix: props.aria_remove_prefix.clone(),
+                on_remove: move |new_values: Vec<String>| {
+                    values_sig.set(new_values.clone());
+                    on_change_remove.call(new_values);
+                },
             }
             div { class: "chip-editor-input-wrap",
                 input {
@@ -341,74 +279,182 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                     },
                 }
                 if !filtered.is_empty() || show_create_row {
-                    ul {
-                        class: "chip-editor-suggestions",
-                        role: "listbox",
-                        "data-testid": "{testid_suggestions}",
-                        if !props.dropdown_header.is_empty() {
-                            li {
-                                class: "chip-editor-suggestions-header",
-                                aria_hidden: "true",
-                                "{props.dropdown_header}"
-                            }
-                        }
-                        for (i, item) in filtered.iter().cloned().enumerate() {
-                            li {
-                                key: "{i}-{item.name}",
-                                // Single-line if/else avoids nightly
-                                // clippy's `suspicious_else_formatting`
-                                // lint, which trips on the multi-line
-                                // form inside rsx attribute slots.
-                                class: if Some(i) == highlight() { "chip-editor-suggestion is-active" } else { "chip-editor-suggestion" },
-                                role: "option",
-                                aria_selected: if Some(i) == highlight() { "true" } else { "false" },
-                                // mousedown (not click) fires before the
-                                // input's blur, so the input keeps focus
-                                // for the next add.
-                                onmousedown: {
-                                    let name = item.name.clone();
-                                    move |e: Event<MouseData>| {
-                                        e.prevent_default();
-                                        commit(name.clone());
-                                    }
-                                },
-                                span { class: "chip-editor-suggestion-name", "{item.name}" }
-                                span { class: "chip-editor-suggestion-count",
-                                    if item.count == 1 { "1 book" } else { "{item.count} books" }
-                                }
-                                span { class: "chip-editor-suggestion-enter",
-                                    aria_hidden: "true",
-                                    "\u{21a9}"
-                                }
-                            }
-                        }
-                        if show_create_row {
-                            li {
-                                key: "__create__-{typed}",
-                                class: if Some(create_row_index) == highlight() { "chip-editor-suggestion chip-editor-suggestion--create is-active" } else { "chip-editor-suggestion chip-editor-suggestion--create" },
-                                role: "option",
-                                aria_selected: if Some(create_row_index) == highlight() { "true" } else { "false" },
-                                onmousedown: {
-                                    let value = typed.clone();
-                                    move |e: Event<MouseData>| {
-                                        e.prevent_default();
-                                        commit(value.clone());
-                                    }
-                                },
-                                span { class: "chip-editor-suggestion-name",
-                                    "+ Create "
-                                    span { class: "chip-editor-suggestion-quote", "\"{typed}\"" }
-                                }
-                                span { class: "chip-editor-suggestion-enter",
-                                    aria_hidden: "true",
-                                    "\u{21a9}"
-                                }
-                            }
-                        }
+                    SuggestionDropdown {
+                        filtered: filtered.clone(),
+                        show_create_row,
+                        typed: typed.clone(),
+                        highlight: highlight(),
+                        dropdown_header: props.dropdown_header.clone(),
+                        testid: testid_suggestions.clone(),
+                        on_pick: move |name: String| commit(name),
                     }
                 }
             }
         }
+    }
+}
+
+/// Rendered chip row — one chip per value with an avatar (optional) and
+/// remove button. Fires `on_remove` with the new full list after each removal.
+#[component]
+fn ChipList(
+    values: Signal<Vec<String>>,
+    show_avatar: bool,
+    aria_remove_prefix: String,
+    on_remove: EventHandler<Vec<String>>,
+) -> Element {
+    rsx! {
+        for (i, value) in values.read().iter().cloned().enumerate() {
+            div {
+                class: "chip me-chip-item",
+                key: "{i}-{value}",
+                if show_avatar {
+                    span { class: "me-avatar",
+                        {value.chars().filter(|c| c.is_uppercase()).take(2).collect::<String>()}
+                    }
+                }
+                // The label is its own element (not a bare text node) so
+                // the chip exposes a node whose text is *exactly* the
+                // value — `getByText(value, { exact: true })` in the E2E
+                // specs would otherwise match nothing, since the chip
+                // `div` also contains the avatar initials and the remove
+                // button's "✕". Visually identical: `.chip` is an
+                // inline-flex row, so the span is the same flex item the
+                // bare text already was.
+                span { class: "me-chip-label", "{value}" }
+                button {
+                    class: "me-chip-remove",
+                    "aria-label": "{aria_remove_prefix} {value}",
+                    onclick: move |_| {
+                        let mut new_values = values.read().clone();
+                        if i < new_values.len() {
+                            new_values.remove(i);
+                            on_remove.call(new_values);
+                        }
+                    },
+                    "\u{2715}"
+                }
+            }
+        }
+    }
+}
+
+/// Autocomplete dropdown — filtered suggestion rows plus an optional
+/// "+ Create" trailing row. `on_pick` fires with the chosen name.
+#[component]
+fn SuggestionDropdown(
+    filtered: Vec<SuggestionItem>,
+    show_create_row: bool,
+    typed: String,
+    highlight: Option<usize>,
+    dropdown_header: String,
+    testid: String,
+    on_pick: EventHandler<String>,
+) -> Element {
+    let create_row_index = filtered.len();
+    rsx! {
+        ul {
+            class: "chip-editor-suggestions",
+            role: "listbox",
+            "data-testid": "{testid}",
+            if !dropdown_header.is_empty() {
+                li {
+                    class: "chip-editor-suggestions-header",
+                    aria_hidden: "true",
+                    "{dropdown_header}"
+                }
+            }
+            for (i, item) in filtered.iter().cloned().enumerate() {
+                li {
+                    key: "{i}-{item.name}",
+                    // Single-line if/else avoids nightly
+                    // clippy's `suspicious_else_formatting`
+                    // lint, which trips on the multi-line
+                    // form inside rsx attribute slots.
+                    class: if Some(i) == highlight { "chip-editor-suggestion is-active" } else { "chip-editor-suggestion" },
+                    role: "option",
+                    aria_selected: if Some(i) == highlight { "true" } else { "false" },
+                    // mousedown (not click) fires before the
+                    // input's blur, so the input keeps focus
+                    // for the next add.
+                    onmousedown: {
+                        let name = item.name.clone();
+                        move |e: Event<MouseData>| {
+                            e.prevent_default();
+                            on_pick.call(name.clone());
+                        }
+                    },
+                    span { class: "chip-editor-suggestion-name", "{item.name}" }
+                    span { class: "chip-editor-suggestion-count",
+                        if item.count == 1 { "1 book" } else { "{item.count} books" }
+                    }
+                    span { class: "chip-editor-suggestion-enter", aria_hidden: "true", "\u{21a9}" }
+                }
+            }
+            if show_create_row {
+                li {
+                    key: "__create__-{typed}",
+                    class: if Some(create_row_index) == highlight { "chip-editor-suggestion chip-editor-suggestion--create is-active" } else { "chip-editor-suggestion chip-editor-suggestion--create" },
+                    role: "option",
+                    aria_selected: if Some(create_row_index) == highlight { "true" } else { "false" },
+                    onmousedown: {
+                        let value = typed.clone();
+                        move |e: Event<MouseData>| {
+                            e.prevent_default();
+                            on_pick.call(value.clone());
+                        }
+                    },
+                    span { class: "chip-editor-suggestion-name",
+                        "+ Create "
+                        span { class: "chip-editor-suggestion-quote", "\"{typed}\"" }
+                    }
+                    span { class: "chip-editor-suggestion-enter", aria_hidden: "true", "\u{21a9}" }
+                }
+            }
+        }
+    }
+}
+
+/// Compute the ≤`MAX_SUGGESTIONS` autocomplete candidates for the current
+/// query and focus state. Returns an empty `Vec` when the pool is empty,
+/// when the query doesn't match anything, or when the input is unfocused
+/// and the query is empty (open-on-focus is suppressed by `suppress_open`).
+///
+/// Filtering uses Unicode-aware `to_lowercase()` so ASCII case variants and
+/// non-ASCII look-alikes don't slip past the dedup check.
+fn compute_suggestions(
+    suggestions: &[SuggestionItem],
+    current_values: &[String],
+    query_lc: &str,
+    focused: bool,
+    suppress_open: bool,
+) -> Vec<SuggestionItem> {
+    if suggestions.is_empty() {
+        return Vec::new();
+    }
+    let current: std::collections::HashSet<String> =
+        current_values.iter().map(|s| s.to_lowercase()).collect();
+    if query_lc.is_empty() {
+        if focused && !suppress_open {
+            suggestions
+                .iter()
+                .filter(|item| !current.contains(&item.name.to_lowercase()))
+                .take(MAX_SUGGESTIONS)
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        }
+    } else {
+        suggestions
+            .iter()
+            .filter(|item| {
+                let lc = item.name.to_lowercase();
+                lc.contains(query_lc) && !current.contains(&lc)
+            })
+            .take(MAX_SUGGESTIONS)
+            .cloned()
+            .collect()
     }
 }
 
@@ -464,5 +510,36 @@ mod tests {
         ]);
         let names: Vec<&str> = out.iter().map(|i| i.name.as_str()).collect();
         assert_eq!(names, vec!["Ada", "Mira", "Zelda"]);
+    }
+
+    #[test]
+    fn compute_suggestions_returns_empty_when_pool_is_empty() {
+        let result = compute_suggestions(&[], &[], "", true, false);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn compute_suggestions_filters_already_chosen_values() {
+        let pool = vec![
+            SuggestionItem::new("Ada", 1),
+            SuggestionItem::new("Mira", 2),
+        ];
+        let result = compute_suggestions(&pool, &["Ada".to_string()], "", true, false);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "Mira");
+    }
+
+    #[test]
+    fn compute_suggestions_returns_empty_when_unfocused_and_query_empty() {
+        let pool = vec![SuggestionItem::new("Ada", 1)];
+        let result = compute_suggestions(&pool, &[], "", false, false);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn compute_suggestions_returns_empty_when_suppress_open_is_true() {
+        let pool = vec![SuggestionItem::new("Ada", 1)];
+        let result = compute_suggestions(&pool, &[], "", true, true);
+        assert!(result.is_empty());
     }
 }

@@ -14,6 +14,7 @@ enum Sort {
     BookCount,
 }
 
+/// Series index page — browse all series in the library.
 #[component]
 pub fn SeriesIndexPage() -> Element {
     let server_url = use_server_url();
@@ -83,59 +84,14 @@ pub fn SeriesIndexPage() -> Element {
 
     rsx! {
         div { class: "idx-page",
-            div { class: "idx-header",
-                nav {
-                    class: "breadcrumb",
-                    aria_label: "breadcrumb",
-                    Link { to: Route::Landing {}, "Library" }
-                    span { class: "breadcrumb-sep", " › " }
-                    span { "Series" }
-                }
-                div { class: "idx-head-row",
-                    div {
-                        span { class: "label", "Library lens" }
-                        h1 { class: "disc-hero-title",
-                            "By "
-                            em { "series" }
-                            "."
-                        }
-                        p { class: "idx-subtitle",
-                            "{total_series} series \u{b7} {total_books} books across them."
-                        }
-                    }
-                }
-
-                div { class: "idx-toolbar",
-                    div { class: "idx-search",
-                        input {
-                            r#type: "search",
-                            placeholder: "Filter series by name or author\u{2026}",
-                            aria_label: "Filter series",
-                            value: "{filter}",
-                            "data-testid": "series-filter",
-                            oninput: move |e| filter.set(e.value()),
-                        }
-                    }
-                    div { class: "idx-sort",
-                        span { class: "label", "Sort" }
-                        button {
-                            class: "idx-btn",
-                            "aria-pressed": if sort() == Sort::Name { "true" } else { "false" },
-                            "data-testid": "series-sort-name",
-                            onclick: move |_| sort.set(Sort::Name),
-                            "A\u{2013}Z"
-                        }
-                        button {
-                            class: "idx-btn",
-                            "aria-pressed": if sort() == Sort::BookCount { "true" } else { "false" },
-                            "data-testid": "series-sort-count",
-                            onclick: move |_| sort.set(Sort::BookCount),
-                            "Most books"
-                        }
-                    }
-                }
+            SeriesIndexHeader {
+                total_series,
+                total_books,
+                filter: filter(),
+                sort: sort(),
+                on_filter: move |v| filter.set(v),
+                on_sort: move |s| sort.set(s),
             }
-
             div { class: "idx-body",
                 if filtered.is_empty() {
                     p { class: "subtitle idx-empty",
@@ -150,6 +106,72 @@ pub fn SeriesIndexPage() -> Element {
                         for s in filtered.iter() {
                             div { key: "{s.id}", {render_series_card(s)} }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Header section: breadcrumb, hero heading + subtitle, filter input, and
+/// sort toggle buttons.
+#[component]
+fn SeriesIndexHeader(
+    total_series: usize,
+    total_books: usize,
+    filter: String,
+    sort: Sort,
+    on_filter: EventHandler<String>,
+    on_sort: EventHandler<Sort>,
+) -> Element {
+    rsx! {
+        div { class: "idx-header",
+            nav {
+                class: "breadcrumb",
+                aria_label: "breadcrumb",
+                Link { to: Route::Landing {}, "Library" }
+                span { class: "breadcrumb-sep", " › " }
+                span { "Series" }
+            }
+            div { class: "idx-head-row",
+                div {
+                    span { class: "label", "Library lens" }
+                    h1 { class: "disc-hero-title",
+                        "By "
+                        em { "series" }
+                        "."
+                    }
+                    p { class: "idx-subtitle",
+                        "{total_series} series \u{b7} {total_books} books across them."
+                    }
+                }
+            }
+            div { class: "idx-toolbar",
+                div { class: "idx-search",
+                    input {
+                        r#type: "search",
+                        placeholder: "Filter series by name or author\u{2026}",
+                        aria_label: "Filter series",
+                        value: "{filter}",
+                        "data-testid": "series-filter",
+                        oninput: move |e| on_filter.call(e.value()),
+                    }
+                }
+                div { class: "idx-sort",
+                    span { class: "label", "Sort" }
+                    button {
+                        class: "idx-btn",
+                        "aria-pressed": if sort == Sort::Name { "true" } else { "false" },
+                        "data-testid": "series-sort-name",
+                        onclick: move |_| on_sort.call(Sort::Name),
+                        "A\u{2013}Z"
+                    }
+                    button {
+                        class: "idx-btn",
+                        "aria-pressed": if sort == Sort::BookCount { "true" } else { "false" },
+                        "data-testid": "series-sort-count",
+                        onclick: move |_| on_sort.call(Sort::BookCount),
+                        "Most books"
                     }
                 }
             }
