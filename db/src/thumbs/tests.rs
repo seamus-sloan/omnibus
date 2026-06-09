@@ -4,45 +4,37 @@
 //! FIFO-by-mtime `evict_if_over_cap` cap enforcement.
 
 use super::*;
-use std::sync::Mutex;
-
-// Serialize env-var tests — same pattern as OMNIBUS_COVERS_DIR tests in queries.rs.
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+use crate::test_support::EnvVarGuard;
 
 #[test]
 fn thumbs_dir_defaults_to_dot_thumbs() {
-    let _guard = ENV_LOCK.lock().unwrap();
-    std::env::remove_var("OMNIBUS_THUMBS_DIR");
+    let _guard = EnvVarGuard::set("OMNIBUS_THUMBS_DIR", None);
     assert_eq!(thumbs_dir(), PathBuf::from("./thumbs"));
 }
 
 #[test]
 fn thumbs_dir_respects_env_var() {
-    let _guard = ENV_LOCK.lock().unwrap();
-    std::env::set_var("OMNIBUS_THUMBS_DIR", "/tmp/omnibus-test-thumbs");
-    let dir = thumbs_dir();
-    std::env::remove_var("OMNIBUS_THUMBS_DIR");
-    assert_eq!(dir, PathBuf::from("/tmp/omnibus-test-thumbs"));
+    let _guard = EnvVarGuard::set("OMNIBUS_THUMBS_DIR", Some("/tmp/omnibus-test-thumbs"));
+    assert_eq!(thumbs_dir(), PathBuf::from("/tmp/omnibus-test-thumbs"));
 }
 
 #[test]
 fn thumb_path_for_format() {
-    let _guard = ENV_LOCK.lock().unwrap();
-    std::env::remove_var("OMNIBUS_THUMBS_DIR");
+    let _guard = EnvVarGuard::set("OMNIBUS_THUMBS_DIR", None);
     let path = thumb_path_for(42, ThumbSize::Md);
     assert_eq!(path, PathBuf::from("./thumbs/42_md.webp"));
 }
 
 #[test]
 fn is_stale_returns_true_when_file_missing() {
+    let _guard = EnvVarGuard::set("OMNIBUS_THUMBS_DIR", None);
     assert!(is_stale(999999, ThumbSize::Sm, 0));
 }
 
 #[test]
 fn is_stale_returns_false_when_mtime_is_newer() {
     let tmp = tempfile::tempdir().unwrap();
-    let _guard = ENV_LOCK.lock().unwrap();
-    std::env::set_var("OMNIBUS_THUMBS_DIR", tmp.path());
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
     std::fs::write(tmp.path().join("1_sm.webp"), b"x").unwrap();
     let mtime = std::fs::metadata(tmp.path().join("1_sm.webp"))
         .unwrap()
@@ -51,16 +43,13 @@ fn is_stale_returns_false_when_mtime_is_newer() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64;
-    let result = is_stale(1, ThumbSize::Sm, mtime - 1);
-    std::env::remove_var("OMNIBUS_THUMBS_DIR");
-    assert!(!result);
+    assert!(!is_stale(1, ThumbSize::Sm, mtime - 1));
 }
 
 #[test]
 fn is_stale_returns_true_when_mtime_is_older() {
     let tmp = tempfile::tempdir().unwrap();
-    let _guard = ENV_LOCK.lock().unwrap();
-    std::env::set_var("OMNIBUS_THUMBS_DIR", tmp.path());
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
     std::fs::write(tmp.path().join("2_md.webp"), b"x").unwrap();
     let mtime = std::fs::metadata(tmp.path().join("2_md.webp"))
         .unwrap()
@@ -69,9 +58,7 @@ fn is_stale_returns_true_when_mtime_is_older() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64;
-    let result = is_stale(2, ThumbSize::Md, mtime + 1);
-    std::env::remove_var("OMNIBUS_THUMBS_DIR");
-    assert!(result);
+    assert!(is_stale(2, ThumbSize::Md, mtime + 1));
 }
 
 #[test]
@@ -97,10 +84,8 @@ fn generate_thumbnail_produces_valid_webp() {
     .unwrap();
 
     let tmp = tempfile::tempdir().unwrap();
-    let _guard = ENV_LOCK.lock().unwrap();
-    std::env::set_var("OMNIBUS_THUMBS_DIR", tmp.path());
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
     let bytes_written = generate_thumbnail(10, ThumbSize::Sm, &png_bytes).unwrap();
-    std::env::remove_var("OMNIBUS_THUMBS_DIR");
 
     assert!(bytes_written > 0);
     let out = std::fs::read(tmp.path().join("10_sm.webp")).unwrap();
@@ -112,8 +97,7 @@ fn generate_thumbnail_produces_valid_webp() {
 #[test]
 fn evict_if_over_cap_removes_oldest_files() {
     let tmp = tempfile::tempdir().unwrap();
-    let _guard = ENV_LOCK.lock().unwrap();
-    std::env::set_var("OMNIBUS_THUMBS_DIR", tmp.path());
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
 
     // Write 3 files with staggered mtimes (we can only guarantee ordering,
     // not specific times, so write sequentially and trust OS mtime).
@@ -125,7 +109,6 @@ fn evict_if_over_cap_removes_oldest_files() {
 
     // Cap at 200 bytes → should delete the 1 oldest file (100 bytes each, 3×100=300 total).
     evict_if_over_cap(200).unwrap();
-    std::env::remove_var("OMNIBUS_THUMBS_DIR");
 
     let remaining: Vec<_> = std::fs::read_dir(tmp.path()).unwrap().flatten().collect();
     assert_eq!(remaining.len(), 2, "should have evicted 1 oldest file");

@@ -4,53 +4,17 @@
 //! `ffmpeg_progress_fraction`) plus the on-disk-sentinel + orphan-recovery
 //! invariants that the status handler depends on.
 
-use std::sync::Mutex;
-
 use super::*;
+use crate::test_support::EnvVarGuard;
 
-/// Serializes the on-disk-sentinel tests that mutate `OMNIBUS_DATA_DIR`.
-/// The env var is process-global; sibling tests pointing at different
-/// tempdirs would otherwise race and observe each other's `.progress`
-/// files. Mirrors `server::backend::audiobooks::tests::ENV_LOCK`.
-static DATA_DIR_LOCK: Mutex<()> = Mutex::new(());
-
-/// RAII helper: set `OMNIBUS_DATA_DIR` to a unique tempdir for the test,
-/// hold `DATA_DIR_LOCK`, and restore the previous value on drop.
-struct DataDirGuard {
-    _dir: tempfile::TempDir,
-    prev: Option<String>,
-    _lock: std::sync::MutexGuard<'static, ()>,
-}
-
-impl DataDirGuard {
-    fn new() -> Self {
-        let lock = DATA_DIR_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let prev = std::env::var("OMNIBUS_DATA_DIR").ok();
-        // SAFETY: held under DATA_DIR_LOCK; no other thread mutates the env.
-        unsafe {
-            std::env::set_var("OMNIBUS_DATA_DIR", dir.path());
-        }
-        Self {
-            _dir: dir,
-            prev,
-            _lock: lock,
-        }
-    }
-}
-
-impl Drop for DataDirGuard {
-    fn drop(&mut self) {
-        // SAFETY: held under DATA_DIR_LOCK; no other thread mutates the env.
-        unsafe {
-            match self.prev.take() {
-                Some(v) => std::env::set_var("OMNIBUS_DATA_DIR", v),
-                None => std::env::remove_var("OMNIBUS_DATA_DIR"),
-            }
-        }
-    }
+/// Create a unique tempdir and point `OMNIBUS_DATA_DIR` at it for the
+/// test's duration. Returns both the guard (holds `ENV_LOCK` + restores
+/// the env var on drop) and the `TempDir` handle (keeps the directory
+/// alive until the end of the test).
+fn data_dir_guard() -> (EnvVarGuard, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let guard = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(dir.path().as_os_str()));
+    (guard, dir)
 }
 
 /// Backdate the mtime of `path` by `age`. Uses `File::set_modified` so
@@ -279,7 +243,7 @@ fn read_progress_treats_orphan_sentinel_as_zero() {
     // crashed transcode from minutes ago. `read_progress` must return
     // 0.0 so the status handler's `progress < 0.05` re-kick gate fires
     // on the next poll.
-    let _guard = DataDirGuard::new();
+    let (_guard, _dir) = data_dir_guard();
     let book_id = 1234;
     let dir = segment_dir(book_id, AUDIO64);
     std::fs::create_dir_all(&dir).unwrap();
@@ -299,7 +263,7 @@ fn read_progress_returns_one_for_completed_transcode_even_if_old() {
     // Mtime-based staleness must not poison the success sentinel — a
     // book sitting idle in cache for hours still needs to read as
     // ready.
-    let _guard = DataDirGuard::new();
+    let (_guard, _dir) = data_dir_guard();
     let book_id = 2345;
     let dir = segment_dir(book_id, AUDIO64);
     std::fs::create_dir_all(&dir).unwrap();
@@ -317,7 +281,7 @@ fn read_progress_returns_one_for_completed_transcode_even_if_old() {
 fn read_progress_preserves_fresh_live_progress() {
     // A heartbeat written seconds ago must NOT be treated as orphaned —
     // the threshold gives the live ffmpeg several heartbeats of headroom.
-    let _guard = DataDirGuard::new();
+    let (_guard, _dir) = data_dir_guard();
     let book_id = 3456;
     let dir = segment_dir(book_id, AUDIO64);
     std::fs::create_dir_all(&dir).unwrap();
@@ -339,7 +303,7 @@ async fn transcode_book_clears_orphan_progress_on_restart() {
     // We can't drive a real ffmpeg in CI, so we point OMNIBUS_FFMPEG_PATH
     // at a binary that won't exist and assert the only invariant that
     // matters for the bug: the orphan sentinel is *gone* afterwards.
-    let _guard = DataDirGuard::new();
+    let (_guard, _dir) = data_dir_guard();
     let book_id = 4567;
     let dir = segment_dir(book_id, AUDIO64);
     std::fs::create_dir_all(&dir).unwrap();
@@ -388,11 +352,13 @@ async fn transcode_book_clears_orphan_progress_on_restart() {
     // and written the bootstrap `0.01`. The cleanup path that follows
     // also nukes the directory, which is fine: either branch ends with
     // `read_progress` below 0.05.
-    let prev_ffmpeg = std::env::var("OMNIBUS_FFMPEG_PATH").ok();
-    // SAFETY: held under DataDirGuard's lock; serialized vs siblings.
-    unsafe {
-        std::env::set_var("OMNIBUS_FFMPEG_PATH", "/this/binary/does/not/exist/ffmpeg");
-    }
+    //
+    // `_guard` already holds ENV_LOCK; `also_set` adds OMNIBUS_FFMPEG_PATH
+    // under the same lock so it is restored automatically on drop.
+    let _guard = _guard.also_set(
+        "OMNIBUS_FFMPEG_PATH",
+        Some("/this/binary/does/not/exist/ffmpeg"),
+    );
 
     let _ = super::transcode_book(&pool, book_id, file_id, "/lib", AUDIO64).await;
 
@@ -401,12 +367,4 @@ async fn transcode_book_clears_orphan_progress_on_restart() {
         observed < 0.05,
         "orphan 0.1 sentinel must have been cleared; got {observed}"
     );
-
-    // SAFETY: same as the set above.
-    unsafe {
-        match prev_ffmpeg {
-            Some(v) => std::env::set_var("OMNIBUS_FFMPEG_PATH", v),
-            None => std::env::remove_var("OMNIBUS_FFMPEG_PATH"),
-        }
-    }
 }
