@@ -8,6 +8,9 @@
 
 use dioxus::prelude::*;
 
+// Pure presentational shell — no branching logic to unit-test.
+// Covered by Playwright at ui_tests/playwright/tests/flows/.
+
 /// Bookmarks drawer — empty state until bookmark persistence ships.
 #[component]
 pub(super) fn BookmarksDrawer(on_close: EventHandler<()>) -> Element {

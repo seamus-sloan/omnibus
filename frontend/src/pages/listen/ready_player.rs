@@ -18,6 +18,120 @@ use super::speed_panel::SpeedPanel;
 use super::stage::{PlaybackPosition, PlayerCallbacks, PlayerStage, ToolbarState, TransportState};
 use crate::Nav;
 
+/// Derive the current chapter index from `elapsed` and a sorted chapter list.
+/// Returns 0 when `chapters` is empty.
+pub(super) fn chapter_index_for_elapsed(chapters: &[ChapterInfo], elapsed: f64) -> usize {
+    if chapters.is_empty() {
+        return 0;
+    }
+    chapters
+        .partition_point(|c| c.start_seconds <= elapsed)
+        .saturating_sub(1)
+}
+
+/// Resolve the seek target for "previous chapter":
+/// - If we're more than 3 s into the current chapter, seek to its start.
+/// - If within 3 s of the start and not the first chapter, go to the previous.
+/// - Otherwise seek to 0.
+///
+/// Returns `None` when `chapters` is empty.
+pub(super) fn chapter_prev_target(
+    chapters: &[ChapterInfo],
+    elapsed: f64,
+    idx: usize,
+) -> Option<f64> {
+    if chapters.is_empty() {
+        return None;
+    }
+    let target = if elapsed - chapters[idx].start_seconds > 3.0 {
+        chapters[idx].start_seconds
+    } else if idx > 0 {
+        chapters[idx - 1].start_seconds
+    } else {
+        0.0
+    };
+    Some(target)
+}
+
+/// Scrub bar maximum — at least 1.0 so the range input is never empty.
+pub(super) fn scrub_max(duration: f64) -> f64 {
+    if duration > 0.0 {
+        duration
+    } else {
+        1.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use omnibus_shared::ChapterInfo;
+
+    use super::*;
+
+    fn ch(ordinal: i64, title: &str, start: f64, dur: f64) -> ChapterInfo {
+        ChapterInfo {
+            ordinal,
+            title: title.into(),
+            start_seconds: start,
+            duration_seconds: dur,
+        }
+    }
+
+    #[test]
+    fn chapter_index_for_elapsed_returns_zero_for_empty_list() {
+        assert_eq!(chapter_index_for_elapsed(&[], 60.0), 0);
+    }
+
+    #[test]
+    fn chapter_index_for_elapsed_returns_first_chapter_before_any_start() {
+        let chs = vec![ch(1, "Intro", 0.0, 300.0), ch(2, "Part 1", 300.0, 600.0)];
+        assert_eq!(chapter_index_for_elapsed(&chs, 0.0), 0);
+        assert_eq!(chapter_index_for_elapsed(&chs, 150.0), 0);
+    }
+
+    #[test]
+    fn chapter_index_for_elapsed_advances_past_chapter_boundary() {
+        let chs = vec![ch(1, "Intro", 0.0, 300.0), ch(2, "Part 1", 300.0, 600.0)];
+        assert_eq!(chapter_index_for_elapsed(&chs, 300.0), 1);
+        assert_eq!(chapter_index_for_elapsed(&chs, 500.0), 1);
+    }
+
+    #[test]
+    fn chapter_prev_target_returns_none_when_chapters_empty() {
+        assert_eq!(chapter_prev_target(&[], 10.0, 0), None);
+    }
+
+    #[test]
+    fn chapter_prev_target_returns_chapter_start_when_well_into_chapter() {
+        let chs = vec![ch(1, "Intro", 0.0, 300.0), ch(2, "Part 1", 300.0, 600.0)];
+        // 50 s into chapter 1 (idx=1, start=300), elapsed=350 → 350-300=50 > 3 → back to 300
+        assert_eq!(chapter_prev_target(&chs, 350.0, 1), Some(300.0));
+    }
+
+    #[test]
+    fn chapter_prev_target_returns_previous_chapter_when_near_start() {
+        let chs = vec![ch(1, "Intro", 0.0, 300.0), ch(2, "Part 1", 300.0, 600.0)];
+        // 1 s into chapter 1 (idx=1, start=300), elapsed=301 → 301-300=1 ≤ 3 → go to ch 0 start=0
+        assert_eq!(chapter_prev_target(&chs, 301.0, 1), Some(0.0));
+    }
+
+    #[test]
+    fn chapter_prev_target_returns_zero_when_at_first_chapter_start() {
+        let chs = vec![ch(1, "Intro", 0.0, 300.0)];
+        assert_eq!(chapter_prev_target(&chs, 1.0, 0), Some(0.0));
+    }
+
+    #[test]
+    fn scrub_max_returns_duration_when_positive() {
+        assert!((scrub_max(120.5) - 120.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn scrub_max_returns_one_when_duration_is_zero() {
+        assert!((scrub_max(0.0) - 1.0).abs() < f64::EPSILON);
+    }
+}
+
 /// Render the ready-state player chrome and bind the transport handlers.
 #[component]
 pub(super) fn ReadyPlayer(
@@ -40,11 +154,7 @@ pub(super) fn ReadyPlayer(
     let current_chapter_index = use_memo(move || {
         let chs = chapters();
         let elapsed_now = elapsed();
-        if chs.is_empty() {
-            return 0usize;
-        }
-        chs.partition_point(|c| c.start_seconds <= elapsed_now)
-            .saturating_sub(1)
+        chapter_index_for_elapsed(&chs, elapsed_now)
     });
 
     let on_toggle = move |_| {
@@ -78,18 +188,10 @@ pub(super) fn ReadyPlayer(
     let on_chapter_prev = move |_: MouseEvent| {
         let chs = chapters();
         let idx = current_chapter_index();
-        if chs.is_empty() {
-            return;
+        if let Some(_target) = chapter_prev_target(&chs, elapsed(), idx) {
+            #[cfg(feature = "web")]
+            super::helpers::audio_call("seek", &_target.to_string());
         }
-        let _target = if elapsed() - chs[idx].start_seconds > 3.0 {
-            chs[idx].start_seconds
-        } else if idx > 0 {
-            chs[idx - 1].start_seconds
-        } else {
-            0.0
-        };
-        #[cfg(feature = "web")]
-        super::helpers::audio_call("seek", &_target.to_string());
     };
 
     let on_chapter_next = move |_: MouseEvent| {
@@ -115,7 +217,7 @@ pub(super) fn ReadyPlayer(
     let dur = duration();
     let elapsed_now = elapsed();
     let remaining = (dur - elapsed_now).max(0.0);
-    let scrub_max = if dur > 0.0 { dur } else { 1.0 };
+    let scrub_max = scrub_max(dur);
     let rate_label = format!("{:.2}\u{00d7}", rate());
     let play_label = if playing() { "Pause" } else { "Play" }.to_string();
     let ready = hls_ready();

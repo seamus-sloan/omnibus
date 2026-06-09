@@ -7,6 +7,11 @@
 
 use dioxus::prelude::*;
 
+// Pure presentational — no branching logic to unit-test here.
+// Overlay visibility is controlled by the booleans in `ready_player` (already
+// tested) and rendered output is covered by Playwright at
+// ui_tests/playwright/tests/flows/.
+
 /// Terminal failure overlay shown when the HLS `.failed` marker is present
 /// or the manifest fetch failed outright.
 #[component]

@@ -12,6 +12,78 @@ use super::chapter_map::ChapterMap;
 use super::controls::{Toolbar, TransportButtons};
 use crate::components::atrium::Cover;
 
+/// Build the "Now playing" kicker text, including chapter counter when available.
+pub(super) fn kicker_text(ch_count: usize, current_chapter_index: usize) -> String {
+    if ch_count > 0 {
+        format!(
+            "Now playing \u{00b7} Chapter {} of {}",
+            current_chapter_index + 1,
+            ch_count
+        )
+    } else {
+        "Now playing".to_string()
+    }
+}
+
+/// Build the chapter subtitle (e.g. "Ch. 2 · The Journey Begins") when the
+/// current chapter has a non-empty title. Returns `None` when there are no
+/// chapters or the chapter title is empty.
+pub(super) fn chapter_sub_text(
+    chapters: &[ChapterInfo],
+    current_chapter_index: usize,
+) -> Option<String> {
+    chapters
+        .get(current_chapter_index)
+        .filter(|c| !c.title.is_empty())
+        .map(|c| format!("Ch. {} \u{00b7} {}", current_chapter_index + 1, c.title))
+}
+
+#[cfg(test)]
+mod tests {
+    use omnibus_shared::ChapterInfo;
+
+    use super::*;
+
+    fn ch(ordinal: i64, title: &str, start: f64) -> ChapterInfo {
+        ChapterInfo {
+            ordinal,
+            title: title.into(),
+            start_seconds: start,
+            duration_seconds: 300.0,
+        }
+    }
+
+    #[test]
+    fn kicker_text_without_chapters_returns_simple_label() {
+        assert_eq!(kicker_text(0, 0), "Now playing");
+    }
+
+    #[test]
+    fn kicker_text_with_chapters_includes_counter() {
+        assert_eq!(kicker_text(5, 2), "Now playing \u{00b7} Chapter 3 of 5");
+    }
+
+    #[test]
+    fn chapter_sub_text_returns_none_when_chapter_list_empty() {
+        assert_eq!(chapter_sub_text(&[], 0), None);
+    }
+
+    #[test]
+    fn chapter_sub_text_returns_none_when_chapter_title_empty() {
+        let chs = vec![ch(1, "", 0.0)];
+        assert_eq!(chapter_sub_text(&chs, 0), None);
+    }
+
+    #[test]
+    fn chapter_sub_text_returns_formatted_title_when_present() {
+        let chs = vec![ch(1, "Intro", 0.0), ch(2, "Part One", 300.0)];
+        assert_eq!(
+            chapter_sub_text(&chs, 1),
+            Some("Ch. 2 \u{00b7} Part One".to_string())
+        );
+    }
+}
+
 /// Scrubber timing — elapsed plus the derived totals (duration, remaining, slider max).
 #[derive(Clone, PartialEq)]
 pub(super) struct PlaybackPosition {
@@ -68,20 +140,8 @@ pub(super) fn PlayerStage(
     current_chapter_index: usize,
 ) -> Element {
     let ch_count = chapters.len();
-    let kicker = if ch_count > 0 {
-        format!(
-            "Now playing \u{00b7} Chapter {} of {}",
-            current_chapter_index + 1,
-            ch_count
-        )
-    } else {
-        "Now playing".to_string()
-    };
-
-    let chapter_sub = chapters
-        .get(current_chapter_index)
-        .filter(|c| !c.title.is_empty())
-        .map(|c| format!("Ch. {} \u{00b7} {}", current_chapter_index + 1, c.title));
+    let kicker = kicker_text(ch_count, current_chapter_index);
+    let chapter_sub = chapter_sub_text(&chapters, current_chapter_index);
 
     rsx! {
         div { class: "lp-stage",

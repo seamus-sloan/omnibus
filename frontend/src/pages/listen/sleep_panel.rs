@@ -12,6 +12,10 @@ const PRESETS: &[&str] = &[
     "Off", "15 min", "30 min", "45 min", "1 hour", "2 hours", "3 hours", "4 hours",
 ];
 
+// Pure presentational shell — no branching logic to unit-test.
+// Active/inactive state is owned by `ready_player` (already tested).
+// Covered by Playwright at ui_tests/playwright/tests/flows/.
+
 /// Frosted-glass sleep-timer panel with duration presets.
 #[component]
 pub(super) fn SleepPanel(on_close: EventHandler<()>) -> Element {
