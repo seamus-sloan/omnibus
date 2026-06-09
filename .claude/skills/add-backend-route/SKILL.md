@@ -89,4 +89,4 @@ If this route is hit by a UI page, drive that page via [`ui-validate`](../ui-val
 
 ## 10. End-of-session
 
-Run [99-end-of-session.md](../../rules/99-end-of-session.md). Update [CLAUDE.md](../../../CLAUDE.md) module-structure section if a new module was introduced.
+Run [99-end-of-session.md](../../rules/99-end-of-session.md). Update [.claude/architecture.md](../../architecture.md) if a new module was introduced.
