@@ -14,11 +14,9 @@ use std::time::{Duration, SystemTime};
 use sqlx::SqlitePool;
 use tokio::io::AsyncBufReadExt;
 
-/// Errors returned by `get_parts`. Other public functions in this module
-/// still return `sqlx::Error` directly (`resolve_audiobook`) or
-/// `anyhow::Result` (`transcode_book`, where ffmpeg + filesystem +
-/// timeouts dominate the failure space); widening the boundary cleanup
-/// is tracked separately.
+/// Errors returned by the HLS DB queries. `transcode_book` uses
+/// `anyhow::Result` because ffmpeg + filesystem + timeouts dominate its
+/// failure space and callers just propagate.
 #[derive(Debug, thiserror::Error)]
 pub enum HlsError {
     #[error(transparent)]
@@ -187,7 +185,7 @@ pub struct ResolvedAudiobook {
 pub async fn resolve_audiobook(
     pool: &SqlitePool,
     uuid: &str,
-) -> Result<Option<ResolvedAudiobook>, sqlx::Error> {
+) -> Result<Option<ResolvedAudiobook>, HlsError> {
     let row = sqlx::query_as::<_, (i64, i64, String)>(
         "SELECT b.id, bf.id, l.path \
          FROM books b \
@@ -469,16 +467,30 @@ async fn run_ffmpeg_with_progress(
     outdir: &Path,
     total_secs: f64,
 ) -> Result<FfmpegOutcome, String> {
-    let ffmpeg = std::env::var("OMNIBUS_FFMPEG_PATH").unwrap_or_else(|_| "ffmpeg".into());
     let timeout_secs: u64 = std::env::var("OMNIBUS_HLS_TRANSCODE_TIMEOUT_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(1800);
 
+    let mut child = spawn_ffmpeg(concat_path, outdir)?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "ffmpeg stdout pipe missing".to_string())?;
+
+    let progress_file = progress_path(book_id, profile);
+    let progress_task = tokio::spawn(stream_progress(stdout, progress_file, total_secs));
+
+    wait_for_ffmpeg(child, progress_task, timeout_secs).await
+}
+
+/// Spawn the ffmpeg child process for HLS transcoding with piped stdout/stderr.
+fn spawn_ffmpeg(concat_path: &Path, outdir: &Path) -> Result<tokio::process::Child, String> {
+    let ffmpeg = std::env::var("OMNIBUS_FFMPEG_PATH").unwrap_or_else(|_| "ffmpeg".into());
     let seg_pattern = outdir.join("seg-%04d.ts");
     let manifest_out = outdir.join("index.m3u8");
 
-    let mut child = tokio::process::Command::new(&ffmpeg)
+    tokio::process::Command::new(&ffmpeg)
         .args([
             "-f",
             "concat",
@@ -514,16 +526,18 @@ async fn run_ffmpeg_with_progress(
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("ffmpeg spawn failed: {e}"))?;
+        .map_err(|e| format!("ffmpeg spawn failed: {e}"))
+}
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "ffmpeg stdout pipe missing".to_string())?;
-
-    let progress_file = progress_path(book_id, profile);
-    let progress_task = tokio::spawn(stream_progress(stdout, progress_file, total_secs));
-
+/// Await ffmpeg exit under `timeout_secs`, then map the result to
+/// [`FfmpegOutcome`]. Aborts the progress-heartbeat task before returning
+/// on the timeout path so we don't depend on the kill→EOF chain to unblock
+/// the `next_line` await inside the reader.
+async fn wait_for_ffmpeg(
+    child: tokio::process::Child,
+    progress_task: tokio::task::JoinHandle<()>,
+    timeout_secs: u64,
+) -> Result<FfmpegOutcome, String> {
     let wait_result = tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
         child.wait_with_output(),
@@ -548,10 +562,10 @@ async fn run_ffmpeg_with_progress(
             Err(format!("ffmpeg wait failed: {io_err}"))
         }
         Err(_elapsed) => {
-            // `kill_on_drop(true)` reaps the child when the wait future
-            // dropped on the timeout return path; abort the progress
-            // reader explicitly so we don't depend on the kill → EOF
-            // chain to unblock its `next_line` await.
+            // `kill_on_drop(true)` reaps the child when the wait future is
+            // dropped on the timeout return path; abort the progress reader
+            // explicitly so we don't depend on the kill → EOF chain to
+            // unblock its `next_line` await.
             progress_task.abort();
             let _ = progress_task.await;
             Ok(FfmpegOutcome::Timeout { timeout_secs })

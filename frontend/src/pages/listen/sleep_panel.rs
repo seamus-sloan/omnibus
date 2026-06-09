@@ -40,6 +40,7 @@ pub(super) fn SleepPanel(on_close: EventHandler<()>) -> Element {
                         let class = if is_off { "lp-sleep-btn on" } else { "lp-sleep-btn" };
                         rsx! {
                             button {
+                                key: "{preset}",
                                 class: class,
                                 r#type: "button",
                                 disabled: !is_off,

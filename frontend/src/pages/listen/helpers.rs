@@ -50,10 +50,6 @@ pub(super) fn post_audio_progress(uuid: String, seconds: f64) {
     });
 }
 
-#[cfg(all(not(feature = "web"), not(feature = "mobile")))]
-#[allow(dead_code)]
-pub(super) fn post_audio_progress(_uuid: String, _seconds: f64) {}
-
 #[cfg(test)]
 mod tests {
     use super::format_hms;

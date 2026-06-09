@@ -8,6 +8,13 @@ use sqlx::{Row, SqlitePool};
 
 use omnibus_shared::{AuthorSummary, SeriesSummary};
 
+/// Errors returned by the browse index queries.
+#[derive(Debug, thiserror::Error)]
+pub enum BrowseError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
 /// Hard cap on rows returned by [`list_authors`] / [`list_series`]. Keeps
 /// the JSON envelope under ~1 MB even with the optional accent string,
 /// while leaving headroom past a 5k+ author library.
@@ -30,7 +37,7 @@ fn placeholders(n: usize) -> String {
 pub async fn list_authors(
     pool: &SqlitePool,
     library_paths: &[&str],
-) -> Result<Vec<AuthorSummary>, sqlx::Error> {
+) -> Result<Vec<AuthorSummary>, BrowseError> {
     if library_paths.is_empty() {
         return Ok(Vec::new());
     }
@@ -114,12 +121,26 @@ pub async fn list_authors(
 pub async fn list_series(
     pool: &SqlitePool,
     library_paths: &[&str],
-) -> Result<Vec<SeriesSummary>, sqlx::Error> {
+) -> Result<Vec<SeriesSummary>, BrowseError> {
     if library_paths.is_empty() {
         return Ok(Vec::new());
     }
-    let ph = placeholders(library_paths.len());
-    let sql = format!(
+    let sql = series_index_sql(library_paths.len());
+    let mut q = sqlx::query(&sql);
+    for path in library_paths {
+        q = q.bind(*path);
+    }
+    q = q.bind(INDEX_LIMIT);
+    let rows = q.fetch_all(pool).await?;
+    Ok(rows.iter().map(map_series_row).collect())
+}
+
+/// Build the `list_series` SQL for `n` library-path placeholders. Uses a CTE
+/// to materialize the path set once so the four correlated subqueries each see
+/// the same `lib_paths` without repeated inline VALUES lists.
+fn series_index_sql(n: usize) -> String {
+    let ph = placeholders(n);
+    format!(
         r#"
         WITH lib_paths(p) AS (VALUES {ph})
         SELECT s.id, s.name, s.sort,
@@ -176,25 +197,19 @@ pub async fn list_series(
         ORDER BY COALESCE(s.sort, s.name) COLLATE NOCASE ASC
         LIMIT ?
         "#
-    );
-    let mut q = sqlx::query(&sql);
-    for path in library_paths {
-        q = q.bind(*path);
-    }
-    q = q.bind(INDEX_LIMIT);
-    let rows = q.fetch_all(pool).await?;
+    )
+}
 
-    Ok(rows
-        .iter()
-        .map(|r| SeriesSummary {
-            id: r.get("id"),
-            name: r.get("name"),
-            sort: r.get("sort"),
-            book_count: r.get::<i64, _>("book_count") as usize,
-            primary_author: r.get("primary_author"),
-            accent: r.get("accent"),
-        })
-        .collect())
+/// Map a `list_series` query row to a [`SeriesSummary`].
+fn map_series_row(r: &sqlx::sqlite::SqliteRow) -> SeriesSummary {
+    SeriesSummary {
+        id: r.get("id"),
+        name: r.get("name"),
+        sort: r.get("sort"),
+        book_count: r.get::<i64, _>("book_count") as usize,
+        primary_author: r.get("primary_author"),
+        accent: r.get("accent"),
+    }
 }
 
 #[cfg(test)]

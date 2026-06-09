@@ -235,15 +235,17 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
                 let o = orig();
                 let overrides = build_overrides(
                     &o,
-                    &title(),
-                    &description(),
-                    &publisher(),
-                    &published(),
-                    &language(),
-                    &series(),
-                    &series_index(),
-                    &authors(),
-                    &tags(),
+                    EditedFields {
+                        title: &title(),
+                        description: &description(),
+                        publisher: &publisher(),
+                        published: &published(),
+                        language: &language(),
+                        series: &series(),
+                        series_index: &series_index(),
+                        authors: &authors(),
+                        tags: &tags(),
+                    },
                 );
 
                 match data::save_overrides(&url, &uuid, &overrides).await {
@@ -318,19 +320,21 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
 // untouched fields are preserved.
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::too_many_arguments)]
-fn build_overrides(
-    orig: &EbookMetadata,
-    title: &str,
-    description: &str,
-    publisher: &str,
-    published: &str,
-    language: &str,
-    series: &str,
-    series_index: &str,
-    authors: &[String],
-    tags: &[String],
-) -> MetadataOverrides {
+/// Edited scalar and list fields collected from the form signals before a save.
+struct EditedFields<'a> {
+    title: &'a str,
+    description: &'a str,
+    publisher: &'a str,
+    published: &'a str,
+    language: &'a str,
+    series: &'a str,
+    series_index: &'a str,
+    authors: &'a [String],
+    tags: &'a [String],
+}
+
+/// Build a [`MetadataOverrides`] from the current edit form values.
+fn build_overrides(orig: &EbookMetadata, edited: EditedFields<'_>) -> MetadataOverrides {
     let opt = |new: &str, old: Option<&str>| -> Option<String> {
         let old_val = old.unwrap_or("");
         if new != old_val {
@@ -341,9 +345,10 @@ fn build_overrides(
     };
 
     let orig_authors: Vec<String> = orig.creators.iter().map(|c| c.name.clone()).collect();
-    let creators = if authors != orig_authors.as_slice() {
+    let creators = if edited.authors != orig_authors.as_slice() {
         Some(
-            authors
+            edited
+                .authors
                 .iter()
                 .map(|name| Contributor {
                     name: name.clone(),
@@ -357,20 +362,20 @@ fn build_overrides(
         None
     };
 
-    let subjects = if tags != orig.subjects.as_slice() {
-        Some(tags.to_vec())
+    let subjects = if edited.tags != orig.subjects.as_slice() {
+        Some(edited.tags.to_vec())
     } else {
         None
     };
 
     MetadataOverrides {
-        title: opt(title, orig.title.as_deref()),
-        description: opt(description, orig.description.as_deref()),
-        publisher: opt(publisher, orig.publisher.as_deref()),
-        published: opt(published, orig.published.as_deref()),
-        language: opt(language, orig.language.as_deref()),
-        series: opt(series, orig.series.as_deref()),
-        series_index: opt(series_index, orig.series_index.as_deref()),
+        title: opt(edited.title, orig.title.as_deref()),
+        description: opt(edited.description, orig.description.as_deref()),
+        publisher: opt(edited.publisher, orig.publisher.as_deref()),
+        published: opt(edited.published, orig.published.as_deref()),
+        language: opt(edited.language, orig.language.as_deref()),
+        series: opt(edited.series, orig.series.as_deref()),
+        series_index: opt(edited.series_index, orig.series_index.as_deref()),
         creators,
         subjects,
     }
@@ -395,20 +400,36 @@ mod tests {
         }
     }
 
+    fn edited<'a>(
+        title: &'a str,
+        publisher: &'a str,
+        authors: &'a [String],
+        tags: &'a [String],
+    ) -> EditedFields<'a> {
+        EditedFields {
+            title,
+            description: "",
+            publisher,
+            published: "",
+            language: "",
+            series: "",
+            series_index: "",
+            authors,
+            tags,
+        }
+    }
+
     #[test]
     fn build_overrides_no_changes_yields_all_none() {
         let orig = book_with(Some("Dune"), &["Frank Herbert"], &["scifi"]);
         let ov = build_overrides(
             &orig,
-            "Dune",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            &["Frank Herbert".to_string()],
-            &["scifi".to_string()],
+            edited(
+                "Dune",
+                "",
+                &["Frank Herbert".to_string()],
+                &["scifi".to_string()],
+            ),
         );
         assert_eq!(ov, MetadataOverrides::default());
     }
@@ -418,15 +439,7 @@ mod tests {
         let orig = book_with(Some("Dune"), &["Frank Herbert"], &[]);
         let ov = build_overrides(
             &orig,
-            "Dune: Messiah",
-            "",
-            "Ace",
-            "",
-            "",
-            "",
-            "",
-            &["Frank Herbert".to_string()],
-            &[],
+            edited("Dune: Messiah", "Ace", &["Frank Herbert".to_string()], &[]),
         );
         assert_eq!(ov.title.as_deref(), Some("Dune: Messiah"));
         assert_eq!(ov.publisher.as_deref(), Some("Ace"));
@@ -440,26 +453,17 @@ mod tests {
         // orig.title = "Dune", edited to "" -> the override must carry the
         // empty string so the merge clears it rather than leaving it untouched.
         let orig = book_with(Some("Dune"), &[], &[]);
-        let ov = build_overrides(&orig, "", "", "", "", "", "", "", &[], &[]);
+        let ov = build_overrides(&orig, edited("", "", &[], &[]));
         assert_eq!(ov.title.as_deref(), Some(""));
     }
 
     #[test]
     fn build_overrides_replaces_full_creator_and_subject_lists() {
         let orig = book_with(Some("Dune"), &["Frank Herbert"], &["scifi"]);
-        let ov = build_overrides(
-            &orig,
-            "Dune",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            &["Frank Herbert".to_string(), "Brian Herbert".to_string()],
-            &["scifi".to_string(), "classic".to_string()],
-        );
-        let creators = ov.creators.unwrap_or_default();
+        let authors = vec!["Frank Herbert".to_string(), "Brian Herbert".to_string()];
+        let tags = vec!["scifi".to_string(), "classic".to_string()];
+        let ov = build_overrides(&orig, edited("Dune", "", &authors, &tags));
+        let creators = ov.creators.expect("creators should be set");
         assert_eq!(creators.len(), 2);
         assert_eq!(creators[0].name, "Frank Herbert");
         assert_eq!(creators[1].name, "Brian Herbert");
@@ -475,15 +479,12 @@ mod tests {
         let orig = book_with(Some("Dune"), &["Frank Herbert"], &["scifi"]);
         let ov = build_overrides(
             &orig,
-            "Dune",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            &["Frank Herbert".to_string()],
-            &["scifi".to_string()],
+            edited(
+                "Dune",
+                "",
+                &["Frank Herbert".to_string()],
+                &["scifi".to_string()],
+            ),
         );
         assert!(ov.creators.is_none());
         assert!(ov.subjects.is_none());

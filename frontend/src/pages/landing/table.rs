@@ -424,7 +424,7 @@ fn EbookRow(
                         span { class: "ebook-cell-formats-empty", "—" }
                     } else {
                         for fmt in display_book.formats.iter() {
-                            span { class: "format-badge", "{format_badge_label(fmt)}" }
+                            span { key: "{fmt}", class: "format-badge", "{format_badge_label(fmt)}" }
                         }
                     }
                 }

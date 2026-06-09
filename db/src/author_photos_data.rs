@@ -10,10 +10,10 @@ use sqlx::SqlitePool;
 
 use crate::metadata_overrides::rebuild_fts_for_books_batch;
 
-/// Errors returned by the author-photos data layer. The single
-/// transparent `Db` variant honors the `02-error-handling` boundary rule
-/// (no raw `sqlx::Error` leaving the module) while keeping `?`
-/// propagation clean at the call sites.
+/// Errors returned by the author-photos data layer. The single transparent
+/// `Db` variant wraps `sqlx::Error` at the module boundary per the
+/// `02-error-handling` boundary rule, keeping `?` propagation clean at
+/// every call site.
 #[derive(Debug, thiserror::Error)]
 pub enum AuthorPhotosDataError {
     #[error(transparent)]
@@ -54,7 +54,7 @@ impl AuthorPhotoSource {
 pub async fn get_author_photo(
     pool: &SqlitePool,
     author_id: i64,
-) -> Result<Option<(String, Vec<u8>)>, sqlx::Error> {
+) -> Result<Option<(String, Vec<u8>)>, AuthorPhotosDataError> {
     // Filter `letter` rows in SQL as well as via the schema CHECK constraint
     // so a malformed row (e.g. left over from a future migration drift)
     // can never accidentally serve `letter` bytes as a real image. Belt +
@@ -80,7 +80,7 @@ pub async fn get_author_photo(
 pub async fn author_photo_status(
     pool: &SqlitePool,
     author_id: i64,
-) -> Result<Option<(AuthorPhotoSource, String)>, sqlx::Error> {
+) -> Result<Option<(AuthorPhotoSource, String)>, AuthorPhotosDataError> {
     let row: Option<(String, String)> =
         sqlx::query_as("SELECT source, fetched_at FROM author_photos WHERE author_id = ?")
             .bind(author_id)
@@ -99,7 +99,7 @@ pub async fn upsert_author_photo(
     url: Option<&str>,
     mime: Option<&str>,
     bytes: Option<&[u8]>,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), AuthorPhotosDataError> {
     sqlx::query(
         "INSERT INTO author_photos (author_id, source, url, mime, bytes, fetched_at)
               VALUES (?, ?, ?, ?, ?, datetime('now'))
