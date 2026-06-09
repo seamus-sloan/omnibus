@@ -415,3 +415,139 @@ async fn reindex_ebooks_does_not_delete_audiobook_rows_when_libraries_share_a_pa
 
     let _ = std::fs::remove_dir_all(&shared);
 }
+
+async fn seed_audiobook_for_backfill(
+    pool: &SqlitePool,
+    library_path: &str,
+    uuid: &str,
+    first_part_filename: &str,
+    format: &str,
+) -> i64 {
+    sqlx::query(
+        "INSERT INTO libraries (path, display_name) VALUES (?, ?) \
+         ON CONFLICT(path) DO NOTHING",
+    )
+    .bind(library_path)
+    .bind(library_path)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let lib_id: i64 = sqlx::query_scalar("SELECT id FROM libraries WHERE path = ?")
+        .bind(library_path)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+
+    let book_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, library_id, path, title, sort) \
+         VALUES (?, ?, ?, ?, ?) RETURNING id",
+    )
+    .bind(uuid)
+    .bind(lib_id)
+    .bind(library_path)
+    .bind(uuid)
+    .bind(uuid)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    let book_file_id: i64 = sqlx::query_scalar(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime, mtime_epoch) \
+         VALUES (?, ?, ?, 100, '', 100) RETURNING id",
+    )
+    .bind(book_id)
+    .bind(format)
+    .bind(uuid)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO book_file_parts \
+            (book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds) \
+         VALUES (?, 0, ?, 100, 100, 3600.0)",
+    )
+    .bind(book_file_id)
+    .bind(first_part_filename)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    book_file_id
+}
+
+#[tokio::test]
+async fn backfill_chapters_inserts_synthetic_chapters_for_all_books_in_batch() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = "/tmp/backfill_test_lib";
+
+    let bfid_a = seed_audiobook_for_backfill(&pool, lib, "book-a", "book-a/part.m4b", "M4B").await;
+    let bfid_b = seed_audiobook_for_backfill(&pool, lib, "book-b", "book-b/part.m4b", "M4B").await;
+
+    let mut progress_calls: Vec<(u32, u32)> = Vec::new();
+    backfill_chapters(&pool, lib, |processed, total| {
+        progress_calls.push((processed, total));
+    })
+    .await
+    .unwrap();
+
+    let chapters_a: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM file_chapters WHERE book_file_id = ?")
+            .bind(bfid_a)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let chapters_b: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM file_chapters WHERE book_file_id = ?")
+            .bind(bfid_b)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        chapters_a >= 1,
+        "book-a must have at least one synthetic chapter after backfill"
+    );
+    assert!(
+        chapters_b >= 1,
+        "book-b must have at least one synthetic chapter after backfill"
+    );
+
+    assert_eq!(
+        progress_calls.len(),
+        2,
+        "on_progress must be called once per book"
+    );
+    assert_eq!(progress_calls[0], (1, 2));
+    assert_eq!(progress_calls[1], (2, 2));
+}
+
+#[tokio::test]
+async fn backfill_chapters_is_idempotent_after_all_books_have_chapters() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = "/tmp/backfill_idempotent_lib";
+
+    let bfid = seed_audiobook_for_backfill(&pool, lib, "book-c", "book-c/part.m4b", "M4B").await;
+
+    sqlx::query(
+        "INSERT INTO file_chapters \
+            (book_file_id, ordinal, title, start_seconds, duration_seconds) \
+         VALUES (?, 0, 'Chapter 1', 0.0, 3600.0)",
+    )
+    .bind(bfid)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let mut progress_calls = 0u32;
+    backfill_chapters(&pool, lib, |_, _| {
+        progress_calls += 1;
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(
+        progress_calls, 0,
+        "on_progress must not be called when all books already have chapters"
+    );
+}
