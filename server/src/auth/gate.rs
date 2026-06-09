@@ -36,6 +36,7 @@ use omnibus_db::auth as auth_db;
 use super::extractor::extract_token;
 use crate::backend::AppState;
 
+/// Reject `/api/*` requests without a live session with `401 Unauthorized`, after exempting `/api/auth/*` and `/api/_health`.
 pub async fn require_auth(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let path = req.uri().path();
     if !path.starts_with("/api/")

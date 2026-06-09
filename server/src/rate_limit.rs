@@ -79,6 +79,7 @@ impl RateLimiter {
         Self::with_policy(Duration::from_secs(WINDOW_SECS), MAX_REQUESTS)
     }
 
+    /// Construct a limiter with an explicit `(window, max requests)` policy.
     pub fn with_policy(window: Duration, max: u32) -> Self {
         Self {
             inner: Mutex::new(HashMap::new()),
@@ -87,6 +88,7 @@ impl RateLimiter {
         }
     }
 
+    /// Record a request from `ip`; returns `false` once the per-IP bucket exceeds `max` within `window`.
     pub async fn allow(&self, ip: IpAddr) -> bool {
         let now = Instant::now();
         let mut map = self.inner.lock().await;
