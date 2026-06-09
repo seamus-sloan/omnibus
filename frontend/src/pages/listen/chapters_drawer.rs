@@ -25,7 +25,7 @@ pub(super) fn ChaptersDrawer(
             onclick: move |_| on_close.call(()),
         }
 
-        div { class: "lp-drawer",
+        div { class: "lp-drawer", "data-testid": "chapters-drawer",
             div { class: "lp-drawer-head",
                 div {
                     div { class: "lp-panel-kicker", "Chapters" }
@@ -58,6 +58,13 @@ pub(super) fn ChaptersDrawer(
                             } else {
                                 "lp-drawer-row"
                             };
+                            let row_testid = if is_current {
+                                "chapter-row-current"
+                            } else if is_played {
+                                "chapter-row-played"
+                            } else {
+                                "chapter-row-upcoming"
+                            };
 
                             let dur_label = format_hms(ch.duration_seconds);
                             let remaining_in_ch = if is_current {
@@ -78,6 +85,7 @@ pub(super) fn ChaptersDrawer(
                             rsx! {
                                 button {
                                     class: "{row_class}",
+                                    "data-testid": "{row_testid}",
                                     r#type: "button",
                                     onclick: move |_| on_seek.call(ch_start),
                                     span { class: "lp-drawer-ord",
