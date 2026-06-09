@@ -206,22 +206,24 @@ mod tests {
     use super::*;
     use omnibus_shared::Contributor;
 
-    #[allow(clippy::too_many_arguments)]
-    fn book(
+    struct BookSpec<'a> {
         id: i64,
-        filename: &str,
-        title: Option<&str>,
-        authors: &[(&str, Option<&str>)],
-        series: Option<(&str, &str)>,
-        modified: Option<&str>,
-        added_at: Option<&str>,
-        subjects: &[&str],
-    ) -> EbookMetadata {
+        filename: &'a str,
+        title: Option<&'a str>,
+        authors: &'a [(&'a str, Option<&'a str>)],
+        series: Option<(&'a str, &'a str)>,
+        modified: Option<&'a str>,
+        added_at: Option<&'a str>,
+        subjects: &'a [&'a str],
+    }
+
+    fn book(s: BookSpec<'_>) -> EbookMetadata {
         EbookMetadata {
-            id,
-            filename: filename.into(),
-            title: title.map(Into::into),
-            creators: authors
+            id: s.id,
+            filename: s.filename.into(),
+            title: s.title.map(Into::into),
+            creators: s
+                .authors
                 .iter()
                 .map(|(name, file_as)| Contributor {
                     name: (*name).into(),
@@ -230,11 +232,11 @@ mod tests {
                     id: None,
                 })
                 .collect(),
-            series: series.map(|(s, _)| s.into()),
-            series_index: series.map(|(_, i)| i.into()),
-            modified: modified.map(Into::into),
-            added_at: added_at.map(Into::into),
-            subjects: subjects.iter().map(|s| (*s).to_string()).collect(),
+            series: s.series.map(|(name, _)| name.into()),
+            series_index: s.series.map(|(_, idx)| idx.into()),
+            modified: s.modified.map(Into::into),
+            added_at: s.added_at.map(Into::into),
+            subjects: s.subjects.iter().map(|sub| (*sub).to_string()).collect(),
             ..Default::default()
         }
     }
@@ -270,36 +272,36 @@ mod tests {
 
     fn sample() -> Vec<EbookMetadata> {
         vec![
-            book(
-                1,
-                "alpha.epub",
-                Some("Alpha"),
-                &[("Tolkien, J.R.R.", Some("Tolkien, J.R.R."))],
-                Some(("Foundation", "1")),
-                Some("2024-01-01T00:00:00"),
-                Some("2025-03-10T00:00:00"),
-                &["Fantasy"],
-            ),
-            book(
-                2,
-                "beta.epub",
-                Some("Beta"),
-                &[("Asimov, Isaac", Some("Asimov, Isaac"))],
-                Some(("Foundation", "2")),
-                Some("2024-06-01T00:00:00"),
-                Some("2025-01-05T00:00:00"),
-                &["Sci-Fi"],
-            ),
-            book(
-                3,
-                "gamma.epub",
-                Some("Gamma"),
-                &[("Le Guin, Ursula", Some("Le Guin, Ursula"))],
-                None,
-                Some("2023-01-01T00:00:00"),
-                Some("2025-02-20T00:00:00"),
-                &["Fantasy", "Sci-Fi"],
-            ),
+            book(BookSpec {
+                id: 1,
+                filename: "alpha.epub",
+                title: Some("Alpha"),
+                authors: &[("Tolkien, J.R.R.", Some("Tolkien, J.R.R."))],
+                series: Some(("Foundation", "1")),
+                modified: Some("2024-01-01T00:00:00"),
+                added_at: Some("2025-03-10T00:00:00"),
+                subjects: &["Fantasy"],
+            }),
+            book(BookSpec {
+                id: 2,
+                filename: "beta.epub",
+                title: Some("Beta"),
+                authors: &[("Asimov, Isaac", Some("Asimov, Isaac"))],
+                series: Some(("Foundation", "2")),
+                modified: Some("2024-06-01T00:00:00"),
+                added_at: Some("2025-01-05T00:00:00"),
+                subjects: &["Sci-Fi"],
+            }),
+            book(BookSpec {
+                id: 3,
+                filename: "gamma.epub",
+                title: Some("Gamma"),
+                authors: &[("Le Guin, Ursula", Some("Le Guin, Ursula"))],
+                series: None,
+                modified: Some("2023-01-01T00:00:00"),
+                added_at: Some("2025-02-20T00:00:00"),
+                subjects: &["Fantasy", "Sci-Fi"],
+            }),
         ]
     }
 
@@ -351,36 +353,36 @@ mod tests {
         // book stays at the end (it doesn't get flipped to the top by the
         // direction reversal).
         let books = vec![
-            book(
-                1,
-                "old.epub",
-                Some("Old"),
-                &[],
-                None,
-                Some("2024-01-01T00:00:00"),
-                None,
-                &[],
-            ),
-            book(
-                2,
-                "new.epub",
-                Some("New"),
-                &[],
-                None,
-                Some("2025-01-01T00:00:00"),
-                None,
-                &[],
-            ),
-            book(
-                3,
-                "missing.epub",
-                Some("Missing"),
-                &[],
-                None,
-                None,
-                None,
-                &[],
-            ),
+            book(BookSpec {
+                id: 1,
+                filename: "old.epub",
+                title: Some("Old"),
+                authors: &[],
+                series: None,
+                modified: Some("2024-01-01T00:00:00"),
+                added_at: None,
+                subjects: &[],
+            }),
+            book(BookSpec {
+                id: 2,
+                filename: "new.epub",
+                title: Some("New"),
+                authors: &[],
+                series: None,
+                modified: Some("2025-01-01T00:00:00"),
+                added_at: None,
+                subjects: &[],
+            }),
+            book(BookSpec {
+                id: 3,
+                filename: "missing.epub",
+                title: Some("Missing"),
+                authors: &[],
+                series: None,
+                modified: None,
+                added_at: None,
+                subjects: &[],
+            }),
         ];
         let desc = sort_books(books.clone(), SortKey::LastUpdated, SortDir::Desc);
         assert_eq!(ids(&desc), vec![2, 1, 3]);
@@ -401,8 +403,26 @@ mod tests {
     fn sort_by_title_is_stable_on_equal_keys_via_id_tiebreak() {
         // Two books share the same title; the id tiebreak keeps a deterministic
         // order regardless of input order or sort direction.
-        let mut a = book(5, "a.epub", Some("Same"), &[], None, None, None, &[]);
-        let mut b = book(2, "b.epub", Some("Same"), &[], None, None, None, &[]);
+        let mut a = book(BookSpec {
+            id: 5,
+            filename: "a.epub",
+            title: Some("Same"),
+            authors: &[],
+            series: None,
+            modified: None,
+            added_at: None,
+            subjects: &[],
+        });
+        let mut b = book(BookSpec {
+            id: 2,
+            filename: "b.epub",
+            title: Some("Same"),
+            authors: &[],
+            series: None,
+            modified: None,
+            added_at: None,
+            subjects: &[],
+        });
         a.title = Some("Same".into());
         b.title = Some("Same".into());
         let asc = sort_books(vec![a.clone(), b.clone()], SortKey::Title, SortDir::Asc);
