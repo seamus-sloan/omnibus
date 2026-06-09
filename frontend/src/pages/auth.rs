@@ -574,7 +574,7 @@ mod tests {
     fn classify_register_error_routes_username() {
         match classify_register_error("username already exists") {
             RegisterError::Username(m) => assert_eq!(m, "username already exists"),
-            other => panic!("expected Username variant, got {other:?}"),
+            other => unreachable!("expected Username variant, got {other:?}"),
         }
     }
 
@@ -582,7 +582,7 @@ mod tests {
     fn classify_register_error_routes_password() {
         match classify_register_error("password is too short") {
             RegisterError::Password(m) => assert_eq!(m, "password is too short"),
-            other => panic!("expected Password variant, got {other:?}"),
+            other => unreachable!("expected Password variant, got {other:?}"),
         }
     }
 
@@ -590,7 +590,7 @@ mod tests {
     fn classify_register_error_falls_back_to_other() {
         match classify_register_error("500: internal server error") {
             RegisterError::Other(m) => assert_eq!(m, "500: internal server error"),
-            other => panic!("expected Other variant, got {other:?}"),
+            other => unreachable!("expected Other variant, got {other:?}"),
         }
     }
 
