@@ -53,8 +53,10 @@ test("renders the listen page layout for an mp3 audiobook", async ({
   const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
   await gotoReady(page, `/listen/${uuid}`);
 
-  // Top bar — own slim chrome, not the app's top-nav.
-  await expect(page.getByTestId("listen-back")).toBeVisible();
+  // App-wide top-nav is mounted by ReadyPlayer.
+  await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
+
+  // "Now playing" kicker above the book title.
   await expect(page.getByText("Now playing")).toBeVisible();
 
   // Book metadata in the player stage.
