@@ -143,6 +143,7 @@
           pkgs-unstable.dioxus-cli
           pkgs-unstable.nodejs_22
           pkgs.ffmpeg-headless
+          pkgs.binaryen
         ];
 
         # E2E extras layer on top of webExtras: Playwright's Nix-provided
