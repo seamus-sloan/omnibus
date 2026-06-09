@@ -180,13 +180,7 @@ fn install_control_surface(uuid: &str, initial_rate: f64) {
     let _ = dioxus::document::eval(&control_surface_js(&rate_lit, &uuid_lit));
 }
 
-/// Build the `window.OmnibusAudio` IIFE script string. Parameterised by
-/// `rate_lit` (JSON-serialised playback rate) and `uuid_lit` (JSON-serialised
-/// book UUID) so the Rust call site stays a single line.
-///
-/// The JS module is self-contained: it waits for `#omnibus-audio` to appear
-/// in the DOM, wires all event listeners, and installs the control object.
-/// Splitting the string further would break the JavaScript scoping model.
+/// Build the `window.OmnibusAudio` IIFE script (one self-contained JS module).
 fn control_surface_js(rate_lit: &str, uuid_lit: &str) -> String {
     format!(
         r#"

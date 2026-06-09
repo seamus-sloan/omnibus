@@ -118,14 +118,6 @@ pub fn AuthorsIndexPage() -> Element {
     let present_letters: std::collections::HashSet<char> =
         letters.iter().map(|(l, _)| *l).collect();
 
-    // Clone filtered+grouped data for the body component; letters and
-    // filtered borrow from `all` (the signal read guard) which can't
-    // outlive this frame, so we materialise cheap owned copies here.
-    let letters_owned: Vec<(char, Vec<AuthorSummary>)> = letters
-        .iter()
-        .map(|(l, group)| (*l, group.iter().map(|a| (*a).clone()).collect()))
-        .collect();
-    let filtered_owned: Vec<AuthorSummary> = filtered.iter().map(|a| (*a).clone()).collect();
     let any_in_library = !all.is_empty();
 
     rsx! {
@@ -143,25 +135,19 @@ pub fn AuthorsIndexPage() -> Element {
                 on_filter: move |v| filter.set(v),
                 on_sort: move |s| sort.set(s),
             }
-            AuthorsIndexBody {
-                filtered: filtered_owned,
-                letters: letters_owned,
-                show_letters,
-                any_in_library,
-                server_url: server_url_for_cards.clone(),
-            }
+            {authors_index_body(&filtered, &letters, show_letters, any_in_library, &server_url_for_cards)}
         }
     }
 }
 
-/// Body section: empty state, letter-grouped card grid, or flat card grid.
-#[component]
-fn AuthorsIndexBody(
-    filtered: Vec<AuthorSummary>,
-    letters: Vec<(char, Vec<AuthorSummary>)>,
+/// Body section (plain fn, not `#[component]`, so we can keep the borrow-only
+/// slices from `AuthorsIndexPage`'s signal read guard without per-render clones).
+fn authors_index_body<'a>(
+    filtered: &[&'a AuthorSummary],
+    letters: &[(char, Vec<&'a AuthorSummary>)],
     show_letters: bool,
     any_in_library: bool,
-    server_url: String,
+    server_url: &str,
 ) -> Element {
     rsx! {
         div { class: "idx-body",
@@ -185,7 +171,7 @@ fn AuthorsIndexBody(
                         }
                         div { class: "idx-card-grid",
                             for a in group.iter() {
-                                div { key: "{a.id}", {render_author_card(a, &server_url)} }
+                                div { key: "{a.id}", {render_author_card(a, server_url)} }
                             }
                         }
                     }
@@ -193,7 +179,7 @@ fn AuthorsIndexBody(
             } else {
                 div { class: "idx-card-grid idx-card-grid--flat",
                     for a in filtered.iter() {
-                        div { key: "{a.id}", {render_author_card(a, &server_url)} }
+                        div { key: "{a.id}", {render_author_card(a, server_url)} }
                     }
                 }
             }
@@ -201,8 +187,7 @@ fn AuthorsIndexBody(
     }
 }
 
-/// Header section: breadcrumb, hero heading + subtitle, filter/sort toolbar,
-/// and the optional A–Z letter jump strip.
+/// Header: breadcrumb, hero, filter/sort toolbar, optional A–Z letter strip.
 #[component]
 fn AuthorsIndexHeader(
     total_authors: usize,

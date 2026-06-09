@@ -113,8 +113,7 @@ pub fn SeriesIndexPage() -> Element {
     }
 }
 
-/// Header section: breadcrumb, hero heading + subtitle, filter input, and
-/// sort toggle buttons.
+/// Header: breadcrumb, hero heading + subtitle, filter input, sort toggles.
 #[component]
 fn SeriesIndexHeader(
     total_series: usize,

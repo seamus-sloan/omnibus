@@ -46,8 +46,7 @@ fn reader_call(method: &str, arg_js: &str) {
     let _ = dioxus::document::eval(&js);
 }
 
-/// Full-screen EPUB reader page. Mounts epub.js interop on the web feature
-/// and compiles the chrome shell on every target.
+/// Full-screen EPUB reader page (web-feature interop, all-target chrome).
 #[component]
 pub fn BookReadPage(uuid: String) -> Element {
     let theme = use_context::<Signal<Theme>>();

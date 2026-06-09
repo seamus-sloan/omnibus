@@ -203,14 +203,12 @@ fn render_loaded(b: EbookMetadata, author_books: Vec<EbookMetadata>) -> Element 
                 b: b.clone(),
                 title: title.clone(),
                 kicker: kicker.clone(),
-                primary_author: primary_author.clone(),
                 crumbs,
                 has_ebook,
                 has_audio,
             }
             section { class: "bd-body-grid",
                 BdBodyMain {
-                    b: b.clone(),
                     title: title.clone(),
                     primary_author: primary_author.clone(),
                     author_books: author_books.clone(),
@@ -245,14 +243,12 @@ fn render_loaded(b: EbookMetadata, author_books: Vec<EbookMetadata>) -> Element 
     }
 }
 
-/// Full hero section: breadcrumb, cover + format badges, title + CTAs column,
-/// and the rating/actions card.
+/// Hero section: breadcrumb, cover + format badges, title + CTAs, rating card.
 #[component]
 fn BdHeroSection(
     b: EbookMetadata,
     title: String,
     kicker: String,
-    primary_author: String,
     crumbs: Vec<BdCrumbItem>,
     has_ebook: bool,
     has_audio: bool,
@@ -426,12 +422,7 @@ fn BdCtaRow(uuid: String, has_ebook: bool, has_audio: bool) -> Element {
 
 /// Main column: journal stub, highlights stub, from-the-same-hand fan, suggestions stub.
 #[component]
-fn BdBodyMain(
-    b: EbookMetadata,
-    title: String,
-    primary_author: String,
-    author_books: Vec<EbookMetadata>,
-) -> Element {
+fn BdBodyMain(title: String, primary_author: String, author_books: Vec<EbookMetadata>) -> Element {
     rsx! {
         div { class: "bd-body-main",
             BdSectionHead { kicker: "Your journal · 0 entries".to_string(), title: "What you've written".to_string() }
