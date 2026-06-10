@@ -13,11 +13,13 @@ use omnibus_shared::EbookMetadata;
 
 use crate::covers::{delete_cover_files_for, write_cover_file};
 use crate::helpers::{parse_series_index, sanitize_accent_color, split_filename, stable_uuid};
+use crate::normalize::{normalize_author, normalize_title};
 use crate::settings::upsert_library;
 use crate::taxonomy::{
     resolve_or_insert_language, resolve_or_insert_publisher, resolve_or_insert_series,
 };
 
+use super::attach;
 use super::authors::insert_author_links;
 use super::backfill::backfill_stat_chunks;
 
@@ -86,6 +88,10 @@ pub async fn sync_books(
     let library_id = upsert_library(&mut tx, library_path).await?;
 
     sync_removed(&mut tx, library_id, &plan.removed_uuids).await?;
+    // Removed uuids that were cross-format attachments have no `books`
+    // row — drop their `book_files` row + `merged_uuids` entry instead
+    // (the target book survives, possibly fileless).
+    attach::remove_attached_files(&mut tx, &plan.removed_uuids).await?;
     let changed_covers =
         sync_changed(&mut tx, library_id, library_path, &plan.changed_books).await?;
     let new_covers = sync_new(&mut tx, library_id, library_path, &plan.new_books).await?;
@@ -204,9 +210,27 @@ async fn sync_changed(
     let mut changed_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
     for (b, uuid) in changed_books.iter().zip(all_uuids.iter()) {
         let Some(&book_id) = id_map.get(uuid) else {
-            // TOCTOU: the diff said this uuid existed in the DB, but a
-            // concurrent process removed it between Phase A and the write.
-            // Promote to a New insert so the file still gets indexed.
+            // No books row with this uuid. Either the file is an
+            // attachment on another book (its uuid lives in
+            // merged_uuids — refresh that book_files row, leaving the
+            // target book's metadata alone) …
+            if let Some((target_id, format)) = attach::attach_target_by_uuid(tx, uuid).await? {
+                attach_ebook_file(
+                    tx,
+                    target_id,
+                    &format,
+                    library_path,
+                    uuid,
+                    b,
+                    &mut changed_covers,
+                )
+                .await?;
+                continue;
+            }
+            // … or a TOCTOU: the diff said this uuid existed in the DB,
+            // but a concurrent process removed it between Phase A and
+            // the write. Promote to a New insert so the file still gets
+            // indexed.
             let inserted = insert_book_row(tx, library_id, library_path, b).await?;
             insert_metadata_links(tx, inserted.book_id, &b.metadata).await?;
             insert_fts_row(
@@ -224,7 +248,8 @@ async fn sync_changed(
         };
 
         update_book_row(tx, book_id, b).await?;
-        wipe_per_book_link_rows(tx, book_id).await?;
+        let (_, _, file_ext) = split_filename(&b.metadata.filename);
+        wipe_per_book_link_rows(tx, book_id, &file_ext).await?;
         insert_book_file_row(tx, book_id, b).await?;
         insert_metadata_links(tx, book_id, &b.metadata).await?;
         // FTS5 row is keyed by rowid = book_id; delete + re-insert.
@@ -254,6 +279,9 @@ async fn sync_new(
 ) -> Result<Vec<(String, String, Vec<u8>)>, sqlx::Error> {
     let mut new_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
     for b in new_books {
+        if try_attach_new_ebook(tx, library_path, b, &mut new_covers).await? {
+            continue;
+        }
         let inserted = insert_book_row(tx, library_id, library_path, b).await?;
         insert_metadata_links(tx, inserted.book_id, &b.metadata).await?;
         insert_fts_row(
@@ -269,6 +297,92 @@ async fn sync_new(
         }
     }
     Ok(new_covers)
+}
+
+/// Try to attach a brand-new ebook file to an existing book in another
+/// format instead of inserting a fresh `books` row. Two triggers, in
+/// order: (1) the file's uuid is already in `merged_uuids` (it was
+/// attached or merged before — the F5.10 "this was merged" path, which
+/// works even when titles no longer match); (2) exactly one existing
+/// book matches on normalized title + author and lacks this format.
+/// Returns `true` when the file was attached (the caller skips its
+/// normal insert). Per-file parse errors never attach — their metadata
+/// is a filename fallback, not a real title.
+async fn try_attach_new_ebook(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    library_path: &str,
+    b: &crate::ebook::IndexedBook,
+    covers: &mut Vec<(String, String, Vec<u8>)>,
+) -> Result<bool, sqlx::Error> {
+    if b.metadata.error.is_some() {
+        return Ok(false);
+    }
+    let m = &b.metadata;
+    let uuid = stable_uuid(library_path, &m.filename);
+    let (_, _, file_ext) = split_filename(&m.filename);
+
+    if let Some((target_id, format)) = attach::attach_target_by_uuid(tx, &uuid).await? {
+        attach_ebook_file(tx, target_id, &format, library_path, &uuid, b, covers).await?;
+        return Ok(true);
+    }
+
+    let title = m.title.clone().unwrap_or_else(|| m.filename.clone());
+    let (Some(title_norm), Some(author_norm)) = (
+        normalize_title(&title),
+        m.creators.first().and_then(|c| normalize_author(&c.name)),
+    ) else {
+        // No author (or empty title): too weak a signal to auto-match.
+        return Ok(false);
+    };
+    let Some(target_id) =
+        attach::find_attach_target(tx, &title_norm, &author_norm, &file_ext).await?
+    else {
+        return Ok(false);
+    };
+    attach_ebook_file(tx, target_id, &file_ext, library_path, &uuid, b, covers).await?;
+    Ok(true)
+}
+
+/// Write (or rewrite) an attached ebook's `book_files` row under
+/// `book_id`, record the attachment, adopt the cover when the target has
+/// none, and union the file's identifiers (target's values win). The
+/// target's `books` scalars, links, and FTS row are deliberately left
+/// untouched — target metadata wins.
+async fn attach_ebook_file(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    format: &str,
+    library_path: &str,
+    uuid: &str,
+    b: &crate::ebook::IndexedBook,
+    covers: &mut Vec<(String, String, Vec<u8>)>,
+) -> Result<(), sqlx::Error> {
+    // Idempotent re-attach: the refresh path (and the self-healing "uuid
+    // known but attachment row missing" path) both land here.
+    sqlx::query("DELETE FROM book_files WHERE book_id = ? AND format = ?")
+        .bind(book_id)
+        .bind(format)
+        .execute(&mut **tx)
+        .await?;
+    insert_book_file_row(tx, book_id, b).await?;
+    // Location override: the attached file's on-disk home is its own
+    // `(library root, dir)`, not the target book's (migration 0016).
+    let (file_dir, _, _) = split_filename(&b.metadata.filename);
+    sqlx::query(
+        "UPDATE book_files SET library_path = ?, path = ? WHERE book_id = ? AND format = ?",
+    )
+    .bind(library_path)
+    .bind(&file_dir)
+    .bind(book_id)
+    .bind(format)
+    .execute(&mut **tx)
+    .await?;
+    insert_identifier_links_or_ignore(tx, book_id, &b.metadata).await?;
+    attach::record_attachment(tx, uuid, book_id, format, library_path).await?;
+    if let Some(cover) = attach::maybe_adopt_cover(tx, book_id, b.cover.as_ref()).await? {
+        covers.push(cover);
+    }
+    Ok(())
 }
 
 /// Stamp `libraries.last_indexed` with the current wall-clock seconds.
@@ -293,12 +407,22 @@ async fn stamp_last_indexed(
 /// here (the `books` row stays), so we wipe explicitly. All these tables
 /// have UNIQUE(book, ...) constraints, so a re-insert without the wipe
 /// would fail.
+///
+/// `book_files` is scoped to the changed file's own `format`: a blanket
+/// wipe would also destroy a cross-format attachment (e.g. the M4B row
+/// hanging off this book via `merged_uuids`) every time the ebook
+/// re-parses.
 async fn wipe_per_book_link_rows(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
+    format: &str,
 ) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM book_files WHERE book_id = ? AND format = ?")
+        .bind(book_id)
+        .bind(format)
+        .execute(&mut **tx)
+        .await?;
     for table in &[
-        "book_files",
         "book_identifiers",
         "books_authors_link",
         "books_tags_link",
@@ -306,10 +430,10 @@ async fn wipe_per_book_link_rows(
         "books_series_link",
         "books_languages_link",
     ] {
-        // Note: the link tables use `book` (not `book_id`) as the
-        // FK column, but `book_files` and `book_identifiers` use
-        // `book_id`. Switch on the table name.
-        let col = if *table == "book_files" || *table == "book_identifiers" {
+        // Note: the link tables use `book` (not `book_id`) as the FK
+        // column, but `book_identifiers` uses `book_id`. Switch on the
+        // table name.
+        let col = if *table == "book_identifiers" {
             "book_id"
         } else {
             "book"
@@ -382,6 +506,7 @@ async fn update_book_row(
         "UPDATE books SET
             path = ?, title = ?, sort = ?, author_sort = ?, series_index = ?,
             pubdate = ?, has_cover = ?, description = ?, isbn = ?, accent_color = ?,
+            title_norm = ?, author_norm = ?,
             last_modified = datetime('now')
          WHERE id = ?",
     )
@@ -395,6 +520,8 @@ async fn update_book_row(
     .bind(&m.description)
     .bind(&first_isbn)
     .bind(sanitize_accent_color(m.accent.as_deref()))
+    .bind(normalize_title(&title))
+    .bind(m.creators.first().and_then(|c| normalize_author(&c.name)))
     .bind(book_id)
     .execute(&mut **tx)
     .await?;
@@ -469,8 +596,8 @@ async fn insert_book_row(
     let book_id = sqlx::query_scalar::<_, i64>(
         "INSERT INTO books
             (uuid, library_id, path, title, sort, author_sort, series_index,
-             pubdate, has_cover, description, isbn, accent_color)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             pubdate, has_cover, description, isbn, accent_color, title_norm, author_norm)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(&uuid)
@@ -485,6 +612,8 @@ async fn insert_book_row(
     .bind(&m.description)
     .bind(&first_isbn)
     .bind(sanitize_accent_color(m.accent.as_deref()))
+    .bind(normalize_title(&title))
+    .bind(m.creators.first().and_then(|c| normalize_author(&c.name)))
     .fetch_one(&mut **tx)
     .await?;
 
@@ -621,6 +750,26 @@ async fn insert_identifier_links(
     book_id: i64,
     m: &EbookMetadata,
 ) -> Result<(), sqlx::Error> {
+    insert_identifier_links_verb(tx, book_id, m, "REPLACE").await
+}
+
+/// [`insert_identifier_links`] variant for the cross-format attach path:
+/// `INSERT OR IGNORE`, so the target book's existing per-scheme values
+/// win over the attached file's.
+async fn insert_identifier_links_or_ignore(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    m: &EbookMetadata,
+) -> Result<(), sqlx::Error> {
+    insert_identifier_links_verb(tx, book_id, m, "IGNORE").await
+}
+
+async fn insert_identifier_links_verb(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    m: &EbookMetadata,
+    verb: &str,
+) -> Result<(), sqlx::Error> {
     let idents: Vec<(&str, &str)> = m
         .identifiers
         .iter()
@@ -639,7 +788,7 @@ async fn insert_identifier_links(
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
-            "INSERT OR REPLACE INTO book_identifiers (book_id, scheme, value) VALUES {rows}"
+            "INSERT OR {verb} INTO book_identifiers (book_id, scheme, value) VALUES {rows}"
         );
         let mut q = sqlx::query(&sql);
         for (scheme, value) in chunk {

@@ -29,7 +29,8 @@ pub use get::{book_file_path, get_book, get_book_by_uuid, resolve_book_id_by_uui
 pub use list::{
     collect_paths, count_books, count_books_for_paths, library_from_db, library_from_db_combined,
     library_from_db_with_total, library_from_db_with_total_combined, list_books,
-    list_books_for_paths, list_indexed_rows, list_indexed_rows_for_formats, IndexedRow,
+    list_books_for_paths, list_indexed_rows, list_indexed_rows_for_formats,
+    list_merged_rows_for_formats, IndexedRow,
 };
 pub use projection::MAX_BOOKS_RETURNED;
 pub use search::{count_search_books, search_books, search_books_with_total};
