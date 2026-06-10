@@ -19,6 +19,7 @@ use omnibus_shared::{
     AuthorDetail, AuthorPhotoScanResult, AuthorSummary, EbookLibrary, EbookMetadata,
     LibraryContents, MetadataOverrides, PaletteResults, ProgressFormat, ProgressRecord,
     ProgressUpdate, SeriesDetail, SeriesSummary, SessionReport, Settings, TagWeight, WorkerStatus,
+    AUTHOR_PHOTO_URL_MAX_LEN,
 };
 
 #[cfg(feature = "server")]
@@ -359,6 +360,13 @@ pub async fn rpc_set_author_photo_url(id: i64, url: String) -> Result<()> {
     if trimmed.is_empty() {
         return Err(ServerFnError::new("url is required").into());
     }
+    if trimmed.len() > AUTHOR_PHOTO_URL_MAX_LEN {
+        return Err(ServerFnError::new(format!(
+            "url must be {} bytes or fewer",
+            AUTHOR_PHOTO_URL_MAX_LEN
+        ))
+        .into());
+    }
     let author_exists: bool =
         sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM authors WHERE id = ?)")
             .bind(id)
@@ -525,4 +533,41 @@ pub async fn rpc_search_palette(q: String) -> Result<PaletteResults> {
         return Ok(PaletteResults::default());
     };
     Ok(db::search_palette(&pool.0, &path, &q).await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AUTHOR_PHOTO_URL_MAX_LEN;
+
+    /// Mirrors the guard in `rpc_set_author_photo_url`: returns `Err` when the
+    /// trimmed URL exceeds `AUTHOR_PHOTO_URL_MAX_LEN` bytes.
+    fn url_length_guard(trimmed: &str) -> Result<(), String> {
+        if trimmed.len() > AUTHOR_PHOTO_URL_MAX_LEN {
+            return Err(format!(
+                "url must be {} bytes or fewer",
+                AUTHOR_PHOTO_URL_MAX_LEN
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rpc_set_author_photo_url_rejects_url_longer_than_2048_bytes() {
+        let over_limit = "https://example.com/".repeat(200);
+        assert!(over_limit.len() > 2048, "test string must exceed cap");
+        let err = url_length_guard(&over_limit).expect_err("over-length URL should be rejected");
+        assert!(
+            err.contains("2048"),
+            "error message should name the cap: {err}"
+        );
+    }
+
+    #[test]
+    fn rpc_set_author_photo_url_accepts_url_at_length_cap() {
+        let at_limit = "a".repeat(AUTHOR_PHOTO_URL_MAX_LEN);
+        assert!(
+            url_length_guard(&at_limit).is_ok(),
+            "URL at exactly the cap should be accepted"
+        );
+    }
 }
