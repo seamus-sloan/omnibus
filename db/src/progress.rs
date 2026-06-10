@@ -19,6 +19,22 @@ pub enum ProgressError {
     Sqlx(#[from] sqlx::Error),
 }
 
+impl From<crate::books::BooksError> for ProgressError {
+    fn from(e: crate::books::BooksError) -> Self {
+        match e {
+            crate::books::BooksError::Db(inner) => ProgressError::Sqlx(inner),
+            // `resolve_book_id_by_uuid` is the only `BooksError`-returning
+            // call this module makes, and it never decodes JSON, so the
+            // `OverridesJson` variant is unreachable here in practice. Fold
+            // it into a generic decode error rather than panicking so a
+            // future caller can't introduce an unhandled path silently.
+            crate::books::BooksError::OverridesJson(inner) => {
+                ProgressError::Sqlx(sqlx::Error::Decode(Box::new(inner)))
+            }
+        }
+    }
+}
+
 fn format_str(f: ProgressFormat) -> &'static str {
     match f {
         ProgressFormat::Epub => "epub",

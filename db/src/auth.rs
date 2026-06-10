@@ -34,10 +34,6 @@ pub use users::{
 
 use sqlx::Row;
 
-// -----------------------------------------------------------------------------
-// Errors
-// -----------------------------------------------------------------------------
-
 /// Auth-layer error space.
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
@@ -68,10 +64,6 @@ impl From<argon2::password_hash::Error> for AuthError {
 }
 
 pub type AuthResult<T> = Result<T, AuthError>;
-
-// -----------------------------------------------------------------------------
-// Domain types
-// -----------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct User {
@@ -126,10 +118,6 @@ pub struct NewSession {
     pub session: Session,
     pub raw_token: String,
 }
-
-// -----------------------------------------------------------------------------
-// Cross-cutting helpers
-// -----------------------------------------------------------------------------
 
 pub(crate) fn row_to_user(row: &sqlx::sqlite::SqliteRow) -> User {
     User {

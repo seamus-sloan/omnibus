@@ -41,3 +41,6 @@ resolve_or_insert_simple!(resolve_or_insert_series, "series", "name");
 resolve_or_insert_simple!(resolve_or_insert_tag, "tags", "name");
 resolve_or_insert_simple!(resolve_or_insert_publisher, "publishers", "name");
 resolve_or_insert_simple!(resolve_or_insert_language, "languages", "code");
+
+#[cfg(test)]
+mod tests;

@@ -223,8 +223,8 @@ pub async fn get_book_by_uuid(
 pub async fn resolve_book_id_by_uuid(
     pool: &SqlitePool,
     uuid: &str,
-) -> Result<Option<i64>, sqlx::Error> {
-    sqlx::query_scalar::<_, i64>(
+) -> Result<Option<i64>, super::BooksError> {
+    Ok(sqlx::query_scalar::<_, i64>(
         "SELECT id FROM books WHERE uuid = ?1
          UNION ALL
          SELECT book_id FROM merged_uuids WHERE uuid = ?1
@@ -232,7 +232,7 @@ pub async fn resolve_book_id_by_uuid(
     )
     .bind(uuid)
     .fetch_optional(pool)
-    .await
+    .await?)
 }
 
 /// Resolve the on-disk path of a book's file for the given format
@@ -247,7 +247,7 @@ pub async fn book_file_path(
     pool: &SqlitePool,
     id: i64,
     format: &str,
-) -> Result<Option<std::path::PathBuf>, sqlx::Error> {
+) -> Result<Option<std::path::PathBuf>, super::BooksError> {
     // COALESCE: an attached / merged file row carries its own
     // `(library_path, path)` override because its on-disk home is not
     // the book's library (see migration 0016).

@@ -219,8 +219,6 @@ mod tests {
         assert!(validate_password("xk7-banana-frog-42").is_ok());
     }
 
-    // ---- username policy ----------------------------------------------------
-
     /// Assert the validator rejects `input` with a `Validation` whose message
     /// contains `needle` — keeps test failures debuggable by surfacing the
     /// actual message when the substring drifts.
