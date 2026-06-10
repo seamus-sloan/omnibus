@@ -388,6 +388,31 @@ fn parent_name(group_path: &str) -> Option<String> {
 /// as an `IndexedBook` whose metadata carries `error = Some(_)` — same
 /// shape the EPUB path uses so one bad file does not hide the rest of
 /// the library.
+
+pub fn parse_audiobook_targets(targets: Vec<AudiobookParseTarget>) -> Vec<super::IndexedBook> {
+    targets
+        .into_iter()
+        .map(|t| {
+            let mut book = match super::build_indexed_book(&t.absolute, t.filename.clone()) {
+                Ok(b) => b,
+                Err(e) => super::IndexedBook {
+                    metadata: omnibus_shared::EbookMetadata {
+                        filename: t.filename,
+                        error: Some(format!("could not read audiobook: {e}")),
+                        ..Default::default()
+                    },
+                    cover: None,
+                    mtime_epoch: 0,
+                    size_bytes: 0,
+                },
+            };
+            book.mtime_epoch = t.mtime_epoch;
+            book.size_bytes = t.size_bytes;
+            book
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::chapters::RawChapter;
@@ -415,28 +440,4 @@ mod tests {
         assert_eq!(shifted[1].start_ms, 11_000);
         assert_eq!(shifted[1].end_ms, 12_500);
     }
-}
-
-pub fn parse_audiobook_targets(targets: Vec<AudiobookParseTarget>) -> Vec<super::IndexedBook> {
-    targets
-        .into_iter()
-        .map(|t| {
-            let mut book = match super::build_indexed_book(&t.absolute, t.filename.clone()) {
-                Ok(b) => b,
-                Err(e) => super::IndexedBook {
-                    metadata: omnibus_shared::EbookMetadata {
-                        filename: t.filename,
-                        error: Some(format!("could not read audiobook: {e}")),
-                        ..Default::default()
-                    },
-                    cover: None,
-                    mtime_epoch: 0,
-                    size_bytes: 0,
-                },
-            };
-            book.mtime_epoch = t.mtime_epoch;
-            book.size_bytes = t.size_bytes;
-            book
-        })
-        .collect()
 }
