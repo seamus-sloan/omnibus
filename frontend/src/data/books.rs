@@ -249,6 +249,24 @@ pub async fn merge_books(
     Err(DataError::Other("merge is web-only".into()))
 }
 
+/// Admin: candidate search for the merge dialog — FTS across both
+/// configured libraries (unlike `search_ebooks`, which is ebook-only).
+#[cfg(not(feature = "mobile"))]
+pub async fn merge_candidates(_server_url: &str, q: &str) -> Result<Vec<EbookMetadata>, DataError> {
+    crate::rpc::rpc_merge_candidates(q.to_string())
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Mobile stub for `merge_candidates` — merge is a web-admin-only surface.
+#[cfg(feature = "mobile")]
+pub async fn merge_candidates(
+    _server_url: &str,
+    _q: &str,
+) -> Result<Vec<EbookMetadata>, DataError> {
+    Err(DataError::Other("merge is web-only".into()))
+}
+
 /// Admin: undo a merge by its `merge_log` id. Returns the restored uuid.
 #[cfg(not(feature = "mobile"))]
 pub async fn undo_merge(_server_url: &str, merge_log_id: i64) -> Result<String, DataError> {

@@ -260,6 +260,27 @@ pub async fn rpc_undo_merge(merge_log_id: i64) -> Result<String> {
     Ok(db::undo_merge(&pool.0, merge_log_id).await?)
 }
 
+/// Admin: candidate search for the merge dialog. Same FTS5 query as
+/// `rpc_search`, but across **both** configured libraries — the typical
+/// merge pairs an ebook with an audiobook, and `rpc_search` is scoped
+/// to the ebook root only. Deduped by uuid for the shared-directory
+/// case; capped small (the dialog shows a handful of rows).
+#[post("/api/rpc/merge-books/candidates", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_merge_candidates(q: String) -> Result<Vec<EbookMetadata>> {
+    let settings = db::get_settings(&pool.0).await?;
+    let mut out: Vec<EbookMetadata> = Vec::new();
+    for path in [settings.ebook_library_path, settings.audiobook_library_path]
+        .into_iter()
+        .flatten()
+    {
+        out.extend(db::search_books(&pool.0, &path, &q).await?);
+    }
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|b| seen.insert(b.unique_identifier.clone()));
+    out.truncate(20);
+    Ok(out)
+}
+
 /// FTS5-backed search across the configured ebook library. Empty or
 /// whitespace-only `q` returns an empty library.
 ///

@@ -51,12 +51,15 @@ pub fn MergeDialog(
             // response already past the await when the next keystroke
             // lands could still race — drop anything (success *or*
             // failure) that no longer matches what the user typed.
-            match data::search_ebooks(&url, &q).await {
-                Ok(lib) => {
+            // `merge_candidates` (not `search_ebooks`): the candidate
+            // pool must span both libraries — the typical merge pairs
+            // an ebook with an audiobook.
+            match data::merge_candidates(&url, &q).await {
+                Ok(books) => {
                     if query() == q {
                         error.set(None);
                         results.set(
-                            lib.books
+                            books
                                 .into_iter()
                                 .filter(|b| {
                                     b.unique_identifier.as_deref() != Some(exclude.as_str())
