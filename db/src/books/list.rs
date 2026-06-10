@@ -19,7 +19,7 @@ use super::projection::{
 pub async fn list_books(
     pool: &SqlitePool,
     library_path: &str,
-) -> Result<Vec<EbookMetadata>, sqlx::Error> {
+) -> Result<Vec<EbookMetadata>, super::BooksError> {
     list_books_for_paths(pool, &[library_path]).await
 }
 
@@ -36,7 +36,7 @@ pub async fn list_books(
 pub async fn list_books_for_paths(
     pool: &SqlitePool,
     library_paths: &[&str],
-) -> Result<Vec<EbookMetadata>, sqlx::Error> {
+) -> Result<Vec<EbookMetadata>, super::BooksError> {
     if library_paths.is_empty() {
         return Ok(Vec::new());
     }
@@ -221,7 +221,7 @@ pub struct IndexedRow {
 pub async fn list_indexed_rows(
     pool: &SqlitePool,
     library_path: &str,
-) -> Result<Vec<IndexedRow>, sqlx::Error> {
+) -> Result<Vec<IndexedRow>, super::BooksError> {
     let rows = sqlx::query(
         r#"
         SELECT b.uuid                                  AS uuid,
@@ -267,7 +267,7 @@ pub async fn list_indexed_rows_for_formats(
     pool: &SqlitePool,
     library_path: &str,
     formats: &[&str],
-) -> Result<Vec<IndexedRow>, sqlx::Error> {
+) -> Result<Vec<IndexedRow>, super::BooksError> {
     if formats.is_empty() {
         return Ok(Vec::new());
     }
@@ -309,7 +309,7 @@ pub async fn list_indexed_rows_for_formats(
 /// Total number of books currently indexed under `library_path`. Thin
 /// wrapper around [`count_books_for_paths`] for single-library callers.
 pub async fn count_books(pool: &SqlitePool, library_path: &str) -> Result<i64, super::BooksError> {
-    Ok(count_books_for_paths(pool, &[library_path]).await?)
+    count_books_for_paths(pool, &[library_path]).await
 }
 
 /// Total number of books currently indexed under any of `library_paths`.
@@ -322,7 +322,7 @@ pub async fn count_books(pool: &SqlitePool, library_path: &str) -> Result<i64, s
 pub async fn count_books_for_paths(
     pool: &SqlitePool,
     library_paths: &[&str],
-) -> Result<i64, sqlx::Error> {
+) -> Result<i64, super::BooksError> {
     if library_paths.is_empty() {
         return Ok(0);
     }
@@ -341,7 +341,7 @@ pub async fn count_books_for_paths(
     for path in library_paths {
         q = q.bind(*path);
     }
-    q.fetch_one(pool).await
+    Ok(q.fetch_one(pool).await?)
 }
 
 /// Build an `EbookLibrary` from whatever is currently in the DB for
@@ -356,7 +356,7 @@ pub async fn count_books_for_paths(
 pub async fn library_from_db(
     pool: &SqlitePool,
     library_path: Option<&str>,
-) -> Result<EbookLibrary, sqlx::Error> {
+) -> Result<EbookLibrary, super::BooksError> {
     library_from_db_combined(pool, library_path, None).await
 }
 
@@ -367,7 +367,7 @@ pub async fn library_from_db(
 pub async fn library_from_db_with_total(
     pool: &SqlitePool,
     library_path: Option<&str>,
-) -> Result<(EbookLibrary, i64), sqlx::Error> {
+) -> Result<(EbookLibrary, i64), super::BooksError> {
     library_from_db_with_total_combined(pool, library_path, None).await
 }
 
@@ -384,7 +384,7 @@ pub async fn library_from_db_combined(
     pool: &SqlitePool,
     ebook_path: Option<&str>,
     audiobook_path: Option<&str>,
-) -> Result<EbookLibrary, sqlx::Error> {
+) -> Result<EbookLibrary, super::BooksError> {
     let paths = collect_paths(ebook_path, audiobook_path);
     if paths.is_empty() {
         return Ok(EbookLibrary::default());
@@ -410,7 +410,7 @@ pub async fn library_from_db_with_total_combined(
     pool: &SqlitePool,
     ebook_path: Option<&str>,
     audiobook_path: Option<&str>,
-) -> Result<(EbookLibrary, i64), sqlx::Error> {
+) -> Result<(EbookLibrary, i64), super::BooksError> {
     let paths = collect_paths(ebook_path, audiobook_path);
     if paths.is_empty() {
         return Ok((EbookLibrary::default(), 0));

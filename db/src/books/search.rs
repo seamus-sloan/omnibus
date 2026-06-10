@@ -31,7 +31,7 @@ pub async fn search_books(
     pool: &SqlitePool,
     library_path: &str,
     q: &str,
-) -> Result<Vec<EbookMetadata>, sqlx::Error> {
+) -> Result<Vec<EbookMetadata>, super::BooksError> {
     let (books, _total) = search_books_with_total(pool, library_path, q).await?;
     Ok(books)
 }
@@ -47,7 +47,7 @@ pub async fn search_books_with_total(
     pool: &SqlitePool,
     library_path: &str,
     q: &str,
-) -> Result<(Vec<EbookMetadata>, i64), sqlx::Error> {
+) -> Result<(Vec<EbookMetadata>, i64), super::BooksError> {
     // Cap query length before parsing to bound the FTS5 MATCH expression size,
     // matching `search_palette` (issue #189). Normal/short queries are
     // unaffected; see `cap_query_len`.
@@ -231,7 +231,7 @@ pub async fn count_search_books(
     pool: &SqlitePool,
     library_path: &str,
     q: &str,
-) -> Result<i64, sqlx::Error> {
+) -> Result<i64, super::BooksError> {
     // Cap query length before parsing to mirror `search_books` /
     // `search_palette` (issue #189). Normal/short queries are unaffected;
     // see `cap_query_len`.
@@ -239,7 +239,7 @@ pub async fn count_search_books(
     let Some(match_expr) = build_fts_match(&capped) else {
         return Ok(0);
     };
-    sqlx::query_scalar::<_, i64>(
+    Ok(sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COUNT(*)
           FROM books_fts
@@ -251,5 +251,5 @@ pub async fn count_search_books(
     .bind(&match_expr)
     .bind(library_path)
     .fetch_one(pool)
-    .await
+    .await?)
 }

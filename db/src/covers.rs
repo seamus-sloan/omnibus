@@ -8,6 +8,17 @@ use std::path::PathBuf;
 
 use sqlx::SqlitePool;
 
+/// Errors returned by the on-disk cover read path.
+///
+/// Today the only failure mode is the DB lookup that resolves a book id to
+/// its uuid + cover flags; filesystem misses are treated as "no cover"
+/// (`Ok(None)`) per the module-level contract, not as errors.
+#[derive(Debug, thiserror::Error)]
+pub enum CoversError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
 /// Root directory for cover files. Override with `OMNIBUS_COVERS_DIR`.
 pub fn covers_dir() -> PathBuf {
     std::env::var("OMNIBUS_COVERS_DIR")
@@ -165,7 +176,7 @@ pub(crate) fn find_override_cover_file(uuid: &str) -> Option<(String, Vec<u8>)> 
 pub async fn get_cover(
     pool: &SqlitePool,
     book_id: i64,
-) -> Result<Option<(String, Vec<u8>)>, sqlx::Error> {
+) -> Result<Option<(String, Vec<u8>)>, CoversError> {
     // `COALESCE(mo.has_cover_override, 0)` keeps the flag at 0 when no
     // override row exists (the LEFT JOIN yields NULL in that case), so the
     // row tuple can decode into `i64` instead of `Option<i64>`.
@@ -228,13 +239,13 @@ pub async fn get_cover(
 pub async fn get_last_modified_epoch(
     pool: &SqlitePool,
     book_id: i64,
-) -> Result<Option<i64>, sqlx::Error> {
-    sqlx::query_scalar(
+) -> Result<Option<i64>, CoversError> {
+    Ok(sqlx::query_scalar(
         "SELECT CAST(strftime('%s', last_modified) AS INTEGER) FROM books WHERE id = ?",
     )
     .bind(book_id)
     .fetch_optional(pool)
-    .await
+    .await?)
 }
 
 #[cfg(test)]
