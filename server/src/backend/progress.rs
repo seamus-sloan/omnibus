@@ -67,6 +67,10 @@ pub(super) async fn get_progress(
 /// book uuids are silently skipped inside the db layer (best-effort
 /// telemetry). `recorded` reflects the **inserted** row count so callers
 /// can tell which queued reports actually persisted.
+///
+/// The entire batch runs inside a single transaction — a DB error mid-loop
+/// rolls back all previously inserted rows so the client can safely retry
+/// without risking double-counts.
 pub(super) async fn post_sessions(
     user: AuthUser,
     State(state): State<AppState>,
@@ -77,13 +81,21 @@ pub(super) async fn post_sessions(
             return (axum::http::StatusCode::BAD_REQUEST, msg).into_response();
         }
     }
+    let mut tx = match state.pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return internal("begin", e),
+    };
     let mut inserted = 0usize;
     for r in &reports {
-        match db::progress::record_session(&state.pool, user.id, r).await {
+        match db::progress::record_session_tx(&mut tx, user.id, r).await {
             Ok(true) => inserted += 1,
             Ok(false) => {}
+            // tx is dropped here, implicitly rolling back
             Err(e) => return internal("record_session", e),
         }
+    }
+    if let Err(e) = tx.commit().await {
+        return internal("commit", e);
     }
     Json(serde_json::json!({ "recorded": inserted })).into_response()
 }

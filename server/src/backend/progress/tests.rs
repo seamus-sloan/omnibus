@@ -267,3 +267,33 @@ async fn api_post_sessions_rejects_inverted_time_range() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn api_post_sessions_batch_of_two_records_both() {
+    // Two valid reports in one POST must both land atomically; `recorded`
+    // must reflect the full count (not a partial commit).
+    let (app, _state, pool) = fixture().await;
+    let (_, uuid) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let body = serde_json::json!([
+        { "book_uuid": uuid, "format": "epub",  "started_at": 100, "ended_at": 460, "progress_units": 360 },
+        { "book_uuid": uuid, "format": "audio", "started_at": 500, "ended_at": 900, "progress_units": 400 },
+    ]);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/progress/sessions")
+                .method("POST")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["recorded"], 2);
+}
