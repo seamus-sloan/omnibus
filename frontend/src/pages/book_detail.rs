@@ -168,7 +168,7 @@ pub fn BookDetailPage(uuid: String) -> Element {
                         merge_open.set(false);
                         undo_error.set(None);
                         merge_result.set(Some(res));
-                        refresh += 1;
+                        refresh.set(refresh() + 1);
                     },
                     on_close: move |_| merge_open.set(false),
                 }
@@ -186,7 +186,7 @@ pub fn BookDetailPage(uuid: String) -> Element {
                                 match data::undo_merge(&url, res.merge_log_id).await {
                                     Ok(_) => {
                                         merge_result.set(None);
-                                        refresh += 1;
+                                        refresh.set(refresh() + 1);
                                     }
                                     Err(e) => undo_error.set(Some(e.to_string())),
                                 }
