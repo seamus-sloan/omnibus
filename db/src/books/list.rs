@@ -1,7 +1,7 @@
 //! Library-scoped list/count read paths plus the small `IndexedRow`
 //! projection used by the incremental reindex diff.
 
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 
 use omnibus_shared::{EbookLibrary, EbookMetadata};
 
