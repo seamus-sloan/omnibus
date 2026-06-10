@@ -90,7 +90,6 @@ pub(super) async fn post_sessions(
         match db::progress::record_session_tx(&mut tx, user.id, r).await {
             Ok(true) => inserted += 1,
             Ok(false) => {}
-            // tx is dropped here, implicitly rolling back
             Err(e) => return internal("record_session", e),
         }
     }
