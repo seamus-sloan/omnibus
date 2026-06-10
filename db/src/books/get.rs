@@ -2,16 +2,13 @@
 //! `resolve_book_id_by_uuid` helper that the covers/thumbs/mobile routes
 //! use to translate a stable uuid to the current id.
 
-use sqlx::{Row, SqlitePool};
+use sqlx::SqlitePool;
 
-use omnibus_shared::{Contributor, EbookMetadata, Identifier};
+use omnibus_shared::EbookMetadata;
 
-use crate::helpers::format_series_index;
 use crate::metadata_overrides::{apply_overrides, get_metadata_overrides};
 
-use super::projection::{
-    backfill_creator_ids, parse_json_array, sanitize_description, CreatorRow, IdentifierRow,
-};
+use super::projection::{backfill_creator_ids, row_to_ebook, BOOK_COLUMNS};
 
 /// Fetch a single book by its stable `books.id`. Returns `None` if not found.
 ///
@@ -32,156 +29,19 @@ pub async fn get_book(
     pool: &SqlitePool,
     id: i64,
 ) -> Result<Option<EbookMetadata>, super::BooksError> {
-    let row = sqlx::query(
-        r#"
-        SELECT
-            b.id, b.uuid, b.title, b.description, b.series_index, b.has_cover,
-            b.pubdate, b.last_modified, b.timestamp, b.accent_color,
-
-            (SELECT bf.filename FROM book_files bf
-              WHERE bf.book_id = b.id
-              ORDER BY (bf.format != 'EPUB'), bf.format
-              LIMIT 1)                                     AS primary_filename,
-
-            (SELECT bf.format FROM book_files bf
-              WHERE bf.book_id = b.id
-              ORDER BY (bf.format != 'EPUB'), bf.format
-              LIMIT 1)                                     AS primary_format,
-
-            (SELECT pub.name FROM books_publishers_link bpl
-              JOIN publishers pub ON pub.id = bpl.publisher
-             WHERE bpl.book = b.id ORDER BY pub.name LIMIT 1)
-                                                           AS publisher,
-
-            (SELECT lang.code FROM books_languages_link bll
-              JOIN languages lang ON lang.id = bll.language
-             WHERE bll.book = b.id ORDER BY lang.code LIMIT 1)
-                                                           AS language,
-
-            (SELECT s.name FROM books_series_link bsl
-              JOIN series s ON s.id = bsl.series
-             WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
-                                                           AS series_name,
-
-            (SELECT s.id FROM books_series_link bsl
-              JOIN series s ON s.id = bsl.series
-             WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
-                                                           AS series_link_id,
-
-            (SELECT json_group_array(json_object('id', a_id, 'name', name, 'sort', sort))
-               FROM (SELECT a.id AS a_id, a.name AS name, a.sort AS sort
-                       FROM books_authors_link bal
-                       JOIN authors a ON a.id = bal.author
-                      WHERE bal.book = b.id
-                      ORDER BY bal.position))              AS creators_json,
-
-            (SELECT json_group_array(name)
-               FROM (SELECT t.name AS name FROM books_tags_link btl
-                       JOIN tags t ON t.id = btl.tag
-                      WHERE btl.book = b.id
-                      ORDER BY t.name))                    AS subjects_json,
-
-            (SELECT json_group_array(json_object('scheme', scheme, 'value', value))
-               FROM (SELECT scheme, value FROM book_identifiers
-                      WHERE book_id = b.id
-                      ORDER BY scheme, value))             AS identifiers_json,
-
-            (SELECT json_group_array(format)
-               FROM (SELECT format FROM book_files
-                      WHERE book_id = b.id
-                      ORDER BY format))                    AS formats_json
-
-        FROM books b
-        WHERE b.id = ?
-        "#,
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
-
-    let Some(r) = row else {
+    let Some(row) = fetch_book_row(pool, id).await? else {
         return Ok(None);
     };
 
-    let book_id: i64 = r.get("id");
-    let has_cover: i64 = r.get("has_cover");
-    let series_index: Option<f64> = r.get("series_index");
-    let uuid: String = r.get("uuid");
-
-    let filename = match (
-        r.get::<Option<String>, _>("primary_filename"),
-        r.get::<Option<String>, _>("primary_format"),
-    ) {
-        (Some(stem), Some(fmt)) => format!("{stem}.{}", fmt.to_ascii_lowercase()),
-        _ => String::new(),
-    };
-
-    let creators: Vec<Contributor> = parse_json_array::<CreatorRow>(r.get("creators_json"))?
-        .into_iter()
-        .map(|c| Contributor {
-            name: c.name,
-            role: None,
-            file_as: c.sort.filter(|s| !s.is_empty()),
-            id: c.id,
-        })
-        .collect();
-
-    let subjects: Vec<String> = parse_json_array(r.get("subjects_json"))?;
-
-    let identifiers: Vec<Identifier> =
-        parse_json_array::<IdentifierRow>(r.get("identifiers_json"))?
-            .into_iter()
-            .map(|i| Identifier {
-                value: i.value,
-                scheme: Some(i.scheme),
-            })
-            .collect();
-
-    let formats: Vec<String> = parse_json_array(r.get("formats_json"))?;
-
-    let mut book = EbookMetadata {
-        id: book_id,
-        filename,
-        title: r.get("title"),
-        description: sanitize_description(r.get("description")),
-        publisher: r.get("publisher"),
-        published: r.get("pubdate"),
-        modified: r.get("last_modified"),
-        language: r.get("language"),
-        creators,
-        subjects,
-        identifiers,
-        series: r.get("series_name"),
-        series_index: series_index.map(format_series_index),
-        series_id: r.get("series_link_id"),
-        unique_identifier: Some(uuid.clone()),
-        cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
-        accent: r.get("accent_color"),
-        formats,
-        added_at: r.get("timestamp"),
-        error: None,
-        has_override: false,
-    };
+    let mut book = row_to_ebook(&row)?;
+    let uuid = book.unique_identifier.clone().unwrap_or_default();
 
     // F5.1: merge user-supplied metadata overrides.
     if let Some((ov, has_cover_ov)) = get_metadata_overrides(pool, &uuid).await? {
         apply_overrides(&mut book, &uuid, &ov, has_cover_ov);
     }
 
-    // `apply_overrides` rewrites `book.series` from the JSON blob but
-    // can't touch the relational `books_series_link` row, so a book
-    // whose series exists only as an override ends up with the series
-    // *name* but no `series_id`. Backfill it by looking up the series
-    // by name so the detail-page Link to /series/:id resolves.
-    if book.series_id.is_none() {
-        if let Some(name) = book.series.as_deref().filter(|s| !s.is_empty()) {
-            book.series_id = sqlx::query_scalar::<_, i64>("SELECT id FROM series WHERE name = ?")
-                .bind(name)
-                .fetch_optional(pool)
-                .await?;
-        }
-    }
-
+    backfill_series_id_by_name(pool, &mut book).await?;
     // Override Contributors are stored by name only — apply_overrides
     // therefore leaves `id` unset, which renders the breadcrumb /
     // "More by …" author link as an unclickable span even when an
@@ -190,6 +50,43 @@ pub async fn get_book(
     backfill_creator_ids(pool, std::slice::from_mut(&mut book)).await?;
 
     Ok(Some(book))
+}
+
+/// Run the single-row `SELECT … WHERE b.id = ?` against `books` with the
+/// shared `BOOK_COLUMNS` projection. Returns `None` if the id is unknown.
+async fn fetch_book_row(
+    pool: &SqlitePool,
+    id: i64,
+) -> Result<Option<sqlx::sqlite::SqliteRow>, sqlx::Error> {
+    let sql = format!(
+        r#"
+        SELECT {BOOK_COLUMNS}
+        FROM books b
+        WHERE b.id = ?
+        "#
+    );
+    sqlx::query(&sql).bind(id).fetch_optional(pool).await
+}
+
+/// `apply_overrides` rewrites `book.series` from the JSON blob but can't
+/// touch the relational `books_series_link` row, so a book whose series
+/// exists only as an override ends up with the series *name* but no
+/// `series_id`. Backfill it by looking up the series by name so the
+/// detail-page `Link` to `/series/:id` resolves.
+async fn backfill_series_id_by_name(
+    pool: &SqlitePool,
+    book: &mut EbookMetadata,
+) -> Result<(), sqlx::Error> {
+    if book.series_id.is_some() {
+        return Ok(());
+    }
+    if let Some(name) = book.series.as_deref().filter(|s| !s.is_empty()) {
+        book.series_id = sqlx::query_scalar::<_, i64>("SELECT id FROM series WHERE name = ?")
+            .bind(name)
+            .fetch_optional(pool)
+            .await?;
+    }
+    Ok(())
 }
 
 /// Look up a book by its stable `books.uuid` and return the same merged
