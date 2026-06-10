@@ -150,6 +150,11 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
     // Per-part: (track_number_for_sort, filename, size_bytes, mtime_epoch, duration, metadata)
     struct PartWork {
         sort_track: u32,
+        /// Part number parsed from the filename stem (`Pt2` → 2);
+        /// `u32::MAX` when the stem carries no part designator. Breaks
+        /// ties when track tags are absent — multi-part m4bs rarely have
+        /// them, and a plain filename sort puts `Pt10` before `Pt2`.
+        part_no: u32,
         filename: String,
         size_bytes: i64,
         mtime_epoch: i64,
@@ -227,8 +232,12 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
             Err(_) => (AudiobookMetadata::default(), 0.0),
         };
 
+        let part_no = super::group::strip_part_suffix(part_stem(&stat_entry.filename))
+            .map(|(_, n)| n)
+            .unwrap_or(u32::MAX);
         parts_work.push(PartWork {
             sort_track: track_num,
+            part_no,
             filename: stat_entry.filename.clone(),
             size_bytes: stat_entry.size_bytes,
             mtime_epoch: stat_entry.mtime_epoch,
@@ -237,18 +246,32 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
         });
     }
 
-    // Sort by (track_number, filename) for stable playlist order.
+    // Sort by (track_number, part_number, filename) for stable playlist
+    // order.
     parts_work.sort_by(|a, b| {
         a.sort_track
             .cmp(&b.sort_track)
+            .then_with(|| a.part_no.cmp(&b.part_no))
             .then_with(|| a.filename.cmp(&b.filename))
     });
 
-    // Derive book-level metadata from the sorted parts.
+    // Derive book-level metadata from the sorted parts. For multi-part
+    // groups the leaf fallback drops the part designator — the group is
+    // keyed on its first part's path, so the raw leaf would read
+    // "Dracula Pt1".
     let title = parts_work
         .iter()
         .find_map(|p| p.meta.album.clone())
-        .unwrap_or_else(|| leaf_name(&group.group_path));
+        .unwrap_or_else(|| {
+            let leaf = leaf_name(&group.group_path);
+            if parts_work.len() > 1 {
+                super::group::strip_part_suffix(&leaf)
+                    .map(|(base, _)| base)
+                    .unwrap_or(leaf)
+            } else {
+                leaf
+            }
+        });
 
     let creator_name = parts_work
         .iter()
@@ -280,15 +303,19 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
         .as_ref()
         .and_then(|(_mime, bytes)| extract_accent(bytes));
 
-    // Extract chapters from the first part (single-file M4B/M4A) or from
-    // the first MP3 (rare: ID3v2 CHAP frames). Multi-file MP3 folders
-    // without embedded CHAP frames get the synthetic fallback at sync time.
-    let chapters = if let Some(first) = group.parts.first() {
-        let abs = library_root.join(&first.filename);
-        super::chapters::extract_chapters(&abs, &group.format)
-    } else {
-        Vec::new()
-    };
+    // Extract chapters from every part in playlist order, shifting each
+    // part's file-relative times by the cumulative duration of the parts
+    // before it so the result is one continuous timeline. Parts without
+    // embedded markers contribute nothing; a fully empty result gets the
+    // synthetic one-chapter-per-part fallback at sync time.
+    let mut chapters = Vec::new();
+    let mut offset_ms = 0u64;
+    for part in &parts {
+        let abs = library_root.join(&part.filename);
+        let part_chapters = super::chapters::extract_chapters(&abs, &group.format);
+        chapters.extend(offset_chapters(part_chapters, offset_ms));
+        offset_ms += (part.duration_seconds * 1000.0).round().max(0.0) as u64;
+    }
 
     IndexedAudiobook {
         uuid: group.uuid,
@@ -305,6 +332,30 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
         description,
         error: None,
     }
+}
+
+/// Shift a part's file-relative chapter times onto the group's
+/// continuous timeline.
+fn offset_chapters(
+    chapters: Vec<super::chapters::RawChapter>,
+    offset_ms: u64,
+) -> Vec<super::chapters::RawChapter> {
+    chapters
+        .into_iter()
+        .map(|c| super::chapters::RawChapter {
+            title: c.title,
+            start_ms: c.start_ms + offset_ms,
+            end_ms: c.end_ms + offset_ms,
+        })
+        .collect()
+}
+
+/// File stem of a library-relative part path (`"A/B Pt1.m4b"` → `"B Pt1"`).
+fn part_stem(filename: &str) -> &str {
+    std::path::Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
 }
 
 /// Leaf directory name or file stem from a group path (title fallback).
@@ -337,6 +388,35 @@ fn parent_name(group_path: &str) -> Option<String> {
 /// as an `IndexedBook` whose metadata carries `error = Some(_)` — same
 /// shape the EPUB path uses so one bad file does not hide the rest of
 /// the library.
+#[cfg(test)]
+mod tests {
+    use super::super::chapters::RawChapter;
+    use super::offset_chapters;
+
+    #[test]
+    fn offset_chapters_shifts_start_and_end_by_offset() {
+        let shifted = offset_chapters(
+            vec![
+                RawChapter {
+                    title: "One".into(),
+                    start_ms: 0,
+                    end_ms: 1_000,
+                },
+                RawChapter {
+                    title: "Two".into(),
+                    start_ms: 1_000,
+                    end_ms: 2_500,
+                },
+            ],
+            10_000,
+        );
+        assert_eq!(shifted[0].start_ms, 10_000);
+        assert_eq!(shifted[0].end_ms, 11_000);
+        assert_eq!(shifted[1].start_ms, 11_000);
+        assert_eq!(shifted[1].end_ms, 12_500);
+    }
+}
+
 pub fn parse_audiobook_targets(targets: Vec<AudiobookParseTarget>) -> Vec<super::IndexedBook> {
     targets
         .into_iter()
