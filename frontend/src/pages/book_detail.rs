@@ -736,7 +736,7 @@ fn BdSectionHead(kicker: String, title: String) -> Element {
 #[component]
 fn BdFormatBadge(fmt: String) -> Element {
     rsx! {
-        div { class: "bd-fmt-badge", "{fmt}" }
+        div { class: "bd-fmt-badge", "data-testid": "bd-format-badge", "{fmt}" }
     }
 }
 
