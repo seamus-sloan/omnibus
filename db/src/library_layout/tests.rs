@@ -1,6 +1,4 @@
-//! Inline unit tests for the `library_layout` module. Migrated to a
-//! sibling file per the `<mod>/tests.rs` testing convention so the prod
-//! file stays focused on the layout helpers themselves.
+//! Unit tests for the `library_layout` module.
 
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};

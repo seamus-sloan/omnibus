@@ -1,6 +1,4 @@
-//! Inline unit tests for the `helpers` module. Migrated to a sibling file
-//! per the `<mod>/tests.rs` testing convention so the prod file stays
-//! focused on the helpers themselves.
+//! Unit tests for the `helpers` module.
 
 use super::*;
 
