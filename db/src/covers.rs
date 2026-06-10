@@ -10,9 +10,11 @@ use sqlx::SqlitePool;
 
 /// Errors returned by the on-disk cover read path.
 ///
-/// Today the only failure mode is the DB lookup that resolves a book id to
-/// its uuid + cover flags; filesystem misses are treated as "no cover"
-/// (`Ok(None)`) per the module-level contract, not as errors.
+/// Today the only failure mode that surfaces here is the DB lookup that
+/// resolves a book id to its uuid + cover flags. Filesystem probes
+/// (`find_cover_file` / `find_override_cover_file`) swallow every
+/// `std::fs::read` failure and return `Ok(None)` — they don't distinguish
+/// a missing file from a permissions or I/O error.
 #[derive(Debug, thiserror::Error)]
 pub enum CoversError {
     #[error(transparent)]
