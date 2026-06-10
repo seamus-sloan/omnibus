@@ -39,10 +39,11 @@ pub use books::{
     get_book, get_book_by_uuid, library_from_db, library_from_db_combined,
     library_from_db_with_total, library_from_db_with_total_combined, list_books,
     list_books_for_paths, list_indexed_rows, list_indexed_rows_for_formats,
-    resolve_book_id_by_uuid, search_books, search_books_with_total, IndexedRow, MAX_BOOKS_RETURNED,
+    resolve_book_id_by_uuid, search_books, search_books_with_total, BooksError, IndexedRow,
+    MAX_BOOKS_RETURNED,
 };
 pub use browse::*;
-pub use covers::{covers_dir, get_cover, get_last_modified_epoch};
+pub use covers::{covers_dir, get_cover, get_last_modified_epoch, CoversError};
 pub use discovery::*;
 pub use helpers::{build_fts_match, sanitize_fts_query};
 pub use metadata_overrides::*;
