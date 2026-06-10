@@ -547,14 +547,11 @@ mod tests {
 
     #[test]
     fn validate_author_photo_url_rejects_url_over_max_len() {
-        let long_url = "https://example.com/".repeat(200);
-        assert!(
-            long_url.len() > AUTHOR_PHOTO_URL_MAX_LEN,
-            "test string must exceed cap"
-        );
+        let long_url = "a".repeat(AUTHOR_PHOTO_URL_MAX_LEN + 1);
         let err = validate_author_photo_url(&long_url).unwrap_err();
         assert!(
-            err.to_string().contains("2048"),
+            err.to_string()
+                .contains(&AUTHOR_PHOTO_URL_MAX_LEN.to_string()),
             "error message should name the cap: {err}"
         );
     }
