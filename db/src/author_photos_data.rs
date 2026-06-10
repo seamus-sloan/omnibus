@@ -223,9 +223,6 @@ mod tests {
     use crate::sync::replace_books;
     use crate::test_support::*;
 
-    // -------------------------------------------------------------------------
-    // F1.11 author profile photo tests
-    // -------------------------------------------------------------------------
     #[tokio::test]
     async fn author_photo_roundtrips_manual_upload() {
         let (pool, _guard) = seed_discovery_fixture().await;
@@ -312,13 +309,7 @@ mod tests {
 
         assert!(author_photo_status(&pool, ada_id).await.unwrap().is_none());
     }
-    // -------------------------------------------------------------------------
-    // ignored_authors blocklist (F5.9-lite reindex-resurrection guard)
-    // -------------------------------------------------------------------------
 
-    // -------------------------------------------------------------------------
-    // delete_author (F5.9-lite admin "Delete author" primitive)
-    // -------------------------------------------------------------------------
     #[tokio::test]
     async fn delete_author_removes_links_and_inserts_blocklist_row() {
         let _covers = CoversTempDir::new("delete_author_basic");
