@@ -388,7 +388,6 @@ fn parent_name(group_path: &str) -> Option<String> {
 /// as an `IndexedBook` whose metadata carries `error = Some(_)` — same
 /// shape the EPUB path uses so one bad file does not hide the rest of
 /// the library.
-
 pub fn parse_audiobook_targets(targets: Vec<AudiobookParseTarget>) -> Vec<super::IndexedBook> {
     targets
         .into_iter()
