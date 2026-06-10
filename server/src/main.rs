@@ -40,9 +40,7 @@ mod server {
 
     use crate::App;
 
-    /// Entry point passed to `dioxus::serve`. Boots the DB + worker, kicks off
-    /// any stale-index recovery scan, wires the auth/REST/RPC routers, and
-    /// layers the global middleware stack onto a single Axum `Router`.
+    /// Entry point handed to `dioxus::serve`: boots the stack and returns the wired Axum `Router`.
     pub(crate) async fn launch() -> anyhow::Result<Router> {
         init_boot_metadata();
         log_startup_warnings();

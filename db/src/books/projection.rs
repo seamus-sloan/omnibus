@@ -250,11 +250,7 @@ pub(crate) async fn backfill_creator_ids(
     Ok(())
 }
 
-/// Bulk-merge user-supplied `metadata_overrides` into every book in `books`
-/// in place. Snapshots each book's uuid first so the borrow checker sees
-/// the overrides_map lookup as independent of the `&mut book` passed into
-/// `apply_overrides`. Used by every list/search read path that returns
-/// `EbookMetadata` rows.
+/// Bulk-merge user-supplied `metadata_overrides` into every book in `books` in place.
 pub(crate) async fn merge_overrides_into_books(
     pool: &SqlitePool,
     books: &mut [EbookMetadata],
@@ -265,6 +261,8 @@ pub(crate) async fn merge_overrides_into_books(
         .collect();
     let overrides_map = load_overrides_bulk(pool, &uuids).await?;
     for book in books.iter_mut() {
+        // Snapshot uuid first so the overrides_map lookup is independent
+        // of the `&mut book` passed into apply_overrides.
         let uuid_owned = book.unique_identifier.clone();
         if let Some(uuid) = uuid_owned.as_deref() {
             if let Some((ov, has_cover_ov)) = overrides_map.get(uuid) {

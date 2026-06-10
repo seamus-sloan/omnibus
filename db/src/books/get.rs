@@ -2,7 +2,7 @@
 //! `resolve_book_id_by_uuid` helper that the covers/thumbs/mobile routes
 //! use to translate a stable uuid to the current id.
 
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 
 use omnibus_shared::EbookMetadata;
 
@@ -33,8 +33,8 @@ pub async fn get_book(
         return Ok(None);
     };
 
+    let uuid: String = row.try_get("uuid")?;
     let mut book = row_to_ebook(&row)?;
-    let uuid = book.unique_identifier.clone().unwrap_or_default();
 
     // F5.1: merge user-supplied metadata overrides.
     if let Some((ov, has_cover_ov)) = get_metadata_overrides(pool, &uuid).await? {
