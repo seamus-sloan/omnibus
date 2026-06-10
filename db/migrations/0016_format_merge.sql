@@ -3,8 +3,11 @@
 -- `title_norm` / `author_norm` are the conservative match key for
 -- attaching a newly indexed file to an existing book in another format
 -- (exact match after casefold/punctuation/diacritics normalization —
--- computed in Rust, see db/src/normalize.rs). NULL when the source
--- value is empty; backfilled once at boot for pre-migration rows.
+-- computed in Rust, see db/src/normalize.rs). The sync writers store
+-- NULL when nothing survives normalization; the one-time boot backfill
+-- for pre-migration rows stores '' instead so its `title_norm IS NULL`
+-- guard stays idempotent. Neither value can ever match — the attach
+-- lookup only binds non-empty keys (and NULL never equals anything).
 ALTER TABLE books ADD COLUMN title_norm  TEXT;
 ALTER TABLE books ADD COLUMN author_norm TEXT;
 CREATE INDEX idx_books_norm ON books(title_norm, author_norm);

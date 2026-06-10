@@ -7,6 +7,7 @@
 //! the other book's page). The parent receives the
 //! [`MergeBooksResult`] for its refetch + undo toast.
 
+use dioxus::core::Task;
 use dioxus::prelude::*;
 use omnibus_shared::{EbookMetadata, MergeBooksResult};
 
@@ -26,22 +27,34 @@ pub fn MergeDialog(
     let mut selected: Signal<Option<EbookMetadata>> = use_signal(|| None);
     let mut error: Signal<Option<String>> = use_signal(|| None);
     let mut busy = use_signal(|| false);
+    // Handle of the in-flight debounce+RPC task so the next keystroke can
+    // `.cancel()` it before spawning a new one — only one search is ever
+    // in flight (same pattern as search_palette/overlay.rs, #126).
+    let mut current_task = use_signal(|| Option::<Task>::None);
 
     let search_url = server_url.clone();
     let search_exclude = target_uuid.clone();
-    let run_search = move |q: String| {
+    let mut run_search = move |q: String| {
+        if let Some(prev) = current_task.write().take() {
+            prev.cancel();
+        }
         let url = search_url.clone();
         let exclude = search_exclude.clone();
-        spawn(async move {
+        let task = spawn(async move {
+            async_sleep_ms(150).await;
             if q.trim().is_empty() {
                 results.set(Vec::new());
+                error.set(None);
                 return;
             }
+            // The cancel above makes stale completions unlikely, but a
+            // response already past the await when the next keystroke
+            // lands could still race — drop anything (success *or*
+            // failure) that no longer matches what the user typed.
             match data::search_ebooks(&url, &q).await {
                 Ok(lib) => {
-                    // Drop stale responses: only apply if the query is
-                    // still what the user typed.
                     if query() == q {
+                        error.set(None);
                         results.set(
                             lib.books
                                 .into_iter()
@@ -53,9 +66,14 @@ pub fn MergeDialog(
                         );
                     }
                 }
-                Err(e) => error.set(Some(e.to_string())),
+                Err(e) => {
+                    if query() == q {
+                        error.set(Some(e.to_string()));
+                    }
+                }
             }
         });
+        current_task.set(Some(task));
     };
 
     let merge_url = server_url.clone();
@@ -136,6 +154,18 @@ pub fn MergeDialog(
             }
         }
     }
+}
+
+// Debounce sleep, platform-gated like search_palette/overlay.rs: the
+// dialog compiles for web (WASM) and server (SSR) targets.
+#[cfg(feature = "web")]
+async fn async_sleep_ms(ms: u32) {
+    gloo_timers::future::TimeoutFuture::new(ms).await;
+}
+
+#[cfg(all(not(feature = "web"), feature = "server"))]
+async fn async_sleep_ms(ms: u32) {
+    tokio::time::sleep(std::time::Duration::from_millis(ms as u64)).await;
 }
 
 /// One search hit: title, author line, and format badges.

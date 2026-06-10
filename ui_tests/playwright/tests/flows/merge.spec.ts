@@ -45,6 +45,9 @@ const SOURCE = AUDIOBOOK_BOOKS.find((b) => b.author === "Ada Lovelace")!;
 async function openDialogAndPickSource(page: import("@playwright/test").Page) {
   await page.getByTestId("merge-with").click();
   await page.getByTestId("merge-search").fill(SOURCE.title);
+  // The candidate list fills after the debounced search RPC returns —
+  // wait for it explicitly so the click can't race the render.
+  await expect(page.getByTestId("merge-candidate").first()).toBeVisible();
   await page.getByTestId("merge-candidate").first().click();
   await expect(page.getByTestId("merge-confirm")).toBeVisible();
 }

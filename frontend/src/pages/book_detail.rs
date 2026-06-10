@@ -197,6 +197,7 @@ pub fn BookDetailPage(uuid: String) -> Element {
                     button {
                         class: "btn ghost sm",
                         "data-testid": "merge-toast-dismiss",
+                        aria_label: "Dismiss",
                         onclick: move |_| merge_result.set(None),
                         "\u{00d7}"
                     }
