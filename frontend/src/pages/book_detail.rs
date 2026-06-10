@@ -24,9 +24,13 @@
 use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::EbookMetadata;
+#[cfg(not(feature = "mobile"))]
+use omnibus_shared::MergeBooksResult;
 
 use crate::components::atrium::Cover;
 use crate::components::FormatSwitcher;
+#[cfg(not(feature = "mobile"))]
+use crate::components::MergeDialog;
 use crate::{data, use_server_url, Route};
 
 /// Book detail page shell: fetches metadata then hands off to `render_loaded`.
@@ -37,9 +41,34 @@ pub fn BookDetailPage(uuid: String) -> Element {
     let mut author_books: Signal<Vec<EbookMetadata>> = use_signal(Vec::new);
     let mut loading = use_signal(|| true);
     let mut error: Signal<Option<String>> = use_signal(|| None);
+    // Bumped after a merge/undo so the effect below refetches the book
+    // (signals read inside `use_effect` re-arm it).
+    let refresh = use_signal(|| 0u32);
+
+    // Admin gating for the "Merge with…" affordance. Web-only — mobile
+    // renders no admin surfaces; the server-side `AdminUser` extractor
+    // on `rpc_merge_books` is the actual security boundary.
+    #[cfg(feature = "web")]
+    let mut is_admin = use_signal(|| false);
+    #[cfg(feature = "web")]
+    use_effect(move || {
+        spawn(async move {
+            if let Ok(Some(user)) = data::current_user().await {
+                is_admin.set(user.is_admin);
+            }
+        });
+    });
+
+    #[cfg(not(feature = "mobile"))]
+    let mut merge_open = use_signal(|| false);
+    #[cfg(not(feature = "mobile"))]
+    let mut merge_result: Signal<Option<MergeBooksResult>> = use_signal(|| None);
+    #[cfg(not(feature = "mobile"))]
+    let mut undo_error: Signal<Option<String>> = use_signal(|| None);
 
     let url = server_url.clone();
     use_effect(use_reactive!(|uuid| {
+        let _ = refresh();
         let url = url.clone();
         let uuid = uuid.clone();
         spawn(async move {
@@ -98,7 +127,94 @@ pub fn BookDetailPage(uuid: String) -> Element {
         };
     };
 
-    render_loaded(b, author_books())
+    #[cfg(feature = "web")]
+    let is_admin_flag = is_admin();
+    #[cfg(not(feature = "web"))]
+    let is_admin_flag = false;
+    #[cfg_attr(feature = "mobile", allow(unused_variables))]
+    let page_title = b.title.clone().unwrap_or_else(|| b.filename.clone());
+    #[cfg_attr(feature = "mobile", allow(unused_variables))]
+    let page_uuid = b.unique_identifier.clone().unwrap_or_default();
+
+    // Rail "Merge with…" button (admin, web only) — threaded down as a
+    // prebuilt Element so the rail component stays platform-agnostic.
+    #[cfg(not(feature = "mobile"))]
+    let merge_button: Option<Element> = is_admin_flag.then(|| {
+        rsx! {
+            button {
+                class: "btn ghost sm bd-rail-edit",
+                "data-testid": "merge-with",
+                onclick: move |_| merge_open.set(true),
+                "Merge with\u{2026}"
+            }
+        }
+    });
+    #[cfg(feature = "mobile")]
+    let merge_button: Option<Element> = {
+        let _ = is_admin_flag;
+        None
+    };
+
+    #[cfg(not(feature = "mobile"))]
+    let merge_ui: Option<Element> = {
+        let mut refresh = refresh;
+        let undo_url = server_url.clone();
+        Some(rsx! {
+            if merge_open() {
+                MergeDialog {
+                    target_uuid: page_uuid.clone(),
+                    target_title: page_title.clone(),
+                    on_merged: move |res: MergeBooksResult| {
+                        merge_open.set(false);
+                        undo_error.set(None);
+                        merge_result.set(Some(res));
+                        refresh += 1;
+                    },
+                    on_close: move |_| merge_open.set(false),
+                }
+            }
+            if let Some(res) = merge_result() {
+                div { class: "bd-merge-toast card", role: "status",
+                    span { "Books merged." }
+                    button {
+                        class: "btn ghost sm",
+                        "data-testid": "merge-undo",
+                        onclick: move |_| {
+                            let url = undo_url.clone();
+                            let mut refresh = refresh;
+                            spawn(async move {
+                                match data::undo_merge(&url, res.merge_log_id).await {
+                                    Ok(_) => {
+                                        merge_result.set(None);
+                                        refresh += 1;
+                                    }
+                                    Err(e) => undo_error.set(Some(e.to_string())),
+                                }
+                            });
+                        },
+                        "Undo"
+                    }
+                    button {
+                        class: "btn ghost sm",
+                        "data-testid": "merge-toast-dismiss",
+                        onclick: move |_| merge_result.set(None),
+                        "\u{00d7}"
+                    }
+                    if let Some(e) = undo_error() {
+                        p { role: "alert", class: "bd-merge-error", "{e}" }
+                    }
+                }
+            }
+        })
+    };
+    #[cfg(feature = "mobile")]
+    let merge_ui: Option<Element> = None;
+
+    let body = render_loaded(b, author_books(), merge_button);
+    rsx! {
+        {body}
+        {merge_ui}
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -159,7 +275,11 @@ fn build_crumbs(
 }
 
 /// Render the fully-loaded book detail view.
-fn render_loaded(b: EbookMetadata, author_books: Vec<EbookMetadata>) -> Element {
+fn render_loaded(
+    b: EbookMetadata,
+    author_books: Vec<EbookMetadata>,
+    merge_button: Option<Element>,
+) -> Element {
     let title = b.title.clone().unwrap_or_else(|| b.filename.clone());
     let primary_author = b
         .creators
@@ -218,6 +338,7 @@ fn render_loaded(b: EbookMetadata, author_books: Vec<EbookMetadata>) -> Element 
                     title: title.clone(),
                     authors_line: authors_line.clone(),
                     series: series.clone(),
+                    merge_button,
                 }
             }
             div { class: "bd-footer",
@@ -477,6 +598,7 @@ fn BdRailSection(
     title: String,
     authors_line: String,
     series: Option<String>,
+    merge_button: Option<Element>,
 ) -> Element {
     let uuid = b.unique_identifier.clone().unwrap_or_default();
     rsx! {
@@ -510,6 +632,7 @@ fn BdRailSection(
                     "data-testid": "edit-metadata",
                     "Edit metadata\u{2026}"
                 }
+                {merge_button}
             }
             div { class: "card",
                 if let Some(s) = series.as_ref() {

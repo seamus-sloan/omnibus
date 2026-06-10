@@ -45,6 +45,14 @@ pub mod atrium;
 // without duplicating the form.
 pub mod author_photo_edit;
 
+// F5.10 admin "Merge with…" dialog, mounted by the book detail page.
+// Web-only: merge is an admin surface and mobile renders no admin
+// affordances.
+#[cfg(not(feature = "mobile"))]
+pub mod merge_dialog;
+#[cfg(not(feature = "mobile"))]
+pub use merge_dialog::MergeDialog;
+
 #[cfg(not(feature = "mobile"))]
 pub mod search_palette;
 
