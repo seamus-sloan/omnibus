@@ -71,9 +71,9 @@ pub struct EbookMetadata {
 
     pub cover_url: Option<String>,
 
-    /// Cover-derived accent color (F1.7 Atrium). Opaque CSS color value
-    /// extracted during indexing. `None` means "no cover or extraction
-    /// failed" — the frontend falls back to the theme default accent.
+    /// Cover-derived accent color. Opaque CSS color value extracted
+    /// during indexing. `None` means "no cover or extraction failed" —
+    /// the frontend falls back to the theme default accent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent: Option<String>,
 
@@ -82,8 +82,8 @@ pub struct EbookMetadata {
 
     /// Row insertion timestamp from `books.timestamp` — SQLite
     /// `datetime('now')` format (`YYYY-MM-DD HH:MM:SS`, UTC, space separator).
-    /// Drives the "Newest Added" sort in F1.3 — distinct from `modified`
-    /// (DC last-write).
+    /// Drives the "Newest Added" sort — distinct from `modified` (DC
+    /// last-write).
     #[serde(default)]
     pub added_at: Option<String>,
 

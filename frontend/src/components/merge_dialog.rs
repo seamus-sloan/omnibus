@@ -1,11 +1,8 @@
-//! Admin-only "Merge with…" dialog mounted by the book detail page.
-//!
-//! Search-and-confirm flow for the F5.10 manual format merge: the admin
-//! picks another book via FTS search, confirms, and `data::merge_books`
-//! absorbs it into the page's book (the current book is always the
-//! merge **target** — its metadata wins; to merge the other way, open
-//! the other book's page). The parent receives the
-//! [`MergeBooksResult`] for its refetch + undo toast.
+//! Admin-only "Merge with…" dialog mounted by the book detail page:
+//! search-and-confirm flow that picks another book via FTS and calls
+//! `data::merge_books` to absorb it into the page's book (the current
+//! book is always the merge **target**; its metadata wins). Parent
+//! receives the [`MergeBooksResult`] for its refetch + undo toast.
 
 use dioxus::core::Task;
 use dioxus::prelude::*;

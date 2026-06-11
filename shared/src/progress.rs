@@ -20,7 +20,7 @@ pub enum ProgressFormat {
     Audio,
 }
 
-/// F2.1 progress-sync write payload. `format` discriminates which position
+/// Progress-sync write payload. `format` discriminates which position
 /// field is meaningful: `Epub` requires `epub_cfi`, `Audio` requires
 /// `audio_position_seconds`. The server validates this at the handler
 /// boundary via [`ProgressUpdate::validate`].
@@ -90,7 +90,7 @@ pub struct ProgressRecord {
     pub updated_at: i64,
 }
 
-/// F2.1 batched session row (reader / audio open-to-close span). Mobile
+/// Batched session row (reader / audio open-to-close span). Mobile
 /// posts these on reconnect via `POST /api/progress/sessions`; web posts
 /// best-effort on unmount. `progress_units` is seconds_read (epub) or
 /// seconds_listened (audio).
