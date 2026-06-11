@@ -82,6 +82,11 @@ pub fn MergeDialog(
     let merge_url = server_url.clone();
     let merge_target = target_uuid.clone();
     let do_merge = move |_| {
+        // Re-entrancy guard: a double-click could land before the
+        // disabled state re-renders.
+        if busy() {
+            return;
+        }
         let Some(source) = selected() else { return };
         let Some(source_uuid) = source.unique_identifier.clone() else {
             return;
@@ -107,7 +112,13 @@ pub fn MergeDialog(
             role: "dialog",
             aria_modal: "true",
             aria_label: "Merge with another book",
-            onclick: move |_| on_close.call(()),
+            // No dismissal while a merge is executing — closing would
+            // hide the outcome (the request itself keeps running).
+            onclick: move |_| {
+                if !busy() {
+                    on_close.call(());
+                }
+            },
             div {
                 class: "author-photo-modal bd-merge-modal",
                 onclick: move |evt| evt.stop_propagation(),
@@ -150,6 +161,7 @@ pub fn MergeDialog(
                     button {
                         class: "btn ghost sm",
                         "data-testid": "merge-cancel",
+                        disabled: busy(),
                         onclick: move |_| on_close.call(()),
                         "Cancel"
                     }
