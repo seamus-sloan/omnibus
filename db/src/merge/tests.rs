@@ -1,46 +1,13 @@
 use super::*;
 use crate::books::list_merged_rows_for_formats;
-use crate::helpers::stable_uuid;
 use crate::indexer::diff_library;
 use crate::pool::init_db;
-use crate::sync::{sync_audiobooks, sync_books, AudiobookSyncPlan, SyncPlan};
-use crate::test_support::{indexed, indexed_audiobook};
+use crate::sync::{sync_audiobooks, AudiobookSyncPlan};
+use crate::test_support::{
+    count_rows as count, indexed_audiobook, seed_synced_audiobook as seed_audiobook,
+    seed_synced_ebook as seed_ebook,
+};
 use omnibus_shared::MetadataOverrides;
-
-async fn seed_ebook(pool: &sqlx::SqlitePool, filename: &str, title: &str, author: &str) -> String {
-    sync_books(
-        pool,
-        "/ebooks",
-        SyncPlan {
-            new_books: vec![indexed(filename, Some(title), &[author], &[], None, None)],
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    stable_uuid("/ebooks", filename)
-}
-
-async fn seed_audiobook(
-    pool: &sqlx::SqlitePool,
-    group_path: &str,
-    title: &str,
-    author: &str,
-) -> String {
-    let ab = indexed_audiobook(group_path, title, Some(author));
-    let uuid = ab.uuid.clone();
-    sync_audiobooks(
-        pool,
-        "/audio",
-        AudiobookSyncPlan {
-            new_books: vec![ab],
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    uuid
-}
 
 async fn seed_user(pool: &sqlx::SqlitePool) -> i64 {
     sqlx::query_scalar(
@@ -49,10 +16,6 @@ async fn seed_user(pool: &sqlx::SqlitePool) -> i64 {
     .fetch_one(pool)
     .await
     .unwrap()
-}
-
-async fn count(pool: &sqlx::SqlitePool, sql: &str) -> i64 {
-    sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
 }
 
 async fn book_id_by_uuid(pool: &sqlx::SqlitePool, uuid: &str) -> i64 {

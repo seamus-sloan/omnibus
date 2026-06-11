@@ -370,17 +370,14 @@ async fn adopt_cover_flag(
     source_id: i64,
     target_id: i64,
 ) -> Result<bool, sqlx::Error> {
-    let (source_has, target_has): (i64, i64) = {
-        let s: i64 = sqlx::query_scalar("SELECT has_cover FROM books WHERE id = ?")
-            .bind(source_id)
-            .fetch_one(&mut **tx)
-            .await?;
-        let t: i64 = sqlx::query_scalar("SELECT has_cover FROM books WHERE id = ?")
-            .bind(target_id)
-            .fetch_one(&mut **tx)
-            .await?;
-        (s, t)
-    };
+    let (source_has, target_has): (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT has_cover FROM books WHERE id = ?1),
+                (SELECT has_cover FROM books WHERE id = ?2)",
+    )
+    .bind(source_id)
+    .bind(target_id)
+    .fetch_one(&mut **tx)
+    .await?;
     if source_has != 0 && target_has == 0 {
         sqlx::query("UPDATE books SET has_cover = 1 WHERE id = ?")
             .bind(target_id)

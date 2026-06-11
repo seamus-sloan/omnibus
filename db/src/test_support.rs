@@ -447,3 +447,57 @@ pub async fn seed_books_for_one_author_and_series(pool: &SqlitePool, count: i64)
     .unwrap();
     (author_id, series_id)
 }
+
+// ---------------------------------------------------------------------------
+// Cross-format attach / merge fixture seeders
+// ---------------------------------------------------------------------------
+
+/// Index one ebook under `/ebooks` through the real `sync_books` write
+/// path and return its stable uuid. Shared by the attach and merge test
+/// suites so the seeding shape can't drift between them.
+pub async fn seed_synced_ebook(
+    pool: &SqlitePool,
+    filename: &str,
+    title: &str,
+    author: &str,
+) -> String {
+    crate::sync::sync_books(
+        pool,
+        "/ebooks",
+        crate::sync::SyncPlan {
+            new_books: vec![indexed(filename, Some(title), &[author], &[], None, None)],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    crate::helpers::stable_uuid("/ebooks", filename)
+}
+
+/// Index one audiobook under `/audio` through the real `sync_audiobooks`
+/// write path and return its uuid.
+pub async fn seed_synced_audiobook(
+    pool: &SqlitePool,
+    group_path: &str,
+    title: &str,
+    author: &str,
+) -> String {
+    let ab = indexed_audiobook(group_path, title, Some(author));
+    let uuid = ab.uuid.clone();
+    crate::sync::sync_audiobooks(
+        pool,
+        "/audio",
+        crate::sync::AudiobookSyncPlan {
+            new_books: vec![ab],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    uuid
+}
+
+/// One-scalar COUNT helper for table-shape assertions.
+pub async fn count_rows(pool: &SqlitePool, sql: &str) -> i64 {
+    sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
+}

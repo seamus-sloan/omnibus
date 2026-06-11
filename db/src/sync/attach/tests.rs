@@ -3,36 +3,14 @@ use crate::helpers::stable_uuid;
 use crate::indexer::diff_library;
 use crate::pool::init_db;
 use crate::sync::{sync_audiobooks, sync_books, AudiobookSyncPlan, SyncPlan};
-use crate::test_support::{indexed, indexed_audiobook, CoversTempDir};
+use crate::test_support::{count_rows as count, indexed, indexed_audiobook, CoversTempDir};
 
 async fn seed_ebook(pool: &sqlx::SqlitePool, filename: &str, title: &str, author: &str) {
-    sync_books(
-        pool,
-        "/ebooks",
-        SyncPlan {
-            new_books: vec![indexed(filename, Some(title), &[author], &[], None, None)],
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
+    crate::test_support::seed_synced_ebook(pool, filename, title, author).await;
 }
 
 async fn seed_audiobook(pool: &sqlx::SqlitePool, group_path: &str, title: &str, author: &str) {
-    sync_audiobooks(
-        pool,
-        "/audio",
-        AudiobookSyncPlan {
-            new_books: vec![indexed_audiobook(group_path, title, Some(author))],
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-}
-
-async fn count(pool: &sqlx::SqlitePool, sql: &str) -> i64 {
-    sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
+    crate::test_support::seed_synced_audiobook(pool, group_path, title, author).await;
 }
 
 #[tokio::test]
