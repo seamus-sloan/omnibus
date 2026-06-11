@@ -19,6 +19,9 @@ pub mod settings;
 pub mod view_prefs;
 pub mod worker;
 
+/// Maximum byte length of an author photo source URL.
+pub const AUTHOR_PHOTO_URL_MAX_LEN: usize = 2048;
+
 pub use audiobook::*;
 pub use auth::*;
 pub use discovery::*;

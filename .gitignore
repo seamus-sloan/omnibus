@@ -70,3 +70,5 @@ test_data/epubs/**/*.webp
 .DS_Store
 **/.DS_Store
 .claude/scheduled_tasks.lock
+# Agent worktree scratch directories created by `isolation: worktree` runs.
+.claude/worktrees/
