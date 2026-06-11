@@ -19,7 +19,7 @@ use omnibus_shared::{
     AuthorDetail, AuthorPhotoScanResult, AuthorSummary, EbookLibrary, EbookMetadata,
     LibraryContents, MergeBooksResult, MetadataOverrides, PaletteResults, ProgressFormat,
     ProgressRecord, ProgressUpdate, SeriesDetail, SeriesSummary, SessionReport, Settings,
-    TagWeight, WorkerStatus,
+    TagWeight, WorkerStatus, AUTHOR_PHOTO_URL_MAX_LEN,
 };
 
 #[cfg(feature = "server")]
@@ -389,6 +389,22 @@ pub async fn rpc_backfill_chapters() -> Result<()> {
     Ok(())
 }
 
+/// Validate and trim an author photo URL: non-empty, within
+/// `AUTHOR_PHOTO_URL_MAX_LEN` bytes. Returns the trimmed slice on success.
+fn validate_author_photo_url(url: &str) -> Result<&str, ServerFnError> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err(ServerFnError::new("url is required"));
+    }
+    if trimmed.len() > AUTHOR_PHOTO_URL_MAX_LEN {
+        return Err(ServerFnError::new(format!(
+            "url must be {} bytes or fewer",
+            AUTHOR_PHOTO_URL_MAX_LEN
+        )));
+    }
+    Ok(trimmed)
+}
+
 /// Persist an author photo by URL. Admin-gated server-side (the
 /// `user.is_admin` check below mirrors `rpc_scan_author_photo`). The
 /// server fetches the URL via `db::author_photos::fetch_remote_image`,
@@ -399,10 +415,7 @@ pub async fn rpc_set_author_photo_url(id: i64, url: String) -> Result<()> {
     if !user.is_admin {
         return Err(ServerFnError::new("forbidden: admin required").into());
     }
-    let trimmed = url.trim();
-    if trimmed.is_empty() {
-        return Err(ServerFnError::new("url is required").into());
-    }
+    let trimmed = validate_author_photo_url(&url)?;
     let author_exists: bool =
         sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM authors WHERE id = ?)")
             .bind(id)
@@ -569,4 +582,35 @@ pub async fn rpc_search_palette(q: String) -> Result<PaletteResults> {
         return Ok(PaletteResults::default());
     };
     Ok(db::search_palette(&pool.0, &path, &q).await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_author_photo_url, AUTHOR_PHOTO_URL_MAX_LEN};
+
+    #[test]
+    fn validate_author_photo_url_rejects_url_over_max_len() {
+        let long_url = "a".repeat(AUTHOR_PHOTO_URL_MAX_LEN + 1);
+        let err = validate_author_photo_url(&long_url).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains(&AUTHOR_PHOTO_URL_MAX_LEN.to_string()),
+            "error message should name the cap: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_author_photo_url_accepts_url_at_max_len() {
+        let at_limit = "a".repeat(AUTHOR_PHOTO_URL_MAX_LEN);
+        assert!(validate_author_photo_url(&at_limit).is_ok());
+    }
+
+    #[test]
+    fn validate_author_photo_url_rejects_empty_url() {
+        let err = validate_author_photo_url("").unwrap_err();
+        assert!(
+            err.to_string().contains("required"),
+            "error message should say required: {err}"
+        );
+    }
 }
