@@ -16,6 +16,9 @@
 //!   dispatch + FTS / cover side helpers.
 //! * [`audiobooks`] — `sync_audiobooks` and its `AudiobookSyncPlan`
 //!   payload, plus the audiobook-specific row / parts / FTS inserts.
+//! * [`attach`] — cross-format auto-attach: lookups + writers that hang
+//!   a newly indexed file off an existing book in another format and
+//!   record it in `merged_uuids` for reindex protection.
 //! * [`authors`] — the batched author-link writer (`insert_author_links`).
 //! * [`backfill`] — the stat-only `(uuid, mtime_epoch, size_bytes)`
 //!   chunked UPDATE used to fill in the post-migration sentinels.
@@ -24,6 +27,7 @@
 //! sibling `db/` modules) keep importing through `omnibus_db::sync::*`
 //! unchanged.
 
+mod attach;
 mod audiobooks;
 mod authors;
 mod backfill;

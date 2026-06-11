@@ -6,10 +6,14 @@ target
 *.db-shm
 *.db-wal
 
-# Dev-server cover cache (F0.1 writes extracted covers to ./covers by default)
+# Dev-server cover cache (F0.1 writes extracted covers to ./covers by default).
+# Also ignored under server/ — `cargo test -p omnibus` runs with CWD=server/,
+# so cover-writing integration tests materialize the cache there.
 /covers/
+server/covers/
 # Dev-server thumbnail WebP cache (F1.2)
 /thumbs/
+server/thumbs/
 # F2.3 HLS transcode cache (OMNIBUS_DATA_DIR default = ./data; segments + concat.txt + .progress)
 /data/
 

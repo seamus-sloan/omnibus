@@ -17,9 +17,9 @@ use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
     AuthorDetail, AuthorPhotoScanResult, AuthorSummary, EbookLibrary, EbookMetadata,
-    LibraryContents, MetadataOverrides, PaletteResults, ProgressFormat, ProgressRecord,
-    ProgressUpdate, SeriesDetail, SeriesSummary, SessionReport, Settings, TagWeight, WorkerStatus,
-    AUTHOR_PHOTO_URL_MAX_LEN,
+    LibraryContents, MergeBooksResult, MetadataOverrides, PaletteResults, ProgressFormat,
+    ProgressRecord, ProgressUpdate, SeriesDetail, SeriesSummary, SessionReport, Settings,
+    TagWeight, WorkerStatus, AUTHOR_PHOTO_URL_MAX_LEN,
 };
 
 #[cfg(feature = "server")]
@@ -236,6 +236,49 @@ pub async fn rpc_get_ebooks() -> Result<EbookLibrary> {
 #[post("/api/rpc/ebook", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_get_ebook(uuid: String) -> Result<Option<EbookMetadata>> {
     Ok(db::get_book_by_uuid(&pool.0, &uuid).await?)
+}
+
+/// Admin: merge the book `source_uuid` into `target_uuid` — the target
+/// absorbs the source's files, links, identifiers, and progress; the
+/// source row disappears. Returns the `merge_log` id (the undo handle)
+/// and the surviving uuid. Domain failures (`SameBook`,
+/// `FormatCollision`, …) surface as their display strings so the dialog
+/// can render them directly.
+#[post("/api/rpc/merge-books", pool: PoolExt, admin: AdminUser)]
+pub async fn rpc_merge_books(source_uuid: String, target_uuid: String) -> Result<MergeBooksResult> {
+    let out = db::merge_books(&pool.0, &source_uuid, &target_uuid, Some(admin.0.id)).await?;
+    Ok(MergeBooksResult {
+        merge_log_id: out.merge_log_id,
+        target_uuid: out.target_uuid,
+    })
+}
+
+/// Admin: reverse a merge recorded in `merge_log`. Returns the restored
+/// (source) book's uuid.
+#[post("/api/rpc/merge-books/undo", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_undo_merge(merge_log_id: i64) -> Result<String> {
+    Ok(db::undo_merge(&pool.0, merge_log_id).await?)
+}
+
+/// Admin: candidate search for the merge dialog. Same FTS5 query as
+/// `rpc_search`, but across **both** configured libraries — the typical
+/// merge pairs an ebook with an audiobook, and `rpc_search` is scoped
+/// to the ebook root only. Deduped by uuid for the shared-directory
+/// case; capped small (the dialog shows a handful of rows).
+#[post("/api/rpc/merge-books/candidates", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_merge_candidates(q: String) -> Result<Vec<EbookMetadata>> {
+    let settings = db::get_settings(&pool.0).await?;
+    let mut out: Vec<EbookMetadata> = Vec::new();
+    for path in [settings.ebook_library_path, settings.audiobook_library_path]
+        .into_iter()
+        .flatten()
+    {
+        out.extend(db::search_books(&pool.0, &path, &q).await?);
+    }
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|b| seen.insert(b.unique_identifier.clone()));
+    out.truncate(20);
+    Ok(out)
 }
 
 /// FTS5-backed search across the configured ebook library. Empty or

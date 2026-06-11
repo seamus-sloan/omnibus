@@ -17,7 +17,9 @@ pub mod helpers;
 pub mod hls;
 pub mod indexer;
 pub mod library_layout;
+pub mod merge;
 pub mod metadata_overrides;
+pub mod normalize;
 pub mod palette;
 pub mod pool;
 pub mod progress;
@@ -39,13 +41,14 @@ pub use books::{
     get_book, get_book_by_uuid, library_from_db, library_from_db_combined,
     library_from_db_with_total, library_from_db_with_total_combined, list_books,
     list_books_for_paths, list_indexed_rows, list_indexed_rows_for_formats,
-    resolve_book_id_by_uuid, search_books, search_books_with_total, BooksError, IndexedRow,
-    MAX_BOOKS_RETURNED,
+    list_merged_rows_for_formats, resolve_book_id_by_uuid, search_books, search_books_with_total,
+    BooksError, IndexedRow, MAX_BOOKS_RETURNED,
 };
 pub use browse::*;
 pub use covers::{covers_dir, get_cover, get_last_modified_epoch, CoversError};
 pub use discovery::*;
 pub use helpers::{build_fts_match, sanitize_fts_query};
+pub use merge::{merge_books, undo_merge, MergeError, MergeOutcome};
 pub use metadata_overrides::*;
 pub use palette::*;
 pub use pool::*;

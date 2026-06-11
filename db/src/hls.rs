@@ -186,8 +186,12 @@ pub async fn resolve_audiobook(
     pool: &SqlitePool,
     uuid: &str,
 ) -> Result<Option<ResolvedAudiobook>, HlsError> {
+    // COALESCE: an audiobook attached to a book in another library keeps
+    // its own root on the `book_files` row (migration 0016) — parts'
+    // relative filenames resolve against the *audio* library, not the
+    // book's.
     let row = sqlx::query_as::<_, (i64, i64, String)>(
-        "SELECT b.id, bf.id, l.path \
+        "SELECT b.id, bf.id, COALESCE(bf.library_path, l.path) \
          FROM books b \
          JOIN book_files bf ON bf.book_id = b.id \
          JOIN libraries l ON l.id = b.library_id \

@@ -56,11 +56,11 @@ In [server/src/backend.rs](../../../server/src/backend.rs):
 
 ## 5. Add the DB query (if needed)
 
-In [db/src/queries.rs](../../../db/src/queries.rs):
+In the matching domain module under [db/src/](../../../db/src/) (`books/`, `progress.rs`, `settings.rs`, a new sibling module for a new domain — `queries.rs` was split apart):
 
-- Define a typed error variant in a `DbError` enum (or add one) per [02-error-handling.md](../../rules/02-error-handling.md).
-- Use `sqlx::query_as!` / `sqlx::query!` for compile-time checking against `DATABASE_URL`.
-- Schema changes go as a new numbered SQL file under [db/migrations/](../../../db/migrations/) (never edit an applied file). Re-exported from `omnibus_db::` so callsites just write `omnibus_db::my_query(...)`.
+- Define a typed error variant in the module's error enum (or add one) per [02-error-handling.md](../../rules/02-error-handling.md).
+- Schema changes go as a new numbered SQL file under [db/migrations/](../../../db/migrations/) (never edit an applied file). Re-exported from `omnibus_db::` (see the flatten block in `db/src/lib.rs`) so callsites just write `omnibus_db::my_query(...)`.
+- If the new table interacts with book identity, mind `merged_uuids` (cross-format attach/merge, migration 0016): book-keyed reads should resolve uuids via `resolve_book_id_by_uuid`, which falls back to merged uuids.
 
 ## 6. Wire the unified data layer
 
@@ -75,7 +75,7 @@ The page component then calls a single `data::my_action(...)` and works on both 
 
 Per [03-unit-testing.md](../../rules/03-unit-testing.md):
 
-- **DB:** inline `#[cfg(test)]` in `db/src/queries.rs` (or the relevant module). Happy path + not-found + constraint violation. Run with `cargo test -p omnibus-db`.
+- **DB:** sibling `<mod>/tests.rs` in the relevant module (inline `#[cfg(test)]` only for 1-2 trivial cases). Happy path + not-found + constraint violation. Run with `cargo test -p omnibus-db`.
 - **REST handler:** inline `#[cfg(test)]` in `server/src/backend.rs`. Drive with `tower::ServiceExt::oneshot` against `rest_router(AppState::new(in-memory pool))`. Bootstrap a session via the helpers in [server/src/auth/test_support.rs](../../../server/src/auth/test_support.rs) (`create_user` / `create_admin` / `bearer_token`) and attach the bearer header. Cover the full matrix per [03-unit-testing.md](../../rules/03-unit-testing.md): 200 (authed) + 401 (anon) + 403 (wrong role, for admin-gated routes) + relevant 4xx/5xx. Run with `cargo test -p omnibus`.
 - **Server function:** covered indirectly by the DB tests (the function body is a thin wrapper). Add an integration test only if the wrapper does non-trivial composition.
 

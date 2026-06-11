@@ -3679,3 +3679,19 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-scrim { position: absolute; inset: 0; z-index: 8;
   background: color-mix(in oklch, var(--bg-0) 55%, transparent);
   backdrop-filter: blur(1.5px); }
+
+/* ── F5.10 merge dialog + toast (book detail) ──────────────────── */
+.bd-merge-modal { max-width: 520px; width: 100%; }
+.bd-merge-results { list-style: none; margin: 10px 0 0; padding: 0;
+  display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
+.bd-merge-candidate { display: flex; flex-direction: column; align-items: flex-start;
+  gap: 2px; width: 100%; text-align: left; }
+.bd-merge-candidate-title { font-size: 14.5px; color: var(--ink-0); }
+.bd-merge-candidate-meta { font-size: 11px; color: var(--ink-2); }
+.bd-merge-confirm-copy { font-size: 14px; line-height: 1.55; color: var(--ink-1); }
+.bd-merge-confirm-actions { display: flex; gap: 10px; margin-top: 14px; }
+.bd-merge-error { color: var(--danger, #e5484d); font-size: 13px; margin-top: 10px; }
+.bd-merge-foot { display: flex; justify-content: flex-end; margin-top: 12px; }
+.bd-merge-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  z-index: 110; display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.35); }

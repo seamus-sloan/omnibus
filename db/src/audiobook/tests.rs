@@ -87,6 +87,32 @@ fn parse_unreadable_file_surfaces_as_error_metadata_row() {
 }
 
 #[test]
+fn parse_groups_orders_multi_part_m4b_by_part_number_and_strips_title_suffix() {
+    // Tagless (junk) part files: track-tag sort falls through to the
+    // filename-derived part number, which must order Pt2 before Pt10,
+    // and the title fallback must drop the part designator.
+    let dir = make_test_dir("m4b_parts");
+    for name in ["Dracula Pt10.m4b", "Dracula Pt2.m4b", "Dracula Pt1.m4b"] {
+        fs::write(dir.join(name), b"junk").unwrap();
+    }
+    let stat = stat_audiobook_library(dir.to_str(), dir.to_str().unwrap());
+    let groups = group_into_books(stat.entries, dir.to_str().unwrap());
+    assert_eq!(groups.len(), 1);
+    let books = parse_groups(groups, &dir);
+    fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(books.len(), 1);
+    let book = &books[0];
+    assert_eq!(book.title, "Dracula");
+    let names: Vec<&str> = book.parts.iter().map(|p| p.filename.as_str()).collect();
+    assert_eq!(
+        names,
+        ["Dracula Pt1.m4b", "Dracula Pt2.m4b", "Dracula Pt10.m4b"]
+    );
+    let ordinals: Vec<i64> = book.parts.iter().map(|p| p.ordinal).collect();
+    assert_eq!(ordinals, [0, 1, 2]);
+}
+
+#[test]
 fn audiobook_error_io_variant_renders_useful_message() {
     let io = std::io::Error::new(std::io::ErrorKind::NotFound, "missing.m4b");
     let err: AudiobookError = io.into();
