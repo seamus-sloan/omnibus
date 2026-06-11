@@ -4,6 +4,10 @@
 //! position via [`crate::reader_progress`]. Chrome compiles on every
 //! target; the JS interop that mounts a book is web-only.
 
+mod aa_panel;
+mod selection;
+mod typography;
+
 use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]
 use dioxus_router::use_navigator;
@@ -12,7 +16,13 @@ use crate::components::atrium::{persist_theme, Theme};
 use crate::contexts::use_server_url;
 use crate::data;
 
-use omnibus_shared::EbookMetadata;
+use omnibus_shared::{EbookMetadata, Highlight, HighlightColor};
+
+use aa_panel::ReaderAaPanel;
+use selection::{SelectionData, SelectionPopover};
+#[cfg(feature = "web")]
+use typography::{load_reader_pref, save_reader_pref};
+use typography::{LineSpacing, Margins, Typeface};
 
 const JSZIP_JS: Asset = asset!("/assets/vendor/jszip.min.js");
 const EPUBJS_JS: Asset = asset!("/assets/vendor/epub.min.js");
@@ -66,7 +76,56 @@ pub fn BookReadPage(uuid: String) -> Element {
     #[cfg_attr(not(feature = "web"), allow(unused_variables, unused_mut))]
     let mut font_size = use_signal(|| 18i32);
 
+    #[cfg_attr(not(feature = "web"), allow(unused_variables, unused_mut))]
+    let mut typeface = use_signal(|| {
+        #[cfg(feature = "web")]
+        {
+            load_reader_pref("omn.typeface")
+                .and_then(|s| Typeface::from_storage(&s))
+                .unwrap_or(Typeface::Editorial)
+        }
+        #[cfg(not(feature = "web"))]
+        Typeface::Editorial
+    });
+    #[cfg_attr(not(feature = "web"), allow(unused_variables, unused_mut))]
+    let mut line_spacing = use_signal(|| {
+        #[cfg(feature = "web")]
+        {
+            load_reader_pref("omn.lineSpacing")
+                .and_then(|s| LineSpacing::from_storage(&s))
+                .unwrap_or(LineSpacing::Cozy)
+        }
+        #[cfg(not(feature = "web"))]
+        LineSpacing::Cozy
+    });
+    #[cfg_attr(not(feature = "web"), allow(unused_variables, unused_mut))]
+    let mut margins = use_signal(|| {
+        #[cfg(feature = "web")]
+        {
+            load_reader_pref("omn.margins")
+                .and_then(|s| Margins::from_storage(&s))
+                .unwrap_or(Margins::Normal)
+        }
+        #[cfg(not(feature = "web"))]
+        Margins::Normal
+    });
+    #[cfg_attr(not(feature = "web"), allow(unused_variables, unused_mut))]
+    let mut justify = use_signal(|| {
+        #[cfg(feature = "web")]
+        {
+            load_reader_pref("omn.justify").as_deref() == Some("true")
+        }
+        #[cfg(not(feature = "web"))]
+        false
+    });
+
     let mut show_aa = use_signal(|| false);
+
+    #[cfg_attr(not(feature = "web"), allow(unused_mut))]
+    let mut selection: Signal<Option<SelectionData>> = use_signal(|| None);
+
+    #[cfg_attr(not(feature = "web"), allow(unused_mut))]
+    let mut highlights: Signal<Vec<Highlight>> = use_signal(Vec::new);
 
     // Relocated data from epub.js (page, chapter, pct).
     #[cfg_attr(not(feature = "web"), allow(unused_mut))]
@@ -113,6 +172,13 @@ pub fn BookReadPage(uuid: String) -> Element {
             let url_lit = serde_json::to_string(&format!("/api/ebooks/{uuid}/file"))
                 .unwrap_or_else(|_| "\"\"".into());
             let theme_lit = serde_json::to_string(theme_name).unwrap_or_else(|_| "\"dark\"".into());
+            let font_family_lit =
+                serde_json::to_string(typeface().to_css()).unwrap_or_else(|_| "null".into());
+            let line_height_lit =
+                serde_json::to_string(line_spacing().to_css()).unwrap_or_else(|_| "null".into());
+            let max_width_lit =
+                serde_json::to_string(margins().to_css()).unwrap_or_else(|_| "null".into());
+            let justify_val = justify();
 
             if let Some(window) = web_sys::window() {
                 let uuid_for_save = uuid_cb.clone();
@@ -152,12 +218,22 @@ pub fn BookReadPage(uuid: String) -> Element {
                     &JsValue::from_str("__omnibusOnRelocate"),
                     relocate.as_ref().unchecked_ref(),
                 );
+                let on_selection = Closure::<dyn FnMut(String)>::new(move |json: String| {
+                    if let Ok(data) = serde_json::from_str::<SelectionData>(&json) {
+                        selection.set(Some(data));
+                    }
+                });
                 let _ = js_sys::Reflect::set(
                     &window,
                     &JsValue::from_str("__omnibusOnStatus"),
                     on_status.as_ref().unchecked_ref(),
                 );
-                *cb_holder.borrow_mut() = vec![relocate, on_status];
+                let _ = js_sys::Reflect::set(
+                    &window,
+                    &JsValue::from_str("__omnibusOnSelection"),
+                    on_selection.as_ref().unchecked_ref(),
+                );
+                *cb_holder.borrow_mut() = vec![relocate, on_status, on_selection];
             }
 
             let uuid_for_fetch = uuid.clone();
@@ -174,9 +250,21 @@ pub fn BookReadPage(uuid: String) -> Element {
                 let chosen = server_cfi.or(local_saved);
                 let cfi_arg = serde_json::to_string(&chosen).unwrap_or_else(|_| "null".into());
                 let js = format!(
-                    r#"(function(){{ var n=0; (function go(){{ if (window.OmnibusReader && window.ePub) {{ window.OmnibusReader.init("omnibus-viewer", {url_lit}, {{ cfi: {cfi_arg}, fontSize: {size}, theme: {theme_lit} }}); }} else if (n++ < 200) {{ setTimeout(go, 50); }} else if (typeof window.__omnibusOnStatus === "function") {{ window.__omnibusOnStatus("error"); }} }})(); }})();"#
+                    r#"(function(){{ var n=0; (function go(){{ if (window.OmnibusReader && window.ePub) {{ window.OmnibusReader.init("omnibus-viewer", {url_lit}, {{ cfi: {cfi_arg}, fontSize: {size}, theme: {theme_lit}, fontFamily: {font_family_lit}, lineHeight: {line_height_lit}, maxWidth: {max_width_lit}, justify: {justify_val} }}); }} else if (n++ < 200) {{ setTimeout(go, 50); }} else if (typeof window.__omnibusOnStatus === "function") {{ window.__omnibusOnStatus("error"); }} }})(); }})();"#
                 );
                 let _ = dioxus::document::eval(&js);
+
+                let hl_uuid = uuid_for_fetch.clone();
+                if let Ok(list) = data::list_highlights("", &hl_uuid).await {
+                    for h in &list {
+                        let cfi_lit = serde_json::to_string(&h.epub_cfi_range)
+                            .unwrap_or_else(|_| "\"\"".into());
+                        let color_lit = serde_json::to_string(h.color.as_str())
+                            .unwrap_or_else(|_| "\"amber\"".into());
+                        reader_call("addAnnotation", &format!("{cfi_lit}, {color_lit}"));
+                    }
+                    highlights.set(list);
+                }
             });
         }));
 
@@ -209,13 +297,56 @@ pub fn BookReadPage(uuid: String) -> Element {
         reader_call("setFontSize", &next.to_string());
     };
 
+    let on_set_typeface = move |t: Typeface| {
+        typeface.set(t);
+        #[cfg(feature = "web")]
+        {
+            let lit = serde_json::to_string(t.to_css()).unwrap_or_else(|_| "null".into());
+            reader_call("setFont", &lit);
+            save_reader_pref("omn.typeface", t.to_storage());
+        }
+    };
+    let on_set_line_spacing = move |ls: LineSpacing| {
+        line_spacing.set(ls);
+        #[cfg(feature = "web")]
+        {
+            let lit = serde_json::to_string(ls.to_css()).unwrap_or_else(|_| "null".into());
+            reader_call("setLineHeight", &lit);
+            save_reader_pref("omn.lineSpacing", ls.to_storage());
+        }
+    };
+    let on_set_margins = move |m: Margins| {
+        margins.set(m);
+        #[cfg(feature = "web")]
+        {
+            let lit = serde_json::to_string(m.to_css()).unwrap_or_else(|_| "null".into());
+            reader_call("setMargins", &lit);
+            save_reader_pref("omn.margins", m.to_storage());
+        }
+    };
+    let on_toggle_justify = move |_: MouseEvent| {
+        let next = !justify();
+        justify.set(next);
+        #[cfg(feature = "web")]
+        {
+            reader_call("setJustify", if next { "true" } else { "false" });
+            save_reader_pref("omn.justify", if next { "true" } else { "false" });
+        }
+    };
+
     let on_prev = move |_| {
         #[cfg(feature = "web")]
-        reader_call("prev", "");
+        {
+            selection.set(None);
+            reader_call("prev", "");
+        }
     };
     let on_next = move |_| {
         #[cfg(feature = "web")]
-        reader_call("next", "");
+        {
+            selection.set(None);
+            reader_call("next", "");
+        }
     };
 
     let set_theme = move |t: Theme| {
@@ -237,7 +368,9 @@ pub fn BookReadPage(uuid: String) -> Element {
         }
         Key::Escape => {
             evt.prevent_default();
-            if show_aa() {
+            if selection.read().is_some() {
+                selection.set(None);
+            } else if show_aa() {
                 show_aa.set(false);
             } else {
                 #[cfg(not(feature = "mobile"))]
@@ -311,10 +444,51 @@ pub fn BookReadPage(uuid: String) -> Element {
                 ReaderAaPanel {
                     theme: *theme.read(),
                     font_pct,
+                    typeface: typeface(),
+                    line_spacing: line_spacing(),
+                    margins: margins(),
+                    justify: justify(),
                     on_set_theme: set_theme,
                     on_font_decrease,
                     on_font_increase,
+                    on_set_typeface,
+                    on_set_line_spacing,
+                    on_set_margins,
+                    on_toggle_justify,
                     on_close: move |_| show_aa.set(false),
+                }
+            }
+
+            if let Some(sel) = selection.read().as_ref() {
+                SelectionPopover {
+                    sel_rect_x: sel.rect.x,
+                    sel_rect_y: sel.rect.y,
+                    sel_rect_width: sel.rect.width,
+                    sel_text: sel.text.clone(),
+                    sel_cfi: sel.cfi_range.clone(),
+                    on_dismiss: move |_| selection.set(None),
+                    on_highlight: move |(cfi, color): (String, HighlightColor)| {
+                        #[cfg(feature = "web")]
+                        {
+                            let cfi_lit = serde_json::to_string(&cfi)
+                                .unwrap_or_else(|_| "\"\"".into());
+                            let color_lit = serde_json::to_string(color.as_str())
+                                .unwrap_or_else(|_| "\"amber\"".into());
+                            reader_call("addAnnotation", &format!("{cfi_lit}, {color_lit}"));
+                        }
+
+                        let create = omnibus_shared::CreateHighlight {
+                            book_uuid: uuid.clone(),
+                            epub_cfi_range: cfi.clone(),
+                            color,
+                        };
+                        selection.set(None);
+                        spawn(async move {
+                            if let Ok(h) = data::create_highlight("", create).await {
+                                highlights.write().push(h);
+                            }
+                        });
+                    },
                 }
             }
         }
@@ -440,139 +614,6 @@ fn ReaderPageTurnButtons(
                 fill: "none", stroke: "currentColor",
                 stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
                 path { d: "M9.5 5l7 7-7 7" }
-            }
-        }
-    }
-}
-
-/// Frosted-glass typography settings panel: theme switcher, typeface,
-/// text size, line spacing, margins, and justify toggle.
-#[component]
-fn ReaderAaPanel(
-    theme: Theme,
-    font_pct: f32,
-    on_set_theme: EventHandler<Theme>,
-    on_font_decrease: EventHandler<MouseEvent>,
-    on_font_increase: EventHandler<MouseEvent>,
-    on_close: EventHandler<MouseEvent>,
-) -> Element {
-    rsx! {
-        div { class: "rd-scrim", onclick: on_close }
-        div {
-            class: "rd-aa-panel",
-            onclick: move |evt: MouseEvent| evt.stop_propagation(),
-
-            div { class: "rd-aa-row",
-                div { class: "rd-aa-label", "Theme" }
-                div {
-                    class: "rd-seg",
-                    button {
-                        class: if theme == Theme::Dark { "on" } else { "" },
-                        r#type: "button",
-                        onclick: move |_| on_set_theme.call(Theme::Dark),
-                        "Dark"
-                    }
-                    button {
-                        class: if theme == Theme::Light { "on" } else { "" },
-                        r#type: "button",
-                        onclick: move |_| on_set_theme.call(Theme::Light),
-                        "Light"
-                    }
-                    button {
-                        class: if theme == Theme::Sepia { "on" } else { "" },
-                        r#type: "button",
-                        onclick: move |_| on_set_theme.call(Theme::Sepia),
-                        "Sepia"
-                    }
-                }
-            }
-
-            // Typeface (visual only).
-            div { class: "rd-aa-row",
-                div { class: "rd-aa-label", "Typeface" }
-                div {
-                    style: "display:flex; gap:6px;",
-                    button {
-                        class: "rd-typeface-chip on",
-                        r#type: "button",
-                        span { class: "preview", style: "font-family:'Instrument Serif',serif;", "Aa" }
-                        span { class: "name", "Editorial" }
-                    }
-                    button {
-                        class: "rd-typeface-chip",
-                        r#type: "button",
-                        span { class: "preview", style: "font-family:'EB Garamond',serif;", "Aa" }
-                        span { class: "name", "Classic" }
-                    }
-                    button {
-                        class: "rd-typeface-chip",
-                        r#type: "button",
-                        span { class: "preview", style: "font-family:Georgia,serif;", "Aa" }
-                        span { class: "name", "Modern" }
-                    }
-                }
-            }
-
-            div { class: "rd-aa-row",
-                div { class: "rd-aa-label", "Text size" }
-                div {
-                    style: "display:flex; align-items:center; gap:12px;",
-                    button {
-                        class: "rd-tool",
-                        r#type: "button",
-                        "aria-label": "Decrease font size",
-                        "data-testid": "reader-font-decrease",
-                        onclick: on_font_decrease,
-                        style: "font-family:var(--serif); font-size:13px; color:var(--ink-2); min-width:24px; height:24px; padding:0;",
-                        "A"
-                    }
-                    div {
-                        class: "rd-size-track",
-                        div { class: "rd-size-fill", style: "width:{font_pct}%;" }
-                        div { class: "rd-size-thumb", style: "left:{font_pct}%;" }
-                    }
-                    button {
-                        class: "rd-tool",
-                        r#type: "button",
-                        "aria-label": "Increase font size",
-                        "data-testid": "reader-font-increase",
-                        onclick: on_font_increase,
-                        style: "font-family:var(--serif); font-size:24px; color:var(--ink-1); min-width:24px; height:24px; padding:0;",
-                        "A"
-                    }
-                }
-            }
-
-            // Line spacing (visual only).
-            div { class: "rd-aa-row",
-                div { class: "rd-aa-label", "Line spacing" }
-                div {
-                    class: "rd-seg",
-                    button { r#type: "button", "Tight" }
-                    button { class: "on", r#type: "button", "Cozy" }
-                    button { r#type: "button", "Airy" }
-                }
-            }
-
-            // Margins (visual only).
-            div { class: "rd-aa-row",
-                div { class: "rd-aa-label", "Margins" }
-                div {
-                    class: "rd-seg",
-                    button { r#type: "button", "Narrow" }
-                    button { class: "on", r#type: "button", "Normal" }
-                    button { r#type: "button", "Wide" }
-                }
-            }
-
-            // Justify toggle (visual only).
-            div {
-                class: "rd-toggle-row",
-                span { style: "font-size:13px; color:var(--ink-1);", "Justify text" }
-                div {
-                    class: "rd-toggle-track",
-                    div { class: "rd-toggle-knob" }
-                }
             }
         }
     }
