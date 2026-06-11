@@ -202,10 +202,7 @@ pub fn RegisterPage() -> Element {
     }
 }
 
-/// Register form body — owns the markup but no async work. Inputs mutate
-/// the parent's signals directly (so each input edit can also clear the
-/// error signal); submission delegates back to `on_submit_now` so the
-/// parent keeps the `spawn` + navigation.
+/// Register form body — inputs write the parent's signals through, submission delegates via `on_submit_now`.
 #[component]
 fn RegisterForm(
     mut username: Signal<String>,
@@ -215,13 +212,23 @@ fn RegisterForm(
     mut terms_ack: Signal<bool>,
     on_submit_now: EventHandler<()>,
 ) -> Element {
+    // Gate Enter/onsubmit on the same condition as the submit button's
+    // `disabled` prop, so neither path can bypass it and re-submit while a
+    // routed error is still showing. The event is still consumed (prevent
+    // the browser's default form submit) — we just skip calling through.
     let on_submit = move |evt: FormEvent| {
         evt.prevent_default();
+        if submitting() || error().is_some() {
+            return;
+        }
         on_submit_now.call(());
     };
     let on_keydown = move |evt: Event<KeyboardData>| {
         if evt.key() == Key::Enter {
             evt.prevent_default();
+            if submitting() || error().is_some() {
+                return;
+            }
             on_submit_now.call(());
         }
     };
