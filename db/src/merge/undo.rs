@@ -17,12 +17,11 @@ use super::MergeError;
 /// by name, and clear the source-uuid reindex guard. Returns the
 /// restored book's uuid.
 ///
-/// Deliberate asymmetries (documented, per the F5.10 risk notes):
-/// progress and history stay on the target; links unioned into the
-/// target stay there; merged override values stay on the target. If a
-/// moved file row was deleted in the meantime (file removed from disk),
-/// the restored source comes back **fileless** — a legal state — rather
-/// than failing.
+/// Deliberate asymmetries: progress and history stay on the target;
+/// links unioned into the target stay there; merged override values stay
+/// on the target. If a moved file row was deleted in the meantime (file
+/// removed from disk), the restored source comes back **fileless** — a
+/// legal state — rather than failing.
 pub async fn undo_merge(pool: &SqlitePool, merge_log_id: i64) -> Result<String, MergeError> {
     let mut tx = pool.begin().await?;
 
