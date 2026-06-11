@@ -51,6 +51,10 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
         .await
         .map_err(|e| sqlx::Error::Migrate(Box::new(e)))?;
 
+    // One-time fill of the auto-attach match key for rows indexed before
+    // migration 0016. Idempotent and a no-op once caught up.
+    crate::normalize::backfill_norm_columns(&pool).await?;
+
     // Issue #94: the previous `stable_uuid` implementation hashed via
     // `DefaultHasher` and produced toolchain-dependent UUIDs. Switching to
     // UUIDv5 changes every cover id on the next reindex, so any pre-existing

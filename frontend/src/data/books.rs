@@ -5,8 +5,8 @@
 //! across feature gates so call sites stay platform-agnostic.
 
 use omnibus_shared::{
-    EbookLibrary, EbookMetadata, LibraryContents, MetadataOverrides, PaletteResults, Settings,
-    WorkerStatus,
+    EbookLibrary, EbookMetadata, LibraryContents, MergeBooksResult, MetadataOverrides,
+    PaletteResults, Settings, WorkerStatus,
 };
 
 #[cfg(not(feature = "mobile"))]
@@ -224,6 +224,61 @@ pub async fn backfill_chapters(server_url: &str) -> Result<(), DataError> {
         return Err(drain_error(response, status).await);
     }
     Ok(())
+}
+
+/// Admin: merge the book `source_uuid` into `target_uuid`. Web-only —
+/// mobile has no admin surface.
+#[cfg(not(feature = "mobile"))]
+pub async fn merge_books(
+    _server_url: &str,
+    source_uuid: &str,
+    target_uuid: &str,
+) -> Result<MergeBooksResult, DataError> {
+    crate::rpc::rpc_merge_books(source_uuid.to_string(), target_uuid.to_string())
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Mobile stub for `merge_books` — merge is a web-admin-only surface.
+#[cfg(feature = "mobile")]
+pub async fn merge_books(
+    _server_url: &str,
+    _source_uuid: &str,
+    _target_uuid: &str,
+) -> Result<MergeBooksResult, DataError> {
+    Err(DataError::Other("merge is web-only".into()))
+}
+
+/// Admin: candidate search for the merge dialog — FTS across both
+/// configured libraries (unlike `search_ebooks`, which is ebook-only).
+#[cfg(not(feature = "mobile"))]
+pub async fn merge_candidates(_server_url: &str, q: &str) -> Result<Vec<EbookMetadata>, DataError> {
+    crate::rpc::rpc_merge_candidates(q.to_string())
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Mobile stub for `merge_candidates` — merge is a web-admin-only surface.
+#[cfg(feature = "mobile")]
+pub async fn merge_candidates(
+    _server_url: &str,
+    _q: &str,
+) -> Result<Vec<EbookMetadata>, DataError> {
+    Err(DataError::Other("merge is web-only".into()))
+}
+
+/// Admin: undo a merge by its `merge_log` id. Returns the restored uuid.
+#[cfg(not(feature = "mobile"))]
+pub async fn undo_merge(_server_url: &str, merge_log_id: i64) -> Result<String, DataError> {
+    crate::rpc::rpc_undo_merge(merge_log_id)
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Mobile stub for `undo_merge` — merge is a web-admin-only surface.
+#[cfg(feature = "mobile")]
+pub async fn undo_merge(_server_url: &str, _merge_log_id: i64) -> Result<String, DataError> {
+    Err(DataError::Other("merge is web-only".into()))
 }
 
 /// Web/SSR `get_ebooks` — server-function wrapper that proxies to `rpc_get_ebooks`.

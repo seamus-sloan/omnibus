@@ -7,8 +7,10 @@ use sqlx::{SqlitePool, Transaction};
 
 use crate::covers::delete_cover_files_for;
 use crate::helpers::sanitize_accent_color;
+use crate::normalize::{normalize_author, normalize_title};
 use crate::settings::upsert_library;
 
+use super::attach;
 use super::books::{materialize_new_covers, SyncError};
 
 /// Per-bucket payload for [`sync_audiobooks`]. Mirrors [`SyncPlan`] for
@@ -66,6 +68,11 @@ pub async fn sync_audiobooks(
             q = q.bind(uuid);
         }
         q.execute(&mut *tx).await?;
+
+        // Removed uuids that were cross-format attachments have no
+        // `books` row — drop their `book_files` row + `merged_uuids`
+        // entry instead (the target book survives, possibly fileless).
+        attach::remove_attached_files(&mut tx, &plan.removed_uuids).await?;
     }
 
     // --- Changed ----------------------------------------------------------
@@ -90,7 +97,23 @@ pub async fn sync_audiobooks(
 
         for b in &plan.changed_books {
             let Some(&book_id) = id_map.get(&b.uuid) else {
-                // TOCTOU: promote to New insert.
+                // No books row with this uuid — either an attachment on
+                // another book (refresh the file row, leave the target's
+                // metadata alone) or a TOCTOU promote to New insert.
+                if let Some((target_id, format)) =
+                    attach::attach_target_by_uuid(&mut tx, &b.uuid).await?
+                {
+                    attach_audiobook_file(
+                        &mut tx,
+                        target_id,
+                        &format,
+                        library_path,
+                        b,
+                        &mut changed_covers,
+                    )
+                    .await?;
+                    continue;
+                }
                 let inserted = insert_audiobook_row(&mut tx, library_id, b).await?;
                 insert_audiobook_parts(&mut tx, inserted.book_file_id, &b.parts).await?;
                 insert_chapters(&mut tx, inserted.book_file_id, &b.chapters, &b.parts).await?;
@@ -105,13 +128,17 @@ pub async fn sync_audiobooks(
 
             update_audiobook_row(&mut tx, book_id, b).await?;
             // Wipe dependent rows; ON DELETE CASCADE handles book_file_parts when
-            // book_files is deleted.
+            // book_files is deleted. The delete is scoped to this group's
+            // own format so a cross-format attachment (e.g. an EPUB row
+            // hanging off this book via merged_uuids) survives the
+            // re-parse.
             sqlx::query("DELETE FROM books_authors_link WHERE book = ?")
                 .bind(book_id)
                 .execute(&mut *tx)
                 .await?;
-            sqlx::query("DELETE FROM book_files WHERE book_id = ?")
+            sqlx::query("DELETE FROM book_files WHERE book_id = ? AND format = ?")
                 .bind(book_id)
+                .bind(&b.format)
                 .execute(&mut *tx)
                 .await?;
             sqlx::query("DELETE FROM books_fts WHERE rowid = ?")
@@ -134,6 +161,9 @@ pub async fn sync_audiobooks(
     // --- New --------------------------------------------------------------
     let mut new_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
     for b in &plan.new_books {
+        if try_attach_new_audiobook(&mut tx, library_path, b, &mut new_covers).await? {
+            continue;
+        }
         let inserted = insert_audiobook_row(&mut tx, library_id, b).await?;
         insert_audiobook_parts(&mut tx, inserted.book_file_id, &b.parts).await?;
         insert_chapters(&mut tx, inserted.book_file_id, &b.chapters, &b.parts).await?;
@@ -188,6 +218,82 @@ pub async fn sync_audiobooks(
     Ok(())
 }
 
+/// Try to attach a brand-new audiobook group to an existing book in
+/// another format instead of inserting a fresh `books` row. Mirrors
+/// `books::try_attach_new_ebook`: a `merged_uuids` hit attaches
+/// unconditionally; otherwise exactly one normalized title+author match
+/// without this format attaches. Returns `true` when attached.
+async fn try_attach_new_audiobook(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    library_path: &str,
+    b: &crate::audiobook::IndexedAudiobook,
+    covers: &mut Vec<(String, String, Vec<u8>)>,
+) -> Result<bool, SyncError> {
+    if b.error.is_some() {
+        return Ok(false);
+    }
+    if let Some((target_id, format)) = attach::attach_target_by_uuid(tx, &b.uuid).await? {
+        attach_audiobook_file(tx, target_id, &format, library_path, b, covers).await?;
+        return Ok(true);
+    }
+    let (Some(title_norm), Some(author_norm)) = (
+        normalize_title(&b.title),
+        b.creator_name.as_deref().and_then(normalize_author),
+    ) else {
+        // No author (or empty title): too weak a signal to auto-match.
+        return Ok(false);
+    };
+    let Some(target_id) =
+        attach::find_attach_target(tx, &title_norm, &author_norm, &b.format).await?
+    else {
+        return Ok(false);
+    };
+    attach_audiobook_file(tx, target_id, &b.format, library_path, b, covers).await?;
+    Ok(true)
+}
+
+/// Write (or rewrite) an attached audiobook's `book_files` row (plus
+/// parts and chapters) under `book_id`, record the attachment, and adopt
+/// the cover when the target has none. The target's `books` scalars,
+/// links, and FTS row are deliberately left untouched. The file row
+/// carries its own `(library_path, path)` location override — the
+/// target book may live in a different library, and the HLS read path
+/// resolves part filenames against the *audio* root.
+async fn attach_audiobook_file(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    format: &str,
+    library_path: &str,
+    b: &crate::audiobook::IndexedAudiobook,
+    covers: &mut Vec<(String, String, Vec<u8>)>,
+) -> Result<(), SyncError> {
+    // Idempotent re-attach: the refresh path lands here too.
+    sqlx::query("DELETE FROM book_files WHERE book_id = ? AND format = ?")
+        .bind(book_id)
+        .bind(format)
+        .execute(&mut **tx)
+        .await?;
+    let book_file_id = insert_audiobook_file_row(tx, book_id, b).await?;
+    let dir = std::path::Path::new(&b.group_path)
+        .parent()
+        .and_then(|p| p.to_str())
+        .unwrap_or("")
+        .to_string();
+    sqlx::query("UPDATE book_files SET library_path = ?, path = ? WHERE id = ?")
+        .bind(library_path)
+        .bind(&dir)
+        .bind(book_file_id)
+        .execute(&mut **tx)
+        .await?;
+    insert_audiobook_parts(tx, book_file_id, &b.parts).await?;
+    insert_chapters(tx, book_file_id, &b.chapters, &b.parts).await?;
+    attach::record_attachment(tx, &b.uuid, book_id, format, library_path).await?;
+    if let Some(cover) = attach::maybe_adopt_cover(tx, book_id, b.cover.as_ref()).await? {
+        covers.push(cover);
+    }
+    Ok(())
+}
+
 /// Return type from a fresh audiobook insert — both ids needed by the
 /// caller for the parts + FTS + author-link inserts.
 struct InsertedAudiobook {
@@ -212,8 +318,9 @@ async fn insert_audiobook_row(
 
     let book_id = sqlx::query_scalar::<_, i64>(
         "INSERT INTO books \
-            (uuid, library_id, path, title, sort, author_sort, has_cover, description, accent_color) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+            (uuid, library_id, path, title, sort, author_sort, has_cover, description, \
+             accent_color, title_norm, author_norm) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id",
     )
     .bind(&b.uuid)
@@ -225,6 +332,8 @@ async fn insert_audiobook_row(
     .bind(has_cover)
     .bind(&b.description)
     .bind(sanitize_accent_color(b.accent.as_deref()))
+    .bind(normalize_title(&b.title))
+    .bind(b.creator_name.as_deref().and_then(normalize_author))
     .fetch_one(&mut **tx)
     .await?;
 
@@ -411,7 +520,8 @@ async fn update_audiobook_row(
     sqlx::query(
         "UPDATE books SET \
             path = ?, title = ?, sort = ?, author_sort = ?, has_cover = ?, \
-            description = ?, accent_color = ?, last_modified = datetime('now') \
+            description = ?, accent_color = ?, title_norm = ?, author_norm = ?, \
+            last_modified = datetime('now') \
          WHERE id = ?",
     )
     .bind(&book_path)
@@ -421,6 +531,8 @@ async fn update_audiobook_row(
     .bind(has_cover)
     .bind(&b.description)
     .bind(sanitize_accent_color(b.accent.as_deref()))
+    .bind(normalize_title(&b.title))
+    .bind(b.creator_name.as_deref().and_then(normalize_author))
     .bind(book_id)
     .execute(&mut **tx)
     .await?;
