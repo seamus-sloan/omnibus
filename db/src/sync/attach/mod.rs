@@ -1,10 +1,8 @@
 //! Cross-format auto-attach lookups shared by `sync_books` and
-//! `sync_audiobooks`. When the indexer is about to INSERT a brand-new
-//! `books` row, these decide whether the file instead belongs to an
-//! existing book in another format (the same work scanned as both an
-//! EPUB and an M4B), and record the attachment in `merged_uuids` so the
-//! next reindex classifies the file against the attached `book_files`
-//! row instead of resurrecting a duplicate.
+//! `sync_audiobooks`: before INSERTing a new `books` row, decide
+//! whether the file actually belongs to an existing book in another
+//! format (same work scanned as EPUB + M4B) and record the attachment
+//! in `merged_uuids` so the next reindex won't resurrect a duplicate.
 
 use sqlx::Transaction;
 

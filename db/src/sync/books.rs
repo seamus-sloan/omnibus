@@ -1,8 +1,7 @@
 //! Transactional orchestrator for the indexer write path. Owns
-//! `sync_books`, the per-bucket helpers it composes
-//! (`sync_removed` / `sync_changed` / `sync_new`), the
-//! `replace_books` nuke-and-pave shim, and the per-book row writers
-//! (`insert_book_row` / `update_book_row`) plus the metadata-link
+//! `sync_books`, the per-bucket helpers (`sync_removed` / `sync_changed`
+//! / `sync_new`), the `replace_books` nuke-and-pave shim, per-book row
+//! writers (`insert_book_row` / `update_book_row`), and the metadata
 //! dispatcher, FTS row insert, and post-commit cover materialization.
 
 use std::collections::HashMap;
