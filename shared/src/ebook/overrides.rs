@@ -50,7 +50,7 @@ impl MetadataOverrides {
     /// from the pre-existing `MAX_SUBJECT_CHARS = 128` constant — tags are
     /// typically short controlled-vocabulary terms, so the tighter cap is
     /// intentional. `NAME_MAX_LEN = 250` applies to author/series/publisher
-    /// names as specified in issue #294.
+    /// names.
     pub const TAG_MAX_LEN: usize = 128;
     /// Maximum number of tags (subjects).
     pub(crate) const MAX_SUBJECTS: usize = 64;

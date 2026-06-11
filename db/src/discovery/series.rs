@@ -16,8 +16,6 @@ use super::{DiscoveryError, MAX_DISCOVERY_BOOKS};
 /// Fetch a series by ID with its books, ordered by series index. Returns
 /// `None` if the series ID doesn't exist. The nested `books` vec is
 /// capped at [`MAX_DISCOVERY_BOOKS`]; `book_count` is uncapped.
-///
-/// Currently returns results across all users (single-tenant).
 pub async fn get_series(
     pool: &SqlitePool,
     series_id: i64,

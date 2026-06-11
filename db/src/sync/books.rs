@@ -302,12 +302,12 @@ async fn sync_new(
 /// Try to attach a brand-new ebook file to an existing book in another
 /// format instead of inserting a fresh `books` row. Two triggers, in
 /// order: (1) the file's uuid is already in `merged_uuids` (it was
-/// attached or merged before — the F5.10 "this was merged" path, which
-/// works even when titles no longer match); (2) exactly one existing
-/// book matches on normalized title + author and lacks this format.
-/// Returns `true` when the file was attached (the caller skips its
-/// normal insert). Per-file parse errors never attach — their metadata
-/// is a filename fallback, not a real title.
+/// attached or merged before — the "this was merged" path, which works
+/// even when titles no longer match); (2) exactly one existing book
+/// matches on normalized title + author and lacks this format. Returns
+/// `true` when the file was attached (the caller skips its normal
+/// insert). Per-file parse errors never attach — their metadata is a
+/// filename fallback, not a real title.
 async fn try_attach_new_ebook(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_path: &str,

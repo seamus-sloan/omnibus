@@ -1,6 +1,6 @@
 //! Admin-only "Merge with…" dialog mounted by the book detail page.
 //!
-//! Search-and-confirm flow for the F5.10 manual format merge: the admin
+//! Search-and-confirm flow for the manual format merge: the admin
 //! picks another book via FTS search, confirms, and `data::merge_books`
 //! absorbs it into the page's book (the current book is always the
 //! merge **target** — its metadata wins; to merge the other way, open

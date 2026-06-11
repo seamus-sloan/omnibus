@@ -19,7 +19,7 @@ pub struct EbookLibrary {
     /// set by the search paths so the web client can show "N of M results"
     /// even when `books` is truncated. `None` for the full-library
     /// (`/api/ebooks`, `rpc_get_ebooks`) responses, which surface truncation
-    /// via the `X-Total-Count` header instead. Issue #241.
+    /// via the `X-Total-Count` header instead.
     #[serde(default)]
     pub total: Option<i64>,
 }
@@ -33,7 +33,7 @@ pub struct AuthorDetail {
     pub sort: Option<String>,
     pub book_count: usize,
     pub books: Vec<EbookMetadata>,
-    /// F1.11: `true` when a usable profile photo is cached for this author
+    /// `true` when a usable profile photo is cached for this author
     /// (a `manual` or `openlibrary` row in `author_photos`). The frontend
     /// hero swaps the letter avatar for `<img src="/api/authors/:id/photo">`
     /// when set. `'letter'` negative-cache rows do not set this flag.

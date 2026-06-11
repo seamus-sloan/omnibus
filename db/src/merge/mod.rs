@@ -1,12 +1,11 @@
-//! Manual format merge (F5.10): absorb one `books` row (the **source**)
-//! into another (the **target**) so a work that indexed as two
-//! format-siblings becomes one book with multiple `book_files` entries.
-//! `merge_books` runs the whole move in one transaction and records a
-//! JSON snapshot of the source in `merge_log` for [`undo_merge`].
+//! Manual format merge: absorb one `books` row (the **source**) into
+//! another (the **target**) so a work that indexed as two format-siblings
+//! becomes one book with multiple `book_files` entries. `merge_books`
+//! runs the whole move in one transaction and records a JSON snapshot of
+//! the source in `merge_log` for [`undo_merge`].
 //!
-//! Concurrency note: like the sync writers this uses a plain deferred
-//! `pool.begin()` (not the `BEGIN IMMEDIATE` the F5.10 design assumed).
-//! SQLite's single-writer lock still serializes the merge against a
+//! Concurrency: uses a plain deferred `pool.begin()` like the sync
+//! writers. SQLite's single-writer lock serializes the merge against a
 //! concurrent reindex; the residual race — a diff snapshot taken before
 //! the merge commits — self-heals because the sync New bucket consults
 //! `merged_uuids` before inserting.

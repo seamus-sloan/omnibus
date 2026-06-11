@@ -10,8 +10,8 @@ use sqlx::Transaction;
 
 /// Reindex protection: has this uuid already been merged into / attached
 /// to a book? Returns the target `(book_id, format)` when so. Covers
-/// both index-time auto-attach and manual F5.10 merges, and works even
-/// when the titles no longer match.
+/// both index-time auto-attach and manual merges, and works even when
+/// the titles no longer match.
 pub(super) async fn attach_target_by_uuid(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     uuid: &str,
