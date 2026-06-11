@@ -465,14 +465,14 @@ fn BdTitleCol(
                         if i > 0 { ", " }
                         if let Some(author_id) = creator.id {
                             Link {
-                                key: "{i}-{creator.name}",
+                                key: "id-{author_id}",
                                 to: Route::AuthorDetail { id: author_id },
                                 class: "bd-author-link",
                                 "{creator.name}"
                             }
                         } else {
                             span {
-                                key: "{i}-{creator.name}",
+                                key: "name-{creator.name}-{creator.role:?}-{creator.file_as:?}",
                                 class: "bd-author-link",
                                 "{creator.name}"
                             }
