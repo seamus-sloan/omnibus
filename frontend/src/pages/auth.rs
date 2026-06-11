@@ -145,11 +145,11 @@ pub fn LoginPage() -> Element {
 
 #[component]
 pub fn RegisterPage() -> Element {
-    let mut username = use_signal(String::new);
-    let mut password = use_signal(String::new);
+    let username = use_signal(String::new);
+    let password = use_signal(String::new);
     let mut error = use_signal(|| Option::<RegisterError>::None);
     let mut submitting = use_signal(|| false);
-    let mut terms_ack = use_signal(|| false);
+    let terms_ack = use_signal(|| false);
     let nav = use_navigator();
 
     let server_url = use_server_url();
@@ -180,14 +180,56 @@ pub fn RegisterPage() -> Element {
             }
         });
     });
+
+    rsx! {
+        AuthShell {
+            kicker: "Create account".to_string(),
+            title: rsx! {
+                "Make "
+                span { class: "auth-shell-headline-em", "yourself" }
+                " at home"
+            },
+            lede: Some("Set up your account to start using Omnibus.".to_string()),
+            RegisterForm {
+                username,
+                password,
+                error,
+                submitting,
+                terms_ack,
+                on_submit_now: move |_| submit_now.call(()),
+            }
+        }
+    }
+}
+
+/// Register form body — inputs write the parent's signals through, submission delegates via `on_submit_now`.
+#[component]
+fn RegisterForm(
+    mut username: Signal<String>,
+    mut password: Signal<String>,
+    mut error: Signal<Option<RegisterError>>,
+    submitting: Signal<bool>,
+    mut terms_ack: Signal<bool>,
+    on_submit_now: EventHandler<()>,
+) -> Element {
+    // Gate Enter/onsubmit on the same condition as the submit button's
+    // `disabled` prop, so neither path can bypass it and re-submit while a
+    // routed error is still showing. The event is still consumed (prevent
+    // the browser's default form submit) — we just skip calling through.
     let on_submit = move |evt: FormEvent| {
         evt.prevent_default();
-        submit_now.call(());
+        if submitting() || error().is_some() {
+            return;
+        }
+        on_submit_now.call(());
     };
     let on_keydown = move |evt: Event<KeyboardData>| {
         if evt.key() == Key::Enter {
             evt.prevent_default();
-            submit_now.call(());
+            if submitting() || error().is_some() {
+                return;
+            }
+            on_submit_now.call(());
         }
     };
 
@@ -218,94 +260,85 @@ pub fn RegisterPage() -> Element {
     };
 
     rsx! {
-        AuthShell {
-            kicker: "Create account".to_string(),
-            title: rsx! {
-                "Make "
-                span { class: "auth-shell-headline-em", "yourself" }
-                " at home"
-            },
-            lede: Some("Set up your account to start using Omnibus.".to_string()),
-            form { class: "auth-form-inner",
-                onsubmit: on_submit,
-                "data-testid": "register-form",
-                if let Some(msg) = other_err {
-                    Banner {
-                        kind: BannerKind::Err,
-                        title: msg,
-                        dismissible: false,
-                    }
+        form { class: "auth-form-inner",
+            onsubmit: on_submit,
+            "data-testid": "register-form",
+            if let Some(msg) = other_err {
+                Banner {
+                    kind: BannerKind::Err,
+                    title: msg,
+                    dismissible: false,
                 }
-                Field {
-                    label: "Username".to_string(),
-                    input_id: "register-username".to_string(),
-                    error: username_err,
-                    input {
-                        id: "register-username",
-                        name: "username",
-                        r#type: "text",
-                        autocomplete: "username",
-                        value: "{username}",
-                        aria_invalid: "{username_invalid}",
-                        oninput: move |e| {
-                            username.set(e.value());
-                            error.set(None);
-                        },
-                        onkeydown: on_keydown,
-                    }
+            }
+            Field {
+                label: "Username".to_string(),
+                input_id: "register-username".to_string(),
+                error: username_err,
+                input {
+                    id: "register-username",
+                    name: "username",
+                    r#type: "text",
+                    autocomplete: "username",
+                    value: "{username}",
+                    aria_invalid: "{username_invalid}",
+                    oninput: move |e| {
+                        username.set(e.value());
+                        error.set(None);
+                    },
+                    onkeydown: on_keydown,
                 }
-                Field {
-                    label: "Password".to_string(),
-                    input_id: "register-password".to_string(),
-                    error: password_err,
-                    input {
-                        id: "register-password",
-                        name: "password",
-                        r#type: "password",
-                        autocomplete: "new-password",
-                        value: "{password}",
-                        aria_invalid: "{password_invalid}",
-                        onkeydown: on_keydown,
-                        oninput: move |e| {
-                            password.set(e.value());
-                            error.set(None);
-                        },
-                    }
+            }
+            Field {
+                label: "Password".to_string(),
+                input_id: "register-password".to_string(),
+                error: password_err,
+                input {
+                    id: "register-password",
+                    name: "password",
+                    r#type: "password",
+                    autocomplete: "new-password",
+                    value: "{password}",
+                    aria_invalid: "{password_invalid}",
+                    onkeydown: on_keydown,
+                    oninput: move |e| {
+                        password.set(e.value());
+                        error.set(None);
+                    },
                 }
-                StrengthMeter {
-                    score: score,
-                    label: Some(score_label.to_string()),
+            }
+            StrengthMeter {
+                score: score,
+                label: Some(score_label.to_string()),
+            }
+            div { class: "auth-requirements",
+                div { class: "auth-requirements-title", "Password needs" }
+                PasswordRequirementRow { ok: rules[0], text: "At least 10 characters" }
+                PasswordRequirementRow { ok: rules[1], text: "Mixed case" }
+                PasswordRequirementRow { ok: rules[2], text: "One number or symbol" }
+            }
+            label { class: "auth-checkbox auth-checkbox-block",
+                input {
+                    r#type: "checkbox",
+                    checked: terms_ack(),
+                    oninput: move |e| terms_ack.set(e.value() == "true"),
                 }
-                div { class: "auth-requirements",
-                    div { class: "auth-requirements-title", "Password needs" }
-                    PasswordRequirementRow { ok: rules[0], text: "At least 10 characters" }
-                    PasswordRequirementRow { ok: rules[1], text: "Mixed case" }
-                    PasswordRequirementRow { ok: rules[2], text: "One number or symbol" }
+                span {
+                    "I understand that the server admin can see my reading list, ratings, journals on shared shelves, and audiobook play position."
                 }
-                label { class: "auth-checkbox auth-checkbox-block",
-                    input {
-                        r#type: "checkbox",
-                        checked: terms_ack(),
-                        oninput: move |e| terms_ack.set(e.value() == "true"),
-                    }
-                    span {
-                        "I understand that the server admin can see my reading list, ratings, journals on shared shelves, and audiobook play position."
-                    }
-                }
-                button {
-                    class: "btn primary lg auth-submit",
-                    r#type: "submit",
-                    // Disable while submitting AND while a routed error is
-                    // shown — keeps users from immediately re-submitting
-                    // the same invalid form. Each input's `oninput` clears
-                    // the error signal so editing re-enables the button.
-                    disabled: submitting() || has_error,
-                    "{submit_label}"
-                }
-                p { class: "auth-footer",
-                    "Already have an account? "
-                    Link { to: Route::Login {}, "Log in" }
-                }
+            }
+            button {
+                class: "btn primary lg auth-submit",
+                r#type: "submit",
+                // Disable while submitting AND while a routed error is
+                // shown — keeps users from immediately re-submitting
+                // the same invalid form. Each input's `oninput` clears
+                // the error signal so editing re-enables the button.
+                disabled: submitting() || has_error,
+                "{submit_label}"
+            }
+            p { class: "auth-footer",
+                "Already have an account? "
+                Link { to: Route::Login {}, "Log in" }
             }
         }
     }
