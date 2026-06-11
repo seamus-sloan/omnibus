@@ -1,7 +1,8 @@
 //! Unit tests for the `progress` module — `upsert_progress`
 //! roundtrip + last-write-wins + per-user/format isolation,
-//! `BookNotFound` variant, `get_progress` empty-state, and
-//! `record_session` per-format dispatch with unknown-uuid skip.
+//! `BookNotFound` variant, `get_progress` empty-state,
+//! `record_session` per-format dispatch with unknown-uuid skip, and
+//! `record_session_tx` rollback behaviour.
 
 use super::*;
 use crate::{init_db, replace_books};
@@ -237,4 +238,78 @@ async fn record_session_inserts_per_format_row() {
     .await
     .unwrap();
     assert!(!skipped, "unknown uuid should be skipped (returns false)");
+}
+
+#[tokio::test]
+async fn record_session_tx_inserts_row_when_committed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    let mut tx = pool.begin().await.unwrap();
+    let inserted = record_session_tx(
+        &mut tx,
+        user,
+        &SessionReport {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            started_at: 100,
+            ended_at: 460,
+            progress_units: 360,
+            device_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(inserted);
+    tx.commit().await.unwrap();
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ? AND book_id = ?",
+    )
+    .bind(user)
+    .bind(book_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn record_session_tx_rollback_leaves_no_rows() {
+    // When the transaction is dropped without committing, no rows must
+    // remain — this is the invariant post_sessions relies on when a
+    // mid-batch error forces an early return.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    {
+        let mut tx = pool.begin().await.unwrap();
+        record_session_tx(
+            &mut tx,
+            user,
+            &SessionReport {
+                book_uuid: uuid.clone(),
+                format: ProgressFormat::Epub,
+                started_at: 100,
+                ended_at: 460,
+                progress_units: 360,
+                device_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        // tx is dropped here without commit → implicit rollback
+    }
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ? AND book_id = ?",
+    )
+    .bind(user)
+    .bind(book_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 0, "dropped transaction must leave no committed rows");
 }
