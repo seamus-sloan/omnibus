@@ -212,6 +212,11 @@ pub async fn get_book_by_uuid(
 /// `UNIQUE`, so this is one indexed lookup. Returns `None` if the uuid
 /// is unknown — handlers translate to a 404.
 ///
+/// Falls back to `merged_uuids`: a uuid that was merged into (or
+/// auto-attached to) another book resolves to the surviving book, so
+/// old detail-page links, cover/thumb URLs, and in-flight progress
+/// POSTs keep working after a merge.
+///
 /// The covers / thumbs / mobile-ebooks routes use this to keep their
 /// URLs uuid-keyed externally while reusing the existing id-keyed
 /// internal helpers (`get_cover`, the thumbnail pipeline) unchanged.
@@ -219,12 +224,15 @@ pub async fn resolve_book_id_by_uuid(
     pool: &SqlitePool,
     uuid: &str,
 ) -> Result<Option<i64>, super::BooksError> {
-    Ok(
-        sqlx::query_scalar::<_, i64>("SELECT id FROM books WHERE uuid = ?")
-            .bind(uuid)
-            .fetch_optional(pool)
-            .await?,
+    Ok(sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM books WHERE uuid = ?1
+         UNION ALL
+         SELECT book_id FROM merged_uuids WHERE uuid = ?1
+         LIMIT 1",
     )
+    .bind(uuid)
+    .fetch_optional(pool)
+    .await?)
 }
 
 /// Resolve the on-disk path of a book's file for the given format
@@ -240,8 +248,12 @@ pub async fn book_file_path(
     id: i64,
     format: &str,
 ) -> Result<Option<std::path::PathBuf>, super::BooksError> {
+    // COALESCE: an attached / merged file row carries its own
+    // `(library_path, path)` override because its on-disk home is not
+    // the book's library (see migration 0016).
     let row = sqlx::query_as::<_, (String, String, String)>(
-        "SELECT l.path, b.path, bf.filename FROM books b \
+        "SELECT COALESCE(bf.library_path, l.path), COALESCE(bf.path, b.path), bf.filename \
+         FROM books b \
          JOIN libraries l ON l.id = b.library_id \
          JOIN book_files bf ON bf.book_id = b.id \
          WHERE b.id = ? AND bf.format = ? COLLATE NOCASE LIMIT 1",

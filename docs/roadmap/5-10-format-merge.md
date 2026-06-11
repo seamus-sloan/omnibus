@@ -1,8 +1,19 @@
 # F5.10 — Format merge (manual)
 
-**Phase 5 · Admin & hygiene** · **Priority:** P2
+**Phase 5 · Admin & hygiene** · **Priority:** P2 · **Status: shipped**, together with the conservative auto-attach this doc originally deferred to "future".
 
 Manual merge of duplicate book rows that represent the same logical work in different formats (e.g. an EPUB and an M4B for *Dracula*).
+
+## Shipped — deltas from the design below
+
+- **Auto-attach shipped alongside the manual path**, not after it: when the indexer is about to insert a brand-new `books` row, it first checks `merged_uuids` (reindex protection) and then looks for **exactly one** existing book with the same normalized title + author (`db/src/normalize.rs`: deunicode fold, casefold, punctuation collapse, "Last, First" swap) that lacks the file's format, and attaches the file there instead. Matching is exact-only — no substring/Jaccard/ISBN tiers (those remain future work). Ambiguity, format collisions, no-author books, and per-file parse errors all fall back to a separate row. **No retroactive auto-merge**: existing duplicate rows are never combined by a reindex — that's what the manual UI is for.
+- **Five m2m link tables**, not the three listed below — `books_publishers_link` and `books_languages_link` union over too.
+- **Progress re-parent needs latest-wins dedupe**: `reading_progress.format` is the coarse `'epub'|'audio'`, so an M4B book merging with an MP3 book passes the file-format collision check but collides on progress rows. `bookmarks` / `reading_sessions` / `listening_sessions` re-parent as well.
+- **`book_files` grew `(library_path, path)` location overrides** (migration 0016): an attached/merged file's on-disk home is not the target book's library, so `book_file_path` and `hls::resolve_audiobook` COALESCE the per-file override over the book's library.
+- **`merged_uuids` carries `format` and `library_path`** (the file's own scanned root) so the reindex diff is library- and format-scoped.
+- **UI ships the simplified absorb direction** instead of the keep-left/keep-right preview: the detail page's book is always the merge target (matching the transaction's target-metadata-wins rule); merge the other way from the other book's page. Undo surfaces as a toast button right after the merge.
+- **Fileless books are a legal state**: undoing a merge whose moved file has since vanished restores the source without files; removing an attached file leaves the target book intact.
+- **Multi-part m4b/m4a grouping** landed in the same change (in `db/src/audiobook/group.rs`, not this initiative's scope as written): same-directory m4b/m4a files whose stems match after stripping a part designator (`Pt1`, `Part 2`, `Disc 3`, `1 of 3`, `- 2`) group into one book with a continuous chapter timeline. Note: libraries that already indexed `Pt1`/`Pt2` as two books self-heal on the next reindex (Removed + New), which drops any reading progress those rows had.
 
 ## Objective
 

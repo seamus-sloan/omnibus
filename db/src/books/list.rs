@@ -306,6 +306,56 @@ pub async fn list_indexed_rows_for_formats(
         .collect())
 }
 
+/// Diff input for files that were attached to a book in another library
+/// or format via `merged_uuids`: one [`IndexedRow`] per merged uuid
+/// under `library_path` whose backing `book_files` row (matched by
+/// `(book_id, format)`) still exists, carrying that row's stat.
+///
+/// Scoped by `merged_uuids.library_path` — the *file's* scanned root —
+/// rather than the target book's library, because the book an attached
+/// file hangs off can live in a different library (Dracula.m4b from the
+/// audiobook root attached to the ebook root's Dracula). The INNER JOIN
+/// is deliberate — a merged uuid whose attachment row vanished simply
+/// isn't returned, so the on-disk file classifies as New and
+/// re-attaches.
+pub async fn list_merged_rows_for_formats(
+    pool: &SqlitePool,
+    library_path: &str,
+    formats: &[&str],
+) -> Result<Vec<IndexedRow>, super::BooksError> {
+    if formats.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = std::iter::repeat_n("?", formats.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        r#"
+        SELECT mu.uuid       AS uuid,
+               bf.mtime_epoch AS mtime_epoch,
+               bf.size_bytes  AS size_bytes
+          FROM merged_uuids mu
+          JOIN book_files bf ON bf.book_id = mu.book_id AND bf.format = mu.format
+         WHERE mu.library_path = ?
+           AND mu.format IN ({placeholders})
+        "#
+    );
+    let mut q = sqlx::query(&sql).bind(library_path);
+    for fmt in formats {
+        q = q.bind(*fmt);
+    }
+    let rows = q.fetch_all(pool).await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| IndexedRow {
+            uuid: r.get("uuid"),
+            mtime_epoch: r.get("mtime_epoch"),
+            size_bytes: r.get("size_bytes"),
+        })
+        .collect())
+}
+
 /// Total number of books currently indexed under `library_path`. Thin
 /// wrapper around [`count_books_for_paths`] for single-library callers.
 pub async fn count_books(pool: &SqlitePool, library_path: &str) -> Result<i64, super::BooksError> {

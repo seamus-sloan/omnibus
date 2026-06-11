@@ -223,8 +223,14 @@ pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()
 
     // Scope to ebook formats so a shared ebook + audiobook library_path
     // does not classify audiobook rows here as Removed (#328 inverse).
-    let db_rows =
+    let mut db_rows =
         books::list_indexed_rows_for_formats(pool, library_path, ebook::EBOOK_FORMATS).await?;
+    // Files attached to a book elsewhere (auto-attach or manual merge)
+    // have no books.uuid of their own; their merged_uuids entries stand
+    // in here so they classify Unchanged/Changed instead of New.
+    db_rows.extend(
+        books::list_merged_rows_for_formats(pool, library_path, ebook::EBOOK_FORMATS).await?,
+    );
     let library_root: PathBuf = PathBuf::from(library_path);
     let diff = diff_library(&stat.entries, &db_rows, &library_root);
 
@@ -280,9 +286,15 @@ pub async fn reindex_audiobooks(pool: &SqlitePool, library_path: &str) -> anyhow
     // so diff_library can be reused verbatim). Scope to audiobook formats so a
     // shared ebook + audiobook library_path does not classify EPUB rows here
     // as Removed (#328).
-    let db_rows =
+    let mut db_rows =
         books::list_indexed_rows_for_formats(pool, library_path, audiobook::AUDIOBOOK_FORMATS)
             .await?;
+    // Merged/attached audiobook files diff against their book_files stat
+    // via merged_uuids — same as the ebook path above.
+    db_rows.extend(
+        books::list_merged_rows_for_formats(pool, library_path, audiobook::AUDIOBOOK_FORMATS)
+            .await?,
+    );
     let library_root: PathBuf = PathBuf::from(library_path);
     let groups_as_stat: Vec<ebook::StatEntry> = groups
         .iter()
