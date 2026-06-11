@@ -7,7 +7,7 @@
 //! per-format `reading_sessions` / `listening_sessions` tables.
 
 use omnibus_shared::{ProgressFormat, ProgressRecord, ProgressUpdate, SessionReport};
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
 use crate::resolve_book_id_by_uuid;
 
@@ -135,18 +135,23 @@ pub async fn get_progress(
     }))
 }
 
-/// Append one session row to the per-format table. Returns `Ok(true)` when
-/// a row was inserted and `Ok(false)` when the report was skipped because
-/// the `book_uuid` is unknown (a session that outlived the book it referred
-/// to is best-effort telemetry, not an integrity failure). The handler
-/// surfaces the inserted count to the client so it can tell which queued
-/// reports actually persisted.
-pub async fn record_session(
-    pool: &SqlitePool,
+/// Append one session row inside an existing transaction. Returns `Ok(true)`
+/// when a row was inserted and `Ok(false)` when the report was skipped
+/// because the `book_uuid` is unknown (best-effort telemetry — a session
+/// that outlived its book is not an integrity failure).
+///
+/// The caller is responsible for committing or rolling back the transaction.
+/// Use this variant when inserting a batch so the entire batch is atomic.
+pub async fn record_session_tx(
+    tx: &mut Transaction<'_, Sqlite>,
     user_id: i64,
     report: &SessionReport,
 ) -> Result<bool, ProgressError> {
-    let Some(book_id) = resolve_book_id_by_uuid(pool, &report.book_uuid).await? else {
+    let book_id: Option<i64> = sqlx::query_scalar("SELECT id FROM books WHERE uuid = ?")
+        .bind(&report.book_uuid)
+        .fetch_optional(&mut **tx)
+        .await?;
+    let Some(book_id) = book_id else {
         return Ok(false);
     };
     match report.format {
@@ -162,7 +167,7 @@ pub async fn record_session(
             .bind(report.ended_at)
             .bind(report.progress_units)
             .bind(report.device_id)
-            .execute(pool)
+            .execute(&mut **tx)
             .await?;
         }
         ProgressFormat::Audio => {
@@ -177,11 +182,29 @@ pub async fn record_session(
             .bind(report.ended_at)
             .bind(report.progress_units)
             .bind(report.device_id)
-            .execute(pool)
+            .execute(&mut **tx)
             .await?;
         }
     }
     Ok(true)
+}
+
+/// Append one session row to the per-format table. Returns `Ok(true)` when
+/// a row was inserted and `Ok(false)` when the report was skipped because
+/// the `book_uuid` is unknown. The handler surfaces the inserted count to
+/// the client so it can tell which queued reports actually persisted.
+///
+/// For batch inserts, prefer [`record_session_tx`] inside a caller-managed
+/// transaction so the entire batch rolls back atomically on error.
+pub async fn record_session(
+    pool: &SqlitePool,
+    user_id: i64,
+    report: &SessionReport,
+) -> Result<bool, ProgressError> {
+    let mut tx = pool.begin().await?;
+    let result = record_session_tx(&mut tx, user_id, report).await?;
+    tx.commit().await?;
+    Ok(result)
 }
 
 #[cfg(test)]
