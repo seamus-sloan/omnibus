@@ -28,6 +28,14 @@ fn resolve_resume_pos(server_pos: Option<f64>, local_pos: f64) -> f64 {
     server_pos.unwrap_or(local_pos)
 }
 
+/// Extract `file_id` from the current URL's query string (`?file_id=N`),
+/// targeting a specific `book_files` row for multi-file audiobooks.
+fn parse_file_id_from_url() -> Option<i64> {
+    let search = web_sys::window()?.location().search().ok()?;
+    let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
+    params.get("file_id")?.parse().ok()
+}
+
 /// App-root playback driver. Installs the `window.OmnibusAudio` shim and
 /// drives manifest-based playback off the app-wide [`crate::PlaybackState`].
 ///
@@ -120,9 +128,14 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
         // ready immediately. HLS mode (flac / ac3 / …) → fall
         // back to the legacy /status poll until ready or failed.
         let uuid_for_fetch = uuid.clone();
+        // The active book's `file_id` (multi-file books) rides on the listen
+        // route's query string; read it here since the App-level driver no
+        // longer receives it as a param.
+        let fid = parse_file_id_from_url();
         spawn(async move {
             run_manifest_init(
                 uuid_for_fetch,
+                fid,
                 initial_position,
                 hls_ready,
                 playback_failed,
@@ -446,7 +459,8 @@ fn control_surface_js(rate_lit: &str, uuid_lit: &str) -> String {
     )
 }
 
-/// Fetch `/api/audiobooks/{uuid}/manifest` and either:
+/// Fetch `/api/audiobooks/{uuid}/manifest` (with optional `?file_id`)
+/// and either:
 /// * **Direct mode** — call `initDirect` with the parts list and flip
 ///   `hls_ready` true (instant playback for m4b/m4a/mp3/aac).
 /// * **HLS mode** — poll `/status` until `ready` (call `initHls` + flip
@@ -455,6 +469,7 @@ fn control_surface_js(rate_lit: &str, uuid_lit: &str) -> String {
 ///   transcode failure.
 async fn run_manifest_init(
     uuid_for_fetch: String,
+    file_id: Option<i64>,
     initial_position: f64,
     mut hls_ready: Signal<bool>,
     mut playback_failed: Signal<bool>,
@@ -475,7 +490,13 @@ async fn run_manifest_init(
     let resume_pos = resolve_resume_pos(server_pos, initial_position);
     let pos_lit = serde_json::to_string(&resume_pos).unwrap_or_else(|_| "0".into());
 
-    let manifest_url = format!("/api/audiobooks/{}/manifest", uuid_for_fetch);
+    let manifest_url = match file_id {
+        Some(fid) => format!(
+            "/api/audiobooks/{}/manifest?file_id={}",
+            uuid_for_fetch, fid
+        ),
+        None => format!("/api/audiobooks/{}/manifest", uuid_for_fetch),
+    };
     let manifest: Option<omnibus_shared::AudiobookManifest> =
         match gloo_net::http::Request::get(&manifest_url).send().await {
             Ok(resp) if resp.status() == 200 => resp.json().await.ok(),

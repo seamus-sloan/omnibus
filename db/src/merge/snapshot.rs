@@ -29,6 +29,11 @@ pub(super) struct SourceSnapshot {
     /// `book_files.format`s re-parented onto the target — undo moves
     /// exactly these back.
     pub moved_formats: Vec<String>,
+    /// `book_files.id`s re-parented onto the target — undo moves exactly
+    /// these rows back (format alone is ambiguous when same-format merges
+    /// are allowed).
+    #[serde(default)]
+    pub moved_file_ids: Vec<i64>,
     /// `moved_formats` minus the formats that were themselves
     /// attachments (present in the source's own `merged_uuids` rows).
     /// The source-uuid reindex guard is recorded per native format.
@@ -98,6 +103,11 @@ pub(super) async fn build_snapshot(
 
     let moved_formats: Vec<String> =
         sqlx::query_scalar("SELECT format FROM book_files WHERE book_id = ? ORDER BY format")
+            .bind(book_id)
+            .fetch_all(&mut **tx)
+            .await?;
+    let moved_file_ids: Vec<i64> =
+        sqlx::query_scalar("SELECT id FROM book_files WHERE book_id = ? ORDER BY id")
             .bind(book_id)
             .fetch_all(&mut **tx)
             .await?;
@@ -173,6 +183,7 @@ pub(super) async fn build_snapshot(
         title_norm,
         author_norm,
         moved_formats,
+        moved_file_ids,
         native_formats,
         authors,
         series,

@@ -38,10 +38,10 @@ pub mod worker;
 // and mirrors how `db.rs` looked before the extraction.
 pub use author_photos_data::*;
 pub use books::{
-    book_file_path, collect_paths, count_books, count_books_for_paths, count_search_books,
-    get_book, get_book_by_uuid, library_from_db, library_from_db_combined,
-    library_from_db_with_total, library_from_db_with_total_combined, list_books,
-    list_books_for_paths, list_indexed_rows, list_indexed_rows_for_formats,
+    book_file_path, book_file_path_by_id, collect_paths, count_books, count_books_for_paths,
+    count_search_books, get_book, get_book_by_uuid, get_book_files, library_from_db,
+    library_from_db_combined, library_from_db_with_total, library_from_db_with_total_combined,
+    list_books, list_books_for_paths, list_indexed_rows, list_indexed_rows_for_formats,
     list_merged_rows_for_formats, resolve_book_id_by_uuid, search_books, search_books_with_total,
     BooksError, IndexedRow, MAX_BOOKS_RETURNED,
 };

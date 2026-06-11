@@ -180,28 +180,52 @@ pub struct ResolvedAudiobook {
 }
 
 /// Resolve a book `uuid` to the ids and library path needed by the HLS
-/// handlers. Returns `None` when the uuid is unknown or the book has no
-/// audiobook format (`M4B` / `M4A` / `MP3`) `book_files` row.
+/// handlers. When `file_id` is `Some`, resolve that specific `book_files`
+/// row (verifying it belongs to the given uuid and is an audio format).
+/// When `None`, returns the first audio file by ordinal. Returns `None`
+/// when the uuid is unknown or no matching audio file exists.
 pub async fn resolve_audiobook(
     pool: &SqlitePool,
     uuid: &str,
 ) -> Result<Option<ResolvedAudiobook>, HlsError> {
-    // COALESCE: an audiobook attached to a book in another library keeps
-    // its own root on the `book_files` row (migration 0016) — parts'
-    // relative filenames resolve against the *audio* library, not the
-    // book's.
-    let row = sqlx::query_as::<_, (i64, i64, String)>(
-        "SELECT b.id, bf.id, COALESCE(bf.library_path, l.path) \
-         FROM books b \
-         JOIN book_files bf ON bf.book_id = b.id \
-         JOIN libraries l ON l.id = b.library_id \
-         WHERE b.uuid = ? \
-           AND bf.format IN ('M4B', 'M4A', 'MP3') \
-         LIMIT 1",
-    )
-    .bind(uuid)
-    .fetch_optional(pool)
-    .await?;
+    resolve_audiobook_file(pool, uuid, None).await
+}
+
+/// Inner resolver that optionally targets a specific `book_files.id`.
+pub async fn resolve_audiobook_file(
+    pool: &SqlitePool,
+    uuid: &str,
+    file_id: Option<i64>,
+) -> Result<Option<ResolvedAudiobook>, HlsError> {
+    let row = if let Some(fid) = file_id {
+        sqlx::query_as::<_, (i64, i64, String)>(
+            "SELECT b.id, bf.id, COALESCE(bf.library_path, l.path) \
+             FROM books b \
+             JOIN book_files bf ON bf.book_id = b.id \
+             JOIN libraries l ON l.id = b.library_id \
+             WHERE b.uuid = ? \
+               AND bf.id = ? \
+               AND bf.format IN ('M4B', 'M4A', 'MP3')",
+        )
+        .bind(uuid)
+        .bind(fid)
+        .fetch_optional(pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, (i64, i64, String)>(
+            "SELECT b.id, bf.id, COALESCE(bf.library_path, l.path) \
+             FROM books b \
+             JOIN book_files bf ON bf.book_id = b.id \
+             JOIN libraries l ON l.id = b.library_id \
+             WHERE b.uuid = ? \
+               AND bf.format IN ('M4B', 'M4A', 'MP3') \
+             ORDER BY bf.ordinal \
+             LIMIT 1",
+        )
+        .bind(uuid)
+        .fetch_optional(pool)
+        .await?
+    };
 
     Ok(
         row.map(|(book_id, book_file_id, library_path)| ResolvedAudiobook {

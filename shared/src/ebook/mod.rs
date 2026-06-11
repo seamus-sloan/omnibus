@@ -11,5 +11,5 @@ mod overrides;
 #[cfg(test)]
 mod tests;
 
-pub use metadata::{Contributor, EbookMetadata, Identifier};
+pub use metadata::{BookFileInfo, Contributor, EbookMetadata, Identifier};
 pub use overrides::MetadataOverrides;

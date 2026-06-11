@@ -94,4 +94,22 @@ pub struct EbookMetadata {
     /// offer a revert action.
     #[serde(default)]
     pub has_override: bool,
+
+    /// Per-file detail for books with multiple files of the same format
+    /// (e.g. five merged M4B parts, or two EPUB editions). Empty for
+    /// single-file-per-format books — the `formats` vec is sufficient.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub book_files: Vec<BookFileInfo>,
+}
+
+/// One `book_files` row — a single physical file on disk. Exposed to the
+/// frontend so the format switcher can offer a file picker when N > 1.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BookFileInfo {
+    pub id: i64,
+    pub format: String,
+    pub filename: String,
+    pub ordinal: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }

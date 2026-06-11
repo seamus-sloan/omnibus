@@ -1,18 +1,24 @@
 //! Per-format CTA rows on the book detail page. Renders one row per format
 //! the book has, sorted alphabetically, with per-format actions wired
-//! underneath. EPUB Read routes into the immersive reader on web (mobile
-//! disabled, no JS engine); Listen and Send-to-Kindle ship later and stay
-//! disabled. The rows are the UI contract for the books / book_files split.
+//! underneath. When multiple files of the same format exist (after merge),
+//! renders sub-rows with a file picker so the user can choose which file
+//! to play or read.
 
 use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]
 use dioxus_router::Link;
 
+use omnibus_shared::BookFileInfo;
+
 #[cfg(not(feature = "mobile"))]
 use crate::Route;
 
 #[component]
-pub fn FormatSwitcher(formats: Vec<String>, uuid: String) -> Element {
+pub fn FormatSwitcher(
+    formats: Vec<String>,
+    uuid: String,
+    #[props(default)] book_files: Vec<BookFileInfo>,
+) -> Element {
     let rows = prepare_rows(&formats);
     if rows.is_empty() {
         return rsx! {};
@@ -25,7 +31,25 @@ pub fn FormatSwitcher(formats: Vec<String>, uuid: String) -> Element {
             aria_label: "Available formats",
             "data-testid": "format-switcher",
             for row in rows {
-                FormatRow { key: "{row.label()}", kind: row, uuid: uuid.clone() }
+                {
+                    let files_for_format: Vec<&BookFileInfo> = book_files.iter()
+                        .filter(|f| FormatKind::from_raw(&f.format) == row)
+                        .collect();
+                    if files_for_format.len() > 1 {
+                        rsx! {
+                            MultiFileRow {
+                                key: "{row.label()}",
+                                kind: row,
+                                uuid: uuid.clone(),
+                                files: files_for_format.into_iter().cloned().collect(),
+                            }
+                        }
+                    } else {
+                        rsx! {
+                            FormatRow { key: "{row.label()}", kind: row, uuid: uuid.clone() }
+                        }
+                    }
+                }
             }
         }
     }
@@ -109,6 +133,103 @@ fn FormatRow(
                     FormatKind::Other(_) => rsx! {
                         span { class: "format-actions-empty", "No actions yet" }
                     },
+                }
+            }
+        }
+    }
+}
+
+/// Expandable row for formats with multiple files (after merge). Shows the
+/// format badge with a file count, and sub-rows for each file.
+#[component]
+fn MultiFileRow(
+    kind: FormatKind,
+    #[cfg_attr(feature = "mobile", allow(unused_variables))] uuid: String,
+    files: Vec<BookFileInfo>,
+) -> Element {
+    let label = kind.label();
+    let testid = format!("format-row-{}", label.to_ascii_lowercase());
+    let count = files.len();
+
+    rsx! {
+        div {
+            class: "format-row format-row-multi",
+            "data-format": "{label}",
+            "data-testid": "{testid}",
+            span { class: "format-badge", "data-testid": "format-badge",
+                "{label} ({count} files)"
+            }
+        }
+        for file in &files {
+            {
+                let file_label = file.label.clone()
+                    .unwrap_or_else(|| format!("Part {}", file.ordinal + 1));
+                let file_testid = format!("format-file-{}", file.id);
+                rsx! {
+                    div {
+                        class: "format-row format-subrow",
+                        "data-testid": "{file_testid}",
+                        span { class: "format-sublabel", "{file_label}" }
+                        div { class: "format-actions",
+                            match kind {
+                                FormatKind::Epub => rsx! {
+                                    {
+                                        #[cfg(not(feature = "mobile"))]
+                                        let read_action = {
+                                            let href = format!("/read/{uuid}?file_id={}", file.id);
+                                            rsx! {
+                                                Link {
+                                                    to: "{href}",
+                                                    class: "btn",
+                                                    "data-testid": "action-read",
+                                                    "Read"
+                                                }
+                                            }
+                                        };
+                                        #[cfg(feature = "mobile")]
+                                        let read_action = rsx! {
+                                            button {
+                                                class: "btn",
+                                                disabled: true,
+                                                "data-testid": "action-read",
+                                                "Read"
+                                            }
+                                        };
+                                        read_action
+                                    }
+                                },
+                                FormatKind::M4b | FormatKind::Mp3 => rsx! {
+                                    {
+                                        #[cfg(not(feature = "mobile"))]
+                                        let listen_action = {
+                                            let href = format!("/listen/{uuid}?file_id={}", file.id);
+                                            rsx! {
+                                                Link {
+                                                    to: "{href}",
+                                                    class: "btn",
+                                                    "data-testid": "action-listen",
+                                                    "Listen"
+                                                }
+                                            }
+                                        };
+                                        #[cfg(feature = "mobile")]
+                                        let listen_action = rsx! {
+                                            button {
+                                                class: "btn",
+                                                disabled: true,
+                                                "data-testid": "action-listen",
+                                                "Listen"
+                                            }
+                                        };
+                                        listen_action
+                                    }
+                                },
+                                FormatKind::Other(_) => rsx! {
+                                    span { class: "format-actions-empty", "No actions yet" }
+                                },
+                            }
+                        }
+                    }
                 }
             }
         }

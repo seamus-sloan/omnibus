@@ -56,6 +56,15 @@ fn reader_call(method: &str, arg_js: &str) {
     let _ = dioxus::document::eval(&js);
 }
 
+/// Extract `file_id` from the current URL's query string (`?file_id=N`),
+/// targeting a specific `book_files` row for multi-file books.
+#[cfg(feature = "web")]
+fn parse_file_id_from_url() -> Option<i64> {
+    let search = web_sys::window()?.location().search().ok()?;
+    let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
+    params.get("file_id")?.parse().ok()
+}
+
 /// Full-screen EPUB reader page (web-feature interop, all-target chrome).
 #[component]
 pub fn BookReadPage(uuid: String) -> Element {
@@ -169,8 +178,11 @@ pub fn BookReadPage(uuid: String) -> Element {
             let local_saved = crate::reader_progress::load(&uuid);
             let size = font_size();
             let theme_name = theme.read().as_attr();
-            let url_lit = serde_json::to_string(&format!("/api/ebooks/{uuid}/file"))
-                .unwrap_or_else(|_| "\"\"".into());
+            let file_url = match parse_file_id_from_url() {
+                Some(fid) => format!("/api/ebooks/{uuid}/file?file_id={fid}"),
+                None => format!("/api/ebooks/{uuid}/file"),
+            };
+            let url_lit = serde_json::to_string(&file_url).unwrap_or_else(|_| "\"\"".into());
             let theme_lit = serde_json::to_string(theme_name).unwrap_or_else(|_| "\"dark\"".into());
             let font_family_lit =
                 serde_json::to_string(typeface().to_css()).unwrap_or_else(|_| "null".into());

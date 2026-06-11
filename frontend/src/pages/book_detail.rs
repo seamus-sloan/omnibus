@@ -640,7 +640,11 @@ fn BdRailSection(
                 }
                 div { class: "divider" }
                 div { class: "label bd-rail-head", "Formats" }
-                FormatSwitcher { formats: b.formats.clone(), uuid: uuid.clone() }
+                FormatSwitcher {
+                    formats: b.formats.clone(),
+                    uuid: uuid.clone(),
+                    book_files: b.book_files.clone(),
+                }
                 Link {
                     to: Route::MetadataEdit { uuid: uuid.clone() },
                     class: "btn ghost sm bd-rail-edit",
