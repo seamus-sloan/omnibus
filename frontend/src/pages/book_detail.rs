@@ -464,9 +464,18 @@ fn BdTitleCol(
                     for (i, creator) in b.creators.iter().enumerate() {
                         if i > 0 { ", " }
                         if let Some(author_id) = creator.id {
-                            Link { to: Route::AuthorDetail { id: author_id }, class: "bd-author-link", "{creator.name}" }
+                            Link {
+                                key: "{i}-{creator.name}",
+                                to: Route::AuthorDetail { id: author_id },
+                                class: "bd-author-link",
+                                "{creator.name}"
+                            }
                         } else {
-                            span { class: "bd-author-link", "{creator.name}" }
+                            span {
+                                key: "{i}-{creator.name}",
+                                class: "bd-author-link",
+                                "{creator.name}"
+                            }
                         }
                     }
                 }
