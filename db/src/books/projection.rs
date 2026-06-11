@@ -9,6 +9,7 @@ use sqlx::{Row, SqlitePool};
 use omnibus_shared::{Contributor, EbookMetadata, Identifier};
 
 use crate::helpers::format_series_index;
+use crate::metadata_overrides::{apply_overrides, load_overrides_bulk};
 
 /// Hard server-side cap on the number of books any single list/search
 /// response returns. 50k is well above the client-side sort/filter
@@ -243,6 +244,29 @@ pub(crate) async fn backfill_creator_ids(
         for c in &mut b.creators {
             if c.id.is_none() {
                 c.id = name_to_id.get(&c.name.to_lowercase()).copied();
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Bulk-merge user-supplied `metadata_overrides` into every book in `books` in place.
+pub(crate) async fn merge_overrides_into_books(
+    pool: &SqlitePool,
+    books: &mut [EbookMetadata],
+) -> Result<(), sqlx::Error> {
+    let uuids: Vec<String> = books
+        .iter()
+        .filter_map(|b| b.unique_identifier.clone())
+        .collect();
+    let overrides_map = load_overrides_bulk(pool, &uuids).await?;
+    for book in books.iter_mut() {
+        // Snapshot uuid first so the overrides_map lookup is independent
+        // of the `&mut book` passed into apply_overrides.
+        let uuid_owned = book.unique_identifier.clone();
+        if let Some(uuid) = uuid_owned.as_deref() {
+            if let Some((ov, has_cover_ov)) = overrides_map.get(uuid) {
+                apply_overrides(book, uuid, ov, *has_cover_ov);
             }
         }
     }
