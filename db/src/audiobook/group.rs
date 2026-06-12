@@ -1,26 +1,8 @@
-//! Phase A.5 — group per-file [`AudiobookStatEntry`] rows into one
-//! [`AudiobookGroup`] per audiobook.
+//! Group per-file [`AudiobookStatEntry`] rows into one [`AudiobookGroup`].
 //!
-//! Real audiobook libraries take two shapes that group deterministically
-//! from filesystem layout alone:
-//!
-//! * `Author/Book.m4b` — single file = one book. Each `.m4b`/`.m4a`
-//!   container is "the whole book" and always becomes its own group,
-//!   even if other files share its parent directory.
-//! * `Author/Book/chapter01.mp3, chapter02.mp3, …` — folder of
-//!   per-chapter mp3s = one book. Group key is the parent directory's
-//!   relative path; parts are ordered by ID3 `track` in Phase B
-//!   (filename here is just the tiebreaker for the stable_uuid input).
-//!
-//! Multi-file m4b/m4a "parts" (e.g. `Book Pt1.m4b` + `Book Pt2.m4b`)
-//! are deliberately NOT merged at this layer: filename-based stem
-//! matching was fragile and silently merged distinct files when stems
-//! collided (e.g. `(3 of 5)` and `(5 of 5)` strip to the same base).
-//! Users combine parts deliberately through the manual merge dialog.
-//!
-//! Mixed-format folders fall out naturally: every `.m4b`/`.m4a` becomes
-//! its own group, then any `.mp3` files in the same directory form a
-//! sibling group.
+//! A single `.m4b`/`.m4a` file is its own book; a folder of per-chapter
+//! `.mp3` files becomes one book per directory. Multi-file parts are
+//! combined deliberately via the manual merge dialog, not by filename.
 
 use super::stat::AudiobookStatEntry;
 use crate::helpers::stable_uuid;
