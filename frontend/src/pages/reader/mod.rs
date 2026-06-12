@@ -464,7 +464,6 @@ pub fn BookReadPage(uuid: String) -> Element {
                     sel_rect_x: sel.rect.x,
                     sel_rect_y: sel.rect.y,
                     sel_rect_width: sel.rect.width,
-                    sel_text: sel.text.clone(),
                     sel_cfi: sel.cfi_range.clone(),
                     on_dismiss: move |_| selection.set(None),
                     on_highlight: move |(cfi, color): (String, HighlightColor)| {

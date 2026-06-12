@@ -30,7 +30,6 @@ pub(crate) fn SelectionPopover(
     sel_rect_x: f64,
     sel_rect_y: f64,
     sel_rect_width: f64,
-    sel_text: String,
     sel_cfi: String,
     on_dismiss: EventHandler<MouseEvent>,
     on_highlight: EventHandler<(String, HighlightColor)>,

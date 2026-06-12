@@ -17,6 +17,7 @@ pub enum HighlightColor {
 }
 
 impl HighlightColor {
+    /// Lowercase storage/wire token for this color (matches migration 0017).
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Amber => "amber",
@@ -27,6 +28,7 @@ impl HighlightColor {
         }
     }
 
+    /// Parse a lowercase token back into a color, `None` if unrecognized.
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "amber" => Some(Self::Amber),

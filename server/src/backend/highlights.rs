@@ -25,9 +25,9 @@ pub(super) async fn post_highlight(
         Err(HighlightError::BookNotFound) => {
             (axum::http::StatusCode::NOT_FOUND, "book not found").into_response()
         }
-        Err(HighlightError::NotFound) => {
-            (axum::http::StatusCode::NOT_FOUND, "highlight not found").into_response()
-        }
+        // NotFound on create means the just-inserted row couldn't be re-read —
+        // a server invariant break, not a missing client resource. Surface 500.
+        Err(e @ HighlightError::NotFound) => internal("create_highlight", e),
         Err(HighlightError::Sqlx(e)) => internal("create_highlight", e),
     }
 }
