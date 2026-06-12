@@ -51,11 +51,12 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
-    /// Default policy tuned for the auth endpoints: `MAX_REQUESTS` per
-    /// `WINDOW_SECS` per IP (10 / 60s). Mount on the auth sub-router via
-    /// `axum::middleware::from_fn_with_state(limiter, rate_limit_paths)`
-    /// with a prefix allow-list so authenticated reads like
-    /// `/api/auth/me` are exempt — see [`rate_limit_paths`].
+    /// Default policy tuned for the auth endpoints: 10 requests per 60 s per IP.
+    ///
+    /// Mount on the auth sub-router via
+    /// `from_fn_with_state((limiter, prefixes), rate_limit_paths)` with a
+    /// prefix allow-list so authenticated reads like `/api/auth/me` are
+    /// exempt — see [`rate_limit_paths`] for the expected `prefixes` shape.
     pub fn new() -> Self {
         Self::with_policy(Duration::from_secs(WINDOW_SECS), MAX_REQUESTS)
     }
