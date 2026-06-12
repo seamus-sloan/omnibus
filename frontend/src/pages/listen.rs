@@ -88,11 +88,17 @@ pub fn BookListenPage(uuid: String) -> Element {
         use_effect(use_reactive!(|route_uuid| {
             let mut uuid_sig = playback.uuid;
             let mut loading_sig = playback.loading;
+            let mut book_sig = playback.book;
+            let mut error_sig = playback.error;
             if uuid_sig.peek().as_deref() != Some(route_uuid.as_str()) {
-                uuid_sig.set(Some(route_uuid.clone()));
-                // Mark loading so the brief pre-fetch window can't flash the
-                // previous book's player or a spurious "not found".
+                // Clear the previous book's app-global metadata before
+                // retargeting so a re-render can't show the old book (or its
+                // error) under the new URL until the App-level driver reloads.
+                // The driver also clears these defensively on the uuid swap.
+                book_sig.set(None);
+                error_sig.set(None);
                 loading_sig.set(true);
+                uuid_sig.set(Some(route_uuid.clone()));
             }
         }));
 

@@ -1,12 +1,8 @@
-//! Persistent mini-dock audiobook bar.
-//!
-//! Rendered inside the web [`crate::ScreenLayout`] so it appears on every
-//! main page while an audiobook is loaded, and is naturally absent on the
-//! immersive `/listen` and `/read` surfaces (which render without
-//! `ScreenLayout`). Reads the app-wide [`crate::PlaybackState`]; the backing
-//! `<audio>` element and signals live at the App root so playback continues
-//! across navigation. Transport reuses the same `helpers::audio_call` seam as
-//! the full player — there is no second JS poke path.
+//! Persistent mini-dock audiobook bar, rendered by the web
+//! [`crate::ScreenLayout`] so it shows on every main page and is absent on the
+//! immersive `/listen` + `/read` routes. Reads the app-wide
+//! [`crate::PlaybackState`] (the `<audio>` element + signals live at the App
+//! root) and drives transport through the shared `helpers::audio_call` seam.
 
 #![cfg(not(feature = "mobile"))]
 
@@ -43,7 +39,12 @@ pub fn MiniDock() -> Element {
         return rsx! { div { class: "mini-dock-host" } };
     };
 
-    let uuid = playback.uuid.read().clone().unwrap_or_default();
+    // Require a real uuid before rendering the bar so the Expand links never
+    // point at an empty `/listen/` route (e.g. mid-dismiss, when `book` is set
+    // but `uuid` has momentarily cleared).
+    let Some(uuid) = playback.uuid.read().clone() else {
+        return rsx! { div { class: "mini-dock-host" } };
+    };
 
     let elapsed_sig = playback.elapsed;
     let duration_sig = playback.duration;
@@ -83,11 +84,15 @@ pub fn MiniDock() -> Element {
         let mut book_sig = playback.book;
         let mut playing_set = playback.playing;
         move |_: MouseEvent| {
+            // Fully stop the shared element (pause + clear src + reset mode) so a
+            // media-key resume can't restart a dismissed book with no visible
+            // control. Clear `book` before `uuid` so the dock hides immediately
+            // and PlaybackState stays coherent for any other consumer.
             #[cfg(feature = "web")]
-            super::helpers::audio_call("pause", "");
-            uuid_sig.set(None);
+            super::helpers::audio_call("stop", "");
             book_sig.set(None);
             playing_set.set(false);
+            uuid_sig.set(None);
         }
     };
 

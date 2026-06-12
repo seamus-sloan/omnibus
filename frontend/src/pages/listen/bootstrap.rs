@@ -51,24 +51,29 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
         let mut book = playback.book;
         let mut loading = playback.loading;
         let mut error = playback.error;
-        let chapters = playback.chapters;
+        let mut chapters = playback.chapters;
 
         // The only reactive dependency — re-run when the active book changes.
         let Some(uuid) = playback.uuid.read().clone() else {
-            // Dismissed via the dock × button. The handler already paused
+            // Dismissed via the dock × button. The handler already stopped
             // the element; clear the book so the dock hides everywhere.
             book.set(None);
             return;
         };
 
-        // Signals outlive the page, so a swap must reset stale per-book
-        // state before installing fresh callbacks — otherwise the previous
-        // book's `hls_ready` / position / chapters leak across the boundary.
+        // Signals outlive the page, so a swap must reset stale per-book state
+        // before installing fresh callbacks — otherwise the previous book's
+        // metadata/position/chapters leak under the new uuid until the async
+        // fetches land. Clear the cross-book fields (book/error/chapters)
+        // synchronously here, not just the playback scalars.
         duration.set(0.0_f64);
         elapsed.set(0.0_f64);
         playing.set(false);
         hls_ready.set(false);
         playback_failed.set(false);
+        book.set(None);
+        error.set(None);
+        chapters.set(Vec::new());
         rate.set(crate::audiobook_progress::load_rate(&uuid));
 
         let initial_position = crate::audiobook_progress::load(&uuid).unwrap_or(0.0);
@@ -85,12 +90,22 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
         inject_hls_script();
         install_control_surface(&uuid, initial_rate);
 
+        // Stale-task guard: the user can switch books while these async tasks
+        // are in flight. Each task captures the uuid it was spawned for and
+        // checks the live `playback.uuid` before writing any shared signal, so
+        // a stale fetch / status-poll can't clobber the new book's state.
+        let guard = playback.uuid;
+
         // Fetch the book metadata into the shared context so both the full
         // player and the mini-dock can render cover + title.
         let uuid_for_book = uuid.clone();
         spawn(async move {
             loading.set(true);
-            match data::get_ebook("", &uuid_for_book).await {
+            let result = data::get_ebook("", &uuid_for_book).await;
+            if guard.peek().as_deref() != Some(uuid_for_book.as_str()) {
+                return; // a newer book was selected while we awaited
+            }
+            match result {
                 Ok(b) => {
                     book.set(b);
                     error.set(None);
@@ -112,6 +127,7 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
                 hls_ready,
                 playback_failed,
                 chapters,
+                guard,
             )
             .await;
         });
@@ -314,6 +330,15 @@ fn control_surface_js(rate_lit: &str, uuid_lit: &str) -> String {
       toggle:  function(){{ if (el.paused) {{ this.play(); }} else {{ this.pause(); }} }},
       setRate: function(r){{ try {{ el.playbackRate = r; }} catch(_) {{}} }},
 
+      // Hard stop for the dock's dismiss: pause, drop the source so a
+      // media-key resume can't restart it, and reset direct-mode state.
+      stop:    function(){{
+        try {{ el.pause(); }} catch(_) {{}}
+        try {{ el.removeAttribute('src'); el.load(); }} catch(_) {{}}
+        this._mode = null; this._parts = null; this._index = 0;
+        this._cumOffsets = []; this._totalDuration = 0;
+      }},
+
       // Seek to an absolute (cross-part) second offset. For direct mode
       // this finds the target part by cumulative duration and switches
       // `el.src` if it differs from the current part, preserving the
@@ -434,7 +459,12 @@ async fn run_manifest_init(
     mut hls_ready: Signal<bool>,
     mut playback_failed: Signal<bool>,
     mut chapters_sig: Signal<Vec<omnibus_shared::ChapterInfo>>,
+    uuid_guard: Signal<Option<String>>,
 ) {
+    // True only while `uuid_for_fetch` is still the active book. Checked before
+    // every shared-signal write so a stale task (user switched books mid-fetch
+    // or mid-`/status`-poll) can't clobber the new book's state.
+    let is_current = || uuid_guard.peek().as_deref() == Some(uuid_for_fetch.as_str());
     // Reconcile resume position with the server upfront so
     // both init paths see the same starting point.
     let server_pos = data::get_progress("", &uuid_for_fetch, omnibus_shared::ProgressFormat::Audio)
@@ -451,6 +481,13 @@ async fn run_manifest_init(
             Ok(resp) if resp.status() == 200 => resp.json().await.ok(),
             _ => None,
         };
+
+    // A newer book may have been selected while the manifest was in flight.
+    // The Direct + None arms below are synchronous, so this single guard covers
+    // them; the HLS arm re-checks each poll iteration.
+    if !is_current() {
+        return;
+    }
 
     match manifest {
         Some(omnibus_shared::AudiobookManifest::Direct {
@@ -472,6 +509,11 @@ async fn run_manifest_init(
             let playlist_lit =
                 serde_json::to_string(&playlist_url).unwrap_or_else(|_| "\"\"".into());
             loop {
+                // Stop polling the moment the user switches away from this book,
+                // so a stale `/status` loop can't flip the new book's signals.
+                if !is_current() {
+                    return;
+                }
                 match gloo_net::http::Request::get(&format!(
                     "/api/audiobooks/{}/status",
                     uuid_for_fetch
