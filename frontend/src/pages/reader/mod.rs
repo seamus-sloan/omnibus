@@ -481,10 +481,23 @@ pub fn BookReadPage(uuid: String) -> Element {
                             epub_cfi_range: cfi.clone(),
                             color,
                         };
+                        #[cfg(feature = "web")]
+                        let cfi_rollback = cfi.clone();
                         selection.set(None);
                         spawn(async move {
                             if let Ok(h) = data::create_highlight("", create).await {
                                 highlights.write().push(h);
+                            } else {
+                                // The annotation was added optimistically above;
+                                // if the write didn't land, roll it back so a
+                                // failed create doesn't leave a highlight that
+                                // vanishes on the next reload.
+                                #[cfg(feature = "web")]
+                                {
+                                    let cfi_lit = serde_json::to_string(&cfi_rollback)
+                                        .unwrap_or_else(|_| "\"\"".into());
+                                    reader_call("removeAnnotation", &cfi_lit);
+                                }
                             }
                         });
                     },
