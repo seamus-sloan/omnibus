@@ -9,19 +9,14 @@ use dioxus_router::Link;
 
 use crate::Route;
 
-/// Dirty-tracking memos forwarded to the save bar. Grouped because
-/// the list of edited field labels and their count are always derived
-/// from the same parent computation.
+/// Dirty-tracking memos forwarded to the save bar.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct DirtyState {
     pub(super) fields: Memo<Vec<&'static str>>,
     pub(super) count: Memo<usize>,
 }
 
-/// In-flight save status: whether a POST is on the wire, and the most
-/// recent error message if the last save failed. Grouped because the
-/// button label and the inline error text are both functions of the
-/// same lifecycle.
+/// In-flight save status: in-progress flag plus last error message.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct SaveStatus {
     pub(super) saving: Signal<bool>,

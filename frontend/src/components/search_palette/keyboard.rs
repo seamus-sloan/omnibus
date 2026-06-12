@@ -9,10 +9,7 @@ use super::model::{facet_query, FlatItem};
 use super::PaletteOpen;
 use crate::Route;
 
-/// Everything the palette's keydown handler needs to read or mutate.
-/// Bundled so [`make_keydown_handler`] doesn't take a long parameter
-/// list; the fields are all `Copy` (Dioxus signals + the navigator)
-/// so the struct is itself cheap to move into the returned closure.
+/// Inputs read or mutated by the palette's keydown handler.
 pub(super) struct KeyboardContext {
     pub(super) open: PaletteOpen,
     pub(super) selected: Signal<usize>,

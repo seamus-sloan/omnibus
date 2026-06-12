@@ -33,16 +33,7 @@ enum EditField {
     Authors,
 }
 
-/// Per-page context threaded through `BookTable` → `EbookRow` → cells:
-/// the configured server origin (empty on web, prefixed on mobile),
-/// whether the current viewer can inline-edit, and the canonical
-/// author/tag suggestion pools used by the chip editors. Wrapped in
-/// a struct so the table and row signatures don't grow a long
-/// passthrough prop list as more per-page context is added.
-///
-/// The `ReadSignal` handles stay as fields so the suggestion pools
-/// are still forwarded by reference (no clones at intermediate
-/// layers) — the struct itself only carries the handle.
+/// Per-page context threaded through `BookTable` → `EbookRow` → cells.
 #[derive(Clone, PartialEq)]
 pub(super) struct BookTableContext {
     pub(super) server_url: String,
