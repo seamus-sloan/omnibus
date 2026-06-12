@@ -15,10 +15,17 @@ listening.
 
 ## Status
 
-**PR 1 — Visual redesign + speed panel:** in progress. Migrates inline styles
-to CSS classes, adds accent-derived gradient backdrop, cover ring decoration,
-chapter-skip button placeholders, toolbar row, and a frosted-glass speed panel
-with preset grid + fine-tune slider. Per-book playback speed storage.
+- **PR 1 — Visual redesign + speed panel:** shipped.
+- **PR 2 — Chapter infrastructure:** shipped.
+- **PR 3 — Chapter UI:** shipped.
+- **PR 6 — Mini-dock player:** shipped. Playback state and the `<audio>`
+  element moved to the App root (`PlaybackState` context + App-level driver),
+  so a persistent bottom dock keeps playing across pages. The dock renders in
+  the web `ScreenLayout` (absent on the immersive `/listen` + `/read` routes),
+  with cover/title/chapter/progress, ±30s + play/pause, speed, Expand, and a
+  dismiss button.
+- **PR 4 — Bookmarks** and **PR 5 — Sleep timer:** not yet started (the
+  toolbar buttons + panels are inert visual shells).
 
 ## PR breakdown
 

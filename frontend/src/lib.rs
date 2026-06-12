@@ -80,6 +80,12 @@ fn ScreenLayout(children: Element) -> Element {
         div { class: "app-shell",
             Nav {}
             main { {children} }
+            // Persistent mini-dock. Lives in `ScreenLayout` (not the
+            // immersive `/listen` / `/read` routes, which render bare) so it
+            // shows on every main page while an audiobook is loaded and is
+            // absent on the full player. Renders an empty host until a book
+            // is playing — see `pages::MiniDock`.
+            pages::MiniDock {}
         }
     }
 }
@@ -164,12 +170,23 @@ pub fn App() -> Element {
     #[cfg(not(feature = "mobile"))]
     {
         use_context_provider(|| CurrentUser(Signal::new(None)));
+        // App-wide audiobook playback. Provided unconditionally on
+        // not(mobile) so SSR markup matches the WASM client; the web-only
+        // driver below reacts to its `uuid` signal.
+        use_context_provider(PlaybackState::new);
     }
 
     // Single boot-time `/me` fetch (replaces the per-component effects in
     // user_menu / landing / author). Also subscribes to `web_auth_state`
     // so a fresh login refills the cache and a 401 clears it without
     // requiring a hard reload.
+    // App-root audiobook playback driver: installs the `window.OmnibusAudio`
+    // shim and reacts to the playback context's `uuid` signal. Mounted here
+    // (not in the route) so the `<audio>` element and signals outlive
+    // navigation, enabling the persistent mini-dock.
+    #[cfg(feature = "web")]
+    pages::install_audio_bootstrap(use_playback());
+
     #[cfg(feature = "web")]
     {
         let mut slot = use_context::<CurrentUser>().0;
@@ -213,10 +230,21 @@ pub fn App() -> Element {
     }
 
     components::atrium::init_theme();
+
+    // The single `<audio>` element, mounted at the App root (sibling of the
+    // Router) so it never unmounts on navigation — the persistence anchor for
+    // cross-page playback. Rendered on not(mobile) for SSR/WASM hydration
+    // parity; empty on mobile.
+    #[cfg(not(feature = "mobile"))]
+    let audio_host = rsx! { pages::AudioElement {} };
+    #[cfg(feature = "mobile")]
+    let audio_host = rsx! {};
+
     rsx! {
         document::Title { "Omnibus" }
         document::Stylesheet { href: ATRIUM_CSS }
         components::atrium::AtriumRoot {
+            {audio_host}
             dioxus_router::Router::<Route> {}
         }
     }

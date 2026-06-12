@@ -23,7 +23,11 @@ pub use author::AuthorPage;
 pub use authors_index::AuthorsIndexPage;
 pub use book_detail::BookDetailPage;
 pub use landing::LandingPage;
+#[cfg(feature = "web")]
+pub(crate) use listen::install_audio_bootstrap;
 pub use listen::BookListenPage;
+#[cfg(not(feature = "mobile"))]
+pub(crate) use listen::{AudioElement, MiniDock};
 pub use metadata_edit::MetadataEditPage;
 pub use reader::BookReadPage;
 pub use search::SearchPage;

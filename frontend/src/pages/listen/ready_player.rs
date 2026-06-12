@@ -11,7 +11,6 @@ use omnibus_shared::{ChapterInfo, EbookMetadata};
 
 use super::bookmarks_drawer::BookmarksDrawer;
 use super::chapters_drawer::ChaptersDrawer;
-use super::controls::AudioElement;
 use super::overlays::{FailedOverlay, PreparingOverlay};
 use super::sleep_panel::SleepPanel;
 use super::speed_panel::SpeedPanel;
@@ -244,7 +243,6 @@ pub(super) fn ReadyPlayer(
             div { class: "lp-backdrop" }
 
             Nav {}
-            AudioElement {}
 
             if failed {
                 FailedOverlay {}
