@@ -1,31 +1,8 @@
 //! Reusable in-memory per-IP rate limiter and axum middleware.
 //!
-//! Self-hosted scope is small — a single process, ≤ a few dozen users. A
-//! Redis-backed limiter is overkill; a `Mutex<HashMap<IpAddr, Bucket>>` fits
-//! in < 60 lines and is easy to reason about. Swap for `tower_governor` if
-//! the scope ever grows.
-//!
-//! Policy: fixed-window counter, `max` requests per `window` per principal.
-//! The principal is the request's peer IP (via `ConnectInfo<SocketAddr>`),
-//! with an optional opt-in `X-Forwarded-For` fallback when
-//! `OMNIBUS_TRUST_FORWARDED_FOR=1`.
-//!
-//! Mount via `axum::middleware::from_fn_with_state(limiter, rate_limit_by_ip)`
-//! on whichever sub-router needs limiting. The middleware itself does **not**
-//! filter on path — restriction happens at the router level, so the same
-//! primitive serves `/api/auth/{login,register}`, `/api/search/*`, and any
-//! future route that wants the same treatment without copy-paste.
-//!
-//! Default policy (`RateLimiter::new`) is tuned for the auth endpoints:
-//! 10 requests / 60s / IP. Search uses a separate limiter built via
-//! [`RateLimiter::with_policy`] with a tighter budget (30 / 10s).
-//!
-//! The auth limiter is mounted via [`rate_limit_paths`] with a prefix
-//! allow-list of `/api/auth/{login,register,logout}` — `/api/auth/me` is
-//! deliberately exempt. `/me` is an authenticated read of the caller's
-//! own row and presents no brute-force surface, so sharing the 10/60s
-//! bucket with credential endpoints just throttled legitimate UI boots
-//! (and parallel Playwright workers from the loopback IP).
+//! Fixed-window counter keyed on the request's peer IP (optionally
+//! `X-Forwarded-For` via `OMNIBUS_TRUST_FORWARDED_FOR=1`). Mounted
+//! per-router in `server/src/main.rs`.
 
 use axum::{
     extract::{ConnectInfo, Request, State},
@@ -74,12 +51,23 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
-    /// Default policy: `MAX_REQUESTS` per `WINDOW_SECS`.
+    /// Default policy tuned for the auth endpoints: 10 requests per 60 s per IP.
+    ///
+    /// Mount on the auth sub-router via
+    /// `from_fn_with_state((limiter, prefixes), rate_limit_paths)` with a
+    /// prefix allow-list so authenticated reads like `/api/auth/me` are
+    /// exempt — see [`rate_limit_paths`] for the expected `prefixes` shape.
     pub fn new() -> Self {
         Self::with_policy(Duration::from_secs(WINDOW_SECS), MAX_REQUESTS)
     }
 
     /// Construct a limiter with an explicit `(window, max requests)` policy.
+    ///
+    /// Used by the search family with a tighter budget (30 / 10s). The
+    /// returned limiter is otherwise identical to [`RateLimiter::new`] —
+    /// the same `Arc` can be shared across REST and RPC routers (via
+    /// [`rate_limit_by_ip`] and [`rate_limit_paths`] respectively) so
+    /// both consume from one per-IP budget.
     pub fn with_policy(window: Duration, max: u32) -> Self {
         Self {
             inner: Mutex::new(HashMap::new()),
@@ -172,6 +160,14 @@ pub async fn rate_limit_by_ip(
 /// Bucket map is shared with whatever limiter is passed in. `main.rs` passes the
 /// *same* `Arc` here and to the REST `/api/search/*` layer so both search
 /// families share one per-IP budget.
+///
+/// The auth sub-router mounts this with a prefix allow-list of
+/// `/api/auth/login`, `/api/auth/register`, and `/api/auth/logout`.
+/// `/api/auth/me` is deliberately omitted from the allow-list: it is an
+/// authenticated read of the caller's own row and presents no brute-force
+/// surface, so sharing the auth bucket with credential endpoints would
+/// throttle legitimate UI boots (and parallel Playwright workers from the
+/// loopback IP) for no security gain.
 pub async fn rate_limit_paths(
     State((limiter, prefixes)): State<(Arc<RateLimiter>, Arc<Vec<&'static str>>)>,
     req: Request,
