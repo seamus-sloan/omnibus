@@ -18,6 +18,28 @@ enum Sort {
     BookCount,
 }
 
+/// Library-wide totals rendered in the header's subtitle. Grouped so the
+/// header doesn't grow a long `total_*` prop list.
+#[derive(Clone, PartialEq, Eq)]
+struct AuthorIndexCounts {
+    total_authors: usize,
+    total_books: usize,
+}
+
+/// Filter + sort + alphabet-strip state for the header. The strip's
+/// visibility, glyphs, and footnote totals all change together as the
+/// filtered set changes, so they ride the same struct.
+#[derive(Clone, PartialEq, Eq)]
+struct AuthorIndexFilter {
+    filter: String,
+    sort: Sort,
+    show_letters: bool,
+    alphabet: Vec<char>,
+    present_letters: std::collections::HashSet<char>,
+    letter_count: usize,
+    filtered_count: usize,
+}
+
 /// Authors index page — browse all authors in the library.
 #[component]
 pub fn AuthorsIndexPage() -> Element {
@@ -120,18 +142,25 @@ pub fn AuthorsIndexPage() -> Element {
 
     let any_in_library = !all.is_empty();
 
+    let counts = AuthorIndexCounts {
+        total_authors,
+        total_books,
+    };
+    let filter_state = AuthorIndexFilter {
+        filter: filter(),
+        sort: sort(),
+        show_letters,
+        alphabet: alphabet.clone(),
+        present_letters: present_letters.clone(),
+        letter_count: letters.len(),
+        filtered_count: filtered.len(),
+    };
+
     rsx! {
         div { class: "idx-page",
             AuthorsIndexHeader {
-                total_authors,
-                total_books,
-                filter: filter(),
-                sort: sort(),
-                show_letters,
-                alphabet: alphabet.clone(),
-                present_letters: present_letters.clone(),
-                letter_count: letters.len(),
-                filtered_count: filtered.len(),
+                counts,
+                filter_state,
                 on_filter: move |v| filter.set(v),
                 on_sort: move |s| sort.set(s),
             }
@@ -190,18 +219,24 @@ fn authors_index_body<'a>(
 /// Header: breadcrumb, hero, filter/sort toolbar, optional A–Z letter strip.
 #[component]
 fn AuthorsIndexHeader(
-    total_authors: usize,
-    total_books: usize,
-    filter: String,
-    sort: Sort,
-    show_letters: bool,
-    alphabet: Vec<char>,
-    present_letters: std::collections::HashSet<char>,
-    letter_count: usize,
-    filtered_count: usize,
+    counts: AuthorIndexCounts,
+    filter_state: AuthorIndexFilter,
     on_filter: EventHandler<String>,
     on_sort: EventHandler<Sort>,
 ) -> Element {
+    let AuthorIndexCounts {
+        total_authors,
+        total_books,
+    } = counts;
+    let AuthorIndexFilter {
+        filter,
+        sort,
+        show_letters,
+        alphabet,
+        present_letters,
+        letter_count,
+        filtered_count,
+    } = filter_state;
     rsx! {
         div { class: "idx-header",
             nav {
