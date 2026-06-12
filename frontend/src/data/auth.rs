@@ -7,6 +7,12 @@
 
 #[cfg(any(feature = "web", feature = "mobile"))]
 use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};
+// Server-only (no web) build still needs `UserSummary` for the SSR
+// `current_user` stub below. The mobile-build `current_user` stub uses the
+// import above; the wider `cfg` here keeps SSR self-sufficient without
+// dragging in the unused `LoginRequest` / `LoginResponse` / `RegisterRequest`.
+#[cfg(all(feature = "server", not(any(feature = "web", feature = "mobile"))))]
+use omnibus_shared::UserSummary;
 
 #[cfg(feature = "mobile")]
 use super::{client_kind, drain_error, http_client, token_store, with_bearer, DataError};
@@ -168,6 +174,18 @@ pub async fn current_user() -> Result<Option<UserSummary>, String> {
     let user = res.json::<UserSummary>().await.map_err(|e| e.to_string())?;
     super::web_auth_state::notify_authorized();
     Ok(Some(user))
+}
+
+/// Non-web stub for `current_user`. The real `/api/auth/me` call is
+/// web-only — under SSR (`feature = "server"` without `"web"`) there's no
+/// browser cookie jar to resolve, and the mobile build never renders the
+/// admin-only affordances driven off this signal. Returning `Ok(None)`
+/// lets pages declare the `use_signal` + `use_effect` pair unconditionally
+/// (so SSR and WASM hook counts match) without any admin surface leaking
+/// into the prerendered markup or appearing on mobile.
+#[cfg(all(any(feature = "server", feature = "mobile"), not(feature = "web")))]
+pub async fn current_user() -> Result<Option<UserSummary>, String> {
+    Ok(None)
 }
 
 #[cfg(feature = "web")]

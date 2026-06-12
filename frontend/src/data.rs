@@ -21,8 +21,10 @@ mod progress;
 mod series;
 mod tags;
 
-// auth exports only exist under web or mobile; under server-only the module is empty.
-#[cfg(any(feature = "web", feature = "mobile"))]
+// auth exports exist under web, mobile, and server-only (the last only
+// re-exports the SSR `current_user` stub so pages can call `data::current_user`
+// unconditionally without diverging hook order between SSR and WASM).
+#[cfg(any(feature = "web", feature = "mobile", feature = "server"))]
 pub use auth::*;
 pub use authors::*;
 pub use books::*;
