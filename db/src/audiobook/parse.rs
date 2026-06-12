@@ -150,11 +150,6 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
     // Per-part: (track_number_for_sort, filename, size_bytes, mtime_epoch, duration, metadata)
     struct PartWork {
         sort_track: u32,
-        /// Part number parsed from the filename stem (`Pt2` → 2);
-        /// `u32::MAX` when the stem carries no part designator. Breaks
-        /// ties when track tags are absent — multi-part m4bs rarely have
-        /// them, and a plain filename sort puts `Pt10` before `Pt2`.
-        part_no: u32,
         filename: String,
         size_bytes: i64,
         mtime_epoch: i64,
@@ -232,12 +227,8 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
             Err(_) => (AudiobookMetadata::default(), 0.0),
         };
 
-        let part_no = super::group::strip_part_suffix(part_stem(&stat_entry.filename))
-            .map(|(_, n)| n)
-            .unwrap_or(u32::MAX);
         parts_work.push(PartWork {
             sort_track: track_num,
-            part_no,
             filename: stat_entry.filename.clone(),
             size_bytes: stat_entry.size_bytes,
             mtime_epoch: stat_entry.mtime_epoch,
@@ -246,32 +237,21 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
         });
     }
 
-    // Sort by (track_number, part_number, filename) for stable playlist
-    // order.
+    // Sort by (track_number, filename) for stable playlist order.
     parts_work.sort_by(|a, b| {
         a.sort_track
             .cmp(&b.sort_track)
-            .then_with(|| a.part_no.cmp(&b.part_no))
             .then_with(|| a.filename.cmp(&b.filename))
     });
 
-    // Derive book-level metadata from the sorted parts. For multi-part
-    // groups the leaf fallback drops the part designator — the group is
-    // keyed on its first part's path, so the raw leaf would read
-    // "Dracula Pt1".
+    // Derive book-level metadata from the sorted parts. Title falls back
+    // to the album tag, then to the group path's leaf — every m4b/m4a is
+    // one-file-per-group post-fix, so the leaf reads as the file stem
+    // (or for an mp3 folder group, the folder name).
     let title = parts_work
         .iter()
         .find_map(|p| p.meta.album.clone())
-        .unwrap_or_else(|| {
-            let leaf = leaf_name(&group.group_path);
-            if parts_work.len() > 1 {
-                super::group::strip_part_suffix(&leaf)
-                    .map(|(base, _)| base)
-                    .unwrap_or(leaf)
-            } else {
-                leaf
-            }
-        });
+        .unwrap_or_else(|| leaf_name(&group.group_path));
 
     let creator_name = parts_work
         .iter()
@@ -348,14 +328,6 @@ fn offset_chapters(
             end_ms: c.end_ms + offset_ms,
         })
         .collect()
-}
-
-/// File stem of a library-relative part path (`"A/B Pt1.m4b"` → `"B Pt1"`).
-fn part_stem(filename: &str) -> &str {
-    std::path::Path::new(filename)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
 }
 
 /// Leaf directory name or file stem from a group path (title fallback).
