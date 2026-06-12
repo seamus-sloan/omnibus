@@ -53,9 +53,10 @@ pub(super) fn scrub_fill_style(pct: f64) -> String {
     format!("--fill: {pct:.1}%")
 }
 
-/// The hidden HTML5 `<audio>` element bound by the JS shim.
+/// The hidden HTML5 `<audio>` element bound by the JS shim. Mounted once at
+/// the App root (not per-route) so playback persists across navigation.
 #[component]
-pub(super) fn AudioElement() -> Element {
+pub(crate) fn AudioElement() -> Element {
     rsx! {
         audio {
             id: "omnibus-audio",

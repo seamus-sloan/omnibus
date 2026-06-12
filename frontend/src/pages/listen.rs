@@ -24,11 +24,9 @@
 use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]
 use dioxus_router::Link;
-#[cfg(not(feature = "mobile"))]
-use omnibus_shared::EbookMetadata;
 
 #[cfg(not(feature = "mobile"))]
-use crate::{data, use_server_url, Route};
+use crate::{use_playback, Route};
 
 #[cfg(not(feature = "mobile"))]
 mod bookmarks_drawer;
@@ -42,6 +40,8 @@ mod chapters_drawer;
 mod controls;
 mod helpers;
 #[cfg(not(feature = "mobile"))]
+mod mini_dock;
+#[cfg(not(feature = "mobile"))]
 mod overlays;
 #[cfg(not(feature = "mobile"))]
 mod ready_player;
@@ -54,6 +54,15 @@ mod stage;
 
 #[cfg(not(feature = "mobile"))]
 use ready_player::ReadyPlayer;
+
+// App-root re-exports: the audio element + dock are mounted by `App` /
+// `ScreenLayout`, and the playback driver is called once from `App`.
+#[cfg(feature = "web")]
+pub(crate) use bootstrap::install_audio_bootstrap;
+#[cfg(not(feature = "mobile"))]
+pub(crate) use controls::AudioElement;
+#[cfg(not(feature = "mobile"))]
+pub(crate) use mini_dock::MiniDock;
 
 #[component]
 pub fn BookListenPage(uuid: String) -> Element {
@@ -69,82 +78,56 @@ pub fn BookListenPage(uuid: String) -> Element {
 
     #[cfg(not(feature = "mobile"))]
     {
-        let server_url = use_server_url();
-        let mut book: Signal<Option<EbookMetadata>> = use_signal(|| None);
-        let mut loading = use_signal(|| true);
-        let mut error: Signal<Option<String>> = use_signal(|| None);
-        #[cfg_attr(not(feature = "web"), allow(unused_mut))]
-        let duration = use_signal(|| 0.0_f64);
-        #[cfg_attr(not(feature = "web"), allow(unused_mut))]
-        let elapsed = use_signal(|| 0.0_f64);
-        #[cfg_attr(not(feature = "web"), allow(unused_mut))]
-        let playing = use_signal(|| false);
-        let uuid_for_rate = uuid.clone();
-        let rate = use_signal(move || crate::audiobook_progress::load_rate(&uuid_for_rate));
-        #[cfg_attr(not(feature = "web"), allow(unused_mut))]
-        let hls_ready = use_signal(|| false);
-        #[cfg_attr(not(feature = "web"), allow(unused_mut))]
-        let playback_failed = use_signal(|| false);
-        #[cfg_attr(not(feature = "web"), allow(unused_mut))]
-        let chapters: Signal<Vec<omnibus_shared::ChapterInfo>> = use_signal(Vec::new);
+        let playback = use_playback();
 
-        let url = server_url.clone();
-        let uuid_for_fetch = uuid.clone();
-        use_effect(use_reactive!(|uuid_for_fetch| {
-            let url = url.clone();
-            let uuid = uuid_for_fetch.clone();
-            spawn(async move {
-                loading.set(true);
-                match data::get_ebook(&url, &uuid).await {
-                    Ok(b) => {
-                        book.set(b);
-                        error.set(None);
-                    }
-                    Err(e) => error.set(Some(e.to_string())),
-                }
-                loading.set(false);
-            });
+        // Point the app-wide player at this route's book. The App-level
+        // driver (install_audio_bootstrap) reacts to `uuid` and does the
+        // fetch + manifest init; we only retarget it, and only when it
+        // differs so re-entering an already-playing book is seamless.
+        let route_uuid = uuid.clone();
+        use_effect(use_reactive!(|route_uuid| {
+            let mut uuid_sig = playback.uuid;
+            let mut loading_sig = playback.loading;
+            if uuid_sig.peek().as_deref() != Some(route_uuid.as_str()) {
+                uuid_sig.set(Some(route_uuid.clone()));
+                // Mark loading so the brief pre-fetch window can't flash the
+                // previous book's player or a spurious "not found".
+                loading_sig.set(true);
+            }
         }));
 
-        #[cfg(feature = "web")]
-        bootstrap::install_audio_bootstrap(
-            uuid.clone(),
-            duration,
-            elapsed,
-            playing,
-            hls_ready,
-            playback_failed,
-            chapters,
-        );
+        let active = playback.uuid.read().as_deref() == Some(uuid.as_str());
 
-        if loading() {
-            return rsx! { p { class: "subtitle", "Loading\u{2026}" } };
-        }
-        if let Some(msg) = error() {
-            return rsx! {
-                p { role: "alert", class: "subtitle", "{msg}" }
-                Link { to: Route::Landing {}, class: "btn", "Back to library" }
-            };
-        }
-        let Some(b) = book() else {
-            return rsx! {
-                p { class: "subtitle", "Audiobook not found." }
-                Link { to: Route::Landing {}, class: "btn", "Back to library" }
-            };
-        };
-
-        rsx! {
-            ReadyPlayer {
-                book: b,
-                uuid: uuid.clone(),
-                duration,
-                elapsed,
-                playing,
-                rate,
-                hls_ready,
-                playback_failed,
-                chapters,
+        if active {
+            if let Some(msg) = playback.error.read().clone() {
+                return rsx! {
+                    p { role: "alert", class: "subtitle", "{msg}" }
+                    Link { to: Route::Landing {}, class: "btn", "Back to library" }
+                };
+            }
+            if let Some(b) = playback.book.read().clone() {
+                return rsx! {
+                    ReadyPlayer {
+                        book: b,
+                        uuid: uuid.clone(),
+                        duration: playback.duration,
+                        elapsed: playback.elapsed,
+                        playing: playback.playing,
+                        rate: playback.rate,
+                        hls_ready: playback.hls_ready,
+                        playback_failed: playback.playback_failed,
+                        chapters: playback.chapters,
+                    }
+                };
+            }
+            if !*playback.loading.read() {
+                return rsx! {
+                    p { class: "subtitle", "Audiobook not found." }
+                    Link { to: Route::Landing {}, class: "btn", "Back to library" }
+                };
             }
         }
+
+        rsx! { p { class: "subtitle", "Loading\u{2026}" } }
     }
 }

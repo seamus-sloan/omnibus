@@ -60,3 +60,63 @@ pub struct CurrentUser(pub Signal<Option<Option<omnibus_shared::UserSummary>>>);
 pub fn use_current_user() -> CurrentUser {
     use_context::<CurrentUser>()
 }
+
+/// App-wide audiobook playback state. Owned by [`crate::App`] via
+/// `use_context_provider` so the full listen player and the persistent
+/// mini-dock share one set of signals. Playback survives route changes
+/// because both these signals and the backing `<audio>` element live at the
+/// App root, not inside the route component.
+///
+/// `uuid` is the currently-loaded audiobook (`None` = nothing playing).
+/// Setting it (the listen page on mount) or clearing it (the dock's dismiss
+/// button) drives the App-level bootstrap effect to load / swap / tear down
+/// playback. Provided unconditionally on `not(mobile)` so SSR markup matches
+/// the WASM client; mobile stubs the listen page and never provides it.
+#[cfg(not(feature = "mobile"))]
+#[derive(Copy, Clone)]
+pub struct PlaybackState {
+    pub uuid: Signal<Option<String>>,
+    pub book: Signal<Option<omnibus_shared::EbookMetadata>>,
+    pub loading: Signal<bool>,
+    pub error: Signal<Option<String>>,
+    pub duration: Signal<f64>,
+    pub elapsed: Signal<f64>,
+    pub playing: Signal<bool>,
+    pub rate: Signal<f64>,
+    pub chapters: Signal<Vec<omnibus_shared::ChapterInfo>>,
+    pub hls_ready: Signal<bool>,
+    pub playback_failed: Signal<bool>,
+}
+
+#[cfg(not(feature = "mobile"))]
+impl PlaybackState {
+    /// Construct the initial (nothing-playing) playback state.
+    pub fn new() -> Self {
+        Self {
+            uuid: Signal::new(None),
+            book: Signal::new(None),
+            loading: Signal::new(false),
+            error: Signal::new(None),
+            duration: Signal::new(0.0),
+            elapsed: Signal::new(0.0),
+            playing: Signal::new(false),
+            rate: Signal::new(1.0),
+            chapters: Signal::new(Vec::new()),
+            hls_ready: Signal::new(false),
+            playback_failed: Signal::new(false),
+        }
+    }
+}
+
+#[cfg(not(feature = "mobile"))]
+impl Default for PlaybackState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Convenience accessor for the playback context. Web/SSR only.
+#[cfg(not(feature = "mobile"))]
+pub fn use_playback() -> PlaybackState {
+    use_context::<PlaybackState>()
+}
