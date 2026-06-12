@@ -2540,6 +2540,81 @@ a.idx-letter-on:focus-visible {
   max-width: 32rem; text-align: center;
 }
 
+/* ── Mini-dock (persistent cross-page audiobook bar) ───────────── */
+/* Empty host until a book is loaded — keeps SSR / WASM markup aligned. */
+.mini-dock-host:empty { display: none; }
+
+.mini-dock {
+  position: fixed; left: 24px; right: 24px; bottom: 18px; z-index: 40;
+  display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.6fr) auto auto;
+  gap: 18px; align-items: center;
+  padding: 12px 18px; border-radius: 16px;
+  background: color-mix(in oklch, var(--bg-1) 95%, transparent);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--line);
+  box-shadow: 0 24px 50px -10px rgba(0, 0, 0, .6);
+}
+
+.mini-dock-now {
+  display: flex; align-items: center; gap: 12px;
+  min-width: 0; text-decoration: none; color: inherit;
+}
+.mini-dock-cover { width: 44px; flex: none; }
+.mini-dock-cover .cover-wrap, .mini-dock-cover .cover { width: 44px; border-radius: 4px; }
+.mini-dock-meta { min-width: 0; }
+.mini-dock-title {
+  font-size: 13.5px; color: var(--ink-0); font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mini-dock-sub {
+  font-family: var(--mono); font-size: 11px; color: var(--ink-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.mini-dock-track { min-width: 0; }
+.mini-dock-times {
+  display: flex; justify-content: space-between;
+  font-family: var(--mono); font-size: 10px; color: var(--ink-3); margin-bottom: 6px;
+}
+
+.mini-dock-controls { display: flex; align-items: center; gap: 12px; color: var(--ink-1); }
+.mini-dock-btn {
+  background: transparent; border: 1px solid var(--line);
+  color: var(--ink-1); cursor: pointer; transition: color .15s, background .15s;
+}
+.mini-dock-btn:hover { color: var(--ink-0); background: var(--bg-1); }
+.mini-dock-skip {
+  width: 32px; height: 32px; padding: 0; border-radius: 999px;
+  display: grid; place-items: center;
+  font-family: var(--mono); font-size: 10px;
+}
+.mini-dock-play {
+  width: 44px; height: 44px; padding: 0; border-radius: 999px; border: 0;
+  background: var(--accent); color: var(--accent-ink);
+  cursor: pointer; display: grid; place-items: center; transition: transform .12s;
+}
+.mini-dock-play:hover { transform: scale(1.04); }
+.mini-dock-play:active { transform: scale(0.97); }
+.mini-dock-ico-play {
+  width: 0; height: 0;
+  border-top: 7px solid transparent; border-bottom: 7px solid transparent;
+  border-left: 12px solid currentColor; margin-left: 2px;
+}
+.mini-dock-ico-pause { display: flex; gap: 4px; }
+.mini-dock-ico-pause-bar { width: 4px; height: 14px; background: currentColor; border-radius: 1px; }
+.mini-dock-rate {
+  font-family: var(--mono); font-size: 11px; color: var(--ink-2);
+}
+
+.mini-dock-actions { display: flex; gap: 6px; }
+.mini-dock-btn.mini-dock-expand-btn,
+.mini-dock-btn.mini-dock-dismiss {
+  height: 30px; padding: 0 12px; border-radius: 999px;
+  display: inline-flex; align-items: center;
+  font-family: var(--mono); font-size: 11px; text-decoration: none;
+}
+.mini-dock-btn.mini-dock-dismiss { width: 30px; padding: 0; justify-content: center; font-size: 16px; }
+
 /* ── Responsive ─────────────────────────────────────────────── */
 @media (max-width: 900px) {
   .lp-stage {
@@ -2551,6 +2626,14 @@ a.idx-letter-on:focus-visible {
   .lp-speed-panel { width: calc(100vw - 48px); right: 24px; bottom: 80px; }
   .lp-sleep-panel { width: calc(100vw - 48px); right: 24px; bottom: 80px; }
   .lp-drawer { width: 100%; }
+
+  /* Stack the dock into two rows when the four-column grid won't fit. */
+  .mini-dock {
+    left: 12px; right: 12px; bottom: 12px;
+    grid-template-columns: auto 1fr auto; gap: 12px;
+  }
+  .mini-dock-track { grid-column: 1 / -1; order: 3; }
+  .mini-dock-actions .mini-dock-expand-btn { display: none; }
 }
 
 /* ── Legacy globals (layout primitives, sr-only) ───────────────────── */
