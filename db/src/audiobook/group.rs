@@ -1,26 +1,26 @@
 //! Phase A.5 — group per-file [`AudiobookStatEntry`] rows into one
 //! [`AudiobookGroup`] per audiobook.
 //!
-//! The shape of real audiobook libraries:
+//! Real audiobook libraries take two shapes that group deterministically
+//! from filesystem layout alone:
 //!
-//! * `Author/Book.m4b` — single file = one book. The `.m4b` (and `.m4a`)
-//!   containers are inherently "the whole book" so each one is always its
-//!   own group, even if other files share its parent directory.
-//! * `Author/Book Pt1.m4b, Book Pt2.m4b` — long books split into parts.
-//!   Same-directory m4b/m4a files whose stems match after stripping a
-//!   part designator (`Pt1`, `Part 2`, `Disc 3`, `1 of 3`, `- 2`, …)
-//!   group into one book; see [`strip_part_suffix`]. A lone part-suffixed
-//!   file stays its own group with an unchanged uuid.
-//! * `Author/Book/chapter01.mp3, chapter02.mp3, …` — folder of per-chapter
-//!   mp3s = one book. Group key is the parent directory's relative path;
-//!   parts are ordered by ID3 `track` in Phase B (filename here is just
-//!   the tiebreaker for the stable_uuid input).
+//! * `Author/Book.m4b` — single file = one book. Each `.m4b`/`.m4a`
+//!   container is "the whole book" and always becomes its own group,
+//!   even if other files share its parent directory.
+//! * `Author/Book/chapter01.mp3, chapter02.mp3, …` — folder of
+//!   per-chapter mp3s = one book. Group key is the parent directory's
+//!   relative path; parts are ordered by ID3 `track` in Phase B
+//!   (filename here is just the tiebreaker for the stable_uuid input).
+//!
+//! Multi-file m4b/m4a "parts" (e.g. `Book Pt1.m4b` + `Book Pt2.m4b`)
+//! are deliberately NOT merged at this layer: filename-based stem
+//! matching was fragile and silently merged distinct files when stems
+//! collided (e.g. `(3 of 5)` and `(5 of 5)` strip to the same base).
+//! Users combine parts deliberately through the manual merge dialog.
 //!
 //! Mixed-format folders fall out naturally: every `.m4b`/`.m4a` becomes
-//! its own group (or joins its part-siblings), then any remaining `.mp3`
-//! files in the same directory form a sibling group. The cases we've
-//! observed in practice never mix the two, but the rule keeps the
-//! grouping deterministic if they do.
+//! its own group, then any `.mp3` files in the same directory form a
+//! sibling group.
 
 use super::stat::AudiobookStatEntry;
 use crate::helpers::stable_uuid;
@@ -56,26 +56,18 @@ pub struct AudiobookGroup {
     pub format: String,
 }
 
-/// Group per-file stat entries into audiobook groups. Synthetic
-/// `error`-bearing entries from `stat_audiobook_library` (empty uuid)
-/// pass through untouched in their own one-part group so the legacy
-/// error-row contract is preserved at the diff layer.
+/// Group per-file stat entries into audiobook groups. Each `.m4b`/`.m4a`
+/// file becomes its own one-file group; `.mp3` files bucket by parent
+/// directory. Synthetic `error`-bearing entries from
+/// `stat_audiobook_library` (empty uuid) pass through untouched in their
+/// own one-part group so the legacy error-row contract is preserved at
+/// the diff layer.
 pub fn group_into_books(
     entries: Vec<AudiobookStatEntry>,
     library_path_key: &str,
 ) -> Vec<AudiobookGroup> {
-    // Two passes: pull every `.m4b`/`.m4a` (and synthetic error rows) out
-    // first — part-suffixed stems bucket with their same-directory
-    // siblings, the rest become one-entry groups — then bucket the
-    // remaining `.mp3` rows by parent directory.
     let mut singles: Vec<AudiobookGroup> = Vec::new();
     let mut mp3_buckets: std::collections::BTreeMap<String, Vec<AudiobookStatEntry>> =
-        std::collections::BTreeMap::new();
-    // Key: (parent_dir, lowercased stripped stem, extension). The
-    // extension is part of the key so an m4b and an m4a never share a
-    // group (book_files.format is single-valued per group).
-    type PartKey = (String, String, String);
-    let mut part_buckets: std::collections::BTreeMap<PartKey, Vec<(u32, AudiobookStatEntry)>> =
         std::collections::BTreeMap::new();
 
     for entry in entries {
@@ -86,17 +78,10 @@ pub fn group_into_books(
         }
         let ext = extension_of(&entry.filename).to_ascii_uppercase();
         match ext.as_str() {
-            "M4B" | "M4A" => match strip_part_suffix(file_stem_of(&entry.filename)) {
-                Some((base, part_no)) => {
-                    let key = (
-                        parent_dir(&entry.filename).to_string(),
-                        base.to_ascii_lowercase(),
-                        ext,
-                    );
-                    part_buckets.entry(key).or_default().push((part_no, entry));
-                }
-                None => singles.push(single(entry, &ext, library_path_key)),
-            },
+            // Each m4b/m4a stands alone — the indexer no longer infers
+            // multi-part bundles from filenames. Users combine parts
+            // deliberately via the F5.10 manual merge dialog.
+            "M4B" | "M4A" => singles.push(single(entry, &ext, library_path_key)),
             "MP3" => {
                 let dir = parent_dir(&entry.filename).to_string();
                 mp3_buckets.entry(dir).or_default().push(entry);
@@ -112,37 +97,6 @@ pub fn group_into_books(
     }
 
     let mut groups = singles;
-    for ((_, _, ext), mut numbered) in part_buckets {
-        if numbered.len() == 1 {
-            // A lone `Book Pt1.m4b` with no siblings stays a normal
-            // single-file group — same group_path/uuid it had before
-            // part-grouping existed, so nothing churns on reindex.
-            let (_, entry) = numbered.remove(0);
-            groups.push(single(entry, &ext, library_path_key));
-            continue;
-        }
-        numbered
-            .sort_by(|(an, ae), (bn, be)| an.cmp(bn).then_with(|| ae.filename.cmp(&be.filename)));
-        let parts: Vec<AudiobookStatEntry> = numbered.into_iter().map(|(_, e)| e).collect();
-        // The group key is the *first part's* real file path, not a
-        // virtual dir-level path. Real file paths can't collide with the
-        // mp3 parent-dir keys or other singles, and when `Pt2` shows up
-        // next to an already-indexed lone `Pt1` the group keeps `Pt1`'s
-        // uuid — the diff sees Changed (size grew), not Removed+New, so
-        // reading progress survives.
-        let group_path = parts[0].filename.clone();
-        let total_size_bytes = parts.iter().map(|p| p.size_bytes).sum();
-        let max_mtime_epoch = parts.iter().map(|p| p.mtime_epoch).max().unwrap_or(0);
-        let uuid = stable_uuid(library_path_key, &group_path);
-        groups.push(AudiobookGroup {
-            group_path,
-            uuid,
-            parts,
-            total_size_bytes,
-            max_mtime_epoch,
-            format: ext,
-        });
-    }
     for (dir, parts) in mp3_buckets {
         let total_size_bytes = parts.iter().map(|p| p.size_bytes).sum();
         let max_mtime_epoch = parts.iter().map(|p| p.mtime_epoch).max().unwrap_or(0);
@@ -159,138 +113,6 @@ pub fn group_into_books(
 
     groups.sort_by(|a, b| a.group_path.cmp(&b.group_path));
     groups
-}
-
-/// Part-designator keywords accepted before a trailing number. `part`
-/// must precede `pt` so the longer keyword wins the suffix match.
-const PART_KEYWORDS: &[&str] = &["part", "disc", "disk", "pt", "cd"];
-
-/// Strip an end-anchored part designator from a file stem:
-/// `"Dracula Pt1"` → `Some(("Dracula", 1))`, `"Dracula"` → `None`.
-///
-/// Accepted forms (case-insensitive): keyword + number (`Pt1`, `Pt. 2`,
-/// `Part 3`, `Disc 1`, `CD2`), `"<n> of <m>"`, either optionally in
-/// trailing parentheses (`(Part 1)`, `(1 of 3)`), and `-`/`_`-delimited
-/// bare numbers (`Title - 2`, `Title_2`). A bare space-delimited number
-/// (`Foundation 2`) deliberately does NOT match — flat series folders
-/// name distinct books that way.
-pub(crate) fn strip_part_suffix(stem: &str) -> Option<(String, u32)> {
-    // ASCII-lowercasing preserves byte offsets, so indexes computed on
-    // `lower` slice `stem` correctly.
-    let lower = stem.to_ascii_lowercase();
-    let body = lower.trim_end();
-
-    // "Title (Part 1)" / "Title (1 of 3)" — parse the parenthesized tail.
-    if let Some(inner_end) = body.strip_suffix(')') {
-        if let Some(open) = inner_end.rfind('(') {
-            if let Some(n) = parse_part_token(&inner_end[open + 1..]) {
-                let base = trim_separators(&stem[..open]);
-                if !base.is_empty() {
-                    return Some((base.to_string(), n));
-                }
-            }
-        }
-    }
-
-    // "Title 1 of 3" — the explicit "of" makes a space delimiter safe.
-    let toks: Vec<&str> = body.split_whitespace().collect();
-    if toks.len() >= 4 && toks[toks.len() - 2] == "of" {
-        let n_tok = toks[toks.len() - 3];
-        let m_tok = toks[toks.len() - 1];
-        if is_digits(n_tok) && is_digits(m_tok) {
-            if let Ok(n) = n_tok.parse() {
-                let cut = n_tok.as_ptr() as usize - body.as_ptr() as usize;
-                let base = trim_separators(&stem[..cut]);
-                if !base.is_empty() {
-                    return Some((base.to_string(), n));
-                }
-            }
-        }
-    }
-
-    // Trailing digit run, then either a part keyword or a `-`/`_`
-    // delimiter before it.
-    let digits_start = body.len() - body.bytes().rev().take_while(u8::is_ascii_digit).count();
-    if digits_start == body.len() || digits_start == 0 {
-        return None;
-    }
-    let n: u32 = body[digits_start..].parse().ok()?;
-
-    // Skip separators between the number and whatever precedes it.
-    let mut cut = digits_start;
-    let mut saw_dash = false;
-    while cut > 0 {
-        let c = body.as_bytes()[cut - 1];
-        match c {
-            b' ' | b'.' => cut -= 1,
-            b'-' | b'_' => {
-                saw_dash = true;
-                cut -= 1;
-            }
-            _ => break,
-        }
-    }
-
-    for kw in PART_KEYWORDS {
-        if body[..cut].ends_with(kw) {
-            let kw_start = cut - kw.len();
-            // The keyword must be its own word: start-of-string or a
-            // separator before it ("Sandisk 2" must not match "disk").
-            let bounded =
-                kw_start == 0 || matches!(body.as_bytes()[kw_start - 1], b' ' | b'-' | b'_' | b'.');
-            if bounded {
-                let base = trim_separators(&stem[..kw_start]);
-                if !base.is_empty() {
-                    return Some((base.to_string(), n));
-                }
-            }
-        }
-    }
-
-    if saw_dash {
-        let base = trim_separators(&stem[..cut]);
-        if !base.is_empty() {
-            return Some((base.to_string(), n));
-        }
-    }
-    None
-}
-
-/// Parse a complete part token: `"part 1"`, `"pt.2"`, `"disc 3"`,
-/// `"1 of 3"`. The whole input must be consumed; bare digits are
-/// rejected (a trailing `"(2)"` usually marks a duplicate download,
-/// not a part).
-fn parse_part_token(tok: &str) -> Option<u32> {
-    let tok = tok.trim();
-    let toks: Vec<&str> = tok.split_whitespace().collect();
-    if toks.len() == 3 && toks[1] == "of" && is_digits(toks[0]) && is_digits(toks[2]) {
-        return toks[0].parse().ok();
-    }
-    for kw in PART_KEYWORDS {
-        if let Some(rest) = tok.strip_prefix(kw) {
-            let rest = rest
-                .trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '.' | '-' | '_'));
-            if !rest.is_empty() && is_digits(rest) {
-                return rest.parse().ok();
-            }
-        }
-    }
-    None
-}
-
-fn is_digits(s: &str) -> bool {
-    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
-}
-
-fn trim_separators(s: &str) -> &str {
-    s.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, '-' | '_' | '.' | ','))
-}
-
-fn file_stem_of(filename: &str) -> &str {
-    std::path::Path::new(filename)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
 }
 
 fn single(entry: AudiobookStatEntry, format: &str, library_path_key: &str) -> AudiobookGroup {
@@ -404,9 +226,6 @@ mod tests {
             "/lib",
         );
         assert_eq!(groups.len(), 2);
-        // Single-file groups sort before the multi-mp3 group when
-        // `Author/Title/all.m4b` < `Author/Title` alphabetically? — let's
-        // pin the actual order by content rather than position.
         let m4b = groups.iter().find(|g| g.format == "M4B").unwrap();
         let mp3 = groups.iter().find(|g| g.format == "MP3").unwrap();
         assert_eq!(m4b.parts.len(), 1);
@@ -444,59 +263,57 @@ mod tests {
     }
 
     #[test]
-    fn strip_part_suffix_accepts_part_designators() {
-        let cases = [
-            ("Dracula Pt1", "Dracula", 1),
-            ("Dracula Pt. 2", "Dracula", 2),
-            ("Dracula Part 3", "Dracula", 3),
-            ("Dracula part 10", "Dracula", 10),
-            ("Dracula Disc 1", "Dracula", 1),
-            ("Dracula disk 4", "Dracula", 4),
-            ("Dracula CD2", "Dracula", 2),
-            ("Dracula 1 of 3", "Dracula", 1),
-            ("Dracula (1 of 3)", "Dracula", 1),
-            ("Dracula (Part 2)", "Dracula", 2),
-            ("Dracula - 2", "Dracula", 2),
-            ("Dracula_2", "Dracula", 2),
-            ("The Stand - Part 01", "The Stand", 1),
-            ("Way of Kings Pt2", "Way of Kings", 2),
-        ];
-        for (stem, base, n) in cases {
-            assert_eq!(
-                strip_part_suffix(stem),
-                Some((base.to_string(), n)),
-                "stem {stem:?}"
-            );
+    fn each_m4b_becomes_its_own_group_even_with_shared_base_stem() {
+        // The Wind-and-Truth repro: 5 distinct M4B files for the same
+        // book, named inconsistently (`(N of 5)` suffixes that strip to
+        // the same base, plus a stray `[05]` style). Pre-fix, the
+        // filename heuristic bucketed `(3 of 5)` and `(5 of 5)` into a
+        // single book because their base stems collided after stripping
+        // — silently hiding part 5 inside part 3's `book_file_parts`.
+        // Post-fix every file stands alone; user combines them via the
+        // manual merge dialog if they want one playable unit.
+        let groups = group_into_books(
+            vec![
+                entry(
+                    "Brandon Sanderson/Wind and Truth/Stormlight Archive [05] Wind and Truth (1 of 5).m4b",
+                    100,
+                    1000,
+                ),
+                entry(
+                    "Brandon Sanderson/Wind and Truth/Stormlight Archive [05] Wind and Truth (2 of 5).m4b",
+                    110,
+                    1100,
+                ),
+                entry(
+                    "Brandon Sanderson/Wind and Truth/Stormlight Archive [05] Wind and Truth (3 of 5).m4b",
+                    120,
+                    1200,
+                ),
+                entry(
+                    "Brandon Sanderson/Wind and Truth/Stormlight Archive 05 Wind and Truth (4 of 5).m4b",
+                    130,
+                    1300,
+                ),
+                entry(
+                    "Brandon Sanderson/Wind and Truth/Stormlight Archive [05] Wind and Truth (5 of 5).m4b",
+                    140,
+                    1400,
+                ),
+            ],
+            "/lib",
+        );
+        assert_eq!(groups.len(), 5);
+        for g in &groups {
+            assert_eq!(g.format, "M4B");
+            assert_eq!(g.parts.len(), 1);
         }
     }
 
     #[test]
-    fn strip_part_suffix_rejects_non_part_stems() {
-        let cases = [
-            "Dracula",
-            // Bare space-delimited number: flat series folders name
-            // distinct books this way (`Dune 1.m4b`, `Dune 2.m4b`).
-            "Foundation 2",
-            "Fahrenheit 451",
-            // Keyword without a word boundary or without digits.
-            "Sandisk 2",
-            "Dracula CD",
-            "Dracula Part",
-            // Parenthesized bare number marks a duplicate, not a part.
-            "Dracula (2)",
-            // Nothing but a designator — base would be empty.
-            "Pt1",
-            "Part 2",
-            "2",
-            "",
-        ];
-        for stem in cases {
-            assert_eq!(strip_part_suffix(stem), None, "stem {stem:?}");
-        }
-    }
-
-    #[test]
-    fn two_part_m4bs_in_one_dir_group_with_first_part_as_key() {
+    fn two_part_m4bs_in_one_dir_stay_separate_groups() {
+        // Pre-fix: the indexer bucketed these into a single multi-part
+        // group keyed on `Dracula Pt1.m4b`. Post-fix each file is its
+        // own group — the user merges them deliberately if intended.
         let groups = group_into_books(
             vec![
                 entry("Stoker/Dracula Pt2.m4b", 200, 2000),
@@ -504,105 +321,15 @@ mod tests {
             ],
             "/lib",
         );
-        assert_eq!(groups.len(), 1);
-        let g = &groups[0];
-        // Group key = first part's real path (sorted by part number), so
-        // a previously lone Pt1's uuid is preserved when Pt2 arrives.
-        assert_eq!(g.group_path, "Stoker/Dracula Pt1.m4b");
-        assert_eq!(
-            g.uuid,
-            crate::helpers::stable_uuid("/lib", "Stoker/Dracula Pt1.m4b")
-        );
-        assert_eq!(g.format, "M4B");
-        assert_eq!(g.parts.len(), 2);
-        assert_eq!(g.parts[0].filename, "Stoker/Dracula Pt1.m4b");
-        assert_eq!(g.parts[1].filename, "Stoker/Dracula Pt2.m4b");
-        assert_eq!(g.total_size_bytes, 3000);
-        assert_eq!(g.max_mtime_epoch, 200);
+        assert_eq!(groups.len(), 2);
+        for g in &groups {
+            assert_eq!(g.format, "M4B");
+            assert_eq!(g.parts.len(), 1);
+        }
     }
 
     #[test]
-    fn folder_per_book_part_m4bs_group_naturally() {
-        let groups = group_into_books(
-            vec![
-                entry("Stoker/Dracula/Dracula Pt1.m4b", 100, 1000),
-                entry("Stoker/Dracula/Dracula Pt2.m4b", 110, 1100),
-            ],
-            "/lib",
-        );
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].group_path, "Stoker/Dracula/Dracula Pt1.m4b");
-        assert_eq!(groups[0].parts.len(), 2);
-    }
-
-    #[test]
-    fn lone_part_suffixed_m4b_stays_single_with_unchanged_uuid() {
-        let groups = group_into_books(vec![entry("Stoker/Dracula Pt1.m4b", 100, 1000)], "/lib");
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].group_path, "Stoker/Dracula Pt1.m4b");
-        // Identical uuid to the pre-part-grouping behavior.
-        assert_eq!(
-            groups[0].uuid,
-            crate::helpers::stable_uuid("/lib", "Stoker/Dracula Pt1.m4b")
-        );
-        assert_eq!(groups[0].parts.len(), 1);
-    }
-
-    #[test]
-    fn distinct_part_sets_in_one_dir_form_separate_groups() {
-        let groups = group_into_books(
-            vec![
-                entry("Audio/Dracula Pt1.m4b", 100, 1000),
-                entry("Audio/Dracula Pt2.m4b", 110, 1100),
-                entry("Audio/Dune Part 1.m4b", 120, 1200),
-                entry("Audio/Dune Part 2.m4b", 130, 1300),
-                entry("Audio/Carmilla.m4b", 140, 1400),
-            ],
-            "/lib",
-        );
-        assert_eq!(groups.len(), 3);
-        let dracula = groups
-            .iter()
-            .find(|g| g.group_path.contains("Dracula"))
-            .unwrap();
-        let dune = groups
-            .iter()
-            .find(|g| g.group_path.contains("Dune"))
-            .unwrap();
-        let carmilla = groups
-            .iter()
-            .find(|g| g.group_path.contains("Carmilla"))
-            .unwrap();
-        assert_eq!(dracula.parts.len(), 2);
-        assert_eq!(dune.parts.len(), 2);
-        assert_eq!(carmilla.parts.len(), 1);
-    }
-
-    #[test]
-    fn part_numbers_sort_numerically_not_lexicographically() {
-        let groups = group_into_books(
-            vec![
-                entry("A/Book Pt10.m4b", 100, 1000),
-                entry("A/Book Pt2.m4b", 110, 1100),
-                entry("A/Book Pt1.m4b", 120, 1200),
-            ],
-            "/lib",
-        );
-        assert_eq!(groups.len(), 1);
-        let names: Vec<&str> = groups[0]
-            .parts
-            .iter()
-            .map(|p| p.filename.as_str())
-            .collect();
-        assert_eq!(
-            names,
-            ["A/Book Pt1.m4b", "A/Book Pt2.m4b", "A/Book Pt10.m4b"]
-        );
-        assert_eq!(groups[0].group_path, "A/Book Pt1.m4b");
-    }
-
-    #[test]
-    fn m4b_and_m4a_parts_with_same_stem_do_not_mix() {
+    fn m4b_and_m4a_in_same_dir_stay_separate_groups() {
         let groups = group_into_books(
             vec![
                 entry("A/Book Pt1.m4b", 100, 1000),

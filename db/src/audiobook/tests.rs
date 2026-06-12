@@ -87,29 +87,29 @@ fn parse_unreadable_file_surfaces_as_error_metadata_row() {
 }
 
 #[test]
-fn parse_groups_orders_multi_part_m4b_by_part_number_and_strips_title_suffix() {
-    // Tagless (junk) part files: track-tag sort falls through to the
-    // filename-derived part number, which must order Pt2 before Pt10,
-    // and the title fallback must drop the part designator.
+fn parse_groups_emits_one_book_per_m4b_even_when_stems_share_a_base() {
+    // Wind-and-Truth repro: distinct m4b files for the same book that
+    // would have collided under the old filename-stripping heuristic
+    // must now stay separate so part 5 isn't hidden inside part 3's row.
+    // Title falls back to the per-file stem (tagless junk → no album).
     let dir = make_test_dir("m4b_parts");
     for name in ["Dracula Pt10.m4b", "Dracula Pt2.m4b", "Dracula Pt1.m4b"] {
         fs::write(dir.join(name), b"junk").unwrap();
     }
     let stat = stat_audiobook_library(dir.to_str(), dir.to_str().unwrap());
     let groups = group_into_books(stat.entries, dir.to_str().unwrap());
-    assert_eq!(groups.len(), 1);
+    assert_eq!(groups.len(), 3);
     let books = parse_groups(groups, &dir);
     fs::remove_dir_all(&dir).unwrap();
-    assert_eq!(books.len(), 1);
-    let book = &books[0];
-    assert_eq!(book.title, "Dracula");
-    let names: Vec<&str> = book.parts.iter().map(|p| p.filename.as_str()).collect();
-    assert_eq!(
-        names,
-        ["Dracula Pt1.m4b", "Dracula Pt2.m4b", "Dracula Pt10.m4b"]
-    );
-    let ordinals: Vec<i64> = book.parts.iter().map(|p| p.ordinal).collect();
-    assert_eq!(ordinals, [0, 1, 2]);
+    assert_eq!(books.len(), 3);
+    let titles: Vec<&str> = books.iter().map(|b| b.title.as_str()).collect();
+    assert!(titles.contains(&"Dracula Pt1"));
+    assert!(titles.contains(&"Dracula Pt2"));
+    assert!(titles.contains(&"Dracula Pt10"));
+    for b in &books {
+        assert_eq!(b.parts.len(), 1);
+        assert_eq!(b.parts[0].ordinal, 0);
+    }
 }
 
 #[test]
