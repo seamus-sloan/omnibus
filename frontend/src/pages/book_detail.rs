@@ -45,12 +45,17 @@ pub fn BookDetailPage(uuid: String) -> Element {
     // (signals read inside `use_effect` re-arm it).
     let refresh = use_signal(|| 0u32);
 
-    // Admin gating for the "Merge with…" affordance. Web-only — mobile
-    // renders no admin surfaces; the server-side `AdminUser` extractor
-    // on `rpc_merge_books` is the actual security boundary.
-    #[cfg(feature = "web")]
+    // Admin gating for the "Merge with…" affordance. The signal and the
+    // effect are declared unconditionally so SSR and the hydrating WASM
+    // bundle agree on hook count and order — Dioxus tracks hooks
+    // positionally, and a cfg-gated declaration would diverge the two.
+    // The effect itself only runs on the client (Dioxus skips `use_effect`
+    // during SSR), and `data::current_user()` resolves to an
+    // `Ok(None)`-returning stub under server-only builds, so no admin
+    // surface ever leaks into the prerendered markup. Mobile renders no
+    // admin surfaces; the server-side `AdminUser` extractor on
+    // `rpc_merge_books` is the actual security boundary.
     let mut is_admin = use_signal(|| false);
-    #[cfg(feature = "web")]
     use_effect(move || {
         spawn(async move {
             if let Ok(Some(user)) = data::current_user().await {
@@ -127,10 +132,10 @@ pub fn BookDetailPage(uuid: String) -> Element {
         };
     };
 
-    #[cfg(feature = "web")]
+    // `is_admin` starts at `false` and only flips to `true` on the web
+    // client after `current_user()` resolves an admin user, so this read
+    // returns `false` during SSR and for non-admins on every platform.
     let is_admin_flag = is_admin();
-    #[cfg(not(feature = "web"))]
-    let is_admin_flag = false;
     #[cfg_attr(feature = "mobile", allow(unused_variables))]
     let page_title = b.title.clone().unwrap_or_else(|| b.filename.clone());
     #[cfg_attr(feature = "mobile", allow(unused_variables))]
