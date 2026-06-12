@@ -279,10 +279,12 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                 }
                 if !filtered.is_empty() || show_create_row {
                     SuggestionDropdown {
-                        filtered: filtered.clone(),
-                        show_create_row,
-                        typed: typed.clone(),
-                        highlight: highlight(),
+                        selection: DropdownSelectionState {
+                            filtered: filtered.clone(),
+                            show_create_row,
+                            typed: typed.clone(),
+                            highlight: highlight(),
+                        },
                         dropdown_header: props.dropdown_header.clone(),
                         testid: testid_suggestions.clone(),
                         on_pick: move |name: String| commit(name),
@@ -338,18 +340,34 @@ fn ChipList(
     }
 }
 
-/// Autocomplete dropdown — filtered suggestion rows plus an optional
-/// "+ Create" trailing row. `on_pick` fires with the chosen name.
-#[component]
-fn SuggestionDropdown(
+/// Per-render selection state for the dropdown: the visible suggestion
+/// rows, whether a "+ Create" trailing row is shown, the raw text to
+/// quote inside that row, and the keyboard highlight cursor. Grouped
+/// so the dropdown signature stays compact as new pieces of selection
+/// state accrete.
+#[derive(Clone, PartialEq)]
+struct DropdownSelectionState {
     filtered: Vec<SuggestionItem>,
     show_create_row: bool,
     typed: String,
     highlight: Option<usize>,
+}
+
+/// Autocomplete dropdown — filtered suggestion rows plus an optional
+/// "+ Create" trailing row. `on_pick` fires with the chosen name.
+#[component]
+fn SuggestionDropdown(
+    selection: DropdownSelectionState,
     dropdown_header: String,
     testid: String,
     on_pick: EventHandler<String>,
 ) -> Element {
+    let DropdownSelectionState {
+        filtered,
+        show_create_row,
+        typed,
+        highlight,
+    } = selection;
     let create_row_index = filtered.len();
     rsx! {
         ul {

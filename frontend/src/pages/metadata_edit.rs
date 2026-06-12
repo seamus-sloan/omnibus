@@ -19,7 +19,7 @@ mod sidebar;
 
 use form_grid::{FormFields, FormGrid, FormSuggestions};
 use header::{Breadcrumb, PageHeader};
-use save_bar::SaveBar;
+use save_bar::{DirtyState, SaveBar, SaveStatus};
 use sidebar::Sidebar;
 
 /// Top-level metadata edit page component, mounted at `/books/:uuid/edit`.
@@ -303,10 +303,14 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
 
             SaveBar {
                 uuid,
-                dirty_fields,
-                dirty_count,
-                saving,
-                save_error,
+                dirty: DirtyState {
+                    fields: dirty_fields,
+                    count: dirty_count,
+                },
+                status: SaveStatus {
+                    saving,
+                    error: save_error,
+                },
                 on_save,
             }
         }

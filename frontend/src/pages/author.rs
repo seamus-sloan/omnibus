@@ -245,9 +245,11 @@ fn render_author(
                         author_name: a.name.clone(),
                         book_count: a.book_count,
                         server_url: server_url.clone(),
-                        show_confirm,
-                        deleting,
-                        delete_error,
+                        state: AuthorDeleteState {
+                            show_confirm,
+                            deleting,
+                            delete_error,
+                        },
                     }
                 });
                 #[cfg(feature = "mobile")]
@@ -316,6 +318,19 @@ fn render_author(
     }
 }
 
+/// Transient state for the delete-author modal: whether the confirm
+/// pane is open, whether a delete RPC is in flight, and the most
+/// recent error message (if any). Grouped because all three change
+/// together across the confirm/run/error lifecycle, and keep the
+/// modal's signature focused on the stable identity props.
+#[cfg(not(feature = "mobile"))]
+#[derive(Clone, Copy, PartialEq)]
+struct AuthorDeleteState {
+    show_confirm: Signal<bool>,
+    deleting: Signal<bool>,
+    delete_error: Signal<Option<String>>,
+}
+
 /// Confirmation modal for the admin "Delete author" action. On confirm,
 /// hits the `rpc_delete_author` server fn (which un-links every book,
 /// inserts the name into `ignored_authors`, and refreshes FTS) then
@@ -330,10 +345,13 @@ fn AuthorDeleteModal(
     author_name: String,
     book_count: usize,
     server_url: String,
-    show_confirm: Signal<bool>,
-    deleting: Signal<bool>,
-    delete_error: Signal<Option<String>>,
+    state: AuthorDeleteState,
 ) -> Element {
+    let AuthorDeleteState {
+        show_confirm,
+        deleting,
+        delete_error,
+    } = state;
     let mut show_confirm = show_confirm;
     let mut deleting = deleting;
     let mut delete_error = delete_error;

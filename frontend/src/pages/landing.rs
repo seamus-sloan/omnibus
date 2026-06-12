@@ -22,7 +22,7 @@ use filtering::{apply_filters, facet_counts};
 use filters::{EmptyFiltered, FilterSidebar, FormatChips};
 use grid::BookGrid;
 use sorting::{default_dir_for, sort_books, toggle_dir};
-use table::BookTable;
+use table::{BookTable, BookTableContext};
 use toolbar::Toolbar;
 
 /// Landing page — primary library surface.
@@ -256,10 +256,12 @@ pub fn LandingPage() -> Element {
                                         save(next);
                                     }
                                 },
-                                server_url: server_url_for_row.clone(),
-                                is_admin: is_admin(),
-                                author_suggestions,
-                                tag_suggestions,
+                                ctx: BookTableContext {
+                                    server_url: server_url_for_row.clone(),
+                                    is_admin: is_admin(),
+                                    author_suggestions: author_suggestions.into(),
+                                    tag_suggestions: tag_suggestions.into(),
+                                },
                             }
                         },
                         ViewMode::Grid => rsx! {

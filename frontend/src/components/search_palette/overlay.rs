@@ -8,7 +8,7 @@ use dioxus::prelude::*;
 use dioxus_router::use_navigator;
 use omnibus_shared::PaletteResults;
 
-use super::keyboard::make_keydown_handler;
+use super::keyboard::{make_keydown_handler, KeyboardContext};
 use super::model::{build_flat_items, plural};
 use super::results::SpResultsList;
 use super::PaletteOpen;
@@ -41,7 +41,14 @@ pub(super) fn SpOverlay(open: PaletteOpen) -> Element {
         open.0.set(false);
     };
 
-    let on_keydown = make_keydown_handler(open, selected, has_navigated, flat_items, query, nav);
+    let on_keydown = make_keydown_handler(KeyboardContext {
+        open,
+        selected,
+        has_navigated,
+        flat_items,
+        query,
+        nav,
+    });
 
     // Debounced search. Uses gloo_timers on web, tokio::time on server.
     // Each keystroke cancels the prior task (debounce sleep + RPC) before

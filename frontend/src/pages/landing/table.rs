@@ -33,18 +33,21 @@ enum EditField {
     Authors,
 }
 
+/// Per-page context threaded through `BookTable` → `EbookRow` → cells.
+#[derive(Clone, PartialEq)]
+pub(super) struct BookTableContext {
+    pub(super) server_url: String,
+    pub(super) is_admin: bool,
+    pub(super) author_suggestions: ReadSignal<Vec<SuggestionItem>>,
+    pub(super) tag_suggestions: ReadSignal<Vec<SuggestionItem>>,
+}
+
 #[component]
 pub(super) fn BookTable(
     books: Vec<EbookMetadata>,
     prefs: ViewPrefs,
     on_sort: EventHandler<SortKey>,
-    server_url: String,
-    is_admin: bool,
-    // Forwarded by reference (ReadSignal) all the way down so the
-    // suggestion pool isn't cloned at any intermediate layer — even on
-    // libraries with thousands of authors.
-    author_suggestions: ReadSignal<Vec<SuggestionItem>>,
-    tag_suggestions: ReadSignal<Vec<SuggestionItem>>,
+    ctx: BookTableContext,
 ) -> Element {
     rsx! {
         div {
@@ -101,10 +104,7 @@ pub(super) fn BookTable(
                         EbookRow {
                             key: "{book.filename}",
                             book: book,
-                            server_url: server_url.clone(),
-                            is_admin,
-                            author_suggestions,
-                            tag_suggestions,
+                            ctx: ctx.clone(),
                         }
                     }
                 }
@@ -146,13 +146,13 @@ fn SortableHeader(
 }
 
 #[component]
-fn EbookRow(
-    book: EbookMetadata,
-    server_url: String,
-    is_admin: bool,
-    author_suggestions: ReadSignal<Vec<SuggestionItem>>,
-    tag_suggestions: ReadSignal<Vec<SuggestionItem>>,
-) -> Element {
+fn EbookRow(book: EbookMetadata, ctx: BookTableContext) -> Element {
+    let BookTableContext {
+        server_url,
+        is_admin,
+        author_suggestions,
+        tag_suggestions,
+    } = ctx;
     // Stable per-book uuid drives both the detail-route URL and the
     // thumbnail URL — see `Route::BookDetail` for why it's keyed on the
     // uuid instead of `books.id`.

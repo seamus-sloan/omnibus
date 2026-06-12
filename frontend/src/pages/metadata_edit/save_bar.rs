@@ -9,16 +9,36 @@ use dioxus_router::Link;
 
 use crate::Route;
 
+/// Dirty-tracking memos forwarded to the save bar.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct DirtyState {
+    pub(super) fields: Memo<Vec<&'static str>>,
+    pub(super) count: Memo<usize>,
+}
+
+/// In-flight save status: in-progress flag plus last error message.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct SaveStatus {
+    pub(super) saving: Signal<bool>,
+    pub(super) error: Signal<Option<String>>,
+}
+
 /// Dirty-field summary + Discard/Save actions.
 #[component]
 pub(super) fn SaveBar(
     uuid: String,
-    dirty_fields: Memo<Vec<&'static str>>,
-    dirty_count: Memo<usize>,
-    saving: Signal<bool>,
-    save_error: Signal<Option<String>>,
+    dirty: DirtyState,
+    status: SaveStatus,
     on_save: EventHandler<()>,
 ) -> Element {
+    let DirtyState {
+        fields: dirty_fields,
+        count: dirty_count,
+    } = dirty;
+    let SaveStatus {
+        saving,
+        error: save_error,
+    } = status;
     rsx! {
         div { class: "me-save-bar",
             if dirty_count() > 0 {

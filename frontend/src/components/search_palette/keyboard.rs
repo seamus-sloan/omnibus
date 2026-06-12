@@ -9,15 +9,26 @@ use super::model::{facet_query, FlatItem};
 use super::PaletteOpen;
 use crate::Route;
 
+/// Inputs read or mutated by the palette's keydown handler.
+pub(super) struct KeyboardContext {
+    pub(super) open: PaletteOpen,
+    pub(super) selected: Signal<usize>,
+    pub(super) has_navigated: Signal<bool>,
+    pub(super) flat_items: Memo<Vec<FlatItem>>,
+    pub(super) query: Signal<String>,
+    pub(super) nav: dioxus_router::Navigator,
+}
+
 /// Build the `onkeydown` event handler for the palette panel.
-pub(super) fn make_keydown_handler(
-    mut open: PaletteOpen,
-    mut selected: Signal<usize>,
-    mut has_navigated: Signal<bool>,
-    flat_items: Memo<Vec<FlatItem>>,
-    query: Signal<String>,
-    nav: dioxus_router::Navigator,
-) -> impl FnMut(Event<KeyboardData>) {
+pub(super) fn make_keydown_handler(ctx: KeyboardContext) -> impl FnMut(Event<KeyboardData>) {
+    let KeyboardContext {
+        mut open,
+        mut selected,
+        mut has_navigated,
+        flat_items,
+        query,
+        nav,
+    } = ctx;
     move |evt: Event<KeyboardData>| {
         let key = evt.key();
         match key {
