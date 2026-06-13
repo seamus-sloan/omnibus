@@ -48,18 +48,30 @@ Override `PORT` (default `3000`) if you need a different port. Playwright target
 
 Non-secret defaults stay in the shellHook above. Anything with a secret — passwords, tokens, per-developer overrides — lives in a gitignored `.env` at the repo root. The shellHook sources `.env` **after** its own exports, so `.env` always wins on conflict.
 
-- [`.env.example`](../../.env.example) is checked in and documents every supported var with example values.
+- [`.env.example`](../../.env.example) is the **canonical, complete reference** — every supported var is documented there with example values and warnings. Keep it and this rule in sync (rule 99 step 3).
 - `.env` is gitignored. Copy from `.env.example` on first checkout.
 
-Currently documented:
+Key vars (see `.env.example` for the full annotated list):
 
 - `OMNIBUS_DEV_SEED_USER=username:password` — creates a named admin user on server boot if absent. Dev convenience for `ui-validate` and parallel agents; never set in production. Password must satisfy `db::auth` validation (≥10 chars, not in `COMMON_PASSWORDS`).
 - `OMNIBUS_SECURE_COOKIES=0` — disables the `Secure` flag on session cookies. The default is `true` (secure-by-default). Browsers treat `http://localhost` as a secure context, so the Nix dev shell does not need this override; only set `0` when serving plain `http://` from a non-localhost origin (e.g. an IP-based dev server on a LAN). Never set in production.
+- `EBOOK_LIBRARY_PATH` / `AUDIOBOOK_LIBRARY_PATH` — pre-seed library paths via the `seed_settings_from_env` boot hook (runs every boot; overwrites the settings row with BOTH values, so set both together or neither). For CI / Docker / dev-up; leave unset in production.
+
+**Security-sensitive (never set casually in production):**
+
+- `OMNIBUS_INITIAL_ADMIN=username` — promotes the named user to admin on **every** boot while set. One-time account recovery only — UNSET IMMEDIATELY AFTER USE.
+- `OMNIBUS_TRUST_FORWARDED_FOR=1` — trust the client `X-Forwarded-For` as the per-IP rate-limit key. MUST NOT be set unless a trusted reverse proxy strips inbound `X-Forwarded-For`; on a directly-exposed deployment it lets any client spoof a fresh bucket and bypass the login throttle (credential stuffing).
 
 Optional storage overrides:
 - `OMNIBUS_COVERS_DIR` — where cover image files are stored (default `./covers`). Set to an absolute path on real deployments so covers don't land next to the binary and disappear on redeploy.
 - `OMNIBUS_THUMBS_DIR` — where WebP thumbnails are cached (default `./thumbs`)
 - `OMNIBUS_THUMBS_CAP_BYTES` — eviction cap in bytes (default 5 GiB)
+
+HLS audiobook transcode cache (read by `db::hls`):
+- `OMNIBUS_DATA_DIR` — base data dir; HLS segments live under `$OMNIBUS_DATA_DIR/hls/` (default `./data`)
+- `OMNIBUS_HLS_CAP_BYTES` — HLS cache eviction cap in bytes (default 5 GiB)
+- `OMNIBUS_HLS_TRANSCODE_TIMEOUT_SECS` — ffmpeg watchdog per book in seconds (default 1800)
+- `OMNIBUS_FFMPEG_PATH` — explicit ffmpeg path; otherwise ffmpeg must be on `$PATH`
 
 If `ANDROID_HOME` / `ANDROID_NDK_HOME` come back empty inside `nix develop .#mobile`, set them manually:
 

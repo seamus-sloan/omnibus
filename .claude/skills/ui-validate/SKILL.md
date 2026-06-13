@@ -50,7 +50,7 @@ This is the process-start timestamp. Any Rust HMR cycle restarts the process, so
 
 ## 4. Open the page and log in
 
-Use the Chrome DevTools MCP. The session cookie is `HttpOnly` (see `server/src/auth/handlers.rs`) and can't be injected from JS — drive the login form:
+Use Claude Preview (`mcp__Claude_Preview__preview_*`). The session cookie is `HttpOnly` (see `server/src/auth/handlers.rs`) and can't be injected from JS — drive the login form:
 
 1. `mcp__Claude_Preview__preview_start` → `http://localhost:$OMNIBUS_PORT/login`
 2. `mcp__Claude_Preview__preview_fill` username `admin` / password `omnibus-dev` (matches `.env.example`)

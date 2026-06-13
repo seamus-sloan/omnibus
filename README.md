@@ -2,7 +2,7 @@
 
 Self-hosted ebook and audiobook library — the Plex/Jellyfin for your book collection. Built with Rust (Axum + Dioxus), SQLite, and a native iOS/Android app.
 
-> **Status:** early development. The current UI is a placeholder counter; see [docs/roadmap/0-0-summary.md](docs/roadmap/0-0-summary.md) for planned features.
+> **Status:** early development. Foundations and browse/discovery have shipped and reading/listening is in progress — landing grid/table, EPUB reader, audiobook player, command-palette search, and auth are live. See [docs/roadmap/0-0-summary.md](docs/roadmap/0-0-summary.md) for the full roadmap.
 
 ## Running
 This project utilizes [Nix](https://wiki.nixos.org/wiki/NixOS_Wiki) to save all dependencies.
