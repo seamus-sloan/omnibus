@@ -11,12 +11,14 @@
 //!   web stubs so SSR-during-fullstack-render still returns sensible data.
 //!
 //! Per-domain wrappers live in the [`auth`], [`authors`], [`books`],
-//! [`progress`], [`series`], and [`tags`] submodules and are re-exported
-//! here so callers keep importing through `omnibus_frontend::data::*`.
+//! [`highlights`], [`progress`], [`series`], and [`tags`] submodules and
+//! are re-exported here so callers keep importing through
+//! `omnibus_frontend::data::*`.
 
 mod auth;
 mod authors;
 mod books;
+mod highlights;
 mod progress;
 mod series;
 mod tags;
@@ -28,6 +30,7 @@ mod tags;
 pub use auth::*;
 pub use authors::*;
 pub use books::*;
+pub use highlights::*;
 pub use progress::*;
 pub use series::*;
 pub use tags::*;

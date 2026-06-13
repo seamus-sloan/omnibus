@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use axum::{
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{delete, get, patch, post, put},
     Extension, Router,
 };
 use omnibus_db::{
@@ -26,6 +26,7 @@ mod authors;
 mod covers;
 mod ebooks;
 mod health;
+mod highlights;
 mod overrides;
 mod progress;
 mod search;
@@ -210,6 +211,22 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
         .route("/api/progress", post(progress::post_progress))
         .route("/api/progress/sessions", post(progress::post_sessions))
         .route("/api/progress/{uuid}", get(progress::get_progress))
+        // F2.4b highlight annotations — mobile-facing REST. Web hits the
+        // analogous `/api/rpc/highlights/*` server functions.
+        .route("/api/highlights", post(highlights::post_highlight))
+        .route(
+            "/api/highlights/book/{book_uuid}",
+            get(highlights::get_highlights),
+        )
+        .route(
+            "/api/highlights/{id}/color",
+            patch(highlights::patch_highlight_color),
+        )
+        .route(
+            "/api/highlights/{id}/note",
+            patch(highlights::patch_highlight_note),
+        )
+        .route("/api/highlights/{id}", delete(highlights::delete_highlight))
         // GET/DELETE for author photos carry no upload body (DELETE mutates,
         // but cheaply — it clears photo state, it doesn't ingest one), so
         // they stay outside the rate-limited `upload_router`. Only the binary
