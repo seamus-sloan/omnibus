@@ -3762,6 +3762,23 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-scrim { position: absolute; inset: 0; z-index: 8;
   background: color-mix(in oklch, var(--bg-0) 55%, transparent);
   backdrop-filter: blur(1.5px); }
+.rd-scrim-clear { background: transparent; backdrop-filter: none; z-index: 18; }
+
+/* ── Selection popover (highlights) ────────────────────────────── */
+.rd-selection-popover { position: absolute; z-index: 20;
+  padding: 8px 12px; border-radius: 10px;
+  background: color-mix(in oklch, var(--bg-1) 90%, transparent);
+  backdrop-filter: blur(12px); border: 1px solid var(--border);
+  box-shadow: 0 4px 16px rgba(0,0,0,.3); }
+.rd-swatch-row { display: flex; gap: 8px; }
+.rd-swatch { width: 28px; height: 28px; border-radius: 50%;
+  border: 2px solid transparent; cursor: pointer; transition: transform .1s; }
+.rd-swatch:hover { transform: scale(1.15); }
+.rd-swatch[data-color="amber"]  { background: rgba(245,158,11,.7); }
+.rd-swatch[data-color="green"]  { background: rgba(34,197,94,.7); }
+.rd-swatch[data-color="blue"]   { background: rgba(59,130,246,.7); }
+.rd-swatch[data-color="rose"]   { background: rgba(244,63,94,.7); }
+.rd-swatch[data-color="violet"] { background: rgba(139,92,246,.7); }
 
 /* ── F5.10 merge dialog + toast (book detail) ──────────────────── */
 .bd-merge-modal { max-width: 520px; width: 100%; }

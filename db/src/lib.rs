@@ -14,6 +14,7 @@ pub mod covers;
 pub mod discovery;
 pub mod ebook;
 pub mod helpers;
+pub mod highlights;
 pub mod hls;
 pub mod indexer;
 pub mod library_layout;

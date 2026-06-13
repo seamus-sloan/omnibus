@@ -16,12 +16,26 @@
  * cookie is sent automatically.
  *
  * Public surface: window.OmnibusReader
- *   init(elementId, fileUrl, opts)  opts = { cfi?, fontSize?, theme? }
+ *   init(elementId, fileUrl, opts)  opts = { cfi?, fontSize?, theme?,
+ *                                           fontFamily?, lineHeight?,
+ *                                           maxWidth?, justify? }
  *   next()
  *   prev()
  *   setFontSize(px)
  *   setTheme(name)
+ *   setFont(family)
+ *   setLineHeight(value)
+ *   setMargins(maxWidth)
+ *   setJustify(on)
+ *   addAnnotation(cfiRange, color)
+ *   removeAnnotation(cfiRange)
+ *   clearAnnotations()
  *   destroy()
+ *
+ * Selection callback:
+ *   - `__omnibusOnSelection(json)` — invoked when the user selects text,
+ *     with { cfiRange, text, rect: { x, y, width, height } } where rect
+ *     is in viewport coordinates.
  */
 (function () {
   "use strict";
@@ -142,6 +156,10 @@
       if (opts.fontSize) {
         rendition.themes.fontSize(opts.fontSize + "px");
       }
+      if (opts.fontFamily) setFont(opts.fontFamily);
+      if (opts.lineHeight) setLineHeight(opts.lineHeight);
+      if (opts.maxWidth) setMargins(opts.maxWidth);
+      if (opts.justify !== undefined) setJustify(opts.justify);
     } catch (e) {
       emitStatus("error");
       return;
@@ -185,6 +203,35 @@
         emitRelocate(location);
       }, 400);
     });
+
+    rendition.on("selected", function (cfiRange, contents) {
+      if (typeof window.__omnibusOnSelection !== "function") return;
+      if (!contents || !contents.window) return;
+      var sel = contents.window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
+      var text = sel.toString().trim();
+      var range = sel.getRangeAt(0);
+      var iframeRect = { x: 0, y: 0 };
+      try {
+        var frame = contents.content.ownerDocument.defaultView.frameElement;
+        if (frame) {
+          var fr = frame.getBoundingClientRect();
+          iframeRect = { x: fr.left, y: fr.top };
+        }
+      } catch (e) { /* cross-origin safety */ }
+      var r = range.getBoundingClientRect();
+      var rect = {
+        x: r.left + iframeRect.x,
+        y: r.top + iframeRect.y,
+        width: r.width,
+        height: r.height,
+      };
+      window.__omnibusOnSelection(JSON.stringify({
+        cfiRange: cfiRange,
+        text: text,
+        rect: rect,
+      }));
+    });
   }
 
   function emitRelocate(location) {
@@ -214,6 +261,66 @@
     rendition.themes.select(name);
   }
 
+  function setFont(family) {
+    if (!rendition) return;
+    rendition.themes.font(family);
+  }
+
+  function setLineHeight(value) {
+    if (!rendition) return;
+    rendition.themes.override("line-height", value);
+  }
+
+  function setMargins(maxWidth) {
+    if (!rendition) return;
+    rendition.themes.override("max-width", maxWidth);
+    rendition.themes.override("margin", "0 auto");
+  }
+
+  function setJustify(on) {
+    if (!rendition) return;
+    rendition.themes.override("text-align", on ? "justify" : "start");
+  }
+
+  // Solid fills — transparency is applied once via the `fill-opacity`
+  // attribute below. Baking alpha into the color too would multiply with
+  // fill-opacity (0.3 x 0.3) and render the highlight nearly invisible.
+  var HIGHLIGHT_COLORS = {
+    amber:  "rgb(245, 158, 11)",
+    green:  "rgb(34, 197, 94)",
+    blue:   "rgb(59, 130, 246)",
+    rose:   "rgb(244, 63, 94)",
+    violet: "rgb(139, 92, 246)",
+  };
+
+  function addAnnotation(cfiRange, color) {
+    if (!rendition) return;
+    var fill = HIGHLIGHT_COLORS[color] || HIGHLIGHT_COLORS.amber;
+    rendition.annotations.add(
+      "highlight", cfiRange, {}, undefined,
+      "hl-" + color,
+      { fill: fill, "fill-opacity": "0.3", "mix-blend-mode": "multiply" }
+    );
+  }
+
+  function removeAnnotation(cfiRange) {
+    if (!rendition) return;
+    rendition.annotations.remove(cfiRange, "highlight");
+  }
+
+  function clearAnnotations() {
+    if (!rendition || !rendition.annotations) return;
+    var store = rendition.annotations._annotations;
+    if (!store) return;
+    var keys = Object.keys(store);
+    for (var i = 0; i < keys.length; i++) {
+      var entry = store[keys[i]];
+      if (entry && entry.type === "highlight") {
+        rendition.annotations.remove(entry.cfiRange, "highlight");
+      }
+    }
+  }
+
   function destroy() {
     if (!rendition) return;
     teardown();
@@ -225,6 +332,13 @@
     prev: prev,
     setFontSize: setFontSize,
     setTheme: setTheme,
+    setFont: setFont,
+    setLineHeight: setLineHeight,
+    setMargins: setMargins,
+    setJustify: setJustify,
+    addAnnotation: addAnnotation,
+    removeAnnotation: removeAnnotation,
+    clearAnnotations: clearAnnotations,
     destroy: destroy,
   };
 })();
