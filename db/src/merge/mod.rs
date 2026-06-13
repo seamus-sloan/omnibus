@@ -22,8 +22,6 @@ pub enum MergeError {
     SameBook,
     #[error("book not found: {0}")]
     BookNotFound(String),
-    #[error("both books already have a {0} file")]
-    FormatCollision(String),
     #[error("merge log entry not found")]
     LogNotFound,
     #[error("merge was already undone")]

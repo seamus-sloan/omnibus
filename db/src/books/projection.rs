@@ -81,7 +81,7 @@ pub(crate) const BOOK_COLUMNS: &str = r#"
               ORDER BY scheme, value))            AS identifiers_json,
 
     (SELECT json_group_array(format)
-       FROM (SELECT format FROM book_files
+       FROM (SELECT DISTINCT format FROM book_files
               WHERE book_id = b.id
               ORDER BY format))                   AS formats_json
 "#;
@@ -188,6 +188,7 @@ pub(crate) fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata,
         added_at: r.get("timestamp"),
         error: None,
         has_override: false,
+        book_files: Vec::new(),
     })
 }
 

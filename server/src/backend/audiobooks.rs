@@ -21,7 +21,7 @@
 
 use axum::{
     body::Body,
-    extract::{Path, Request, State},
+    extract::{Path, Query, Request, State},
     response::{IntoResponse, Response},
     Json,
 };
@@ -31,12 +31,18 @@ use omnibus_db::{
     worker::Task,
 };
 use omnibus_shared::{AudiobookManifest, ManifestPart};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
 use super::{internal, AppState};
 use crate::auth::AuthUser;
+
+/// Query parameters for `GET /api/audiobooks/{uuid}/manifest`.
+#[derive(Deserialize)]
+pub(super) struct ManifestQuery {
+    file_id: Option<i64>,
+}
 
 /// Returns the HLS VOD manifest for `uuid` (always built from DB — no
 /// filesystem read). The manifest is derived from stored
@@ -89,16 +95,17 @@ pub(super) async fn get_audiobook_playlist(
         .into_response()
 }
 
-/// Returns the playback manifest for `uuid`. Routes direct-playable books
-/// (m4b / m4a / mp3) to per-part HTTP Range URLs and everything else (mixed
-/// folders containing flac / ac3 / …) to the legacy HLS playlist. The codec
-/// gate lives in [`omnibus_db::audiobook::codec`].
+/// Returns the playback manifest for `uuid`. Accepts an optional
+/// `?file_id=N` to target a specific `book_files` row (for multi-file
+/// books after merge). Routes direct-playable books (m4b / m4a / mp3) to
+/// per-part HTTP Range URLs and everything else to the legacy HLS playlist.
 pub(super) async fn get_audiobook_manifest(
     _user: AuthUser,
     State(state): State<AppState>,
     Path(uuid): Path<String>,
+    Query(query): Query<ManifestQuery>,
 ) -> Response {
-    let resolved = match hls::resolve_audiobook(&state.pool, &uuid).await {
+    let resolved = match hls::resolve_audiobook_file(&state.pool, &uuid, query.file_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
         Err(e) => return internal("resolve_audiobook", e),
@@ -116,6 +123,10 @@ pub(super) async fn get_audiobook_manifest(
     }
 
     let filenames: Vec<&str> = parts.iter().map(|p| p.filename.as_str()).collect();
+    let file_id_suffix = query
+        .file_id
+        .map(|fid| format!("?file_id={fid}"))
+        .unwrap_or_default();
     let manifest = match audiobook::classify_filenames(&filenames) {
         PlaybackMode::Direct => {
             let total_duration_seconds = parts.iter().map(|p| p.duration_seconds).sum();
@@ -123,7 +134,10 @@ pub(super) async fn get_audiobook_manifest(
                 .iter()
                 .map(|p| ManifestPart {
                     ordinal: p.ordinal,
-                    url: format!("/api/audiobooks/{uuid}/parts/{}", p.ordinal),
+                    url: format!(
+                        "/api/audiobooks/{uuid}/parts/{}{}",
+                        p.ordinal, file_id_suffix
+                    ),
                     duration_seconds: p.duration_seconds,
                     mime: audiobook::mime_for_filename(&p.filename).to_string(),
                 })
@@ -146,20 +160,22 @@ pub(super) async fn get_audiobook_manifest(
     Json(manifest).into_response()
 }
 
+/// Query parameters for `GET /api/audiobooks/{uuid}/parts/{ordinal}`.
+#[derive(Deserialize)]
+pub(super) struct PartsQuery {
+    file_id: Option<i64>,
+}
+
 /// Range-served raw file for one part of a direct-play audiobook.
-/// Mirrors the `get_audiobook_segment` HLS-segment path (same
-/// `ServeFile` + `oneshot` shape) but reads the source file from the
-/// library rather than the HLS cache. Out-of-range ordinal → 404;
-/// missing file on disk → 404 from `ServeFile` itself. HLS-classified
-/// books (e.g. mixed folders containing flac) → 404, since `/manifest`
-/// already routed them to the HLS playlist.
+/// Accepts optional `?file_id=N` to target a specific `book_files` row.
 pub(super) async fn get_audiobook_part(
     _user: AuthUser,
     State(state): State<AppState>,
     Path((uuid, ordinal)): Path<(String, i64)>,
+    Query(query): Query<PartsQuery>,
     req: Request,
 ) -> Response {
-    let resolved = match hls::resolve_audiobook(&state.pool, &uuid).await {
+    let resolved = match hls::resolve_audiobook_file(&state.pool, &uuid, query.file_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
         Err(e) => return internal("resolve_audiobook", e),

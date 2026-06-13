@@ -242,9 +242,9 @@ pub async fn rpc_get_ebook(uuid: String) -> Result<Option<EbookMetadata>> {
 /// Admin: merge the book `source_uuid` into `target_uuid` — the target
 /// absorbs the source's files, links, identifiers, and progress; the
 /// source row disappears. Returns the `merge_log` id (the undo handle)
-/// and the surviving uuid. Domain failures (`SameBook`,
-/// `FormatCollision`, …) surface as their display strings so the dialog
-/// can render them directly.
+/// and the surviving uuid. Same-format files are allowed (e.g. merging
+/// five M4B books into one). Domain failures (`SameBook`, …) surface as
+/// their display strings so the dialog can render them directly.
 #[post("/api/rpc/merge-books", pool: PoolExt, admin: AdminUser)]
 pub async fn rpc_merge_books(source_uuid: String, target_uuid: String) -> Result<MergeBooksResult> {
     let out = db::merge_books(&pool.0, &source_uuid, &target_uuid, Some(admin.0.id)).await?;

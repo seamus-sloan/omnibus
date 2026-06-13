@@ -16,9 +16,8 @@ use super::{MergeError, MergeOutcome};
 /// files, links, identifiers, progress, and history move over; the
 /// source row is deleted and snapshotted into `merge_log` for undo.
 ///
-/// Fails with [`MergeError::FormatCollision`] when both books carry a
-/// file of the same format — merging would have to discard one, so we
-/// refuse instead.
+/// Same-format files are allowed: if both books carry M4B files, the
+/// source's files are appended after the target's (ordinal offset).
 pub async fn merge_books(
     pool: &SqlitePool,
     source_uuid: &str,
@@ -35,8 +34,6 @@ pub async fn merge_books(
     if source_id == target_id {
         return Err(MergeError::SameBook);
     }
-    check_format_collision(&mut tx, source_id, target_id).await?;
-
     let snapshot = build_snapshot(&mut tx, source_id).await?;
 
     move_book_files(
@@ -47,6 +44,7 @@ pub async fn merge_books(
         &snapshot.path,
     )
     .await?;
+    assign_ordinals_after_move(&mut tx, target_id, &snapshot.title).await?;
     move_links(&mut tx, source_id, target_id).await?;
     move_progress_and_history(&mut tx, source_id, target_id).await?;
     move_identifiers(&mut tx, source_id, target_id).await?;
@@ -141,33 +139,72 @@ async fn resolve_book(
         .ok_or_else(|| MergeError::BookNotFound(uuid.to_owned()))
 }
 
-/// Reject the merge when both books carry the same file format.
-async fn check_format_collision(
+/// Sentinel offset added by `move_book_files` to source ordinals before
+/// the re-parent, preventing UNIQUE constraint violations during the move.
+const ORDINAL_OFFSET: i64 = 1000;
+
+/// After re-parenting source files onto the target, assign clean ordinals
+/// to moved files. Moved files carry temporary ordinals (>= ORDINAL_OFFSET)
+/// from `move_book_files`; this normalizes them to consecutive values
+/// starting after the target's existing files. Their `label` is set to
+/// the source book's title so the file picker shows a meaningful name.
+async fn assign_ordinals_after_move(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
-    source_id: i64,
     target_id: i64,
-) -> Result<(), MergeError> {
-    let collision: Option<String> = sqlx::query_scalar(
-        "SELECT s.format FROM book_files s
-          WHERE s.book_id = ?1
-            AND EXISTS (SELECT 1 FROM book_files t
-                        WHERE t.book_id = ?2 AND t.format = s.format)
-          LIMIT 1",
+    source_title: &str,
+) -> Result<(), sqlx::Error> {
+    let formats_with_moves: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT format FROM book_files
+          WHERE book_id = ? AND ordinal >= ?",
     )
-    .bind(source_id)
     .bind(target_id)
-    .fetch_optional(&mut **tx)
+    .bind(ORDINAL_OFFSET)
+    .fetch_all(&mut **tx)
     .await?;
-    match collision {
-        Some(fmt) => Err(MergeError::FormatCollision(fmt)),
-        None => Ok(()),
+
+    for fmt in &formats_with_moves {
+        let max_existing: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(ordinal), -1) FROM book_files
+              WHERE book_id = ? AND format = ? AND ordinal < ?",
+        )
+        .bind(target_id)
+        .bind(fmt)
+        .bind(ORDINAL_OFFSET)
+        .fetch_one(&mut **tx)
+        .await?;
+
+        let moved_ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM book_files
+              WHERE book_id = ? AND format = ? AND ordinal >= ?
+              ORDER BY ordinal, filename",
+        )
+        .bind(target_id)
+        .bind(fmt)
+        .bind(ORDINAL_OFFSET)
+        .fetch_all(&mut **tx)
+        .await?;
+
+        for (i, file_id) in moved_ids.iter().enumerate() {
+            let new_ordinal = max_existing + 1 + i as i64;
+            sqlx::query(
+                "UPDATE book_files SET ordinal = ?, label = COALESCE(label, ?)
+                  WHERE id = ?",
+            )
+            .bind(new_ordinal)
+            .bind(source_title)
+            .bind(file_id)
+            .execute(&mut **tx)
+            .await?;
+        }
     }
+    Ok(())
 }
 
 /// Re-parent the source's `book_files` rows (parts and chapters follow
-/// via their `book_file_id` FK). Rows without a location override get
-/// the source's `(library root, dir)` stamped in — under the target the
-/// inherited values would point at the wrong directory.
+/// via their `book_file_id` FK). To avoid violating the
+/// `UNIQUE(book_id, format, ordinal)` constraint, source files are given
+/// temporary high ordinals before the re-parent; `assign_ordinals_after_move`
+/// cleans them up to consecutive values.
 async fn move_book_files(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     source_id: i64,
@@ -175,6 +212,20 @@ async fn move_book_files(
     source_library_path: &str,
     source_path: &str,
 ) -> Result<(), sqlx::Error> {
+    let max_target: i64 =
+        sqlx::query_scalar("SELECT COALESCE(MAX(ordinal), -1) FROM book_files WHERE book_id = ?")
+            .bind(target_id)
+            .fetch_one(&mut **tx)
+            .await?;
+
+    // Offset source ordinals so they land above anything on the target,
+    // preventing collisions during the re-parent UPDATE.
+    sqlx::query("UPDATE book_files SET ordinal = ordinal + ?1 WHERE book_id = ?2")
+        .bind(max_target + ORDINAL_OFFSET)
+        .bind(source_id)
+        .execute(&mut **tx)
+        .await?;
+
     sqlx::query(
         "UPDATE book_files SET
             book_id = ?1,

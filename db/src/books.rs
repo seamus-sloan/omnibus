@@ -25,7 +25,10 @@ mod search;
 #[cfg(test)]
 mod tests;
 
-pub use get::{book_file_path, get_book, get_book_by_uuid, resolve_book_id_by_uuid};
+pub use get::{
+    book_file_path, book_file_path_by_id, get_book, get_book_by_uuid, get_book_files,
+    resolve_book_id_by_uuid,
+};
 pub use list::{
     collect_paths, count_books, count_books_for_paths, library_from_db, library_from_db_combined,
     library_from_db_with_total, library_from_db_with_total_combined, list_books,
