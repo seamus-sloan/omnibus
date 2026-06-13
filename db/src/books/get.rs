@@ -49,6 +49,18 @@ pub async fn get_book(
     // authors table by name. Mirrors the series_id backfill above.
     backfill_creator_ids(pool, std::slice::from_mut(&mut book)).await?;
 
+    let files = get_book_files(pool, id).await?;
+    let has_multipart = files.iter().any(|f| {
+        files
+            .iter()
+            .filter(|o| o.format.eq_ignore_ascii_case(&f.format))
+            .count()
+            > 1
+    });
+    if has_multipart {
+        book.book_files = files;
+    }
+
     Ok(Some(book))
 }
 
@@ -133,35 +145,94 @@ pub async fn resolve_book_id_by_uuid(
 }
 
 /// Resolve the on-disk path of a book's file for the given format
-/// (e.g. "EPUB"). The indexer stores `books.path` **relative to its
-/// `libraries.path` root** (mirroring the scanner's `root.join(filename)`),
-/// and `book_files.filename` as the stem, so the path is
-/// `<libraries.path>/<books.path>/<filename>.<format-lowercased>`. When the
-/// library root is itself relative the result resolves against the server's
-/// working directory, exactly as the scanner read it. Ok(None) when the book
-/// or a file row for that format is absent.
+/// (e.g. "EPUB"). When multiple files of the same format exist, returns
+/// the one with the lowest ordinal. Ok(None) when absent.
 pub async fn book_file_path(
     pool: &SqlitePool,
     id: i64,
     format: &str,
 ) -> Result<Option<std::path::PathBuf>, super::BooksError> {
-    // COALESCE: an attached / merged file row carries its own
-    // `(library_path, path)` override because its on-disk home is not
-    // the book's library (see migration 0016).
-    let row = sqlx::query_as::<_, (String, String, String)>(
-        "SELECT COALESCE(bf.library_path, l.path), COALESCE(bf.path, b.path), bf.filename \
+    let row = sqlx::query_as::<_, (String, String, String, String)>(
+        "SELECT COALESCE(bf.library_path, l.path), COALESCE(bf.path, b.path), \
+                bf.filename, bf.format \
          FROM books b \
          JOIN libraries l ON l.id = b.library_id \
          JOIN book_files bf ON bf.book_id = b.id \
-         WHERE b.id = ? AND bf.format = ? COLLATE NOCASE LIMIT 1",
+         WHERE b.id = ? AND bf.format = ? COLLATE NOCASE \
+         ORDER BY bf.ordinal LIMIT 1",
     )
     .bind(id)
     .bind(format)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(lib, dir, stem)| {
+    Ok(row.map(|(lib, dir, stem, fmt)| {
         std::path::Path::new(&lib)
             .join(&dir)
-            .join(format!("{stem}.{}", format.to_lowercase()))
+            .join(format!("{stem}.{}", fmt.to_lowercase()))
     }))
+}
+
+/// Resolve the on-disk path for a specific `book_files.id`, verifying
+/// it belongs to the given book. When `format` is `Some`, also
+/// validates the file's format matches (case-insensitive) — returns
+/// `None` for mismatches so callers get a clean 404.
+pub async fn book_file_path_by_id(
+    pool: &SqlitePool,
+    book_id: i64,
+    book_file_id: i64,
+    format: Option<&str>,
+) -> Result<Option<std::path::PathBuf>, super::BooksError> {
+    let sql = if format.is_some() {
+        "SELECT COALESCE(bf.library_path, l.path), COALESCE(bf.path, b.path), \
+                bf.filename, bf.format \
+         FROM book_files bf \
+         JOIN books b ON b.id = bf.book_id \
+         JOIN libraries l ON l.id = b.library_id \
+         WHERE bf.id = ?1 AND bf.book_id = ?2 AND bf.format = ?3 COLLATE NOCASE"
+    } else {
+        "SELECT COALESCE(bf.library_path, l.path), COALESCE(bf.path, b.path), \
+                bf.filename, bf.format \
+         FROM book_files bf \
+         JOIN books b ON b.id = bf.book_id \
+         JOIN libraries l ON l.id = b.library_id \
+         WHERE bf.id = ?1 AND bf.book_id = ?2"
+    };
+    let mut q = sqlx::query_as::<_, (String, String, String, String)>(sql)
+        .bind(book_file_id)
+        .bind(book_id);
+    if let Some(fmt) = format {
+        q = q.bind(fmt);
+    }
+    let row = q.fetch_optional(pool).await?;
+    Ok(row.map(|(lib, dir, stem, fmt)| {
+        std::path::Path::new(&lib)
+            .join(&dir)
+            .join(format!("{stem}.{}", fmt.to_lowercase()))
+    }))
+}
+
+/// Fetch all `book_files` rows for a book, ordered by format then ordinal.
+pub async fn get_book_files(
+    pool: &SqlitePool,
+    book_id: i64,
+) -> Result<Vec<omnibus_shared::BookFileInfo>, super::BooksError> {
+    let rows = sqlx::query_as::<_, (i64, String, String, i64, Option<String>)>(
+        "SELECT id, format, filename, ordinal, label FROM book_files \
+         WHERE book_id = ? ORDER BY format, ordinal",
+    )
+    .bind(book_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, format, filename, ordinal, label)| omnibus_shared::BookFileInfo {
+                id,
+                format,
+                filename,
+                ordinal,
+                label,
+            },
+        )
+        .collect())
 }

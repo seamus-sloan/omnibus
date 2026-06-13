@@ -5,15 +5,22 @@
 //! Mounted on the mobile REST router in [`super::rest_router`].
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::header,
     response::{IntoResponse, Response},
     Json,
 };
 use omnibus_db::{self as db, scanner};
+use serde::Deserialize;
 
 use super::{internal, with_pagination_headers, AppState};
 use crate::auth::AuthUser;
+
+/// Query parameters for `GET /api/ebooks/{uuid}/file`.
+#[derive(Deserialize)]
+pub(super) struct EbookFileQuery {
+    file_id: Option<i64>,
+}
 
 pub(super) async fn get_ebooks(_user: AuthUser, State(state): State<AppState>) -> Response {
     let settings = match db::get_settings(&state.pool).await {
@@ -44,20 +51,31 @@ pub(super) async fn get_ebook_by_uuid(
     }
 }
 
+/// Streams the raw EPUB bytes. Accepts optional `?file_id=N` to target
+/// a specific `book_files` row for multi-EPUB books.
 pub(super) async fn get_ebook_file(
     _user: AuthUser,
     State(state): State<AppState>,
     Path(uuid): Path<String>,
+    Query(query): Query<EbookFileQuery>,
 ) -> Response {
     let id = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
         Ok(Some(id)) => id,
         Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
         Err(e) => return internal("resolve_book_id_by_uuid", e),
     };
-    let path = match db::book_file_path(&state.pool, id, "EPUB").await {
-        Ok(Some(p)) => p,
-        Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return internal("book_file_path", e),
+    let path = if let Some(file_id) = query.file_id {
+        match db::book_file_path_by_id(&state.pool, id, file_id, Some("EPUB")).await {
+            Ok(Some(p)) => p,
+            Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
+            Err(e) => return internal("book_file_path_by_id", e),
+        }
+    } else {
+        match db::book_file_path(&state.pool, id, "EPUB").await {
+            Ok(Some(p)) => p,
+            Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
+            Err(e) => return internal("book_file_path", e),
+        }
     };
     match tokio::fs::read(&path).await {
         Ok(bytes) => (

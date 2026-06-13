@@ -89,13 +89,23 @@ async fn merge_books_rejects_unknown_uuid() {
 }
 
 #[tokio::test]
-async fn merge_books_rejects_format_collision() {
+async fn merge_books_allows_same_format_and_assigns_ordinals() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let a = seed_ebook(&pool, "A/Dracula.epub", "Dracula", "Bram Stoker").await;
     let b = seed_ebook(&pool, "B/Dracula 1992.epub", "Dracula 1992", "Bram Stoker").await;
-    let err = merge_books(&pool, &a, &b, None).await.unwrap_err();
-    assert!(matches!(err, MergeError::FormatCollision(f) if f.eq_ignore_ascii_case("epub")));
-    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 2);
+    let out = merge_books(&pool, &a, &b, None).await.unwrap();
+    assert_eq!(out.target_uuid, b);
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 1);
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM book_files").await, 2);
+    // The target's original file keeps ordinal 0; the merged source file
+    // gets ordinal 1 with the source's title as label.
+    let rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT ordinal, COALESCE(label, '') FROM book_files WHERE book_id = (SELECT id FROM books) ORDER BY ordinal",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rows, vec![(0, String::new()), (1, "Dracula".to_string())]);
 }
 
 #[tokio::test]

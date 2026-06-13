@@ -41,7 +41,14 @@ pub async fn undo_merge(pool: &SqlitePool, merge_log_id: i64) -> Result<String, 
     let snap: SourceSnapshot = serde_json::from_str(&json)?;
 
     let new_id = recreate_source_row(&mut tx, &snap).await?;
-    move_files_back(&mut tx, target_id, new_id, &snap.moved_formats).await?;
+    move_files_back(
+        &mut tx,
+        target_id,
+        new_id,
+        &snap.moved_file_ids,
+        &snap.moved_formats,
+    )
+    .await?;
     restore_links(&mut tx, new_id, &snap).await?;
     restore_identifiers(&mut tx, new_id, &snap).await?;
 
@@ -133,22 +140,54 @@ async fn recreate_source_row(
     Ok(id)
 }
 
-/// Move the snapshot's file formats back from the target. Formats whose
-/// rows vanished since the merge are skipped silently — the restored
-/// book is then fileless.
+/// Move the snapshot's files back from the target. Uses file IDs when
+/// available (new snapshots); falls back to format matching for old
+/// snapshots created before same-format merges were allowed. Rows that
+/// vanished since the merge are skipped — the restored book is then
+/// fileless. Moved files get sequential ordinals per format and their
+/// label cleared.
 async fn move_files_back(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     target_id: i64,
     new_source_id: i64,
+    file_ids: &[i64],
     formats: &[String],
 ) -> Result<(), sqlx::Error> {
-    for fmt in formats {
-        sqlx::query("UPDATE book_files SET book_id = ?1 WHERE book_id = ?2 AND format = ?3")
+    if !file_ids.is_empty() {
+        // Fetch format for each file so we can assign per-format ordinals.
+        let mut per_format: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        for &fid in file_ids {
+            let fmt: Option<String> =
+                sqlx::query_scalar("SELECT format FROM book_files WHERE id = ? AND book_id = ?")
+                    .bind(fid)
+                    .bind(target_id)
+                    .fetch_optional(&mut **tx)
+                    .await?;
+            let Some(fmt) = fmt else { continue };
+            let ordinal = per_format.entry(fmt.to_uppercase()).or_insert(0);
+            sqlx::query(
+                "UPDATE book_files SET book_id = ?1, ordinal = ?2, label = NULL
+                  WHERE id = ?3 AND book_id = ?4",
+            )
             .bind(new_source_id)
+            .bind(*ordinal)
+            .bind(fid)
             .bind(target_id)
-            .bind(fmt)
             .execute(&mut **tx)
             .await?;
+            *ordinal += 1;
+        }
+    } else {
+        // Legacy snapshot without file IDs — move by format.
+        for fmt in formats {
+            sqlx::query("UPDATE book_files SET book_id = ?1 WHERE book_id = ?2 AND format = ?3")
+                .bind(new_source_id)
+                .bind(target_id)
+                .bind(fmt)
+                .execute(&mut **tx)
+                .await?;
+        }
     }
     Ok(())
 }
