@@ -313,3 +313,24 @@ async fn record_session_tx_rollback_leaves_no_rows() {
     .unwrap();
     assert_eq!(count, 0, "dropped transaction must leave no committed rows");
 }
+
+#[tokio::test]
+async fn migration_0020_adds_windowed_session_indexes_for_stats() {
+    // F3.4 stats range-scans sessions by `(user_id, started_at)` and the
+    // progress rail orders by `(user_id, updated_at)`. Assert migration
+    // 0020 created each index so those windowed queries can use them.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    for index in [
+        "idx_reading_sessions_user_started",
+        "idx_listening_sessions_user_started",
+        "idx_reading_progress_user_updated",
+    ] {
+        let found: Option<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?")
+                .bind(index)
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert_eq!(found.as_deref(), Some(index), "missing index {index}");
+    }
+}
