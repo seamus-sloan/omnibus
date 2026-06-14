@@ -39,8 +39,9 @@ dev-bounce:
     nix develop .#web --command scripts/dev-server-bounce.sh
 
 # Run the full unit/integration test matrix. `cargo test --workspace` is a
-# trap here — it skips the frontend rpc/page tests (they need --features
-# server) and mobile (out of default-members) — so run each crate explicitly.
+# trap here — it silently skips the frontend rpc/page tests (they need
+# --features server) — so run each crate explicitly. Mobile is not listed
+# because it has no tests of its own (lint covers it via `just lint`).
 # Self-wraps in the slim nix shell so it works from a bare checkout too.
 test:
     nix develop --command bash -ec '\
