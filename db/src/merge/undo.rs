@@ -4,6 +4,7 @@
 use sqlx::{SqlitePool, Transaction};
 
 use crate::settings::upsert_library;
+use crate::sync::upsert_fts;
 use crate::taxonomy::{
     resolve_or_insert_language, resolve_or_insert_publisher, resolve_or_insert_series,
     resolve_or_insert_tag,
@@ -72,7 +73,9 @@ pub async fn undo_merge(pool: &SqlitePool, merge_log_id: i64) -> Result<String, 
         .execute(&mut *tx)
         .await?;
 
-    insert_fts_for_restored(&mut tx, new_id, &snap).await?;
+    // The restored `books` row + links + identifiers are all written by
+    // now, so the door reconstructs the FTS row from them directly.
+    upsert_fts(&mut tx, new_id).await?;
 
     sqlx::query("UPDATE merge_log SET undone_at = datetime('now') WHERE id = ?")
         .bind(merge_log_id)
@@ -272,28 +275,4 @@ async fn restore_identifiers(
         .await?;
     }
     Ok(())
-}
-
-/// Write the FTS row for the restored book from snapshot data.
-async fn insert_fts_for_restored(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    book_id: i64,
-    snap: &SourceSnapshot,
-) -> Result<(), sqlx::Error> {
-    let m = omnibus_shared::EbookMetadata {
-        creators: snap
-            .authors
-            .iter()
-            .map(|(name, sort, _)| omnibus_shared::Contributor {
-                name: name.clone(),
-                file_as: sort.clone(),
-                ..Default::default()
-            })
-            .collect(),
-        subjects: snap.tags.clone(),
-        series: snap.series.first().cloned(),
-        description: snap.description.clone(),
-        ..Default::default()
-    };
-    crate::sync::insert_fts_row(tx, book_id, &snap.title, snap.isbn.as_deref(), &m).await
 }

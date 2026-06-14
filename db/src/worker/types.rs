@@ -80,6 +80,11 @@ pub enum Task {
     /// `audiobooks:{library_path}` (mutual exclusion with scans on the same
     /// library). Does not consume the scan semaphore (lightweight IO).
     BackfillChapters { library_path: String },
+    /// Rebuild the entire `books_fts` search index from `books` via
+    /// `crate::sync::rebuild_all_fts`. Admin-triggered repair for any drift
+    /// left by a failed post-commit FTS refresh. Keyed on a fixed resource
+    /// so concurrent clicks serialize; does not consume the scan semaphore.
+    RebuildFtsIndex,
     /// Test-only synthetic task: sleeps `latency_ms` and invokes the
     /// optional `on_run` / `on_done` hooks, with `resource` and
     /// `route_through_scan_sem` letting a test exercise the keyed mutex and
@@ -107,6 +112,7 @@ impl Task {
             } => Some(format!("hls:{book_id}:{profile}")),
             Task::RefetchAuthorPhotos => Some("refetch-author-photos".into()),
             Task::BackfillChapters { library_path } => Some(format!("audiobooks:{library_path}")),
+            Task::RebuildFtsIndex => Some("rebuild-fts".into()),
             #[cfg(test)]
             Task::Test { resource, .. } => resource.clone(),
         }
@@ -121,6 +127,7 @@ impl Task {
             Task::HlsTranscode { .. } => false,
             Task::RefetchAuthorPhotos => false,
             Task::BackfillChapters { .. } => false,
+            Task::RebuildFtsIndex => false,
             #[cfg(test)]
             Task::Test {
                 route_through_scan_sem,
@@ -149,6 +156,9 @@ impl Task {
             // Reuse Scan kind for UI display until a dedicated HLS progress
             // widget is added.
             Task::HlsTranscode { .. } => TaskKind::Scan,
+            // Reuse Scan kind for the FTS rebuild's progress display rather
+            // than growing the wire-facing `TaskKind` enum for a rare admin job.
+            Task::RebuildFtsIndex => TaskKind::Scan,
             #[cfg(test)]
             Task::Test { .. } => TaskKind::Scan,
         }

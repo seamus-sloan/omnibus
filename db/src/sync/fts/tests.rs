@@ -1,0 +1,426 @@
+//! Acceptance tests for the `books_fts` choke-point: the no-orphan
+//! invariant after every public write path, the cross-format attach gap
+//! regression (a newly-attached format's ISBN must become searchable),
+//! and `rebuild_all_fts` reconstructing a corrupted index.
+
+use super::*;
+use crate::ebook::IndexedBook;
+use crate::pool::init_db;
+use crate::sync::{sync_audiobooks, sync_books, AudiobookSyncPlan, SyncPlan};
+use crate::test_support::{count_rows, indexed, indexed_audiobook, CoversTempDir};
+use omnibus_shared::{Contributor, EbookMetadata, Identifier};
+
+/// Build an `IndexedBook` with a single ISBN identifier so attach/union
+/// paths have an ISBN to carry into the target's FTS row.
+fn indexed_with_isbn(filename: &str, title: &str, author: &str, isbn: &str) -> IndexedBook {
+    IndexedBook {
+        metadata: EbookMetadata {
+            filename: filename.into(),
+            title: Some(title.into()),
+            creators: vec![Contributor {
+                name: author.into(),
+                ..Default::default()
+            }],
+            identifiers: vec![Identifier {
+                value: isbn.into(),
+                scheme: Some("ISBN".into()),
+            }],
+            ..Default::default()
+        },
+        cover: None,
+        mtime_epoch: 0,
+        size_bytes: 0,
+    }
+}
+
+/// Assert the standalone FTS twin is in lock-step with `books`: every
+/// `books` row has exactly one `books_fts` row, and no `books_fts` row is
+/// orphaned (no backing `books` row).
+async fn assert_fts_invariant(pool: &sqlx::SqlitePool) {
+    let books = count_rows(pool, "SELECT COUNT(*) FROM books").await;
+    let fts = count_rows(pool, "SELECT COUNT(*) FROM books_fts").await;
+    assert_eq!(books, fts, "books_fts row count must equal books row count");
+
+    let missing = count_rows(
+        pool,
+        "SELECT COUNT(*) FROM books b
+          WHERE NOT EXISTS (SELECT 1 FROM books_fts f WHERE f.rowid = b.id)",
+    )
+    .await;
+    assert_eq!(missing, 0, "every books row must have a books_fts row");
+
+    let orphans = count_rows(
+        pool,
+        "SELECT COUNT(*) FROM books_fts f
+          WHERE NOT EXISTS (SELECT 1 FROM books b WHERE b.id = f.rowid)",
+    )
+    .await;
+    assert_eq!(orphans, 0, "no books_fts row may be orphaned");
+}
+
+/// Count `books_fts` rows whose `isbn` column MATCHes the term.
+async fn fts_isbn_hits(pool: &sqlx::SqlitePool, isbn: &str) -> i64 {
+    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM books_fts WHERE isbn MATCH ?")
+        .bind(isbn)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn fts_invariant_holds_after_sync_books_new_changed_and_removed() {
+    let _covers = CoversTempDir::new("fts_invariant_ebooks");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    // New.
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            new_books: vec![
+                indexed("a.epub", Some("Alpha"), &["Ann"], &["sci-fi"], None, None),
+                indexed("b.epub", Some("Beta"), &["Bob"], &[], None, None),
+            ],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 2);
+    assert_fts_invariant(&pool).await;
+
+    // Changed (same filename, new title) — preserves id, refreshes FTS.
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            changed_books: vec![indexed(
+                "a.epub",
+                Some("Alpha Prime"),
+                &["Ann"],
+                &["sci-fi"],
+                None,
+                None,
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_fts_invariant(&pool).await;
+
+    // Removed.
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            removed_uuids: vec![crate::helpers::stable_uuid("/lib", "b.epub")],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 1);
+    assert_fts_invariant(&pool).await;
+}
+
+#[tokio::test]
+async fn fts_invariant_holds_after_replace_books() {
+    let _covers = CoversTempDir::new("fts_invariant_replace");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    crate::sync::replace_books(
+        &pool,
+        "/lib",
+        vec![
+            indexed("x.epub", Some("Ex"), &["Xi"], &[], None, None),
+            indexed("y.epub", Some("Why"), &["Yi"], &[], None, None),
+        ],
+    )
+    .await
+    .unwrap();
+    assert_fts_invariant(&pool).await;
+
+    // Replace again with one fewer book — the dropped book's FTS row must go.
+    crate::sync::replace_books(
+        &pool,
+        "/lib",
+        vec![indexed("x.epub", Some("Ex"), &["Xi"], &[], None, None)],
+    )
+    .await
+    .unwrap();
+    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 1);
+    assert_fts_invariant(&pool).await;
+}
+
+#[tokio::test]
+async fn fts_invariant_holds_after_sync_audiobooks_new_changed_and_removed() {
+    let _covers = CoversTempDir::new("fts_invariant_audiobooks");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    let ab = indexed_audiobook("Stoker/Dracula", "Dracula", Some("Bram Stoker"));
+    let uuid = ab.uuid.clone();
+    sync_audiobooks(
+        &pool,
+        "/audio",
+        AudiobookSyncPlan {
+            new_books: vec![ab],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 1);
+    assert_fts_invariant(&pool).await;
+
+    // Changed.
+    let mut changed = indexed_audiobook(
+        "Stoker/Dracula",
+        "Dracula (Unabridged)",
+        Some("Bram Stoker"),
+    );
+    changed.uuid = uuid.clone();
+    sync_audiobooks(
+        &pool,
+        "/audio",
+        AudiobookSyncPlan {
+            changed_books: vec![changed],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_fts_invariant(&pool).await;
+
+    // Removed.
+    sync_audiobooks(
+        &pool,
+        "/audio",
+        AudiobookSyncPlan {
+            removed_uuids: vec![uuid],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 0);
+    assert_fts_invariant(&pool).await;
+}
+
+#[tokio::test]
+async fn attaching_second_ebook_format_makes_its_new_isbn_searchable() {
+    // Regression for the attach gap: a second format attaching to an
+    // existing book unions its identifiers (incl. ISBN), but the pre-fix
+    // code never refreshed the target's FTS row — so the ISBN wasn't
+    // searchable. This test fails on the old code and passes after the
+    // door is called from `attach_ebook_file`.
+    let _covers = CoversTempDir::new("fts_attach_ebook_isbn");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    // Seed an EPUB with no ISBN.
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            new_books: vec![indexed(
+                "Dracula.epub",
+                Some("Dracula"),
+                &["Bram Stoker"],
+                &[],
+                None,
+                None,
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(fts_isbn_hits(&pool, "9781111111111").await, 0);
+
+    // Attach a second format (MOBI) for the same work carrying a NEW ISBN.
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            new_books: vec![indexed_with_isbn(
+                "Dracula.mobi",
+                "Dracula",
+                "Bram Stoker",
+                "9781111111111",
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // Still one book (the MOBI attached, not a new row).
+    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 1);
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM book_files").await,
+        2
+    );
+    // The unioned ISBN is now searchable, and the invariant still holds.
+    assert_eq!(fts_isbn_hits(&pool, "9781111111111").await, 1);
+    assert_fts_invariant(&pool).await;
+}
+
+#[tokio::test]
+async fn attaching_audiobook_to_existing_ebook_keeps_single_fts_row() {
+    // The audiobook attach path carries no identifiers, so there is no new
+    // ISBN to surface — but it must still leave exactly one FTS row for the
+    // target (no orphan, no duplicate) after routing through the door.
+    let _covers = CoversTempDir::new("fts_attach_audiobook");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            new_books: vec![indexed(
+                "Dracula.epub",
+                Some("Dracula"),
+                &["Bram Stoker"],
+                &[],
+                None,
+                None,
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    sync_audiobooks(
+        &pool,
+        "/audio",
+        AudiobookSyncPlan {
+            new_books: vec![indexed_audiobook(
+                "Stoker/Dracula",
+                "Dracula",
+                Some("Bram Stoker"),
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 1);
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM book_files").await,
+        2
+    );
+    assert_fts_invariant(&pool).await;
+}
+
+#[tokio::test]
+async fn rebuild_all_fts_reconstructs_index_after_corruption() {
+    let _covers = CoversTempDir::new("fts_rebuild_all");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            new_books: vec![
+                indexed_with_isbn("a.epub", "Alpha", "Ann", "9782222222222"),
+                indexed("b.epub", Some("Beta"), &["Bob"], &[], None, None),
+                indexed("c.epub", Some("Gamma"), &["Cy"], &[], None, None),
+            ],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_fts_invariant(&pool).await;
+
+    // Corrupt the index two ways: drop one real row (creating a missing
+    // entry) and insert an orphan row for a non-existent book id.
+    sqlx::query("DELETE FROM books_fts WHERE rowid = (SELECT id FROM books WHERE title = 'Alpha')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn) \
+                 VALUES (999999, 'ghost', '', '', '', '', '')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Sanity: the index is now structurally drifted — a real book lacks
+    // its FTS row, and an orphan FTS row exists. (The two cancel out in a
+    // raw row count, so check the anti-joins, not the totals.)
+    let missing_before = count_rows(
+        &pool,
+        "SELECT COUNT(*) FROM books b
+          WHERE NOT EXISTS (SELECT 1 FROM books_fts f WHERE f.rowid = b.id)",
+    )
+    .await;
+    let orphans_before = count_rows(
+        &pool,
+        "SELECT COUNT(*) FROM books_fts f
+          WHERE NOT EXISTS (SELECT 1 FROM books b WHERE b.id = f.rowid)",
+    )
+    .await;
+    assert_eq!(
+        missing_before, 1,
+        "the dropped book should now lack an FTS row"
+    );
+    assert_eq!(orphans_before, 1, "the ghost row should be an orphan");
+    assert_eq!(fts_isbn_hits(&pool, "9782222222222").await, 0);
+
+    rebuild_all_fts(&pool).await.unwrap();
+
+    // Invariant restored, orphan swept, the dropped ISBN searchable again.
+    assert_fts_invariant(&pool).await;
+    assert_eq!(fts_isbn_hits(&pool, "9782222222222").await, 1);
+    let ghost = count_rows(&pool, "SELECT COUNT(*) FROM books_fts WHERE rowid = 999999").await;
+    assert_eq!(ghost, 0, "orphan row must be swept by the rebuild");
+}
+
+#[tokio::test]
+async fn upsert_and_delete_fts_round_trip_a_single_row() {
+    let _covers = CoversTempDir::new("fts_door_unit");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            new_books: vec![indexed("a.epub", Some("Alpha"), &["Ann"], &[], None, None)],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let id: i64 = sqlx::query_scalar("SELECT id FROM books")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // delete_fts removes the row; upsert_fts puts it back from canonical data.
+    let mut conn = pool.acquire().await.unwrap();
+    delete_fts(&mut conn, id).await.unwrap();
+    let after_delete: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books_fts WHERE rowid = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(after_delete, 0);
+
+    upsert_fts(&mut conn, id).await.unwrap();
+    let after_upsert: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books_fts WHERE rowid = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(after_upsert, 1);
+    // upsert is idempotent — a second call doesn't duplicate.
+    upsert_fts(&mut conn, id).await.unwrap();
+    let after_second: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books_fts WHERE rowid = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(after_second, 1);
+}

@@ -172,6 +172,7 @@ fn content_routes() -> Router<AppState> {
         .route("/api/settings", get(settings::get_settings))
         .route("/api/settings", post(settings::post_settings))
         .route("/api/reindex", post(settings::post_reindex))
+        .route("/api/fts/rebuild", post(settings::post_rebuild_fts))
         .route("/api/library", get(ebooks::get_library))
         .route("/api/ebooks", get(ebooks::get_ebooks))
         .route("/api/ebooks/{uuid}", get(ebooks::get_ebook_by_uuid))
