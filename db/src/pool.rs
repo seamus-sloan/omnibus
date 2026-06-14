@@ -7,15 +7,28 @@ use std::path::Path;
 use sqlx::{sqlite::SqlitePoolOptions, Executor, SqlitePool};
 
 use crate::covers::covers_dir;
+use crate::normalize::NormalizeError;
 
 /// Schema migrations embedded at compile time from `db/migrations/`.
 /// Every schema change ships as a new numbered `.sql` file there; applied
 /// versions are recorded in the `_sqlx_migrations` table.
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
+/// Errors returned by [`init_db`]. Wraps `sqlx::Error` (pool connect +
+/// PRAGMA) and `NormalizeError` (the boot-time backfill) so neither
+/// leaks across the `omnibus-db` crate boundary per rule 02
+/// (Error handling) § Boundary.
+#[derive(Debug, thiserror::Error)]
+pub enum InitDbError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+    #[error(transparent)]
+    Normalize(#[from] NormalizeError),
+}
+
 /// Initialize or open the SQLite pool at `database_url`, apply per-connection PRAGMAs, run pending
 /// migrations, and — on non-memory databases — perform a one-time legacy cover-cache directory purge.
-pub async fn init_db(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
+pub async fn init_db(database_url: &str) -> Result<SqlitePool, InitDbError> {
     // PRAGMAs `foreign_keys`, `busy_timeout`, and `synchronous` are
     // *per-connection* settings — they only apply to the connection that
     // executed them, and any future connection the pool spins up would
@@ -174,6 +187,18 @@ fn purge_legacy_covers_once(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn init_db_returns_db_error_when_url_is_invalid() {
+        // `sqlite://` URL pointing at a path under a non-existent dir + no
+        // `mode=rwc` flag forces the underlying pool connect to fail. The
+        // typed wrapper must surface a `Db` variant rather than panicking
+        // or leaking `sqlx::Error` at the signature.
+        let err = init_db("sqlite:///nonexistent/dir/omnibus.db")
+            .await
+            .expect_err("invalid url should fail to open");
+        assert!(matches!(err, InitDbError::Db(_)));
+    }
 
     #[tokio::test]
     async fn migrator_records_applied_versions() {

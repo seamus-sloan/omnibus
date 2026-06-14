@@ -45,6 +45,14 @@ fn normalize_author_swaps_single_comma_last_first() {
 }
 
 #[tokio::test]
+async fn backfill_norm_columns_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = backfill_norm_columns(&pool).await.unwrap_err();
+    assert!(matches!(err, NormalizeError::Db(_)));
+}
+
+#[tokio::test]
 async fn backfill_norm_columns_fills_only_null_rows_and_is_idempotent() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     sqlx::query("INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib')")
