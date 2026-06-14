@@ -445,16 +445,14 @@ async fn insert_book_file_row(
 ) -> Result<(), sqlx::Error> {
     let m = &b.metadata;
     let (_, file_stem, file_ext) = split_filename(&m.filename);
-    let mtime = m.modified.clone().unwrap_or_default();
     sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime, mtime_epoch)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch)
+         VALUES (?, ?, ?, ?, ?)",
     )
     .bind(book_id)
     .bind(&file_ext)
     .bind(&file_stem)
     .bind(b.size_bytes)
-    .bind(&mtime)
     .bind(b.mtime_epoch)
     .execute(&mut **tx)
     .await?;
@@ -592,20 +590,16 @@ async fn insert_book_row(
     .fetch_one(&mut **tx)
     .await?;
 
-    // The legacy `mtime TEXT` column holds the OPF `dcterms:modified` value
-    // (Dublin Core, not filesystem state) — kept for backward compat. The
-    // new `mtime_epoch INTEGER` column holds the filesystem stat the
-    // incremental diff compares against (migration 0009).
-    let mtime = m.modified.clone().unwrap_or_default();
+    // `mtime_epoch INTEGER` holds the filesystem stat the incremental diff
+    // compares against (migration 0009).
     sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime, mtime_epoch)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch)
+         VALUES (?, ?, ?, ?, ?)",
     )
     .bind(book_id)
     .bind(&file_ext)
     .bind(&file_stem)
     .bind(b.size_bytes)
-    .bind(&mtime)
     .bind(b.mtime_epoch)
     .execute(&mut **tx)
     .await?;

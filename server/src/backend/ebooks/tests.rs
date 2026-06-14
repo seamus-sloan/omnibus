@@ -392,8 +392,8 @@ async fn api_get_ebook_file_returns_200_with_epub_bytes() {
             .unwrap()
             .last_insert_rowid();
     sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime) \
-         VALUES (?, 'EPUB', ?, 0, '')",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'EPUB', ?, 0)",
     )
     .bind(book_id)
     .bind(stem)

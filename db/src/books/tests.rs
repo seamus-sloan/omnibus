@@ -542,8 +542,8 @@ async fn list_books_returns_one_row_per_book_with_multi_format() {
     .unwrap();
     let id = list_books(&pool, "/lib").await.unwrap()[0].id;
     sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime)
-         VALUES (?, 'M4B', 'alpha', 0, '')",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes)
+         VALUES (?, 'M4B', 'alpha', 0)",
     )
     .bind(id)
     .execute(&pool)
@@ -580,8 +580,8 @@ async fn search_books_returns_one_row_per_book_with_multi_format() {
     .unwrap();
     let id = list_books(&pool, "/lib").await.unwrap()[0].id;
     sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime)
-         VALUES (?, 'M4B', 'alpha', 0, '')",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes)
+         VALUES (?, 'M4B', 'alpha', 0)",
     )
     .bind(id)
     .execute(&pool)
@@ -791,8 +791,8 @@ async fn get_book_is_deterministic_with_multiple_files_and_links() {
 
     // Add a second physical file in another format.
     sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime)
-         VALUES (?, 'M4B', 'alpha', 0, '')",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes)
+         VALUES (?, 'M4B', 'alpha', 0)",
     )
     .bind(id)
     .execute(&pool)
@@ -1668,8 +1668,8 @@ async fn book_file_path_returns_absolute_path_for_epub() {
     .unwrap()
     .last_insert_rowid();
     sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime) \
-         VALUES (?, 'EPUB', 'some-book', 0, '')",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'EPUB', 'some-book', 0)",
     )
     .bind(book_id)
     .execute(&pool)
@@ -1747,9 +1747,9 @@ async fn list_indexed_rows_for_formats_returns_only_matching_format_rows() {
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime, mtime_epoch) \
-         VALUES (?, 'EPUB', 'EpubTitle', 100, '', 100), \
-                (?, 'M4B',  'AudioTitle', 200, '', 200)",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch) \
+         VALUES (?, 'EPUB', 'EpubTitle', 100, 100), \
+                (?, 'M4B',  'AudioTitle', 200, 200)",
     )
     .bind(epub_id)
     .bind(m4b_id)
@@ -1770,6 +1770,30 @@ async fn list_indexed_rows_for_formats_returns_only_matching_format_rows() {
         .unwrap();
     assert_eq!(audiobooks.len(), 1);
     assert_eq!(audiobooks[0].uuid, "uuid-m4b");
+}
+
+// ---------- migration 0024: drop dead book_files.mtime (F19) ----------
+
+#[tokio::test]
+async fn migration_drops_book_files_mtime_text_column_but_keeps_mtime_epoch() {
+    // F19: the OPF `dcterms:modified` TEXT column was write-only and is
+    // dropped by 0024; the filesystem-stat `mtime_epoch` (used by the
+    // incremental reindex diff) must survive.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let columns: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM pragma_table_info('book_files') WHERE name IN ('mtime', 'mtime_epoch')",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        !columns.iter().any(|c| c == "mtime"),
+        "book_files.mtime should be dropped by migration 0024"
+    );
+    assert!(
+        columns.iter().any(|c| c == "mtime_epoch"),
+        "book_files.mtime_epoch must remain for change detection"
+    );
 }
 
 #[tokio::test]
@@ -1793,8 +1817,8 @@ async fn list_indexed_rows_for_formats_returns_empty_for_empty_allow_list() {
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime, mtime_epoch) \
-         VALUES (?, 'EPUB', 'a', 0, '', 0)",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch) \
+         VALUES (?, 'EPUB', 'a', 0, 0)",
     )
     .bind(book_id)
     .execute(&pool)
