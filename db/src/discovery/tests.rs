@@ -234,6 +234,109 @@ async fn get_tag_cloud_counts_reflect_overrides() {
     );
 }
 #[tokio::test]
+async fn get_tag_cloud_counts_canonical_and_override_subjects_without_double_count() {
+    // Regression guard for the single-pass GROUP BY rewrite: one tag
+    // ("essay") must sum exactly one canonical member and one
+    // override-only member without double-counting either. Arm 1
+    // (canonical link, `tag_name = NULL`) and arm 2 (override subject,
+    // `tag_id = NULL`) are disjoint per book, so the OR-join must add the
+    // two distinct books to cnt=2 — not 1 (under-count) and not 3+
+    // (double-count via the OR predicate).
+    let _guard = CoversTempDir::new("tag_cloud_no_double_count");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    replace_books(
+        &pool,
+        "/lib",
+        vec![
+            // a.epub: canonically "essay".
+            indexed("a.epub", Some("A"), &["X"], &["essay"], None, None),
+            // b.epub: canonically "fiction"; will be overridden to "essay".
+            indexed("b.epub", Some("B"), &["X"], &["fiction"], None, None),
+        ],
+    )
+    .await
+    .unwrap();
+
+    // Override b.epub to "essay" so it reaches the tag via arm 2 only,
+    // while a.epub reaches it via arm 1 only.
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let b = books.iter().find(|x| x.filename == "b.epub").unwrap();
+    let uuid = b.unique_identifier.clone().unwrap();
+    let ov = MetadataOverrides {
+        subjects: Some(vec!["essay".into()]),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+        .await
+        .unwrap();
+
+    let tags = get_tag_cloud(&pool).await.unwrap();
+    let essay = tags
+        .iter()
+        .find(|t| t.name == "essay")
+        .expect("essay present");
+    assert_eq!(
+        essay.count, 2,
+        "essay must sum the canonical and override members exactly once each, got {tags:?}",
+    );
+    // "fiction" loses its only member to the override; the tag stays
+    // visible via its canonical link but its merged count drops to 0.
+    let fiction = tags
+        .iter()
+        .find(|t| t.name == "fiction")
+        .expect("fiction stays visible via canonical link");
+    assert_eq!(
+        fiction.count, 0,
+        "a fully-overridden-away tag stays visible at cnt=0, got {tags:?}",
+    );
+}
+#[tokio::test]
+async fn get_tag_cloud_dedupes_duplicate_subject_strings_within_one_override() {
+    // The UNION (not UNION ALL) in arm (2) collapses a `["essay","essay"]`
+    // override to a single effective row, so the GROUP BY pass counts the
+    // book once. A naive UNION ALL rewrite would double-count it.
+    let _guard = CoversTempDir::new("tag_cloud_dedupe_override");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed("a.epub", Some("A"), &["X"], &["essay"], None, None)],
+    )
+    .await
+    .unwrap();
+
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let a = books.iter().find(|x| x.filename == "a.epub").unwrap();
+    let uuid = a.unique_identifier.clone().unwrap();
+    let ov = MetadataOverrides {
+        subjects: Some(vec!["essay".into(), "essay".into()]),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+        .await
+        .unwrap();
+
+    let tags = get_tag_cloud(&pool).await.unwrap();
+    let essay = tags
+        .iter()
+        .find(|t| t.name == "essay")
+        .expect("essay present");
+    assert_eq!(
+        essay.count, 1,
+        "duplicate subject strings in one override must count the book once, got {tags:?}",
+    );
+}
+#[tokio::test]
 async fn get_author_includes_books_whose_override_names_this_author() {
     // Repro of the bug where renaming a book's author via the
     // metadata form (e.g. "Sanderson, Brandon" → "Brandon Sanderson")
