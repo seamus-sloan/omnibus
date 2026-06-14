@@ -5,6 +5,13 @@
 
 use sqlx::SqlitePool;
 
+/// Errors returned by [`backfill_norm_columns`].
+#[derive(Debug, thiserror::Error)]
+pub enum NormalizeError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
 /// Normalize a title into its match key: diacritics folded, lowercased,
 /// punctuation collapsed to single spaces. `None` when nothing survives.
 ///
@@ -50,7 +57,7 @@ fn normalize(s: &str) -> Option<String> {
 /// `title_norm IS NULL` — and cheap once caught up, so it runs on every
 /// boot from `init_db`. Normalizes **scanned** metadata only
 /// (`metadata_overrides` is a read layer and deliberately ignored).
-pub async fn backfill_norm_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+pub async fn backfill_norm_columns(pool: &SqlitePool) -> Result<(), NormalizeError> {
     let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
         "SELECT b.id, b.title, a.name
            FROM books b
