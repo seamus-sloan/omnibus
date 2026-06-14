@@ -434,6 +434,62 @@ async fn get_author_includes_books_whose_override_names_this_author() {
     );
 }
 #[tokio::test]
+async fn get_author_returns_both_canonical_and_override_members_under_reanchored_predicate() {
+    // F6 re-anchor guard: the author-detail predicate now drives through
+    // `books_authors_link WHERE author = ?` (arm 1) UNION the
+    // override-creators set (arm 2). For an author with BOTH a canonical
+    // book and a book overridden INTO them, the detail page must return
+    // the union of both — same books as the old `FROM books` scan.
+    let (pool, _guard) = seed_discovery_fixture().await;
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    // Niklaus canonically has only "Other Story" (Pioneers). Override the
+    // standalone book (canonically Ada's) so its single creator becomes
+    // Niklaus, pulling it into Niklaus's effective set via arm (2).
+    let niklaus_id = author_id_by_name(&pool, "Niklaus Wirth").await;
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let standalone = books
+        .iter()
+        .find(|b| b.filename == "standalone.epub")
+        .unwrap();
+    let uuid = standalone.unique_identifier.clone().unwrap();
+
+    let ov = MetadataOverrides {
+        creators: Some(vec![Contributor {
+            name: "Niklaus Wirth".into(),
+            role: Some("aut".into()),
+            file_as: None,
+            id: None,
+        }]),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+        .await
+        .unwrap();
+
+    let niklaus = get_author(&pool, niklaus_id)
+        .await
+        .unwrap()
+        .expect("author exists");
+    assert_eq!(
+        niklaus.book_count, 2,
+        "canonical (Other Story) + override-in (Standalone) = 2",
+    );
+    let mut titles: Vec<_> = niklaus
+        .books
+        .iter()
+        .map(|b| b.title.clone().unwrap_or_default())
+        .collect();
+    titles.sort();
+    assert_eq!(
+        titles,
+        vec!["Other Story".to_string(), "Standalone".to_string()],
+        "detail predicate must union the canonical and override members",
+    );
+}
+#[tokio::test]
 async fn get_author_excludes_books_whose_override_clears_authors() {
     // A book whose override sets creators to the empty array should
     // disappear from every author's page, matching what the book

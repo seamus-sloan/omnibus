@@ -144,6 +144,75 @@ async fn list_authors_book_count_follows_override_creators() {
         "Grace picks up saga2 from the override",
     );
 }
+// F6 — the GROUP BY rewrite computes counts from a single `effective`
+// membership CTE (canonical-link arm UNION override-creators arm). These
+// guard that each arm is independently correct and that grouping does not
+// collapse a book shared by two distinct authors into one author's count.
+#[tokio::test]
+async fn list_authors_book_count_independently_reflects_each_override_arm() {
+    // Override saga2 (canonically Ada) so its single creator is Grace.
+    // Arm exercised:
+    //   - override-OUT: Ada must shed saga2 (it now carries a creators
+    //     override and its canonical-link row is excluded from arm (1)).
+    //   - override-IN:  Grace must gain saga2 via the override arm (2),
+    //     even though Grace has no canonical link to saga2.
+    // Expected effective counts: Ada → 2 (saga1 + standalone),
+    // Grace → 2 (saga1 canonical + saga2 override).
+    let (pool, _guard) = seed_discovery_fixture().await;
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let saga2 = books.iter().find(|b| b.filename == "saga2.epub").unwrap();
+    let uuid = saga2.unique_identifier.clone().unwrap();
+
+    let ov = MetadataOverrides {
+        creators: Some(vec![Contributor {
+            name: "Grace Hopper".into(),
+            role: Some("aut".into()),
+            file_as: None,
+            id: None,
+        }]),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+        .await
+        .unwrap();
+
+    let authors = list_authors(&pool, &["/lib"]).await.unwrap();
+    let by_name: std::collections::HashMap<_, _> = authors
+        .iter()
+        .map(|a| (a.name.clone(), a.book_count))
+        .collect();
+    assert_eq!(
+        by_name.get("Ada Lovelace").copied(),
+        Some(2),
+        "override-out arm: Ada drops the overridden book",
+    );
+    assert_eq!(
+        by_name.get("Grace Hopper").copied(),
+        Some(2),
+        "override-in arm: Grace gains the overridden book by name",
+    );
+}
+#[tokio::test]
+async fn list_authors_book_count_counts_a_shared_book_for_both_authors() {
+    // saga1 canonically lists both Ada and Grace. The GROUP BY over the
+    // effective set must emit a `(author_id, book_id)` row for each, so
+    // the single shared book counts toward both authors — grouping must
+    // not collapse cross-author membership.
+    let (pool, _guard) = seed_discovery_fixture().await;
+    let authors = list_authors(&pool, &["/lib"]).await.unwrap();
+    let by_name: std::collections::HashMap<_, _> = authors
+        .iter()
+        .map(|a| (a.name.clone(), a.book_count))
+        .collect();
+    // Ada: saga1 + saga2 + standalone = 3; Grace: saga1 = 1. Both include
+    // the shared saga1, proving it is not deduped across authors.
+    assert_eq!(by_name.get("Ada Lovelace").copied(), Some(3));
+    assert_eq!(by_name.get("Grace Hopper").copied(), Some(1));
+}
 #[tokio::test]
 async fn list_authors_book_count_matches_canonical_creator_case_insensitively() {
     // `authors.name` is `UNIQUE COLLATE NOCASE`; an override that
