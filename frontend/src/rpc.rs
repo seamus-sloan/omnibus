@@ -592,6 +592,9 @@ pub async fn rpc_search_palette(q: String) -> Result<PaletteResults> {
 
 #[post("/api/rpc/highlights/create", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_create_highlight(input: CreateHighlight) -> Result<Highlight> {
+    if let Err(msg) = input.validate() {
+        return Err(ServerFnError::new(msg).into());
+    }
     match db::highlights::create_highlight(&pool.0, user.id, &input).await {
         Ok(h) => Ok(h),
         Err(db::highlights::HighlightError::BookNotFound) => {
@@ -633,6 +636,9 @@ pub async fn rpc_update_highlight_color(id: i64, color: HighlightColor) -> Resul
 
 #[post("/api/rpc/highlights/update-note", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_update_highlight_note(id: i64, body: UpdateHighlightNote) -> Result<()> {
+    if let Err(msg) = body.validate() {
+        return Err(ServerFnError::new(msg).into());
+    }
     match db::highlights::update_highlight_note(&pool.0, user.id, id, body.note.as_deref()).await {
         Ok(()) => Ok(()),
         Err(db::highlights::HighlightError::NotFound) => {

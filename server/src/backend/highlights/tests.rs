@@ -33,6 +33,87 @@ async fn api_post_highlight_requires_auth() {
 }
 
 #[tokio::test]
+async fn api_post_highlight_400_on_oversized_cfi() {
+    let (app, _state, pool) = fixture().await;
+    let (_, uuid) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let oversized = "a".repeat(omnibus_shared::CreateHighlight::EPUB_CFI_RANGE_MAX_LEN + 1);
+    let body = serde_json::json!({
+        "book_uuid": uuid,
+        "epub_cfi_range": oversized,
+        "color": "amber",
+    });
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/highlights")
+                .method("POST")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let msg = String::from_utf8_lossy(&bytes);
+    assert!(msg.contains("epub_cfi_range"), "got: {msg}");
+}
+
+#[tokio::test]
+async fn api_patch_highlight_note_400_on_oversized_note() {
+    let (app, _state, pool) = fixture().await;
+    let (_, uuid) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    // Create a highlight to patch.
+    let body = serde_json::json!({
+        "book_uuid": uuid,
+        "epub_cfi_range": "epubcfi(/6/4)",
+        "color": "amber",
+    });
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/highlights")
+                .method("POST")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let created: Highlight = serde_json::from_slice(&bytes).unwrap();
+
+    let oversized = "n".repeat(omnibus_shared::UpdateHighlightNote::NOTE_MAX_LEN + 1);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/highlights/{}/note", created.id))
+                .method("PATCH")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(
+                    serde_json::json!({ "note": oversized }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let msg = String::from_utf8_lossy(&bytes);
+    assert!(msg.contains("note"), "got: {msg}");
+}
+
+#[tokio::test]
 async fn api_post_highlight_404_on_unknown_book() {
     let (app, _state, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "alice").await;
