@@ -1830,3 +1830,126 @@ async fn list_indexed_rows_for_formats_returns_empty_for_empty_allow_list() {
         .unwrap();
     assert!(rows.is_empty());
 }
+
+// ---------- F5: collapsed json_object projection (primary file + series) ----------
+
+#[tokio::test]
+async fn list_books_returns_collapsed_primary_file_and_series_for_book_with_series_and_multiple_formats(
+) {
+    // F5: `primary_filename`/`primary_format` and `series_name`/`series_link_id`
+    // each used to be two correlated subqueries scanning the same row twice;
+    // they're now single `json_object` subqueries. This is the equality oracle:
+    // a book that HAS a series AND multiple formats must still yield the
+    // EPUB-primary filename/format and the right series name + id.
+    let _covers = CoversTempDir::new("collapse_primary_and_series");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed(
+            "saga-book.epub",
+            Some("Saga Book"),
+            &["Author A"],
+            &[],
+            Some(("Saga", "3")),
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    let id = list_books(&pool, "/lib").await.unwrap()[0].id;
+    // Add a second physical format so the EPUB-preferred tiebreak is exercised.
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes)
+         VALUES (?, 'M4B', 'saga-book', 0)",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let books = list_books(&pool, "/lib").await.unwrap();
+    assert_eq!(books.len(), 1, "multi-format must not duplicate rows");
+    let book = &books[0];
+    // Collapsed primary_file_json: EPUB wins the tiebreak, format lowercased.
+    assert_eq!(book.filename, "saga-book.epub");
+    assert_eq!(book.formats, vec!["EPUB".to_string(), "M4B".to_string()]);
+    // Collapsed series_json: name + id come from the same picked row.
+    assert_eq!(book.series.as_deref(), Some("Saga"));
+    assert_eq!(book.series_index.as_deref(), Some("3"));
+    let expected_series_id = series_id_by_name(&pool, "Saga").await;
+    assert_eq!(book.series_id, Some(expected_series_id));
+}
+
+#[tokio::test]
+async fn get_book_returns_collapsed_primary_file_and_series_for_book_with_series() {
+    // Same collapsed projection on the single-book read path (`get_book`
+    // shares `BOOK_COLUMNS` verbatim through `row_to_ebook`).
+    let _covers = CoversTempDir::new("collapse_get_book");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed(
+            "lonely.epub",
+            Some("Lonely"),
+            &["Author B"],
+            &[],
+            Some(("Saga", "1")),
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    let id = list_books(&pool, "/lib").await.unwrap()[0].id;
+
+    let book = get_book(&pool, id).await.unwrap().expect("book exists");
+    assert_eq!(book.filename, "lonely.epub");
+    assert_eq!(book.series.as_deref(), Some("Saga"));
+    assert_eq!(book.series_id, Some(series_id_by_name(&pool, "Saga").await));
+}
+
+#[tokio::test]
+async fn list_books_returns_no_series_when_book_has_none_after_collapse() {
+    // The collapsed `series_json` subquery returns SQLite NULL (decoded to
+    // `None`) for a book with no `books_series_link` row — same shape the
+    // former two-NULL-column pair produced.
+    let _covers = CoversTempDir::new("collapse_no_series");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed(
+            "standalone.epub",
+            Some("Standalone"),
+            &["Author C"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+
+    let books = list_books(&pool, "/lib").await.unwrap();
+    assert_eq!(books.len(), 1);
+    assert_eq!(books[0].filename, "standalone.epub");
+    assert_eq!(books[0].series, None);
+    assert_eq!(books[0].series_id, None);
+}
+
+// ---------- migration 0025: library-scoped landing-sort index (F5) ----------
+
+#[tokio::test]
+async fn migration_creates_composite_library_sort_index_for_landing_projection() {
+    // F5: the `(library_id, sort, id)` composite index lets the planner seek
+    // the library filter and supply `ORDER BY sort, id` without a temp sort.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let exists: Option<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_books_library_sort'",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(exists.as_deref(), Some("idx_books_library_sort"));
+}

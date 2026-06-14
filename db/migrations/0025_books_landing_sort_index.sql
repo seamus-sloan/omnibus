@@ -1,0 +1,21 @@
+-- F5 — composite index supporting the library-scoped landing/browse sort.
+-- The landing projection (`list_books_for_paths`, db/src/books/list.rs) joins
+-- `books -> scan_roots` on `library_id`, filters to the configured library
+-- path(s), then `ORDER BY b.sort, b.id`. The only pre-existing covering
+-- indexes are the global `idx_books_sort ON books(sort)` (0002) and the FK
+-- index `idx_books_scan_root_id ON books(library_id)` (0019) — neither can
+-- both seek the `library_id` filter AND supply the sort, so the planner does
+-- a filter-then-temp-sort once the library predicate is in play. This
+-- composite lets the planner seek `library_id` and walk `(sort, id)` in
+-- order, eliminating the temp B-tree sort for the landing/browse read path.
+--
+-- `books.library_id` kept its column name after the F3 `libraries -> scan_roots`
+-- rename (0019). `IF NOT EXISTS` keeps the migration idempotent against any
+-- hand-created index of the same name.
+--
+-- Forward-only, pure secondary index — populated on CREATE with no backfill,
+-- no table recreate (no column types, PKs, or constraints change). A fresh DB
+-- built from 0001..0025 and an upgraded DB converge on the same schema. The
+-- now-partially-redundant global `idx_books_sort` is left in place
+-- deliberately — dropping it is a separate change (F17).
+CREATE INDEX IF NOT EXISTS idx_books_library_sort ON books(library_id, sort, id);
