@@ -9,7 +9,7 @@ use omnibus_shared::MetadataOverrides;
 use crate::covers::{find_cover_file, write_cover_file};
 use crate::sync::delete_fts;
 
-use super::snapshot::build_snapshot;
+use super::snapshot::{build_snapshot, SourceSnapshot};
 use super::{MergeError, MergeOutcome};
 
 /// Merge the book identified by `source_uuid` into the one identified by
@@ -30,22 +30,10 @@ pub async fn merge_books(
     }
     let mut tx = pool.begin().await?;
 
-    let source_id = resolve_book(&mut tx, source_uuid).await?;
-    let target_id = resolve_book(&mut tx, target_uuid).await?;
-    if source_id == target_id {
-        return Err(MergeError::SameBook);
-    }
-    let snapshot = build_snapshot(&mut tx, source_id).await?;
+    let (source_id, target_id, snapshot) =
+        snapshot_source_book(&mut tx, source_uuid, target_uuid).await?;
 
-    move_book_files(
-        &mut tx,
-        source_id,
-        target_id,
-        &snapshot.library_path,
-        &snapshot.path,
-    )
-    .await?;
-    assign_ordinals_after_move(&mut tx, target_id, &snapshot.title).await?;
+    migrate_book_files(&mut tx, source_id, target_id, &snapshot).await?;
     move_links(&mut tx, source_id, target_id).await?;
     move_progress_and_history(&mut tx, source_id, target_id).await?;
     move_identifiers(&mut tx, source_id, target_id).await?;
@@ -79,21 +67,7 @@ pub async fn merge_books(
         .await?;
     }
 
-    let merge_log_id: i64 = sqlx::query_scalar(
-        "INSERT INTO merge_log (target_book_id, source_uuid, source_metadata, merged_by)
-         VALUES (?, ?, ?, ?) RETURNING id",
-    )
-    .bind(target_id)
-    .bind(source_uuid)
-    .bind(serde_json::to_string(&snapshot)?)
-    .bind(merged_by)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    sqlx::query("DELETE FROM books WHERE id = ?")
-        .bind(source_id)
-        .execute(&mut *tx)
-        .await?;
+    let merge_log_id = finalize_merge(&mut tx, target_id, source_id, &snapshot, merged_by).await?;
 
     tx.commit().await?;
 
@@ -123,6 +97,70 @@ pub async fn merge_books(
         merge_log_id,
         target_uuid: target_uuid.to_owned(),
     })
+}
+
+/// Resolve both uuids to row ids, re-check same-book, then freeze the
+/// source book's metadata into a [`SourceSnapshot`] for the merge log.
+async fn snapshot_source_book(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    source_uuid: &str,
+    target_uuid: &str,
+) -> Result<(i64, i64, SourceSnapshot), MergeError> {
+    let source_id = resolve_book(tx, source_uuid).await?;
+    let target_id = resolve_book(tx, target_uuid).await?;
+    if source_id == target_id {
+        return Err(MergeError::SameBook);
+    }
+    let snapshot = build_snapshot(tx, source_id).await?;
+    Ok((source_id, target_id, snapshot))
+}
+
+/// Re-parent the source's `book_files` onto the target and renormalize
+/// the moved rows' ordinals/labels.
+async fn migrate_book_files(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    source_id: i64,
+    target_id: i64,
+    snapshot: &SourceSnapshot,
+) -> Result<(), sqlx::Error> {
+    move_book_files(
+        tx,
+        source_id,
+        target_id,
+        &snapshot.library_path,
+        &snapshot.path,
+    )
+    .await?;
+    assign_ordinals_after_move(tx, target_id, &snapshot.title).await?;
+    Ok(())
+}
+
+/// Append the merge-log entry and delete the source book row. Returns
+/// the new `merge_log.id` (the undo handle).
+async fn finalize_merge(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    target_id: i64,
+    source_id: i64,
+    snapshot: &SourceSnapshot,
+    merged_by: Option<i64>,
+) -> Result<i64, MergeError> {
+    let merge_log_id: i64 = sqlx::query_scalar(
+        "INSERT INTO merge_log (target_book_id, source_uuid, source_metadata, merged_by)
+         VALUES (?, ?, ?, ?) RETURNING id",
+    )
+    .bind(target_id)
+    .bind(&snapshot.uuid)
+    .bind(serde_json::to_string(snapshot)?)
+    .bind(merged_by)
+    .fetch_one(&mut **tx)
+    .await?;
+
+    sqlx::query("DELETE FROM books WHERE id = ?")
+        .bind(source_id)
+        .execute(&mut **tx)
+        .await?;
+
+    Ok(merge_log_id)
 }
 
 /// Resolve a uuid to its `books.id` — real rows only, no `merged_uuids`
