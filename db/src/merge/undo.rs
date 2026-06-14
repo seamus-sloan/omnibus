@@ -119,8 +119,8 @@ async fn recreate_source_row(
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO books
             (uuid, library_id, path, title, sort, author_sort, series_index, pubdate,
-             timestamp, has_cover, description, isbn, accent_color, title_norm, author_norm)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?, ?)
+             timestamp, has_cover, description, accent_color, title_norm, author_norm)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(&snap.uuid)
@@ -134,7 +134,6 @@ async fn recreate_source_row(
     .bind(&snap.timestamp)
     .bind(snap.has_cover)
     .bind(&snap.description)
-    .bind(&snap.isbn)
     .bind(&snap.accent_color)
     .bind(&snap.title_norm)
     .bind(&snap.author_norm)

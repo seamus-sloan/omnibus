@@ -461,18 +461,6 @@ async fn insert_book_file_row(
     Ok(())
 }
 
-/// First ISBN-scheme identifier, case-insensitive on the scheme name.
-fn first_isbn(idents: &[omnibus_shared::Identifier]) -> Option<String> {
-    idents
-        .iter()
-        .find(|id| {
-            id.scheme
-                .as_deref()
-                .is_some_and(|s| s.eq_ignore_ascii_case("isbn"))
-        })
-        .map(|id| id.value.clone())
-}
-
 /// UPDATE the `books` row for a Changed entry in place (preserving id).
 /// All scalar columns that `insert_book_row` writes get refreshed; the
 /// link tables and FTS row are handled by the caller.
@@ -490,13 +478,12 @@ async fn update_book_row(
         .first()
         .and_then(|c| c.file_as.clone())
         .or_else(|| m.creators.first().map(|c| c.name.clone()));
-    let first_isbn = first_isbn(&m.identifiers);
     let has_cover = i64::from(b.cover.is_some());
 
     sqlx::query(
         "UPDATE books SET
             path = ?, title = ?, sort = ?, author_sort = ?, series_index = ?,
-            pubdate = ?, has_cover = ?, description = ?, isbn = ?, accent_color = ?,
+            pubdate = ?, has_cover = ?, description = ?, accent_color = ?,
             title_norm = ?, author_norm = ?,
             last_modified = datetime('now')
          WHERE id = ?",
@@ -509,7 +496,6 @@ async fn update_book_row(
     .bind(&m.published)
     .bind(has_cover)
     .bind(&m.description)
-    .bind(&first_isbn)
     .bind(sanitize_accent_color(m.accent.as_deref()))
     .bind(normalize_title(&title))
     .bind(m.creators.first().and_then(|c| normalize_author(&c.name)))
@@ -581,14 +567,13 @@ async fn insert_book_row(
         .first()
         .and_then(|c| c.file_as.clone())
         .or_else(|| m.creators.first().map(|c| c.name.clone()));
-    let first_isbn = first_isbn(&m.identifiers);
     let has_cover = i64::from(b.cover.is_some());
 
     let book_id = sqlx::query_scalar::<_, i64>(
         "INSERT INTO books
             (uuid, library_id, path, title, sort, author_sort, series_index,
-             pubdate, has_cover, description, isbn, accent_color, title_norm, author_norm)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             pubdate, has_cover, description, accent_color, title_norm, author_norm)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(&uuid)
@@ -601,7 +586,6 @@ async fn insert_book_row(
     .bind(&m.published)
     .bind(has_cover)
     .bind(&m.description)
-    .bind(&first_isbn)
     .bind(sanitize_accent_color(m.accent.as_deref()))
     .bind(normalize_title(&title))
     .bind(m.creators.first().and_then(|c| normalize_author(&c.name)))

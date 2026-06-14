@@ -1,0 +1,18 @@
+-- F8 — drop the denormalized `books.isbn` column. It held a copy of the
+-- first ISBN-scheme identifier, but that value is already canonical in
+-- `book_identifiers` (one row per scheme/value). No read path consumes it:
+--   * FTS — `upsert_fts` (db/src/sync/fts.rs) already sources the `isbn`
+--     token from `book_identifiers` (F4), not from `books.isbn`.
+--   * Projection — `row_to_ebook` (db/src/books/projection.rs) rebuilds the
+--     identifier list from a `book_identifiers` JSON aggregate.
+--   * Merge undo — the source snapshot replays identifiers into
+--     `book_identifiers`, so the recreated row's ISBN survives without the
+--     column.
+--
+-- Forward-only. `books.isbn` is a bare `TEXT COLLATE NOCASE` with no index,
+-- FK, PK, generated column, trigger, or view depending on it, so SQLite
+-- (>= 3.35, runtime here is far newer) drops it in place with no
+-- table-recreate. The frozen 0005_fts5.sql backfill reads `b.isbn` but only
+-- runs once on a fresh, empty `books` table; on an upgraded DB it ran long
+-- before this migration. Both paths converge on the same schema.
+ALTER TABLE books DROP COLUMN isbn;
