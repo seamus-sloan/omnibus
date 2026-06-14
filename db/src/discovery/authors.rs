@@ -45,7 +45,7 @@ pub async fn get_author(
         id: a.get("id"),
         name: a.get("name"),
         sort: a.get("sort"),
-        book_count: book_count as usize,
+        book_count: usize::try_from(book_count).unwrap_or(0),
         books,
         has_photo,
     }))

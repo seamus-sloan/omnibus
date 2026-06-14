@@ -371,7 +371,17 @@ pub(super) fn BdFormatBadge(fmt: String) -> Element {
 /// integer in the stub; the interactive widget will replace this later.
 #[component]
 pub(super) fn BdStars(value: f32) -> Element {
-    let full = value.floor().clamp(0.0, 5.0) as u32;
+    // Clamped to `[0, 5]` so the cast is a trivial in-range truncation.
+    // NaN gets the explicit `is_nan()` branch — Rust's `f32::clamp`
+    // returns NaN for NaN inputs, so the branch is required for the
+    // collapse-to-0 behavior.
+    let bounded = if value.is_nan() {
+        0.0
+    } else {
+        value.floor().clamp(0.0, 5.0)
+    };
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let full = bounded as u32;
     rsx! {
         span { class: "bd-stars-row",
             for i in 0..5u32 {

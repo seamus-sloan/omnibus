@@ -510,6 +510,10 @@ pub(crate) async fn insert_chapters(
 ) -> Result<(), SyncError> {
     if !chapters.is_empty() {
         let total_duration: f64 = parts.iter().map(|p| p.duration_seconds).sum();
+        // Chapter timestamps are milliseconds; `f64` has 53 bits of
+        // integer precision, so it represents every millisecond exactly
+        // up to ~2^53 ms ≈ 285,000 years — well past any real audiobook.
+        #[allow(clippy::cast_precision_loss)]
         for (i, ch) in chapters.iter().enumerate() {
             let start_seconds = ch.start_ms as f64 / 1000.0;
             let duration_seconds = if ch.end_ms > ch.start_ms {

@@ -22,7 +22,12 @@ pub(super) fn format_hms(seconds: f64) -> String {
     if !seconds.is_finite() || seconds < 0.0 {
         return "0:00".into();
     }
-    let s_total = seconds as u64;
+    // Cap to ~136 years so the cast cannot wrap. Combined with the
+    // finite/non-negative check above, the `as u64` is an in-range
+    // truncation, never a saturation to `u64::MAX`.
+    let bounded = seconds.min(f64::from(u32::MAX));
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let s_total = bounded as u64;
     let h = s_total / 3600;
     let m = (s_total % 3600) / 60;
     let s = s_total % 60;

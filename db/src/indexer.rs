@@ -91,9 +91,10 @@ pub async fn is_stale(pool: &SqlitePool, library_path: &str) -> Result<bool, Ind
     };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        // Clock unreadable: substitute `last` so `now - last == 0` and we
-        // serve stale (see the doc comment above).
+        .ok()
+        .and_then(|d| i64::try_from(d.as_secs()).ok())
+        // Clock unreadable (or post-Y292B overflow): substitute `last` so
+        // `now - last == 0` and we serve stale (see the doc comment above).
         .unwrap_or(last);
     Ok(is_stale_decision(last, now))
 }
@@ -412,7 +413,7 @@ pub(crate) async fn backfill_chapters(
         return Ok(());
     }
 
-    let total = rows.len() as u32;
+    let total = u32::try_from(rows.len()).unwrap_or(u32::MAX);
     tracing::info!(
         count = total,
         "backfilling chapters for existing audiobooks"
@@ -485,7 +486,10 @@ pub(crate) async fn backfill_chapters(
             sync::insert_chapters(&mut tx, *book_file_id, &chapters, parts).await?;
 
             let global_idx = batch_idx * 250 + i;
-            on_progress(global_idx as u32 + 1, total);
+            let progress = u32::try_from(global_idx)
+                .unwrap_or(u32::MAX)
+                .saturating_add(1);
+            on_progress(progress, total);
         }
         tx.commit().await?;
     }

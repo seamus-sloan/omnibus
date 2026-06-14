@@ -77,8 +77,7 @@ pub fn build_indexed_book(path: &Path, filename: String) -> Result<IndexedBook, 
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| filename_stem(&filename));
     let description = meta.duration_seconds.map(|d| {
-        let h = (d / 3600.0) as i64;
-        let m = ((d % 3600.0) / 60.0) as i64;
+        let (h, m) = duration_to_hm(d);
         format!("Audiobook · {h}h {m:02}m")
     });
     let accent = cover
@@ -109,4 +108,24 @@ fn filename_stem(filename: &str) -> String {
         .and_then(|s| s.to_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| filename.to_string())
+}
+
+/// Split a duration in seconds into `(hours, minutes)` for the human-readable
+/// `Audiobook · {h}h {m:02}m` description. Tag-supplied durations can be
+/// `NaN`/`inf`/negative when a file is corrupt; without this guard those
+/// values get cast straight to `i64::MIN`, surfacing as
+/// `-9223372036854775808h` in the UI. Clamp to a sane upper bound so the
+/// final cast cannot truncate.
+pub(super) fn duration_to_hm(d: f64) -> (i64, i64) {
+    if !d.is_finite() || d < 0.0 {
+        return (0, 0);
+    }
+    let d = d.min(f64::from(i32::MAX));
+    // The `is_finite`+`>= 0` filter and the `i32::MAX` clamp above guarantee
+    // both quotients land in `[0, i32::MAX]` — far inside `i64` range, so
+    // the `as i64` cast is now an in-range truncation, not the saturate-to
+    // `-9223372036854775808` that this helper exists to prevent.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let hm = ((d / 3600.0) as i64, ((d % 3600.0) / 60.0) as i64);
+    hm
 }

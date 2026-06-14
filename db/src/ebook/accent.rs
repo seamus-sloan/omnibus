@@ -50,6 +50,10 @@ pub fn extract_accent(bytes: &[u8]) -> Option<String> {
         };
         let sat = if max == 0.0 { 0.0 } else { delta / max };
         let weight = sat * max;
+        // `hue` is in [0.0, 360.0) from the HSV formula above, so the
+        // floored quotient is a small non-negative integer (≤ 12)
+        // before `.min(11)` clamps it into the bucket array.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let idx = ((hue / 30.0).floor() as usize).min(11);
         buckets[idx].r += r * weight;
         buckets[idx].g += g * weight;

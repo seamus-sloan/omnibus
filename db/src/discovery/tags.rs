@@ -96,7 +96,7 @@ pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, Discover
         .iter()
         .map(|r| TagWeight {
             name: r.get("name"),
-            count: r.get::<i64, _>("cnt") as usize,
+            count: usize::try_from(r.get::<i64, _>("cnt")).unwrap_or(0),
         })
         .collect())
 }
