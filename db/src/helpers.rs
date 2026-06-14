@@ -219,8 +219,18 @@ fn sanitize_fts_tokens(tokens: &[&str]) -> Option<String> {
 }
 
 pub(crate) fn format_series_index(v: f64) -> String {
+    if !v.is_finite() {
+        return format!("{v}");
+    }
     if (v - v.trunc()).abs() < f64::EPSILON {
-        format!("{}", v.trunc() as i64)
+        // Clamp to the f64-exactly-representable integer range before the
+        // cast so an out-of-range value can't saturate to `i64::MIN`/MAX
+        // and surface as `-9223372036854775808` in the UI.
+        const LIMIT: f64 = 9.0e15;
+        let bounded = v.trunc().clamp(-LIMIT, LIMIT);
+        #[allow(clippy::cast_possible_truncation)]
+        let i = bounded as i64;
+        format!("{i}")
     } else {
         format!("{v}")
     }

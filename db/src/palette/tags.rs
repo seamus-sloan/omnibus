@@ -81,7 +81,7 @@ pub async fn search_tags(
         .map(|r| PaletteTagHit {
             id: r.get("id"),
             name: r.get("name"),
-            book_count: r.get::<i32, _>("book_count") as u32,
+            book_count: u32::try_from(r.get::<i32, _>("book_count")).unwrap_or(0),
         })
         .collect())
 }

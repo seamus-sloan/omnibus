@@ -126,3 +126,31 @@ fn audiobook_error_unsupported_variant_renders_format_token() {
     let s = err.to_string();
     assert!(s.contains("xyz"), "got {s:?}");
 }
+
+#[test]
+fn duration_to_hm_splits_finite_seconds_into_hours_and_minutes() {
+    assert_eq!(duration_to_hm(3661.0), (1, 1));
+    assert_eq!(duration_to_hm(0.0), (0, 0));
+    assert_eq!(duration_to_hm(59.0), (0, 0));
+    assert_eq!(duration_to_hm(7200.0), (2, 0));
+}
+
+#[test]
+fn duration_to_hm_returns_zero_for_non_finite_or_negative_input() {
+    // The bug this guards against: an `f64 as i64` cast of a NaN/inf
+    // duration produced `-9223372036854775808` in the description,
+    // surfacing as a garbled `-9223372036854775808h …m` in the UI.
+    assert_eq!(duration_to_hm(f64::NAN), (0, 0));
+    assert_eq!(duration_to_hm(f64::INFINITY), (0, 0));
+    assert_eq!(duration_to_hm(f64::NEG_INFINITY), (0, 0));
+    assert_eq!(duration_to_hm(-1.0), (0, 0));
+}
+
+#[test]
+fn duration_to_hm_clamps_implausibly_large_values_to_in_range_cast() {
+    // f64 values larger than i32::MAX are clamped so the final `as i64`
+    // cast cannot wrap or saturate-to-MIN.
+    let (h, m) = duration_to_hm(f64::MAX);
+    assert!(h >= 0 && m >= 0);
+    assert!(h <= i64::from(i32::MAX) / 3600 + 1);
+}

@@ -282,7 +282,8 @@ pub(super) fn lock_unpoison<T>(m: &StdMutex<T>) -> MutexGuard<'_, T> {
 pub(super) fn wall_clock_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_millis()).ok())
         .unwrap_or(0)
 }
 

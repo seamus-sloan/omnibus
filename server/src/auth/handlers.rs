@@ -61,10 +61,15 @@ fn auth_error_to_response(e: AuthError) -> Response {
         // "invalid credentials" body as a wrong password, but with 429 and
         // a `Retry-After` header so a well-behaved client can back off.
         AuthError::AccountLocked { until_unix } => {
+            // Fall open at `until_unix` if SystemTime is unreadable or
+            // doesn't fit i64 — that makes `retry_after = 0` rather than
+            // an enormous header that prolongs the lockout for a clock
+            // glitch the client didn't cause.
             let now_unix = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
+                .ok()
+                .and_then(|d| i64::try_from(d.as_secs()).ok())
+                .unwrap_or(until_unix);
             let retry_after = until_unix.saturating_sub(now_unix).max(0);
             let mut headers = HeaderMap::new();
             if let Ok(v) = retry_after.to_string().parse() {

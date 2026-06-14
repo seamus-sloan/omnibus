@@ -63,7 +63,7 @@ fn row_key(book: &EbookMetadata, key: SortKey) -> RowKey {
                     .series_index
                     .as_deref()
                     .and_then(|raw| raw.parse::<f64>().ok())
-                    .map(|f| (f * 1000.0).round() as i64)
+                    .map(series_index_to_sort_key)
                     .unwrap_or(0);
                 (s.to_ascii_lowercase(), idx)
             }),
@@ -77,6 +77,24 @@ fn row_key(book: &EbookMetadata, key: SortKey) -> RowKey {
             series: None,
         },
     }
+}
+
+/// Pack a parsed `series_index` (`f64`) into a deterministic integer sort
+/// key by scaling by 1000 (3 decimal places of precision). Guards the cast
+/// so a NaN/inf parsed from a corrupt OPF can't collapse to `i64::MIN` and
+/// shove the book to the top of the series sort.
+fn series_index_to_sort_key(f: f64) -> i64 {
+    if !f.is_finite() {
+        return 0;
+    }
+    // Series indices in practice are small positive decimals (book 1.5 in
+    // a trilogy, etc.). Cap to a sane range — well within the
+    // f64-exactly-representable integer range — so the cast cannot wrap.
+    const MAX_SCALED: f64 = 1.0e15;
+    let scaled = (f * 1000.0).round().clamp(-MAX_SCALED, MAX_SCALED);
+    #[allow(clippy::cast_possible_truncation)]
+    let key = scaled as i64;
+    key
 }
 
 /// Compare two `Option<K>` values where missing always sorts last regardless
@@ -430,5 +448,33 @@ mod tests {
         // Reversed direction does not reverse the tiebreak: ids stay ascending.
         let desc = sort_books(vec![a, b], SortKey::Title, SortDir::Desc);
         assert_eq!(ids(&desc), vec![2, 5]);
+    }
+
+    #[test]
+    fn series_index_to_sort_key_scales_finite_values_by_one_thousand() {
+        assert_eq!(series_index_to_sort_key(1.0), 1_000);
+        assert_eq!(series_index_to_sort_key(1.5), 1_500);
+        assert_eq!(series_index_to_sort_key(0.0), 0);
+        assert_eq!(series_index_to_sort_key(-2.0), -2_000);
+    }
+
+    #[test]
+    fn series_index_to_sort_key_returns_zero_for_non_finite_input() {
+        // The bug this guards against: a NaN/inf parsed from a corrupt OPF
+        // would `as i64` to `i64::MIN`, shoving the book to the top of the
+        // series sort.
+        assert_eq!(series_index_to_sort_key(f64::NAN), 0);
+        assert_eq!(series_index_to_sort_key(f64::INFINITY), 0);
+        assert_eq!(series_index_to_sort_key(f64::NEG_INFINITY), 0);
+    }
+
+    #[test]
+    fn series_index_to_sort_key_clamps_extreme_finite_values_in_range() {
+        let huge = series_index_to_sort_key(1.0e30);
+        let tiny = series_index_to_sort_key(-1.0e30);
+        // Both fall in the f64-exact range so the cast can't saturate to
+        // the wrong sign.
+        assert!(huge > 0);
+        assert!(tiny < 0);
     }
 }

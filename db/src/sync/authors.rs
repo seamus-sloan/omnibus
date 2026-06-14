@@ -25,7 +25,13 @@ pub(super) async fn insert_author_links(
         .creators
         .iter()
         .enumerate()
-        .map(|(pos, c)| (c.name.as_str(), c.file_as.as_deref(), pos as i64))
+        .map(|(pos, c)| {
+            (
+                c.name.as_str(),
+                c.file_as.as_deref(),
+                i64::try_from(pos).unwrap_or(i64::MAX),
+            )
+        })
         .collect();
     if entries.is_empty() {
         return Ok(());

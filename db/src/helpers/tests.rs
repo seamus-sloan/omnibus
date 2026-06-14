@@ -231,3 +231,23 @@ fn stable_uuid_is_version_5() {
         "must use RFC 4122 variant bits"
     );
 }
+
+#[test]
+fn format_series_index_strips_trailing_zeros_for_integer_values() {
+    assert_eq!(format_series_index(1.0), "1");
+    assert_eq!(format_series_index(7.0), "7");
+}
+
+#[test]
+fn format_series_index_keeps_decimal_for_fractional_values() {
+    assert_eq!(format_series_index(1.5), "1.5");
+}
+
+#[test]
+fn format_series_index_passes_through_non_finite_values_verbatim() {
+    // The guarded cast would otherwise saturate `NaN`/`inf` to
+    // `i64::MIN`/`i64::MAX` and surface as a garbled integer.
+    assert_eq!(format_series_index(f64::NAN), "NaN");
+    assert_eq!(format_series_index(f64::INFINITY), "inf");
+    assert_eq!(format_series_index(f64::NEG_INFINITY), "-inf");
+}
