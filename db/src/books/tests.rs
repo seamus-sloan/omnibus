@@ -701,6 +701,62 @@ async fn list_and_search_books_return_multi_valued_fields() {
     );
     assert_eq!(hits[0].identifiers.len(), 2);
 }
+
+/// F8 regression: the denormalized `books.isbn` column was dropped (migration
+/// 0023). A book's ISBN must still surface through the identifier projection,
+/// which reads the canonical `book_identifiers` rows — proving the read path
+/// never depended on the removed column.
+#[tokio::test]
+async fn get_book_and_list_books_surface_isbn_from_book_identifiers_after_column_drop() {
+    let _covers = CoversTempDir::new("isbn_after_drop");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib",
+        vec![IndexedBook {
+            metadata: EbookMetadata {
+                filename: "isbn.epub".into(),
+                title: Some("ISBN Book".into()),
+                identifiers: vec![Identifier {
+                    value: "9780000000000".into(),
+                    scheme: Some("isbn".into()),
+                }],
+                ..Default::default()
+            },
+            cover: None,
+            mtime_epoch: 0,
+            size_bytes: 0,
+        }],
+    )
+    .await
+    .unwrap();
+
+    // The `books` table no longer has an `isbn` column at all.
+    let has_isbn_col: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info('books') WHERE name = 'isbn'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(has_isbn_col, 0, "books.isbn must be dropped");
+
+    let list = list_books(&pool, "/lib").await.unwrap();
+    assert_eq!(list.len(), 1);
+    let list_isbn = list[0]
+        .identifiers
+        .iter()
+        .find(|i| i.scheme.as_deref() == Some("isbn"))
+        .map(|i| i.value.as_str());
+    assert_eq!(list_isbn, Some("9780000000000"));
+
+    let detail = get_book(&pool, list[0].id).await.unwrap().unwrap();
+    let detail_isbn = detail
+        .identifiers
+        .iter()
+        .find(|i| i.scheme.as_deref() == Some("isbn"))
+        .map(|i| i.value.as_str());
+    assert_eq!(detail_isbn, Some("9780000000000"));
+}
+
 #[tokio::test]
 async fn get_book_returns_none_for_missing_id() {
     let pool = init_db("sqlite::memory:").await.unwrap();

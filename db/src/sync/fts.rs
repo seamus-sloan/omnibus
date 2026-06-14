@@ -27,8 +27,8 @@ pub(crate) async fn upsert_fts(
     // `authors` / `series` / `tags` mirror the rename-trigger projections
     // in 0005_fts5.sql so the inline upsert and the triggers agree on the
     // same text. `isbn` takes the first ISBN-scheme identifier
-    // (case-insensitive), matching the per-site `first_isbn` the sync
-    // path used to write inline.
+    // (case-insensitive) straight from `book_identifiers` — the canonical
+    // source now that the denormalized `books.isbn` column is gone (F8).
     sqlx::query(
         "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn)
          SELECT

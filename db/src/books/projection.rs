@@ -30,7 +30,7 @@ pub const MAX_BOOKS_RETURNED: i64 = 50_000;
 pub(crate) const BOOK_COLUMNS: &str = r#"
     b.id, b.uuid,
     b.title, b.description, b.series_index, b.has_cover,
-    b.pubdate, b.last_modified, b.timestamp, b.isbn, b.accent_color,
+    b.pubdate, b.last_modified, b.timestamp, b.accent_color,
 
     (SELECT bf.filename FROM book_files bf
       WHERE bf.book_id = b.id
