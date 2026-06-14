@@ -312,8 +312,7 @@ fn build_parts_list(
 
     let total_secs: f64 = parts_work.iter().map(|p| p.duration_seconds).sum();
     let description = if total_secs > 0.0 {
-        let h = (total_secs / 3600.0) as i64;
-        let m = ((total_secs % 3600.0) / 60.0) as i64;
+        let (h, m) = super::duration_to_hm(total_secs);
         Some(format!("Audiobook · {h}h {m:02}m"))
     } else {
         None
@@ -323,7 +322,7 @@ fn build_parts_list(
         .into_iter()
         .enumerate()
         .map(|(i, p)| AudiobookPart {
-            ordinal: i as i64,
+            ordinal: i64::try_from(i).unwrap_or(i64::MAX),
             filename: p.filename,
             size_bytes: p.size_bytes,
             mtime_epoch: p.mtime_epoch,
@@ -357,7 +356,19 @@ fn apply_chapters(
         let abs = library_root.join(&part.filename);
         let part_chapters = super::chapters::extract_chapters(&abs, format);
         chapters.extend(offset_chapters(part_chapters, offset_ms));
-        offset_ms += (part.duration_seconds * 1000.0).round().max(0.0) as u64;
+        // `duration_seconds` is a tag-supplied f64; guard against NaN/inf
+        // and oversize values so the cumulative `offset_ms` stays
+        // monotonic and bounded. Rust's float→int `as` saturates
+        // (NaN→0, overflow→u64::MAX) rather than being undefined, but a
+        // saturated `u64::MAX` would still wreck every subsequent chapter
+        // offset — hence the explicit finite/positive/min-cap guard below.
+        let ms = (part.duration_seconds * 1000.0).round();
+        if ms.is_finite() && ms > 0.0 {
+            let bounded = ms.min(1.0e18);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let added = bounded as u64;
+            offset_ms = offset_ms.saturating_add(added);
+        }
     }
     chapters
 }

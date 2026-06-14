@@ -423,7 +423,11 @@ pub fn BookReadPage(uuid: String) -> Element {
         .and_then(|b| b.title.clone())
         .unwrap_or_default();
 
-    let font_pct = ((font_size() - 12) as f32 / 20.0 * 100.0).clamp(0.0, 100.0);
+    // Font size is a small i32 slider value in `[12, 32]`; the `as f32`
+    // cast is exact within that range.
+    #[allow(clippy::cast_precision_loss)]
+    let font_offset = (font_size() - 12) as f32;
+    let font_pct = (font_offset / 20.0 * 100.0).clamp(0.0, 100.0);
 
     rsx! {
         document::Script { src: JSZIP_JS }

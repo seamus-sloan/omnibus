@@ -77,7 +77,12 @@ pub fn TagCloudPage() -> Element {
 
 /// Render a single tag in the cloud with size/opacity scaled by weight.
 fn render_tag_item(tag: &TagWeight, max_count: usize) -> Element {
-    let weight = tag.count as f64 / max_count as f64;
+    // Tag counts and library sizes both comfortably fit a `u32`, well within
+    // the f64-exactly-representable integer range. Saturating cast guards
+    // against the unlikely-but-possible >4B case rather than asserting.
+    let count_f = f64::from(u32::try_from(tag.count).unwrap_or(u32::MAX));
+    let max_f = f64::from(u32::try_from(max_count).unwrap_or(u32::MAX));
+    let weight = if max_f == 0.0 { 0.0 } else { count_f / max_f };
     let size = 16.0 + (weight * 56.0);
     let opacity = 0.55 + (weight * 0.45);
     let is_high = weight > 0.7;

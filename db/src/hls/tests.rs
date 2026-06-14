@@ -233,6 +233,52 @@ fn ffmpeg_progress_fraction_uses_safe_default_when_total_unknown() {
     );
 }
 
+#[test]
+fn ffmpeg_progress_fraction_returns_safe_default_for_non_finite_total() {
+    // Corrupt tag data can surface NaN/inf as the parts' summed
+    // duration. `<= 0.0` doesn't catch NaN, so without the explicit
+    // `is_finite()` guard the function would return NaN and leak it
+    // into the on-disk `.progress` sentinel.
+    let pct = ffmpeg_progress_fraction(60_000_000, f64::NAN);
+    assert!(pct.is_finite() && pct > 0.0, "expected finite, got {pct}");
+    let pct = ffmpeg_progress_fraction(60_000_000, f64::INFINITY);
+    assert!(pct.is_finite() && pct > 0.0, "expected finite, got {pct}");
+    let pct = ffmpeg_progress_fraction(60_000_000, f64::NEG_INFINITY);
+    assert!(pct.is_finite() && pct > 0.0, "expected finite, got {pct}");
+}
+
+#[test]
+fn build_manifest_returns_stub_for_non_finite_total_secs() {
+    // A NaN/inf summed duration from corrupt tag data must NOT make
+    // build_manifest emit `#EXTINF:NaN` or loop over an arbitrary
+    // segment count — it has to fall back to the minimal stub.
+    for d in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let m = build_manifest(&[HlsPart {
+            ordinal: 0,
+            filename: "track.mp3".into(),
+            duration_seconds: d,
+        }]);
+        assert!(!m.contains("NaN"), "manifest leaked NaN for {d}: {m}");
+        assert!(!m.contains("inf"), "manifest leaked inf for {d}: {m}");
+        assert!(m.contains("seg-0000.ts"), "stub missing for {d}: {m}");
+        assert!(m.contains("#EXT-X-ENDLIST"), "stub missing for {d}: {m}");
+    }
+}
+
+#[test]
+fn build_manifest_returns_stub_when_segment_count_exceeds_cap() {
+    // 100 hours = 36000 segments is the documented cap. Anything past
+    // it is corrupt tag data, and we'd rather serve the stub than
+    // allocate ~100MB of `#EXTINF:` text. 200 hours blows the cap.
+    let m = build_manifest(&[HlsPart {
+        ordinal: 0,
+        filename: "track.mp3".into(),
+        duration_seconds: 200.0 * 3600.0,
+    }]);
+    assert!(m.contains("seg-0000.ts"));
+    assert!(!m.contains("seg-0001.ts"), "over-cap manifest leaked: {m}");
+}
+
 // ---------------------------------------------------------------------------
 // Orphan-progress recovery (Bug 1 of #338)
 // ---------------------------------------------------------------------------

@@ -80,7 +80,7 @@ pub async fn search_palette(
     // D. Tags — substring match, scoped to library.
     let tags = search_tags(pool, library_path, &like_pattern, LIMIT).await?;
 
-    let duration_ms = start.elapsed().as_millis() as u64;
+    let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     Ok(PaletteResults {
         query: trimmed.to_string(),

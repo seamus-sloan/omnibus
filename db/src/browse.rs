@@ -125,7 +125,7 @@ pub async fn list_authors(
             id: r.get("id"),
             name: r.get("name"),
             sort: r.get("sort"),
-            book_count: r.get::<i64, _>("book_count") as usize,
+            book_count: usize::try_from(r.get::<i64, _>("book_count")).unwrap_or(0),
             accent: r.get("accent"),
             has_photo: r.get::<i64, _>("has_photo") != 0,
         })
@@ -243,7 +243,7 @@ fn map_series_row(r: &sqlx::sqlite::SqliteRow) -> SeriesSummary {
         id: r.get("id"),
         name: r.get("name"),
         sort: r.get("sort"),
-        book_count: r.get::<i64, _>("book_count") as usize,
+        book_count: usize::try_from(r.get::<i64, _>("book_count")).unwrap_or(0),
         primary_author: r.get("primary_author"),
         accent: r.get("accent"),
     }

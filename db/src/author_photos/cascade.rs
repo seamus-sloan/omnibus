@@ -142,30 +142,31 @@ pub async fn refetch_all(
     let author_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM authors ORDER BY id")
         .fetch_all(pool)
         .await?;
-    let total = author_ids.len() as u32;
+    let total = u32::try_from(author_ids.len()).unwrap_or(u32::MAX);
 
     for (i, author_id) in author_ids.iter().enumerate() {
+        let done = u32::try_from(i).unwrap_or(u32::MAX).saturating_add(1);
         match author_photo_status(pool, *author_id).await {
             Ok(Some((AuthorPhotoSource::Manual, _))) => {
-                on_progress((i + 1) as u32, Some(total));
+                on_progress(done, Some(total));
                 continue;
             }
             Ok(_) => {}
             Err(e) => {
                 tracing::warn!(author_id, error = %e, "refetch_all: status check failed, skipping");
-                on_progress((i + 1) as u32, Some(total));
+                on_progress(done, Some(total));
                 continue;
             }
         }
         if let Err(e) = delete_author_photo(pool, *author_id).await {
             tracing::warn!(author_id, error = %e, "refetch_all: delete failed, skipping");
-            on_progress((i + 1) as u32, Some(total));
+            on_progress(done, Some(total));
             continue;
         }
         if let Err(e) = resolve(pool, *author_id).await {
             tracing::warn!(author_id, error = %e, "refetch_all: resolve failed, continuing");
         }
-        on_progress((i + 1) as u32, Some(total));
+        on_progress(done, Some(total));
     }
     Ok(())
 }

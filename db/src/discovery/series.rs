@@ -39,7 +39,7 @@ pub async fn get_series(
         id: s.get("id"),
         name: s.get("name"),
         sort: s.get("sort"),
-        book_count: book_count as usize,
+        book_count: usize::try_from(book_count).unwrap_or(0),
         books,
     }))
 }
