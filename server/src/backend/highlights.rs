@@ -20,6 +20,9 @@ pub(super) async fn post_highlight(
     State(state): State<AppState>,
     Json(input): Json<CreateHighlight>,
 ) -> Response {
+    if let Err(msg) = input.validate() {
+        return (axum::http::StatusCode::BAD_REQUEST, msg).into_response();
+    }
     match db::highlights::create_highlight(&state.pool, user.id, &input).await {
         Ok(h) => Json(h).into_response(),
         Err(HighlightError::BookNotFound) => {
@@ -74,6 +77,9 @@ pub(super) async fn patch_highlight_note(
     Path(id): Path<i64>,
     Json(body): Json<UpdateHighlightNote>,
 ) -> Response {
+    if let Err(msg) = body.validate() {
+        return (axum::http::StatusCode::BAD_REQUEST, msg).into_response();
+    }
     match db::highlights::update_highlight_note(&state.pool, user.id, id, body.note.as_deref())
         .await
     {

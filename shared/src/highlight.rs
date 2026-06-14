@@ -66,8 +66,58 @@ pub struct CreateHighlight {
     pub color: HighlightColor,
 }
 
+impl CreateHighlight {
+    /// Maximum length (in chars) of an EPUB CFI range string. A real CFI
+    /// rarely exceeds a few hundred bytes; 4 KiB is a generous ceiling that
+    /// stops an authed client from persisting megabyte-sized blobs per row.
+    pub const EPUB_CFI_RANGE_MAX_LEN: usize = 4096;
+
+    /// Validate field lengths and required-ness. Call at the handler
+    /// boundary before persisting so over-long inputs surface as 400
+    /// instead of falling through to the DB.
+    ///
+    /// Length caps are measured in Unicode scalar values (`chars`),
+    /// matching `MetadataOverrides::validate`.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.book_uuid.trim().is_empty() {
+            return Err("book_uuid is required".into());
+        }
+        if self.epub_cfi_range.trim().is_empty() {
+            return Err("epub_cfi_range is required".into());
+        }
+        if self.epub_cfi_range.chars().count() > Self::EPUB_CFI_RANGE_MAX_LEN {
+            return Err(format!(
+                "epub_cfi_range exceeds {} characters",
+                Self::EPUB_CFI_RANGE_MAX_LEN
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Payload for updating a highlight's note text.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UpdateHighlightNote {
     pub note: Option<String>,
 }
+
+impl UpdateHighlightNote {
+    /// Maximum length (in chars) of a highlight note — 4 KiB cap that lets
+    /// the API boundary reject megabyte payloads up front.
+    pub const NOTE_MAX_LEN: usize = 4096;
+
+    /// Validate the note length. `None` clears the note and is always
+    /// permitted. Returns `Err` with a human-readable message when the
+    /// cap is exceeded.
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(ref note) = self.note {
+            if note.chars().count() > Self::NOTE_MAX_LEN {
+                return Err(format!("note exceeds {} characters", Self::NOTE_MAX_LEN));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests;
