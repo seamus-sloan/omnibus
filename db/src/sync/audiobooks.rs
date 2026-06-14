@@ -367,8 +367,8 @@ async fn insert_audiobook_file_row(
 
     let id = sqlx::query_scalar::<_, i64>(
         "INSERT INTO book_files \
-            (book_id, format, filename, size_bytes, mtime, mtime_epoch) \
-         VALUES (?, ?, ?, ?, '', ?) \
+            (book_id, format, filename, size_bytes, mtime_epoch) \
+         VALUES (?, ?, ?, ?, ?) \
          RETURNING id",
     )
     .bind(book_id)

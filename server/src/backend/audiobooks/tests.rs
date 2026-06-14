@@ -39,8 +39,8 @@ async fn seed_one_audiobook(pool: &sqlx::SqlitePool) -> String {
             .unwrap()
             .last_insert_rowid();
     let file_id = sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime) \
-         VALUES (?, 'MP3', 'the-princess-knight', 100, '')",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'MP3', 'the-princess-knight', 100)",
     )
     .bind(book_id)
     .execute(pool)
@@ -272,8 +272,8 @@ async fn seed_audiobook_with_parts(
             .unwrap()
             .last_insert_rowid();
     let file_id = sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime) \
-         VALUES (?, ?, 'book', 0, '')",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, ?, 'book', 0)",
     )
     .bind(book_id)
     .bind(format)
