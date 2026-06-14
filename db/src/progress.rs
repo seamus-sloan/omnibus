@@ -1,15 +1,13 @@
-//! Server-authoritative reading and listening position sync, plus batched
-//! session reports.
-//!
-//! Position upserts are last-write-wins on `(user_id, book_id, format)`; the
-//! upsert always bumps `updated_at` to now so a newly-opened client can sync
-//! forward by reading the row back. Session inserts write into the
-//! per-format `reading_sessions` / `listening_sessions` tables.
+//! Server-authoritative reading/listening position sync plus batched
+//! session reports. Position upserts are last-write-wins on
+//! `(user_id, book_id, format)`; session inserts go to the per-format
+//! `reading_sessions` / `listening_sessions` tables. Both paths resolve
+//! `book_uuid` through the same merged-uuid-aware resolver.
 
 use omnibus_shared::{ProgressFormat, ProgressRecord, ProgressUpdate, SessionReport};
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
-use crate::resolve_book_id_by_uuid;
+use crate::{resolve_book_id_by_uuid, resolve_book_id_by_uuid_exec};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProgressError {
@@ -137,8 +135,10 @@ pub async fn get_progress(
 
 /// Append one session row inside an existing transaction. Returns `Ok(true)`
 /// when a row was inserted and `Ok(false)` when the report was skipped
-/// because the `book_uuid` is unknown (best-effort telemetry — a session
-/// that outlived its book is not an integrity failure).
+/// because the `book_uuid` resolves to neither a `books` row nor a
+/// `merged_uuids` entry (best-effort telemetry — a session that outlived its
+/// book is not an integrity failure). A format-merged or auto-attached uuid
+/// resolves to the surviving book and is recorded.
 ///
 /// The caller is responsible for committing or rolling back the transaction.
 /// Use this variant when inserting a batch so the entire batch is atomic.
@@ -147,11 +147,12 @@ pub async fn record_session_tx(
     user_id: i64,
     report: &SessionReport,
 ) -> Result<bool, ProgressError> {
-    let book_id: Option<i64> = sqlx::query_scalar("SELECT id FROM books WHERE uuid = ?")
-        .bind(&report.book_uuid)
-        .fetch_optional(&mut **tx)
-        .await?;
-    let Some(book_id) = book_id else {
+    // Resolve through the same merged-uuid-aware path as `upsert_progress`,
+    // so a uuid that was format-merged or auto-attached after the session
+    // started still records against the surviving book instead of being
+    // silently dropped. `Ok(false)` now means "unknown in neither `books`
+    // nor `merged_uuids`".
+    let Some(book_id) = resolve_book_id_by_uuid_exec(&mut **tx, &report.book_uuid).await? else {
         return Ok(false);
     };
     match report.format {

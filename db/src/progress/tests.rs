@@ -1,12 +1,29 @@
-//! Unit tests for the `progress` module — `upsert_progress`
-//! roundtrip + last-write-wins + per-user/format isolation,
-//! `BookNotFound` variant, `get_progress` empty-state,
-//! `record_session` per-format dispatch with unknown-uuid skip, and
-//! `record_session_tx` rollback behaviour.
+//! Unit tests for the `progress` module: `upsert_progress` roundtrip,
+//! last-write-wins, per-user/format isolation, `BookNotFound`,
+//! `get_progress` empty-state, `record_session` per-format dispatch and
+//! unknown-uuid skip, merged-uuid resolution, and `record_session_tx`
+//! rollback.
 
 use super::*;
 use crate::{init_db, replace_books};
 use omnibus_shared::EbookMetadata;
+
+/// Map a merged/auto-attached `uuid` onto an existing `book_id` the way the
+/// merge transaction does (`db/src/merge/transaction.rs`), so the session path
+/// has a row to resolve through the `merged_uuids` UNION fallback.
+async fn seed_merged_uuid(pool: &SqlitePool, uuid: &str, book_id: i64, format: &str) {
+    sqlx::query(
+        "INSERT OR REPLACE INTO merged_uuids (uuid, book_id, format, library_path)
+         VALUES (?, ?, ?, ?)",
+    )
+    .bind(uuid)
+    .bind(book_id)
+    .bind(format)
+    .bind("/lib")
+    .execute(pool)
+    .await
+    .expect("seed merged uuid");
+}
 
 async fn seed(pool: &SqlitePool, library: &str, title: &str) -> (i64, String) {
     replace_books(
@@ -333,4 +350,80 @@ async fn migration_0020_adds_windowed_session_indexes_for_stats() {
                 .unwrap();
         assert_eq!(found.as_deref(), Some(index), "missing index {index}");
     }
+}
+
+#[tokio::test]
+async fn record_session_resolves_merged_uuid_and_records_against_canonical_book() {
+    // A uuid that only exists in `merged_uuids` (the file was format-merged
+    // into the surviving book after the session started) must resolve to the
+    // canonical book and record the session, not be dropped with Ok(false).
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, _survivor_uuid) = seed(&pool, "/lib", "Book A").await;
+    seed_merged_uuid(&pool, "merged-uuid", book_id, "epub").await;
+
+    let recorded = record_session(
+        &pool,
+        user,
+        &SessionReport {
+            book_uuid: "merged-uuid".into(),
+            format: ProgressFormat::Epub,
+            started_at: 100,
+            ended_at: 460,
+            progress_units: 360,
+            device_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(recorded, "merged uuid should resolve and record, not skip");
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ? AND book_id = ?",
+    )
+    .bind(user)
+    .bind(book_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1, "session must land against the canonical book");
+}
+
+#[tokio::test]
+async fn record_session_resolves_merged_audio_uuid_to_canonical_book() {
+    // Per-format dispatch counterpart: a merged audio uuid records into
+    // `listening_sessions` against the surviving book.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, _survivor_uuid) = seed(&pool, "/lib", "Book A").await;
+    seed_merged_uuid(&pool, "merged-audio-uuid", book_id, "audio").await;
+
+    let recorded = record_session(
+        &pool,
+        user,
+        &SessionReport {
+            book_uuid: "merged-audio-uuid".into(),
+            format: ProgressFormat::Audio,
+            started_at: 200,
+            ended_at: 800,
+            progress_units: 600,
+            device_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(recorded, "merged audio uuid should resolve and record");
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM listening_sessions WHERE user_id = ? AND book_id = ?",
+    )
+    .bind(user)
+    .bind(book_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        count, 1,
+        "listening session must land against the canonical book"
+    );
 }

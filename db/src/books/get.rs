@@ -133,6 +133,21 @@ pub async fn resolve_book_id_by_uuid(
     pool: &SqlitePool,
     uuid: &str,
 ) -> Result<Option<i64>, super::BooksError> {
+    resolve_book_id_by_uuid_exec(pool, uuid).await
+}
+
+/// Executor-generic counterpart to [`resolve_book_id_by_uuid`], single-sourcing
+/// the `books`/`merged_uuids` UNION fallback so callers inside an open
+/// transaction (e.g. session inserts) resolve book identity identically to the
+/// pool-based read paths. Pass `&pool` for a standalone lookup or `&mut *tx`
+/// from within a transaction.
+pub async fn resolve_book_id_by_uuid_exec<'e, E>(
+    executor: E,
+    uuid: &str,
+) -> Result<Option<i64>, super::BooksError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     Ok(sqlx::query_scalar::<_, i64>(
         "SELECT id FROM books WHERE uuid = ?1
          UNION ALL
@@ -140,7 +155,7 @@ pub async fn resolve_book_id_by_uuid(
          LIMIT 1",
     )
     .bind(uuid)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?)
 }
 
