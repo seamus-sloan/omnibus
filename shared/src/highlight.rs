@@ -102,9 +102,8 @@ pub struct UpdateHighlightNote {
 }
 
 impl UpdateHighlightNote {
-    /// Maximum length (in chars) of a highlight note. Matches the
-    /// `MetadataOverrides.description`-style per-row text budget so the
-    /// API boundary rejects megabyte payloads up front.
+    /// Maximum length (in chars) of a highlight note — 4 KiB cap that lets
+    /// the API boundary reject megabyte payloads up front.
     pub const NOTE_MAX_LEN: usize = 4096;
 
     /// Validate the note length. `None` clears the note and is always
