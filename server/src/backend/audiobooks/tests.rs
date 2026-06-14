@@ -21,12 +21,13 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// Seed one audiobook book + book_files + book_file_parts row for tests.
 async fn seed_one_audiobook(pool: &sqlx::SqlitePool) -> String {
-    let lib_id = sqlx::query("INSERT INTO libraries (path, display_name) VALUES (?, 'audiobooks')")
-        .bind("/audiobooks")
-        .execute(pool)
-        .await
-        .unwrap()
-        .last_insert_rowid();
+    let lib_id =
+        sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'audiobooks')")
+            .bind("/audiobooks")
+            .execute(pool)
+            .await
+            .unwrap()
+            .last_insert_rowid();
     let uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     let book_id =
         sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, ?, 'PK')")
@@ -254,7 +255,7 @@ async fn seed_audiobook_with_parts(
     format: &str,
     parts: &[(i64, &str, f64)],
 ) -> String {
-    let lib_id = sqlx::query("INSERT INTO libraries (path, display_name) VALUES (?, 'lib')")
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
         .bind(library_path)
         .execute(pool)
         .await

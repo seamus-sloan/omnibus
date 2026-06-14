@@ -41,7 +41,7 @@ pub async fn search_tags(
           SELECT btl.tag AS tag_id, NULL AS tag_name, btl.book AS book_id
             FROM books_tags_link btl
             JOIN books b ON b.id = btl.book
-            JOIN libraries l2 ON l2.id = b.library_id
+            JOIN scan_roots l2 ON l2.id = b.library_id
             LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
            WHERE l2.path = ?1
              AND (mo.book_uuid IS NULL
@@ -49,7 +49,7 @@ pub async fn search_tags(
           UNION
           SELECT NULL AS tag_id, je.value AS tag_name, b.id AS book_id
             FROM books b
-            JOIN libraries l2 ON l2.id = b.library_id
+            JOIN scan_roots l2 ON l2.id = b.library_id
             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
             JOIN json_each(mo.overrides, '$.subjects') je
            WHERE l2.path = ?1
@@ -63,7 +63,7 @@ pub async fn search_tags(
           AND EXISTS (
             SELECT 1 FROM books_tags_link btl
               JOIN books b ON b.id = btl.book
-              JOIN libraries l ON l.id = b.library_id
+              JOIN scan_roots l ON l.id = b.library_id
              WHERE btl.tag = t.id AND l.path = ?1
           )
         ORDER BY book_count DESC, t.name

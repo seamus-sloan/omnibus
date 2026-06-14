@@ -66,7 +66,7 @@ async fn fetch_list_rows(
         r#"
         SELECT {BOOK_COLUMNS}
         FROM books b
-        JOIN libraries l ON l.id = b.library_id
+        JOIN scan_roots l ON l.id = b.library_id
         WHERE l.path IN ({placeholders})
         ORDER BY b.sort, b.id
         LIMIT ?
@@ -111,7 +111,7 @@ pub async fn list_indexed_rows(
                COALESCE(MAX(bf.mtime_epoch), 0)        AS mtime_epoch,
                COALESCE(MAX(bf.size_bytes), 0)         AS size_bytes
           FROM books b
-          JOIN libraries l   ON l.id = b.library_id
+          JOIN scan_roots l   ON l.id = b.library_id
           LEFT JOIN book_files bf ON bf.book_id = b.id
          WHERE l.path = ?
          GROUP BY b.id, b.uuid
@@ -166,7 +166,7 @@ pub async fn list_indexed_rows_for_formats(
                COALESCE(MAX(bf.mtime_epoch), 0)        AS mtime_epoch,
                COALESCE(MAX(bf.size_bytes), 0)         AS size_bytes
           FROM books b
-          JOIN libraries l   ON l.id = b.library_id
+          JOIN scan_roots l   ON l.id = b.library_id
           JOIN book_files bf ON bf.book_id = b.id
          WHERE l.path = ?
            AND bf.format IN ({placeholders})
@@ -266,7 +266,7 @@ pub async fn count_books_for_paths(
         r#"
         SELECT COUNT(*)
           FROM books b
-          JOIN libraries l ON l.id = b.library_id
+          JOIN scan_roots l ON l.id = b.library_id
          WHERE l.path IN ({placeholders})
         "#
     );

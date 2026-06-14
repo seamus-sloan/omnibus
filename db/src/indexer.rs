@@ -372,7 +372,7 @@ pub(crate) async fn backfill_chapters(
         "SELECT bf.id, bfp.filename, bf.format \
          FROM book_files bf \
          JOIN books b ON bf.book_id = b.id \
-         JOIN libraries l ON b.library_id = l.id \
+         JOIN scan_roots l ON b.library_id = l.id \
          JOIN book_file_parts bfp ON bfp.book_file_id = bf.id \
          WHERE l.path = ? \
            AND bf.format IN ('M4B', 'M4A', 'MP3') \

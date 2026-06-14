@@ -29,13 +29,13 @@ pub struct AudiobookSyncPlan {
 /// but writes `book_file_parts` rows in addition to `books` and `book_files`.
 ///
 /// Transaction order:
-/// 1. Upsert `libraries` row.
+/// 1. Upsert `scan_roots` row.
 /// 2. Delete Removed (explicit FTS clear + cascade DELETE from `books`).
 /// 3. Update Changed in-place: wipe `book_files` + `book_file_parts` + author
 ///    link + FTS, then re-insert them.
 /// 4. Insert New.
 /// 5. Backfill `book_files.(mtime_epoch, size_bytes)` only.
-/// 6. Stamp `libraries.last_indexed`.
+/// 6. Stamp `scan_roots.last_indexed`.
 ///
 /// Post-commit: write / delete cover files (best-effort, same as sync_books).
 pub async fn sync_audiobooks(
@@ -196,7 +196,7 @@ pub async fn sync_audiobooks(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    sqlx::query("UPDATE libraries SET last_indexed = ? WHERE id = ?")
+    sqlx::query("UPDATE scan_roots SET last_indexed = ? WHERE id = ?")
         .bind(now)
         .bind(library_id)
         .execute(&mut *tx)

@@ -203,7 +203,7 @@ async fn api_get_ebooks_sets_total_cap_header_when_truncated() {
     // the indexer's full m2m wiring isn't relevant here.
     let total = db::MAX_BOOKS_RETURNED + 5;
     let lib_id: i64 = sqlx::query_scalar(
-        "INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib') RETURNING id",
+        "INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib') RETURNING id",
     )
     .fetch_one(&pool)
     .await
@@ -375,7 +375,7 @@ async fn api_get_ebook_file_returns_200_with_epub_bytes() {
     let file_path = tmp.join(format!("{stem}.epub"));
     std::fs::write(&file_path, b"PK\x03\x04 fake-epub").unwrap();
 
-    let lib_id = sqlx::query("INSERT INTO libraries (path, display_name) VALUES (?, 'lib')")
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
         .bind(tmp.to_str().unwrap())
         .execute(&pool)
         .await
@@ -472,7 +472,7 @@ async fn api_get_ebook_file_returns_500_when_book_file_path_fails() {
     let user = auth_test_support::create_user(&pool, "alice").await;
     let token = auth_test_support::bearer_token(&pool, user.id).await;
 
-    let lib_id = sqlx::query("INSERT INTO libraries (path, display_name) VALUES (?, 'lib')")
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
         .bind("/lib")
         .execute(&pool)
         .await
