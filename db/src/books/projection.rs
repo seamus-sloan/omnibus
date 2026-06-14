@@ -27,20 +27,23 @@ pub const MAX_BOOKS_RETURNED: i64 = 50_000;
 /// pattern as `list_books` / `search_books` — one row per `books.id` with
 /// all m2m relations inlined as JSON aggregates. Re-used by the discovery
 /// read paths (`get_author`, `get_series`) via `pub(crate)`.
+///
+/// Single-valued joins that need two columns from the *same* picked row
+/// (the primary `book_files` row, the primary `books_series_link` row) are
+/// pulled as one `json_object` subquery rather than two correlated scalar
+/// subqueries scanning the same table twice — mirroring the `json_object`
+/// shape already used for creators/identifiers. `row_to_ebook` decodes
+/// these blobs.
 pub(crate) const BOOK_COLUMNS: &str = r#"
     b.id, b.uuid,
     b.title, b.description, b.series_index, b.has_cover,
     b.pubdate, b.last_modified, b.timestamp, b.accent_color,
 
-    (SELECT bf.filename FROM book_files bf
+    (SELECT json_object('filename', bf.filename, 'format', bf.format)
+       FROM book_files bf
       WHERE bf.book_id = b.id
       ORDER BY (bf.format != 'EPUB'), bf.format
-      LIMIT 1)                                   AS primary_filename,
-
-    (SELECT bf.format FROM book_files bf
-      WHERE bf.book_id = b.id
-      ORDER BY (bf.format != 'EPUB'), bf.format
-      LIMIT 1)                                   AS primary_format,
+      LIMIT 1)                                   AS primary_file_json,
 
     (SELECT pub.name FROM books_publishers_link bpl
        JOIN publishers pub ON pub.id = bpl.publisher
@@ -52,15 +55,11 @@ pub(crate) const BOOK_COLUMNS: &str = r#"
       WHERE bll.book = b.id ORDER BY lang.code LIMIT 1)
                                                   AS language_code,
 
-    (SELECT s.name FROM books_series_link bsl
+    (SELECT json_object('name', s.name, 'id', s.id)
+       FROM books_series_link bsl
        JOIN series s ON s.id = bsl.series
       WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
-                                                  AS series_name,
-
-    (SELECT s.id FROM books_series_link bsl
-       JOIN series s ON s.id = bsl.series
-      WHERE bsl.book = b.id ORDER BY s.name LIMIT 1)
-                                                  AS series_link_id,
+                                                  AS series_json,
 
     (SELECT json_group_array(json_object('id', a_id, 'name', name, 'sort', sort))
        FROM (SELECT a.id AS a_id, a.name AS name, a.sort AS sort
@@ -101,6 +100,39 @@ pub(crate) struct IdentifierRow {
     pub(crate) value: String,
 }
 
+/// Decoded `primary_file_json` blob: the filename stem + format of the
+/// primary `book_files` row (EPUB-preferred). Both columns come from the
+/// *same* picked row, so a single subquery replaces the former pair.
+#[derive(serde::Deserialize)]
+pub(crate) struct PrimaryFileRow {
+    pub(crate) filename: String,
+    pub(crate) format: String,
+}
+
+/// Decoded `series_json` blob: the name + id of the primary
+/// `books_series_link` row (alphabetical by name). Both columns come from
+/// the *same* picked row, so a single subquery replaces the former pair.
+#[derive(serde::Deserialize)]
+pub(crate) struct SeriesRow {
+    pub(crate) name: String,
+    pub(crate) id: i64,
+}
+
+/// Decode a single `json_object` blob produced by a `LIMIT 1` subquery.
+/// `None` (SQLite NULL — the subquery matched no row) maps to `Ok(None)`,
+/// so callers tolerate the "no primary file" / "no series" case exactly as
+/// the former two-NULL-column pair did.
+pub(crate) fn parse_json_object<T: serde::de::DeserializeOwned>(
+    blob: Option<String>,
+) -> Result<Option<T>, sqlx::Error> {
+    match blob {
+        Some(s) => serde_json::from_str(&s)
+            .map(Some)
+            .map_err(|e| sqlx::Error::Decode(Box::new(e))),
+        None => Ok(None),
+    }
+}
+
 /// Decode a `json_group_array` blob produced by SQLite. Returns `"[]"` for an
 /// aggregate over zero rows, so a `None` here only means the column itself was
 /// NULL (which the subqueries never produce, but we tolerate it defensively).
@@ -139,11 +171,15 @@ pub(crate) fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata,
     let id: i64 = r.get("id");
     let uuid: String = r.get("uuid");
     let has_cover: i64 = r.get("has_cover");
-    let primary_filename: Option<String> = r.get("primary_filename");
-    let primary_format: Option<String> = r.get("primary_format");
-    let filename = match (primary_filename, primary_format) {
-        (Some(stem), Some(fmt)) => format!("{stem}.{}", fmt.to_ascii_lowercase()),
-        _ => String::new(),
+    let primary_file = parse_json_object::<PrimaryFileRow>(r.get("primary_file_json"))?;
+    let filename = match primary_file {
+        Some(pf) => format!("{}.{}", pf.filename, pf.format.to_ascii_lowercase()),
+        None => String::new(),
+    };
+    let series = parse_json_object::<SeriesRow>(r.get("series_json"))?;
+    let (series_name, series_link_id) = match series {
+        Some(s) => (Some(s.name), Some(s.id)),
+        None => (None, None),
     };
     let series_index: Option<f64> = r.get("series_index");
 
@@ -178,9 +214,9 @@ pub(crate) fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata,
         creators,
         subjects,
         identifiers,
-        series: r.get("series_name"),
+        series: series_name,
         series_index: series_index.map(format_series_index),
-        series_id: r.get("series_link_id"),
+        series_id: series_link_id,
         unique_identifier: Some(uuid.clone()),
         cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
         accent: r.get("accent_color"),
