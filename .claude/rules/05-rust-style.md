@@ -29,9 +29,11 @@ covered by [04-playwright.md](04-playwright.md).
 - **Soft cap: ~80 lines per function.** Once a function crosses it,
   extract named helpers. Same applies to functions with clear staged
   sub-steps or stages that are independently testable.
-- Model: [db/src/worker.rs](../../db/src/worker.rs) (small `impl`
-  methods). Anti-pattern: [db/src/sync.rs:60](../../db/src/sync.rs:60)'s
-  ~270-line `sync_books`.
+- Model: [db/src/worker/](../../db/src/worker/) (small `impl`
+  methods). Resolved anti-pattern: `sync_books`'s old ~270-line body
+  was extracted into per-bucket helpers under
+  [db/src/sync/](../../db/src/sync/) (`sync.rs` is now a 46-line module
+  file) — the shape this rule prescribes.
 
 ## File shape
 
@@ -48,8 +50,8 @@ covered by [04-playwright.md](04-playwright.md).
 - **Unpredictable failure space → `anyhow`** with a contextual message
   (`anyhow::bail!("scan of {path} failed: {msg}")`). The right fit when
   the source is a foreign system (filesystem, parser, network) and the
-  caller just propagates. Example:
-  [db/src/indexer.rs:193](../../db/src/indexer.rs:193).
+  caller just propagates. Example: `reindex` in
+  [db/src/indexer.rs](../../db/src/indexer.rs).
 - **Coarse variants.** Group by failure mode and let the
   `#[error("...")]` message carry the detail. One
   `PasswordInvalid(String)` beats `PasswordTooShort` /
@@ -115,5 +117,4 @@ See [03-unit-testing.md](03-unit-testing.md) for the underlying rule.
 ## Out of scope
 
 - TypeScript / Playwright — see [04-playwright.md](04-playwright.md).
-- SQL migrations — see the migrations section of
-  [CLAUDE.md](../../CLAUDE.md).
+- SQL migrations — see [06-migrations.md](06-migrations.md).

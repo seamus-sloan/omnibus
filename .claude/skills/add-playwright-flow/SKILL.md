@@ -75,7 +75,7 @@ cd ui_tests/playwright
 npx playwright test
 ```
 
-If you need to drive the same page manually (for snapshots / debugging while iterating on the spec), use the [`ui-validate`](../ui-validate/SKILL.md) skill — same server, same login, Chrome DevTools MCP by default.
+If you need to drive the same page manually (for snapshots / debugging while iterating on the spec), use the [`ui-validate`](../ui-validate/SKILL.md) skill — same server, same login, Claude Preview (`mcp__Claude_Preview__preview_*`) by default.
 
 ## 7. End-of-session
 
