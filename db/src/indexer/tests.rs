@@ -9,7 +9,7 @@ use crate::pool::init_db;
 use crate::sync::replace_books;
 use crate::test_support::{indexed, CoversTempDir};
 
-/// Seed a `libraries` row for `path` with an explicit `last_indexed`
+/// Seed a `scan_roots` row for `path` with an explicit `last_indexed`
 /// epoch-seconds value. There's no public writer for `last_indexed`
 /// that lets a test set an arbitrary timestamp (`sync_books` always
 /// stamps "now"), so the `is_stale` window tests insert the row

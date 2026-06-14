@@ -51,7 +51,7 @@ pub(crate) fn get_anon(uri: &str) -> Request<Body> {
 
 /// Seed a book row with `has_cover = 0`. Returns the inserted book id.
 pub(crate) async fn seed_book_no_cover(pool: &sqlx::SqlitePool) -> i64 {
-    // Insert a minimal library row first (FK requirement).
+    // Insert a minimal scan_roots row first (FK requirement).
     sqlx::query(
         "INSERT OR IGNORE INTO scan_roots(path, display_name) VALUES ('/test/library', 'Test')",
     )

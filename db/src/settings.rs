@@ -1,9 +1,8 @@
 //! Settings KV CRUD, scan-root row upserts, and orphan-scan-root pruning.
 //!
-//! The `settings` KV keys (`ebook_library_path` / `audiobook_library_path`)
-//! are read by the UI and translated into `scan_roots` rows by the indexer.
-//! Saving settings prunes any scan root whose path is no longer configured
-//! along with its books, FTS rows, and on-disk covers.
+//! `settings` KV keys (`ebook_library_path` / `audiobook_library_path`) are
+//! read by the UI and translated into `scan_roots` rows by the indexer; saving
+//! settings prunes any orphan root and its books, FTS rows, and on-disk covers.
 
 use std::path::Path;
 
