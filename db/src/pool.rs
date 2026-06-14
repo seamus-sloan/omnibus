@@ -198,6 +198,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn migration_0021_drops_redundant_and_dead_schema_objects() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+
+        // F17 + F18: the four redundant indexes and the speculative
+        // NULL-accent partial index must be gone after the migrator runs.
+        for index in [
+            "idx_books_uuid",
+            "idx_book_files_book_id",
+            "idx_book_file_parts_lookup",
+            "reading_progress_user_book_idx",
+            "idx_books_accent_null",
+        ] {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?",
+            )
+            .bind(index)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(count, 0, "index {index} should have been dropped by 0021");
+        }
+
+        // F20: the vestigial single-row table must be gone.
+        let app_state: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='app_state'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            app_state, 0,
+            "app_state table should have been dropped by 0021"
+        );
+
+        // The covering composite index that supersedes idx_book_files_book_id
+        // must still be present (kept, not dropped).
+        let kept_composite: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_book_files_book_format'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            kept_composite, 1,
+            "idx_book_files_book_format must survive — it covers book_id-only lookups"
+        );
+
+        // The (user_id, book_id) session indexes from 0013 have no covering
+        // UNIQUE, so they must NOT have been dropped.
+        for kept in [
+            "bookmarks_user_book_idx",
+            "reading_sessions_user_book_idx",
+            "listening_sessions_user_book_idx",
+        ] {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?",
+            )
+            .bind(kept)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                count, 1,
+                "index {kept} has no covering UNIQUE and must be kept"
+            );
+        }
+
+        // The UNIQUE(user_id, book_id, format) auto-index that supersedes
+        // reading_progress_user_book_idx must still enforce uniqueness: a
+        // duplicate (user_id, book_id, format) insert must fail.
+        sqlx::query("INSERT INTO users (username, password_hash, is_admin) VALUES ('u', 'h', 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // `libraries` was renamed to `scan_roots` in 0019; `books.library_id`
+        // keeps its column name and FK.
+        sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'Lib')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO books (uuid, library_id, path, title) \
+             VALUES ('bk-uuid', 1, '/lib/bk', 'Book')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO reading_progress (user_id, book_id, format, epub_cfi) \
+             VALUES (1, 1, 'epub', 'cfi-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let dup = sqlx::query(
+            "INSERT INTO reading_progress (user_id, book_id, format, epub_cfi) \
+             VALUES (1, 1, 'epub', 'cfi-2')",
+        )
+        .execute(&pool)
+        .await;
+        assert!(
+            dup.is_err(),
+            "UNIQUE(user_id, book_id, format) must still reject a duplicate row"
+        );
+    }
+
+    #[tokio::test]
     async fn migrator_is_idempotent_on_rerun() {
         let tmp = std::env::temp_dir().join(format!(
             "omnibus-migrate-{}-{}.db",
