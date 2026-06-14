@@ -365,7 +365,7 @@ async fn attach_ebook_file(
     .bind(format)
     .execute(&mut **tx)
     .await?;
-    insert_identifier_links_or_ignore(tx, book_id, &b.metadata).await?;
+    insert_identifier_links(tx, book_id, &b.metadata).await?;
     attach::record_attachment(tx, uuid, book_id, format, library_path).await?;
     // The unioned identifiers (incl. a new ISBN from this format) just
     // changed the target's searchable text — refresh its FTS row.
@@ -729,32 +729,17 @@ async fn insert_tag_links(
     Ok(())
 }
 
-/// Batch-insert the book's identifiers in one statement. `INSERT OR REPLACE`
-/// keeps the last value per `(book_id, scheme)`, matching the old loop.
+/// Batch-insert the book's identifiers in one statement. `INSERT OR IGNORE`
+/// keeps every distinct `(book_id, scheme, value)` tuple — a book carrying
+/// both an ISBN-10 and an ISBN-13 keeps both — and silently drops an exact
+/// duplicate tuple (the same OPF listing one identifier twice). The wider
+/// `(book_id, scheme, value)` PK (migration 0022) makes this lossless; the
+/// cross-format attach path shares this writer, so an attached file's
+/// identifiers union into the target rather than clobbering it.
 async fn insert_identifier_links(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
     m: &EbookMetadata,
-) -> Result<(), sqlx::Error> {
-    insert_identifier_links_verb(tx, book_id, m, "REPLACE").await
-}
-
-/// [`insert_identifier_links`] variant for the cross-format attach path:
-/// `INSERT OR IGNORE`, so the target book's existing per-scheme values
-/// win over the attached file's.
-async fn insert_identifier_links_or_ignore(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    book_id: i64,
-    m: &EbookMetadata,
-) -> Result<(), sqlx::Error> {
-    insert_identifier_links_verb(tx, book_id, m, "IGNORE").await
-}
-
-async fn insert_identifier_links_verb(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    book_id: i64,
-    m: &EbookMetadata,
-    verb: &str,
 ) -> Result<(), sqlx::Error> {
     let idents: Vec<(&str, &str)> = m
         .identifiers
@@ -767,14 +752,14 @@ async fn insert_identifier_links_verb(
     }
     // 3 bound params per identifier; chunk at 250 (→ 750 binds) to stay under
     // SQLite's 999-param cap for books with very large identifier lists.
-    // OR REPLACE keeps the last value per (book_id, scheme); processing chunks
-    // in OPF order preserves that "last wins" semantics across chunk boundaries.
+    // OR IGNORE keeps every distinct (scheme, value) and dedups exact-duplicate
+    // tuples; chunk order is irrelevant since the PK now covers `value`.
     for chunk in idents.chunks(250) {
         let rows = std::iter::repeat_n("(?, ?, ?)", chunk.len())
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
-            "INSERT OR {verb} INTO book_identifiers (book_id, scheme, value) VALUES {rows}"
+            "INSERT OR IGNORE INTO book_identifiers (book_id, scheme, value) VALUES {rows}"
         );
         let mut q = sqlx::query(&sql);
         for (scheme, value) in chunk {
