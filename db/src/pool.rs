@@ -14,10 +14,7 @@ use crate::normalize::NormalizeError;
 /// versions are recorded in the `_sqlx_migrations` table.
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
-/// Errors returned by [`init_db`]. Wraps `sqlx::Error` (pool connect +
-/// PRAGMA) and `NormalizeError` (the boot-time backfill) so neither
-/// leaks across the `omnibus-db` crate boundary per rule 02
-/// (Error handling) § Boundary.
+/// Errors returned by [`init_db`].
 #[derive(Debug, thiserror::Error)]
 pub enum InitDbError {
     #[error(transparent)]

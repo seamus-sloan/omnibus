@@ -5,9 +5,7 @@
 
 use sqlx::SqlitePool;
 
-/// Errors returned by the title/author normalization backfill. Wraps
-/// `sqlx::Error` so it doesn't leak across the module boundary per
-/// rule 02 (Error handling) § Boundary.
+/// Errors returned by [`backfill_norm_columns`].
 #[derive(Debug, thiserror::Error)]
 pub enum NormalizeError {
     #[error(transparent)]
