@@ -1,8 +1,4 @@
-//! Hero section of the Atrium "Cinematic" book-detail page.
-//!
-//! Renders the breadcrumb, accent-tinted backdrop, 240-px cover with format
-//! badges, title row, author/description block, primary CTAs, in-progress
-//! chip bar, tag chips, and the right-side "your rating" action card.
+//! Hero section of the book-detail page — breadcrumb, cover with format badges, title row, CTAs, tag chips, rating card.
 
 use dioxus::prelude::*;
 use dioxus_router::Link;

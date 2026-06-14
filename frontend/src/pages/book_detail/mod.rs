@@ -1,13 +1,7 @@
-//! Book detail page — Atrium "Cinematic" redesign.
+//! Book detail page — Atrium "Cinematic" shell.
 //!
-//! Composes Atrium primitives ([`crate::components::atrium::Cover`], buttons,
-//! cards, chips, dividers) into the layout sketched in
-//! `screens/book-detail.jsx#DetailA` from the Omnibus design canvas. Sub-
-//! modules carry the section bodies — [`hero`] (cover + title + CTAs +
-//! rating card), [`body`] (two-column main + sticky rail), and [`merge`]
-//! (admin "Merge with…" dialog and post-merge toast on web). This shell
-//! owns the data fetch, the breadcrumb/title plumbing, and the small
-//! markup primitives reused by every section.
+//! Owns the data fetch and shared markup primitives; section bodies live in
+//! [`hero`], [`body`], and [`merge`].
 
 use dioxus::prelude::*;
 use dioxus_router::Link;

@@ -1,9 +1,6 @@
-//! Merge dialog + post-merge toast for the book-detail page.
+//! Web-only merge dialog + post-merge toast for the book-detail page.
 //!
-//! Web-only admin affordance: opens the [`MergeDialog`] from the rail and
-//! surfaces a status toast with "Undo" once the merge resolves. The mobile
-//! build compiles to stubs that return `None` so the host component stays
-//! platform-agnostic.
+//! Mobile build compiles to stubs returning `None`.
 
 #[cfg(not(feature = "mobile"))]
 use dioxus::prelude::*;

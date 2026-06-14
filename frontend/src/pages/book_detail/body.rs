@@ -1,9 +1,4 @@
-//! Body grid of the Atrium "Cinematic" book-detail page.
-//!
-//! Houses the two-column body: a main column with journal + highlights stubs
-//! plus the "from the same hand" cover-fan rail, and a sticky right rail
-//! with file details, the [`FormatSwitcher`], series/standalone info, and
-//! reading insights.
+//! Body grid of the book-detail page — two-column main (journal + highlights stubs + cover-fan rail) plus a sticky right rail (file details, [`FormatSwitcher`], series info, insights).
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
