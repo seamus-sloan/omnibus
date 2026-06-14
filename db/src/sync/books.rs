@@ -1,8 +1,10 @@
 //! Transactional orchestrator for the indexer write path. Owns
 //! `sync_books`, the per-bucket helpers (`sync_removed` / `sync_changed`
 //! / `sync_new`), the `replace_books` nuke-and-pave shim, per-book row
-//! writers (`insert_book_row` / `update_book_row`), and the metadata
-//! dispatcher, FTS row insert, and post-commit cover materialization.
+//! writers (`insert_book_row` / `update_book_row`), the metadata
+//! dispatcher, and post-commit cover materialization. All `books_fts`
+//! maintenance is delegated to the [`super::fts`] choke-point
+//! (`upsert_fts` / `delete_fts`) rather than written inline.
 
 use std::collections::HashMap;
 
@@ -21,6 +23,7 @@ use crate::taxonomy::{
 use super::attach;
 use super::authors::insert_author_links;
 use super::backfill::backfill_stat_chunks;
+use super::fts::{delete_fts, upsert_fts};
 
 /// Errors returned by the public sync write path.
 #[derive(Debug, thiserror::Error)]
@@ -120,8 +123,9 @@ pub async fn sync_books(
     Ok(())
 }
 
-/// Remove a batch of books by uuid: explicit `books_fts` clear (FTS5 is
-/// standalone — no FK cascade), then cascade DELETE from `books`.
+/// Remove a batch of books by uuid: clear each `books_fts` row through
+/// the [`delete_fts`] door (FTS5 is standalone — no FK cascade), then
+/// cascade DELETE from `books`.
 async fn sync_removed(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_id: i64,
@@ -132,24 +136,27 @@ async fn sync_removed(
     }
     // library_id + 1 bind per uuid; chunk at 500 to stay under SQLite's
     // 999-param cap when a whole library (or any large diff) is removed.
-    // Both deletes run per chunk inside the same transaction, matching the
-    // tags/identifiers/backfill chunking pattern elsewhere in this module.
+    // Both the id resolve and the `books` delete run per chunk inside the
+    // same transaction, matching the chunking pattern elsewhere here.
     for chunk in removed_uuids.chunks(500) {
         let placeholders = std::iter::repeat_n("?", chunk.len())
             .collect::<Vec<_>>()
             .join(", ");
 
-        // FTS5 is standalone (no FK to `books`), so we must clear it
-        // explicitly before the cascade DELETE on `books` runs.
-        let fts_sql = format!(
-            "DELETE FROM books_fts WHERE rowid IN
-                (SELECT id FROM books WHERE library_id = ? AND uuid IN ({placeholders}))"
-        );
-        let mut q = sqlx::query(&fts_sql).bind(library_id);
+        // Resolve the affected ids first, then clear each FTS row via the
+        // door — keeps `books_fts` maintenance in one place rather than a
+        // second inline DELETE. The clear must precede the cascade DELETE
+        // on `books` (standalone FTS5 has no FK).
+        let id_sql =
+            format!("SELECT id FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
+        let mut q = sqlx::query_scalar::<_, i64>(&id_sql).bind(library_id);
         for uuid in chunk {
             q = q.bind(uuid);
         }
-        q.execute(&mut **tx).await?;
+        let ids = q.fetch_all(&mut **tx).await?;
+        for id in ids {
+            delete_fts(tx, id).await?;
+        }
 
         let books_sql =
             format!("DELETE FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
@@ -232,14 +239,8 @@ async fn sync_changed(
             // indexed.
             let inserted = insert_book_row(tx, library_id, library_path, b).await?;
             insert_metadata_links(tx, inserted.book_id, &b.metadata).await?;
-            insert_fts_row(
-                tx,
-                inserted.book_id,
-                &inserted.title,
-                inserted.first_isbn.as_deref(),
-                &b.metadata,
-            )
-            .await?;
+            // Source the FTS row from the rows we just wrote via the door.
+            upsert_fts(tx, inserted.book_id).await?;
             if let Some((mime, bytes)) = &b.cover {
                 changed_covers.push((inserted.uuid, mime.clone(), bytes.clone()));
             }
@@ -251,15 +252,8 @@ async fn sync_changed(
         wipe_per_book_link_rows(tx, book_id, &file_ext).await?;
         insert_book_file_row(tx, book_id, b).await?;
         insert_metadata_links(tx, book_id, &b.metadata).await?;
-        // FTS5 row is keyed by rowid = book_id; delete + re-insert.
-        sqlx::query("DELETE FROM books_fts WHERE rowid = ?")
-            .bind(book_id)
-            .execute(&mut **tx)
-            .await?;
-        let m = &b.metadata;
-        let title = m.title.clone().unwrap_or_else(|| m.filename.clone());
-        let first_isbn = first_isbn(&m.identifiers);
-        insert_fts_row(tx, book_id, &title, first_isbn.as_deref(), &b.metadata).await?;
+        // Refresh the FTS row from the freshly-rewritten links via the door.
+        upsert_fts(tx, book_id).await?;
 
         if let Some((mime, bytes)) = &b.cover {
             changed_covers.push((uuid.clone(), mime.clone(), bytes.clone()));
@@ -283,14 +277,7 @@ async fn sync_new(
         }
         let inserted = insert_book_row(tx, library_id, library_path, b).await?;
         insert_metadata_links(tx, inserted.book_id, &b.metadata).await?;
-        insert_fts_row(
-            tx,
-            inserted.book_id,
-            &inserted.title,
-            inserted.first_isbn.as_deref(),
-            &b.metadata,
-        )
-        .await?;
+        upsert_fts(tx, inserted.book_id).await?;
         if let Some((mime, bytes)) = &b.cover {
             new_covers.push((inserted.uuid, mime.clone(), bytes.clone()));
         }
@@ -345,8 +332,10 @@ async fn try_attach_new_ebook(
 /// Write (or rewrite) an attached ebook's `book_files` row under
 /// `book_id`, record the attachment, adopt the cover when the target has
 /// none, and union the file's identifiers (target's values win). The
-/// target's `books` scalars, links, and FTS row are deliberately left
-/// untouched — target metadata wins.
+/// target's `books` scalars and links are deliberately left untouched —
+/// target metadata wins — but the FTS row is refreshed via the door so
+/// the newly-unioned identifiers (incl. an attached-only ISBN) become
+/// searchable immediately.
 async fn attach_ebook_file(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
@@ -378,6 +367,9 @@ async fn attach_ebook_file(
     .await?;
     insert_identifier_links_or_ignore(tx, book_id, &b.metadata).await?;
     attach::record_attachment(tx, uuid, book_id, format, library_path).await?;
+    // The unioned identifiers (incl. a new ISBN from this format) just
+    // changed the target's searchable text — refresh its FTS row.
+    upsert_fts(tx, book_id).await?;
     if let Some(cover) = attach::maybe_adopt_cover(tx, book_id, b.cover.as_ref()).await? {
         covers.push(cover);
     }
@@ -563,12 +555,12 @@ pub async fn replace_books(
 }
 
 /// Fields the per-book outer loop needs after the canonical `books` /
-/// `book_files` inserts have run.
+/// `book_files` inserts have run. The FTS row is sourced from the written
+/// rows via [`upsert_fts`], so the loop only needs the id (for the upsert
+/// + link writes) and the uuid (for the post-commit cover triple).
 pub(super) struct InsertedBook {
     pub(super) book_id: i64,
     pub(super) uuid: String,
-    pub(super) title: String,
-    pub(super) first_isbn: Option<String>,
 }
 
 /// Insert the canonical `books` row (returning its id) and its single
@@ -634,12 +626,7 @@ async fn insert_book_row(
     .execute(&mut **tx)
     .await?;
 
-    Ok(InsertedBook {
-        book_id,
-        uuid,
-        title,
-        first_isbn,
-    })
+    Ok(InsertedBook { book_id, uuid })
 }
 
 /// Insert the per-book metadata join rows (authors + contributors, series,
@@ -795,35 +782,6 @@ async fn insert_identifier_links_verb(
         }
         q.execute(&mut **tx).await?;
     }
-    Ok(())
-}
-
-/// Write the `books_fts` row for a book. Inline (rather than a trigger) so
-/// the bulk reindex doesn't fan out across six tables; keeps the
-/// denormalized row in lock-step with the canonical inserts.
-pub(crate) async fn insert_fts_row(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    book_id: i64,
-    title: &str,
-    first_isbn: Option<&str>,
-    m: &EbookMetadata,
-) -> Result<(), sqlx::Error> {
-    let authors_text = crate::helpers::join_names(m.creators.iter().map(|c| c.name.as_str()));
-    let series_text = m.series.clone().unwrap_or_default();
-    let tags_text = crate::helpers::join_names(m.subjects.iter().map(String::as_str));
-    sqlx::query(
-        "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(book_id)
-    .bind(title)
-    .bind(&authors_text)
-    .bind(&series_text)
-    .bind(&tags_text)
-    .bind(m.description.as_deref().unwrap_or(""))
-    .bind(first_isbn.unwrap_or(""))
-    .execute(&mut **tx)
-    .await?;
     Ok(())
 }
 

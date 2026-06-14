@@ -7,6 +7,7 @@ use sqlx::{SqlitePool, Transaction};
 use omnibus_shared::MetadataOverrides;
 
 use crate::covers::{find_cover_file, write_cover_file};
+use crate::sync::delete_fts;
 
 use super::snapshot::build_snapshot;
 use super::{MergeError, MergeOutcome};
@@ -51,12 +52,10 @@ pub async fn merge_books(
     merge_overrides(&mut tx, source_uuid, target_uuid, merged_by).await?;
     let adopt_cover = adopt_cover_flag(&mut tx, source_id, target_id).await?;
 
-    // FTS5 has no FK cascade; clear the source row explicitly. The
-    // target's row is rebuilt post-commit with the unioned links.
-    sqlx::query("DELETE FROM books_fts WHERE rowid = ?")
-        .bind(source_id)
-        .execute(&mut *tx)
-        .await?;
+    // FTS5 has no FK cascade; clear the source row explicitly via the
+    // door. The target's row is rebuilt post-commit with the unioned
+    // links.
+    delete_fts(&mut tx, source_id).await?;
 
     // Re-point uuids of earlier merges/attachments into the source
     // *before* the source delete cascades them away, then guard the

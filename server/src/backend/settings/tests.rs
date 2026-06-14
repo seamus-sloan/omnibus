@@ -327,6 +327,84 @@ async fn reindex_returns_200_when_scan_succeeds() {
 }
 
 #[tokio::test]
+async fn post_fts_rebuild_returns_200_for_admin() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    // Seed a book (which populates `books_fts` via `replace_books`), then
+    // blow the FTS index away to simulate drift left by a failed
+    // post-commit refresh. The rebuild must repair it: a 200 on the wire
+    // and a `books_fts` row count back in sync with `books`.
+    seed_book(&pool, "/lib", "Rebuildable Title").await;
+    sqlx::query("DELETE FROM books_fts")
+        .execute(&pool)
+        .await
+        .expect("clear books_fts to simulate drift");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/fts/rebuild")
+                .method("POST")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let books_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
+        .fetch_one(&pool)
+        .await
+        .expect("count books");
+    let fts_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books_fts")
+        .fetch_one(&pool)
+        .await
+        .expect("count books_fts");
+    assert_eq!(
+        fts_count, books_count,
+        "rebuild should re-derive one FTS row per book"
+    );
+}
+
+#[tokio::test]
+async fn post_fts_rebuild_returns_401_when_anonymous() {
+    let (app, _, _) = fixture().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/fts/rebuild")
+                .method("POST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn post_fts_rebuild_returns_403_when_not_admin() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "reader").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/fts/rebuild")
+                .method("POST")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn api_get_settings_returns_401_when_anonymous() {
     let (app, _, _) = fixture().await;
     let res = app.oneshot(get_anon("/api/settings")).await.unwrap();

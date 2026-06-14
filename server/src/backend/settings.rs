@@ -83,5 +83,16 @@ pub(super) async fn post_reindex(_admin: AdminUser, State(state): State<AppState
     }
 }
 
+/// Admin-only synchronous rebuild of the `books_fts` search index: clears
+/// and re-derives every row from `books`. 200 on success, 500 on worker
+/// failure. Repairs any drift left by a failed post-commit FTS refresh.
+pub(super) async fn post_rebuild_fts(_admin: AdminUser, State(state): State<AppState>) -> Response {
+    let task_id = state.worker.post(Task::RebuildFtsIndex);
+    match state.worker.await_completion(task_id).await {
+        TaskOutcome::Ok => axum::http::StatusCode::OK.into_response(),
+        TaskOutcome::Err(e) => internal("rebuild fts", e),
+    }
+}
+
 #[cfg(test)]
 mod tests;

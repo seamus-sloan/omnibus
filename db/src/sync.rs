@@ -9,11 +9,14 @@
 //!
 //! The implementation is split across focused sub-modules:
 //!
+//! * [`fts`] — the single `books_fts` choke-point (`upsert_fts` /
+//!   `delete_fts` / `rebuild_all_fts`). Every book mutation routes its
+//!   FTS maintenance through here so the standalone index can't drift.
 //! * [`books`] — the transactional orchestrator (`sync_books`), the
 //!   per-bucket helpers (`sync_removed`, `sync_changed`, `sync_new`,
 //!   `stamp_last_indexed`), `replace_books`, the per-book row writers
 //!   (`insert_book_row`, `update_book_row`), and the metadata-link
-//!   dispatch + FTS / cover side helpers.
+//!   dispatch + cover side helpers (FTS is delegated to [`fts`]).
 //! * [`audiobooks`] — `sync_audiobooks` and its `AudiobookSyncPlan`
 //!   payload, plus the audiobook-specific row / parts / FTS inserts.
 //! * [`attach`] — cross-format auto-attach: lookups + writers that hang
@@ -32,6 +35,7 @@ mod audiobooks;
 mod authors;
 mod backfill;
 mod books;
+mod fts;
 
 #[cfg(test)]
 mod tests;
@@ -40,7 +44,9 @@ pub(crate) use audiobooks::insert_chapters;
 pub use audiobooks::{sync_audiobooks, AudiobookSyncPlan};
 pub use books::{replace_books, sync_books, SyncError, SyncPlan};
 
-// `pub(crate)` re-export for sibling `db/` modules (currently
-// `metadata_overrides`) that referenced this helper at
-// `crate::sync::insert_fts_row` before the split.
-pub(crate) use books::insert_fts_row;
+// The single `books_fts` door. `upsert_fts` / `delete_fts` are
+// `pub(crate)` for the in-tx write sites (sync / merge / undo /
+// metadata_overrides); `rebuild_all_fts` is `pub` for the worker task +
+// admin endpoint that repair the whole index.
+pub use fts::rebuild_all_fts;
+pub(crate) use fts::{delete_fts, upsert_fts};
