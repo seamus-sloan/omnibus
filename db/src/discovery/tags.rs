@@ -35,18 +35,30 @@ pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, Discover
     // Issue #154: counts are taken from an `effective` membership CTE —
     // the UNION of (1) canonical `books_tags_link` rows whose book has no
     // `subjects` override and (2) override-extracted `(tag_name, book_id)`
-    // pairs from `json_each(mo.overrides, '$.subjects')`. The per-tag count
-    // is a correlated scalar subquery against `effective` (one pass per
-    // tag, not one pass total — see the `t.id`/`t.name` join predicate),
-    // bounded by the `LIMIT ?` on the outer select. The empty-array
-    // clear-all case falls out naturally: a `Some([])` override drops the
-    // book from arm (1) and yields no rows from `json_each` in arm (2).
-    // Override match stays BINARY (`je.value = t.name`, no COLLATE) to
-    // match the prior behavior. Visibility still requires ≥1 canonical
-    // link (the `EXISTS`), so a tag that exists only inside override JSON
-    // never surfaces.
+    // pairs from `json_each(mo.overrides, '$.subjects')`. The CTE is
+    // `AS MATERIALIZED` (like `matches` in `fetch_search_rows`) so the
+    // override extraction — `json_each` over every `metadata_overrides`
+    // row — is built once per call rather than re-scanned per tag. Counts
+    // come from a single `GROUP BY` pass: `effective` is `LEFT JOIN`ed to
+    // `tags` on the OR predicate (`e.tag_id = t.id OR e.tag_name = t.name`)
+    // and aggregated with `COUNT(e.book_id)`. The `LEFT JOIN` preserves the
+    // prior correlated-subquery `cnt = 0` semantics for a visible tag whose
+    // every canonical book got overridden away (the `EXISTS` keeps it
+    // visible while `COUNT(e.book_id)` over zero matched rows yields 0).
+    // The two arms are disjoint on the key columns (arm 1 sets
+    // `tag_name = NULL`, arm 2 sets `tag_id = NULL`), and a book with a
+    // subjects override is excluded from arm 1, so no single book reaches a
+    // tag through both arms — the OR-join sums without double-counting.
+    // The empty-array clear-all case falls out naturally: a `Some([])`
+    // override drops the book from arm (1) and yields no rows from
+    // `json_each` in arm (2). UNION (not ALL) in arm (2) dedupes duplicate
+    // subject strings within one override array so a book tagged
+    // `["fiction","fiction"]` still counts once. Override match stays
+    // BINARY (`je.value = t.name`, no COLLATE) to match the prior behavior.
+    // Visibility still requires ≥1 canonical link (the `EXISTS`), so a tag
+    // that exists only inside override JSON never surfaces.
     let rows = sqlx::query(
-        r#"WITH effective AS (
+        r#"WITH effective AS MATERIALIZED (
              -- (1) Canonical tag memberships with no subjects override.
              SELECT btl.tag AS tag_id, NULL AS tag_name, btl.book AS book_id
                FROM books_tags_link btl
@@ -65,13 +77,14 @@ pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, Discover
                JOIN json_each(mo.overrides, '$.subjects') je
               WHERE json_type(mo.overrides, '$.subjects') IS NOT NULL
            )
-           SELECT t.name,
-             (SELECT COUNT(*) FROM effective e
-               WHERE e.tag_id = t.id OR e.tag_name = t.name) AS cnt
+           SELECT t.name, COUNT(e.book_id) AS cnt
            FROM tags t
+           LEFT JOIN effective e
+             ON e.tag_id = t.id OR e.tag_name = t.name
            WHERE EXISTS (
              SELECT 1 FROM books_tags_link btl WHERE btl.tag = t.id
            )
+           GROUP BY t.id, t.name
            ORDER BY cnt DESC, t.name ASC
            LIMIT ?"#,
     )
