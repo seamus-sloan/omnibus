@@ -80,10 +80,7 @@ pub fn WorkerStatusIndicator() -> Element {
     }
 }
 
-/// Drop dismissed ids that the server has already evicted, so the set
-/// stays bounded by `len(recent_complete)` rather than growing
-/// monotonically across the session. Writes only when something
-/// actually changed to avoid signal-write churn on every poll.
+/// Drop dismissed ids the server has already evicted so the set stays bounded by `recent_complete`.
 fn prune_dismissed(mut dismissed: Signal<std::collections::HashSet<u64>>, snap: &WorkerStatus) {
     let current = dismissed();
     let live: std::collections::HashSet<u64> = current
@@ -96,8 +93,7 @@ fn prune_dismissed(mut dismissed: Signal<std::collections::HashSet<u64>>, snap: 
     }
 }
 
-/// Render a single terminal-state row, dispatching on `task.state` to
-/// the matching `DoneRow` / `FailedRow` / defensive `ActiveRow` element.
+/// Render a single terminal-state row, dispatching on `task.state` to the matching row component.
 fn terminal_row(
     task: &TaskProgress,
     mut dismissed: Signal<std::collections::HashSet<u64>>,
