@@ -576,6 +576,15 @@ async fn is_valid_segment_name_rejects_traversal_paths() {
     assert!(is_valid_segment_name("seg-9999.ts"));
 }
 
+#[tokio::test]
+async fn is_valid_segment_name_accepts_uppercase_extension() {
+    // Case-insensitive filesystems (APFS, NTFS) may surface the same file
+    // as `.TS` or mixed-case; the validator must accept those forms.
+    assert!(is_valid_segment_name("seg-0000.TS"));
+    assert!(is_valid_segment_name("seg-1234.Ts"));
+    assert!(is_valid_segment_name("SEG-0001.ts"));
+}
+
 // -------------------------------------------------------------------
 // 5xx / DB-failure paths — induce sqlx errors by dropping the table
 // that the first DB call in each handler touches. Auth gate uses

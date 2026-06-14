@@ -358,11 +358,21 @@ struct StatusResponse {
 }
 
 /// `true` if `name` matches `seg-NNNN.ts` exactly (4 decimal digits).
+///
+/// Case-insensitive on prefix and extension so the validator stays in
+/// sync with case-insensitive filesystems (APFS, NTFS) — the transcoder
+/// writes lowercase today, but `seg-0001.TS` from the same file must
+/// still resolve. Clippy's
+/// `case_sensitive_file_extension_comparisons` lint is silenced because
+/// the `to_ascii_lowercase` pass below already makes the `.ends_with`
+/// comparison case-insensitive without reaching for `Path::extension`.
+#[allow(clippy::case_sensitive_file_extension_comparisons)]
 fn is_valid_segment_name(name: &str) -> bool {
-    if !name.starts_with("seg-") || !name.ends_with(".ts") {
+    let lower = name.to_ascii_lowercase();
+    if !lower.starts_with("seg-") || !lower.ends_with(".ts") {
         return false;
     }
-    let digits = &name[4..name.len() - 3];
+    let digits = &lower[4..lower.len() - 3];
     digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit())
 }
 
