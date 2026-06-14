@@ -46,14 +46,48 @@ pub async fn sync_audiobooks(
     library_path: &str,
     plan: AudiobookSyncPlan,
 ) -> Result<(), SyncError> {
+    sync_audiobooks_with_progress(pool, library_path, plan, |_, _| {}).await
+}
+
+/// [`sync_audiobooks`] variant that calls `on_progress(processed, total)`
+/// after each per-book write. `total` counts the buckets that loop per
+/// book — Changed + New. Removed and Backfill are batched and not
+/// reported as per-book ticks.
+pub async fn sync_audiobooks_with_progress(
+    pool: &SqlitePool,
+    library_path: &str,
+    plan: AudiobookSyncPlan,
+    mut on_progress: impl FnMut(u32, u32),
+) -> Result<(), SyncError> {
+    let total: u32 = (plan.changed_books.len() + plan.new_books.len())
+        .try_into()
+        .unwrap_or(u32::MAX);
+    // Emit (0, total) before any per-book work so the UI flips from
+    // indeterminate spinner to determinate bar on the first poll.
+    on_progress(0, total);
+    let mut processed: u32 = 0;
+
     let mut tx = pool.begin().await?;
     let library_id = upsert_library(&mut tx, library_path).await?;
 
     sync_audiobooks_removed(&mut tx, library_id, &plan.removed_uuids).await?;
-    let changed_covers =
-        sync_audiobooks_changed(&mut tx, library_id, library_path, &plan.changed_books).await?;
+    let changed_covers = sync_audiobooks_changed(
+        &mut tx,
+        library_id,
+        library_path,
+        &plan.changed_books,
+        || {
+            processed = processed.saturating_add(1);
+            on_progress(processed, total);
+        },
+    )
+    .await?;
     let new_covers =
-        sync_audiobooks_new(&mut tx, library_id, library_path, &plan.new_books).await?;
+        sync_audiobooks_new(&mut tx, library_id, library_path, &plan.new_books, || {
+            processed = processed.saturating_add(1);
+            on_progress(processed, total);
+        })
+        .await?;
     backfill_audiobook_stats(&mut tx, library_id, &plan.backfill).await?;
     stamp_audiobooks_last_indexed(&mut tx, library_id).await?;
 
@@ -125,6 +159,7 @@ async fn sync_audiobooks_changed(
     library_id: i64,
     library_path: &str,
     changed_books: &[crate::audiobook::IndexedAudiobook],
+    mut on_book_written: impl FnMut(),
 ) -> Result<Vec<(String, String, Vec<u8>)>, SyncError> {
     let mut changed_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
     if changed_books.is_empty() {
@@ -154,9 +189,11 @@ async fn sync_audiobooks_changed(
             if let Some((target_id, format)) = attach::attach_target_by_uuid(tx, &b.uuid).await? {
                 attach_audiobook_file(tx, target_id, &format, library_path, b, &mut changed_covers)
                     .await?;
+                on_book_written();
                 continue;
             }
             insert_new_audiobook(tx, library_id, b, &mut changed_covers).await?;
+            on_book_written();
             continue;
         };
 
@@ -186,6 +223,7 @@ async fn sync_audiobooks_changed(
         if let Some((mime, bytes)) = &b.cover {
             changed_covers.push((b.uuid.clone(), mime.clone(), bytes.clone()));
         }
+        on_book_written();
     }
     Ok(changed_covers)
 }
@@ -198,13 +236,16 @@ async fn sync_audiobooks_new(
     library_id: i64,
     library_path: &str,
     new_books: &[crate::audiobook::IndexedAudiobook],
+    mut on_book_written: impl FnMut(),
 ) -> Result<Vec<(String, String, Vec<u8>)>, SyncError> {
     let mut new_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
     for b in new_books {
         if try_attach_new_audiobook(tx, library_path, b, &mut new_covers).await? {
+            on_book_written();
             continue;
         }
         insert_new_audiobook(tx, library_id, b, &mut new_covers).await?;
+        on_book_written();
     }
     Ok(new_covers)
 }
