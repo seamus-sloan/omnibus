@@ -22,7 +22,6 @@ pub(super) struct SourceSnapshot {
     pub timestamp: Option<String>,
     pub has_cover: i64,
     pub description: Option<String>,
-    pub isbn: Option<String>,
     pub accent_color: Option<String>,
     pub title_norm: Option<String>,
     pub author_norm: Option<String>,
@@ -70,7 +69,6 @@ pub(super) async fn build_snapshot(
         timestamp,
         has_cover,
         description,
-        isbn,
         accent_color,
         title_norm,
         author_norm,
@@ -89,10 +87,9 @@ pub(super) async fn build_snapshot(
         Option<String>,
         Option<String>,
         Option<String>,
-        Option<String>,
     ) = sqlx::query_as(
         "SELECT b.uuid, l.path, b.path, b.title, b.sort, b.author_sort, b.series_index,
-                b.pubdate, b.timestamp, b.has_cover, b.description, b.isbn, b.accent_color,
+                b.pubdate, b.timestamp, b.has_cover, b.description, b.accent_color,
                 b.title_norm, b.author_norm
            FROM books b JOIN scan_roots l ON l.id = b.library_id
           WHERE b.id = ?",
@@ -178,7 +175,6 @@ pub(super) async fn build_snapshot(
         timestamp,
         has_cover,
         description,
-        isbn,
         accent_color,
         title_norm,
         author_norm,
