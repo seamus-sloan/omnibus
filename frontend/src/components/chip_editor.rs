@@ -188,9 +188,7 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
     }
 }
 
-/// Per-render derived view: the visible suggestion rows, the raw typed text
-/// (used by the "+ Create" row), and whether that Create row should show.
-/// Bundled so `ChipEditor` doesn't repeat three separate let-bindings.
+/// Per-render derived view bundling the filtered suggestion rows, the typed text, and the Create-row flag.
 #[derive(Clone)]
 struct SelectionView {
     filtered: Vec<SuggestionItem>,
@@ -198,30 +196,21 @@ struct SelectionView {
     show_create_row: bool,
 }
 
-/// Compute the visible suggestion rows + Create-row state for the current
-/// input/focus/values. Pure function so the parent component body stays
-/// focused on wiring rather than derivation.
+/// Compute the visible suggestion rows + Create-row state for the current input/focus/values.
 fn compute_selection(
     props: &ChipEditorProps,
     input_value: String,
     focused: bool,
     suppress_open: bool,
 ) -> SelectionView {
+    // Read each signal once so `filtered` and `show_create_row` are derived
+    // from a single consistent snapshot of `suggestions` and `values`.
+    let suggestions = props.suggestions.read();
+    let values = props.values.read();
     let query_lc = input_value.trim().to_lowercase();
-    let filtered = compute_suggestions(
-        &props.suggestions.read(),
-        &props.values.read(),
-        &query_lc,
-        focused,
-        suppress_open,
-    );
+    let filtered = compute_suggestions(&suggestions, &values, &query_lc, focused, suppress_open);
     let typed = input_value.trim().to_string();
-    let show_create_row = should_show_create_row(
-        &props.suggestions.read(),
-        &props.values.read(),
-        &query_lc,
-        &typed,
-    );
+    let show_create_row = should_show_create_row(&suggestions, &values, &query_lc, &typed);
     SelectionView {
         filtered,
         typed,
@@ -355,9 +344,7 @@ fn dispatch_keydown(
     }
 }
 
-/// Inline `<input>` for the chip editor — owns nothing, forwards every
-/// event to the parent's handlers. Split out so `ChipEditor`'s body stays
-/// focused on state + dispatch.
+/// Inline `<input>` for the chip editor — owns nothing, forwards every event to the parent's handlers.
 #[component]
 fn ChipInput(
     input: Signal<String>,
