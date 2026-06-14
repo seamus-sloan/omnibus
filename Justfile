@@ -37,3 +37,27 @@ dev-down:
 # `dx serve` has wedged on a compile error and `dev-up` exits 2.
 dev-bounce:
     nix develop .#web --command scripts/dev-server-bounce.sh
+
+# Run the full unit/integration test matrix. `cargo test --workspace` is a
+# trap here — it silently skips the frontend rpc/page tests (they need
+# --features server) — so run each crate explicitly. Mobile is not listed
+# because it has no tests of its own (lint covers it via `just lint`).
+# Self-wraps in the slim nix shell so it works from a bare checkout too.
+test:
+    nix develop --command bash -ec '\
+        cargo test -p omnibus-db && \
+        cargo test -p omnibus && \
+        cargo test -p omnibus-frontend --features server && \
+        cargo test -p omnibus-shared'
+
+# Format check + clippy, including the crate/feature combos a bare
+# `cargo clippy` (default-members, default features) misses.
+lint:
+    nix develop --command bash -ec '\
+        cargo fmt --check && \
+        cargo clippy --all-targets && \
+        cargo clippy -p omnibus-frontend --features server --all-targets && \
+        cargo clippy -p omnibus-mobile --all-targets'
+
+# Lint then test — the pre-push gate referenced by rule 99.
+check: lint test

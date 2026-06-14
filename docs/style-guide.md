@@ -24,13 +24,13 @@ belongs in commit messages and PR bodies — those have an audit trail, a
 review pass, and don't rot when the issue numbers stop being
 meaningful.
 
-**Anti-pattern.** [db/src/discovery.rs:1](../db/src/discovery.rs:1)
-opens with a 17-line `//!` containing a `# Multi-tenancy invariant`
-H2 heading and forward references to "Phase 4 in
-docs/roadmap/0-0-summary.md", issue #232, and an "F4.x" milestone.
-When F4.x ships those references will be wrong; when issue #232 is
-closed nobody updates the file. This belongs in the PR that introduces
-multi-tenancy, not the file itself.
+**Anti-pattern (since fixed).** `db/src/discovery.rs` once opened with a
+17-line `//!` containing a `# Multi-tenancy invariant` H2 heading and
+forward references to "Phase 4", issue #232, and an "F4.x" milestone —
+the kind of context that rots the moment F4.x ships or #232 closes. It
+has since been split into `discovery/{mod,authors,series,tags}.rs` with
+short module docs; multi-tenancy context like that belongs in the PR
+that introduces it, not the file.
 
 **Pattern.** Something like:
 
@@ -55,17 +55,17 @@ of useful summary beats five lines of obligatory `# Errors` /
 lock that callers must not hold across `.await`, a function that
 mutates after returning `Err`, a retry budget.
 
-**Anti-pattern.** [db/src/discovery.rs:44](../db/src/discovery.rs:44)
-puts a 22-line rustdoc on `get_author` with three H2 sections
-(`# Bounded reads (issue #150)`, `# Multi-tenancy`) describing what
-the cap *used to be*, what `book_count` means, and what F4.x will
+**Anti-pattern (since fixed).** `get_author` in the old
+`db/src/discovery.rs` once carried a 22-line rustdoc with three H2
+sections (`# Bounded reads (issue #150)`, `# Multi-tenancy`) describing
+what the cap used to be, what `book_count` means, and what F4.x would
 require. The function is `async fn get_author(pool, author_id) ->
-Result<Option<AuthorDetail>, sqlx::Error>`. Everything beyond "fetch
-an author by ID with their books; `None` if missing" is either
-duplicated in the `MAX_DISCOVERY_BOOKS` const doc above it or belongs
-in a PR description.
+Result<Option<AuthorDetail>, sqlx::Error>`. Everything beyond "fetch an
+author by ID with their books; `None` if missing" belonged in a const
+doc or a PR description. It now lives in `db/src/discovery/authors.rs`
+with a one-line summary.
 
-**Pattern.** [db/src/scanner.rs:3](../db/src/scanner.rs:3):
+**Pattern.** `list_files` in [db/src/scanner.rs](../db/src/scanner.rs):
 
 ```rust
 /// Recursively walk `path` and return total file count plus
@@ -89,11 +89,13 @@ Useful comments encode information the reader *can't* derive from the
 code: a known SQLite quirk, a backwards-compat workaround, a
 non-obvious invariant.
 
-**Anti-pattern.** [db/src/sync.rs](../db/src/sync.rs) has section
-markers like `// --- Removed -------------------` and `// --- Backfill
----------------` scattered through a 270-line function. They're nav
-aids for a function that shouldn't be that long in the first place
-(see [Function shape](#function-shape)).
+**Anti-pattern (since fixed).** `db/src/sync.rs` once had section markers
+like `// --- Removed -------------------` and `// --- Backfill
+---------------` scattered through a ~270-line `sync_books`. They were
+nav aids for a function that shouldn't have been that long in the first
+place. `sync.rs` is now a 46-line module file and `sync_books` lives in
+`db/src/sync/books.rs`, split into per-bucket helpers (see
+[Function shape](#function-shape)).
 
 **Pattern.** A comment that says something the code doesn't:
 
@@ -121,17 +123,19 @@ stages but the locals leak between them, so refactoring one stage
 means re-reading the whole body. Named helpers make the stages
 real: each has a signature, a test, and a name that documents intent.
 
-**Model.** [db/src/worker.rs](../db/src/worker.rs). Each `impl`
-method does one thing and most are short. `resource_key`, `kind`,
-`post`, `await_completion` are all single-purpose.
+**Model.** [db/src/worker/](../db/src/worker/) (split into
+`{types,queue,exec,handlers,progress}.rs`). Each `impl` method does one
+thing and most are short — `resource_key`, `kind`, `post`,
+`await_completion` are all single-purpose.
 
-**Anti-pattern.** [db/src/sync.rs:60](../db/src/sync.rs:60). The
-~270-line `sync_books` does upsert + remove + change + new + backfill
-+ FTS-rebuild in one body, marked off with `// --- Removed`,
-`// --- Changed`, `// --- New`, `// --- Backfill` dividers. The fix is
-to extract `sync_removed`, `sync_changed`, `sync_new`,
-`backfill_creator_ids_for_library` as helpers and let the top-level
-function be a 20-line transaction wrapper that calls them in order.
+**Anti-pattern (since fixed).** `db/src/sync.rs`'s ~270-line `sync_books`
+did upsert + remove + change + new + backfill + FTS-rebuild in one body,
+marked off with `// --- Removed`, `// --- Changed`, `// --- New`,
+`// --- Backfill` dividers. It has since been extracted into
+`sync_removed` / `sync_changed` / `sync_new` / backfill helpers under
+[db/src/sync/](../db/src/sync/), with the top-level function now a thin
+transaction wrapper that calls them in order — exactly the shape this
+rule prescribes.
 
 ---
 
@@ -147,11 +151,11 @@ decision (what *is* the sub-topic?) which usually surfaces a
 missing module boundary. The `books/` subdirectory pattern in this
 repo already proves the shape works.
 
-**Candidates today.** `db/src/sync.rs` (~1500 lines),
-`db/src/discovery.rs` (~1440 lines), `db/src/palette.rs`,
-`db/src/worker.rs`, `frontend/src/data.rs`. A prioritized cleanup list lives in
-[`style-guide-cleanup.md`](style-guide-cleanup.md) (created in a
-follow-up commit).
+**Proven by this repo.** The `books/`, `sync/`, `discovery/`, `palette/`,
+`metadata_overrides/`, and `worker/` subdirectory splits all started as
+single 800–1700-line files and were broken up by sub-topic using exactly
+this pattern. When a file crosses the cap, follow them rather than letting
+it keep growing.
 
 ---
 
@@ -172,14 +176,14 @@ fail in arbitrary ways (filesystem walks, EPUB parsing, network
 fetches), an exhaustive enum is a lie that future-you has to keep
 updating — `anyhow` with a `with_context(...)` message is honest.
 
-**Pattern (predictable).** [db/src/auth.rs:58](../db/src/auth.rs:58)
+**Pattern (predictable).** [db/src/auth.rs](../db/src/auth.rs)
 correctly chooses `thiserror`: login, registration, and session
 validation each have a finite set of outcomes a UI renders
-differently. But the variants are *too* fine-grained — see "Coarse
-variants" below.
+differently. `AuthError` was once over-granular but has since been
+coarsened to the shape below — see "Coarse variants".
 
-**Pattern (unpredictable).**
-[db/src/indexer.rs:193](../db/src/indexer.rs:193):
+**Pattern (unpredictable).** `reindex` in
+[db/src/indexer.rs](../db/src/indexer.rs):
 
 ```rust
 pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()> {
@@ -198,12 +202,14 @@ propagates. The format string carries the detail.
 `PasswordTooShort { min }` / `PasswordTooLong { max }` /
 `PasswordCommon` unless the caller actually branches on them.
 
-**Anti-pattern.** [db/src/auth.rs:58](../db/src/auth.rs:58) has 14
-variants. The login UI renders the same "invalid username or
-password" message for every credential failure regardless of variant,
-and the registration form shows the `#[error]` text directly. The
-three password variants could collapse to one with the message doing
-the work. Same for the four username-validation variants.
+**Anti-pattern (since fixed).** `db/src/auth.rs`'s `AuthError` once had
+14 variants — three password rules, four username rules — even though
+the login UI renders the same "invalid username or password" for every
+credential failure and the registration form shows the `#[error]` text
+directly. It has since collapsed to ~8 coarse variants
+(`InvalidCredentials`, `Validation(String)`, `UsernameTaken`,
+`SessionNotFound`, `AccountLocked`, `RegistrationDisabled`, transparent
+`Db`, …), with the message doing the work — matching the Pattern below.
 
 **Pattern.** Three to five variants, each genuinely different in how
 the caller handles them:
@@ -226,13 +232,14 @@ pub enum AuthError {
 
 ### Never leak `sqlx::Error`
 
-**Anti-pattern.** [db/src/sync.rs:60](../db/src/sync.rs:60) returns
-`Result<(), sqlx::Error>` from a `pub` function. Callers downstream
-inherit a leaky abstraction: any future migration to a different DB
+**Anti-pattern (since fixed).** `sync_books` once returned
+`Result<(), sqlx::Error>` from a `pub` function, leaking the DB crate
+into every downstream caller: any future migration to a different DB
 crate becomes a workspace-wide rename, and `sqlx::Error` carries
-unrelated variants (`PoolTimedOut`, `Configuration`, …) that the
-caller can't meaningfully handle. Wrap with a module-local
-`#[error(transparent)] #[from]` variant.
+unrelated variants (`PoolTimedOut`, `Configuration`, …) the caller
+can't meaningfully handle. It now returns `Result<(), SyncError>` — a
+module-local enum in `db/src/sync/books.rs` that wraps `sqlx::Error`
+via `#[error(transparent)] #[from]`. Wrap, don't leak.
 
 ---
 
@@ -369,5 +376,5 @@ document the invariant and call it out in the PR description.
 
 - TypeScript / Playwright — covered by
   [04-playwright.md](../.claude/rules/04-playwright.md).
-- SQL migrations — covered by the migrations section of
-  [CLAUDE.md](../CLAUDE.md).
+- SQL migrations — covered by
+  [.claude/rules/06-migrations.md](../.claude/rules/06-migrations.md).

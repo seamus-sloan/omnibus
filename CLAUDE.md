@@ -2,7 +2,7 @@
 
 Guidance for Claude Code when working in this repo. This file is an index — detailed rules and recipes live in [.claude/](.claude/).
 
-Omnibus is a self-hosted ebook/audiobook library (see [docs/roadmap/0-0-summary.md](docs/roadmap/0-0-summary.md)). The current counter app is a placeholder.
+Omnibus is a self-hosted ebook/audiobook library (see [docs/roadmap/0-0-summary.md](docs/roadmap/0-0-summary.md)). Foundations and browse/discovery have shipped; reading/listening is in progress — the UI is a real library app (landing grid + table, EPUB reader, audiobook player, command-palette search, auth, author/series/tag discovery).
 
 ## Rules
 
@@ -13,10 +13,12 @@ Numbered rules in [.claude/rules/](.claude/rules/), applied in order. Follow the
 - [03-unit-testing.md](.claude/rules/03-unit-testing.md) — sibling `<mod>/tests.rs`, `test_support` per crate, happy + per-variant coverage.
 - [04-playwright.md](.claude/rules/04-playwright.md) — full E2E conventions (selectors, fixtures, `expectMutation`, error paths).
 - [05-rust-style.md](.claude/rules/05-rust-style.md) — Rust style guide: comments, function/file shape, errors, tests, mechanics. Long-form rationale in [docs/style-guide.md](docs/style-guide.md).
+- [06-migrations.md](.claude/rules/06-migrations.md) — authoring SQL migrations: `NNNN_` naming, never-edit-applied, the `_norm` backfill pattern, testing against `sqlite::memory:`, and the dev-bounce step.
+- [07-hydration.md](.claude/rules/07-hydration.md) — SSR/WASM hydration parity: never feature-gate a component body on `web`; how to confirm and fix a hydration mismatch.
 - [98-keep-skills-fresh.md](.claude/rules/98-keep-skills-fresh.md) — update skills when the code they reference changes.
 - [99-end-of-session.md](.claude/rules/99-end-of-session.md) — end-of-session checklist (docs sync, fmt/clippy, coverage, line-count cap).
 
-**Line-count cap:** every file in `CLAUDE.md` / `.claude/` stays under ~200 lines. Split by topic when it grows past that — enforced by rule 99.
+**Line-count cap:** every file in `CLAUDE.md`, `AGENTS.md`, and `.claude/` stays under ~200 lines. Split by topic when it grows past that — enforced by rule 99.
 
 ## Skills
 
@@ -38,6 +40,16 @@ Five-crate Cargo workspace: `shared/` (serde types), `db/` (data layer + indexer
 
 Full crate descriptions, per-crate module maps, request flow diagrams, and mobile-auth details live in [.claude/architecture.md](.claude/architecture.md).
 
+## Version control
+
+This repo is developed with [Jujutsu (`jj`)](https://jj-vcs.github.io/jj/) over the Git backend, and changes land as GitHub pull requests — one PR per change, conventional-commit titles (`feat:` / `fix:` / `chore:` / `docs:`).
+
+- **Never amend or rewrite an already-pushed commit.** `jj` auto-snapshots the working copy into the current change on every command, so editing files while `@` sits on a pushed bookmark silently rewrites published history into a force-push. Run `jj new <bookmark>` to start a fresh change *before* editing — even when the working copy is clean.
+- Routine flow: `jj git fetch` to sync; `jj bookmark create <name>` for a branch; `jj describe -m "…"` to set the message; `jj bookmark move <name> --to @` then `jj git push`.
+- The dev tooling assumes `jj` — `scripts/dev-server-up.sh` identity-checks the workspace root so sibling `jj` workspaces don't collide on a port.
+
+Operator-specific conventions (ticket prefixes, standing workspace names) live in personal config, not here.
+
 ## Quick commands
 
 ```bash
@@ -46,7 +58,7 @@ just serve                                                  # Zellij
 just serve-pc                                               # process-compose
 
 # Idempotent dev-server bring-up — port-walks from $PORT (default 3000)
-# up to PORT+20, reuses an existing omnibus server if found, seeds the
+# up to PORT+9, reuses an existing omnibus server if found, seeds the
 # admin user from $OMNIBUS_DEV_SEED_USER, writes .claude/runtime/{port,env.sh}.
 # Used by the `ui-validate` skill; safe to re-run.
 just dev-up
@@ -57,9 +69,19 @@ dx serve --platform web -p omnibus
 
 # Server only (native backend, no WASM bundle)
 cargo run -p omnibus                                        # start at http://0.0.0.0:3000
+
+# Tests & lint — aggregate targets cover the full crate matrix in one go
+just test                                                   # db + server + frontend(--features server) + shared
+just lint                                                   # cargo fmt --check + clippy (incl. mobile + frontend-server)
+just check                                                  # lint then test
+# …or per-crate (note: `cargo test --workspace` SKIPS frontend rpc/page tests
+#  and mobile — the rpc/page tests need --features server to compile the
+#  server-function bodies; mobile is out of default-members and has no tests):
 cargo test -p omnibus                                       # /api/* REST integration tests
-cargo test -p omnibus-db                                    # db + ebook + scanner tests
-cargo clippy                                                # lint default-members crates
+cargo test -p omnibus-db                                    # db + scanner + sync tests
+cargo test -p omnibus-frontend --features server            # rpc + page tests (server feature required)
+cargo test -p omnibus-shared                                # shared serde / ebook / progress tests
+cargo clippy                                                # lint default-members (server, shared, frontend)
 cargo fmt                                                   # format all crates
 
 # Playwright E2E (server must be running; baseURL = $PLAYWRIGHT_BASE_URL or :3000)

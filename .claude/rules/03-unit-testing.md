@@ -15,9 +15,12 @@ for rationale.
   [db/src/books/tests.rs](../../db/src/books/tests.rs) is the model.
 - **Unit tests (trivial):** inline `#[cfg(test)] mod tests` at the
   bottom of the file is fine for 1–2 cases that need no helpers.
-- **Integration tests:** inline `#[cfg(test)]` in
-  `server/src/backend.rs`, driving `rest_router(AppState::new(pool))`
-  via `tower::ServiceExt::oneshot` against an in-memory DB.
+- **Integration tests:** sibling `<module>/tests.rs` next to the
+  handler module (e.g.
+  [server/src/backend/progress/tests.rs](../../server/src/backend/progress/tests.rs));
+  inline `#[cfg(test)]` only for routes still in `server/src/backend.rs`
+  itself. Drive `rest_router(AppState::new(pool))` via
+  `tower::ServiceExt::oneshot` against an in-memory DB.
 - **E2E tests:** see [04-playwright.md](04-playwright.md).
 
 All tests use `sqlite::memory:` for isolation — never the on-disk DB.
@@ -77,8 +80,10 @@ async fn get_book_propagates_db_error_when_pool_is_closed() { ... }
 ## Running
 
 ```bash
+just test                                          # full matrix (db + server + frontend(server) + shared)
 cargo test -p omnibus                              # /api/* REST integration tests
 cargo test -p omnibus-db                           # db + scanner + sync tests
 cargo test -p omnibus-frontend --features server   # rpc + page tests
+cargo test -p omnibus-shared                       # shared serde / ebook / progress tests
 cargo test -p <crate> <test_name>                  # single test by name
 ```
