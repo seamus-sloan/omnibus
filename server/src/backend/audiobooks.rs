@@ -362,18 +362,16 @@ struct StatusResponse {
 /// Case-insensitive on prefix and extension so the validator stays in
 /// sync with case-insensitive filesystems (APFS, NTFS) — the transcoder
 /// writes lowercase today, but `seg-0001.TS` from the same file must
-/// still resolve. Clippy's
-/// `case_sensitive_file_extension_comparisons` lint is silenced because
-/// the `to_ascii_lowercase` pass below already makes the `.ends_with`
-/// comparison case-insensitive without reaching for `Path::extension`.
-#[allow(clippy::case_sensitive_file_extension_comparisons)]
+/// still resolve. Compares byte slices via `eq_ignore_ascii_case` to
+/// avoid allocating a lowercased copy on the HLS segment hot path.
 fn is_valid_segment_name(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    if !lower.starts_with("seg-") || !lower.ends_with(".ts") {
+    if name.len() != 11 {
         return false;
     }
-    let digits = &lower[4..lower.len() - 3];
-    digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit())
+    let bytes = name.as_bytes();
+    bytes[..4].eq_ignore_ascii_case(b"seg-")
+        && bytes[8..].eq_ignore_ascii_case(b".ts")
+        && bytes[4..8].iter().all(u8::is_ascii_digit)
 }
 
 #[cfg(test)]
