@@ -1,5 +1,7 @@
 //! Multi-file audiobook sync. Mirrors `sync_books` but writes
-//! `book_file_parts` rows in addition to `books` and `book_files`.
+//! `book_file_parts` rows in addition to `books` and `book_files`. Like
+//! the ebook path, all `books_fts` maintenance routes through the
+//! [`super::fts`] choke-point (`upsert_fts` / `delete_fts`).
 
 use std::collections::HashMap;
 
@@ -12,6 +14,7 @@ use crate::settings::upsert_library;
 
 use super::attach;
 use super::books::{materialize_new_covers, SyncError};
+use super::fts::{delete_fts, upsert_fts};
 
 /// Per-bucket payload for [`sync_audiobooks`]. Mirrors [`SyncPlan`] for
 /// the ebook path but carries [`crate::audiobook::IndexedAudiobook`] rows
@@ -51,15 +54,18 @@ pub async fn sync_audiobooks(
         let placeholders = std::iter::repeat_n("?", plan.removed_uuids.len())
             .collect::<Vec<_>>()
             .join(", ");
-        let fts_sql = format!(
-            "DELETE FROM books_fts WHERE rowid IN \
-             (SELECT id FROM books WHERE library_id = ? AND uuid IN ({placeholders}))"
-        );
-        let mut q = sqlx::query(&fts_sql).bind(library_id);
+        // Resolve affected ids, then clear each FTS row via the door
+        // before the cascade DELETE on `books` (standalone FTS5, no FK).
+        let id_sql =
+            format!("SELECT id FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
+        let mut q = sqlx::query_scalar::<_, i64>(&id_sql).bind(library_id);
         for uuid in &plan.removed_uuids {
             q = q.bind(uuid);
         }
-        q.execute(&mut *tx).await?;
+        let ids = q.fetch_all(&mut *tx).await?;
+        for id in ids {
+            delete_fts(&mut tx, id).await?;
+        }
 
         let books_sql =
             format!("DELETE FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
@@ -119,7 +125,7 @@ pub async fn sync_audiobooks(
                 insert_chapters(&mut tx, inserted.book_file_id, &b.chapters, &b.parts).await?;
                 insert_audiobook_author_link(&mut tx, inserted.book_id, b.creator_name.as_deref())
                     .await?;
-                insert_audiobook_fts_row(&mut tx, inserted.book_id, b).await?;
+                upsert_fts(&mut tx, inserted.book_id).await?;
                 if let Some((mime, bytes)) = &b.cover {
                     changed_covers.push((b.uuid.clone(), mime.clone(), bytes.clone()));
                 }
@@ -141,16 +147,13 @@ pub async fn sync_audiobooks(
                 .bind(&b.format)
                 .execute(&mut *tx)
                 .await?;
-            sqlx::query("DELETE FROM books_fts WHERE rowid = ?")
-                .bind(book_id)
-                .execute(&mut *tx)
-                .await?;
 
             let book_file_id = insert_audiobook_file_row(&mut tx, book_id, b).await?;
             insert_audiobook_parts(&mut tx, book_file_id, &b.parts).await?;
             insert_chapters(&mut tx, book_file_id, &b.chapters, &b.parts).await?;
             insert_audiobook_author_link(&mut tx, book_id, b.creator_name.as_deref()).await?;
-            insert_audiobook_fts_row(&mut tx, book_id, b).await?;
+            // Refresh from the rewritten author link via the door.
+            upsert_fts(&mut tx, book_id).await?;
 
             if let Some((mime, bytes)) = &b.cover {
                 changed_covers.push((b.uuid.clone(), mime.clone(), bytes.clone()));
@@ -168,7 +171,7 @@ pub async fn sync_audiobooks(
         insert_audiobook_parts(&mut tx, inserted.book_file_id, &b.parts).await?;
         insert_chapters(&mut tx, inserted.book_file_id, &b.chapters, &b.parts).await?;
         insert_audiobook_author_link(&mut tx, inserted.book_id, b.creator_name.as_deref()).await?;
-        insert_audiobook_fts_row(&mut tx, inserted.book_id, b).await?;
+        upsert_fts(&mut tx, inserted.book_id).await?;
         if let Some((mime, bytes)) = &b.cover {
             new_covers.push((b.uuid.clone(), mime.clone(), bytes.clone()));
         }
@@ -254,9 +257,10 @@ async fn try_attach_new_audiobook(
 
 /// Write (or rewrite) an attached audiobook's `book_files` row (plus
 /// parts and chapters) under `book_id`, record the attachment, and adopt
-/// the cover when the target has none. The target's `books` scalars,
-/// links, and FTS row are deliberately left untouched. The file row
-/// carries its own `(library_path, path)` location override — the
+/// the cover when the target has none. The target's `books` scalars and
+/// links are deliberately left untouched, but its FTS row is refreshed
+/// via the door so any newly-unioned text becomes searchable. The file
+/// row carries its own `(library_path, path)` location override — the
 /// target book may live in a different library, and the HLS read path
 /// resolves part filenames against the *audio* root.
 async fn attach_audiobook_file(
@@ -288,6 +292,9 @@ async fn attach_audiobook_file(
     insert_audiobook_parts(tx, book_file_id, &b.parts).await?;
     insert_chapters(tx, book_file_id, &b.chapters, &b.parts).await?;
     attach::record_attachment(tx, &b.uuid, book_id, format, library_path).await?;
+    // Refresh the target's FTS row so this format's contribution to the
+    // searchable text lands immediately (mirrors the ebook attach path).
+    upsert_fts(tx, book_id).await?;
     if let Some(cover) = attach::maybe_adopt_cover(tx, book_id, b.cover.as_ref()).await? {
         covers.push(cover);
     }
@@ -478,27 +485,6 @@ async fn insert_audiobook_author_link(
     )
     .bind(book_id)
     .bind(name)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
-/// Insert or replace the FTS row for an audiobook.
-async fn insert_audiobook_fts_row(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    book_id: i64,
-    b: &crate::audiobook::IndexedAudiobook,
-) -> Result<(), sqlx::Error> {
-    let author_text = b.creator_name.as_deref().unwrap_or("");
-    let desc_text = b.description.as_deref().unwrap_or("");
-    sqlx::query(
-        "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn) \
-         VALUES (?, ?, ?, '', '', ?, '')",
-    )
-    .bind(book_id)
-    .bind(&b.title)
-    .bind(author_text)
-    .bind(desc_text)
     .execute(&mut **tx)
     .await?;
     Ok(())

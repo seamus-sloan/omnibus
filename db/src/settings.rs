@@ -125,23 +125,19 @@ pub(crate) async fn prune_orphan_libraries(
     for chunk in orphan_ids.chunks(500) {
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
 
-        let select_sql = format!("SELECT uuid FROM books WHERE library_id IN ({placeholders})");
-        let mut select = sqlx::query_scalar::<_, String>(&select_sql);
+        let select_sql = format!("SELECT id, uuid FROM books WHERE library_id IN ({placeholders})");
+        let mut select = sqlx::query_as::<_, (i64, String)>(&select_sql);
         for id in chunk {
             select = select.bind(id);
         }
-        let mut uuids = select.fetch_all(&mut **tx).await?;
-        orphan_uuids.append(&mut uuids);
+        let book_rows = select.fetch_all(&mut **tx).await?;
 
-        let fts_sql = format!(
-            "DELETE FROM books_fts WHERE rowid IN
-                (SELECT id FROM books WHERE library_id IN ({placeholders}))"
-        );
-        let mut fts_delete = sqlx::query(&fts_sql);
-        for id in chunk {
-            fts_delete = fts_delete.bind(id);
+        // Clear each orphaned book's FTS row through the door before the
+        // cascade DELETE on `books` (standalone FTS5 has no FK).
+        for (book_id, _) in &book_rows {
+            crate::sync::delete_fts(tx, *book_id).await?;
         }
-        fts_delete.execute(&mut **tx).await?;
+        orphan_uuids.extend(book_rows.into_iter().map(|(_, uuid)| uuid));
 
         let books_sql = format!("DELETE FROM books WHERE library_id IN ({placeholders})");
         let mut books_delete = sqlx::query(&books_sql);

@@ -81,6 +81,10 @@ impl Worker {
                     Err(e) => TaskOutcome::Err(e.to_string()),
                 }
             }
+            Task::RebuildFtsIndex => match crate::sync::rebuild_all_fts(&self.pool).await {
+                Ok(()) => TaskOutcome::Ok,
+                Err(e) => TaskOutcome::Err(e.to_string()),
+            },
             Task::GenerateThumbs {
                 book_id,
                 last_modified_epoch,
