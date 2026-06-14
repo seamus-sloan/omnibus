@@ -213,7 +213,7 @@ doc removes; C throws that away. Not recommended.
 
 **Adopt Option B (separate `book_changes` audit feed), with a global
 sequence space (`AUTOINCREMENT`) and per-`(user_id, device_id)`
-cursors.** Land migration `0019` now (additive, zero read-path risk) and
+cursors.** Land the new migration now (additive, zero read-path risk) and
 the writer wiring; defer the GC/reaper and all `/kobo/*` endpoints to
 F4.1.
 
@@ -268,12 +268,13 @@ CREATE TABLE kobo_sync_tokens (
 
 ## Migration plan (SKETCH — do not apply yet)
 
-`db/migrations/0019_change_tracking.sql` — next number after the highest
-on disk (`0018_multiformat_book_files.sql`). Forward-only, additive only,
+`db/migrations/NNNN_change_tracking.sql` — the number is allocated at
+implementation time (next after the highest on disk, currently
+`0018_multiformat_book_files.sql`). Forward-only, additive only,
 so **no table-recreate dance** is needed:
 
 ```sql
--- 0019_change_tracking.sql  (Option B, recommended)
+-- NNNN_change_tracking.sql  (Option B, recommended)
 CREATE TABLE book_changes (
   seq        INTEGER PRIMARY KEY AUTOINCREMENT,
   book_uuid  TEXT    NOT NULL,
@@ -304,7 +305,7 @@ contract exactly:
   kind) SELECT uuid, 'upsert' FROM books` so a device's very first sync
   sees the whole library.
 
-This makes a pre-`0019` database converge with a fresh one on the next
+This makes a pre-migration database converge with a fresh one on the next
 boot, with no manual step — the rule-06 backfill contract.
 
 (If Option A is chosen instead, the migration adds the two `books`
@@ -319,7 +320,7 @@ existing book under the same idempotency guard.)
 From the scout spec, scoped to **Option B** (A's extra read-path files
 are noted inline):
 
-- `db/migrations/0019_change_tracking.sql` — **new**: `book_changes` +
+- `db/migrations/NNNN_change_tracking.sql` — **new**: `book_changes` +
   `kobo_sync_tokens` + indexes (Option A: `books.change_seq` /
   `books.deleted_at` columns + `change_counter` instead).
 - `db/src/change_feed/{mod.rs,tests.rs}` — **new module**:
@@ -355,7 +356,7 @@ are noted inline):
 
 Per rule 03: sibling `db/src/change_feed/tests.rs`, `sqlite::memory:` via
 `test_support`, happy path + one test per `thiserror` variant. The
-migrator runs on every `init_db("sqlite::memory:")`, so `0019` is
+migrator runs on every `init_db("sqlite::memory:")`, so the new migration is
 exercised transitively by the whole suite.
 
 New `db/src/change_feed/tests.rs`:
@@ -368,7 +369,7 @@ New `db/src/change_feed/tests.rs`:
   `removed_book_is_still_reportable_after_books_row_is_gone` — remove a
   book, assert a `delete` change row exists keyed by the (now-deleted)
   uuid. On today's hard-delete schema there is no feed at all, so this
-  test cannot even compile against `main` without `0019` — it is the
+  test cannot even compile against `main` without the new migration — it is the
   red bar proving the gap is closed. (Option A variant: assert
   `deleted_at IS NOT NULL` and `change_seq` bumped, and that the row is
   excluded from `list_books`.)
@@ -387,7 +388,7 @@ Extend `db/src/sync/tests.rs`:
 
 `db/src/pool.rs` (or `normalize`-adjacent) backfill test:
 
-- `backfill_initial_changes_seeds_one_upsert_per_pre_0019_book` and is a
+- `backfill_initial_changes_seeds_one_upsert_per_pre_migration_book` and is a
   no-op on second call (idempotency, mirroring the
   `backfill_norm_columns` test).
 
@@ -399,8 +400,8 @@ excluded from list/browse/discovery/search/taxonomy.
 ## Risks & rollback
 
 - **Forward-only, fix-forward.** Migrations are append-only (rule 06).
-  An error in `0019` is corrected by a `0020`, never by editing `0019`
-  once applied anywhere — `sqlx` checksums each file and a changed
+  An error in the new migration is corrected by a later one, never by
+  editing it once applied anywhere — `sqlx` checksums each file and a changed
   applied migration fails startup.
 - **Option B is cheaply reversible** *until devices hold cursors.* Drop
   `book_changes` + `kobo_sync_tokens` and remove four call sites. Once
@@ -419,7 +420,7 @@ excluded from list/browse/discovery/search/taxonomy.
   F4.1): if it prunes `book_changes` rows below the *slowest* device
   cursor incorrectly, a lagging device misses changes. The reaper must
   read `MIN(last_seq)` across `kobo_sync_tokens` before deleting, and
-  coalesce rather than gap the sequence. Out of scope for `0019`;
+  coalesce rather than gap the sequence. Out of scope for this migration;
   flagged so it isn't forgotten.
 - **Counter contention.** Both the single-row `change_counter` (A) and
   `AUTOINCREMENT` (B) serialize on the sync transaction. Sync is already
@@ -444,7 +445,7 @@ The load-bearing ordering constraints:
   must respect.
 - **F14 / F17 / F18 (other schema-pass findings).** If any of these
   also add `books` columns or touch the sync write path, batch them into
-  the same `0019`/`002x` schema pass so the hot write path is
+  the same adjacent schema pass so the hot write path is
   instrumented once, not thrice. Coordinate the migration numbering so
   they don't collide.
 - **F4.1 depends on F13, not the reverse.** This doc *unblocks* F4.1 —
@@ -463,8 +464,8 @@ The load-bearing ordering constraints:
    space with per-`(user, device)` cursors, justified by today's
    single-tenant catalog. If per-user catalog visibility (private
    uploads, per-user shelves) is on any horizon, the feed may need a
-   `user_id` dimension — decide before `0019` since adding it later is a
-   non-additive change to `book_changes`.
+   `user_id` dimension — decide before authoring the migration since adding
+   it later is a non-additive change to `book_changes`.
 2. **Reading-state vs. catalog changes.** F4.1 routes *reading state*
    (bookmarks, progress) through F2.1 internally (`4-1-kobo-sync.md:31`),
    separate from *catalog* changes. This doc covers only catalog change
@@ -479,4 +480,4 @@ The load-bearing ordering constraints:
    on `book.last_modified` bump (`4-1-kobo-sync.md:21`). If `change_seq`
    (Option A) or a `book_changes` upsert (Option B) becomes the canonical
    "this book changed" signal, the invalidation should key off that, not
-   the coarse `last_modified`. Note for F4.1, not a blocker for `0019`.
+   the coarse `last_modified`. Note for F4.1, not a blocker for this migration.

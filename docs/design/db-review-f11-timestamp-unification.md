@@ -101,7 +101,7 @@ the same for `timestamp AS added_at`). `build_metadata` keeps
 `r.get::<String,_>(...)`. `shared::EbookMetadata` and the entire `frontend/`
 sort + render path are **untouched**.
 
-**Migration shape.** `0019_*.sql` recreates the five tables → INTEGER.
+**Migration shape.** A new `NNNN_*.sql` recreates the five tables → INTEGER.
 
 **Blast radius.** DB crate only. `shared/` and `frontend/` see zero diff. No
 change to `sorting.rs` / `table.rs` / `filtering.rs` or their fixtures.
@@ -164,7 +164,7 @@ completeness.
 ## Recommendation
 
 **Adopt Option A.** Migrate all five DB columns to INTEGER unix-seconds via the
-`0019` table-recreate, and format `added_at` / `modified` back to fixed-width ISO
+`NNNN` table-recreate, and format `added_at` / `modified` back to fixed-width ISO
 on the `projection.rs` read path so `shared::EbookMetadata` and the entire
 frontend stay byte-for-byte unchanged.
 
@@ -198,7 +198,8 @@ sort (`sorting.rs` `cmp_with_missing_last`) keeps working.
 
 ## Migration plan (SKETCH — not to be applied)
 
-`db/migrations/0019_unify_timestamps_to_unix_seconds.sql`, forward-only per
+`db/migrations/NNNN_unify_timestamps_to_unix_seconds.sql` (number allocated at
+implementation time), forward-only per
 rule 06. The in-DDL `CAST(strftime('%s', col) AS INTEGER)` **is** the backfill —
 no separate Rust boot hook is needed (unlike the `_norm` pattern), because the
 conversion is pure SQL and every writer of these columns used
@@ -206,7 +207,7 @@ conversion is pure SQL and every writer of these columns used
 `'YYYY-MM-DD HH:MM:SS'` UTC that `strftime('%s', …)` parses exactly.
 
 ```sql
--- 0019_unify_timestamps_to_unix_seconds.sql  (forward-only)
+-- NNNN_unify_timestamps_to_unix_seconds.sql  (forward-only)
 -- foreign_keys is ON (init_db sets it). Wrap in the migrator's implicit txn.
 
 -- books: timestamp + last_modified TEXT -> INTEGER. Recreate because the column
@@ -303,7 +304,7 @@ from `db/src/pool.rs:56`) — but none exists today, so the in-DDL CAST suffices
 
 ## Affected code (Option A)
 
-**Migration (new):** `db/migrations/0019_unify_timestamps_to_unix_seconds.sql`.
+**Migration (new):** `db/migrations/NNNN_unify_timestamps_to_unix_seconds.sql`.
 
 **Write sites — `datetime('now')` → `strftime('%s','now')`:**
 
@@ -346,7 +347,7 @@ Option B would change.)
 ## Test plan
 
 Per rule 03: sibling `<mod>/tests.rs`, `sqlite::memory:` via `init_db` (which
-runs all migrations including `0019`), happy + per-variant.
+runs all migrations including the new one), happy + per-variant.
 
 - **Column type post-migration.** In a migration/`pool.rs` test: insert a row
   and assert the stored value is an INTEGER unix-second for each migrated column
@@ -354,8 +355,8 @@ runs all migrations including `0019`), happy + per-variant.
   `author_photos.fetched_at`, `merge_log.merged_at`, `ignored_authors.ignored_at`
   (fetch as `i64`, assert `> 0`; or `SELECT typeof(col) = 'integer'`).
 - **Backfill conversion (the acceptance test that MUST fail on the old schema).**
-  A `sqlite::memory:` DB running `0019` immediately can't hold pre-migration TEXT
-  rows, so lock the conversion *semantics* directly:
+  A `sqlite::memory:` DB running the new migration immediately can't hold
+  pre-migration TEXT rows, so lock the conversion *semantics* directly:
   `SELECT CAST(strftime('%s','2024-01-02 03:04:05') AS INTEGER)` must equal
   `1704164645`. This is the conversion the old TEXT rows depend on; it is the
   parsing case rule 03 says to cover. Pair it with a test that inserts via the
@@ -376,7 +377,7 @@ runs all migrations including `0019`), happy + per-variant.
   query simplifies).
 - Run: `cargo test -p omnibus-db`, `cargo test -p omnibus-frontend --features
   server`, `cargo test -p omnibus-shared`, `cargo test -p omnibus` (`just test`),
-  then `just dev-bounce` so `0019` applies to the live dev DB.
+  then `just dev-bounce` so the new migration applies to the live dev DB.
 
 (Under Option B, additionally: replace ISO-string fixtures in `sorting.rs`
 281-302 / 362-383 and `filtering.rs` with `i64`, and assert `NewestAdded` /
@@ -387,8 +388,8 @@ runs all migrations including `0019`), happy + per-variant.
 ## Risks & rollback
 
 - **Forward-only, fix-forward (rule 06).** There is no down-migration. A mistake
-  in `0019` is corrected by a `0020`, never by editing `0019` once it has run
-  anywhere (sqlx checksums it).
+  in the new migration is corrected by a later one, never by editing it once it
+  has run anywhere (sqlx checksums it).
 - **Data-loss surface = the table recreate of `books`.** `books` is FK-parent to
   `book_files` and the link tables and is external-content for `books_fts`
   (0005). The `INSERT…SELECT … id` preserves primary keys, so children stay
@@ -406,7 +407,7 @@ runs all migrations including `0019`), happy + per-variant.
   `DROP TABLE books` may drop them; the recreate must re-establish them. Confirm
   during authoring and add to the migration if so — a missing FTS trigger
   silently breaks search on subsequently-indexed books.
-- **Mitigation.** Author and run `0019` against a *copy* of a real
+- **Mitigation.** Author and run the new migration against a *copy* of a real
   Calibre-derived DB (not just `sqlite::memory:`, which starts empty) to exercise
   the CAST path on actual `datetime('now')` rows before merge.
 
@@ -425,9 +426,9 @@ Recommended ordering:
   the `books_new` column list and the `BOOK_COLUMNS` edits will need rework. In
   particular the F1 ↔ F2 ↔ F10 chain (book-identity / merge / override-orphan
   reconcile) all touch `books` and `merge_log`; sequencing F11 last among the
-  `books`-table migrations means `0019` recreates the *final* column set once,
-  rather than chasing intermediate shapes.
-- If F11 must go first, keep `0019` purely additive-in-spirit (type-only
+  `books`-table migrations means this migration recreates the *final* column set
+  once, rather than chasing intermediate shapes.
+- If F11 must go first, keep this migration purely additive-in-spirit (type-only
   conversion, no column add/drop) so a later `books` migration rebases cleanly on
   top.
 - **Independent of the index findings.** The "session indexes don't support
@@ -445,8 +446,8 @@ Recommended ordering:
    Library reskin that owns date rendering is landing concurrently and wants the
    `i64`.
 2. **`books_fts` trigger fate on recreate.** Does 0005 define AFTER
-   insert/update/delete triggers on `books`? If yes, `0019` must drop+recreate
-   them. (Verify at authoring time; gates a correct migration.)
+   insert/update/delete triggers on `books`? If yes, this migration must
+   drop+recreate them. (Verify at authoring time; gates a correct migration.)
 3. **Books-table migration ordering.** Does any of F1/F2/F10 add or remove a
    `books` column before F11 lands? If so, F11's `books_new` column list must be
    authored against that later shape — coordinate the merge order.

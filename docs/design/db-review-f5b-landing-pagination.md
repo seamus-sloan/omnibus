@@ -266,8 +266,9 @@ Rust. The only migration in this neighborhood is F5a's, repeated here for
 sequencing clarity:
 
 ```sql
--- db/migrations/0019_books_landing_sort_index.sql   (ships in F5a, NOT F5b)
--- Append-only; latest applied is 0018. Pure secondary index, no backfill.
+-- db/migrations/NNNN_books_landing_sort_index.sql   (ships in F5a, NOT F5b)
+-- Append-only; number allocated at implementation time (latest applied is
+-- 0018). Pure secondary index, no backfill.
 CREATE INDEX IF NOT EXISTS idx_books_library_sort
     ON books (library_id, sort, id);
 ```
@@ -361,7 +362,7 @@ in-memory pool per rule 03):
 - `get_ebooks_rejects_malformed_cursor_with_400` — a non-decodable base64 /
   bad tuple is a client error, not a 500.
 
-Migration coverage is automatic: `init_db` runs F5a's `0019` against the
+Migration coverage is automatic: `init_db` runs F5a's index migration against the
 in-memory pool, so every db test exercises the new index. `BooksError::Db`
 stays covered by the existing pool-closed test; no new error variant is
 introduced (a bad cursor is a server-layer 400, decoded before the db call).

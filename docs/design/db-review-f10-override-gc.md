@@ -149,10 +149,13 @@ Result<u64, MetadataOverridesError>` in
 
 ```sql
 SELECT book_uuid FROM metadata_overrides
- WHERE updated_at < datetime('now', ?-grace)
+ WHERE updated_at < datetime('now', '-' || ? || ' days')
    AND book_uuid NOT IN (SELECT uuid FROM books)
    AND book_uuid NOT IN (SELECT uuid FROM merged_uuids)
 ```
+
+The bound parameter is an integer day count: SQLite concatenates it into a
+valid relative modifier (e.g. `7` → `'-7 days'`).
 
 then `delete_overrides_for_uuids(tx, &uuids)` (chunked at 500, mirroring
 `load_overrides_bulk` and `prune_orphan_libraries`) and a defensive
@@ -190,7 +193,8 @@ time, not *detach* time.
 ### Option C — Soft-detach (`detached_at`), F3.2-aligned
 
 **How it works.** Add an append-only migration
-`0019_metadata_overrides_detached.sql`:
+`NNNN_metadata_overrides_detached.sql` (the next free number, allocated at
+implementation time):
 
 ```sql
 ALTER TABLE metadata_overrides ADD COLUMN detached_at TEXT;  -- NULL = attached
@@ -279,7 +283,7 @@ that is the only condition under which C beats B today.
    - `pub(crate) async fn delete_overrides_for_uuids(tx, uuids: &[String]) -> Result<(), sqlx::Error>`
      — chunked at 500, `DELETE FROM metadata_overrides WHERE book_uuid IN (...)`.
    - `pub async fn reconcile_orphan_overrides(pool, grace_secs) -> Result<u64, MetadataOverridesError>`
-     — SELECT orphans (predicate above + `updated_at < datetime('now', ?-grace)`),
+     — SELECT orphans (predicate above + `updated_at < datetime('now', '-' || ? || ' days')`),
      `delete_overrides_for_uuids`, defensive `delete_override_cover` per uuid
      off-runtime via `spawn_blocking` (mirror `settings.rs:80-85`). Reuse
      `MetadataOverridesError::Db`.
@@ -299,7 +303,7 @@ that is the only condition under which C beats B today.
 **Option C (only if chosen): one append-only migration.**
 
 ```sql
--- db/migrations/0019_metadata_overrides_detached.sql
+-- db/migrations/NNNN_metadata_overrides_detached.sql
 -- Soft-detach marker for override rows whose book has disappeared.
 -- NULL = attached (the default for every existing row, so no backfill).
 -- Set on first reconcile that finds no books/merged_uuids match; cleared
@@ -331,7 +335,7 @@ From the scout spec, for Option B:
 | `db/src/metadata_overrides/tests.rs` | new reconcile + `delete_overrides_for_uuids` tests |
 | `db/src/settings.rs` (tests mod) | prune-deletes-override-rows test |
 
-For Option C additionally: `db/migrations/0019_metadata_overrides_detached.sql`;
+For Option C additionally: `db/migrations/NNNN_metadata_overrides_detached.sql`;
 `detached_at IS NULL` predicate on `db/src/browse.rs:52,150,175` and
 `db/src/discovery/authors.rs:67`; clear-on-relink write on the reindex path.
 
@@ -382,7 +386,7 @@ rows.
 - **Forward-only, fix-forward.** Per rule 06 there are no down-migrations.
   Option B has no migration to roll back at all. Option C's `ADD COLUMN` is
   irreversible in place; a regret is corrected by a *new* migration, never
-  by editing `0019`.
+  by editing the `NNNN` one once it has run.
 - **Data-loss surface (the real risk).** Option B hard-deletes. The only
   guard against a wrong delete is the grace window + the `merged_uuids`
   arm. The acute failure is the **F2 interaction**: if `stable_uuid`

@@ -1,4 +1,4 @@
-# Durable book identity — re-anchor `stable_uuid` off path
+# F2 — Durable book identity: re-anchor `stable_uuid` off path
 
 Status: Proposed — deferred from db.md F2, awaiting decision.
 
@@ -198,11 +198,12 @@ take that risk to unblock F3.2.
 
 ## Migration plan (SKETCH — not to be applied yet)
 
-Next free number is `0019` (highest applied is
-`0018_multiformat_book_files.sql`). Forward-only, append-only per rule 06.
+The migration number (`NNNN`) is allocated at implementation time — the next
+free number after the highest applied at that point (`0018_multiformat_book_files.sql`
+is the latest as of writing). Forward-only, append-only per rule 06.
 
 ```sql
--- 0019_book_identity_uuid.sql  (SKETCH — additive identity model)
+-- NNNN_book_identity_uuid.sql  (SKETCH — additive identity model)
 ALTER TABLE books ADD COLUMN identity_uuid TEXT;   -- nullable; backfilled at boot
 ALTER TABLE books ADD COLUMN content_hash  TEXT;   -- SHA-256 hex of file bytes
 
@@ -237,7 +238,8 @@ pub async fn backfill_identity_uuids(pool: &SqlitePool) -> Result<(), sqlx::Erro
 Covers are a rebuildable cache, so a missed rename regenerates on the next
 reindex — the rename is best-effort, like the existing `#94` purge. A
 **later** migration (`0020+`) can re-key `merged_uuids` / `metadata_overrides`
-PKs to `identity_uuid` once it is the canonical key; do not do that in `0019`.
+PKs to `identity_uuid` once it is the canonical key; do not do that in this
+`NNNN` migration.
 
 ## Affected code
 
@@ -264,7 +266,7 @@ From the scout spec (current symbols, not line anchors — anchors rot):
 - `db/src/books/projection.rs` — `row_to_ebook` surfaces the persisted
   `identity_uuid` as `unique_identifier` instead of echoing `books.uuid`.
 - `db/src/audiobook/group.rs` — content-hash anchor (no `dc:identifier`).
-- `db/migrations/0019_book_identity_uuid.sql` — additive columns + partial
+- `db/migrations/NNNN_book_identity_uuid.sql` — additive columns + partial
   unique index.
 - `db/src/normalize.rs` (or new `identity.rs`) — `backfill_identity_uuids`,
   wired into `db/src/pool.rs` `init_db`.
@@ -291,7 +293,7 @@ the durable anchor lands.
 - `db/src/books/tests.rs` — `resolve_book_id_by_uuid` resolves by
   `identity_uuid`, by legacy path-uuid, and by `merged_uuids` (one happy per
   branch).
-- Backfill test — seed a row with NULL `identity_uuid` (simulate pre-0019),
+- Backfill test — seed a row with NULL `identity_uuid` (simulate pre-migration),
   run `backfill_identity_uuids` twice, assert it populates once and is a
   no-op the second time (idempotent, like the `backfill_norm_columns` tests).
 - Reconcile test — detach a `metadata_overrides` row via a root change, run
@@ -299,14 +301,14 @@ the durable anchor lands.
   `identity_uuid`.
 - Audiobook test — content-hash anchor stable across a root change for an MP3
   group (`db/src/audiobook` tests).
-- Migration test — assert `0019` adds the column + partial unique index and
-  that a duplicate `identity_uuid` is rejected. The `MIGRATOR` runs `0019`
-  in every existing memory-DB test, so the migration is already exercised.
+- Migration test — assert the new migration adds the column + partial unique
+  index and that a duplicate `identity_uuid` is rejected. The `MIGRATOR` runs
+  it in every existing memory-DB test, so the migration is already exercised.
 
 ## Risks & rollback
 
-- **Forward-only / fix-forward.** No down-migrations (rule 06). A bug in
-  `0019` is corrected by `0020`, never by editing `0019`.
+- **Forward-only / fix-forward.** No down-migrations (rule 06). A bug in the
+  new migration is corrected by a later one, never by editing it once applied.
 - **Data-loss surfaces.** The reconcile pass deletes/relinks override and
   merged rows; a wrong `(author, title)` match could *mis*-link an override
   to the wrong book. Mitigate with exact-normalized matching only (reuse
@@ -332,8 +334,9 @@ F2 sits in a tight chain with F1 and F10:
   the five user-data tables still key on numeric `book_id`, so today only
   `metadata_overrides` + `merged_uuids` detach on a re-key. F1 must move user
   data to `book_uuid` soft-refs first; only *then* does a stable uuid matter
-  for ratings/progress. Land **F1 then F2**, or as a stacked pair sharing
-  migrations `0019`/`0020`. F2 without F1 fixes the identity but leaves user
+  for ratings/progress. Land **F1 then F2**, or as a stacked pair sharing two
+  adjacent migration numbers (allocated at implementation time). F2 without F1
+  fixes the identity but leaves user
   data cascade-deleting; F1 without F2 makes the soft-ref contract a lie on
   path change. Both are needed before F3.2.
 - **F10 (override GC / reconcile).** The reconcile/relink pass this doc adds
@@ -344,7 +347,7 @@ F2 sits in a tight chain with F1 and F10:
 - **Audiobook anchor (decision 3)** can land in the same change or a fast
   follow; it is independent of the ebook `dc:identifier` path.
 
-Must land first: F1's table moves (or at least its `0019` migration shape)
+Must land first: F1's table moves (or at least its migration shape)
 so F2 and F1 don't fight over the migration number. Confirm whether they
 stack on one migration or two before authoring either.
 

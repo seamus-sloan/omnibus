@@ -123,7 +123,8 @@ keep the resolver (guard stays) but store and key on `book_uuid` instead
 of resolving to `id`. No boot GC: orphans linger and auto-relink, exactly
 like `metadata_overrides`.
 
-**Migration shape.** One `0019_user_data_soft_ref.sql`, five table
+**Migration shape.** One `NNNN_user_data_soft_ref.sql` (number allocated at
+implementation time), five table
 recreates. Backfill is the `INSERT … SELECT … JOIN books` itself — no
 boot-time pass needed, because every existing row is already
 uuid-addressable through its current `book_id`. Rows whose book is already
@@ -148,7 +149,7 @@ any future `LEFT JOIN` against these tables (the same drag F10 notes for
 `normalize::backfill_norm_columns`) that, on every boot, deletes user rows
 whose `book_uuid` matches neither `books.uuid` nor `merged_uuids`.
 
-**Migration shape.** Identical `0019` migration as A, plus a new function
+**Migration shape.** Identical `NNNN` migration as A, plus a new function
 in `db/src/normalize.rs` (or a sibling reconcile module) called from
 `db/src/pool.rs` right after `backfill_norm_columns` at line 56.
 
@@ -172,7 +173,7 @@ once it runs.
 guard so `upsert_progress`/`create_highlight` accept any uuid. Rows for
 not-yet-indexed books start detached and bind when the book appears.
 
-**Migration shape.** Same `0019`. Code change is *removing* the resolver
+**Migration shape.** Same `NNNN`. Code change is *removing* the resolver
 call and the `BookNotFound` variant from the write paths.
 
 **Blast radius.** Touches the public error contract: `ProgressError` and
@@ -225,8 +226,9 @@ data-loss event. Land A before F3.2 populates these tables.
 
 > **Sketch only — not to be applied until the decision is ratified.**
 
-`db/migrations/0019_user_data_soft_ref.sql`. Next zero-padded number after
-`0018_multiformat_book_files.sql`. SQLite cannot drop a cascade FK or
+`db/migrations/NNNN_user_data_soft_ref.sql` — the next zero-padded number is
+allocated at implementation time (`0018_multiformat_book_files.sql` is the
+latest applied as of writing). SQLite cannot drop a cascade FK or
 change a column in place, so each of the five tables is a full recreate.
 `PRAGMA foreign_keys` is per-connection (ON at runtime); DDL inside the
 migration runs fine. The backfill is the `INSERT … SELECT … JOIN books`
@@ -282,7 +284,7 @@ recommended scope.)
 
 From the scout spec, scoped to Option A:
 
-- **`db/migrations/0019_user_data_soft_ref.sql`** *(new)* — table-recreate
+- **`db/migrations/NNNN_user_data_soft_ref.sql`** *(new)* — table-recreate
   all five tables to `book_uuid TEXT NOT NULL` soft-ref; backfill via
   `INSERT … SELECT JOIN books`; recreate every index/CHECK/UNIQUE;
   preserve the `device_id` FK on the two session tables.
@@ -337,8 +339,8 @@ Run: `cargo test -p omnibus-db`, then `cargo test -p omnibus`, then
 
 ## Risks & rollback
 
-- **Forward-only, fix-forward.** Migration `0019` is frozen once it runs
-  anywhere (rule 06); any correction is a `0020`. There are no
+- **Forward-only, fix-forward.** The new migration is frozen once it runs
+  anywhere (rule 06); any correction is a later migration. There are no
   down-migrations.
 - **Backfill drops already-orphaned rows.** The `INSERT … SELECT JOIN
   books` does not carry rows whose `book_id` no longer joins to a `books`
@@ -388,9 +390,10 @@ The F1 ↔ F2 ↔ F10 chain:
    `books.uuid` and `merged_uuids` for N boots? A timestamp column? This is
    F10's to answer; flagged here because Decision 1b would force it early.
 2. **F2 anchor for backfill.** If F2 re-keys uuids in the same train, does
-   `0019`'s backfill run before or after the re-key migration? They must be
-   ordered so the `JOIN books` sees post-re-key uuids — likely F2's re-key
-   migration is a lower number than `0019`, but confirm during sequencing.
+   this migration's backfill run before or after the re-key migration? They
+   must be ordered so the `JOIN books` sees post-re-key uuids — likely F2's
+   re-key migration takes a lower number than this one, but confirm during
+   sequencing.
 3. **Override-cover orphans (F10 territory).** `metadata_overrides`
    orphans also leak `override-<uuid>.<ext>` cover files. The five
    user-data tables have no file side-effects, so this is not an F1

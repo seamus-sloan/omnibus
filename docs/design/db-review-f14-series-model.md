@@ -234,11 +234,12 @@ Pick A now; gate any future B on this doc plus a concrete multi-series feature.
 ## Migration plan
 
 > **Sketch only — not to be applied.** DDL below is illustrative and lands only
-> after the decision is recorded. Confirm `0019` is still the next free number
-> at authoring time (highest on disk is currently `0018`). Forward-only; never
-> edit an applied migration ([rule 06](../../.claude/rules/06-migrations.md)).
+> after the decision is recorded. The migration number (`NNNN`) is allocated at
+> authoring time — the next free number then (highest on disk is currently
+> `0018`). Forward-only; never edit an applied migration
+> ([rule 06](../../.claude/rules/06-migrations.md)).
 
-### Option A — `db/migrations/0019_series_link_unique.sql`
+### Option A — `db/migrations/NNNN_series_link_unique.sql`
 
 ```sql
 -- F14: commit to single-series. Add UNIQUE(book) to books_series_link so the
@@ -286,7 +287,7 @@ Notes:
   ([projection.rs:55-63](../../db/src/books/projection.rs)) documenting why
   `LIMIT 1` is now provably safe.
 
-### Option B — `db/migrations/0019_series_index_on_link.sql` (sketch, not recommended)
+### Option B — `db/migrations/NNNN_series_index_on_link.sql` (sketch, not recommended)
 
 ```sql
 -- F14 (multi-series): move position onto the membership row.
@@ -322,7 +323,7 @@ From the scout spec, by option.
 
 | File | Symbol | Change |
 |---|---|---|
-| `db/migrations/0019_series_link_unique.sql` | new file | table-recreate adding `UNIQUE(book)` + collapse INSERT |
+| `db/migrations/NNNN_series_link_unique.sql` | new file | table-recreate adding `UNIQUE(book)` + collapse INSERT |
 | `db/src/books/projection.rs` | `BOOK_COLUMNS` (55-63) | optional invariant comment; **no behaviour change** |
 | `db/src/sync/books.rs` | `insert_metadata_links` (665-672) | **none** — existing `INSERT OR IGNORE` already compatible |
 | `db/src/sync/tests.rs` | new tests | UNIQUE-rejection + reindex-idempotence |
@@ -331,7 +332,7 @@ From the scout spec, by option.
 
 | File | Symbol |
 |---|---|
-| `db/migrations/0019_series_index_on_link.sql` | new file — add `series_index` to link table + recreate indexes |
+| `db/migrations/NNNN_series_index_on_link.sql` | new file — add `series_index` to link table + recreate indexes |
 | `shared/src/ebook/metadata.rs` | `EbookMetadata.series` / `series_index` / `series_id` (61-66) → multi-membership field |
 | `db/src/ebook/parse.rs` | `collect_series` (≈159-161) → N memberships |
 | `db/src/sync/books.rs` | `insert_metadata_links` (665-672); `update_book_row` / `insert_book_row` `series_index` binds |
@@ -346,8 +347,8 @@ From the scout spec, by option.
 
 Per [rule 03](../../.claude/rules/03-unit-testing.md): sibling `<mod>/tests.rs`,
 `sqlite::memory:` via `init_db("sqlite::memory:")` (which runs every migration,
-so `0019` is smoke-tested by the whole suite), happy path + one test per failure
-variant. Names in the long-sentence `fn_under_test_does_X_when_Y` style.
+so the new migration is smoke-tested by the whole suite), happy path + one test
+per failure variant. Names in the long-sentence `fn_under_test_does_X_when_Y` style.
 
 For **Option A**, in `db/src/sync/tests.rs` (the sibling file already exists):
 
@@ -357,8 +358,8 @@ For **Option A**, in `db/src/sync/tests.rs` (the sibling file already exists):
    `INSERT INTO books_series_link (book, series)` for a *second, distinct*
    series id and assert it returns a `UNIQUE`-constraint `sqlx::Error`. Raw
    INSERT (not the write path, which uses `INSERT OR IGNORE` and would swallow
-   the conflict) is what proves the constraint exists. **On the pre-0019 schema
-   this insert succeeds** — that's the regression guard.
+   the conflict) is what proves the constraint exists. **On the pre-migration
+   schema this insert succeeds** — that's the regression guard.
 2. `series_link_unique_is_idempotent_for_reindex`: run the book replace/sync
    path twice over the same fixture and assert exactly **one**
    `books_series_link` row per book — guards that
@@ -377,8 +378,8 @@ the wire round-trips a `Vec`. Out of scope here — it ships with B's own plan.
 
 ## Risks & rollback
 
-- **Forward-only, fix-forward.** There are no down-migrations. A bad `0019` is
-  corrected by a *new* `0020`, never by editing the applied file (rule 06's
+- **Forward-only, fix-forward.** There are no down-migrations. A bad migration is
+  corrected by a *new* one, never by editing the applied file (rule 06's
   checksum mismatch fails startup otherwise).
 - **Option A data-loss surface (currently empty).** The collapse INSERT keeps
   `MIN(series)` per book. On any DB where a book genuinely has two series rows it
