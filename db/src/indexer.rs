@@ -211,6 +211,18 @@ pub fn diff_library(
 /// elapses). Per-book parse failures are *not* fatal; they land in the
 /// DB as rows with `error = Some(_)`, same as before.
 pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()> {
+    reindex_with_progress(pool, library_path, |_, _| {}).await
+}
+
+/// [`reindex`] variant that calls `on_progress(processed, total)` after
+/// each per-book write inside `sync_books`. Used by
+/// [`crate::worker::Worker`] to report determinate `processed / total`
+/// counts to the UI indicator.
+pub async fn reindex_with_progress(
+    pool: &SqlitePool,
+    library_path: &str,
+    on_progress: impl FnMut(u32, u32),
+) -> anyhow::Result<()> {
     let path_for_scan = library_path.to_owned();
     let library_key_for_scan = library_path.to_owned();
     let stat = tokio::task::spawn_blocking(move || {
@@ -256,7 +268,7 @@ pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()
         removed_uuids: diff.removed,
         backfill: diff.backfill,
     };
-    sync::sync_books(pool, library_path, plan).await?;
+    sync::sync_books_with_progress(pool, library_path, plan, on_progress).await?;
     Ok(())
 }
 
@@ -264,6 +276,18 @@ pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()
 /// reads multi-part tags, then calls [`sync::sync_audiobooks`] to write
 /// `book_file_parts` rows.
 pub async fn reindex_audiobooks(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()> {
+    reindex_audiobooks_with_progress(pool, library_path, |_, _| {}).await
+}
+
+/// [`reindex_audiobooks`] variant that calls `on_progress(processed,
+/// total)` after each per-book write inside `sync_audiobooks`. Used by
+/// [`crate::worker::Worker`] to report determinate `processed / total`
+/// counts to the UI indicator.
+pub async fn reindex_audiobooks_with_progress(
+    pool: &SqlitePool,
+    library_path: &str,
+    on_progress: impl FnMut(u32, u32),
+) -> anyhow::Result<()> {
     // Phase A: stat every audio file.
     let path_for_scan = library_path.to_owned();
     let library_key = library_path.to_owned();
@@ -341,7 +365,7 @@ pub async fn reindex_audiobooks(pool: &SqlitePool, library_path: &str) -> anyhow
         removed_uuids: diff.removed,
         backfill: diff.backfill,
     };
-    sync::sync_audiobooks(pool, library_path, plan).await?;
+    sync::sync_audiobooks_with_progress(pool, library_path, plan, on_progress).await?;
     Ok(())
 }
 

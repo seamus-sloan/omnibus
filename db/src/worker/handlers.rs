@@ -11,13 +11,29 @@ impl Worker {
     pub(super) async fn execute(self: &Arc<Self>, task: Task, id: TaskId) -> TaskOutcome {
         match task {
             Task::Scan { library_path } => {
-                match crate::indexer::reindex(&self.pool, &library_path).await {
+                match crate::indexer::reindex_with_progress(
+                    &self.pool,
+                    &library_path,
+                    |processed, total| {
+                        self.report_progress(id, processed, Some(total));
+                    },
+                )
+                .await
+                {
                     Ok(()) => TaskOutcome::Ok,
                     Err(e) => TaskOutcome::Err(e.to_string()),
                 }
             }
             Task::ScanAudiobooks { library_path } => {
-                match crate::indexer::reindex_audiobooks(&self.pool, &library_path).await {
+                match crate::indexer::reindex_audiobooks_with_progress(
+                    &self.pool,
+                    &library_path,
+                    |processed, total| {
+                        self.report_progress(id, processed, Some(total));
+                    },
+                )
+                .await
+                {
                     Ok(()) => {
                         // Post a follow-up chapter backfill task now that the
                         // scan has populated book_file_parts rows. Same resource

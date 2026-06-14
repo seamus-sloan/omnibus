@@ -86,6 +86,28 @@ pub async fn sync_books(
     library_path: &str,
     plan: SyncPlan,
 ) -> Result<(), SyncError> {
+    sync_books_with_progress(pool, library_path, plan, |_, _| {}).await
+}
+
+/// [`sync_books`] variant that calls `on_progress(processed, total)`
+/// after each per-book write so the worker can surface a determinate
+/// progress bar. `total` is the count of buckets that loop per book —
+/// Changed + New. Removed and Backfill are batched and not reported as
+/// per-book progress (they're invisible to the user-facing "Scanning"
+/// step).
+pub async fn sync_books_with_progress(
+    pool: &SqlitePool,
+    library_path: &str,
+    plan: SyncPlan,
+    mut on_progress: impl FnMut(u32, u32),
+) -> Result<(), SyncError> {
+    let total: u32 = (plan.changed_books.len() + plan.new_books.len())
+        .try_into()
+        .unwrap_or(u32::MAX);
+    // Emit an initial (0, total) tick so the UI flips from indeterminate
+    // spinner to determinate bar before the first per-book write lands.
+    on_progress(0, total);
+
     let mut tx = pool.begin().await?;
     let library_id = upsert_library(&mut tx, library_path).await?;
 
@@ -94,9 +116,23 @@ pub async fn sync_books(
     // row — drop their `book_files` row + `merged_uuids` entry instead
     // (the target book survives, possibly fileless).
     attach::remove_attached_files(&mut tx, &plan.removed_uuids).await?;
-    let changed_covers =
-        sync_changed(&mut tx, library_id, library_path, &plan.changed_books).await?;
-    let new_covers = sync_new(&mut tx, library_id, library_path, &plan.new_books).await?;
+    let mut processed: u32 = 0;
+    let changed_covers = sync_changed(
+        &mut tx,
+        library_id,
+        library_path,
+        &plan.changed_books,
+        || {
+            processed = processed.saturating_add(1);
+            on_progress(processed, total);
+        },
+    )
+    .await?;
+    let new_covers = sync_new(&mut tx, library_id, library_path, &plan.new_books, || {
+        processed = processed.saturating_add(1);
+        on_progress(processed, total);
+    })
+    .await?;
     backfill_stat_chunks(&mut tx, library_id, &plan.backfill).await?;
     stamp_last_indexed(&mut tx, library_id).await?;
 
@@ -182,6 +218,7 @@ async fn sync_changed(
     library_id: i64,
     library_path: &str,
     changed_books: &[crate::ebook::IndexedBook],
+    mut on_book_written: impl FnMut(),
 ) -> Result<Vec<(String, String, Vec<u8>)>, sqlx::Error> {
     if changed_books.is_empty() {
         return Ok(Vec::new());
@@ -215,51 +252,76 @@ async fn sync_changed(
     // only invariant any external caller depends on.
     let mut changed_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
     for (b, uuid) in changed_books.iter().zip(all_uuids.iter()) {
-        let Some(&book_id) = id_map.get(uuid) else {
-            // No books row with this uuid. Either the file is an
-            // attachment on another book (its uuid lives in
-            // merged_uuids — refresh that book_files row, leaving the
-            // target book's metadata alone) …
-            if let Some((target_id, format)) = attach::attach_target_by_uuid(tx, uuid).await? {
-                attach_ebook_file(
-                    tx,
-                    target_id,
-                    &format,
-                    library_path,
-                    uuid,
-                    b,
-                    &mut changed_covers,
-                )
-                .await?;
-                continue;
-            }
-            // … or a TOCTOU: the diff said this uuid existed in the DB,
-            // but a concurrent process removed it between Phase A and
-            // the write. Promote to a New insert so the file still gets
-            // indexed.
-            let inserted = insert_book_row(tx, library_id, library_path, b).await?;
-            insert_metadata_links(tx, inserted.book_id, &b.metadata).await?;
-            // Source the FTS row from the rows we just wrote via the door.
-            upsert_fts(tx, inserted.book_id).await?;
-            if let Some((mime, bytes)) = &b.cover {
-                changed_covers.push((inserted.uuid, mime.clone(), bytes.clone()));
-            }
-            continue;
-        };
-
-        update_book_row(tx, book_id, b).await?;
-        let (_, _, file_ext) = split_filename(&b.metadata.filename);
-        wipe_per_book_link_rows(tx, book_id, &file_ext).await?;
-        insert_book_file_row(tx, book_id, b).await?;
-        insert_metadata_links(tx, book_id, &b.metadata).await?;
-        // Refresh the FTS row from the freshly-rewritten links via the door.
-        upsert_fts(tx, book_id).await?;
-
-        if let Some((mime, bytes)) = &b.cover {
-            changed_covers.push((uuid.clone(), mime.clone(), bytes.clone()));
-        }
+        sync_changed_one(
+            tx,
+            library_id,
+            library_path,
+            b,
+            uuid,
+            &id_map,
+            &mut changed_covers,
+        )
+        .await?;
+        on_book_written();
     }
     Ok(changed_covers)
+}
+
+/// Apply a single Changed entry — extracted so `sync_changed`'s outer
+/// loop stays a clean per-book progress tick.
+async fn sync_changed_one(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    library_id: i64,
+    library_path: &str,
+    b: &crate::ebook::IndexedBook,
+    uuid: &str,
+    id_map: &HashMap<String, i64>,
+    changed_covers: &mut Vec<(String, String, Vec<u8>)>,
+) -> Result<(), sqlx::Error> {
+    let Some(&book_id) = id_map.get(uuid) else {
+        // No books row with this uuid. Either the file is an
+        // attachment on another book (its uuid lives in
+        // merged_uuids — refresh that book_files row, leaving the
+        // target book's metadata alone) …
+        if let Some((target_id, format)) = attach::attach_target_by_uuid(tx, uuid).await? {
+            attach_ebook_file(
+                tx,
+                target_id,
+                &format,
+                library_path,
+                uuid,
+                b,
+                changed_covers,
+            )
+            .await?;
+            return Ok(());
+        }
+        // … or a TOCTOU: the diff said this uuid existed in the DB,
+        // but a concurrent process removed it between Phase A and
+        // the write. Promote to a New insert so the file still gets
+        // indexed.
+        let inserted = insert_book_row(tx, library_id, library_path, b).await?;
+        insert_metadata_links(tx, inserted.book_id, &b.metadata).await?;
+        // Source the FTS row from the rows we just wrote via the door.
+        upsert_fts(tx, inserted.book_id).await?;
+        if let Some((mime, bytes)) = &b.cover {
+            changed_covers.push((inserted.uuid, mime.clone(), bytes.clone()));
+        }
+        return Ok(());
+    };
+
+    update_book_row(tx, book_id, b).await?;
+    let (_, _, file_ext) = split_filename(&b.metadata.filename);
+    wipe_per_book_link_rows(tx, book_id, &file_ext).await?;
+    insert_book_file_row(tx, book_id, b).await?;
+    insert_metadata_links(tx, book_id, &b.metadata).await?;
+    // Refresh the FTS row from the freshly-rewritten links via the door.
+    upsert_fts(tx, book_id).await?;
+
+    if let Some((mime, bytes)) = &b.cover {
+        changed_covers.push((uuid.to_string(), mime.clone(), bytes.clone()));
+    }
+    Ok(())
 }
 
 /// Insert a batch of New entries: canonical `books` + `book_files` row,
@@ -269,10 +331,12 @@ async fn sync_new(
     library_id: i64,
     library_path: &str,
     new_books: &[crate::ebook::IndexedBook],
+    mut on_book_written: impl FnMut(),
 ) -> Result<Vec<(String, String, Vec<u8>)>, sqlx::Error> {
     let mut new_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
     for b in new_books {
         if try_attach_new_ebook(tx, library_path, b, &mut new_covers).await? {
+            on_book_written();
             continue;
         }
         let inserted = insert_book_row(tx, library_id, library_path, b).await?;
@@ -281,6 +345,7 @@ async fn sync_new(
         if let Some((mime, bytes)) = &b.cover {
             new_covers.push((inserted.uuid, mime.clone(), bytes.clone()));
         }
+        on_book_written();
     }
     Ok(new_covers)
 }
