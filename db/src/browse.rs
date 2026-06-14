@@ -48,7 +48,7 @@ pub async fn list_authors(
         SELECT a.id, a.name, a.sort,
                (SELECT COUNT(*)
                   FROM books b
-                  JOIN libraries l2 ON l2.id = b.library_id
+                  JOIN scan_roots l2 ON l2.id = b.library_id
                   LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
                  WHERE l2.path IN (SELECT p FROM lib_paths)
                    AND CASE
@@ -67,7 +67,7 @@ pub async fn list_authors(
                (SELECT b2.accent_color
                   FROM books_authors_link bal2
                   JOIN books b2 ON b2.id = bal2.book
-                  JOIN libraries l2 ON l2.id = b2.library_id
+                  JOIN scan_roots l2 ON l2.id = b2.library_id
                  WHERE bal2.author = a.id
                    AND l2.path IN (SELECT p FROM lib_paths)
                    AND b2.accent_color IS NOT NULL
@@ -83,7 +83,7 @@ pub async fn list_authors(
         WHERE EXISTS (
             SELECT 1 FROM books_authors_link bal
               JOIN books b ON b.id = bal.book
-              JOIN libraries l ON l.id = b.library_id
+              JOIN scan_roots l ON l.id = b.library_id
              WHERE bal.author = a.id
                AND l.path IN (SELECT p FROM lib_paths)
           )
@@ -146,7 +146,7 @@ fn series_index_sql(n: usize) -> String {
         SELECT s.id, s.name, s.sort,
                (SELECT COUNT(*)
                   FROM books b
-                  JOIN libraries l2 ON l2.id = b.library_id
+                  JOIN scan_roots l2 ON l2.id = b.library_id
                   LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
                  WHERE l2.path IN (SELECT p FROM lib_paths)
                    AND CASE
@@ -171,7 +171,7 @@ fn series_index_sql(n: usize) -> String {
                   END
                 FROM books_series_link bsl2
                   JOIN books b2 ON b2.id = bsl2.book
-                  JOIN libraries l2 ON l2.id = b2.library_id
+                  JOIN scan_roots l2 ON l2.id = b2.library_id
                   LEFT JOIN metadata_overrides mo2 ON mo2.book_uuid = b2.uuid
                  WHERE bsl2.series = s.id
                    AND l2.path IN (SELECT p FROM lib_paths)
@@ -180,7 +180,7 @@ fn series_index_sql(n: usize) -> String {
                (SELECT b3.accent_color
                   FROM books_series_link bsl3
                   JOIN books b3 ON b3.id = bsl3.book
-                  JOIN libraries l3 ON l3.id = b3.library_id
+                  JOIN scan_roots l3 ON l3.id = b3.library_id
                  WHERE bsl3.series = s.id
                    AND l3.path IN (SELECT p FROM lib_paths)
                    AND b3.accent_color IS NOT NULL
@@ -190,7 +190,7 @@ fn series_index_sql(n: usize) -> String {
         WHERE EXISTS (
             SELECT 1 FROM books_series_link bsl
               JOIN books b ON b.id = bsl.book
-              JOIN libraries l ON l.id = b.library_id
+              JOIN scan_roots l ON l.id = b.library_id
              WHERE bsl.series = s.id
                AND l.path IN (SELECT p FROM lib_paths)
           )

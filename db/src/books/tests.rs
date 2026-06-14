@@ -836,7 +836,7 @@ async fn get_book_handles_book_with_no_relations() {
     // a populated `EbookMetadata` with empty vecs and an empty filename
     // rather than erroring out on the missing data.
     let pool = init_db("sqlite::memory:").await.unwrap();
-    let lib_res = sqlx::query("INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib')")
+    let lib_res = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib')")
         .execute(&pool)
         .await
         .unwrap();
@@ -1594,7 +1594,7 @@ async fn search_books_returns_empty_for_unknown_library() {
 #[tokio::test]
 async fn book_file_path_returns_absolute_path_for_epub() {
     let pool = init_db("sqlite::memory:").await.unwrap();
-    let lib_id = sqlx::query("INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib')")
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib')")
         .execute(&pool)
         .await
         .unwrap()
@@ -1637,7 +1637,7 @@ async fn book_file_path_returns_none_for_missing_book() {
 #[tokio::test]
 async fn book_file_path_returns_none_when_no_file_row_for_format() {
     let pool = init_db("sqlite::memory:").await.unwrap();
-    let lib_id = sqlx::query("INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib')")
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib')")
         .execute(&pool)
         .await
         .unwrap()
@@ -1669,7 +1669,7 @@ async fn list_indexed_rows_for_formats_returns_only_matching_format_rows() {
     // the same `libraries.path` string only via the second seed adding
     // its own row, so we instead insert both books under the same id.
     let lib_id: i64 = sqlx::query_scalar(
-        "INSERT INTO libraries (path, display_name) VALUES ('/shared', '/shared') RETURNING id",
+        "INSERT INTO scan_roots (path, display_name) VALUES ('/shared', '/shared') RETURNING id",
     )
     .fetch_one(&pool)
     .await
@@ -1723,7 +1723,7 @@ async fn list_indexed_rows_for_formats_returns_empty_for_empty_allow_list() {
     // every row (which would re-introduce the #328 bug).
     let pool = init_db("sqlite::memory:").await.unwrap();
     let lib_id: i64 = sqlx::query_scalar(
-        "INSERT INTO libraries (path, display_name) VALUES ('/lib', '/lib') RETURNING id",
+        "INSERT INTO scan_roots (path, display_name) VALUES ('/lib', '/lib') RETURNING id",
     )
     .fetch_one(&pool)
     .await

@@ -45,7 +45,7 @@ pub async fn search_series(
           SELECT bsl.series AS series_id, NULL AS series_name, bsl.book AS book_id
             FROM books_series_link bsl
             JOIN books b ON b.id = bsl.book
-            JOIN libraries l2 ON l2.id = b.library_id
+            JOIN scan_roots l2 ON l2.id = b.library_id
             LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
            WHERE l2.path = ?1
              AND (mo.book_uuid IS NULL
@@ -55,7 +55,7 @@ pub async fn search_series(
                  json_extract(mo.overrides, '$.series') AS series_name,
                  b.id AS book_id
             FROM books b
-            JOIN libraries l2 ON l2.id = b.library_id
+            JOIN scan_roots l2 ON l2.id = b.library_id
             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
            WHERE l2.path = ?1
              AND json_type(mo.overrides, '$.series') IS NOT NULL
@@ -75,7 +75,7 @@ pub async fn search_series(
              END
            FROM books_series_link bsl2
              JOIN books b2 ON b2.id = bsl2.book
-             JOIN libraries l2 ON l2.id = b2.library_id
+             JOIN scan_roots l2 ON l2.id = b2.library_id
              LEFT JOIN metadata_overrides mo2 ON mo2.book_uuid = b2.uuid
             WHERE bsl2.series = s.id AND l2.path = ?1
             ORDER BY b2.sort, b2.id LIMIT 1) AS author_display
@@ -84,7 +84,7 @@ pub async fn search_series(
           AND EXISTS (
             SELECT 1 FROM books_series_link bsl
               JOIN books b ON b.id = bsl.book
-              JOIN libraries l ON l.id = b.library_id
+              JOIN scan_roots l ON l.id = b.library_id
              WHERE bsl.series = s.id AND l.path = ?1
           )
         ORDER BY book_count DESC, s.name

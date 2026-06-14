@@ -195,11 +195,11 @@ impl Drop for CoversTempDir {
 /// need rows to exist (e.g. response-cap tests) avoid the multi-second
 /// cost of running the full pipeline.
 pub async fn seed_minimal_books(pool: &SqlitePool, count: i64) {
-    sqlx::query("INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib')")
+    sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib')")
         .execute(pool)
         .await
         .unwrap();
-    let lib_id: i64 = sqlx::query_scalar("SELECT id FROM libraries WHERE path = '/lib'")
+    let lib_id: i64 = sqlx::query_scalar("SELECT id FROM scan_roots WHERE path = '/lib'")
         .fetch_one(pool)
         .await
         .unwrap();
@@ -393,11 +393,11 @@ pub async fn series_id_by_name(pool: &SqlitePool, name: &str) -> i64 {
 /// depend on link rows existing — keeping the test fast even past the
 /// 1k cap. Returns `(author_id, series_id)`.
 pub async fn seed_books_for_one_author_and_series(pool: &SqlitePool, count: i64) -> (i64, i64) {
-    sqlx::query("INSERT INTO libraries (path, display_name) VALUES ('/lib', 'lib')")
+    sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib')")
         .execute(pool)
         .await
         .unwrap();
-    let lib_id: i64 = sqlx::query_scalar("SELECT id FROM libraries WHERE path = '/lib'")
+    let lib_id: i64 = sqlx::query_scalar("SELECT id FROM scan_roots WHERE path = '/lib'")
         .fetch_one(pool)
         .await
         .unwrap();

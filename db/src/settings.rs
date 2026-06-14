@@ -1,9 +1,8 @@
-//! Settings KV CRUD, library row upserts, and orphan-library pruning.
+//! Settings KV CRUD, scan-root row upserts, and orphan-scan-root pruning.
 //!
-//! The `settings` KV keys (`ebook_library_path` / `audiobook_library_path`)
-//! are read by the UI and translated into `libraries` rows by the indexer.
-//! Saving settings prunes any library whose path is no longer configured
-//! along with its books, FTS rows, and on-disk covers.
+//! `settings` KV keys (`ebook_library_path` / `audiobook_library_path`) are
+//! read by the UI and translated into `scan_roots` rows by the indexer; saving
+//! settings prunes any orphan root and its books, FTS rows, and on-disk covers.
 
 use std::path::Path;
 
@@ -45,7 +44,7 @@ pub async fn get_settings(pool: &SqlitePool) -> Result<Settings, SettingsError> 
 
 /// Persist library paths and reconcile dependent state in a single
 /// transaction: upserts each path into `settings`, prunes orphaned
-/// `libraries` rows (and their books / FTS rows via cascade), then deletes
+/// `scan_roots` rows (and their books / FTS rows via cascade), then deletes
 /// the matching cover files from disk *after* commit so filesystem
 /// side-effects don't run inside the DB transaction. Callers should kick
 /// off a reindex afterwards — this function does not touch the indexer.
@@ -86,10 +85,10 @@ pub async fn set_settings(pool: &SqlitePool, settings: &Settings) -> Result<(), 
     Ok(())
 }
 
-/// Delete every `libraries` row whose `path` is not in `keep`, along with
+/// Delete every `scan_roots` row whose `path` is not in `keep`, along with
 /// its books, dependent rows removed by book-level cascades, FTS rows, and
 /// on-disk cover files. Settings has at most one ebook and one audiobook
-/// path, so any library whose path isn't one of those is orphaned and must
+/// path, so any scan root whose path isn't one of those is orphaned and must
 /// go — otherwise switching the configured path leaves the old library's
 /// rows behind and `list_books` callers for the old path continue to see
 /// its data.
@@ -101,7 +100,7 @@ pub(crate) async fn prune_orphan_libraries(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     keep: &[Option<&str>],
 ) -> Result<Vec<String>, SettingsError> {
-    let orphans: Vec<(i64, String)> = sqlx::query_as("SELECT id, path FROM libraries")
+    let orphans: Vec<(i64, String)> = sqlx::query_as("SELECT id, path FROM scan_roots")
         .fetch_all(&mut **tx)
         .await?
         .into_iter()
@@ -151,12 +150,12 @@ pub(crate) async fn prune_orphan_libraries(
         }
         books_delete.execute(&mut **tx).await?;
 
-        let libraries_sql = format!("DELETE FROM libraries WHERE id IN ({placeholders})");
-        let mut libraries_delete = sqlx::query(&libraries_sql);
+        let scan_roots_sql = format!("DELETE FROM scan_roots WHERE id IN ({placeholders})");
+        let mut scan_roots_delete = sqlx::query(&scan_roots_sql);
         for id in chunk {
-            libraries_delete = libraries_delete.bind(id);
+            scan_roots_delete = scan_roots_delete.bind(id);
         }
-        libraries_delete.execute(&mut **tx).await?;
+        scan_roots_delete.execute(&mut **tx).await?;
     }
 
     Ok(orphan_uuids)
@@ -206,7 +205,7 @@ pub async fn seed_settings_from_env(pool: &SqlitePool) -> Result<(), SettingsErr
     Ok(())
 }
 
-/// Upsert a `libraries` row for `path` (display_name derived from basename).
+/// Upsert a `scan_roots` row for `path` (display_name derived from basename).
 /// Used by the indexer write path in `sync`.
 pub(crate) async fn upsert_library(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
@@ -218,14 +217,14 @@ pub(crate) async fn upsert_library(
         .unwrap_or(path)
         .to_string();
     sqlx::query(
-        "INSERT INTO libraries (path, display_name) VALUES (?, ?)
+        "INSERT INTO scan_roots (path, display_name) VALUES (?, ?)
          ON CONFLICT(path) DO UPDATE SET display_name = excluded.display_name",
     )
     .bind(path)
     .bind(&display_name)
     .execute(&mut **tx)
     .await?;
-    let id: i64 = sqlx::query_scalar("SELECT id FROM libraries WHERE path = ?")
+    let id: i64 = sqlx::query_scalar("SELECT id FROM scan_roots WHERE path = ?")
         .bind(path)
         .fetch_one(&mut **tx)
         .await?;
@@ -234,13 +233,13 @@ pub(crate) async fn upsert_library(
 
 /// Unix-seconds timestamp of the last successful index for `library_path`,
 /// or `None` if the library has never been indexed (or doesn't exist in the
-/// `libraries` table yet).
+/// `scan_roots` table yet).
 pub async fn last_indexed_at(
     pool: &SqlitePool,
     library_path: &str,
 ) -> Result<Option<i64>, SettingsError> {
     Ok(
-        sqlx::query_scalar::<_, Option<i64>>("SELECT last_indexed FROM libraries WHERE path = ?")
+        sqlx::query_scalar::<_, Option<i64>>("SELECT last_indexed FROM scan_roots WHERE path = ?")
             .bind(library_path)
             .fetch_optional(pool)
             .await?
