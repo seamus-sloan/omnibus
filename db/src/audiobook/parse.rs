@@ -145,18 +145,61 @@ pub fn parse_groups(
         .collect()
 }
 
+/// Per-part working record built during the tag-extraction phase of
+/// [`parse_one_group`]. Carries the fields needed to sort by
+/// (track_number, filename) and to derive book-level metadata before
+/// being projected into [`AudiobookPart`].
+struct PartWork {
+    sort_track: u32,
+    filename: String,
+    size_bytes: i64,
+    mtime_epoch: i64,
+    duration_seconds: f64,
+    meta: AudiobookMetadata,
+}
+
+/// Book-level fields derived from the sorted [`PartWork`] list.
+struct BookLevel {
+    title: String,
+    creator_name: Option<String>,
+    description: Option<String>,
+}
+
 /// Parse a single [`super::AudiobookGroup`] into an [`IndexedAudiobook`].
 fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> IndexedAudiobook {
-    // Per-part: (track_number_for_sort, filename, size_bytes, mtime_epoch, duration, metadata)
-    struct PartWork {
-        sort_track: u32,
-        filename: String,
-        size_bytes: i64,
-        mtime_epoch: i64,
-        duration_seconds: f64,
-        meta: AudiobookMetadata,
-    }
+    let (parts_work, first_cover) = extract_tags_and_metadata(&group, library_root);
+    let (book_level, parts) = build_parts_list(parts_work, &group.group_path);
+    let chapters = apply_chapters(&parts, library_root, &group.format);
 
+    let accent = first_cover
+        .as_ref()
+        .and_then(|(_mime, bytes)| extract_accent(bytes));
+
+    IndexedAudiobook {
+        uuid: group.uuid,
+        group_path: group.group_path,
+        format: group.format,
+        title: book_level.title,
+        creator_name: book_level.creator_name,
+        cover: first_cover,
+        accent,
+        parts,
+        chapters,
+        total_size_bytes: group.total_size_bytes,
+        max_mtime_epoch: group.max_mtime_epoch,
+        description: book_level.description,
+        error: None,
+    }
+}
+
+/// Read lofty tags + duration for every part of `group` and, in the
+/// same sweep, lift the first readable embedded cover. A per-part lofty
+/// failure logs a WARN and emits a [`PartWork`] with empty metadata and
+/// `duration = 0` so one corrupt file doesn't drop the whole group.
+fn extract_tags_and_metadata(
+    group: &super::AudiobookGroup,
+    library_root: &Path,
+) -> (Vec<PartWork>, Option<(String, Vec<u8>)>) {
     let mut parts_work: Vec<PartWork> = Vec::with_capacity(group.parts.len());
     let mut first_cover: Option<(String, Vec<u8>)> = None;
     let mut first_cover_fetched = false;
@@ -237,7 +280,16 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
         });
     }
 
-    // Sort by (track_number, filename) for stable playlist order.
+    (parts_work, first_cover)
+}
+
+/// Sort the per-part working records by (track_number, filename) for a
+/// stable playlist order, derive book-level title/creator/description
+/// from the sorted view, and project to the [`AudiobookPart`] list.
+fn build_parts_list(
+    mut parts_work: Vec<PartWork>,
+    group_path: &str,
+) -> (BookLevel, Vec<AudiobookPart>) {
     parts_work.sort_by(|a, b| {
         a.sort_track
             .cmp(&b.sort_track)
@@ -251,12 +303,12 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
     let title = parts_work
         .iter()
         .find_map(|p| p.meta.album.clone())
-        .unwrap_or_else(|| leaf_name(&group.group_path));
+        .unwrap_or_else(|| leaf_name(group_path));
 
     let creator_name = parts_work
         .iter()
         .find_map(|p| p.meta.artist.clone())
-        .or_else(|| parent_name(&group.group_path));
+        .or_else(|| parent_name(group_path));
 
     let total_secs: f64 = parts_work.iter().map(|p| p.duration_seconds).sum();
     let description = if total_secs > 0.0 {
@@ -279,39 +331,35 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
         })
         .collect();
 
-    let accent = first_cover
-        .as_ref()
-        .and_then(|(_mime, bytes)| extract_accent(bytes));
+    (
+        BookLevel {
+            title,
+            creator_name,
+            description,
+        },
+        parts,
+    )
+}
 
-    // Extract chapters from every part in playlist order, shifting each
-    // part's file-relative times by the cumulative duration of the parts
-    // before it so the result is one continuous timeline. Parts without
-    // embedded markers contribute nothing; a fully empty result gets the
-    // synthetic one-chapter-per-part fallback at sync time.
+/// Extract chapters from every part in playlist order, shifting each
+/// part's file-relative times by the cumulative duration of the parts
+/// before it so the result is one continuous timeline. Parts without
+/// embedded markers contribute nothing; a fully empty result gets the
+/// synthetic one-chapter-per-part fallback at sync time.
+fn apply_chapters(
+    parts: &[AudiobookPart],
+    library_root: &Path,
+    format: &str,
+) -> Vec<super::chapters::RawChapter> {
     let mut chapters = Vec::new();
     let mut offset_ms = 0u64;
-    for part in &parts {
+    for part in parts {
         let abs = library_root.join(&part.filename);
-        let part_chapters = super::chapters::extract_chapters(&abs, &group.format);
+        let part_chapters = super::chapters::extract_chapters(&abs, format);
         chapters.extend(offset_chapters(part_chapters, offset_ms));
         offset_ms += (part.duration_seconds * 1000.0).round().max(0.0) as u64;
     }
-
-    IndexedAudiobook {
-        uuid: group.uuid,
-        group_path: group.group_path,
-        format: group.format,
-        title,
-        creator_name,
-        cover: first_cover,
-        accent,
-        parts,
-        chapters,
-        total_size_bytes: group.total_size_bytes,
-        max_mtime_epoch: group.max_mtime_epoch,
-        description,
-        error: None,
-    }
+    chapters
 }
 
 /// Shift a part's file-relative chapter times onto the group's
