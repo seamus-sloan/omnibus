@@ -315,7 +315,7 @@ async fn transcode_book_clears_orphan_progress_on_restart() {
     // `get_parts` returns at least one entry — otherwise `transcode_book`
     // short-circuits before the orphan check would matter.
     let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
-    let lib_id = sqlx::query("INSERT INTO libraries (path, display_name) VALUES (?, 'lib')")
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
         .bind("/lib")
         .execute(&pool)
         .await

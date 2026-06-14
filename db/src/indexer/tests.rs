@@ -15,7 +15,7 @@ use crate::test_support::{indexed, CoversTempDir};
 /// stamps "now"), so the `is_stale` window tests insert the row
 /// directly — exactly the columns `last_indexed_at` reads back.
 async fn seed_last_indexed(pool: &SqlitePool, path: &str, last_indexed: i64) {
-    sqlx::query("INSERT INTO libraries (path, display_name, last_indexed) VALUES (?, ?, ?)")
+    sqlx::query("INSERT INTO scan_roots (path, display_name, last_indexed) VALUES (?, ?, ?)")
         .bind(path)
         .bind(path)
         .bind(last_indexed)
@@ -424,7 +424,7 @@ async fn seed_audiobook_for_backfill(
     format: &str,
 ) -> i64 {
     sqlx::query(
-        "INSERT INTO libraries (path, display_name) VALUES (?, ?) \
+        "INSERT INTO scan_roots (path, display_name) VALUES (?, ?) \
          ON CONFLICT(path) DO NOTHING",
     )
     .bind(library_path)
@@ -433,7 +433,7 @@ async fn seed_audiobook_for_backfill(
     .await
     .unwrap();
 
-    let lib_id: i64 = sqlx::query_scalar("SELECT id FROM libraries WHERE path = ?")
+    let lib_id: i64 = sqlx::query_scalar("SELECT id FROM scan_roots WHERE path = ?")
         .bind(library_path)
         .fetch_one(pool)
         .await

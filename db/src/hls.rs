@@ -175,7 +175,7 @@ pub struct ResolvedAudiobook {
     pub book_id: i64,
     /// `book_files.id`
     pub book_file_id: i64,
-    /// `libraries.path` — the library root on disk.
+    /// `scan_roots.path` — the library root on disk.
     pub library_path: String,
 }
 
@@ -202,7 +202,7 @@ pub async fn resolve_audiobook_file(
             "SELECT b.id, bf.id, COALESCE(bf.library_path, l.path) \
              FROM books b \
              JOIN book_files bf ON bf.book_id = b.id \
-             JOIN libraries l ON l.id = b.library_id \
+             JOIN scan_roots l ON l.id = b.library_id \
              WHERE b.uuid = ? \
                AND bf.id = ? \
                AND bf.format IN ('M4B', 'M4A', 'MP3')",
@@ -216,7 +216,7 @@ pub async fn resolve_audiobook_file(
             "SELECT b.id, bf.id, COALESCE(bf.library_path, l.path) \
              FROM books b \
              JOIN book_files bf ON bf.book_id = b.id \
-             JOIN libraries l ON l.id = b.library_id \
+             JOIN scan_roots l ON l.id = b.library_id \
              WHERE b.uuid = ? \
                AND bf.format IN ('M4B', 'M4A', 'MP3') \
              ORDER BY bf.ordinal \

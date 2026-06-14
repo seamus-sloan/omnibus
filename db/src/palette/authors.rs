@@ -48,7 +48,7 @@ pub async fn search_authors(
           SELECT bal.author AS author_id, NULL AS author_name, bal.book AS book_id
             FROM books_authors_link bal
             JOIN books b ON b.id = bal.book
-            JOIN libraries l2 ON l2.id = b.library_id
+            JOIN scan_roots l2 ON l2.id = b.library_id
             LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
            WHERE l2.path = ?1
              AND (mo.book_uuid IS NULL
@@ -58,7 +58,7 @@ pub async fn search_authors(
                  json_extract(je.value, '$.name') AS author_name,
                  b.id AS book_id
             FROM books b
-            JOIN libraries l2 ON l2.id = b.library_id
+            JOIN scan_roots l2 ON l2.id = b.library_id
             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
             JOIN json_each(mo.overrides, '$.creators') je
            WHERE l2.path = ?1
@@ -72,7 +72,7 @@ pub async fn search_authors(
           AND EXISTS (
             SELECT 1 FROM books_authors_link bal
               JOIN books b ON b.id = bal.book
-              JOIN libraries l ON l.id = b.library_id
+              JOIN scan_roots l ON l.id = b.library_id
              WHERE bal.author = a.id AND l.path = ?1
           )
         ORDER BY book_count DESC, a.name

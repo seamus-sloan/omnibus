@@ -44,7 +44,7 @@ pub async fn search_books(
 
         FROM books_fts
         JOIN books b ON b.id = books_fts.rowid
-        JOIN libraries l ON l.id = b.library_id
+        JOIN scan_roots l ON l.id = b.library_id
         WHERE books_fts MATCH ?1 AND l.path = ?2
         ORDER BY bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0), b.sort, b.id
         LIMIT ?3

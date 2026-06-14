@@ -10,7 +10,7 @@ use sqlx::Transaction;
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct SourceSnapshot {
     pub uuid: String,
-    /// The source book's `libraries.path` (re-resolved or recreated on
+    /// The source book's `scan_roots.path` (re-resolved or recreated on
     /// undo) — also the `merged_uuids.library_path` for the guard row.
     pub library_path: String,
     pub path: String,
@@ -94,7 +94,7 @@ pub(super) async fn build_snapshot(
         "SELECT b.uuid, l.path, b.path, b.title, b.sort, b.author_sort, b.series_index,
                 b.pubdate, b.timestamp, b.has_cover, b.description, b.isbn, b.accent_color,
                 b.title_norm, b.author_norm
-           FROM books b JOIN libraries l ON l.id = b.library_id
+           FROM books b JOIN scan_roots l ON l.id = b.library_id
           WHERE b.id = ?",
     )
     .bind(book_id)

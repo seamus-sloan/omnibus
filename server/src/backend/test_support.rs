@@ -53,13 +53,13 @@ pub(crate) fn get_anon(uri: &str) -> Request<Body> {
 pub(crate) async fn seed_book_no_cover(pool: &sqlx::SqlitePool) -> i64 {
     // Insert a minimal library row first (FK requirement).
     sqlx::query(
-        "INSERT OR IGNORE INTO libraries(path, display_name) VALUES ('/test/library', 'Test')",
+        "INSERT OR IGNORE INTO scan_roots(path, display_name) VALUES ('/test/library', 'Test')",
     )
     .execute(pool)
     .await
     .expect("insert library");
     let library_id: i64 =
-        sqlx::query_scalar("SELECT id FROM libraries WHERE path = '/test/library'")
+        sqlx::query_scalar("SELECT id FROM scan_roots WHERE path = '/test/library'")
             .fetch_one(pool)
             .await
             .expect("library id");

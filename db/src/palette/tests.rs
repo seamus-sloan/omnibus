@@ -912,14 +912,14 @@ async fn palette_taxonomy_query_plans_use_indexes() {
            SELECT bal.author AS author_id, NULL AS author_name, bal.book AS book_id \
              FROM books_authors_link bal \
              JOIN books b ON b.id = bal.book \
-             JOIN libraries l2 ON l2.id = b.library_id \
+             JOIN scan_roots l2 ON l2.id = b.library_id \
              LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
             WHERE l2.path = ?1 \
               AND (mo.book_uuid IS NULL OR json_type(mo.overrides, '$.creators') IS NULL) \
            UNION \
            SELECT NULL AS author_id, json_extract(je.value, '$.name') AS author_name, b.id AS book_id \
              FROM books b \
-             JOIN libraries l2 ON l2.id = b.library_id \
+             JOIN scan_roots l2 ON l2.id = b.library_id \
              JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
              JOIN json_each(mo.overrides, '$.creators') je \
             WHERE l2.path = ?1 AND json_type(mo.overrides, '$.creators') IS NOT NULL \
@@ -931,7 +931,7 @@ async fn palette_taxonomy_query_plans_use_indexes() {
          WHERE a.name LIKE ?2 ESCAPE '\\' \
            AND EXISTS (SELECT 1 FROM books_authors_link bal \
                          JOIN books b ON b.id = bal.book \
-                         JOIN libraries l ON l.id = b.library_id \
+                         JOIN scan_roots l ON l.id = b.library_id \
                         WHERE bal.author = a.id AND l.path = ?1) \
          ORDER BY book_count DESC, a.name \
          LIMIT ?3",
@@ -951,14 +951,14 @@ async fn palette_taxonomy_query_plans_use_indexes() {
            SELECT bsl.series AS series_id, NULL AS series_name, bsl.book AS book_id \
              FROM books_series_link bsl \
              JOIN books b ON b.id = bsl.book \
-             JOIN libraries l2 ON l2.id = b.library_id \
+             JOIN scan_roots l2 ON l2.id = b.library_id \
              LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
             WHERE l2.path = ?1 \
               AND (mo.book_uuid IS NULL OR json_type(mo.overrides, '$.series') IS NULL) \
            UNION \
            SELECT NULL AS series_id, json_extract(mo.overrides, '$.series') AS series_name, b.id AS book_id \
              FROM books b \
-             JOIN libraries l2 ON l2.id = b.library_id \
+             JOIN scan_roots l2 ON l2.id = b.library_id \
              JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
             WHERE l2.path = ?1 AND json_type(mo.overrides, '$.series') IS NOT NULL \
          ) \
@@ -969,7 +969,7 @@ async fn palette_taxonomy_query_plans_use_indexes() {
          WHERE s.name LIKE ?2 ESCAPE '\\' \
            AND EXISTS (SELECT 1 FROM books_series_link bsl \
                          JOIN books b ON b.id = bsl.book \
-                         JOIN libraries l ON l.id = b.library_id \
+                         JOIN scan_roots l ON l.id = b.library_id \
                         WHERE bsl.series = s.id AND l.path = ?1) \
          ORDER BY book_count DESC, s.name \
          LIMIT ?3",
@@ -989,14 +989,14 @@ async fn palette_taxonomy_query_plans_use_indexes() {
            SELECT btl.tag AS tag_id, NULL AS tag_name, btl.book AS book_id \
              FROM books_tags_link btl \
              JOIN books b ON b.id = btl.book \
-             JOIN libraries l2 ON l2.id = b.library_id \
+             JOIN scan_roots l2 ON l2.id = b.library_id \
              LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
             WHERE l2.path = ?1 \
               AND (mo.book_uuid IS NULL OR json_type(mo.overrides, '$.subjects') IS NULL) \
            UNION \
            SELECT NULL AS tag_id, je.value AS tag_name, b.id AS book_id \
              FROM books b \
-             JOIN libraries l2 ON l2.id = b.library_id \
+             JOIN scan_roots l2 ON l2.id = b.library_id \
              JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
              JOIN json_each(mo.overrides, '$.subjects') je \
             WHERE l2.path = ?1 AND json_type(mo.overrides, '$.subjects') IS NOT NULL \
@@ -1008,7 +1008,7 @@ async fn palette_taxonomy_query_plans_use_indexes() {
          WHERE t.name LIKE ?2 ESCAPE '\\' \
            AND EXISTS (SELECT 1 FROM books_tags_link btl \
                          JOIN books b ON b.id = btl.book \
-                         JOIN libraries l ON l.id = b.library_id \
+                         JOIN scan_roots l ON l.id = b.library_id \
                         WHERE btl.tag = t.id AND l.path = ?1) \
          ORDER BY book_count DESC, t.name \
          LIMIT ?3",

@@ -156,7 +156,7 @@ pub async fn book_file_path(
         "SELECT COALESCE(bf.library_path, l.path), COALESCE(bf.path, b.path), \
                 bf.filename, bf.format \
          FROM books b \
-         JOIN libraries l ON l.id = b.library_id \
+         JOIN scan_roots l ON l.id = b.library_id \
          JOIN book_files bf ON bf.book_id = b.id \
          WHERE b.id = ? AND bf.format = ? COLLATE NOCASE \
          ORDER BY bf.ordinal LIMIT 1",
@@ -187,14 +187,14 @@ pub async fn book_file_path_by_id(
                 bf.filename, bf.format \
          FROM book_files bf \
          JOIN books b ON b.id = bf.book_id \
-         JOIN libraries l ON l.id = b.library_id \
+         JOIN scan_roots l ON l.id = b.library_id \
          WHERE bf.id = ?1 AND bf.book_id = ?2 AND bf.format = ?3 COLLATE NOCASE"
     } else {
         "SELECT COALESCE(bf.library_path, l.path), COALESCE(bf.path, b.path), \
                 bf.filename, bf.format \
          FROM book_files bf \
          JOIN books b ON b.id = bf.book_id \
-         JOIN libraries l ON l.id = b.library_id \
+         JOIN scan_roots l ON l.id = b.library_id \
          WHERE bf.id = ?1 AND bf.book_id = ?2"
     };
     let mut q = sqlx::query_as::<_, (String, String, String, String)>(sql)

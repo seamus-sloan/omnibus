@@ -153,7 +153,7 @@ async fn set_settings_prunes_library_when_ebook_path_changes() {
     .unwrap();
 
     assert!(list_books(&pool, "/old").await.unwrap().is_empty());
-    let library_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM libraries")
+    let library_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scan_roots")
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -233,7 +233,7 @@ async fn set_settings_none_removes_library_data() {
     .await
     .unwrap();
 
-    let library_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM libraries")
+    let library_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scan_roots")
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -268,7 +268,7 @@ async fn prune_orphan_libraries_batches_across_many_libraries() {
     for i in 0..LIBRARY_COUNT {
         let path = format!("/orphan-{i}");
         let library_id: i64 = sqlx::query_scalar(
-            "INSERT INTO libraries (path, display_name) VALUES (?, ?) RETURNING id",
+            "INSERT INTO scan_roots (path, display_name) VALUES (?, ?) RETURNING id",
         )
         .bind(&path)
         .bind(format!("Orphan {i}"))
@@ -311,7 +311,7 @@ async fn prune_orphan_libraries_batches_across_many_libraries() {
         "every orphaned book's cover UUID should be collected across all chunks"
     );
 
-    let library_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM libraries")
+    let library_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scan_roots")
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -331,4 +331,49 @@ async fn prune_orphan_libraries_batches_across_many_libraries() {
             "cover for {uuid} should be deleted"
         );
     }
+}
+
+/// Migration 0019 renames `libraries` -> `scan_roots` via
+/// `ALTER TABLE ... RENAME`. SQLite auto-rewrites the `books.library_id`
+/// FK to reference the renamed table, so deleting a scan-root row must
+/// still cascade-delete its books. A bug in the rename (e.g. a stray
+/// table recreate that dropped the FK) would leave the book row behind.
+#[tokio::test]
+async fn fk_cascade_survives_libraries_rename_to_scan_roots() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    let scan_root_id: i64 = sqlx::query_scalar(
+        "INSERT INTO scan_roots (path, display_name) VALUES (?, ?) RETURNING id",
+    )
+    .bind("/lib")
+    .bind("lib")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, ?, ?)")
+        .bind("uuid-cascade")
+        .bind(scan_root_id)
+        .bind("/lib/book.epub")
+        .bind("Cascade Book")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    sqlx::query("DELETE FROM scan_roots WHERE id = ?")
+        .bind(scan_root_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let book_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books WHERE library_id = ?")
+        .bind(scan_root_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        book_count, 0,
+        "deleting the scan_roots row should cascade-delete its books \
+         after the libraries->scan_roots rename"
+    );
 }

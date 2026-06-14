@@ -58,7 +58,7 @@ pub struct SyncPlan {
 /// books are UPDATEd in place so their `books.id` is preserved too.
 ///
 /// Inside a single transaction, in this order:
-/// 1. Upsert the `libraries` row.
+/// 1. Upsert the `scan_roots` row.
 /// 2. Delete Removed: explicit FTS clear + cascade DELETE from `books`.
 /// 3. Update Changed in place (preserves `books.id`); wipe-and-rewrite
 ///    link rows + FTS row for each.
@@ -66,7 +66,7 @@ pub struct SyncPlan {
 /// 5. Backfill: UPDATE `book_files.(mtime_epoch, size_bytes)` only — no
 ///    OPF re-parse, no link writes, no FTS write. See the Backfill rule
 ///    in the [`crate::indexer`] module doc.
-/// 6. Stamp `libraries.last_indexed`.
+/// 6. Stamp `scan_roots.last_indexed`.
 ///
 /// Post-commit (best-effort, logged on failure — covers are a
 /// rebuildable cache):
@@ -384,7 +384,7 @@ async fn attach_ebook_file(
     Ok(())
 }
 
-/// Stamp `libraries.last_indexed` with the current wall-clock seconds.
+/// Stamp `scan_roots.last_indexed` with the current wall-clock seconds.
 async fn stamp_last_indexed(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_id: i64,
@@ -393,7 +393,7 @@ async fn stamp_last_indexed(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    sqlx::query("UPDATE libraries SET last_indexed = ? WHERE id = ?")
+    sqlx::query("UPDATE scan_roots SET last_indexed = ? WHERE id = ?")
         .bind(now)
         .bind(library_id)
         .execute(&mut **tx)
@@ -542,7 +542,7 @@ pub async fn replace_books(
 ) -> Result<(), SyncError> {
     let removed_uuids: Vec<String> = sqlx::query_scalar(
         "SELECT b.uuid FROM books b
-         JOIN libraries l ON l.id = b.library_id
+         JOIN scan_roots l ON l.id = b.library_id
          WHERE l.path = ?",
     )
     .bind(library_path)
