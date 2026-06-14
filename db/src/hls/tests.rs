@@ -330,8 +330,8 @@ async fn transcode_book_clears_orphan_progress_on_restart() {
     .await
     .unwrap();
     let file_id = sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime) \
-         VALUES (?, 'MP3', 'b', 0, '')",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'MP3', 'b', 0)",
     )
     .bind(book_id)
     .execute(&pool)

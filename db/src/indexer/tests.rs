@@ -453,8 +453,8 @@ async fn seed_audiobook_for_backfill(
     .unwrap();
 
     let book_file_id: i64 = sqlx::query_scalar(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime, mtime_epoch) \
-         VALUES (?, ?, ?, 100, '', 100) RETURNING id",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch) \
+         VALUES (?, ?, ?, 100, 100) RETURNING id",
     )
     .bind(book_id)
     .bind(format)

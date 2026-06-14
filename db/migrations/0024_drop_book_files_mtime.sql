@@ -1,0 +1,18 @@
+-- F19 — drop the dead `book_files.mtime` column. It held the OPF
+-- `dcterms:modified` Dublin Core string (NOT filesystem state), written on
+-- every `book_files` insert but never SELECTed by any read path:
+--   * Incremental reindex — the change-detection diff compares only
+--     `(mtime_epoch, size_bytes)`. `list_indexed_rows` and friends
+--     (db/src/books/list.rs) project `MAX(bf.mtime_epoch)`, never `mtime`.
+--   * Backfill — the stat-only bucket (db/src/sync/backfill.rs,
+--     db/src/sync/audiobooks.rs) UPDATEs `(mtime_epoch, size_bytes)` only.
+-- The live filesystem stat lives in `mtime_epoch INTEGER` (migration 0009),
+-- which this migration leaves untouched.
+--
+-- Forward-only. `book_files.mtime` is a bare `TEXT NOT NULL` with no index,
+-- FK, PK, generated column, trigger, or view depending on it (the only
+-- `book_files` indexes are on `book_id` and `(book_id, format)`), so SQLite
+-- (>= 3.35, runtime here is far newer) drops it in place with no
+-- table-recreate. No backfill: the discarded data has no reader. A fresh DB
+-- built from 0001..0024 and an upgraded DB converge on the same schema.
+ALTER TABLE book_files DROP COLUMN mtime;
