@@ -93,104 +93,49 @@ pub struct ChipEditorProps {
 /// Add/remove chip editor with autocomplete dropdown.
 #[component]
 pub fn ChipEditor(props: ChipEditorProps) -> Element {
+    // Seed `focused` from `autofocus`: the browser's autofocus does not
+    // always emit `onfocus` for a freshly-mounted node (e.g. the landing
+    // cell's editor, mounted on click), so without seeding the
+    // open-on-focus dropdown never surfaces. `suppress_open` flips true
+    // after a commit so the just-emptied input does not instantly
+    // re-surface the pool; any keystroke / fresh focus clears it.
     let mut input = use_signal(String::new);
     let mut highlight = use_signal::<Option<usize>>(|| None);
-    // Focus state drives the "open-on-focus" dropdown behavior the
-    // design comp asks for: clicking into the input surfaces the top
-    // `MAX_SUGGESTIONS` candidates immediately so the admin can pick
-    // by sight, without having to type a character first to "wake up"
-    // the autocomplete. `onblur` clears it (and the highlight) so the
-    // dropdown collapses when focus leaves.
-    // Seed `focused` from `autofocus`: an autofocused input is focused on
-    // first paint, but the browser's autofocus does not always emit an
-    // `onfocus` event for a freshly-mounted node (e.g. the landing cell's
-    // editor, mounted on click), so relying on the event left `focused`
-    // false and the open-on-focus dropdown never surfaced. Seeding it true
-    // makes the dropdown appear on first paint, as the `autofocus` prop
-    // promises; `onblur` still flips it false when focus leaves.
     let mut focused = use_signal(|| props.autofocus);
-    // Suppress the open-on-focus pool *after a commit* so committing a chip
-    // (Enter / suggestion pick) collapses the dropdown rather than instantly
-    // re-surfacing the pool against the now-empty input. Any keystroke or a
-    // fresh focus clears it, so the autocomplete still wakes on the next
-    // interaction.
     let mut suppress_open = use_signal(|| false);
 
-    let query_lc = input().trim().to_lowercase();
-    let filtered = compute_suggestions(
-        &props.suggestions.read(),
-        &props.values.read(),
-        &query_lc,
-        focused(),
-        suppress_open(),
-    );
-
-    // Render the "+ Create '<query>'" footer row when the user has typed
-    // something but no entry in the *full* suggestion pool (and no
-    // currently-chosen value) is an exact case-insensitive match.
-    // Checking against `filtered` alone would let an exact-match author
-    // outside the top-5 truncation falsely surface a Create row for a
-    // name that already exists in the library.
-    let typed = input().trim().to_string();
-    let exact_match_in_pool = !query_lc.is_empty()
-        && props
-            .suggestions
-            .read()
-            .iter()
-            .any(|item| item.name.to_lowercase() == query_lc);
-    let exact_match_in_values = !query_lc.is_empty()
-        && props
-            .values
-            .read()
-            .iter()
-            .any(|v| v.to_lowercase() == query_lc);
-    let show_create_row = !typed.is_empty() && !exact_match_in_pool && !exact_match_in_values;
-
-    // Total selectable rows in the dropdown: filtered suggestions plus
-    // an optional "+ Create" trailing row. The create row, when shown,
-    // is at index `filtered.len()`. ↑/↓ navigation wraps across the
-    // whole set so the admin can land on Create with one keystroke
-    // after a typed-from-scratch entry.
-    let filtered_for_keydown = filtered.clone();
-    let create_value_for_keydown = typed.clone();
-    let create_row_index = filtered_for_keydown.len();
-    let total_rows = filtered_for_keydown.len() + usize::from(show_create_row);
-
+    let selection = compute_selection(&props, input(), focused(), suppress_open());
+    let selection_kd = selection.clone();
     let mut values_sig = props.values;
     let on_change = props.on_change;
     let on_change_remove = on_change;
-    let mut commit = move |name: String| {
-        let trimmed = name.trim().to_string();
-        if trimmed.is_empty() {
-            return;
-        }
-        // Dedup uses the same Unicode-aware `to_lowercase()` comparison
-        // the filter loop above runs against the suggestion pool, so a
-        // dropdown-surfaced duplicate and a duplicate typed-in by hand
-        // are treated identically (the old `eq_ignore_ascii_case` would
-        // let through case-variant duplicates that contain non-ASCII).
-        let trimmed_lc = trimmed.to_lowercase();
-        if values_sig
-            .read()
-            .iter()
-            .any(|v| v.to_lowercase() == trimmed_lc)
-        {
-            input.set(String::new());
-            highlight.set(None);
-            suppress_open.set(true);
-            return;
-        }
-        let mut new_values = values_sig.read().clone();
-        new_values.push(trimmed);
-        values_sig.set(new_values.clone());
-        on_change.call(new_values);
-        input.set(String::new());
-        highlight.set(None);
-        suppress_open.set(true);
-    };
+    let on_close = props.on_close;
 
-    let testid_suggestions = format!("{}-suggestions", props.testid_prefix);
-    let testid_input = format!("{}-input", props.testid_prefix);
+    let mut commit = move |name: String| {
+        commit_chip(
+            name,
+            &mut values_sig,
+            &mut input,
+            &mut highlight,
+            &mut suppress_open,
+            &on_change,
+        );
+    };
+    let on_keydown = move |e: Event<KeyboardData>| {
+        dispatch_keydown(
+            e,
+            &selection_kd,
+            &mut input,
+            &mut highlight,
+            &mut commit,
+            &on_close,
+        );
+    };
+    let SelectionView {
+        filtered,
+        typed,
+        show_create_row,
+    } = selection;
 
     rsx! {
         Fragment {
@@ -204,78 +149,26 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                 },
             }
             div { class: "chip-editor-input-wrap",
-                input {
-                    class: "{props.input_class}",
-                    "data-testid": "{testid_input}",
-                    placeholder: "{props.placeholder}",
-                    value: "{input}",
+                ChipInput {
+                    input,
+                    placeholder: props.placeholder.clone(),
+                    input_class: props.input_class.clone(),
+                    testid: format!("{}-input", props.testid_prefix),
                     autofocus: props.autofocus,
-                    onfocus: move |_| {
+                    on_focus: move |_| {
                         focused.set(true);
                         suppress_open.set(false);
                     },
-                    onblur: move |_| {
+                    on_blur: move |_| {
                         focused.set(false);
                         highlight.set(None);
                     },
-                    oninput: move |e| {
-                        input.set(e.value());
+                    on_input: move |value: String| {
+                        input.set(value);
                         highlight.set(None);
                         suppress_open.set(false);
                     },
-                    onkeydown: move |e| {
-                        match e.key() {
-                            Key::Enter => {
-                                e.prevent_default();
-                                // Stop Enter from bubbling to host
-                                // handlers (e.g. the landing table
-                                // row's keydown that navigates to
-                                // the book detail page).
-                                e.stop_propagation();
-                                let typed_now = input();
-                                // Dispatch to highlighted row (suggestion or
-                                // create) when present; otherwise commit the
-                                // raw typed value.
-                                let value = match highlight() {
-                                    Some(idx) if idx < filtered_for_keydown.len() => {
-                                        filtered_for_keydown
-                                            .get(idx)
-                                            .map(|s| s.name.clone())
-                                            .unwrap_or(typed_now)
-                                    }
-                                    Some(idx) if idx == create_row_index && show_create_row => {
-                                        create_value_for_keydown.clone()
-                                    }
-                                    _ => typed_now,
-                                };
-                                commit(value);
-                            }
-                            Key::ArrowDown if total_rows > 0 => {
-                                e.prevent_default();
-                                e.stop_propagation();
-                                let next = match highlight() {
-                                    Some(i) if i + 1 < total_rows => Some(i + 1),
-                                    _ => Some(0),
-                                };
-                                highlight.set(next);
-                            }
-                            Key::ArrowUp if total_rows > 0 => {
-                                e.prevent_default();
-                                e.stop_propagation();
-                                let next = match highlight() {
-                                    Some(0) | None => Some(total_rows - 1),
-                                    Some(i) => Some(i - 1),
-                                };
-                                highlight.set(next);
-                            }
-                            Key::Escape => {
-                                e.stop_propagation();
-                                highlight.set(None);
-                                props.on_close.call(());
-                            }
-                            _ => {}
-                        }
-                    },
+                    on_keydown,
                 }
                 if !filtered.is_empty() || show_create_row {
                     SuggestionDropdown {
@@ -286,11 +179,195 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                             highlight: highlight(),
                         },
                         dropdown_header: props.dropdown_header.clone(),
-                        testid: testid_suggestions.clone(),
+                        testid: format!("{}-suggestions", props.testid_prefix),
                         on_pick: move |name: String| commit(name),
                     }
                 }
             }
+        }
+    }
+}
+
+/// Per-render derived view bundling the filtered suggestion rows, the typed text, and the Create-row flag.
+#[derive(Clone)]
+struct SelectionView {
+    filtered: Vec<SuggestionItem>,
+    typed: String,
+    show_create_row: bool,
+}
+
+/// Compute the visible suggestion rows + Create-row state for the current input/focus/values.
+fn compute_selection(
+    props: &ChipEditorProps,
+    input_value: String,
+    focused: bool,
+    suppress_open: bool,
+) -> SelectionView {
+    // Read each signal once so `filtered` and `show_create_row` are derived
+    // from a single consistent snapshot of `suggestions` and `values`.
+    let suggestions = props.suggestions.read();
+    let values = props.values.read();
+    let query_lc = input_value.trim().to_lowercase();
+    let filtered = compute_suggestions(&suggestions, &values, &query_lc, focused, suppress_open);
+    let typed = input_value.trim().to_string();
+    let show_create_row = should_show_create_row(&suggestions, &values, &query_lc, &typed);
+    SelectionView {
+        filtered,
+        typed,
+        show_create_row,
+    }
+}
+
+/// Render the "+ Create '<query>'" footer row when the user has typed
+/// something but no entry in the *full* suggestion pool (and no
+/// currently-chosen value) is an exact case-insensitive match. Checking
+/// against the truncated `filtered` view alone would let an exact-match
+/// entry outside the top-5 truncation falsely surface a Create row for a
+/// name that already exists in the library.
+fn should_show_create_row(
+    suggestions: &[SuggestionItem],
+    current_values: &[String],
+    query_lc: &str,
+    typed: &str,
+) -> bool {
+    if typed.is_empty() || query_lc.is_empty() {
+        return false;
+    }
+    let exact_match_in_pool = suggestions
+        .iter()
+        .any(|item| item.name.to_lowercase() == query_lc);
+    let exact_match_in_values = current_values.iter().any(|v| v.to_lowercase() == query_lc);
+    !exact_match_in_pool && !exact_match_in_values
+}
+
+/// Append `name` to `values` if non-empty and not already present
+/// (case-insensitive). Resets `input`/`highlight` and suppresses
+/// open-on-focus so the dropdown collapses against the now-empty input.
+/// Calls `on_change` only on a successful add — duplicates are silently
+/// dropped after clearing the input.
+fn commit_chip(
+    name: String,
+    values: &mut Signal<Vec<String>>,
+    input: &mut Signal<String>,
+    highlight: &mut Signal<Option<usize>>,
+    suppress_open: &mut Signal<bool>,
+    on_change: &EventHandler<Vec<String>>,
+) {
+    let trimmed = name.trim().to_string();
+    if trimmed.is_empty() {
+        return;
+    }
+    // Dedup uses the same Unicode-aware `to_lowercase()` comparison the
+    // filter loop runs against the suggestion pool, so a dropdown-surfaced
+    // duplicate and a hand-typed duplicate are treated identically (the
+    // old `eq_ignore_ascii_case` would let through case-variant duplicates
+    // that contain non-ASCII).
+    let trimmed_lc = trimmed.to_lowercase();
+    if values.read().iter().any(|v| v.to_lowercase() == trimmed_lc) {
+        input.set(String::new());
+        highlight.set(None);
+        suppress_open.set(true);
+        return;
+    }
+    let mut new_values = values.read().clone();
+    new_values.push(trimmed);
+    values.set(new_values.clone());
+    on_change.call(new_values);
+    input.set(String::new());
+    highlight.set(None);
+    suppress_open.set(true);
+}
+
+/// Translate Enter / Arrow / Escape keystrokes into commits + highlight
+/// moves. Total selectable rows are filtered suggestions plus an optional
+/// "+ Create" trailing row at index `filtered.len()`; ↑/↓ wrap across the
+/// whole set so the admin can land on Create with one keystroke after a
+/// typed-from-scratch entry.
+fn dispatch_keydown(
+    e: Event<KeyboardData>,
+    selection: &SelectionView,
+    input: &mut Signal<String>,
+    highlight: &mut Signal<Option<usize>>,
+    commit: &mut impl FnMut(String),
+    on_close: &EventHandler<()>,
+) {
+    let SelectionView {
+        filtered,
+        typed: create_value,
+        show_create_row,
+    } = selection;
+    let show_create_row = *show_create_row;
+    let create_row_index = filtered.len();
+    let total_rows = filtered.len() + usize::from(show_create_row);
+    match e.key() {
+        Key::Enter => {
+            e.prevent_default();
+            // Stop Enter from bubbling to host handlers (e.g. the
+            // landing table row's keydown that navigates to the
+            // book detail page).
+            e.stop_propagation();
+            let typed_now = input();
+            let value = match highlight() {
+                Some(idx) if idx < filtered.len() => filtered
+                    .get(idx)
+                    .map(|s| s.name.clone())
+                    .unwrap_or(typed_now),
+                Some(idx) if idx == create_row_index && show_create_row => create_value.clone(),
+                _ => typed_now,
+            };
+            commit(value);
+        }
+        Key::ArrowDown if total_rows > 0 => {
+            e.prevent_default();
+            e.stop_propagation();
+            let next = match highlight() {
+                Some(i) if i + 1 < total_rows => Some(i + 1),
+                _ => Some(0),
+            };
+            highlight.set(next);
+        }
+        Key::ArrowUp if total_rows > 0 => {
+            e.prevent_default();
+            e.stop_propagation();
+            let next = match highlight() {
+                Some(0) | None => Some(total_rows - 1),
+                Some(i) => Some(i - 1),
+            };
+            highlight.set(next);
+        }
+        Key::Escape => {
+            e.stop_propagation();
+            highlight.set(None);
+            on_close.call(());
+        }
+        _ => {}
+    }
+}
+
+/// Inline `<input>` for the chip editor — owns nothing, forwards every event to the parent's handlers.
+#[component]
+fn ChipInput(
+    input: Signal<String>,
+    placeholder: String,
+    input_class: String,
+    testid: String,
+    autofocus: bool,
+    on_focus: EventHandler<()>,
+    on_blur: EventHandler<()>,
+    on_input: EventHandler<String>,
+    on_keydown: EventHandler<Event<KeyboardData>>,
+) -> Element {
+    rsx! {
+        input {
+            class: "{input_class}",
+            "data-testid": "{testid}",
+            placeholder: "{placeholder}",
+            value: "{input}",
+            autofocus,
+            onfocus: move |_| on_focus.call(()),
+            onblur: move |_| on_blur.call(()),
+            oninput: move |e| on_input.call(e.value()),
+            onkeydown: move |e| on_keydown.call(e),
         }
     }
 }
