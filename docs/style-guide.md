@@ -65,7 +65,7 @@ author by ID with their books; `None` if missing" belonged in a const
 doc or a PR description. It now lives in `db/src/discovery/authors.rs`
 with a one-line summary.
 
-**Pattern.** [db/src/scanner.rs:3](../db/src/scanner.rs:3):
+**Pattern.** `list_files` in [db/src/scanner.rs](../db/src/scanner.rs):
 
 ```rust
 /// Recursively walk `path` and return total file count plus

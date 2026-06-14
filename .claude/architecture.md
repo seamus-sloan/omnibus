@@ -43,7 +43,7 @@ worker.rs           — TaskKind, ProgressState (Running/Done/Failed), TaskProgr
 ## db/src/
 
 ```
-lib.rs              — module index + flat re-export of the query layer (books, browse, covers, discovery, helpers, metadata_overrides, palette, pool, settings, sync, author_photos_data, thumbs) so callers write `omnibus_db::list_books(...)`. Declares 25 `pub mod`s plus a private `taxonomy` and a cfg-gated `test_support`.
+lib.rs              — module index + flat re-export of the query layer (books, browse, covers, discovery, helpers, merge, metadata_overrides, palette, pool, settings, sync, author_photos_data, thumbs) so callers write `omnibus_db::list_books(...)`. Declares 25 `pub mod`s plus a private `taxonomy` and a cfg-gated `test_support`.
 books/              — core book read layer: `list_books`/`list_books_for_paths`, `get_book`/`get_book_by_uuid`, `search_books` (BM25 FTS), the shared `BOOK_COLUMNS` projection, `book_file_path`, and `resolve_book_id_by_uuid` (UNIONs `merged_uuids` so format-merged uuids still resolve). `MAX_BOOKS_RETURNED` cap; `BooksError`. Split into submodules (`list`/`get`/`search`/`projection`) + `tests.rs`.
 browse.rs           — F1.12 browse-all indexes: `list_authors`/`list_series` with per-row `book_count`, accent color, and `has_photo`, honoring metadata overrides.
 covers.rs           — on-disk cover blob access: `covers_dir`, `get_cover`, `get_last_modified_epoch`; `CoversError`. Cover image files live on the filesystem, not in the DB.

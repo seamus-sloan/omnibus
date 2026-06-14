@@ -55,7 +55,8 @@ lint:
     nix develop --command bash -ec '\
         cargo fmt --check && \
         cargo clippy --all-targets && \
-        cargo clippy -p omnibus-frontend --features server --all-targets'
+        cargo clippy -p omnibus-frontend --features server --all-targets && \
+        cargo clippy -p omnibus-mobile --all-targets'
 
 # Lint then test — the pre-push gate referenced by rule 99.
 check: lint test

@@ -18,7 +18,7 @@ Numbered rules in [.claude/rules/](.claude/rules/), applied in order. Follow the
 - [98-keep-skills-fresh.md](.claude/rules/98-keep-skills-fresh.md) — update skills when the code they reference changes.
 - [99-end-of-session.md](.claude/rules/99-end-of-session.md) — end-of-session checklist (docs sync, fmt/clippy, coverage, line-count cap).
 
-**Line-count cap:** every file in `CLAUDE.md` / `.claude/` stays under ~200 lines. Split by topic when it grows past that — enforced by rule 99.
+**Line-count cap:** every file in `CLAUDE.md`, `AGENTS.md`, and `.claude/` stays under ~200 lines. Split by topic when it grows past that — enforced by rule 99.
 
 ## Skills
 
@@ -75,7 +75,8 @@ just test                                                   # db + server + fron
 just lint                                                   # cargo fmt --check + clippy (incl. mobile + frontend-server)
 just check                                                  # lint then test
 # …or per-crate (note: `cargo test --workspace` SKIPS frontend rpc/page tests
-#  and mobile — frontend needs --features server, mobile is out of default-members):
+#  and mobile — the rpc/page tests need --features server to compile the
+#  server-function bodies; mobile is out of default-members and has no tests):
 cargo test -p omnibus                                       # /api/* REST integration tests
 cargo test -p omnibus-db                                    # db + scanner + sync tests
 cargo test -p omnibus-frontend --features server            # rpc + page tests (server feature required)
