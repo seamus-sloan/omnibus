@@ -1,8 +1,11 @@
 //! Browse-all index pages: `/authors` and `/series`. Returns every row
 //! (capped at `INDEX_LIMIT`) so the UI's client-side sort/filter has the
 //! full list to work with; per-row counts come back override-aware so the
-//! index stays consistent with the discovery-detail reads. Single-tenant
-//! today — no per-user ACL filtering.
+//! index stays consistent with the discovery-detail reads. Counts are
+//! computed in a single reverse-index-driven `GROUP BY` pass (one
+//! `effective` membership CTE, not a correlated subquery per row) so a
+//! multi-thousand-author library doesn't pay an O(rows × books) cost.
+//! Single-tenant today — no per-user ACL filtering.
 
 use sqlx::{Row, SqlitePool};
 
@@ -42,28 +45,45 @@ pub async fn list_authors(
         return Ok(Vec::new());
     }
     let ph = placeholders(library_paths.len());
+    // `effective(author_id, book_id)` is the override-aware membership set,
+    // built once: arm (1) canonical link rows whose book has no creators
+    // override, arm (2) override-derived `(authors.id, book_id)` pairs.
+    // A single `GROUP BY author_id` over it replaces the old per-author
+    // correlated `COUNT(*)` subquery, so the books table is scanned once
+    // rather than once per author. UNION (not ALL) collapses a duplicate
+    // author name inside one override array, matching the old `EXISTS`.
     let sql = format!(
         r#"
-        WITH lib_paths(p) AS (VALUES {ph})
+        WITH lib_paths(p) AS (VALUES {ph}),
+        effective AS (
+            -- (1) Canonical authorship with no creators override.
+            SELECT bal.author AS author_id, bal.book AS book_id
+              FROM books_authors_link bal
+              JOIN books b ON b.id = bal.book
+              JOIN scan_roots l ON l.id = b.library_id
+              LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+             WHERE l.path IN (SELECT p FROM lib_paths)
+               AND (mo.book_uuid IS NULL
+                    OR json_type(mo.overrides, '$.creators') IS NULL)
+            UNION
+            -- (2) Override creators resolved (NOCASE) to an authors row.
+            SELECT a2.id AS author_id, b.id AS book_id
+              FROM books b
+              JOIN scan_roots l ON l.id = b.library_id
+              JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+              JOIN json_each(mo.overrides, '$.creators') je
+              JOIN authors a2
+                ON a2.name = json_extract(je.value, '$.name') COLLATE NOCASE
+             WHERE l.path IN (SELECT p FROM lib_paths)
+               AND json_type(mo.overrides, '$.creators') IS NOT NULL
+        ),
+        counts AS (
+            SELECT author_id, COUNT(*) AS book_count
+              FROM effective
+             GROUP BY author_id
+        )
         SELECT a.id, a.name, a.sort,
-               (SELECT COUNT(*)
-                  FROM books b
-                  JOIN scan_roots l2 ON l2.id = b.library_id
-                  LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-                 WHERE l2.path IN (SELECT p FROM lib_paths)
-                   AND CASE
-                         WHEN mo.book_uuid IS NOT NULL
-                              AND json_type(mo.overrides, '$.creators') IS NOT NULL
-                           THEN EXISTS (
-                             SELECT 1 FROM json_each(mo.overrides, '$.creators') je
-                              WHERE json_extract(je.value, '$.name') = a.name COLLATE NOCASE
-                           )
-                         ELSE EXISTS (
-                           SELECT 1 FROM books_authors_link bal
-                            WHERE bal.book = b.id AND bal.author = a.id
-                         )
-                       END
-               ) AS book_count,
+               COALESCE(c.book_count, 0) AS book_count,
                (SELECT b2.accent_color
                   FROM books_authors_link bal2
                   JOIN books b2 ON b2.id = bal2.book
@@ -80,6 +100,7 @@ pub async fn list_authors(
                     AND ap.bytes IS NOT NULL
                ) AS has_photo
         FROM authors a
+        LEFT JOIN counts c ON c.author_id = a.id
         WHERE EXISTS (
             SELECT 1 FROM books_authors_link bal
               JOIN books b ON b.id = bal.book
@@ -136,29 +157,44 @@ pub async fn list_series(
 }
 
 /// Build the `list_series` SQL for `n` library-path placeholders. Uses a CTE
-/// to materialize the path set once so the four correlated subqueries each see
-/// the same `lib_paths` without repeated inline VALUES lists.
+/// to materialize the path set once so the correlated subqueries (accent,
+/// primary author) each see the same `lib_paths` without repeated inline
+/// VALUES lists. `book_count` comes from a single `GROUP BY` over the
+/// `effective` membership set rather than a per-series correlated subquery,
+/// so the books table is scanned once instead of once per series.
 fn series_index_sql(n: usize) -> String {
     let ph = placeholders(n);
     format!(
         r#"
-        WITH lib_paths(p) AS (VALUES {ph})
+        WITH lib_paths(p) AS (VALUES {ph}),
+        effective AS (
+            -- (1) Canonical members with no series override.
+            SELECT bsl.series AS series_id, bsl.book AS book_id
+              FROM books_series_link bsl
+              JOIN books b ON b.id = bsl.book
+              JOIN scan_roots l ON l.id = b.library_id
+              LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+             WHERE l.path IN (SELECT p FROM lib_paths)
+               AND (mo.book_uuid IS NULL
+                    OR json_type(mo.overrides, '$.series') IS NULL)
+            UNION
+            -- (2) Books whose `overrides.series` names a series (NOCASE).
+            SELECT s2.id AS series_id, b.id AS book_id
+              FROM books b
+              JOIN scan_roots l ON l.id = b.library_id
+              JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+              JOIN series s2
+                ON s2.name = json_extract(mo.overrides, '$.series') COLLATE NOCASE
+             WHERE l.path IN (SELECT p FROM lib_paths)
+               AND json_type(mo.overrides, '$.series') IS NOT NULL
+        ),
+        counts AS (
+            SELECT series_id, COUNT(*) AS book_count
+              FROM effective
+             GROUP BY series_id
+        )
         SELECT s.id, s.name, s.sort,
-               (SELECT COUNT(*)
-                  FROM books b
-                  JOIN scan_roots l2 ON l2.id = b.library_id
-                  LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-                 WHERE l2.path IN (SELECT p FROM lib_paths)
-                   AND CASE
-                         WHEN mo.book_uuid IS NOT NULL
-                              AND json_type(mo.overrides, '$.series') IS NOT NULL
-                           THEN json_extract(mo.overrides, '$.series') = s.name COLLATE NOCASE
-                         ELSE EXISTS (
-                           SELECT 1 FROM books_series_link bsl
-                            WHERE bsl.book = b.id AND bsl.series = s.id
-                         )
-                       END
-               ) AS book_count,
+               COALESCE(c.book_count, 0) AS book_count,
                (SELECT
                   CASE
                     WHEN mo2.book_uuid IS NOT NULL
@@ -187,6 +223,7 @@ fn series_index_sql(n: usize) -> String {
                  ORDER BY b3.series_index NULLS LAST, b3.sort, b3.id
                  LIMIT 1) AS accent
         FROM series s
+        LEFT JOIN counts c ON c.series_id = s.id
         WHERE EXISTS (
             SELECT 1 FROM books_series_link bsl
               JOIN books b ON b.id = bsl.book

@@ -51,8 +51,8 @@ pub async fn get_author(
     }))
 }
 
-/// SQL fragment expressing the override-aware effective author membership.
-/// Used by both `fetch_author_books` (with `SELECT BOOK_COLUMNS`) and
+/// SQL CTE expressing the override-aware effective author membership. Used
+/// by both `fetch_author_books` (with the full `BOOK_COLUMNS` SELECT) and
 /// `count_effective_author_members` (with `COUNT(*)`).
 ///
 /// `apply_overrides` replaces creators wholesale when the override JSON
@@ -61,26 +61,58 @@ pub async fn get_author(
 ///   array, which clears all authors), else
 /// - the canonical names from `books_authors_link`.
 ///
-/// Override creators carry only `name`, so we match by name against the
-/// target author. Bind order: `?1` = author_name, `?2` = author_id.
-const EFFECTIVE_AUTHOR_PREDICATE: &str = r#"FROM books b
-           LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-           WHERE
-             CASE
-               WHEN mo.book_uuid IS NOT NULL
-                    AND json_type(mo.overrides, '$.creators') IS NOT NULL
-                 THEN EXISTS (
-                   SELECT 1 FROM json_each(mo.overrides, '$.creators') je
-                    WHERE json_extract(je.value, '$.name') = ?1 COLLATE NOCASE
-                 )
-               ELSE EXISTS (
-                 SELECT 1 FROM books_authors_link bal
-                  WHERE bal.book = b.id AND bal.author = ?2
-               )
-             END"#;
+/// Single-pass UNION over (1) canonical link rows for *this* author whose
+/// book has no `creators` override, and (2) override rows whose
+/// `overrides.creators` array names this author. Arm (1) is scoped to
+/// `bal.author = ?2` up front so it drives through the
+/// `idx_books_authors_author` reverse index instead of scanning every
+/// book — mirroring the `EFFECTIVE_SERIES_CTE` shape. Override creators
+/// carry only `name`, so arm (2) matches by name (NOCASE) against `?1`.
+///
+/// Each arm carries the override-aware `series_index` (the same NULLIF
+/// rule `get_series` uses) so the detail page can order by it. An
+/// index-only override on a canonical member still re-sorts here because
+/// arm (1) reads `mo.overrides.series_index` even when creators are
+/// canonical. Bind order: `?1` = author_name, `?2` = author_id.
+const EFFECTIVE_AUTHOR_CTE: &str = r#"WITH effective AS (
+             -- (1) Canonical authorship of this author with no creators
+             -- override. A `series_index` override still drives ordering.
+             SELECT bal.book AS book_id,
+                    CASE
+                      WHEN mo.book_uuid IS NOT NULL
+                           AND json_type(mo.overrides, '$.series_index') IS NOT NULL
+                        THEN CAST(NULLIF(json_extract(mo.overrides, '$.series_index'), '') AS REAL)
+                      ELSE b.series_index
+                    END AS series_index
+               FROM books_authors_link bal
+               JOIN books b ON b.id = bal.book
+               LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+              WHERE bal.author = ?2
+                AND (mo.book_uuid IS NULL
+                     OR json_type(mo.overrides, '$.creators') IS NULL)
+             UNION
+             -- (2) Books whose `overrides.creators` names this author.
+             SELECT b.id AS book_id,
+                    -- NULLIF: an override that explicitly clears the index
+                    -- (`Some("")` from the edit form) would otherwise CAST
+                    -- to 0.0 and sort to the front. Treat empty-string as
+                    -- "no index" and let NULLS LAST trail it.
+                    CASE
+                      WHEN json_type(mo.overrides, '$.series_index') IS NOT NULL
+                        THEN CAST(NULLIF(json_extract(mo.overrides, '$.series_index'), '') AS REAL)
+                      ELSE b.series_index
+                    END AS series_index
+               FROM books b
+               JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+              WHERE json_type(mo.overrides, '$.creators') IS NOT NULL
+                AND EXISTS (
+                  SELECT 1 FROM json_each(mo.overrides, '$.creators') je
+                   WHERE json_extract(je.value, '$.name') = ?1 COLLATE NOCASE
+                )
+           )"#;
 
-/// Run the override-aware author SELECT and hydrate each row into
-/// [`EbookMetadata`]. `series_index` ordering follows the same
+/// Run the `effective`-CTE + `BOOK_COLUMNS` SELECT and hydrate each row
+/// into [`EbookMetadata`]. `series_index` ordering follows the same
 /// override-aware NULLIF rule used in `get_series`. The returned vec is
 /// capped at [`MAX_DISCOVERY_BOOKS`].
 async fn fetch_author_books(
@@ -89,21 +121,11 @@ async fn fetch_author_books(
     author_name: &str,
 ) -> Result<Vec<EbookMetadata>, DiscoveryError> {
     let sql = format!(
-        r#"SELECT {BOOK_COLUMNS}
-           {EFFECTIVE_AUTHOR_PREDICATE}
-           ORDER BY
-             CASE
-               WHEN mo.book_uuid IS NOT NULL
-                    AND json_type(mo.overrides, '$.series_index') IS NOT NULL
-                 -- NULLIF: an override that explicitly clears the index
-                 -- (`Some("")` from the edit form) would otherwise CAST to
-                 -- 0.0 and sort to the front. Treat empty-string as "no
-                 -- index" so ORDER BY's NULLS LAST trails it — matching
-                 -- get_series.
-                 THEN CAST(NULLIF(json_extract(mo.overrides, '$.series_index'), '') AS REAL)
-               ELSE b.series_index
-             END NULLS LAST,
-             b.sort, b.id
+        r#"{EFFECTIVE_AUTHOR_CTE}
+           SELECT {BOOK_COLUMNS}
+           FROM books b
+           JOIN effective e ON e.book_id = b.id
+           ORDER BY e.series_index NULLS LAST, b.sort, b.id
            LIMIT ?3"#
     );
     let rows = sqlx::query(&sql)
@@ -120,7 +142,7 @@ async fn fetch_author_books(
     Ok(books)
 }
 
-/// Count the (uncapped) effective shelf size using the same predicate as
+/// Count the (uncapped) effective shelf size using the same UNION as
 /// [`fetch_author_books`] so `book_count` stays truthful and truncation is
 /// detectable as `book_count > books.len()`.
 async fn count_effective_author_members(
@@ -129,8 +151,8 @@ async fn count_effective_author_members(
     author_name: &str,
 ) -> Result<i64, sqlx::Error> {
     let sql = format!(
-        r#"SELECT COUNT(*)
-           {EFFECTIVE_AUTHOR_PREDICATE}"#
+        r#"{EFFECTIVE_AUTHOR_CTE}
+           SELECT COUNT(*) FROM effective"#
     );
     sqlx::query_scalar(&sql)
         .bind(author_name)
