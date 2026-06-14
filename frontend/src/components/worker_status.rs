@@ -28,7 +28,7 @@ pub fn WorkerStatusIndicator() -> Element {
     // Pruned on every render to ids still present in `recent_complete`
     // so the set can't grow past the server's own ~10 s retention
     // window (see snapshot loop below).
-    let mut dismissed = use_signal(std::collections::HashSet::<u64>::new);
+    let dismissed = use_signal(std::collections::HashSet::<u64>::new);
 
     let url_for_poll = server_url.clone();
     use_future(move || {
@@ -48,21 +48,7 @@ pub fn WorkerStatusIndicator() -> Element {
     });
 
     let snap = status();
-    // Drop any dismissed ids that the server has already evicted, so the
-    // set stays bounded by `len(recent_complete)` rather than growing
-    // monotonically across the session. Only writes when something
-    // actually changed to avoid signal-write churn on every poll.
-    {
-        let current = dismissed();
-        let live: std::collections::HashSet<u64> = current
-            .iter()
-            .copied()
-            .filter(|id| snap.recent_complete.iter().any(|p| p.task_id == *id))
-            .collect();
-        if live.len() != current.len() {
-            dismissed.set(live);
-        }
-    }
+    prune_dismissed(dismissed, &snap);
     let visible_terminals: Vec<TaskProgress> = snap
         .recent_complete
         .iter()
@@ -88,42 +74,61 @@ pub fn WorkerStatusIndicator() -> Element {
             // Recently-finished tasks. Done → inline success row that
             // fades client-side; Failed → red banner with dismiss.
             for task in visible_terminals.iter() {
-                {
-                    let id = task.task_id;
-                    match &task.state {
-                        ProgressState::Done { .. } => rsx! {
-                            DoneRow {
-                                key: "{id}",
-                                kind: task.kind,
-                                on_dismiss: move |_| {
-                                    let mut set = dismissed();
-                                    set.insert(id);
-                                    dismissed.set(set);
-                                },
-                            }
-                        },
-                        ProgressState::Failed { message } => rsx! {
-                            FailedRow {
-                                key: "{id}",
-                                kind: task.kind,
-                                message: message.clone(),
-                                on_dismiss: move |_| {
-                                    let mut set = dismissed();
-                                    set.insert(id);
-                                    dismissed.set(set);
-                                },
-                            }
-                        },
-                        // Defensive: a Running entry shouldn't be in
-                        // recent_complete, but render it as active rather
-                        // than panicking on the unreachable arm.
-                        ProgressState::Running { .. } => rsx! {
-                            ActiveRow { key: "{id}", task: task.clone() }
-                        },
-                    }
-                }
+                {terminal_row(task, dismissed)}
             }
         }
+    }
+}
+
+/// Drop dismissed ids the server has already evicted so the set stays bounded by `recent_complete`.
+fn prune_dismissed(mut dismissed: Signal<std::collections::HashSet<u64>>, snap: &WorkerStatus) {
+    let current = dismissed();
+    let live: std::collections::HashSet<u64> = current
+        .iter()
+        .copied()
+        .filter(|id| snap.recent_complete.iter().any(|p| p.task_id == *id))
+        .collect();
+    if live.len() != current.len() {
+        dismissed.set(live);
+    }
+}
+
+/// Render a single terminal-state row, dispatching on `task.state` to the matching row component.
+fn terminal_row(
+    task: &TaskProgress,
+    mut dismissed: Signal<std::collections::HashSet<u64>>,
+) -> Element {
+    let id = task.task_id;
+    match &task.state {
+        ProgressState::Done { .. } => rsx! {
+            DoneRow {
+                key: "{id}",
+                kind: task.kind,
+                on_dismiss: move |_| {
+                    let mut set = dismissed();
+                    set.insert(id);
+                    dismissed.set(set);
+                },
+            }
+        },
+        ProgressState::Failed { message } => rsx! {
+            FailedRow {
+                key: "{id}",
+                kind: task.kind,
+                message: message.clone(),
+                on_dismiss: move |_| {
+                    let mut set = dismissed();
+                    set.insert(id);
+                    dismissed.set(set);
+                },
+            }
+        },
+        // Defensive: a Running entry shouldn't be in recent_complete,
+        // but render it as active rather than panicking on the
+        // unreachable arm.
+        ProgressState::Running { .. } => rsx! {
+            ActiveRow { key: "{id}", task: task.clone() }
+        },
     }
 }
 
