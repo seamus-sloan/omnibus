@@ -358,12 +358,20 @@ struct StatusResponse {
 }
 
 /// `true` if `name` matches `seg-NNNN.ts` exactly (4 decimal digits).
+///
+/// Case-insensitive on prefix and extension so the validator stays in
+/// sync with case-insensitive filesystems (APFS, NTFS) — the transcoder
+/// writes lowercase today, but `seg-0001.TS` from the same file must
+/// still resolve. Compares byte slices via `eq_ignore_ascii_case` to
+/// avoid allocating a lowercased copy on the HLS segment hot path.
 fn is_valid_segment_name(name: &str) -> bool {
-    if !name.starts_with("seg-") || !name.ends_with(".ts") {
+    if name.len() != 11 {
         return false;
     }
-    let digits = &name[4..name.len() - 3];
-    digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit())
+    let bytes = name.as_bytes();
+    bytes[..4].eq_ignore_ascii_case(b"seg-")
+        && bytes[8..].eq_ignore_ascii_case(b".ts")
+        && bytes[4..8].iter().all(u8::is_ascii_digit)
 }
 
 #[cfg(test)]
