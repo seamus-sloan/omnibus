@@ -260,7 +260,7 @@ fn AuthorsIndexHeader(
                 }
             }
             div { class: "idx-toolbar",
-                FilterInput { filter: filter.clone(), on_filter }
+                FilterInput { filter, on_filter }
                 SortSelector { sort, on_sort }
             }
             if show_letters {
@@ -324,11 +324,9 @@ fn LetterNav(
     letter_count: usize,
     filtered_count: usize,
 ) -> Element {
-    // Letter jump strip. Letters that have at least one author
-    // render as same-page anchors targeting the section's
-    // `id="letter-{L}"` below — clicking jumps via the browser's
-    // native fragment scroll, no JS required. Letters with no
-    // authors stay as plain spans so there's nothing to jump to.
+    // Present letters become real `<a href="#letter-{frag}">` anchors so the
+    // browser's native fragment scroll handles the jump (no JS); absent
+    // letters stay as plain spans to avoid dead links.
     rsx! {
         div { class: "idx-letters",
             for l in alphabet.iter() {
