@@ -1335,7 +1335,7 @@ async fn sync_audiobooks_with_removed_above_bind_cap_succeeds() {
 
     // 1000 audiobooks: pushes the un-chunked IN(?, ?, ...) over SQLite's
     // 999-bind cap (1 library_id + 1000 uuids = 1001 binds). 1000 also
-    // forces the chunked path through three chunks (499 + 499 + 2).
+    // forces the chunked path through two chunks (500 + 500).
     const N: usize = 1000;
     let new_books: Vec<_> = (0..N)
         .map(|i| {
@@ -1357,10 +1357,10 @@ async fn sync_audiobooks_with_removed_above_bind_cap_succeeds() {
         },
     )
     .await
-    .expect("initial sync of 600 audiobooks should succeed");
+    .expect("initial sync of 1000 audiobooks should succeed");
     assert_eq!(list_books(&pool, "/lib").await.unwrap().len(), N);
 
-    // Wholesale remove all 600 in a single plan — this is the scenario
+    // Wholesale remove all 1000 in a single plan — this is the scenario
     // the issue calls out (massive library disappearing in a single scan).
     sync_audiobooks(
         &pool,
@@ -1371,7 +1371,7 @@ async fn sync_audiobooks_with_removed_above_bind_cap_succeeds() {
         },
     )
     .await
-    .expect("wholesale removal of >499 audiobooks must not exceed bind cap");
+    .expect("wholesale removal of >500 audiobooks must not exceed bind cap");
 
     assert!(
         list_books(&pool, "/lib").await.unwrap().is_empty(),

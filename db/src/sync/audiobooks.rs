@@ -119,11 +119,12 @@ async fn sync_audiobooks_removed(
     if removed_uuids.is_empty() {
         return Ok(());
     }
-    // library_id + 1 bind per uuid; chunk at 499 to stay under SQLite's
+    // library_id + 1 bind per uuid; chunk at 500 to stay under SQLite's
     // 999-param cap when a whole library (or any large diff) is removed.
     // Both the id resolve and the `books` delete run per chunk inside the
-    // same transaction, mirroring `sync_removed` in `books.rs`.
-    for chunk in removed_uuids.chunks(499) {
+    // same transaction, matching the 500-chunk convention from
+    // `sync_removed` in `books.rs`.
+    for chunk in removed_uuids.chunks(500) {
         let placeholders = std::iter::repeat_n("?", chunk.len())
             .collect::<Vec<_>>()
             .join(", ");
