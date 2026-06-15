@@ -76,7 +76,7 @@ fn mime_for_extension(path: &Path) -> &'static str {
     match path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .as_deref()
     {
         Some("png") => "image/png",

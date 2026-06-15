@@ -394,7 +394,7 @@ fn leaf_name(group_path: &str) -> String {
     PathBuf::from(group_path)
         .file_stem()
         .and_then(|s| s.to_str())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .unwrap_or_else(|| {
             PathBuf::from(group_path)
                 .file_name()
@@ -410,7 +410,7 @@ fn parent_name(group_path: &str) -> Option<String> {
         .parent()
         .and_then(|p| p.file_name())
         .and_then(|s| s.to_str())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .filter(|s| !s.is_empty())
 }
 

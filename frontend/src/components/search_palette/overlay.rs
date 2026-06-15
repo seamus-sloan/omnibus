@@ -91,7 +91,10 @@ pub(super) fn SpOverlay(open: PaletteOpen) -> Element {
     // would visually jump to index 1 instead of 0.
     let is_loading = loading();
 
-    let total = res.as_ref().map(|r| r.total_count()).unwrap_or(0);
+    let total = res
+        .as_ref()
+        .map(omnibus_shared::PaletteResults::total_count)
+        .unwrap_or(0);
     let duration = res.as_ref().map(|r| r.duration_ms).unwrap_or(0);
 
     rsx! {

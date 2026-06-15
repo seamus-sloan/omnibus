@@ -27,7 +27,7 @@ pub async fn search_books(
     };
 
     let rows = sqlx::query(
-        r#"
+        r"
         SELECT b.id, b.uuid, b.title, b.has_cover, b.accent_color,
                SUBSTR(b.pubdate, 1, 4) AS year,
 
@@ -48,7 +48,7 @@ pub async fn search_books(
         WHERE books_fts MATCH ?1 AND l.path = ?2
         ORDER BY bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0), b.sort, b.id
         LIMIT ?3
-        "#,
+        ",
     )
     .bind(&match_expr)
     .bind(library_path)

@@ -34,7 +34,7 @@ pub const MAX_BOOKS_RETURNED: i64 = 50_000;
 /// subqueries scanning the same table twice — mirroring the `json_object`
 /// shape already used for creators/identifiers. `row_to_ebook` decodes
 /// these blobs.
-pub(crate) const BOOK_COLUMNS: &str = r#"
+pub(crate) const BOOK_COLUMNS: &str = r"
     b.id, b.uuid,
     b.title, b.description, b.series_index, b.has_cover,
     b.pubdate, b.last_modified, b.timestamp, b.accent_color,
@@ -83,7 +83,7 @@ pub(crate) const BOOK_COLUMNS: &str = r#"
        FROM (SELECT DISTINCT format FROM book_files
               WHERE book_id = b.id
               ORDER BY format))                   AS formats_json
-"#;
+";
 
 #[derive(serde::Deserialize)]
 pub(crate) struct CreatorRow {

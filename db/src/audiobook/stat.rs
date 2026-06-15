@@ -96,7 +96,7 @@ pub fn stat_audiobook_library(
             let ext = entry_path
                 .extension()
                 .and_then(|s| s.to_str())
-                .map(|s| s.to_ascii_lowercase());
+                .map(str::to_ascii_lowercase);
             let accepted = ext
                 .as_deref()
                 .is_some_and(|e| super::AUDIOBOOK_EXTENSIONS.contains(&e));

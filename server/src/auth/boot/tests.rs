@@ -41,7 +41,9 @@ impl EnvGuard {
         // holding it) instead of cascading the panic into every
         // subsequent env-var test — matches the repo's other ENV_LOCK
         // / mutex call sites (e.g. db::settings, db::worker).
-        let lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let prev = std::env::var(key).ok();
         // SAFETY: `_lock` guarantees exclusive access to the process
         // environment for the duration of this guard's lifetime —
@@ -61,7 +63,9 @@ impl EnvGuard {
         // holding it) instead of cascading the panic into every
         // subsequent env-var test — matches the repo's other ENV_LOCK
         // / mutex call sites (e.g. db::settings, db::worker).
-        let lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let prev = std::env::var(key).ok();
         // SAFETY: same guarantee as `EnvGuard::set` — `_lock` is held
         // for the entire guard lifetime, preventing concurrent env access.

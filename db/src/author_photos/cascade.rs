@@ -223,7 +223,7 @@ pub(super) async fn fetch_open_library(
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .unwrap_or_else(|| "image/jpeg".into());
     if !content_type.starts_with("image/") {
         return Ok(None);

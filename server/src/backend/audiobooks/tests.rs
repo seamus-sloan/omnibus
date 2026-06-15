@@ -154,7 +154,9 @@ async fn api_get_audiobook_status_returns_preparing_when_not_transcoded() {
     // sibling test below can't interleave its `.failed` write into
     // our `OMNIBUS_DATA_DIR`. Tempdir keeps us isolated from any
     // pre-existing `./data/hls/*/audio64.failed` files on the host.
-    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
     let prev = std::env::var("OMNIBUS_DATA_DIR").ok();
     // SAFETY: held under ENV_LOCK; no other thread mutates the env.
@@ -201,7 +203,9 @@ async fn api_get_audiobook_status_returns_failed_when_failed_marker_present() {
     // assert the status endpoint surfaces `state: "failed"` instead of
     // the legacy `ready:false, progress:0` shape that the UI couldn't
     // distinguish from "preparing".
-    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
     let prev = std::env::var("OMNIBUS_DATA_DIR").ok();
     // SAFETY: held under ENV_LOCK; no other thread mutates the env.

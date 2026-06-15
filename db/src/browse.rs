@@ -53,7 +53,7 @@ pub async fn list_authors(
     // rather than once per author. UNION (not ALL) collapses a duplicate
     // author name inside one override array, matching the old `EXISTS`.
     let sql = format!(
-        r#"
+        r"
         WITH lib_paths(p) AS (VALUES {ph}),
         effective AS (
             -- (1) Canonical authorship with no creators override.
@@ -110,7 +110,7 @@ pub async fn list_authors(
           )
         ORDER BY COALESCE(a.sort, a.name) COLLATE NOCASE ASC
         LIMIT ?
-        "#
+        "
     );
     let mut q = sqlx::query(&sql);
     for path in library_paths {
@@ -165,7 +165,7 @@ pub async fn list_series(
 fn series_index_sql(n: usize) -> String {
     let ph = placeholders(n);
     format!(
-        r#"
+        r"
         WITH lib_paths(p) AS (VALUES {ph}),
         effective AS (
             -- (1) Canonical members with no series override.
@@ -233,7 +233,7 @@ fn series_index_sql(n: usize) -> String {
           )
         ORDER BY COALESCE(s.sort, s.name) COLLATE NOCASE ASC
         LIMIT ?
-        "#
+        "
     )
 }
 

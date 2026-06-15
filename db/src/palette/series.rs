@@ -40,7 +40,7 @@ pub async fn search_series(
     // scalar series override) but keeps the shape uniform with the other
     // sites.
     let rows = sqlx::query(
-        r#"
+        r"
         WITH effective AS (
           SELECT bsl.series AS series_id, NULL AS series_name, bsl.book AS book_id
             FROM books_series_link bsl
@@ -89,7 +89,7 @@ pub async fn search_series(
           )
         ORDER BY book_count DESC, s.name
         LIMIT ?3
-        "#,
+        ",
     )
     .bind(library_path)
     .bind(like_pattern)

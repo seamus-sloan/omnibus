@@ -297,7 +297,9 @@ mod tests {
     fn prepare_rows_sorts_alphabetical() {
         let rows = prepare_rows(&["M4B".into(), "EPUB".into(), "PDF".into()]);
         assert_eq!(
-            rows.iter().map(|r| r.label()).collect::<Vec<_>>(),
+            rows.iter()
+                .map(super::FormatKind::label)
+                .collect::<Vec<_>>(),
             vec!["EPUB", "M4B", "PDF"],
         );
     }
@@ -317,7 +319,9 @@ mod tests {
         // lower-cased unknown ones (cbz), which surprises users.
         let rows = prepare_rows(&["PDF".into(), "cbz".into(), "EPUB".into()]);
         assert_eq!(
-            rows.iter().map(|r| r.label()).collect::<Vec<_>>(),
+            rows.iter()
+                .map(super::FormatKind::label)
+                .collect::<Vec<_>>(),
             vec!["cbz", "EPUB", "PDF"],
         );
     }
