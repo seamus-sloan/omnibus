@@ -292,9 +292,9 @@ mod tests {
             );
         }
 
-        // The UNIQUE(user_id, book_id, format) auto-index that supersedes
-        // reading_progress_user_book_idx must still enforce uniqueness: a
-        // duplicate (user_id, book_id, format) insert must fail.
+        // The UNIQUE(user_id, book_uuid, format) auto-index (the soft-ref key
+        // post-F1) must still enforce uniqueness: a duplicate
+        // (user_id, book_uuid, format) insert must fail.
         sqlx::query("INSERT INTO users (username, password_hash, is_admin) VALUES ('u', 'h', 0)")
             .execute(&pool)
             .await
@@ -313,21 +313,21 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO reading_progress (user_id, book_id, format, epub_cfi) \
-             VALUES (1, 1, 'epub', 'cfi-1')",
+            "INSERT INTO reading_progress (user_id, book_uuid, format, epub_cfi) \
+             VALUES (1, 'bk-uuid', 'epub', 'cfi-1')",
         )
         .execute(&pool)
         .await
         .unwrap();
         let dup = sqlx::query(
-            "INSERT INTO reading_progress (user_id, book_id, format, epub_cfi) \
-             VALUES (1, 1, 'epub', 'cfi-2')",
+            "INSERT INTO reading_progress (user_id, book_uuid, format, epub_cfi) \
+             VALUES (1, 'bk-uuid', 'epub', 'cfi-2')",
         )
         .execute(&pool)
         .await;
         assert!(
             dup.is_err(),
-            "UNIQUE(user_id, book_id, format) must still reject a duplicate row"
+            "UNIQUE(user_id, book_uuid, format) must still reject a duplicate row"
         );
     }
 

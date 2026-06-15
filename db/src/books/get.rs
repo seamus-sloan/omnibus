@@ -159,6 +159,38 @@ where
     .await?)
 }
 
+/// Resolve any book reference (its own durable `books.uuid` or a
+/// `merged_uuids` ledger key for a format-merged/attached file) to the
+/// **canonical** `books.uuid` of the surviving book. `None` when the uuid
+/// matches neither. Used by the F1 user-data write paths so a row always
+/// stores the durable identity (and a merged uuid collapses onto its target)
+/// — keeping `(user_id, book_uuid, format)` uniqueness correct.
+pub async fn resolve_canonical_book_uuid_exec<'e, E>(
+    executor: E,
+    uuid: &str,
+) -> Result<Option<String>, super::BooksError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT uuid FROM books WHERE uuid = ?1
+         UNION ALL
+         SELECT b.uuid FROM merged_uuids m JOIN books b ON b.id = m.book_id WHERE m.uuid = ?1
+         LIMIT 1",
+    )
+    .bind(uuid)
+    .fetch_optional(executor)
+    .await?)
+}
+
+/// Pool-based [`resolve_canonical_book_uuid_exec`].
+pub async fn resolve_canonical_book_uuid(
+    pool: &SqlitePool,
+    uuid: &str,
+) -> Result<Option<String>, super::BooksError> {
+    resolve_canonical_book_uuid_exec(pool, uuid).await
+}
+
 /// Resolve the on-disk path of a book's file for the given format
 /// (e.g. "EPUB"). When multiple files of the same format exist, returns
 /// the one with the lowest ordinal. Ok(None) when absent.
