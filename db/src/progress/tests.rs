@@ -188,7 +188,7 @@ async fn get_progress_returns_none_when_unset() {
 async fn record_session_inserts_per_format_row() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
-    let (book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let (_book_id, uuid) = seed(&pool, "/lib", "Book A").await;
     record_session(
         &pool,
         user,
@@ -204,10 +204,10 @@ async fn record_session_inserts_per_format_row() {
     .await
     .unwrap();
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ? AND book_id = ?",
+        "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ? AND book_uuid = ?",
     )
     .bind(user)
-    .bind(book_id)
+    .bind(&uuid)
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -228,10 +228,10 @@ async fn record_session_inserts_per_format_row() {
     .await
     .unwrap();
     let audio_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM listening_sessions WHERE user_id = ? AND book_id = ?",
+        "SELECT COUNT(*) FROM listening_sessions WHERE user_id = ? AND book_uuid = ?",
     )
     .bind(user)
-    .bind(book_id)
+    .bind(&uuid)
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -261,7 +261,7 @@ async fn record_session_inserts_per_format_row() {
 async fn record_session_tx_inserts_row_when_committed() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
-    let (book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let (_book_id, uuid) = seed(&pool, "/lib", "Book A").await;
 
     let mut tx = pool.begin().await.unwrap();
     let inserted = record_session_tx(
@@ -282,10 +282,10 @@ async fn record_session_tx_inserts_row_when_committed() {
     tx.commit().await.unwrap();
 
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ? AND book_id = ?",
+        "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ? AND book_uuid = ?",
     )
     .bind(user)
-    .bind(book_id)
+    .bind(&uuid)
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -299,7 +299,7 @@ async fn record_session_tx_rollback_leaves_no_rows() {
     // mid-batch error forces an early return.
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
-    let (book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let (_book_id, uuid) = seed(&pool, "/lib", "Book A").await;
 
     {
         let mut tx = pool.begin().await.unwrap();
@@ -321,10 +321,10 @@ async fn record_session_tx_rollback_leaves_no_rows() {
     }
 
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ? AND book_id = ?",
+        "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ? AND book_uuid = ?",
     )
     .bind(user)
-    .bind(book_id)
+    .bind(&uuid)
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -359,7 +359,7 @@ async fn record_session_resolves_merged_uuid_and_records_against_canonical_book(
     // canonical book and record the session, not be dropped with Ok(false).
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
-    let (book_id, _survivor_uuid) = seed(&pool, "/lib", "Book A").await;
+    let (book_id, survivor_uuid) = seed(&pool, "/lib", "Book A").await;
     seed_merged_uuid(&pool, "merged-uuid", book_id, "epub").await;
 
     let recorded = record_session(
@@ -379,10 +379,10 @@ async fn record_session_resolves_merged_uuid_and_records_against_canonical_book(
     assert!(recorded, "merged uuid should resolve and record, not skip");
 
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ? AND book_id = ?",
+        "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ? AND book_uuid = ?",
     )
     .bind(user)
-    .bind(book_id)
+    .bind(&survivor_uuid)
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -395,7 +395,7 @@ async fn record_session_resolves_merged_audio_uuid_to_canonical_book() {
     // `listening_sessions` against the surviving book.
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
-    let (book_id, _survivor_uuid) = seed(&pool, "/lib", "Book A").await;
+    let (book_id, survivor_uuid) = seed(&pool, "/lib", "Book A").await;
     seed_merged_uuid(&pool, "merged-audio-uuid", book_id, "audio").await;
 
     let recorded = record_session(
@@ -415,15 +415,58 @@ async fn record_session_resolves_merged_audio_uuid_to_canonical_book() {
     assert!(recorded, "merged audio uuid should resolve and record");
 
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM listening_sessions WHERE user_id = ? AND book_id = ?",
+        "SELECT COUNT(*) FROM listening_sessions WHERE user_id = ? AND book_uuid = ?",
     )
     .bind(user)
-    .bind(book_id)
+    .bind(&survivor_uuid)
     .fetch_one(&pool)
     .await
     .unwrap();
     assert_eq!(
         count, 1,
         "listening session must land against the canonical book"
+    );
+}
+
+#[tokio::test]
+async fn progress_survives_hard_delete_of_book() {
+    // F1: the soft-ref (`book_uuid TEXT`, no FK, no cascade) means deleting
+    // the `books` row leaves the user's reading position intact — the
+    // durability guarantee the old `book_id … ON DELETE CASCADE` violated.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
+            audio_position_seconds: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Hard-delete the books row — what a cascade-deleting reindex (or a future
+    // GC) would do. Pre-F1 this cascaded the progress away.
+    sqlx::query("DELETE FROM books WHERE id = ?")
+        .bind(book_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let surviving: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM reading_progress WHERE user_id = ? AND book_uuid = ?",
+    )
+    .bind(user)
+    .bind(&uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        surviving, 1,
+        "reading_progress must survive a hard delete of its book (no cascade)"
     );
 }

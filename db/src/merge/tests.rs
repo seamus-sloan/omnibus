@@ -131,15 +131,14 @@ async fn merge_books_moves_progress_with_latest_wins_on_collision() {
     // Identity is minted (F2) — read the durable uuid back by scan_key.
     let source = crate::test_support::uuid_by_scan_key(&pool, &source_scan_key).await;
 
-    let target_id = book_id_by_uuid(&pool, &target).await;
-    let source_id = book_id_by_uuid(&pool, &source).await;
-    for (book_id, pos, ts) in [(target_id, 100.0, 1000), (source_id, 200.0, 2000)] {
+    // User-data tables soft-ref the durable `books.uuid` (F1).
+    for (book_uuid, pos, ts) in [(&target, 100.0, 1000), (&source, 200.0, 2000)] {
         sqlx::query(
-            "INSERT INTO reading_progress (user_id, book_id, format, audio_position_seconds, updated_at)
+            "INSERT INTO reading_progress (user_id, book_uuid, format, audio_position_seconds, updated_at)
              VALUES (?, ?, 'audio', ?, ?)",
         )
         .bind(user)
-        .bind(book_id)
+        .bind(book_uuid)
         .bind(pos)
         .bind(ts)
         .execute(&pool)
@@ -151,13 +150,14 @@ async fn merge_books_moves_progress_with_latest_wins_on_collision() {
         .await
         .unwrap();
 
-    // Exactly one row survives: the newer (source's) position.
-    let rows: Vec<(i64, f64)> =
-        sqlx::query_as("SELECT book_id, audio_position_seconds FROM reading_progress")
+    // Exactly one row survives, re-parented to the target: the newer
+    // (source's) position.
+    let rows: Vec<(String, f64)> =
+        sqlx::query_as("SELECT book_uuid, audio_position_seconds FROM reading_progress")
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(rows, vec![(target_id, 200.0)]);
+    assert_eq!(rows, vec![(target.clone(), 200.0)]);
 }
 
 #[tokio::test]
@@ -372,4 +372,39 @@ async fn undo_merge_rejects_double_undo() {
     undo_merge(&pool, out.merge_log_id).await.unwrap();
     let err = undo_merge(&pool, out.merge_log_id).await.unwrap_err();
     assert!(matches!(err, MergeError::AlreadyUndone));
+}
+
+#[tokio::test]
+async fn merge_moves_highlights_to_target() {
+    // F1 merge fix: highlights are now in the re-parent set, so a manual
+    // merge no longer loses the source book's highlights.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool).await;
+    let target = seed_ebook(&pool, "A/Dracula.epub", "Dracula", "Bram Stoker").await;
+    let source = seed_audiobook(&pool, "B/Drakula.m4b", "Drakula", "Bram Stoker").await;
+
+    crate::highlights::create_highlight(
+        &pool,
+        user,
+        &omnibus_shared::CreateHighlight {
+            book_uuid: source.clone(),
+            epub_cfi_range: "epubcfi(/6/4!/4/2,/1:0,/1:100)".into(),
+            color: omnibus_shared::HighlightColor::Blue,
+        },
+    )
+    .await
+    .unwrap();
+
+    merge_books(&pool, &source, &target, Some(user))
+        .await
+        .unwrap();
+
+    let on_target = crate::highlights::list_highlights(&pool, user, &target)
+        .await
+        .unwrap();
+    assert_eq!(
+        on_target.len(),
+        1,
+        "the source book's highlight must re-parent to the target on merge"
+    );
 }

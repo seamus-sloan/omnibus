@@ -304,7 +304,7 @@ async fn api_post_sessions_rollback_on_second_insert_error() {
     // This proves the batch-level transaction rolls back: the 1st (epub)
     // row must NOT be committed even though the insert was called.
     let (app, _state, pool) = fixture().await;
-    let (book_id, uuid) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
+    let (_book_id, uuid) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
     let user = auth_test_support::create_user(&pool, "alice").await;
     let token = auth_test_support::bearer_token(&pool, user.id).await;
 
@@ -332,10 +332,10 @@ async fn api_post_sessions_rollback_on_second_insert_error() {
 
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ? AND book_id = ?",
+        "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ? AND book_uuid = ?",
     )
     .bind(user.id)
-    .bind(book_id)
+    .bind(&uuid)
     .fetch_one(&pool)
     .await
     .unwrap();

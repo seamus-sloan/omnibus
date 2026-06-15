@@ -333,52 +333,66 @@ async fn move_links(
     Ok(())
 }
 
-/// Re-parent reading progress with latest-wins dedupe, plus bookmarks
-/// and reading/listening sessions (plain re-parent — no unique
-/// constraints there).
+/// Re-parent reading progress (with latest-wins dedupe) plus bookmarks,
+/// reading/listening sessions, and highlights from the source book onto the
+/// target. The F1 user-data tables soft-reference the durable `books.uuid`,
+/// so re-parenting is an `UPDATE … SET book_uuid = <target> WHERE book_uuid =
+/// <source>` (no FK cascade — a cascade would *delete* the children). The two
+/// canonical uuids are read from `books` while the source row still exists
+/// (it is deleted later in `finalize_merge`).
 ///
-/// Dedupe is necessary because `reading_progress.format` is the coarse
-/// `'epub' | 'audio'`, while the merge's format-collision check uses the
-/// real file formats — an M4B book merging with an MP3 book passes the
-/// check but both carry `'audio'` progress rows.
+/// Dedupe on `reading_progress` is necessary because `format` is the coarse
+/// `'epub' | 'audio'`, while the merge's format-collision check uses the real
+/// file formats — an M4B book merging with an MP3 book passes the check but
+/// both carry `'audio'` progress rows.
 async fn move_progress_and_history(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     source_id: i64,
     target_id: i64,
 ) -> Result<(), sqlx::Error> {
+    let source_uuid: String = sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
+        .bind(source_id)
+        .fetch_one(&mut **tx)
+        .await?;
+    let target_uuid: String = sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
+        .bind(target_id)
+        .fetch_one(&mut **tx)
+        .await?;
+
     // Losing source rows first (target is newer or equal) …
     sqlx::query(
-        "DELETE FROM reading_progress WHERE book_id = ?2 AND EXISTS (
+        "DELETE FROM reading_progress WHERE book_uuid = ?2 AND EXISTS (
             SELECT 1 FROM reading_progress t
-             WHERE t.book_id = ?1 AND t.user_id = reading_progress.user_id
+             WHERE t.book_uuid = ?1 AND t.user_id = reading_progress.user_id
                AND t.format = reading_progress.format
                AND t.updated_at >= reading_progress.updated_at)",
     )
-    .bind(target_id)
-    .bind(source_id)
+    .bind(&target_uuid)
+    .bind(&source_uuid)
     .execute(&mut **tx)
     .await?;
     // … then losing target rows (a strictly newer source row survived).
     sqlx::query(
-        "DELETE FROM reading_progress WHERE book_id = ?1 AND EXISTS (
+        "DELETE FROM reading_progress WHERE book_uuid = ?1 AND EXISTS (
             SELECT 1 FROM reading_progress s
-             WHERE s.book_id = ?2 AND s.user_id = reading_progress.user_id
+             WHERE s.book_uuid = ?2 AND s.user_id = reading_progress.user_id
                AND s.format = reading_progress.format)",
     )
-    .bind(target_id)
-    .bind(source_id)
+    .bind(&target_uuid)
+    .bind(&source_uuid)
     .execute(&mut **tx)
     .await?;
-    sqlx::query("UPDATE reading_progress SET book_id = ?1 WHERE book_id = ?2")
-        .bind(target_id)
-        .bind(source_id)
-        .execute(&mut **tx)
-        .await?;
-    for table in ["bookmarks", "reading_sessions", "listening_sessions"] {
-        let sql = format!("UPDATE {table} SET book_id = ?1 WHERE book_id = ?2");
+    for table in [
+        "reading_progress",
+        "bookmarks",
+        "reading_sessions",
+        "listening_sessions",
+        "highlights",
+    ] {
+        let sql = format!("UPDATE {table} SET book_uuid = ?1 WHERE book_uuid = ?2");
         sqlx::query(&sql)
-            .bind(target_id)
-            .bind(source_id)
+            .bind(&target_uuid)
+            .bind(&source_uuid)
             .execute(&mut **tx)
             .await?;
     }
