@@ -10,20 +10,21 @@ use std::path::{Path, PathBuf};
 /// parse. The incremental diff compares these against `book_files` to
 /// classify entries as Unchanged / New / Changed / Removed / Backfill.
 ///
-/// An entry with an empty `uuid` is a synthetic placeholder for an
+/// An entry with an empty `scan_key` is a synthetic placeholder for an
 /// unreadable subdirectory — `error` carries the underlying io message
 /// (e.g. "permission denied" vs. "no such file") so the legacy
 /// [`super::scan_ebook_library_with`] wrapper can surface it verbatim. The
-/// incremental diff ignores empty-uuid entries.
+/// incremental diff ignores empty-`scan_key` entries.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StatEntry {
     /// Path relative to the library root — same shape used everywhere else
     /// as the per-book "filename" string.
     pub filename: String,
-    /// Stable UUIDv5 of `(library_path, filename)`. Computed here so the
-    /// diff branch never needs to thread `library_path` around again.
-    /// Empty string for placeholder rows (see struct doc).
-    pub uuid: String,
+    /// The Phase-A diff key (F2): the book's path *relative to the scan
+    /// root*. Stored verbatim in `books.scan_key` so a library-root repoint
+    /// — which leaves relative paths unchanged — preserves every
+    /// `books.uuid`. Empty string for placeholder rows (see struct doc).
+    pub scan_key: String,
     /// Filesystem mtime in seconds since the unix epoch, or `0` if
     /// `entry.metadata().modified()` failed.
     pub mtime_epoch: i64,
@@ -48,10 +49,12 @@ pub struct StatScanResult {
 /// `uuid`) for any unreadable subdirectory — the legacy
 /// `scan_ebook_library_with` shape surfaces these as error rows.
 ///
-/// `library_path_key` is what `stable_uuid` hashes; callers pass the same
-/// string they'd use as the `books.library_path` so the uuids line up with
-/// any rows already in the DB.
+/// `library_path_key` is retained for signature compatibility with the
+/// audiobook walker; the diff key is now the library-relative path (F2), so
+/// it no longer participates in identity. Empty-`scan_key` placeholder rows
+/// mark unreadable subdirs for the legacy wrapper.
 pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatScanResult {
+    let _ = library_path_key;
     let Some(path_str) = path else {
         return StatScanResult {
             path: None,
@@ -95,7 +98,7 @@ pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatSca
                     .to_string();
                 entries.push(StatEntry {
                     filename: relative,
-                    uuid: String::new(),
+                    scan_key: String::new(),
                     mtime_epoch: 0,
                     size_bytes: 0,
                     error: Some(e.to_string()),
@@ -129,10 +132,10 @@ pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatSca
                 .to_string_lossy()
                 .to_string();
             let (mtime_epoch, size_bytes) = stat_file(&entry_path);
-            let uuid = crate::helpers::stable_uuid(library_path_key, &relative);
+            let scan_key = crate::helpers::scan_key_for(&relative);
             entries.push(StatEntry {
                 filename: relative,
-                uuid,
+                scan_key,
                 mtime_epoch,
                 size_bytes,
                 error: None,

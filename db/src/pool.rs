@@ -65,6 +65,11 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, InitDbError> {
     // migration 0016. Idempotent and a no-op once caught up.
     crate::normalize::backfill_norm_columns(&pool).await?;
 
+    // One-time fill of the F2 `scan_key` diff key for rows indexed before
+    // migration 0026. Pure DB work (reconstructed from stored columns, no
+    // filesystem reads), idempotent, safe against in-memory test DBs.
+    crate::identity::backfill_scan_keys(&pool).await?;
+
     // Issue #94: the previous `stable_uuid` implementation hashed via
     // `DefaultHasher` and produced toolchain-dependent UUIDs. Switching to
     // UUIDv5 changes every cover id on the next reindex, so any pre-existing

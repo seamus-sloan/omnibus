@@ -13,7 +13,10 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudiobookStatEntry {
     pub filename: String,
-    pub uuid: String,
+    /// The Phase-A diff key (F2): the file's path relative to the scan
+    /// root. Empty for unreadable-subdir placeholder rows. Grouped into an
+    /// [`super::AudiobookGroup`] scan_key downstream.
+    pub scan_key: String,
     pub mtime_epoch: i64,
     pub size_bytes: i64,
     pub error: Option<String>,
@@ -36,6 +39,9 @@ pub fn stat_audiobook_library(
     path: Option<&str>,
     library_path_key: &str,
 ) -> AudiobookStatScanResult {
+    // `library_path_key` no longer participates in identity (F2 keys the
+    // diff on the relative path); retained for signature symmetry.
+    let _ = library_path_key;
     let Some(path_str) = path else {
         return AudiobookStatScanResult {
             path: None,
@@ -73,7 +79,7 @@ pub fn stat_audiobook_library(
                     .to_string();
                 entries.push(AudiobookStatEntry {
                     filename: relative,
-                    uuid: String::new(),
+                    scan_key: String::new(),
                     mtime_epoch: 0,
                     size_bytes: 0,
                     error: Some(e.to_string()),
@@ -109,10 +115,10 @@ pub fn stat_audiobook_library(
                 .to_string_lossy()
                 .to_string();
             let (mtime_epoch, size_bytes) = stat_file(&entry_path);
-            let uuid = crate::helpers::stable_uuid(library_path_key, &relative);
+            let scan_key = crate::helpers::scan_key_for(&relative);
             entries.push(AudiobookStatEntry {
                 filename: relative,
-                uuid,
+                scan_key,
                 mtime_epoch,
                 size_bytes,
                 error: None,

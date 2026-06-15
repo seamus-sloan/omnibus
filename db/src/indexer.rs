@@ -26,7 +26,10 @@
 //! - **New** — on disk, not in DB. Full Phase-B parse + insert.
 //! - **Changed** — on disk, in DB, stat differs. Full Phase-B parse, then
 //!   UPDATE in place (preserves `books.id`).
-//! - **Removed** — in DB, not on disk. DELETE (cascades clean).
+//! - **Removed** — a file-backed book whose file is gone. Its `book_files`
+//!   row is dropped so the book becomes a **fileless ghost** (the `books`
+//!   row + its soft-ref user data are retained, not deleted); a returning
+//!   file re-attaches via Changed. An already-fileless ghost is left alone.
 //! - **Backfill** — in DB, in disk, DB has the migration default
 //!   `(mtime_epoch=0, size_bytes=0)`. Treated as the sentinel for "fs
 //!   metadata never observed" (post-migration), so the writer only
@@ -119,8 +122,9 @@ pub struct ReindexDiff {
     /// In the DB but the stat differs. Writer parses + UPDATEs in place
     /// (`books.id` preserved).
     pub changed: Vec<ebook::ParseTarget>,
-    /// In the DB but not on disk. Writer deletes; cascades clear the link
-    /// tables; cover files on disk get cleaned up post-commit.
+    /// A file-backed book whose file is gone (by `books.uuid`). The writer
+    /// drops its `book_files` row + clears FTS, retaining the `books` row as
+    /// a fileless ghost; cover files get cleaned up post-commit.
     pub removed: Vec<String>,
     /// In the DB and on disk, but the DB row carries the post-migration
     /// `(mtime_epoch=0, size_bytes=0)` sentinel. Writer fills in the stat
@@ -140,52 +144,66 @@ pub fn diff_library(
 ) -> ReindexDiff {
     use std::collections::HashMap;
 
-    // Skip the synthetic "unreadable subdir" placeholders the stat walk
-    // emits with an empty uuid (`scan_ebook_library_with` lifts those
-    // into error rows for the legacy wrapper, but the diff treats them
-    // as not-present).
-    let disk_by_uuid: HashMap<&str, &ebook::StatEntry> = disk
+    // The diff matches on `scan_key` — the library-relative path (F2) — so a
+    // scan-root repoint (which leaves relative paths unchanged) preserves
+    // every `books.uuid`. Empty scan_keys are synthetic "unreadable subdir"
+    // placeholders / pre-backfill rows; skip them on both sides.
+    let disk_by_key: HashMap<&str, &ebook::StatEntry> = disk
         .iter()
-        .filter(|e| !e.uuid.is_empty())
-        .map(|e| (e.uuid.as_str(), e))
+        .filter(|e| !e.scan_key.is_empty())
+        .map(|e| (e.scan_key.as_str(), e))
         .collect();
-    let db_by_uuid: HashMap<&str, &books::IndexedRow> =
-        db.iter().map(|r| (r.uuid.as_str(), r)).collect();
+    let db_by_key: HashMap<&str, &books::IndexedRow> = db
+        .iter()
+        .filter(|r| !r.scan_key.is_empty())
+        .map(|r| (r.scan_key.as_str(), r))
+        .collect();
 
     let mut out = ReindexDiff::default();
 
-    for (uuid, entry) in &disk_by_uuid {
-        match db_by_uuid.get(uuid) {
-            None => out.new.push(ebook::ParseTarget {
-                filename: entry.filename.clone(),
-                absolute: library_root.join(&entry.filename),
-                mtime_epoch: entry.mtime_epoch,
-                size_bytes: entry.size_bytes,
-            }),
+    let target = |entry: &ebook::StatEntry| ebook::ParseTarget {
+        filename: entry.filename.clone(),
+        absolute: library_root.join(&entry.filename),
+        mtime_epoch: entry.mtime_epoch,
+        size_bytes: entry.size_bytes,
+    };
+
+    for (scan_key, entry) in &disk_by_key {
+        match db_by_key.get(scan_key) {
+            None => out.new.push(target(entry)),
+            Some(row) if !row.has_file => {
+                // A fileless ghost whose file is back on disk. Route through
+                // Changed: the writer re-creates the `book_files` row while
+                // preserving the existing `books.uuid` (auto-relink, F2).
+                out.changed.push(target(entry));
+            }
             Some(row) => {
                 let never_observed = row.mtime_epoch == 0 && row.size_bytes == 0;
                 let matches =
                     row.mtime_epoch == entry.mtime_epoch && row.size_bytes == entry.size_bytes;
                 if never_observed {
                     out.backfill
-                        .push(((*uuid).to_string(), entry.mtime_epoch, entry.size_bytes));
+                        .push((row.uuid.clone(), entry.mtime_epoch, entry.size_bytes));
                 } else if matches {
-                    out.unchanged.push((*uuid).to_string());
+                    out.unchanged.push(row.uuid.clone());
                 } else {
-                    out.changed.push(ebook::ParseTarget {
-                        filename: entry.filename.clone(),
-                        absolute: library_root.join(&entry.filename),
-                        mtime_epoch: entry.mtime_epoch,
-                        size_bytes: entry.size_bytes,
-                    });
+                    out.changed.push(target(entry));
                 }
             }
         }
     }
 
     for row in db {
-        if !disk_by_uuid.contains_key(row.uuid.as_str()) {
-            out.removed.push(row.uuid.clone());
+        if row.scan_key.is_empty() {
+            continue;
+        }
+        if !disk_by_key.contains_key(row.scan_key.as_str()) {
+            // A file-backed book whose file is gone becomes a fileless
+            // ghost (the row + its soft-ref user data are retained, not
+            // deleted). An already-fileless ghost is left untouched.
+            if row.has_file {
+                out.removed.push(row.uuid.clone());
+            }
         }
     }
 
@@ -323,10 +341,10 @@ pub async fn reindex_audiobooks_with_progress(
     let library_root: PathBuf = PathBuf::from(library_path);
     let groups_as_stat: Vec<ebook::StatEntry> = groups
         .iter()
-        .filter(|g| !g.uuid.is_empty())
+        .filter(|g| !g.scan_key.is_empty())
         .map(|g| ebook::StatEntry {
             filename: g.group_path.clone(),
-            uuid: g.uuid.clone(),
+            scan_key: g.scan_key.clone(),
             mtime_epoch: g.max_mtime_epoch,
             size_bytes: g.total_size_bytes,
             error: None,
@@ -337,7 +355,7 @@ pub async fn reindex_audiobooks_with_progress(
     // Phase B: parse only the New and Changed groups.
     let groups_by_group_path: std::collections::HashMap<String, audiobook::AudiobookGroup> = groups
         .into_iter()
-        .filter(|g| !g.uuid.is_empty())
+        .filter(|g| !g.scan_key.is_empty())
         .map(|g| (g.group_path.clone(), g))
         .collect();
 

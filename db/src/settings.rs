@@ -49,7 +49,27 @@ pub async fn get_settings(pool: &SqlitePool) -> Result<Settings, SettingsError> 
 /// side-effects don't run inside the DB transaction. Callers should kick
 /// off a reindex afterwards — this function does not touch the indexer.
 pub async fn set_settings(pool: &SqlitePool, settings: &Settings) -> Result<(), SettingsError> {
+    // Read the *current* paths before writing so a changed path can be
+    // repointed in place (F2) — keeping the `scan_roots` row's id, and thus
+    // every `books.uuid` keyed under it, stable across the move.
+    let current = get_settings(pool).await?;
     let mut tx = pool.begin().await?;
+    // The other slot's *new* path is passed so a shared scan root (both slots
+    // pointing at one path) isn't silently moved when only one slot changes.
+    repoint_scan_root(
+        &mut tx,
+        current.ebook_library_path.as_deref(),
+        settings.ebook_library_path.as_deref(),
+        settings.audiobook_library_path.as_deref(),
+    )
+    .await?;
+    repoint_scan_root(
+        &mut tx,
+        current.audiobook_library_path.as_deref(),
+        settings.audiobook_library_path.as_deref(),
+        settings.ebook_library_path.as_deref(),
+    )
+    .await?;
     upsert_or_clear(
         &mut tx,
         EBOOK_LIBRARY_PATH_KEY,
@@ -85,76 +105,109 @@ pub async fn set_settings(pool: &SqlitePool, settings: &Settings) -> Result<(), 
     Ok(())
 }
 
-/// Delete every `scan_roots` row whose `path` is not in `keep`, along with
-/// its books, dependent rows removed by book-level cascades, FTS rows, and
-/// on-disk cover files. Settings has at most one ebook and one audiobook
-/// path, so any scan root whose path isn't one of those is orphaned and must
-/// go — otherwise switching the configured path leaves the old library's
-/// rows behind and `list_books` callers for the old path continue to see
-/// its data.
+/// Repoint a slot's `scan_roots` row in place when its configured path
+/// changes (F2). Updating the existing row's `path` (rather than letting
+/// `upsert_library` insert a new one) keeps the row id — and therefore every
+/// `books.uuid` keyed under that `library_id` — stable, so the next reindex
+/// matches each file by its unchanged relative `scan_key` and preserves its
+/// identity. The attached-file location overrides (`book_files.library_path`)
+/// and the attach ledger (`merged_uuids.library_path`) are repointed in the
+/// same step so attachments stay discoverable and resolve to the new root.
 ///
-/// Returns the orphaned books' UUIDs so the caller can delete the matching
-/// cover files *after* committing the transaction — filesystem side-effects
-/// must not run inside the DB transaction.
+/// A no-op unless both old and new paths are set and differ; skipped if a row
+/// for the new path already exists (avoid a UNIQUE collision — the existing
+/// row wins and the reindex reconciles), and skipped when `old` is still
+/// referenced by the *other* slot's new path (a shared scan root must not be
+/// moved out from under the slot that still uses it).
+async fn repoint_scan_root(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    old: Option<&str>,
+    new: Option<&str>,
+    other_new: Option<&str>,
+) -> Result<(), SettingsError> {
+    let (Some(old), Some(new)) = (old, new) else {
+        return Ok(());
+    };
+    if old == new {
+        return Ok(());
+    }
+    // Shared-root guard: the other slot still points at `old`, so renaming the
+    // row would silently move both libraries and leave the other slot dangling.
+    if other_new == Some(old) {
+        return Ok(());
+    }
+    let new_exists: Option<i64> = sqlx::query_scalar("SELECT id FROM scan_roots WHERE path = ?")
+        .bind(new)
+        .fetch_optional(&mut **tx)
+        .await?;
+    if new_exists.is_some() {
+        return Ok(());
+    }
+    let display_name = Path::new(new)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(new)
+        .to_string();
+    sqlx::query("UPDATE scan_roots SET path = ?, display_name = ? WHERE path = ?")
+        .bind(new)
+        .bind(&display_name)
+        .bind(old)
+        .execute(&mut **tx)
+        .await?;
+    // Repoint the file-location overrides + attach ledger that key on the
+    // *file's* scanned root (set only for cross-format attachments) so the
+    // reindex diff (`list_merged_rows_for_formats`) and `book_file_path*`
+    // resolve to the new root instead of the stale one.
+    sqlx::query("UPDATE merged_uuids SET library_path = ? WHERE library_path = ?")
+        .bind(new)
+        .bind(old)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("UPDATE book_files SET library_path = ? WHERE library_path = ?")
+        .bind(new)
+        .bind(old)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// Drop **childless** orphan `scan_roots` rows whose `path` is not in `keep`.
+///
+/// Never-prune (F2): a removed scan root that still owns books is **kept**,
+/// and its books (plus their soft-ref user data) are retained rather than
+/// cascade-deleted — the durable-identity safety net. Books under a cleared
+/// path simply stop being listed (no `list_books` call passes that path) and
+/// reappear if it is re-added. Only roots with zero books are swept, to bound
+/// empty-row accumulation; nothing user-facing is deleted, so the returned
+/// uuid list (for post-commit cover cleanup) is always empty.
 pub(crate) async fn prune_orphan_libraries(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     keep: &[Option<&str>],
 ) -> Result<Vec<String>, SettingsError> {
-    let orphans: Vec<(i64, String)> = sqlx::query_as("SELECT id, path FROM scan_roots")
+    let childless_orphans: Vec<i64> = sqlx::query_as("SELECT id, path FROM scan_roots")
         .fetch_all(&mut **tx)
         .await?
         .into_iter()
         .filter(|(_, path): &(i64, String)| {
             !keep.iter().any(|k| k.map(|s| s == path).unwrap_or(false))
         })
+        .map(|(id, _)| id)
         .collect();
 
-    if orphans.is_empty() {
-        return Ok(Vec::new());
+    for id in childless_orphans {
+        // Conditional delete: the row goes only if it has no books. A root
+        // that still owns books is left in place (never-prune) so the FK
+        // cascade on `books.library_id` is never triggered.
+        sqlx::query(
+            "DELETE FROM scan_roots WHERE id = ?
+              AND NOT EXISTS (SELECT 1 FROM books WHERE library_id = scan_roots.id)",
+        )
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
     }
 
-    let orphan_ids: Vec<i64> = orphans.iter().map(|(id, _)| *id).collect();
-
-    // Collect every orphaned book's cover UUID in a single `IN (...)` query
-    // instead of one `SELECT` per library — the cleanup branch runs on every
-    // reindex (via `set_settings`/`replace_books`), so the per-library
-    // round-trip was an N+1 that degrades linearly with the number of
-    // accumulated orphans (#149). We chunk on SQLite's 999-parameter bind
-    // limit, matching the `load_overrides_bulk` batching introduced in #77.
-    let mut orphan_uuids: Vec<String> = Vec::new();
-    for chunk in orphan_ids.chunks(500) {
-        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-
-        let select_sql = format!("SELECT id, uuid FROM books WHERE library_id IN ({placeholders})");
-        let mut select = sqlx::query_as::<_, (i64, String)>(&select_sql);
-        for id in chunk {
-            select = select.bind(id);
-        }
-        let book_rows = select.fetch_all(&mut **tx).await?;
-
-        // Clear each orphaned book's FTS row through the door before the
-        // cascade DELETE on `books` (standalone FTS5 has no FK).
-        for (book_id, _) in &book_rows {
-            crate::sync::delete_fts(tx, *book_id).await?;
-        }
-        orphan_uuids.extend(book_rows.into_iter().map(|(_, uuid)| uuid));
-
-        let books_sql = format!("DELETE FROM books WHERE library_id IN ({placeholders})");
-        let mut books_delete = sqlx::query(&books_sql);
-        for id in chunk {
-            books_delete = books_delete.bind(id);
-        }
-        books_delete.execute(&mut **tx).await?;
-
-        let scan_roots_sql = format!("DELETE FROM scan_roots WHERE id IN ({placeholders})");
-        let mut scan_roots_delete = sqlx::query(&scan_roots_sql);
-        for id in chunk {
-            scan_roots_delete = scan_roots_delete.bind(id);
-        }
-        scan_roots_delete.execute(&mut **tx).await?;
-    }
-
-    Ok(orphan_uuids)
+    Ok(Vec::new())
 }
 
 async fn upsert_or_clear(

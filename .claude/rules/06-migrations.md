@@ -31,6 +31,14 @@ works in production.
 
 ## Book-identity tables
 
+`books.uuid` is the **durable** book identity (F2, migration `0026`): a
+random UUIDv4 minted once at insert and never recomputed. The reindex diff
+matches disk-vs-DB on `books.scan_key` (the library-relative path), so a
+scan-root repoint preserves every uuid; a removed file **ghosts** its book
+(drops `book_files`, retains the `books` row) so the identity — and anything
+keyed on it — survives. `stable_uuid(library_path, filename)` is no longer
+the identity; it survives only as the `merged_uuids` attach-ledger key.
+
 If the new table references a book, mind `merged_uuids` (cross-format
 attach/merge, migration `0016`): resolve uuids through
 `resolve_book_id_by_uuid` (which falls back to merged uuids) rather than
