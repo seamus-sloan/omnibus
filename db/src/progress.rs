@@ -1,13 +1,15 @@
 //! Server-authoritative reading/listening position sync plus batched
 //! session reports. Position upserts are last-write-wins on
-//! `(user_id, book_id, format)`; session inserts go to the per-format
-//! `reading_sessions` / `listening_sessions` tables. Both paths resolve
-//! `book_uuid` through the same merged-uuid-aware resolver.
+//! `(user_id, book_uuid, format)`; session inserts go to the per-format
+//! `reading_sessions` / `listening_sessions` tables. All rows soft-reference
+//! the durable `books.uuid` (F1 — no FK, no cascade), resolved through the
+//! same merged-uuid-aware canonical resolver so a format-merged uuid stores
+//! the surviving book's identity.
 
 use omnibus_shared::{ProgressFormat, ProgressRecord, ProgressUpdate, SessionReport};
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
-use crate::{resolve_book_id_by_uuid, resolve_book_id_by_uuid_exec};
+use crate::{resolve_canonical_book_uuid, resolve_canonical_book_uuid_exec};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProgressError {
@@ -51,28 +53,29 @@ fn parse_format(raw: &str) -> ProgressFormat {
 }
 
 /// Upsert a position row for `(user, book, format)` and return the new
-/// server-authoritative record. Resolves `book_uuid` → `book_id`; returns
-/// `ProgressError::BookNotFound` when the uuid is unknown.
+/// server-authoritative record. Resolves the request uuid to the **canonical**
+/// `books.uuid` (keeping the `BookNotFound` guard — you cannot record progress
+/// for a book the server has never indexed) and stores/keys on it.
 pub async fn upsert_progress(
     pool: &SqlitePool,
     user_id: i64,
     update: &ProgressUpdate,
 ) -> Result<ProgressRecord, ProgressError> {
-    let book_id = resolve_book_id_by_uuid(pool, &update.book_uuid)
+    let book_uuid = resolve_canonical_book_uuid(pool, &update.book_uuid)
         .await?
         .ok_or(ProgressError::BookNotFound)?;
     let fmt = format_str(update.format);
     sqlx::query(
         "INSERT INTO reading_progress
-            (user_id, book_id, format, epub_cfi, audio_position_seconds, updated_at)
+            (user_id, book_uuid, format, epub_cfi, audio_position_seconds, updated_at)
          VALUES (?, ?, ?, ?, ?, strftime('%s','now'))
-         ON CONFLICT(user_id, book_id, format) DO UPDATE SET
+         ON CONFLICT(user_id, book_uuid, format) DO UPDATE SET
              epub_cfi = excluded.epub_cfi,
              audio_position_seconds = excluded.audio_position_seconds,
              updated_at = strftime('%s','now')",
     )
     .bind(user_id)
-    .bind(book_id)
+    .bind(&book_uuid)
     .bind(fmt)
     .bind(update.epub_cfi.as_deref())
     .bind(update.audio_position_seconds)
@@ -82,15 +85,15 @@ pub async fn upsert_progress(
     let row = sqlx::query(
         "SELECT epub_cfi, audio_position_seconds, updated_at
          FROM reading_progress
-         WHERE user_id = ? AND book_id = ? AND format = ?",
+         WHERE user_id = ? AND book_uuid = ? AND format = ?",
     )
     .bind(user_id)
-    .bind(book_id)
+    .bind(&book_uuid)
     .bind(fmt)
     .fetch_one(pool)
     .await?;
     Ok(ProgressRecord {
-        book_uuid: update.book_uuid.clone(),
+        book_uuid,
         format: update.format,
         epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
         audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
@@ -107,17 +110,17 @@ pub async fn get_progress(
     book_uuid: &str,
     format: ProgressFormat,
 ) -> Result<Option<ProgressRecord>, ProgressError> {
-    let Some(book_id) = resolve_book_id_by_uuid(pool, book_uuid).await? else {
+    let Some(canonical) = resolve_canonical_book_uuid(pool, book_uuid).await? else {
         return Ok(None);
     };
     let fmt = format_str(format);
     let Some(row) = sqlx::query(
         "SELECT format, epub_cfi, audio_position_seconds, updated_at
          FROM reading_progress
-         WHERE user_id = ? AND book_id = ? AND format = ?",
+         WHERE user_id = ? AND book_uuid = ? AND format = ?",
     )
     .bind(user_id)
-    .bind(book_id)
+    .bind(&canonical)
     .bind(fmt)
     .fetch_optional(pool)
     .await?
@@ -125,7 +128,7 @@ pub async fn get_progress(
         return Ok(None);
     };
     Ok(Some(ProgressRecord {
-        book_uuid: book_uuid.to_string(),
+        book_uuid: canonical,
         format: parse_format(row.try_get::<String, _>("format")?.as_str()),
         epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
         audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
@@ -152,18 +155,19 @@ pub async fn record_session_tx(
     // started still records against the surviving book instead of being
     // silently dropped. `Ok(false)` now means "unknown in neither `books`
     // nor `merged_uuids`".
-    let Some(book_id) = resolve_book_id_by_uuid_exec(&mut **tx, &report.book_uuid).await? else {
+    let Some(book_uuid) = resolve_canonical_book_uuid_exec(&mut **tx, &report.book_uuid).await?
+    else {
         return Ok(false);
     };
     match report.format {
         ProgressFormat::Epub => {
             sqlx::query(
                 "INSERT INTO reading_sessions
-                    (user_id, book_id, started_at, ended_at, seconds_read, device_id)
+                    (user_id, book_uuid, started_at, ended_at, seconds_read, device_id)
                  VALUES (?, ?, ?, ?, ?, ?)",
             )
             .bind(user_id)
-            .bind(book_id)
+            .bind(&book_uuid)
             .bind(report.started_at)
             .bind(report.ended_at)
             .bind(report.progress_units)
@@ -174,11 +178,11 @@ pub async fn record_session_tx(
         ProgressFormat::Audio => {
             sqlx::query(
                 "INSERT INTO listening_sessions
-                    (user_id, book_id, started_at, ended_at, seconds_listened, device_id)
+                    (user_id, book_uuid, started_at, ended_at, seconds_listened, device_id)
                  VALUES (?, ?, ?, ?, ?, ?)",
             )
             .bind(user_id)
-            .bind(book_id)
+            .bind(&book_uuid)
             .bind(report.started_at)
             .bind(report.ended_at)
             .bind(report.progress_units)

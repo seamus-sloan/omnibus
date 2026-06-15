@@ -44,7 +44,8 @@ pub use books::{
     library_from_db_combined, library_from_db_with_total, library_from_db_with_total_combined,
     list_books, list_books_for_paths, list_indexed_rows, list_indexed_rows_for_formats,
     list_merged_rows_for_formats, resolve_book_id_by_uuid, resolve_book_id_by_uuid_exec,
-    search_books, search_books_with_total, BooksError, IndexedRow, MAX_BOOKS_RETURNED,
+    resolve_canonical_book_uuid, resolve_canonical_book_uuid_exec, search_books,
+    search_books_with_total, BooksError, IndexedRow, MAX_BOOKS_RETURNED,
 };
 pub use browse::*;
 pub use covers::{covers_dir, get_cover, get_last_modified_epoch, CoversError};

@@ -27,7 +27,8 @@ mod tests;
 
 pub use get::{
     book_file_path, book_file_path_by_id, get_book, get_book_by_uuid, get_book_files,
-    resolve_book_id_by_uuid, resolve_book_id_by_uuid_exec,
+    resolve_book_id_by_uuid, resolve_book_id_by_uuid_exec, resolve_canonical_book_uuid,
+    resolve_canonical_book_uuid_exec,
 };
 pub use list::{
     collect_paths, count_books, count_books_for_paths, library_from_db, library_from_db_combined,

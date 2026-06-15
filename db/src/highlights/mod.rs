@@ -4,7 +4,7 @@
 use omnibus_shared::{CreateHighlight, Highlight, HighlightColor};
 use sqlx::{Row, SqlitePool};
 
-use crate::resolve_book_id_by_uuid;
+use crate::resolve_canonical_book_uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HighlightError {
@@ -33,15 +33,15 @@ pub async fn create_highlight(
     user_id: i64,
     input: &CreateHighlight,
 ) -> Result<Highlight, HighlightError> {
-    let book_id = resolve_book_id_by_uuid(pool, &input.book_uuid)
+    let book_uuid = resolve_canonical_book_uuid(pool, &input.book_uuid)
         .await?
         .ok_or(HighlightError::BookNotFound)?;
     let id = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO highlights (user_id, book_id, epub_cfi_range, color)
+        "INSERT INTO highlights (user_id, book_uuid, epub_cfi_range, color)
          VALUES (?, ?, ?, ?) RETURNING id",
     )
     .bind(user_id)
-    .bind(book_id)
+    .bind(&book_uuid)
     .bind(&input.epub_cfi_range)
     .bind(input.color.as_str())
     .fetch_one(pool)
@@ -56,18 +56,17 @@ pub async fn list_highlights(
     user_id: i64,
     book_uuid: &str,
 ) -> Result<Vec<Highlight>, HighlightError> {
-    let Some(book_id) = resolve_book_id_by_uuid(pool, book_uuid).await? else {
+    let Some(canonical) = resolve_canonical_book_uuid(pool, book_uuid).await? else {
         return Ok(vec![]);
     };
     let rows = sqlx::query(
-        "SELECT h.id, b.uuid, h.epub_cfi_range, h.color, h.note, h.created_at
+        "SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, h.created_at
          FROM highlights h
-         JOIN books b ON b.id = h.book_id
-         WHERE h.user_id = ? AND h.book_id = ?
+         WHERE h.user_id = ? AND h.book_uuid = ?
          ORDER BY h.created_at ASC",
     )
     .bind(user_id)
-    .bind(book_id)
+    .bind(&canonical)
     .fetch_all(pool)
     .await?;
 
@@ -135,9 +134,8 @@ async fn get_highlight_by_id(
     highlight_id: i64,
 ) -> Result<Highlight, HighlightError> {
     let row = sqlx::query(
-        "SELECT h.id, b.uuid, h.epub_cfi_range, h.color, h.note, h.created_at
+        "SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, h.created_at
          FROM highlights h
-         JOIN books b ON b.id = h.book_id
          WHERE h.id = ? AND h.user_id = ?",
     )
     .bind(highlight_id)
@@ -154,7 +152,7 @@ fn row_to_highlight(row: &sqlx::sqlite::SqliteRow) -> Result<Highlight, Highligh
     let color = HighlightColor::parse(&color_str).unwrap_or(HighlightColor::Amber);
     Ok(Highlight {
         id: row.try_get("id")?,
-        book_uuid: row.try_get::<String, _>("uuid")?,
+        book_uuid: row.try_get::<String, _>("book_uuid")?,
         epub_cfi_range: row.try_get("epub_cfi_range")?,
         color,
         note: row.try_get("note")?,
