@@ -260,68 +260,102 @@ fn AuthorsIndexHeader(
                 }
             }
             div { class: "idx-toolbar",
-                div { class: "idx-search",
-                    input {
-                        r#type: "search",
-                        placeholder: "Filter authors by name\u{2026}",
-                        aria_label: "Filter authors by name",
-                        value: "{filter}",
-                        "data-testid": "authors-filter",
-                        oninput: move |e| on_filter.call(e.value()),
-                    }
+                FilterInput { filter: filter.clone(), on_filter }
+                SortSelector { sort, on_sort }
+            }
+            if show_letters {
+                LetterNav {
+                    alphabet: alphabet.clone(),
+                    present_letters: present_letters.clone(),
+                    letter_count,
+                    filtered_count,
                 }
-                div { class: "idx-sort",
-                    span { class: "label", "Sort" }
-                    button {
-                        class: "idx-btn",
-                        "aria-pressed": if sort == Sort::Name { "true" } else { "false" },
-                        "data-testid": "authors-sort-name",
-                        onclick: move |_| on_sort.call(Sort::Name),
-                        "Last name A\u{2013}Z"
-                    }
-                    button {
-                        class: "idx-btn",
-                        "aria-pressed": if sort == Sort::BookCount { "true" } else { "false" },
-                        "data-testid": "authors-sort-count",
-                        onclick: move |_| on_sort.call(Sort::BookCount),
-                        "Most books"
+            }
+        }
+    }
+}
+
+/// Search input that filters the author list by display name as the admin types.
+#[component]
+fn FilterInput(filter: String, on_filter: EventHandler<String>) -> Element {
+    rsx! {
+        div { class: "idx-search",
+            input {
+                r#type: "search",
+                placeholder: "Filter authors by name\u{2026}",
+                aria_label: "Filter authors by name",
+                value: "{filter}",
+                "data-testid": "authors-filter",
+                oninput: move |e| on_filter.call(e.value()),
+            }
+        }
+    }
+}
+
+/// Two-button toolbar that picks between surname A–Z and most-books sort axes.
+#[component]
+fn SortSelector(sort: Sort, on_sort: EventHandler<Sort>) -> Element {
+    rsx! {
+        div { class: "idx-sort",
+            span { class: "label", "Sort" }
+            button {
+                class: "idx-btn",
+                "aria-pressed": if sort == Sort::Name { "true" } else { "false" },
+                "data-testid": "authors-sort-name",
+                onclick: move |_| on_sort.call(Sort::Name),
+                "Last name A\u{2013}Z"
+            }
+            button {
+                class: "idx-btn",
+                "aria-pressed": if sort == Sort::BookCount { "true" } else { "false" },
+                "data-testid": "authors-sort-count",
+                onclick: move |_| on_sort.call(Sort::BookCount),
+                "Most books"
+            }
+        }
+    }
+}
+
+/// A–Z (plus `#`) jump strip; present letters become same-page anchors targeting `id="letter-{L}"` sections.
+#[component]
+fn LetterNav(
+    alphabet: Vec<char>,
+    present_letters: std::collections::HashSet<char>,
+    letter_count: usize,
+    filtered_count: usize,
+) -> Element {
+    // Letter jump strip. Letters that have at least one author
+    // render as same-page anchors targeting the section's
+    // `id="letter-{L}"` below — clicking jumps via the browser's
+    // native fragment scroll, no JS required. Letters with no
+    // authors stay as plain spans so there's nothing to jump to.
+    rsx! {
+        div { class: "idx-letters",
+            for l in alphabet.iter() {
+                {
+                    let has = present_letters.contains(l);
+                    // `#` is not valid inside a URL fragment, so the
+                    // non-alpha bucket gets a textual slug instead.
+                    let frag = letter_frag(*l);
+                    if has {
+                        rsx! {
+                            a {
+                                class: "idx-letter idx-letter-on",
+                                href: "#letter-{frag}",
+                                "data-testid": "authors-letter-{frag}",
+                                "{l}"
+                            }
+                        }
+                    } else {
+                        rsx! {
+                            span { class: "idx-letter", "{l}" }
+                        }
                     }
                 }
             }
-            // Letter jump strip. Letters that have at least one author
-            // render as same-page anchors targeting the section's
-            // `id="letter-{L}"` below — clicking jumps via the browser's
-            // native fragment scroll, no JS required. Letters with no
-            // authors stay as plain spans so there's nothing to jump to.
-            if show_letters {
-                div { class: "idx-letters",
-                    for l in alphabet.iter() {
-                        {
-                            let has = present_letters.contains(l);
-                            // `#` is not valid inside a URL fragment, so the
-                            // non-alpha bucket gets a textual slug instead.
-                            let frag = letter_frag(*l);
-                            if has {
-                                rsx! {
-                                    a {
-                                        class: "idx-letter idx-letter-on",
-                                        href: "#letter-{frag}",
-                                        "data-testid": "authors-letter-{frag}",
-                                        "{l}"
-                                    }
-                                }
-                            } else {
-                                rsx! {
-                                    span { class: "idx-letter", "{l}" }
-                                }
-                            }
-                        }
-                    }
-                    span { class: "idx-letters-spacer" }
-                    span { class: "mono idx-letters-count",
-                        "{letter_count} letters \u{b7} {filtered_count} authors"
-                    }
-                }
+            span { class: "idx-letters-spacer" }
+            span { class: "mono idx-letters-count",
+                "{letter_count} letters \u{b7} {filtered_count} authors"
             }
         }
     }
