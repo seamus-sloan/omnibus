@@ -1322,3 +1322,67 @@ async fn book_with_duplicate_identifier_dedups_to_one_row() {
         "exact-duplicate identifier tuple must collapse to one row"
     );
 }
+
+/// Removing a single audiobook diff bucket that exceeds SQLite's 999-bind
+/// parameter cap must succeed: `sync_audiobooks_removed` has to chunk the
+/// `WHERE uuid IN (?, ?, ...)` list (mirroring `sync_removed` in books.rs).
+/// Un-chunked, a single 1000-uuid removal would bind library_id + 1000 uuids
+/// and fail at runtime with "too many SQL variables".
+#[tokio::test]
+async fn sync_audiobooks_with_removed_above_bind_cap_succeeds() {
+    let _covers = CoversTempDir::new("ab_remove_chunk");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    // 1000 audiobooks: pushes the un-chunked IN(?, ?, ...) over SQLite's
+    // 999-bind cap (1 library_id + 1000 uuids = 1001 binds). 1000 also
+    // forces the chunked path through three chunks (499 + 499 + 2).
+    const N: usize = 1000;
+    let new_books: Vec<_> = (0..N)
+        .map(|i| {
+            indexed_audiobook(
+                &format!("Author/Book{i:04}.m4b"),
+                &format!("Book {i}"),
+                Some("Author"),
+            )
+        })
+        .collect();
+    let all_uuids: Vec<String> = new_books.iter().map(|b| b.uuid.clone()).collect();
+
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            new_books,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("initial sync of 600 audiobooks should succeed");
+    assert_eq!(list_books(&pool, "/lib").await.unwrap().len(), N);
+
+    // Wholesale remove all 600 in a single plan — this is the scenario
+    // the issue calls out (massive library disappearing in a single scan).
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            removed_uuids: all_uuids,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("wholesale removal of >499 audiobooks must not exceed bind cap");
+
+    assert!(
+        list_books(&pool, "/lib").await.unwrap().is_empty(),
+        "every audiobook row should be gone after wholesale removal"
+    );
+    let fts_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books_fts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        fts_count, 0,
+        "FTS rows should be cleared for every removed audiobook"
+    );
+}
