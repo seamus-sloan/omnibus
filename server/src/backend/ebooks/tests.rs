@@ -215,13 +215,23 @@ async fn api_get_ebooks_sets_total_cap_header_when_truncated() {
             UNION ALL
             SELECT i + 1 FROM n WHERE i < ?
         )
-        INSERT INTO books (uuid, library_id, path, title, sort)
-        SELECT 'uuid-' || i, ?, '/lib/b' || i, 'Title ' || i,
+        INSERT INTO books (uuid, scan_key, library_id, path, title, sort)
+        SELECT 'uuid-' || i, 'b' || i || '.epub', ?, '/lib/b' || i, 'Title ' || i,
                'Title ' || printf('%010d', i)
           FROM n
         ",
     )
     .bind(total)
+    .bind(lib_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Give every seeded book a `book_files` row so the F2 ghost filter
+    // (which hides fileless books from list/count reads) keeps them counted.
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch)
+         SELECT id, 'EPUB', 'b' || id, 1, 1 FROM books WHERE library_id = ?",
+    )
     .bind(lib_id)
     .execute(&pool)
     .await

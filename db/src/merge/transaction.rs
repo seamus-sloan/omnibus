@@ -54,15 +54,24 @@ pub async fn merge_books(
         .bind(source_id)
         .execute(&mut *tx)
         .await?;
+    // The source file's relative path (F2 scan_key) so the next reindex
+    // recognizes the now-attached file by scan_key and classifies it
+    // Unchanged instead of resurrecting a duplicate.
+    let source_scan_key: Option<String> =
+        sqlx::query_scalar("SELECT scan_key FROM books WHERE id = ?")
+            .bind(source_id)
+            .fetch_optional(&mut *tx)
+            .await?;
     for fmt in &snapshot.native_formats {
         sqlx::query(
-            "INSERT OR REPLACE INTO merged_uuids (uuid, book_id, format, library_path)
-             VALUES (?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO merged_uuids (uuid, book_id, format, library_path, scan_key)
+             VALUES (?, ?, ?, ?, ?)",
         )
         .bind(source_uuid)
         .bind(target_id)
         .bind(fmt)
         .bind(&snapshot.library_path)
+        .bind(&source_scan_key)
         .execute(&mut *tx)
         .await?;
     }

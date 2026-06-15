@@ -6,18 +6,27 @@
 
 use sqlx::Transaction;
 
-/// Reindex protection: has this uuid already been merged into / attached
-/// to a book? Returns the target `(book_id, format)` when so. Covers
-/// both index-time auto-attach and manual merges, and works even when
-/// the titles no longer match.
-pub(super) async fn attach_target_by_uuid(
+/// Reindex protection: has the file at `(library_path, scan_key)` already
+/// been merged into / attached to a book? Returns the recorded
+/// `(uuid, book_id, format)` when so, so the caller re-attaches against the
+/// **stored** ledger uuid rather than a freshly-recomputed path-derived one.
+/// Keying on the relative `scan_key` (F2) — not on `stable_uuid` — is what
+/// lets an attachment survive a repoint of its scan root. Covers both
+/// index-time auto-attach and manual merges, even when the titles no longer
+/// match.
+pub(super) async fn find_attachment_by_scan_key(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
-    uuid: &str,
-) -> Result<Option<(i64, String)>, sqlx::Error> {
-    sqlx::query_as::<_, (i64, String)>("SELECT book_id, format FROM merged_uuids WHERE uuid = ?")
-        .bind(uuid)
-        .fetch_optional(&mut **tx)
-        .await
+    library_path: &str,
+    scan_key: &str,
+) -> Result<Option<(String, i64, String)>, sqlx::Error> {
+    sqlx::query_as::<_, (String, i64, String)>(
+        "SELECT uuid, book_id, format FROM merged_uuids
+          WHERE library_path = ? AND scan_key = ?",
+    )
+    .bind(library_path)
+    .bind(scan_key)
+    .fetch_optional(&mut **tx)
+    .await
 }
 
 /// Conservative title+author match for a brand-new file: the book this
@@ -53,22 +62,37 @@ pub(super) async fn find_attach_target(
 
 /// Record (or refresh) the `merged_uuids` row for an attached file.
 /// `library_path` is the scanned root of the *file*, not the target
-/// book's library — the reindex diff filters on it.
+/// book's library — the reindex diff filters on it. `scan_key` is the
+/// attached file's relative path: the F2 diff key the reindex matches on,
+/// so the attachment survives a repoint of the file's scan root.
 pub(super) async fn record_attachment(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     uuid: &str,
     book_id: i64,
     format: &str,
     library_path: &str,
+    scan_key: &str,
 ) -> Result<(), sqlx::Error> {
+    // Reuse the uuid of any existing ledger row for the same
+    // `(library_path, scan_key)` so a repoint-recomputed `uuid` can't insert a
+    // *duplicate* row for the same attached file — the ledger is keyed on the
+    // repoint-stable relative path, and `uuid` is just its stored handle.
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT uuid FROM merged_uuids WHERE library_path = ? AND scan_key = ?")
+            .bind(library_path)
+            .bind(scan_key)
+            .fetch_optional(&mut **tx)
+            .await?;
+    let row_uuid = existing.as_deref().unwrap_or(uuid);
     sqlx::query(
-        "INSERT OR REPLACE INTO merged_uuids (uuid, book_id, format, library_path)
-         VALUES (?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO merged_uuids (uuid, book_id, format, library_path, scan_key)
+         VALUES (?, ?, ?, ?, ?)",
     )
-    .bind(uuid)
+    .bind(row_uuid)
     .bind(book_id)
     .bind(format)
     .bind(library_path)
+    .bind(scan_key)
     .execute(&mut **tx)
     .await?;
     Ok(())

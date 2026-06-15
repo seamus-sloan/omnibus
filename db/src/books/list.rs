@@ -62,12 +62,17 @@ async fn fetch_list_rows(
     let placeholders = std::iter::repeat_n("?", library_paths.len())
         .collect::<Vec<_>>()
         .join(", ");
+    // Exclude fileless ghosts (F2): a book whose file was removed keeps its
+    // row + soft-ref user data, but must not render as a broken tile in the
+    // library grid. Search already excludes them (their FTS row is cleared
+    // when ghosted); this is the list-view equivalent.
     let sql = format!(
         r"
         SELECT {BOOK_COLUMNS}
         FROM books b
         JOIN scan_roots l ON l.id = b.library_id
         WHERE l.path IN ({placeholders})
+          AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)
         ORDER BY b.sort, b.id
         LIMIT ?
         "
@@ -84,16 +89,21 @@ async fn fetch_list_rows(
 /// incremental reindex diff needs to classify a filesystem stat against
 /// the existing index.
 ///
-/// `mtime_epoch` / `size_bytes` come from the matching `book_files` row.
-/// Today the scanner only writes `.epub` files, so there's one
-/// `book_files` row per book; the `MAX(...)` aggregation is defensive in
-/// case a future audiobook scanner adds a sibling format row for the
-/// same `books.id`. The diff treats `(mtime_epoch=0, size_bytes=0)` as a
-/// "never observed" sentinel (the migration default) and routes those
-/// rows through the Backfill branch — no OPF re-parse on first run.
+/// `scan_key` is the durable diff key (the library-relative path, F2): the
+/// diff matches disk-vs-DB on it. `uuid` is the book's durable identity
+/// (carried for the Removed/Backfill buckets, which act by uuid).
+/// `has_file` is false for a **fileless ghost** — a book whose file was
+/// removed but whose row (and soft-ref user data) is retained; the diff
+/// routes a ghost whose file reappears back through Changed to re-attach.
+///
+/// `mtime_epoch` / `size_bytes` come from the matching `book_files` row;
+/// `(0, 0)` with `has_file = true` is the "never observed" Backfill
+/// sentinel (the migration default).
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexedRow {
     pub uuid: String,
+    pub scan_key: String,
+    pub has_file: bool,
     pub mtime_epoch: i64,
     pub size_bytes: i64,
 }
@@ -108,8 +118,10 @@ pub async fn list_indexed_rows(
     let rows = sqlx::query(
         r"
         SELECT b.uuid                                  AS uuid,
+               COALESCE(b.scan_key, '')                AS scan_key,
                COALESCE(MAX(bf.mtime_epoch), 0)        AS mtime_epoch,
-               COALESCE(MAX(bf.size_bytes), 0)         AS size_bytes
+               COALESCE(MAX(bf.size_bytes), 0)         AS size_bytes,
+               (COUNT(bf.id) > 0)                      AS has_file
           FROM books b
           JOIN scan_roots l   ON l.id = b.library_id
           LEFT JOIN book_files bf ON bf.book_id = b.id
@@ -121,14 +133,19 @@ pub async fn list_indexed_rows(
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|r| IndexedRow {
-            uuid: r.get("uuid"),
-            mtime_epoch: r.get("mtime_epoch"),
-            size_bytes: r.get("size_bytes"),
-        })
-        .collect())
+    Ok(rows.into_iter().map(row_to_indexed).collect())
+}
+
+/// Project a diff-input row. Shared by every `list_*_rows*` reader so the
+/// `scan_key` / `has_file` columns are read identically everywhere.
+fn row_to_indexed(r: sqlx::sqlite::SqliteRow) -> IndexedRow {
+    IndexedRow {
+        uuid: r.get("uuid"),
+        scan_key: r.get("scan_key"),
+        has_file: r.get::<i64, _>("has_file") != 0,
+        mtime_epoch: r.get("mtime_epoch"),
+        size_bytes: r.get("size_bytes"),
+    }
 }
 
 /// Format-scoped variant of [`list_indexed_rows`]: returns only books
@@ -160,33 +177,39 @@ pub async fn list_indexed_rows_for_formats(
     let placeholders = std::iter::repeat_n("?", formats.len())
         .collect::<Vec<_>>()
         .join(", ");
+    // The format filter lives in the LEFT JOIN's ON clause (not WHERE) so a
+    // book with no `book_files` of `formats` is still returned when it has
+    // **no files at all** — a fileless ghost the diff needs to see so a
+    // returning file re-attaches instead of inserting a duplicate. A book
+    // that only has a *different* format's file is correctly excluded
+    // (`has_file = 0` and it still has files), preserving the cross-format
+    // scoping from #328. Bind order: the format placeholders appear before
+    // `l.path` in the statement text, so they bind first.
     let sql = format!(
         r"
         SELECT b.uuid                                  AS uuid,
+               COALESCE(b.scan_key, '')                AS scan_key,
                COALESCE(MAX(bf.mtime_epoch), 0)        AS mtime_epoch,
-               COALESCE(MAX(bf.size_bytes), 0)         AS size_bytes
+               COALESCE(MAX(bf.size_bytes), 0)         AS size_bytes,
+               (COUNT(bf.id) > 0)                      AS has_file
           FROM books b
-          JOIN scan_roots l   ON l.id = b.library_id
-          JOIN book_files bf ON bf.book_id = b.id
+          JOIN scan_roots l ON l.id = b.library_id
+          LEFT JOIN book_files bf
+                 ON bf.book_id = b.id AND bf.format IN ({placeholders})
          WHERE l.path = ?
-           AND bf.format IN ({placeholders})
-         GROUP BY b.id, b.uuid
+         GROUP BY b.id
+        HAVING (COUNT(bf.id) > 0)
+            OR NOT EXISTS (SELECT 1 FROM book_files bf2 WHERE bf2.book_id = b.id)
         "
     );
-    let mut q = sqlx::query(&sql).bind(library_path);
+    let mut q = sqlx::query(&sql);
     for fmt in formats {
         q = q.bind(*fmt);
     }
+    q = q.bind(library_path);
     let rows = q.fetch_all(pool).await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|r| IndexedRow {
-            uuid: r.get("uuid"),
-            mtime_epoch: r.get("mtime_epoch"),
-            size_bytes: r.get("size_bytes"),
-        })
-        .collect())
+    Ok(rows.into_iter().map(row_to_indexed).collect())
 }
 
 /// Diff input for files that were attached to a book in another library
@@ -212,11 +235,17 @@ pub async fn list_merged_rows_for_formats(
     let placeholders = std::iter::repeat_n("?", formats.len())
         .collect::<Vec<_>>()
         .join(", ");
+    // An attached file is matched by its own relative `scan_key` (F2), so a
+    // repoint of the file's scan root preserves the attachment. `has_file`
+    // is always true — the INNER JOIN means the backing `book_files` row
+    // exists. `COALESCE(mu.scan_key, '')` guards pre-backfill rows.
     let sql = format!(
         r"
-        SELECT mu.uuid       AS uuid,
-               bf.mtime_epoch AS mtime_epoch,
-               bf.size_bytes  AS size_bytes
+        SELECT mu.uuid                       AS uuid,
+               COALESCE(mu.scan_key, '')     AS scan_key,
+               bf.mtime_epoch                AS mtime_epoch,
+               bf.size_bytes                 AS size_bytes,
+               1                             AS has_file
           FROM merged_uuids mu
           JOIN book_files bf ON bf.book_id = mu.book_id AND bf.format = mu.format
          WHERE mu.library_path = ?
@@ -229,14 +258,7 @@ pub async fn list_merged_rows_for_formats(
     }
     let rows = q.fetch_all(pool).await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|r| IndexedRow {
-            uuid: r.get("uuid"),
-            mtime_epoch: r.get("mtime_epoch"),
-            size_bytes: r.get("size_bytes"),
-        })
-        .collect())
+    Ok(rows.into_iter().map(row_to_indexed).collect())
 }
 
 /// Total number of books currently indexed under `library_path`. Thin
@@ -262,12 +284,15 @@ pub async fn count_books_for_paths(
     let placeholders = std::iter::repeat_n("?", library_paths.len())
         .collect::<Vec<_>>()
         .join(", ");
+    // Match `fetch_list_rows`: fileless ghosts (F2) are excluded from the
+    // count so the truncation hint stays consistent with the listed rows.
     let sql = format!(
         r"
         SELECT COUNT(*)
           FROM books b
           JOIN scan_roots l ON l.id = b.library_id
          WHERE l.path IN ({placeholders})
+           AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)
         "
     );
     let mut q = sqlx::query_scalar::<_, i64>(&sql);

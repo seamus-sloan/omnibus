@@ -59,12 +59,12 @@ ammonia = "4"
 lofty = "0.22"
 
 
-# Stable, toolchain-independent UUIDv5 derivation for cover ids (issue #94).
-# `std::collections::hash_map::DefaultHasher` is documented as subject to
-# change between Rust versions, so a toolchain bump would silently rotate
-# every cover UUID and orphan the on-disk files. UUIDv5 (SHA-1 namespaced)
-# is fixed by RFC 4122.
-uuid = { version = "1", features = ["v5"] }
+# `v4` mints the durable, content-independent `books.uuid` (F2): a fresh
+# random id per book, assigned once at insert and never recomputed, so two
+# distinct books that share a title/author (or even identical bytes) can never
+# collide on identity. `v5` remains for the legacy toolchain-independent cover
+# id derivation (issue #94); it is no longer the book identity / diff key.
+uuid = { version = "1", features = ["v4", "v5"] }
 
 # F1.11 author profile photos: outbound HTTP for the Open Library resolver
 # (`db::author_photos`). `rustls-tls` matches the rest of our async TLS

@@ -117,7 +117,7 @@ async fn merge_books_moves_progress_with_latest_wins_on_collision() {
     let target = seed_audiobook(&pool, "A/Dracula.m4b", "Dracula", "Bram Stoker").await;
     let mut mp3 = indexed_audiobook("B/Drakula mp3", "Drakula", Some("Bram Stoker"));
     mp3.format = "MP3".into();
-    let source = mp3.uuid.clone();
+    let source_scan_key = mp3.scan_key.clone();
     sync_audiobooks(
         &pool,
         "/audio",
@@ -128,6 +128,8 @@ async fn merge_books_moves_progress_with_latest_wins_on_collision() {
     )
     .await
     .unwrap();
+    // Identity is minted (F2) — read the durable uuid back by scan_key.
+    let source = crate::test_support::uuid_by_scan_key(&pool, &source_scan_key).await;
 
     let target_id = book_id_by_uuid(&pool, &target).await;
     let source_id = book_id_by_uuid(&pool, &source).await;
@@ -276,13 +278,15 @@ async fn reindex_diff_classifies_merged_source_file_as_unchanged() {
         .unwrap();
     let disk = vec![crate::ebook::StatEntry {
         filename: ab.group_path.clone(),
-        uuid: ab.uuid.clone(),
+        scan_key: ab.scan_key.clone(),
         mtime_epoch: ab.max_mtime_epoch,
         size_bytes: ab.total_size_bytes,
         error: None,
     }];
     let diff = diff_library(&disk, &db_rows, std::path::Path::new("/audio"));
-    assert_eq!(diff.unchanged, vec![ab.uuid]);
+    // The merged row's identity in the diff is `merged_uuids.uuid` = the
+    // source book's (now-deleted) uuid, which equals `source`.
+    assert_eq!(diff.unchanged, vec![source]);
     assert!(diff.new.is_empty());
 }
 

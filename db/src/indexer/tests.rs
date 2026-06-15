@@ -31,20 +31,35 @@ fn now_secs() -> i64 {
         .as_secs() as i64
 }
 
-fn entry(name: &str, uuid: &str, mtime: i64, size: i64) -> StatEntry {
+fn entry(name: &str, scan_key: &str, mtime: i64, size: i64) -> StatEntry {
     StatEntry {
         filename: name.into(),
-        uuid: uuid.into(),
+        scan_key: scan_key.into(),
         mtime_epoch: mtime,
         size_bytes: size,
         error: None,
     }
 }
-fn row(uuid: &str, mtime: i64, size: i64) -> IndexedRow {
+/// A file-backed DB row. `scan_key` is the diff key; `uuid` mirrors it so
+/// the Removed/Backfill buckets (which carry uuids) keep asserting on the
+/// same string the callers pass.
+fn row(scan_key: &str, mtime: i64, size: i64) -> IndexedRow {
     IndexedRow {
-        uuid: uuid.into(),
+        uuid: scan_key.into(),
+        scan_key: scan_key.into(),
+        has_file: true,
         mtime_epoch: mtime,
         size_bytes: size,
+    }
+}
+/// A fileless ghost row (F2): retained book whose file is gone.
+fn ghost_row(scan_key: &str) -> IndexedRow {
+    IndexedRow {
+        uuid: scan_key.into(),
+        scan_key: scan_key.into(),
+        has_file: false,
+        mtime_epoch: 0,
+        size_bytes: 0,
     }
 }
 
@@ -151,7 +166,7 @@ fn diff_ignores_empty_uuid_placeholders_from_stat_walk() {
         entry("good.epub", "uuid-good", 100, 1000),
         StatEntry {
             filename: "bad/".into(),
-            uuid: String::new(),
+            scan_key: String::new(),
             mtime_epoch: 0,
             size_bytes: 0,
             error: Some("permission denied".into()),
@@ -161,6 +176,31 @@ fn diff_ignores_empty_uuid_placeholders_from_stat_walk() {
     let d = diff_library(&disk, &db, Path::new("/lib"));
     assert_eq!(d.new.len(), 1);
     assert_eq!(d.new[0].filename, "good.epub");
+}
+
+#[test]
+fn diff_routes_returning_file_for_a_ghost_through_changed() {
+    // A fileless ghost (F2) whose file is back on disk must classify Changed
+    // — so the writer re-attaches, preserving the existing uuid — not New
+    // (which would mint a fresh uuid and orphan its soft-ref user data).
+    let disk = vec![entry("a.epub", "a.epub", 100, 1000)];
+    let db = vec![ghost_row("a.epub")];
+    let d = diff_library(&disk, &db, Path::new("/lib"));
+    assert!(d.new.is_empty(), "a ghost match is not New");
+    assert_eq!(d.changed.len(), 1);
+    assert_eq!(d.changed[0].filename, "a.epub");
+    assert!(d.removed.is_empty());
+}
+
+#[test]
+fn diff_leaves_a_still_missing_ghost_untouched() {
+    // A ghost whose file is still gone stays a ghost — not re-Removed.
+    let disk: Vec<StatEntry> = vec![];
+    let db = vec![ghost_row("a.epub")];
+    let d = diff_library(&disk, &db, Path::new("/lib"));
+    assert!(d.removed.is_empty());
+    assert!(d.new.is_empty());
+    assert!(d.changed.is_empty());
 }
 
 #[test]
@@ -283,7 +323,7 @@ async fn reindex_propagates_scan_error_without_clearing_existing_index() {
 async fn seed_audiobook_row(pool: &SqlitePool, library_path: &str, group_path: &str) {
     let plan = crate::sync::AudiobookSyncPlan {
         new_books: vec![crate::audiobook::IndexedAudiobook {
-            uuid: "uuid-m4b".to_string(),
+            scan_key: group_path.to_string(),
             group_path: group_path.to_string(),
             format: "M4B".to_string(),
             title: "AudioTitle".to_string(),

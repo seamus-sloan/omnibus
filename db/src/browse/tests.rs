@@ -464,9 +464,12 @@ async fn list_series_includes_series_from_audiobook_library() {
         .await
         .unwrap()
         .id;
+    // Identity is minted (F2) — key the override on the audiobook's actual
+    // uuid, resolved by its scan_key (the group's relative path).
+    let audio_uuid = crate::test_support::uuid_by_scan_key(&pool, "herbert/dune-audio").await;
     upsert_metadata_overrides(
         &pool,
-        "ab-uuid-herbert-dune-audio",
+        &audio_uuid,
         &MetadataOverrides {
             series: Some("Dune Chronicles".into()),
             series_index: Some("1".into()),

@@ -99,8 +99,10 @@ pub struct AudiobookPart {
 /// One fully-parsed audiobook group, ready for [`crate::sync::sync_audiobooks`].
 #[derive(Debug)]
 pub struct IndexedAudiobook {
-    /// Stable UUIDv5 for `(library_path, group_path)`.
-    pub uuid: String,
+    /// The Phase-A diff key (F2): the group's library-relative path. Stored
+    /// in `books.scan_key`; identity (`books.uuid`) is minted fresh at
+    /// insert and never derived from this.
+    pub scan_key: String,
     /// Group path (the library-relative parent dir for mp3 folders, or the
     /// file path for single-file m4b/m4a).
     pub group_path: String,
@@ -176,7 +178,7 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
         .and_then(|(_mime, bytes)| extract_accent(bytes));
 
     IndexedAudiobook {
-        uuid: group.uuid,
+        scan_key: group.scan_key,
         group_path: group.group_path,
         format: group.format,
         title: book_level.title,

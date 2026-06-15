@@ -45,8 +45,8 @@ fn stat_picks_up_each_accepted_extension_and_skips_others() {
     let names: Vec<_> = out.entries.iter().map(|e| e.filename.as_str()).collect();
     assert!(out.error.is_none());
     assert_eq!(names, vec!["a.m4b", "b.m4a", "c.mp3"]);
-    // Same uuid scheme as the ebook path — non-empty + per-file stable.
-    assert!(out.entries.iter().all(|e| !e.uuid.is_empty()));
+    // Same scan_key scheme as the ebook path — non-empty per real file.
+    assert!(out.entries.iter().all(|e| !e.scan_key.is_empty()));
 }
 
 #[test]

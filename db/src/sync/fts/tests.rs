@@ -37,25 +37,46 @@ fn indexed_with_isbn(filename: &str, title: &str, author: &str, isbn: &str) -> I
 /// `books` row has exactly one `books_fts` row, and no `books_fts` row is
 /// orphaned (no backing `books` row).
 async fn assert_fts_invariant(pool: &sqlx::SqlitePool) {
-    let books = count_rows(pool, "SELECT COUNT(*) FROM books").await;
+    // The FTS row set tracks **file-backed** books. A fileless ghost (F2) is
+    // retained in `books` but has its FTS row cleared, so the invariant is
+    // scoped to books that still have a `book_files` row.
+    let file_backed = count_rows(
+        pool,
+        "SELECT COUNT(*) FROM books b
+          WHERE EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)",
+    )
+    .await;
     let fts = count_rows(pool, "SELECT COUNT(*) FROM books_fts").await;
-    assert_eq!(books, fts, "books_fts row count must equal books row count");
+    assert_eq!(
+        file_backed, fts,
+        "books_fts row count must equal file-backed books count"
+    );
 
     let missing = count_rows(
         pool,
         "SELECT COUNT(*) FROM books b
-          WHERE NOT EXISTS (SELECT 1 FROM books_fts f WHERE f.rowid = b.id)",
+          WHERE EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)
+            AND NOT EXISTS (SELECT 1 FROM books_fts f WHERE f.rowid = b.id)",
     )
     .await;
-    assert_eq!(missing, 0, "every books row must have a books_fts row");
+    assert_eq!(
+        missing, 0,
+        "every file-backed book must have a books_fts row"
+    );
 
     let orphans = count_rows(
         pool,
         "SELECT COUNT(*) FROM books_fts f
-          WHERE NOT EXISTS (SELECT 1 FROM books b WHERE b.id = f.rowid)",
+          WHERE NOT EXISTS (
+              SELECT 1 FROM books b
+                JOIN book_files bf ON bf.book_id = b.id
+               WHERE b.id = f.rowid)",
     )
     .await;
-    assert_eq!(orphans, 0, "no books_fts row may be orphaned");
+    assert_eq!(
+        orphans, 0,
+        "no books_fts row may point at a missing or fileless-ghost book"
+    );
 }
 
 /// Count `books_fts` rows whose `isbn` column MATCHes the term.
@@ -109,18 +130,35 @@ async fn fts_invariant_holds_after_sync_books_new_changed_and_removed() {
     .unwrap();
     assert_fts_invariant(&pool).await;
 
-    // Removed.
+    // Removed — ghosted (F2). Identity is minted, so resolve b.epub's uuid
+    // by scan_key, then assert it is retained as a fileless ghost (one
+    // file-backed book left, FTS cleared for the ghost).
+    let b_uuid = crate::test_support::uuid_by_scan_key(&pool, "b.epub").await;
     sync_books(
         &pool,
         "/lib",
         SyncPlan {
-            removed_uuids: vec![crate::helpers::stable_uuid("/lib", "b.epub")],
+            removed_uuids: vec![b_uuid],
             ..Default::default()
         },
     )
     .await
     .unwrap();
-    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 1);
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM books").await,
+        2,
+        "removed book retained as a fileless ghost"
+    );
+    assert_eq!(
+        count_rows(
+            &pool,
+            "SELECT COUNT(*) FROM books b
+              WHERE EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)"
+        )
+        .await,
+        1,
+        "only the surviving book is file-backed"
+    );
     assert_fts_invariant(&pool).await;
 }
 
@@ -140,7 +178,9 @@ async fn fts_invariant_holds_after_replace_books() {
     .unwrap();
     assert_fts_invariant(&pool).await;
 
-    // Replace again with one fewer book — the dropped book's FTS row must go.
+    // Replace again with one fewer book — the dropped book's FTS row must go,
+    // but the book is retained as a fileless ghost (F2): 2 books total, 1
+    // file-backed (and therefore 1 FTS row).
     crate::sync::replace_books(
         &pool,
         "/lib",
@@ -148,7 +188,16 @@ async fn fts_invariant_holds_after_replace_books() {
     )
     .await
     .unwrap();
-    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 1);
+    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 2);
+    assert_eq!(
+        count_rows(
+            &pool,
+            "SELECT COUNT(*) FROM books b
+              WHERE EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)"
+        )
+        .await,
+        1
+    );
     assert_fts_invariant(&pool).await;
 }
 
@@ -158,7 +207,6 @@ async fn fts_invariant_holds_after_sync_audiobooks_new_changed_and_removed() {
     let pool = init_db("sqlite::memory:").await.unwrap();
 
     let ab = indexed_audiobook("Stoker/Dracula", "Dracula", Some("Bram Stoker"));
-    let uuid = ab.uuid.clone();
     sync_audiobooks(
         &pool,
         "/audio",
@@ -171,14 +219,15 @@ async fn fts_invariant_holds_after_sync_audiobooks_new_changed_and_removed() {
     .unwrap();
     assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 1);
     assert_fts_invariant(&pool).await;
+    // Identity is minted (F2) — read the durable uuid back by scan_key.
+    let uuid = crate::test_support::uuid_by_scan_key(&pool, "Stoker/Dracula").await;
 
-    // Changed.
-    let mut changed = indexed_audiobook(
+    // Changed — matched by scan_key (the group path), identity preserved.
+    let changed = indexed_audiobook(
         "Stoker/Dracula",
         "Dracula (Unabridged)",
         Some("Bram Stoker"),
     );
-    changed.uuid = uuid.clone();
     sync_audiobooks(
         &pool,
         "/audio",
@@ -191,7 +240,8 @@ async fn fts_invariant_holds_after_sync_audiobooks_new_changed_and_removed() {
     .unwrap();
     assert_fts_invariant(&pool).await;
 
-    // Removed.
+    // Removed — ghosted (F2): the books row is retained fileless, the
+    // book_files row is gone, and the FTS row is cleared.
     sync_audiobooks(
         &pool,
         "/audio",
@@ -202,7 +252,15 @@ async fn fts_invariant_holds_after_sync_audiobooks_new_changed_and_removed() {
     )
     .await
     .unwrap();
-    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 0);
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM books").await,
+        1,
+        "removed book is retained as a fileless ghost"
+    );
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM book_files").await,
+        0
+    );
     assert_fts_invariant(&pool).await;
 }
 

@@ -1,11 +1,9 @@
 //! Unit tests for the `settings` module — `get_settings`/`set_settings`
 //! roundtrip, env-var seeding (serialized via a process-global guard),
-//! library-prune-on-change cascade, and the batched
-//! `prune_orphan_libraries` chunking loop.
+//! F2 repoint-in-place identity preservation, and never-prune retention.
 
 use super::*;
 use crate::books::list_books;
-use crate::covers::{cover_path_for, delete_cover_files_for, write_cover_file};
 use crate::pool::init_db;
 use crate::sync::replace_books;
 use crate::test_support::{indexed, CoversTempDir, EnvVarGuard};
@@ -113,9 +111,12 @@ async fn seed_settings_from_env_is_noop_when_vars_unset() {
     assert_eq!(result.audiobook_library_path, None);
 }
 
+/// F2 repoint-in-place: changing the ebook path moves the existing
+/// `scan_roots` row (keeping its id) so every book — and its durable
+/// `books.uuid` — survives the move under the new path. Nothing is deleted.
 #[tokio::test]
-async fn set_settings_prunes_library_when_ebook_path_changes() {
-    let _covers = CoversTempDir::new("prune-change");
+async fn set_settings_repoints_library_in_place_preserving_identity() {
+    let _covers = CoversTempDir::new("repoint");
     let pool = init_db("sqlite::memory:").await.unwrap();
     set_settings(
         &pool,
@@ -140,7 +141,9 @@ async fn set_settings_prunes_library_when_ebook_path_changes() {
     )
     .await
     .unwrap();
-    assert_eq!(list_books(&pool, "/old").await.unwrap().len(), 1);
+    let before = list_books(&pool, "/old").await.unwrap();
+    assert_eq!(before.len(), 1);
+    let uuid_before = before[0].unique_identifier.clone();
 
     set_settings(
         &pool,
@@ -152,22 +155,25 @@ async fn set_settings_prunes_library_when_ebook_path_changes() {
     .await
     .unwrap();
 
+    // The old path is empty; the book now lists under the new path with its
+    // identity intact, and exactly one scan_roots row / one book survive.
     assert!(list_books(&pool, "/old").await.unwrap().is_empty());
+    let after = list_books(&pool, "/new").await.unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(
+        after[0].unique_identifier, uuid_before,
+        "books.uuid must be preserved across a repoint"
+    );
     let library_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scan_roots")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(library_count, 0);
+    assert_eq!(library_count, 1, "scan_roots row repointed, not recreated");
     let book_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(book_count, 0);
-    let fts_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books_fts")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(fts_count, 0);
+    assert_eq!(book_count, 1, "never-prune: the book is retained");
 }
 #[tokio::test]
 async fn set_settings_keeps_libraries_still_configured() {
@@ -202,8 +208,11 @@ async fn set_settings_keeps_libraries_still_configured() {
 
     assert_eq!(list_books(&pool, "/books").await.unwrap().len(), 1);
 }
+/// Never-prune (F2): clearing the ebook path does **not** delete the
+/// library's books (the durable-identity safety net) — its `scan_roots` row
+/// and books are retained, and re-adding the path lists them again.
 #[tokio::test]
-async fn set_settings_none_removes_library_data() {
+async fn set_settings_none_retains_library_data() {
     let _covers = CoversTempDir::new("prune-clear");
     let pool = init_db("sqlite::memory:").await.unwrap();
     set_settings(
@@ -233,104 +242,91 @@ async fn set_settings_none_removes_library_data() {
     .await
     .unwrap();
 
+    // The scan_roots row still owns a book, so never-prune keeps both.
     let library_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scan_roots")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(library_count, 0);
-}
-/// Exercises the batched `prune_orphan_libraries` path across more than
-/// one chunk. The IN-list is chunked at 500 ids to stay under SQLite's
-/// bind-parameter cap, so seeding more orphaned libraries than a
-/// single chunk holds is what actually verifies the chunking loop iterates
-/// (a regression that dropped or mis-bound a later chunk would otherwise go
-/// undetected). Seeds 1001 libraries — three chunks of 500 / 500 / 1 — each
-/// with a book, then prunes them all in one transaction and asserts every
-/// cover UUID is collected (so the lookup is verified to span all chunks)
-/// and every row is gone. Only a handful of rows get an on-disk cover:
-/// materializing 1001 files would be slow, and cover deletion is exercised
-/// by the tracked subset, which straddles the chunk boundaries.
-#[tokio::test]
-async fn prune_orphan_libraries_batches_across_many_libraries() {
-    // > 2 full chunks of 500 → the chunk loop runs three times.
-    const LIBRARY_COUNT: usize = 1001;
-    // Indices spanning every chunk: first row, the first row of the second
-    // chunk, a mid-chunk row, and the final (third-chunk) row.
-    const MATERIALIZED_COVER_INDICES: [usize; 4] = [0, 500, 750, LIBRARY_COUNT - 1];
-
-    let _covers = CoversTempDir::new("prune-batch");
-    let pool = init_db("sqlite::memory:").await.unwrap();
-
-    // Seed the orphaned libraries directly. `keep = []` below marks all of
-    // them as orphans regardless of path.
-    let mut expected_uuids: Vec<String> = Vec::with_capacity(LIBRARY_COUNT);
-    let mut materialized_uuids: Vec<String> = Vec::new();
-    for i in 0..LIBRARY_COUNT {
-        let path = format!("/orphan-{i}");
-        let library_id: i64 = sqlx::query_scalar(
-            "INSERT INTO scan_roots (path, display_name) VALUES (?, ?) RETURNING id",
-        )
-        .bind(&path)
-        .bind(format!("Orphan {i}"))
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-        let uuid = format!("uuid-{i}");
-        sqlx::query(
-            "INSERT INTO books (uuid, library_id, path, title, has_cover)
-                 VALUES (?, ?, ?, ?, 1)",
-        )
-        .bind(&uuid)
-        .bind(library_id)
-        .bind(format!("{path}/book.epub"))
-        .bind(format!("Book {i}"))
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        // Materialize an on-disk cover for a few rows spanning the chunk
-        // boundaries so deletion is observable without writing 1001 files.
-        if MATERIALIZED_COVER_INDICES.contains(&i) {
-            write_cover_file(&uuid, "image/jpeg", b"fake-jpeg").unwrap();
-            assert!(cover_path_for(&uuid, "jpg").exists());
-            materialized_uuids.push(uuid.clone());
-        }
-
-        expected_uuids.push(uuid);
-    }
-
-    let mut tx = pool.begin().await.unwrap();
-    let mut orphan_uuids = prune_orphan_libraries(&mut tx, &[]).await.unwrap();
-    tx.commit().await.unwrap();
-
-    orphan_uuids.sort();
-    expected_uuids.sort();
     assert_eq!(
-        orphan_uuids, expected_uuids,
-        "every orphaned book's cover UUID should be collected across all chunks"
+        library_count, 1,
+        "never-prune retains a non-empty scan root"
     );
-
-    let library_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scan_roots")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(library_count, 0);
     let book_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(book_count, 0);
+    assert_eq!(book_count, 1, "books are retained when the path is cleared");
+    // Re-adding the path surfaces the retained book again.
+    set_settings(
+        &pool,
+        &Settings {
+            ebook_library_path: Some("/books".into()),
+            audiobook_library_path: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(list_books(&pool, "/books").await.unwrap().len(), 1);
+}
+/// Never-prune (F2): `prune_orphan_libraries` drops only **childless**
+/// orphan scan roots; a root not in `keep` that still owns books is retained
+/// (its books and their soft-ref user data must never be cascade-deleted),
+/// and it returns no cover uuids (nothing is deleted).
+#[tokio::test]
+async fn prune_orphan_libraries_keeps_non_empty_roots_and_drops_childless() {
+    let _covers = CoversTempDir::new("prune-never");
+    let pool = init_db("sqlite::memory:").await.unwrap();
 
-    // The caller deletes cover files post-commit; verify the collected
-    // UUIDs drive removal of every materialized cover (one per chunk).
-    delete_cover_files_for(&orphan_uuids);
-    for uuid in &materialized_uuids {
-        assert!(
-            !cover_path_for(uuid, "jpg").exists(),
-            "cover for {uuid} should be deleted"
-        );
-    }
+    // Root A: orphaned but owns a book → must be retained.
+    let a_id: i64 = sqlx::query_scalar(
+        "INSERT INTO scan_roots (path, display_name) VALUES (?, ?) RETURNING id",
+    )
+    .bind("/with-book")
+    .bind("A")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind("uuid-a")
+    .bind("book.epub")
+    .bind(a_id)
+    .bind("/with-book")
+    .bind("Kept")
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Root B: orphaned and childless → must be dropped.
+    sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, ?)")
+        .bind("/childless")
+        .bind("B")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    let orphan_uuids = prune_orphan_libraries(&mut tx, &[]).await.unwrap();
+    tx.commit().await.unwrap();
+
+    assert!(
+        orphan_uuids.is_empty(),
+        "never-prune deletes no books, so no cover uuids are returned"
+    );
+    let roots: Vec<String> = sqlx::query_scalar("SELECT path FROM scan_roots ORDER BY path")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        roots,
+        vec!["/with-book".to_string()],
+        "childless orphan dropped, book-owning orphan retained"
+    );
+    let book_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(book_count, 1, "the orphaned-root book is never deleted");
 }
 
 /// Migration 0019 renames `libraries` -> `scan_roots` via
@@ -376,4 +372,54 @@ async fn fk_cascade_survives_libraries_rename_to_scan_roots() {
         "deleting the scan_roots row should cascade-delete its books \
          after the libraries->scan_roots rename"
     );
+}
+
+/// Shared-root guard (F2): when ebook + audiobook point at the same scan
+/// root and only one slot's path changes, the shared `scan_roots` row must
+/// NOT be repointed out from under the slot that still uses it (that would
+/// silently move both libraries).
+#[tokio::test]
+async fn set_settings_does_not_repoint_a_shared_root_for_a_single_slot_change() {
+    let _covers = CoversTempDir::new("shared-root");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    set_settings(
+        &pool,
+        &Settings {
+            ebook_library_path: Some("/lib".into()),
+            audiobook_library_path: Some("/lib".into()),
+        },
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed("a.epub", Some("A"), &["X"], &[], None, None)],
+    )
+    .await
+    .unwrap();
+
+    // Change only the ebook slot; the audiobook slot still points at "/lib".
+    set_settings(
+        &pool,
+        &Settings {
+            ebook_library_path: Some("/newlib".into()),
+            audiobook_library_path: Some("/lib".into()),
+        },
+    )
+    .await
+    .unwrap();
+
+    // The shared row is untouched (not renamed to /newlib), so the slot that
+    // still uses "/lib" keeps resolving its books — nothing was moved silently.
+    let paths: Vec<String> = sqlx::query_scalar("SELECT path FROM scan_roots ORDER BY path")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        paths,
+        vec!["/lib".to_string()],
+        "a shared root must not be repointed for a single-slot change"
+    );
+    assert_eq!(list_books(&pool, "/lib").await.unwrap().len(), 1);
 }
