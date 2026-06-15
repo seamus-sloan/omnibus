@@ -399,7 +399,10 @@ mod tests {
                     ..Default::default()
                 })
                 .collect(),
-            subjects: subjects.iter().map(|s| s.to_string()).collect(),
+            subjects: subjects
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             ..Default::default()
         }
     }

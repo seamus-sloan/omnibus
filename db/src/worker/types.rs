@@ -209,7 +209,7 @@ impl Default for WorkerConfig {
 /// avoid adding a `num_cpus` crate for one call site.
 fn num_cpus() -> usize {
     std::thread::available_parallelism()
-        .map(|n| n.get())
+        .map(std::num::NonZero::get)
         .unwrap_or(1)
 }
 
@@ -271,7 +271,7 @@ pub(super) struct ProgressEntry {
 /// safer than tearing down the worker. Mirrors `frontend::data`'s
 /// `unpoison` helper.
 pub(super) fn lock_unpoison<T>(m: &StdMutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Current wall-clock time in milliseconds since the UNIX epoch. Used only

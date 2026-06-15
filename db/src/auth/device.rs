@@ -39,7 +39,7 @@ fn validate_device_field(
     if v.chars().count() > max_chars {
         return Err(AuthError::Validation(format!("invalid {label}: too long")));
     }
-    if v.chars().any(|c| c.is_control()) {
+    if v.chars().any(char::is_control) {
         return Err(AuthError::Validation(format!(
             "invalid {label}: contains control characters"
         )));

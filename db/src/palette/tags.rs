@@ -36,7 +36,7 @@ pub async fn search_tags(
     // falls out: a `Some([])` override drops the book from arm (1) and
     // yields no `json_each` rows in arm (2).
     let rows = sqlx::query(
-        r#"
+        r"
         WITH effective AS (
           SELECT btl.tag AS tag_id, NULL AS tag_name, btl.book AS book_id
             FROM books_tags_link btl
@@ -68,7 +68,7 @@ pub async fn search_tags(
           )
         ORDER BY book_count DESC, t.name
         LIMIT ?3
-        "#,
+        ",
     )
     .bind(library_path)
     .bind(like_pattern)

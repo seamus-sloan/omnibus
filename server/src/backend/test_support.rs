@@ -167,7 +167,7 @@ impl CoversDirGuard {
     pub(crate) fn new(tag: &str) -> Self {
         let guard = COVER_DIR_ENV_LOCK
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

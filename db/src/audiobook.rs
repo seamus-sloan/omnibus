@@ -106,7 +106,7 @@ fn filename_stem(filename: &str) -> String {
     PathBuf::from(filename)
         .file_stem()
         .and_then(|s| s.to_str())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .unwrap_or_else(|| filename.to_string())
 }
 
