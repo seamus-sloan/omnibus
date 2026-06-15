@@ -63,14 +63,14 @@ async fn fetch_list_rows(
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!(
-        r#"
+        r"
         SELECT {BOOK_COLUMNS}
         FROM books b
         JOIN scan_roots l ON l.id = b.library_id
         WHERE l.path IN ({placeholders})
         ORDER BY b.sort, b.id
         LIMIT ?
-        "#
+        "
     );
     let mut q = sqlx::query(&sql);
     for path in library_paths {
@@ -106,7 +106,7 @@ pub async fn list_indexed_rows(
     library_path: &str,
 ) -> Result<Vec<IndexedRow>, super::BooksError> {
     let rows = sqlx::query(
-        r#"
+        r"
         SELECT b.uuid                                  AS uuid,
                COALESCE(MAX(bf.mtime_epoch), 0)        AS mtime_epoch,
                COALESCE(MAX(bf.size_bytes), 0)         AS size_bytes
@@ -115,7 +115,7 @@ pub async fn list_indexed_rows(
           LEFT JOIN book_files bf ON bf.book_id = b.id
          WHERE l.path = ?
          GROUP BY b.id, b.uuid
-        "#,
+        ",
     )
     .bind(library_path)
     .fetch_all(pool)
@@ -161,7 +161,7 @@ pub async fn list_indexed_rows_for_formats(
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!(
-        r#"
+        r"
         SELECT b.uuid                                  AS uuid,
                COALESCE(MAX(bf.mtime_epoch), 0)        AS mtime_epoch,
                COALESCE(MAX(bf.size_bytes), 0)         AS size_bytes
@@ -171,7 +171,7 @@ pub async fn list_indexed_rows_for_formats(
          WHERE l.path = ?
            AND bf.format IN ({placeholders})
          GROUP BY b.id, b.uuid
-        "#
+        "
     );
     let mut q = sqlx::query(&sql).bind(library_path);
     for fmt in formats {
@@ -213,7 +213,7 @@ pub async fn list_merged_rows_for_formats(
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!(
-        r#"
+        r"
         SELECT mu.uuid       AS uuid,
                bf.mtime_epoch AS mtime_epoch,
                bf.size_bytes  AS size_bytes
@@ -221,7 +221,7 @@ pub async fn list_merged_rows_for_formats(
           JOIN book_files bf ON bf.book_id = mu.book_id AND bf.format = mu.format
          WHERE mu.library_path = ?
            AND mu.format IN ({placeholders})
-        "#
+        "
     );
     let mut q = sqlx::query(&sql).bind(library_path);
     for fmt in formats {
@@ -263,12 +263,12 @@ pub async fn count_books_for_paths(
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!(
-        r#"
+        r"
         SELECT COUNT(*)
           FROM books b
           JOIN scan_roots l ON l.id = b.library_id
          WHERE l.path IN ({placeholders})
-        "#
+        "
     );
     let mut q = sqlx::query_scalar::<_, i64>(&sql);
     for path in library_paths {

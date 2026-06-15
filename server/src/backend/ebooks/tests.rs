@@ -209,7 +209,7 @@ async fn api_get_ebooks_sets_total_cap_header_when_truncated() {
     .await
     .unwrap();
     sqlx::query(
-        r#"
+        r"
         WITH RECURSIVE n(i) AS (
             SELECT 1
             UNION ALL
@@ -219,7 +219,7 @@ async fn api_get_ebooks_sets_total_cap_header_when_truncated() {
         SELECT 'uuid-' || i, ?, '/lib/b' || i, 'Title ' || i,
                'Title ' || printf('%010d', i)
           FROM n
-        "#,
+        ",
     )
     .bind(total)
     .bind(lib_id)

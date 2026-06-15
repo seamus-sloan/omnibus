@@ -236,7 +236,7 @@ pub async fn fetch_remote_image_with(
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .unwrap_or_else(|| "application/octet-stream".into());
     if !content_type.starts_with("image/") {
         return Err(FetchRemoteImageError::NotImage(content_type));

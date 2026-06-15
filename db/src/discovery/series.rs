@@ -103,12 +103,12 @@ async fn fetch_series_books(
     series_name: &str,
 ) -> Result<Vec<EbookMetadata>, DiscoveryError> {
     let sql = format!(
-        r#"{EFFECTIVE_SERIES_CTE}
+        r"{EFFECTIVE_SERIES_CTE}
            SELECT {BOOK_COLUMNS}
            FROM books b
            JOIN effective e ON e.book_id = b.id
            ORDER BY e.series_index NULLS LAST, b.sort, b.id
-           LIMIT ?3"#
+           LIMIT ?3"
     );
     let rows = sqlx::query(&sql)
         .bind(series_id)
@@ -133,8 +133,8 @@ async fn count_effective_series_members(
     series_name: &str,
 ) -> Result<i64, sqlx::Error> {
     let sql = format!(
-        r#"{EFFECTIVE_SERIES_CTE}
-           SELECT COUNT(*) FROM effective"#
+        r"{EFFECTIVE_SERIES_CTE}
+           SELECT COUNT(*) FROM effective"
     );
     sqlx::query_scalar(&sql)
         .bind(series_id)

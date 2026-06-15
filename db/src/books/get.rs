@@ -71,11 +71,11 @@ async fn fetch_book_row(
     id: i64,
 ) -> Result<Option<sqlx::sqlite::SqliteRow>, sqlx::Error> {
     let sql = format!(
-        r#"
+        r"
         SELECT {BOOK_COLUMNS}
         FROM books b
         WHERE b.id = ?
-        "#
+        "
     );
     sqlx::query(&sql).bind(id).fetch_optional(pool).await
 }

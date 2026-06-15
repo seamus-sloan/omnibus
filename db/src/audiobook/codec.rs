@@ -75,7 +75,7 @@ fn extension_of(filename: &str) -> Option<String> {
     std::path::Path::new(filename)
         .extension()
         .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
 }
 
 #[cfg(test)]

@@ -84,7 +84,7 @@ async fn fetch_search_rows(
     match_expr: &str,
 ) -> Result<Vec<sqlx::sqlite::SqliteRow>, sqlx::Error> {
     let sql = format!(
-        r#"
+        r"
         WITH matches AS MATERIALIZED (
             SELECT books_fts.rowid AS bid,
                    bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0) AS rank
@@ -99,7 +99,7 @@ async fn fetch_search_rows(
         JOIN books b ON b.id = m.bid
         ORDER BY m.rank, b.sort, b.id
         LIMIT ?
-        "#
+        "
     );
     sqlx::query(&sql)
         .bind(match_expr)
@@ -125,13 +125,13 @@ pub async fn count_search_books(
         return Ok(0);
     };
     Ok(sqlx::query_scalar::<_, i64>(
-        r#"
+        r"
         SELECT COUNT(*)
           FROM books_fts
           JOIN books b ON b.id = books_fts.rowid
           JOIN scan_roots l ON l.id = b.library_id
          WHERE books_fts MATCH ? AND l.path = ?
-        "#,
+        ",
     )
     .bind(&match_expr)
     .bind(library_path)

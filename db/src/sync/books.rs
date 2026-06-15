@@ -738,7 +738,7 @@ async fn insert_tag_links(
     let tags: Vec<&str> = m
         .subjects
         .iter()
-        .map(|s| s.as_str())
+        .map(String::as_str)
         .filter(|s| !s.is_empty())
         .filter(|s| seen.insert(*s))
         .collect();

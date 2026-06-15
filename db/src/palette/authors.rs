@@ -43,7 +43,7 @@ pub async fn search_authors(
     // case falls out: a `Some([])` override drops the book from arm (1) and
     // yields no `json_each` rows in arm (2).
     let rows = sqlx::query(
-        r#"
+        r"
         WITH effective AS (
           SELECT bal.author AS author_id, NULL AS author_name, bal.book AS book_id
             FROM books_authors_link bal
@@ -77,7 +77,7 @@ pub async fn search_authors(
           )
         ORDER BY book_count DESC, a.name
         LIMIT ?3
-        "#,
+        ",
     )
     .bind(library_path)
     .bind(like_pattern)

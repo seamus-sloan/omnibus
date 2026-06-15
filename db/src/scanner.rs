@@ -55,7 +55,7 @@ pub fn list_files(path: Option<&str>, extensions: &[&str]) -> LibrarySection {
                     .path()
                     .extension()
                     .and_then(|e| e.to_str())
-                    .map(|e| e.to_lowercase())
+                    .map(str::to_lowercase)
                 {
                     if let Some(slot) = counts.iter_mut().find(|(key, _)| key == &ext) {
                         slot.1 += 1;
