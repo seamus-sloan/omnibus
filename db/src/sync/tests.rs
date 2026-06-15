@@ -2,7 +2,6 @@ use super::*;
 use crate::books::{get_book, list_books, list_indexed_rows, search_books};
 use crate::covers::get_cover;
 use crate::ebook::IndexedBook;
-use crate::helpers::stable_uuid;
 use crate::metadata_overrides::upsert_metadata_overrides;
 use crate::pool::init_db;
 use crate::settings::last_indexed_at;
@@ -303,9 +302,10 @@ async fn sync_overrides_survive_changed() {
     let after = list_books(&pool, "/lib").await.unwrap();
     assert_eq!(after[0].title.as_deref(), Some("User Title"));
 }
-/// A Removed uuid must wipe books_fts, book_files,
-/// books_authors_link, etc. — the cascade plus our explicit FTS
-/// clear should leave no orphans.
+/// A Removed uuid is ghosted (F2): the `books` row is **retained** (so its
+/// soft-ref user data survives), but its `book_files`, `books_fts`, and
+/// taxonomy/author links are cleared so the ghost is invisible to the grid,
+/// search, and browse pages.
 #[tokio::test]
 async fn sync_removes_book_cascades_links_and_fts() {
     let _covers = CoversTempDir::new("sync_removed_cascade");
@@ -356,10 +356,68 @@ async fn sync_removes_book_cascades_links_and_fts() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(books_count, 0);
+    assert_eq!(books_count, 1, "books row retained as a fileless ghost");
     assert_eq!(files_count, 0);
     assert_eq!(link_count, 0);
     assert_eq!(fts_count, 0);
+}
+/// F2 acceptance: removing a file ghosts its book (hidden from the grid but
+/// the row + durable `books.uuid` survive); when the same file returns it
+/// re-attaches to that row, preserving the uuid (auto-relink). This is what
+/// makes user data keyed on `books.uuid` durable across a removed→re-added
+/// cycle.
+#[tokio::test]
+async fn removed_file_ghosts_then_returning_file_relinks_same_uuid() {
+    let _covers = CoversTempDir::new("ghost_relink");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed("a.epub", Some("A"), &["X"], &[], None, None)],
+    )
+    .await
+    .unwrap();
+    let uuid1 = crate::test_support::uuid_by_scan_key(&pool, "a.epub").await;
+
+    // File gone → ghosted: hidden from the list, but the row + uuid survive.
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            removed_uuids: vec![uuid1.clone()],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        list_books(&pool, "/lib").await.unwrap().is_empty(),
+        "fileless ghost is hidden from the library grid"
+    );
+    assert_eq!(
+        crate::test_support::uuid_by_scan_key(&pool, "a.epub").await,
+        uuid1,
+        "ghost retains its scan_key and durable uuid"
+    );
+
+    // File returns → re-attaches to the same row (same uuid), listed again.
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            new_books: vec![indexed("a.epub", Some("A"), &["X"], &[], None, None)],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let after = list_books(&pool, "/lib").await.unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(
+        after[0].unique_identifier.as_deref(),
+        Some(uuid1.as_str()),
+        "returning file relinks to the same uuid (no orphaned user data)"
+    );
 }
 /// One sync covering all four mutating branches at once. Unchanged
 /// ids stay put; Changed id stays put; New gets a fresh id;
@@ -385,7 +443,7 @@ async fn sync_mixed_diff_in_one_transaction() {
         .into_iter()
         .map(|b| (b.filename.clone(), b.id))
         .collect();
-    let gone_uuid = stable_uuid("/lib", "gone.epub");
+    let gone_uuid = crate::test_support::uuid_by_scan_key(&pool, "gone.epub").await;
 
     let plan = SyncPlan {
         new_books: vec![indexed_with_stat("add.epub", Some("Added"), 100, 100)],
@@ -439,8 +497,8 @@ async fn sync_cover_sidecar_lifecycle_on_remove() {
     )
     .await
     .unwrap();
-    let keep_uuid = stable_uuid("/lib", "keep.epub");
-    let gone_uuid = stable_uuid("/lib", "gone.epub");
+    let keep_uuid = crate::test_support::uuid_by_scan_key(&pool, "keep.epub").await;
+    let gone_uuid = crate::test_support::uuid_by_scan_key(&pool, "gone.epub").await;
     let keep_path = covers.path.join(format!("{keep_uuid}.jpg"));
     let gone_path = covers.path.join(format!("{gone_uuid}.jpg"));
     assert!(keep_path.exists(), "cover for keep should exist");
@@ -739,16 +797,24 @@ async fn reindex_keeps_fts_row_count_in_sync() {
     .await
     .unwrap();
 
-    let book_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    // F2: removed book `b` is retained as a fileless ghost, so total books
+    // is 2 but only the file-backed `a` carries an FTS row.
+    let file_backed: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM books b
+          WHERE EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     let fts_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books_fts")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(book_count, 1);
-    assert_eq!(fts_count, 1, "FTS row count must match book count");
+    assert_eq!(file_backed, 1);
+    assert_eq!(
+        fts_count, 1,
+        "FTS row count must match file-backed book count"
+    );
 }
 #[tokio::test]
 async fn overrides_survive_reindex() {
@@ -1103,8 +1169,8 @@ async fn sync_books_with_progress_excludes_removed_and_backfill_from_total() {
     )
     .await
     .unwrap();
-    let survivor_uuid = stable_uuid("/lib", "survivor.epub");
-    let gone_uuid = stable_uuid("/lib", "gone.epub");
+    let survivor_uuid = crate::test_support::uuid_by_scan_key(&pool, "survivor.epub").await;
+    let gone_uuid = crate::test_support::uuid_by_scan_key(&pool, "gone.epub").await;
 
     let plan = SyncPlan {
         new_books: vec![indexed_with_stat("new.epub", Some("New"), 10, 10)],
@@ -1346,7 +1412,6 @@ async fn sync_audiobooks_with_removed_above_bind_cap_succeeds() {
             )
         })
         .collect();
-    let all_uuids: Vec<String> = new_books.iter().map(|b| b.uuid.clone()).collect();
 
     sync_audiobooks(
         &pool,
@@ -1359,6 +1424,11 @@ async fn sync_audiobooks_with_removed_above_bind_cap_succeeds() {
     .await
     .expect("initial sync of 1000 audiobooks should succeed");
     assert_eq!(list_books(&pool, "/lib").await.unwrap().len(), N);
+    // Identity is minted (F2) — collect the durable uuids to remove from the DB.
+    let all_uuids: Vec<String> = sqlx::query_scalar("SELECT uuid FROM books")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
 
     // Wholesale remove all 1000 in a single plan — this is the scenario
     // the issue calls out (massive library disappearing in a single scan).
@@ -1375,7 +1445,7 @@ async fn sync_audiobooks_with_removed_above_bind_cap_succeeds() {
 
     assert!(
         list_books(&pool, "/lib").await.unwrap().is_empty(),
-        "every audiobook row should be gone after wholesale removal"
+        "every audiobook is hidden (ghosted) after wholesale removal"
     );
     let fts_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books_fts")
         .fetch_one(&pool)
@@ -1383,6 +1453,6 @@ async fn sync_audiobooks_with_removed_above_bind_cap_succeeds() {
         .unwrap();
     assert_eq!(
         fts_count, 0,
-        "FTS rows should be cleared for every removed audiobook"
+        "FTS rows should be cleared for every ghosted audiobook"
     );
 }

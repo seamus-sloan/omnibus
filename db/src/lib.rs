@@ -16,6 +16,7 @@ pub mod ebook;
 pub mod helpers;
 pub mod highlights;
 pub mod hls;
+pub mod identity;
 pub mod indexer;
 pub mod library_layout;
 pub mod merge;

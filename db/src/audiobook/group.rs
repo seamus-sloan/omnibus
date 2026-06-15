@@ -5,7 +5,7 @@
 //! combined deliberately via the manual merge dialog, not by filename.
 
 use super::stat::AudiobookStatEntry;
-use crate::helpers::stable_uuid;
+use crate::helpers::scan_key_for;
 
 /// One audiobook entity post-grouping. The aggregate `mtime_epoch` /
 /// `size_bytes` are used by the incremental diff to detect that *any*
@@ -19,14 +19,13 @@ pub struct AudiobookGroup {
     /// (e.g. `Author/Series/Title`); for single-file m4b/m4a/mp3 groups
     /// this is the file's own relative path including extension.
     pub group_path: String,
-    /// Deterministic UUIDv5 of `(library_path_key, group_path)`. Stays
-    /// stable across reindexes — same shape as
-    /// [`crate::ebook::stat::StatEntry::uuid`].
-    pub uuid: String,
+    /// The Phase-A diff key (F2): the group's library-relative path (same
+    /// value as `group_path`). Empty for synthetic placeholder rows. Same
+    /// role as [`crate::ebook::stat::StatEntry::scan_key`].
+    pub scan_key: String,
     /// Per-part stat rows in the order returned by the walk. Phase B
     /// re-sorts by ID3 `track` tag; this ordering is only here so the
-    /// `stable_uuid` input is deterministic and the diff result is
-    /// reproducible.
+    /// diff result is reproducible.
     pub parts: Vec<AudiobookStatEntry>,
     /// Sum across `parts`.
     pub total_size_bytes: i64,
@@ -53,7 +52,7 @@ pub fn group_into_books(
         std::collections::BTreeMap::new();
 
     for entry in entries {
-        if entry.uuid.is_empty() {
+        if entry.scan_key.is_empty() {
             // Synthetic "unreadable subdir" placeholder. Pass through.
             singles.push(single(entry, "MP3", library_path_key));
             continue;
@@ -82,10 +81,10 @@ pub fn group_into_books(
     for (dir, parts) in mp3_buckets {
         let total_size_bytes = parts.iter().map(|p| p.size_bytes).sum();
         let max_mtime_epoch = parts.iter().map(|p| p.mtime_epoch).max().unwrap_or(0);
-        let uuid = stable_uuid(library_path_key, &dir);
+        let scan_key = scan_key_for(&dir);
         groups.push(AudiobookGroup {
             group_path: dir,
-            uuid,
+            scan_key,
             parts,
             total_size_bytes,
             max_mtime_epoch,
@@ -97,26 +96,26 @@ pub fn group_into_books(
     groups
 }
 
-fn single(entry: AudiobookStatEntry, format: &str, library_path_key: &str) -> AudiobookGroup {
+fn single(entry: AudiobookStatEntry, format: &str, _library_path_key: &str) -> AudiobookGroup {
     // For single-file groups the canonical key is the file path itself,
     // not its parent dir — two `Author/Book.m4b` and
     // `Author/Bonus.m4b` files in the same directory must produce two
     // groups, not one.
     let group_path = entry.filename.clone();
-    // The synthetic-error case carries an empty uuid through; recompute
+    // The synthetic-error case carries an empty scan_key through; derive
     // here from the group key so downstream code (`diff_library`) sees a
-    // proper stable id when the row is real, and an empty one when it's
-    // a placeholder.
-    let uuid = if entry.uuid.is_empty() {
+    // proper key when the row is real, and an empty one when it's a
+    // placeholder.
+    let scan_key = if entry.scan_key.is_empty() {
         String::new()
     } else {
-        stable_uuid(library_path_key, &group_path)
+        scan_key_for(&group_path)
     };
     let size = entry.size_bytes;
     let mtime = entry.mtime_epoch;
     AudiobookGroup {
         group_path,
-        uuid,
+        scan_key,
         parts: vec![entry],
         total_size_bytes: size,
         max_mtime_epoch: mtime,
@@ -146,7 +145,7 @@ mod tests {
     fn entry(name: &str, mtime: i64, size: i64) -> AudiobookStatEntry {
         AudiobookStatEntry {
             filename: name.into(),
-            uuid: crate::helpers::stable_uuid("/lib", name),
+            scan_key: crate::helpers::scan_key_for(name),
             mtime_epoch: mtime,
             size_bytes: size,
             error: None,
@@ -186,12 +185,9 @@ mod tests {
         // Aggregates: sum-of-sizes, max-of-mtimes.
         assert_eq!(g.total_size_bytes, 3300);
         assert_eq!(g.max_mtime_epoch, 120);
-        // Stable uuid sourced from `(library, group_path)`, not from any
-        // individual part — invariant the F2.1 progress endpoints rely on.
-        assert_eq!(
-            g.uuid,
-            crate::helpers::stable_uuid("/lib", "Sanderson/Way of Kings")
-        );
+        // scan_key sourced from the group's relative path, not from any
+        // individual part — the diff matches on this across reindexes.
+        assert_eq!(g.scan_key, "Sanderson/Way of Kings");
     }
 
     #[test]
@@ -229,14 +225,14 @@ mod tests {
         // (not invent one) and pass the row through unchanged.
         let bad = AudiobookStatEntry {
             filename: "locked".into(),
-            uuid: String::new(),
+            scan_key: String::new(),
             mtime_epoch: 0,
             size_bytes: 0,
             error: Some("permission denied".into()),
         };
         let groups = group_into_books(vec![bad.clone()], "/lib");
         assert_eq!(groups.len(), 1);
-        assert!(groups[0].uuid.is_empty());
+        assert!(groups[0].scan_key.is_empty());
         assert_eq!(groups[0].parts.len(), 1);
         assert_eq!(
             groups[0].parts[0].error.as_deref(),

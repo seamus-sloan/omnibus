@@ -1,5 +1,4 @@
 use crate::books::list_merged_rows_for_formats;
-use crate::helpers::stable_uuid;
 use crate::indexer::diff_library;
 use crate::pool::init_db;
 use crate::sync::{sync_audiobooks, sync_books, AudiobookSyncPlan, SyncPlan};
@@ -145,13 +144,18 @@ async fn reindex_diff_classifies_attached_file_as_unchanged() {
         .unwrap();
     let disk = vec![crate::ebook::StatEntry {
         filename: ab.group_path.clone(),
-        uuid: ab.uuid.clone(),
+        scan_key: ab.scan_key.clone(),
         mtime_epoch: ab.max_mtime_epoch,
         size_bytes: ab.total_size_bytes,
         error: None,
     }];
     let diff = diff_library(&disk, &db_rows, std::path::Path::new("/audio"));
-    assert_eq!(diff.unchanged, vec![ab.uuid.clone()]);
+    // The merged row's identity is `merged_uuids.uuid` = the attach ledger
+    // key (stable_uuid of the audiobook's group path), unchanged by F2.
+    assert_eq!(
+        diff.unchanged,
+        vec![crate::helpers::stable_uuid("/audio", &ab.group_path)]
+    );
     assert!(diff.new.is_empty());
     assert!(diff.removed.is_empty());
 }
@@ -241,15 +245,20 @@ async fn removed_attached_file_drops_attachment_but_keeps_book() {
 }
 
 #[tokio::test]
-async fn removed_ebook_with_attached_audiobook_cascades_and_audiobook_recreates() {
-    // Deleting the target book's own file removes the books row (its
-    // uuid IS the row); the attached file's merged_uuids entry cascades,
-    // so the next audiobook scan recreates it standalone — self-healing.
+async fn removed_ebook_with_attached_audiobook_ghosts_and_audiobook_reattaches() {
+    // F2: removing the ebook file ghosts its books row (retained, fileless)
+    // rather than deleting it, so the attachment ledger survives. The book's
+    // identity (and any user data on it) is preserved, and re-scanning the
+    // still-present audiobook re-attaches to the same row — now audiobook-only.
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_ebook(&pool, "Stoker/Dracula.epub", "Dracula", "Bram Stoker").await;
     seed_audiobook(&pool, "Stoker/Dracula.m4b", "Dracula", "Bram Stoker").await;
+    // One book (the ebook), with the m4b attached via merged_uuids.
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 1);
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM merged_uuids").await, 1);
 
-    let ebook_uuid = stable_uuid("/ebooks", "Stoker/Dracula.epub");
+    // Identity is minted (F2) — remove by the real uuid (read via scan_key).
+    let ebook_uuid = crate::test_support::uuid_by_scan_key(&pool, "Stoker/Dracula.epub").await;
     sync_books(
         &pool,
         "/ebooks",
@@ -260,12 +269,24 @@ async fn removed_ebook_with_attached_audiobook_cascades_and_audiobook_recreates(
     )
     .await
     .unwrap();
-    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 0);
-    assert_eq!(count(&pool, "SELECT COUNT(*) FROM merged_uuids").await, 0);
+    // Ghosted: the books row + its merged_uuids ledger survive; all file rows
+    // are dropped.
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 1);
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM merged_uuids").await, 1);
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM book_files").await, 0);
 
+    // The audiobook is still on disk; the next scan re-attaches it to the
+    // retained row, which becomes file-backed (audiobook-only) again.
     seed_audiobook(&pool, "Stoker/Dracula.m4b", "Dracula", "Bram Stoker").await;
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 1);
-    assert_eq!(count(&pool, "SELECT COUNT(*) FROM merged_uuids").await, 0);
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM book_files WHERE format = 'M4B'"
+        )
+        .await,
+        1
+    );
 }
 
 #[tokio::test]
@@ -371,5 +392,73 @@ async fn known_uuid_reattaches_even_when_titles_no_longer_match() {
         )
         .await,
         1
+    );
+}
+
+#[tokio::test]
+async fn attachment_survives_a_scan_root_repoint() {
+    // F2: an attached file is matched by its repoint-stable
+    // `(library_path, scan_key)`, and a repoint updates
+    // `merged_uuids.library_path`, so re-scanning under the new root
+    // re-attaches against the stored ledger uuid instead of duplicating.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    crate::settings::set_settings(
+        &pool,
+        &omnibus_shared::Settings {
+            ebook_library_path: Some("/ebooks".into()),
+            audiobook_library_path: Some("/audio".into()),
+        },
+    )
+    .await
+    .unwrap();
+    seed_ebook(&pool, "Stoker/Dracula.epub", "Dracula", "Bram Stoker").await;
+    seed_audiobook(&pool, "Stoker/Dracula.m4b", "Dracula", "Bram Stoker").await;
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 1);
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM merged_uuids").await, 1);
+
+    // Repoint the audiobook scan root /audio -> /audio2.
+    crate::settings::set_settings(
+        &pool,
+        &omnibus_shared::Settings {
+            ebook_library_path: Some("/ebooks".into()),
+            audiobook_library_path: Some("/audio2".into()),
+        },
+    )
+    .await
+    .unwrap();
+    let mu_lib: String =
+        sqlx::query_scalar("SELECT library_path FROM merged_uuids WHERE format = 'M4B'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        mu_lib, "/audio2",
+        "the attach ledger's library_path follows the repoint"
+    );
+
+    // Re-scan the same m4b under the new root: it must re-attach, not duplicate.
+    sync_audiobooks(
+        &pool,
+        "/audio2",
+        AudiobookSyncPlan {
+            new_books: vec![indexed_audiobook(
+                "Stoker/Dracula.m4b",
+                "Dracula",
+                Some("Bram Stoker"),
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        count(&pool, "SELECT COUNT(*) FROM books").await,
+        1,
+        "re-scan under the new root re-attaches — no duplicate book"
+    );
+    assert_eq!(
+        count(&pool, "SELECT COUNT(*) FROM merged_uuids").await,
+        1,
+        "no duplicate ledger row"
     );
 }

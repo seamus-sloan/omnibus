@@ -79,10 +79,10 @@ its `books` row is gone, soft-ref user rows now survive as orphans. Pick:
   auto-relink if the same uuid reappears on a future scan. Matches
   `metadata_overrides` behavior exactly. Simplest; unbounded orphan growth
   (overlaps F10's no-GC concern).
-- **(1b) Relink/GC pass at `init_db`.** An idempotent boot pass prunes (or
-  relinks) rows whose `book_uuid` is in neither `books.uuid` nor
-  `merged_uuids`. Bounds orphan growth; adds a destructive boot path that
-  must be conservative or it becomes a *new* data-loss surface.
+- *From owner: Ideally, books can exist in Omnibus without a file existing
+  in the future. Books should be able to be added to a "wishlist." This
+  feature isn't added to the roadmpa yet, but should be accounted for none-
+  theless.*
 
 **Decision 2 — `BookNotFound` write guard.** Today `upsert_progress` and
 `create_highlight` reject writes for an unknown uuid
@@ -93,10 +93,8 @@ soft ref we could:
   `books`/`merged_uuids` first; you cannot record progress for a book the
   server has never indexed. Smallest blast radius — the resolver call
   stays, only the *stored* column changes from `id` to `uuid`.
-- **(2b) Relax the guard.** Accept a write for any uuid, indexed or not
-  (the row simply starts detached). Enables offline-first clients writing
-  ahead of an index, but lets a typo'd uuid persist forever and couples
-  tightly to Decision 1b's GC to ever clean those up.
+- *From owner: There shouldn't be a time where the user has progress on
+  on a book that doesn't exist.*
 
 These are co-dependent with **F2** (the uuid must be *stable* — a
 path-derived `stable_uuid` re-keys every book on a library-root change, so
@@ -141,51 +139,6 @@ get wrong; fully reversible-in-spirit (orphans are harmless data, not
 deletions). **Cons.** Unbounded orphan growth over time; dead rows slow
 any future `LEFT JOIN` against these tables (the same drag F10 notes for
 `metadata_overrides`); defers the GC question rather than answering it.
-
-### Option B — Soft-ref + idempotent relink/GC at boot (Decision 1b + 2a)
-
-**How it works.** Same migration as A, plus an idempotent
-`reconcile_user_data` pass in `init_db` (modeled on
-`normalize::backfill_norm_columns`) that, on every boot, deletes user rows
-whose `book_uuid` matches neither `books.uuid` nor `merged_uuids`.
-
-**Migration shape.** Identical `NNNN` migration as A, plus a new function
-in `db/src/normalize.rs` (or a sibling reconcile module) called from
-`db/src/pool.rs` right after `backfill_norm_columns` at line 56.
-
-**Blast radius.** A's surface plus a destructive boot path that runs
-against every developer DB and production on every start. Needs a grace
-mechanism so a *legitimately detached-pending-reindex* row (book removed
-this boot, re-added next reindex) is not pruned in the window between.
-Without a grace window this re-introduces a data-loss path — the exact
-class of bug F1 exists to kill.
-
-**Pros.** Bounds orphan growth; keeps the join tables lean; lands the GC
-that F10 wants for `metadata_overrides` too (shareable). **Cons.** A
-boot-time `DELETE` on user data is the highest-risk code in this whole
-change; getting the grace window wrong silently deletes the data we just
-protected; couples F1's timeline to F10's design. Pruning is irreversible
-once it runs.
-
-### Option C — Soft-ref + relax write guard (Decision 1a/1b + 2b)
-
-**How it works.** Same migration; additionally drop the `BookNotFound`
-guard so `upsert_progress`/`create_highlight` accept any uuid. Rows for
-not-yet-indexed books start detached and bind when the book appears.
-
-**Migration shape.** Same `NNNN`. Code change is *removing* the resolver
-call and the `BookNotFound` variant from the write paths.
-
-**Blast radius.** Touches the public error contract: `ProgressError` and
-`HighlightError` lose a variant, so the handlers and their tests that
-assert the 404/4xx on unknown-book change. Without a GC (1a) every typo'd
-or stale-client uuid persists forever; effectively forces Option B's GC to
-stay sane, so C realistically means B+C.
-
-**Pros.** Enables offline-first / write-ahead clients (a Phase-4 device-sync
-nicety). **Cons.** Removes a cheap correctness check for a feature nothing
-needs yet; widens the GC requirement; changes a wire-visible error
-contract for no current consumer. Premature.
 
 ## Recommendation
 
@@ -350,9 +303,11 @@ Run: `cargo test -p omnibus-db`, then `cargo test -p omnibus`, then
 - **What's irreversible once data accumulates:** the choice of `book_uuid`
   as the durable key is load-bearing across `metadata_overrides`,
   `merged_uuids`, cover filenames, and route URLs. This is precisely why
-  **F2 (stable uuid) must land first or alongside** — migrating to a soft
-  ref on an *unstable* uuid buys a smaller, not zero, data-loss surface
-  (a path change still re-keys every uuid). See sequencing.
+  **F2 (durable stored uuid) must land first or alongside** — migrating to a
+  soft ref *before* F2 buys a smaller, not zero, data-loss surface, because
+  until F2 the path-derived uuid still moves on a repoint. Once F2 lands the
+  uuid is stored and never recomputed, so the soft ref is fully durable. See
+  sequencing.
 - **Option B-specific (not recommended now):** a boot-time GC `DELETE`
   with a too-aggressive grace window would delete legitimately-detached
   rows — the exact failure F1 exists to prevent. Keeping GC out of this
@@ -362,12 +317,17 @@ Run: `cargo test -p omnibus-db`, then `cargo test -p omnibus`, then
 
 The F1 ↔ F2 ↔ F10 chain:
 
-- **F2 (path-based `stable_uuid` → content-anchored) must land first, or
-  in the same train.** A soft ref on an unstable uuid still orphans every
-  row on a library-root change, because the uuid itself moves. F1 without
-  F2 is a partial fix; the roadmap lists the uuid fix as a hard dependency
-  of F3.2 (`docs/roadmap/3-2-ratings-journaling.md:46-57`). Recommended
-  order: **F2 → F1 (Option A) → F3.2**.
+- **F2 (durable stored uuid + relative-path scan key) must land first, or
+  in the same train.** *Before* F2, the path-derived uuid is recomputed every
+  scan and a repoint cascade-deletes books, so a soft ref on that uuid still
+  orphans every row on a library-root change — the row survives as an orphan
+  but cannot auto-relink, because the uuid itself moved. F2 fixes this at the
+  root: `books.uuid` becomes a stored value that is never recomputed, and a
+  repoint reuses the scan-root row (and no longer prunes books) instead of
+  deleting it — so once F2 lands the soft ref is fully durable. F1 without F2
+  is a partial fix; the roadmap lists the uuid fix as a hard dependency of
+  F3.2 (`docs/roadmap/3-2-ratings-journaling.md:46-57`). Recommended order:
+  **F2 → F1 (Option A) → F3.2**.
 - **F9 (`record_session_tx` merged-uuid resolution) folds into F1.** It
   touches the same `record_session_tx` column and resolver; fix it in the
   same change (covered in [Affected code](#affected-code) and
@@ -389,11 +349,12 @@ The F1 ↔ F2 ↔ F10 chain:
    what disqualifies a row from pruning — uuid absent from both
    `books.uuid` and `merged_uuids` for N boots? A timestamp column? This is
    F10's to answer; flagged here because Decision 1b would force it early.
-2. **F2 anchor for backfill.** If F2 re-keys uuids in the same train, does
-   this migration's backfill run before or after the re-key migration? They
-   must be ordered so the `JOIN books` sees post-re-key uuids — likely F2's
-   re-key migration takes a lower number than this one, but confirm during
-   sequencing.
+2. **Migration ordering with F2 (resolved).** F2 does **not** re-key
+   `books.uuid` — it keeps existing values verbatim and only adds a `scan_key`
+   column — so this migration's `INSERT … SELECT JOIN books` backfill produces
+   the same `book_uuid` whether or not F2 has run. The only coupling left is
+   migration *numbering*: F1 and F2 must take distinct, ordered `NNNN` numbers
+   (F2 lower if stacked). No data-ordering hazard.
 3. **Override-cover orphans (F10 territory).** `metadata_overrides`
    orphans also leak `override-<uuid>.<ext>` cover files. The five
    user-data tables have no file side-effects, so this is not an F1

@@ -36,6 +36,26 @@ pub(crate) fn stable_uuid(library_path: &str, filename: &str) -> String {
         .to_string()
 }
 
+/// Mint a fresh, durable book identity — a random UUIDv4 assigned once at
+/// insert and **never recomputed** (F2). Unlike the retired path-derived
+/// `stable_uuid`, this cannot move when a library root is repointed and
+/// cannot collide for two distinct books that share a title/author or even
+/// identical bytes. The diff no longer reconstructs this value from disk; the
+/// relative-path [`scan_key_for`] does the Phase-A matching instead.
+pub(crate) fn mint_uuid() -> String {
+    uuid::Uuid::new_v4().hyphenated().to_string()
+}
+
+/// The Phase-A diff key: a book's path *relative to its scan root* (e.g.
+/// `Author/Title.epub`). Stored in `books.scan_key` and matched disk-vs-DB so
+/// a library-root repoint — which leaves relative paths unchanged — preserves
+/// every `books.uuid` instead of re-minting it. Identity today (the relative
+/// path is used verbatim); the single chokepoint should we ever need to fold
+/// separators or casing.
+pub(crate) fn scan_key_for(relative_path: &str) -> String {
+    relative_path.to_string()
+}
+
 /// Split `dir/sub/name.epub` into (`dir/sub`, `name`, `EPUB`). If no dir,
 /// the path portion is empty. Extension is uppercased per Calibre convention.
 pub(crate) fn split_filename(filename: &str) -> (String, String, String) {

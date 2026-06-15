@@ -210,13 +210,23 @@ pub async fn seed_minimal_books(pool: &SqlitePool, count: i64) {
             UNION ALL
             SELECT i + 1 FROM n WHERE i < ?
         )
-        INSERT INTO books (uuid, library_id, path, title, sort)
-        SELECT 'uuid-' || i, ?, '/lib/b' || i, 'Title ' || i,
+        INSERT INTO books (uuid, scan_key, library_id, path, title, sort)
+        SELECT 'uuid-' || i, 'b' || i || '.epub', ?, '/lib/b' || i, 'Title ' || i,
                'Title ' || printf('%010d', i)
           FROM n
         "#,
     )
     .bind(count)
+    .bind(lib_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    // Give every seeded book a `book_files` row so the ghost filter (F2) —
+    // which hides fileless books from list/count reads — doesn't drop them.
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch)
+         SELECT id, 'EPUB', 'b' || id, 1, 1 FROM books WHERE library_id = ?",
+    )
     .bind(lib_id)
     .execute(pool)
     .await
@@ -290,7 +300,7 @@ pub fn indexed_audiobook(
     creator: Option<&str>,
 ) -> crate::audiobook::IndexedAudiobook {
     crate::audiobook::IndexedAudiobook {
-        uuid: format!("ab-uuid-{}", group_path.replace('/', "-")),
+        scan_key: group_path.into(),
         group_path: group_path.into(),
         format: "M4B".into(),
         title: title.into(),
@@ -453,8 +463,9 @@ pub async fn seed_books_for_one_author_and_series(pool: &SqlitePool, count: i64)
 // ---------------------------------------------------------------------------
 
 /// Index one ebook under `/ebooks` through the real `sync_books` write
-/// path and return its stable uuid. Shared by the attach and merge test
-/// suites so the seeding shape can't drift between them.
+/// path and return its **minted** `books.uuid` (F2 — identity is no longer
+/// path-derived, so we read it back by `scan_key`). Shared by the attach and
+/// merge test suites so the seeding shape can't drift between them.
 pub async fn seed_synced_ebook(
     pool: &SqlitePool,
     filename: &str,
@@ -471,11 +482,11 @@ pub async fn seed_synced_ebook(
     )
     .await
     .unwrap();
-    crate::helpers::stable_uuid("/ebooks", filename)
+    uuid_by_scan_key(pool, &crate::helpers::scan_key_for(filename)).await
 }
 
 /// Index one audiobook under `/audio` through the real `sync_audiobooks`
-/// write path and return its uuid.
+/// write path and return its **minted** `books.uuid` (read back by scan_key).
 pub async fn seed_synced_audiobook(
     pool: &SqlitePool,
     group_path: &str,
@@ -483,7 +494,6 @@ pub async fn seed_synced_audiobook(
     author: &str,
 ) -> String {
     let ab = indexed_audiobook(group_path, title, Some(author));
-    let uuid = ab.uuid.clone();
     crate::sync::sync_audiobooks(
         pool,
         "/audio",
@@ -494,7 +504,28 @@ pub async fn seed_synced_audiobook(
     )
     .await
     .unwrap();
-    uuid
+    uuid_by_scan_key(pool, &crate::helpers::scan_key_for(group_path)).await
+}
+
+/// Read back the seeded book's identifier by its `scan_key` (the relative
+/// path). For a native book that's the durable `books.uuid`; for a file that
+/// auto-attached to an existing book (no own `books` row) it's the
+/// `merged_uuids` ledger key — matching what the pre-F2 seeders returned, so
+/// existing attach/merge assertions keep resolving through the same value.
+pub async fn uuid_by_scan_key(pool: &SqlitePool, scan_key: &str) -> String {
+    if let Some(uuid) = sqlx::query_scalar::<_, String>("SELECT uuid FROM books WHERE scan_key = ?")
+        .bind(scan_key)
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+    {
+        return uuid;
+    }
+    sqlx::query_scalar::<_, String>("SELECT uuid FROM merged_uuids WHERE scan_key = ?")
+        .bind(scan_key)
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 
 /// One-scalar COUNT helper for table-shape assertions.

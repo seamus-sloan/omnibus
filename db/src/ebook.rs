@@ -105,7 +105,7 @@ pub fn scan_ebook_library_with(path: Option<&str>, opts: ScanOptions) -> ScanRes
     let targets: Vec<ParseTarget> = stat
         .entries
         .iter()
-        .filter(|e| !e.uuid.is_empty())
+        .filter(|e| !e.scan_key.is_empty())
         .map(|e| ParseTarget {
             filename: e.filename.clone(),
             absolute: dir.join(&e.filename),
@@ -120,7 +120,7 @@ pub fn scan_ebook_library_with(path: Option<&str>, opts: ScanOptions) -> ScanRes
     // io::Error string so callers can distinguish "permission denied"
     // from "no such file" — same diagnostic detail the pre-split
     // implementation surfaced.
-    for placeholder in stat.entries.into_iter().filter(|e| e.uuid.is_empty()) {
+    for placeholder in stat.entries.into_iter().filter(|e| e.scan_key.is_empty()) {
         let msg = placeholder
             .error
             .as_deref()
