@@ -119,31 +119,41 @@ async fn sync_audiobooks_removed(
     if removed_uuids.is_empty() {
         return Ok(());
     }
-    let placeholders = std::iter::repeat_n("?", removed_uuids.len())
-        .collect::<Vec<_>>()
-        .join(", ");
-    // Resolve affected ids, then clear each FTS row via the door
-    // before the cascade DELETE on `books` (standalone FTS5, no FK).
-    let id_sql = format!("SELECT id FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
-    let mut q = sqlx::query_scalar::<_, i64>(&id_sql).bind(library_id);
-    for uuid in removed_uuids {
-        q = q.bind(uuid);
-    }
-    let ids = q.fetch_all(&mut **tx).await?;
-    for id in ids {
-        delete_fts(tx, id).await?;
-    }
+    // library_id + 1 bind per uuid; chunk at 500 to stay under SQLite's
+    // 999-param cap when a whole library (or any large diff) is removed.
+    // Both the id resolve and the `books` delete run per chunk inside the
+    // same transaction, matching the 500-chunk convention from
+    // `sync_removed` in `books.rs`.
+    for chunk in removed_uuids.chunks(500) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        // Resolve affected ids, then clear each FTS row via the door
+        // before the cascade DELETE on `books` (standalone FTS5, no FK).
+        let id_sql =
+            format!("SELECT id FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
+        let mut q = sqlx::query_scalar::<_, i64>(&id_sql).bind(library_id);
+        for uuid in chunk {
+            q = q.bind(uuid);
+        }
+        let ids = q.fetch_all(&mut **tx).await?;
+        for id in ids {
+            delete_fts(tx, id).await?;
+        }
 
-    let books_sql = format!("DELETE FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
-    let mut q = sqlx::query(&books_sql).bind(library_id);
-    for uuid in removed_uuids {
-        q = q.bind(uuid);
+        let books_sql =
+            format!("DELETE FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
+        let mut q = sqlx::query(&books_sql).bind(library_id);
+        for uuid in chunk {
+            q = q.bind(uuid);
+        }
+        q.execute(&mut **tx).await?;
     }
-    q.execute(&mut **tx).await?;
 
     // Removed uuids that were cross-format attachments have no
     // `books` row — drop their `book_files` row + `merged_uuids`
     // entry instead (the target book survives, possibly fileless).
+    // `remove_attached_files` already chunks internally.
     attach::remove_attached_files(tx, removed_uuids).await?;
     Ok(())
 }
