@@ -24,6 +24,29 @@ pub struct EbookLibrary {
     pub total: Option<i64>,
 }
 
+/// One facet value paired with the number of books carrying it. `value` is the
+/// canonical key the filter chips toggle (author/series/tag name, or a
+/// lowercased format key like `"epub"`); `count` is the book tally across the
+/// whole (unfiltered) library.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FacetCount {
+    pub value: String,
+    pub count: i64,
+}
+
+/// Per-facet book counts for the landing sidebar, computed server-side over
+/// the full library so the counts stay correct under keyset pagination (the
+/// client only ever holds one page). Each list is ordered by count descending,
+/// then value ascending — the order the sidebar renders. Formats are keyed by
+/// their lowercased extension (`"epub"`, `"m4b"`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FacetCounts {
+    pub authors: Vec<FacetCount>,
+    pub series: Vec<FacetCount>,
+    pub formats: Vec<FacetCount>,
+    pub tags: Vec<FacetCount>,
+}
+
 /// Author detail payload for `GET /api/authors/:id` and `rpc_get_author`.
 /// Contains the author row plus every book by that author.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

@@ -3,6 +3,22 @@
 use super::*;
 
 #[test]
+fn parse_series_index_parses_finite_decimals() {
+    assert_eq!(parse_series_index(" 1.5 "), Some(1.5));
+    assert_eq!(parse_series_index("3"), Some(3.0));
+}
+
+#[test]
+fn parse_series_index_rejects_non_finite_and_garbage() {
+    // `"nan"`/`"inf"` parse to non-finite floats SQLite would store, which
+    // corrupt the Series keyset cursor — they must be dropped at the source.
+    assert_eq!(parse_series_index("nan"), None);
+    assert_eq!(parse_series_index("inf"), None);
+    assert_eq!(parse_series_index("-inf"), None);
+    assert_eq!(parse_series_index("not a number"), None);
+}
+
+#[test]
 fn sanitize_accent_color_accepts_indexer_shape() {
     assert_eq!(
         sanitize_accent_color(Some("oklch(0.660 0.130 245.0)")).as_deref(),

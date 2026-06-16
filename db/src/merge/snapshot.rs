@@ -17,6 +17,7 @@ pub(super) struct SourceSnapshot {
     pub title: String,
     pub sort: Option<String>,
     pub author_sort: Option<String>,
+    pub series_sort: Option<String>,
     pub series_index: Option<f64>,
     pub pubdate: Option<String>,
     pub timestamp: Option<String>,
@@ -64,6 +65,7 @@ pub(super) async fn build_snapshot(
         title,
         sort,
         author_sort,
+        series_sort,
         series_index,
         pubdate,
         timestamp,
@@ -79,6 +81,7 @@ pub(super) async fn build_snapshot(
         String,
         Option<String>,
         Option<String>,
+        Option<String>,
         Option<f64>,
         Option<String>,
         Option<String>,
@@ -88,9 +91,9 @@ pub(super) async fn build_snapshot(
         Option<String>,
         Option<String>,
     ) = sqlx::query_as(
-        "SELECT b.uuid, l.path, b.path, b.title, b.sort, b.author_sort, b.series_index,
-                b.pubdate, b.timestamp, b.has_cover, b.description, b.accent_color,
-                b.title_norm, b.author_norm
+        "SELECT b.uuid, l.path, b.path, b.title, b.sort, b.author_sort, b.series_sort,
+                b.series_index, b.pubdate, b.timestamp, b.has_cover, b.description,
+                b.accent_color, b.title_norm, b.author_norm
            FROM books b JOIN scan_roots l ON l.id = b.library_id
           WHERE b.id = ?",
     )
@@ -170,6 +173,7 @@ pub(super) async fn build_snapshot(
         title,
         sort,
         author_sort,
+        series_sort,
         series_index,
         pubdate,
         timestamp,
