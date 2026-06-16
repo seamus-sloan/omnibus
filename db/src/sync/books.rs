@@ -27,9 +27,9 @@ use super::authors::insert_author_links;
 use super::backfill::backfill_stat_chunks;
 use super::fts::{delete_fts, upsert_fts};
 
-/// Errors returned by the public sync write path.
+/// Crate-internal error wrapping `sqlx::Error` so `?` propagates cleanly in the audiobook sync helpers.
 #[derive(Debug, thiserror::Error)]
-pub enum SyncError {
+pub(crate) enum SyncError {
     #[error(transparent)]
     Db(#[from] sqlx::Error),
 }
@@ -87,7 +87,7 @@ pub async fn sync_books(
     pool: &SqlitePool,
     library_path: &str,
     plan: SyncPlan,
-) -> Result<(), SyncError> {
+) -> anyhow::Result<()> {
     sync_books_with_progress(pool, library_path, plan, |_, _| {}).await
 }
 
@@ -102,7 +102,7 @@ pub async fn sync_books_with_progress(
     library_path: &str,
     plan: SyncPlan,
     mut on_progress: impl FnMut(u32, u32),
-) -> Result<(), SyncError> {
+) -> anyhow::Result<()> {
     let total: u32 = (plan.changed_books.len() + plan.new_books.len())
         .try_into()
         .unwrap_or(u32::MAX);
@@ -684,7 +684,7 @@ pub async fn replace_books(
     pool: &SqlitePool,
     library_path: &str,
     books: Vec<crate::ebook::IndexedBook>,
-) -> Result<(), SyncError> {
+) -> anyhow::Result<()> {
     let removed_uuids: Vec<String> = sqlx::query_scalar(
         "SELECT b.uuid FROM books b
          JOIN scan_roots l ON l.id = b.library_id
