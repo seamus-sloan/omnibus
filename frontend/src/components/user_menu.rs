@@ -123,19 +123,16 @@ fn UserMenuPanel(user: UserSummary, open: Signal<bool>) -> Element {
     let on_signout = move |_| {
         // Spawn first; closing the menu unmounts the button mid-handler on
         // web, which can swallow work queued after `open.set(false)`.
-        #[cfg(feature = "web")]
-        {
-            spawn(async move {
-                let _ = crate::data::logout().await;
-                open.set(false);
-                nav.replace(Route::Login {});
-            });
-        }
-        #[cfg(not(feature = "web"))]
-        {
+        //
+        // Hydration parity (rule 07): the closure body must be identical
+        // across SSR/WASM. `data::logout` has a non-web `Ok(())` stub so
+        // this dispatches uniformly — SSR never fires click handlers, and
+        // WASM runs the real REST call.
+        spawn(async move {
+            let _ = crate::data::logout().await;
             open.set(false);
-            let _ = nav;
-        }
+            nav.replace(Route::Login {});
+        });
     };
 
     let on_keydown = move |evt: Event<KeyboardData>| {
@@ -153,14 +150,18 @@ fn UserMenuPanel(user: UserSummary, open: Signal<bool>) -> Element {
             "aria-label": "User menu",
             tabindex: "-1",
             onkeydown: on_keydown,
-            onmounted: move |_evt: MountedEvent| {
+            onmounted: move |evt: MountedEvent| {
                 // Focus the panel so the onkeydown listener above receives
                 // ESC presses — opening the menu via the trigger leaves
                 // focus on the (now-unmounted-from-DOM-tab-order) trigger
                 // otherwise. Defer to the next animation frame so the
                 // browser has finished layout before `.focus()` lands.
-                #[cfg(feature = "web")]
-                focus_user_menu_panel(&_evt);
+                //
+                // Hydration parity (rule 07): closure body stays identical
+                // across SSR/WASM; `focus_user_menu_panel` has a non-web
+                // no-op stub so the gate lives at the function definition,
+                // not inside the rsx-attached handler.
+                focus_user_menu_panel(&evt);
             },
 
             // ── Header ────────────────────────────────────────────
@@ -363,6 +364,13 @@ fn focus_user_menu_panel(evt: &MountedEvent) {
     });
     let _ = window.request_animation_frame(cb.unchecked_ref());
 }
+
+/// Non-web stub: SSR never paints the panel and native shells don't
+/// drive the user menu, so there is nothing to focus. Defined so the
+/// `onmounted` handler can call `focus_user_menu_panel` unconditionally
+/// (rule 07: hydration parity — keep cfg gates out of rsx bodies).
+#[cfg(not(feature = "web"))]
+fn focus_user_menu_panel(_evt: &MountedEvent) {}
 
 #[cfg(test)]
 mod tests {
