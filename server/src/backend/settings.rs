@@ -30,6 +30,9 @@ pub(super) async fn post_settings(
     State(state): State<AppState>,
     Json(settings): Json<Settings>,
 ) -> Response {
+    if let Err(e) = settings.validate() {
+        return (axum::http::StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response();
+    }
     match db::set_settings(&state.pool, &settings).await {
         Ok(()) => match db::get_settings(&state.pool).await {
             Ok(updated) => {

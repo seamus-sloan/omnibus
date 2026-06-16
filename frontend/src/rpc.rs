@@ -151,6 +151,9 @@ pub async fn rpc_get_settings() -> Result<Settings> {
 
 #[post("/api/rpc/settings", pool: PoolExt, worker: WorkerExt, _admin: AdminUser)]
 pub async fn rpc_save_settings(settings: Settings) -> Result<Settings> {
+    if let Err(e) = settings.validate() {
+        return Err(ServerFnError::new(e.to_string()).into());
+    }
     db::set_settings(&pool.0, &settings).await?;
     let updated = db::get_settings(&pool.0).await?;
     // Library path may have changed (and even when it hasn't, the user has
@@ -668,6 +671,15 @@ pub async fn rpc_delete_highlight(id: i64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{validate_author_photo_url, AUTHOR_PHOTO_URL_MAX_LEN};
+
+    // `rpc_save_settings`'s validation wiring is covered by the REST
+    // boundary test `api_post_settings_returns_422_when_*_path_exceeds_max_len`
+    // in `server::backend::settings::tests` (same `Settings::validate()`
+    // call), and `Settings::validate()` itself by
+    // `shared::settings::tests`. Direct call-through tests here can't reach
+    // the dioxus server-fn router without spinning up the full fullstack
+    // stack, so they'd only re-test the shared validator — which is why
+    // the previous regression tests were removed.
 
     #[test]
     fn validate_author_photo_url_rejects_url_over_max_len() {
