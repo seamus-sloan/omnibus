@@ -208,15 +208,22 @@ pub(super) async fn post_ebook_cover(
     }
 
     // Mark the overrides table with has_cover_override = 1. Preserve existing
-    // field overrides if any.
+    // field overrides if any. Any DB failure from here on must clean up the
+    // file we just wrote — otherwise the cover lives on disk with no row
+    // pointing at it (#516). Cleanup is best-effort: log on failure, return
+    // the original DB error.
     let existing_overrides = match db::get_metadata_overrides(&state.pool, &uuid).await {
         Ok(Some((ov, _))) => ov,
         Ok(None) => MetadataOverrides::default(),
-        Err(e) => return internal("get_metadata_overrides", e),
+        Err(e) => {
+            cleanup_orphan_cover(&uuid);
+            return internal("get_metadata_overrides", e);
+        }
     };
     if let Err(e) =
         db::upsert_metadata_overrides(&state.pool, &uuid, &existing_overrides, true, user.id).await
     {
+        cleanup_orphan_cover(&uuid);
         return internal("upsert_metadata_overrides", e);
     }
 
@@ -231,6 +238,16 @@ pub(super) async fn post_ebook_cover(
         Ok(None) => (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
         Err(e) => internal("get_book", e),
     }
+}
+
+/// Best-effort delete of the on-disk override cover after a DB failure in
+/// `post_ebook_cover`. `delete_override_cover` swallows its own filesystem
+/// errors, so this only logs the intent — the caller is already returning
+/// the original DB error, and a missing cover file is preferred over a
+/// dangling file with no row pointing at it.
+fn cleanup_orphan_cover(uuid: &str) {
+    tracing::warn!(uuid, "cover upload DB step failed — removing orphan file");
+    db::delete_override_cover(uuid);
 }
 
 #[cfg(test)]

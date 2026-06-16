@@ -403,3 +403,57 @@ async fn api_post_cover_rejects_undetectable_format() {
         "rejected undetectable-format upload must not create an override row"
     );
 }
+
+#[tokio::test]
+async fn api_post_cover_cleans_up_orphan_file_when_db_upsert_fails() {
+    // Disk write succeeds, the `metadata_overrides` DB step fails — the
+    // handler must remove the file it just wrote so the cover doesn't
+    // live on disk with no row pointing at it (#516). We force the DB
+    // failure by dropping the `metadata_overrides` table after the book
+    // is seeded; both `get_metadata_overrides` and
+    // `upsert_metadata_overrides` then return `sqlx::Error`, exercising
+    // the cleanup-on-failure branches.
+    let _covers = CoversDirGuard::new("orphan_cleanup");
+    let (app, _state, pool) = fixture().await;
+    let (_id, uuid) = seed_book_with_uuid(&pool, "/lib", "OrphanBook").await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    sqlx::query("DROP TABLE metadata_overrides")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (content_type, body) = build_cover_multipart("image/png", TINY_PNG);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/ebooks/{uuid}/cover"))
+                .method("POST")
+                .header("content-type", content_type)
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    // No `override-<uuid>.*` file should remain on disk — the handler
+    // must have invoked `delete_override_cover` on the failure path.
+    // `write_override_cover` lays down `override-<uuid>.png` for PNG
+    // input, but check every extension the read-side probes so a future
+    // format change in `write_override_cover` doesn't silently bypass
+    // this assertion.
+    let dir = db::covers_dir();
+    let leftover: Vec<std::path::PathBuf> = ["png", "jpg", "jpeg", "webp", "gif", "svg", "bin"]
+        .iter()
+        .map(|ext| dir.join(format!("override-{uuid}.{ext}")))
+        .filter(|p| p.exists())
+        .collect();
+    assert!(
+        leftover.is_empty(),
+        "DB failure path must remove the orphan cover file from disk; \
+         leftover files: {leftover:?}"
+    );
+}
