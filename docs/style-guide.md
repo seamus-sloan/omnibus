@@ -237,9 +237,10 @@ pub enum AuthError {
 into every downstream caller: any future migration to a different DB
 crate becomes a workspace-wide rename, and `sqlx::Error` carries
 unrelated variants (`PoolTimedOut`, `Configuration`, …) the caller
-can't meaningfully handle. It now returns `Result<(), SyncError>` — a
-module-local enum in `db/src/sync/books.rs` that wraps `sqlx::Error`
-via `#[error(transparent)] #[from]`. Wrap, don't leak.
+can't meaningfully handle. It now returns `anyhow::Result<()>` — the
+internal `SyncError` enum in `db/src/sync/books.rs` is `pub(crate)`,
+so external callers see only an opaque `anyhow::Error` and `sqlx::Error`
+stays inside the `db` crate. Wrap, don't leak.
 
 ---
 

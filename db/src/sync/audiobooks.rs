@@ -45,7 +45,7 @@ pub async fn sync_audiobooks(
     pool: &SqlitePool,
     library_path: &str,
     plan: AudiobookSyncPlan,
-) -> Result<(), SyncError> {
+) -> anyhow::Result<()> {
     sync_audiobooks_with_progress(pool, library_path, plan, |_, _| {}).await
 }
 
@@ -58,7 +58,7 @@ pub async fn sync_audiobooks_with_progress(
     library_path: &str,
     plan: AudiobookSyncPlan,
     mut on_progress: impl FnMut(u32, u32),
-) -> Result<(), SyncError> {
+) -> anyhow::Result<()> {
     let total: u32 = (plan.changed_books.len() + plan.new_books.len())
         .try_into()
         .unwrap_or(u32::MAX);
