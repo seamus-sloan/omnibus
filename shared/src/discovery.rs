@@ -47,6 +47,32 @@ pub struct FacetCounts {
     pub tags: Vec<FacetCount>,
 }
 
+/// Response payload for the F5b keyset-paginated **web** landing read
+/// (`rpc_get_ebooks_page`). One page of books plus the opaque cursor to fetch
+/// the next page (`None` at end of stream).
+///
+/// `total` (full unfiltered library count) and `facets` (sidebar counts) are
+/// populated only on the **first** page — a cursor-less request — so the
+/// client sizes the header and renders the sidebar once instead of recomputing
+/// them on every scroll. The cursor is opaque: the client stores `next_cursor`
+/// and hands it back verbatim; it never inspects it.
+///
+/// The mobile REST `GET /api/ebooks` paginated form does **not** use this type:
+/// it keeps the `EbookLibrary` body and carries the cursor in the
+/// `X-Next-Cursor` header (and has no `facets`), so older clients stay
+/// byte-compatible.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LibraryPage {
+    pub path: Option<String>,
+    pub books: Vec<EbookMetadata>,
+    #[serde(default)]
+    pub next_cursor: Option<String>,
+    #[serde(default)]
+    pub total: Option<i64>,
+    #[serde(default)]
+    pub facets: Option<FacetCounts>,
+}
+
 /// Author detail payload for `GET /api/authors/:id` and `rpc_get_author`.
 /// Contains the author row plus every book by that author.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
