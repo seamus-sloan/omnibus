@@ -535,37 +535,63 @@ async fn insert_audiobook_file_row(
 }
 
 /// Batch-insert `book_file_parts` rows for the ordered part list.
+///
+/// One VALUES-list `INSERT` per chunk (chunked at 166 rows: 6 binds per row
+/// keeps each statement under SQLite's 999 bind-parameter cap) instead of
+/// one round-trip per part — the parent transaction's commit boundary is
+/// unchanged.
 async fn insert_audiobook_parts(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_file_id: i64,
     parts: &[crate::audiobook::AudiobookPart],
 ) -> Result<(), sqlx::Error> {
-    for p in parts {
-        sqlx::query(
+    // 6 binds per row × 166 rows = 996 binds, under SQLite's 999 cap.
+    for chunk in parts.chunks(166) {
+        let rows = std::iter::repeat_n("(?, ?, ?, ?, ?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
             "INSERT INTO book_file_parts \
                 (book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds) \
-             VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .bind(book_file_id)
-        .bind(p.ordinal)
-        .bind(&p.filename)
-        .bind(p.size_bytes)
-        .bind(p.mtime_epoch)
-        .bind(p.duration_seconds)
-        .execute(&mut **tx)
-        .await?;
+             VALUES {rows}"
+        );
+        let mut q = sqlx::query(&sql);
+        for p in chunk {
+            q = q
+                .bind(book_file_id)
+                .bind(p.ordinal)
+                .bind(&p.filename)
+                .bind(p.size_bytes)
+                .bind(p.mtime_epoch)
+                .bind(p.duration_seconds);
+        }
+        q.execute(&mut **tx).await?;
     }
     Ok(())
 }
 
 /// Insert `file_chapters` rows. If no chapters were extracted, synthesize
-/// one chapter per part so the frontend always gets `chapters.len() >= 1`.
+/// one chapter per part — yielding zero rows only when both `chapters` and
+/// `parts` are empty (the empty-parts edge case).
+///
+/// Both branches first materialize the row tuples and then hand them to
+/// [`bulk_insert_chapters`], which issues a single VALUES-list `INSERT` per
+/// chunk (199 rows × 5 binds = 995, under SQLite's 999 bind cap) instead of
+/// one round-trip per chapter.
 pub(crate) async fn insert_chapters(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_file_id: i64,
     chapters: &[crate::audiobook::RawChapter],
     parts: &[crate::audiobook::AudiobookPart],
 ) -> Result<(), SyncError> {
+    // (ordinal, title, start_seconds, duration_seconds). Exactly one branch
+    // below runs, so the needed capacity is whichever input it drains.
+    let capacity = if chapters.is_empty() {
+        parts.len()
+    } else {
+        chapters.len()
+    };
+    let mut rows: Vec<(i64, String, f64, f64)> = Vec::with_capacity(capacity);
     if !chapters.is_empty() {
         let total_duration: f64 = parts.iter().map(|p| p.duration_seconds).sum();
         // Chapter timestamps are milliseconds; `f64` has 53 bits of
@@ -581,38 +607,47 @@ pub(crate) async fn insert_chapters(
             } else {
                 (total_duration - start_seconds).max(0.0)
             };
-            sqlx::query(
-                "INSERT INTO file_chapters \
-                    (book_file_id, ordinal, title, start_seconds, duration_seconds) \
-                 VALUES (?, ?, ?, ?, ?)",
-            )
-            .bind(book_file_id)
-            .bind(i as i64)
-            .bind(&ch.title)
-            .bind(start_seconds)
-            .bind(duration_seconds)
-            .execute(&mut **tx)
-            .await?;
+            rows.push((i as i64, ch.title.clone(), start_seconds, duration_seconds));
         }
     } else {
         // Synthetic fallback: one chapter per part.
         let mut cumulative = 0.0f64;
         for p in parts {
             let title = format!("Part {}", p.ordinal + 1);
-            sqlx::query(
-                "INSERT INTO file_chapters \
-                    (book_file_id, ordinal, title, start_seconds, duration_seconds) \
-                 VALUES (?, ?, ?, ?, ?)",
-            )
-            .bind(book_file_id)
-            .bind(p.ordinal)
-            .bind(&title)
-            .bind(cumulative)
-            .bind(p.duration_seconds)
-            .execute(&mut **tx)
-            .await?;
+            rows.push((p.ordinal, title, cumulative, p.duration_seconds));
             cumulative += p.duration_seconds;
         }
+    }
+    bulk_insert_chapters(tx, book_file_id, &rows).await?;
+    Ok(())
+}
+
+/// Bulk-insert pre-materialized `file_chapters` rows. Chunks at 199 rows so
+/// 5 binds per row stays under SQLite's 999 bind-parameter cap.
+async fn bulk_insert_chapters(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_file_id: i64,
+    rows: &[(i64, String, f64, f64)],
+) -> Result<(), sqlx::Error> {
+    for chunk in rows.chunks(199) {
+        let placeholders = std::iter::repeat_n("(?, ?, ?, ?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "INSERT INTO file_chapters \
+                (book_file_id, ordinal, title, start_seconds, duration_seconds) \
+             VALUES {placeholders}"
+        );
+        let mut q = sqlx::query(&sql);
+        for (ordinal, title, start_seconds, duration_seconds) in chunk {
+            q = q
+                .bind(book_file_id)
+                .bind(*ordinal)
+                .bind(title)
+                .bind(*start_seconds)
+                .bind(*duration_seconds);
+        }
+        q.execute(&mut **tx).await?;
     }
     Ok(())
 }
