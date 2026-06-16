@@ -49,6 +49,19 @@ test("renders every fixture book with the expected metadata", async ({ page }) =
   }
 });
 
+test("browse fits the fixture library in one keyset page (no Load more)", async ({ page }) => {
+  await gotoReady(page, "/");
+
+  // F5b: browse is keyset-paginated, but the fixtures are far under the
+  // 100-book page size, so the first page contains the whole library and the
+  // pagination sentinel must not render. (Above the page size, a
+  // `lib-load-more` button appears and appends further pages.)
+  await expect(page.getByTestId(/^ebook-row-/).first()).toBeVisible();
+  const rowCount = await page.getByTestId(/^ebook-row-/).count();
+  expect(rowCount).toBeGreaterThanOrEqual(FIXTURE_BOOKS.length);
+  await expect(page.getByTestId("lib-load-more")).toHaveCount(0);
+});
+
 test("toggles to grid view and persists across reload", async ({ page }) => {
   await gotoReady(page, "/");
 

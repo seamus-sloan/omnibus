@@ -160,13 +160,9 @@ pub(crate) const SORT_KEYS: [SortKey; 5] = [
 ];
 
 pub(crate) fn sort_key_value(key: SortKey) -> &'static str {
-    match key {
-        SortKey::Title => "title",
-        SortKey::Author => "author",
-        SortKey::Series => "series",
-        SortKey::LastUpdated => "last_updated",
-        SortKey::NewestAdded => "newest_added",
-    }
+    // Delegate to the shared wire vocabulary so the dropdown, the REST query,
+    // and the cursor axis can't drift.
+    key.as_wire()
 }
 
 pub(crate) fn sort_key_label(key: SortKey) -> &'static str {
@@ -180,14 +176,7 @@ pub(crate) fn sort_key_label(key: SortKey) -> &'static str {
 }
 
 pub(crate) fn sort_key_from_value(value: &str) -> Option<SortKey> {
-    match value {
-        "title" => Some(SortKey::Title),
-        "author" => Some(SortKey::Author),
-        "series" => Some(SortKey::Series),
-        "last_updated" => Some(SortKey::LastUpdated),
-        "newest_added" => Some(SortKey::NewestAdded),
-        _ => None,
-    }
+    SortKey::from_wire(value)
 }
 
 /// Stable Playwright row id derived from the ebook's on-disk filename:
