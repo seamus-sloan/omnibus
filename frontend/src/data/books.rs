@@ -5,8 +5,8 @@
 //! across feature gates so call sites stay platform-agnostic.
 
 use omnibus_shared::{
-    EbookLibrary, EbookMetadata, LibraryContents, MergeBooksResult, MetadataOverrides,
-    PaletteResults, Settings, WorkerStatus,
+    EbookLibrary, EbookMetadata, LibraryContents, LibraryPage, MergeBooksResult, MetadataOverrides,
+    PaletteResults, Settings, SortDir, SortKey, ViewFilters, WorkerStatus,
 };
 
 #[cfg(not(feature = "mobile"))]
@@ -63,6 +63,57 @@ pub async fn get_ebooks(server_url: &str) -> Result<EbookLibrary, DataError> {
         return Err(drain_error(response, status).await);
     }
     Ok(response.json::<EbookLibrary>().await?)
+}
+
+/// GET `/api/ebooks?sort=&dir=&cursor=&limit=` — one keyset page (F5b).
+///
+/// Mobile REST keyset is sort+cursor only: `filters` is ignored and `facets`
+/// comes back `None` (the sidebar facets are a web concern). `total` is read
+/// from `X-Total-Count` on the first page only; `next_cursor` from
+/// `X-Next-Cursor`.
+#[cfg(feature = "mobile")]
+pub async fn get_ebooks_page(
+    server_url: &str,
+    sort_key: SortKey,
+    sort_dir: SortDir,
+    _filters: ViewFilters,
+    cursor: Option<String>,
+    limit: i64,
+) -> Result<LibraryPage, DataError> {
+    let mut url = format!(
+        "{server_url}/api/ebooks?sort={}&dir={}&limit={limit}",
+        sort_key.as_wire(),
+        sort_dir.as_wire(),
+    );
+    if let Some(c) = &cursor {
+        url.push_str("&cursor=");
+        url.push_str(c);
+    }
+    let response = with_bearer(http_client().get(&url)).send().await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    // Read headers before `.json()` consumes the response.
+    let next_cursor = response
+        .headers()
+        .get("X-Next-Cursor")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let total = response
+        .headers()
+        .get("X-Total-Count")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<i64>().ok());
+    let lib = response.json::<EbookLibrary>().await?;
+    Ok(LibraryPage {
+        path: lib.path,
+        books: lib.books,
+        next_cursor,
+        // Surface the total only on the first page, matching the web RPC shape.
+        total: cursor.is_none().then_some(total).flatten(),
+        facets: None,
+    })
 }
 
 /// GET `/api/search?q=` — full-text search across the ebook library.
@@ -285,6 +336,22 @@ pub async fn undo_merge(_server_url: &str, _merge_log_id: i64) -> Result<String,
 #[cfg(not(feature = "mobile"))]
 pub async fn get_ebooks(_server_url: &str) -> Result<EbookLibrary, DataError> {
     crate::rpc::rpc_get_ebooks()
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Web/SSR `get_ebooks_page` — one keyset page (F5b) via `rpc_get_ebooks_page`.
+/// `server_url` is unused (server functions resolve against the page origin).
+#[cfg(not(feature = "mobile"))]
+pub async fn get_ebooks_page(
+    _server_url: &str,
+    sort_key: SortKey,
+    sort_dir: SortDir,
+    filters: ViewFilters,
+    cursor: Option<String>,
+    limit: i64,
+) -> Result<LibraryPage, DataError> {
+    crate::rpc::rpc_get_ebooks_page(sort_key, sort_dir, filters, cursor, limit)
         .await
         .map_err(note_server_fn_err)
 }
