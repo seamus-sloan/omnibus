@@ -19,6 +19,25 @@ pub(crate) struct FacetCounts {
     pub(crate) tags: Vec<(String, usize)>,
 }
 
+impl FacetCounts {
+    /// Adapt the server-side `shared::FacetCounts` (F5b browse mode) into the
+    /// render shape the sidebar/chips consume. Search mode still tallies
+    /// facets client-side via [`facet_counts`] over the (capped) result list.
+    pub(crate) fn from_shared(s: omnibus_shared::FacetCounts) -> Self {
+        fn conv(v: Vec<omnibus_shared::FacetCount>) -> Vec<(String, usize)> {
+            v.into_iter()
+                .map(|f| (f.value, usize::try_from(f.count).unwrap_or(0)))
+                .collect()
+        }
+        FacetCounts {
+            authors: conv(s.authors),
+            series: conv(s.series),
+            formats: conv(s.formats),
+            tags: conv(s.tags),
+        }
+    }
+}
+
 fn matches_filters(book: &EbookMetadata, filters: &ViewFilters) -> bool {
     // Allocation-free membership checks: filter buckets are typically tiny
     // (a handful of selected chips), so a nested `any().any()` is faster

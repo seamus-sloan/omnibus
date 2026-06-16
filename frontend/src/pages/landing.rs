@@ -1,12 +1,19 @@
 //! Landing page (`/`) — the primary library surface.
 //!
-//! Hydrates the configured ebook library once, then renders either a dense
-//! table or a cover grid. Sort, filter, and faceting all happen client-side
-//! over the hydrated list; view mode + sort + filters persist per library
-//! path via [`crate::view_prefs`].
+//! Browse (no search query) is keyset-paginated server-side (F5b): the first
+//! page carries the sidebar facets + the full-library count, and further pages
+//! are appended from a "Load more" sentinel (auto-triggered on web by an
+//! `IntersectionObserver`). Sort and filter are owned by the server — changing
+//! either refetches page 1. Search (non-empty query) keeps the pre-F5b path:
+//! the capped result set is sorted/filtered client-side (search keyset is a
+//! separate effort). View mode + sort + filters persist per library path via
+//! [`crate::view_prefs`].
 
 use dioxus::prelude::*;
-use omnibus_shared::{EbookLibrary, SortKey, TagWeight, ViewFilters, ViewMode, ViewPrefs};
+use omnibus_shared::{
+    EbookMetadata, FacetCounts as ServerFacetCounts, SortKey, TagWeight, ViewFilters, ViewMode,
+    ViewPrefs,
+};
 
 use crate::components::chip_editor::{collect_suggestions, SuggestionItem};
 use crate::{data, use_search_query, use_server_url, view_prefs};
@@ -18,39 +25,48 @@ mod sorting;
 mod table;
 mod toolbar;
 
-use filtering::{apply_filters, facet_counts};
+use filtering::{apply_filters, facet_counts, FacetCounts};
 use filters::{EmptyFiltered, FilterSidebar, FormatChips};
 use grid::BookGrid;
 use sorting::{default_dir_for, sort_books, toggle_dir};
 use table::{BookTable, BookTableContext};
 use toolbar::Toolbar;
 
-/// Landing page — primary library surface.
-///
-/// Hydrates the configured ebook library once, then renders either a dense
-/// table or a cover grid. Sort and filter happen entirely client-side over
-/// the hydrated list (for libraries up to ~10k books). View mode + sort +
-/// filters persist per library path via [`view_prefs`].
+/// Keyset page size for the browse path (F5b open question #1). A grid renders
+/// ~30–60 cards above the fold and the table more; 100 covers both without an
+/// oversized first paint.
+const PAGE_SIZE: i64 = 100;
+
+/// Landing page — primary library surface. See the module doc for the
+/// browse-paginates / search-stays-client-side split.
 #[component]
 pub fn LandingPage() -> Element {
     let server_url = use_server_url();
-    let mut library = use_signal(EbookLibrary::default);
+    // Accumulated result rows: one growing browse list, or the capped search
+    // result set. `next_cursor` is `Some` only while more browse pages remain.
+    let mut books = use_signal(Vec::<EbookMetadata>::new);
+    let mut next_cursor = use_signal(|| None::<String>);
+    let mut server_facets = use_signal(|| None::<ServerFacetCounts>);
+    let mut total = use_signal(|| None::<i64>);
+    let mut lib_path = use_signal(|| None::<String>);
+    let mut lib_error = use_signal(|| None::<String>);
     let mut loading = use_signal(|| true);
+    let mut loading_more = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
     let mut prefs = use_signal(ViewPrefs::default);
+    // Bumped by the Load-more button and the web scroll observer; one effect
+    // watches it and appends the next page.
+    let mut want_more = use_signal(|| 0u32);
+    // Monotonic fetch epoch, bumped on every page-1 refetch. An in-flight
+    // page-1 fetch or load-more append captures the epoch and drops its result
+    // if a newer fetch (sort/dir/filter/query change) superseded it mid-flight
+    // — otherwise it would splice an old result stream onto the new list.
+    let mut fetch_epoch = use_signal(|| 0u64);
     // Search box lives in the top nav; the query is shared via context.
     let query = use_search_query().0;
 
-    // F5.9-lite: admin-only inline-edit affordances on the power-user
-    // table. Non-admins see the existing read-only cells; hiding the
-    // affordance is the UX contract — `rpc_save_overrides` enforces the
-    // real boundary server-side. Web-only (mobile keeps the read-only
-    // landing for now per the F5.9-lite plan; admin can edit via the
-    // per-book detail page).
-    //
-    // Reads from the App-wide `CurrentUser` context — no per-mount
-    // `/api/auth/me` round-trip. Reactive: re-runs on boot resolve,
-    // fresh login, or observed 401.
+    // F5.9-lite: admin-only inline-edit affordances on the power-user table.
+    // Reads from the App-wide `CurrentUser` context — no per-mount round-trip.
     #[cfg_attr(not(feature = "web"), allow(unused_mut))]
     let mut is_admin = use_signal(|| false);
     #[cfg(feature = "web")]
@@ -62,16 +78,12 @@ pub fn LandingPage() -> Element {
     }
 
     // Suggestion pools for the inline Authors chip editor and the
-    // (currently future-reserved) Tags pool. Each item carries the
-    // book-count the ChipEditor dropdown renders next to the name —
-    // mirrors the fetch done by the F5.1 metadata edit page.
+    // (future-reserved) Tags pool, each carrying the dropdown book-count.
     let mut author_suggestions: Signal<Vec<SuggestionItem>> = use_signal(Vec::new);
     let mut tag_suggestions: Signal<Vec<SuggestionItem>> = use_signal(Vec::new);
     {
         let url = server_url.clone();
         use_effect(move || {
-            // Only admins ever see the dropdown, so skip the round-trip
-            // entirely until we know we're admin.
             if !is_admin() {
                 return;
             }
@@ -95,66 +107,209 @@ pub fn LandingPage() -> Element {
         });
     }
 
-    // Fetch the library when the search query changes.
-    let url_for_fetch = server_url.clone();
-    use_effect(move || {
-        let url = url_for_fetch.clone();
-        let q = query();
-        spawn(async move {
-            loading.set(true);
-            let trimmed = q.trim();
-            let result = if trimmed.is_empty() {
-                data::get_ebooks(&url).await
-            } else {
-                data::search_ebooks(&url, trimmed).await
-            };
-            match result {
-                Ok(lib) => {
-                    library.set(lib);
-                    error.set(None);
-                }
-                Err(e) => error.set(Some(e.to_string())),
-            }
-            loading.set(false);
-        });
+    // Refetch page 1 whenever the search query or a *data-affecting* pref
+    // (sort axis/dir or filters) changes. The `use_memo` keys the effect on
+    // exactly those fields, so view-mode / sidebar-open toggles don't refetch.
+    let fetch_key = use_memo(move || {
+        let p = prefs();
+        (
+            query().trim().to_string(),
+            p.sort_key,
+            p.sort_dir,
+            p.filters.clone(),
+        )
     });
+    {
+        let url = server_url.clone();
+        use_effect(move || {
+            let (q, sort_key, sort_dir, filters) = fetch_key();
+            let epoch = {
+                fetch_epoch.with_mut(|e| *e += 1);
+                *fetch_epoch.peek()
+            };
+            let url = url.clone();
+            spawn(async move {
+                loading.set(true);
+                error.set(None);
+                next_cursor.set(None);
+                if q.is_empty() {
+                    // Browse: server keyset page 1 (server-side sort + filter,
+                    // facets + total ride along on the first page).
+                    let result =
+                        data::get_ebooks_page(&url, sort_key, sort_dir, filters, None, PAGE_SIZE)
+                            .await;
+                    if *fetch_epoch.peek() != epoch {
+                        return; // a newer fetch superseded us — drop this result
+                    }
+                    match result {
+                        Ok(page) => {
+                            lib_path.set(page.path);
+                            lib_error.set(None);
+                            next_cursor.set(page.next_cursor);
+                            total.set(page.total);
+                            server_facets.set(page.facets);
+                            books.set(page.books);
+                        }
+                        Err(e) => {
+                            error.set(Some(e.to_string()));
+                            // Clear the derived signals so the error state doesn't
+                            // render a stale header count or facet sidebar.
+                            books.set(Vec::new());
+                            total.set(None);
+                            server_facets.set(None);
+                            lib_error.set(None);
+                        }
+                    }
+                } else {
+                    // Search: capped full result set, sorted/filtered client-side.
+                    let result = data::search_ebooks(&url, &q).await;
+                    if *fetch_epoch.peek() != epoch {
+                        return;
+                    }
+                    match result {
+                        Ok(lib) => {
+                            lib_path.set(lib.path);
+                            lib_error.set(lib.error);
+                            total.set(lib.total);
+                            server_facets.set(None); // client computes search facets
+                            books.set(lib.books);
+                        }
+                        Err(e) => {
+                            error.set(Some(e.to_string()));
+                            books.set(Vec::new());
+                            total.set(None);
+                            server_facets.set(None);
+                            lib_error.set(None);
+                        }
+                    }
+                }
+                loading.set(false);
+            });
+        });
+    }
 
-    // Hydrate persisted prefs whenever the library path resolves.
+    // Append the next browse page when `want_more` is bumped (button click or
+    // the web scroll observer). Guards against concurrent/empty loads.
+    {
+        let url = server_url.clone();
+        use_effect(move || {
+            let trigger = want_more();
+            if trigger == 0 || *loading_more.peek() || next_cursor.peek().is_none() {
+                return;
+            }
+            let p = prefs.peek().clone();
+            let cursor = next_cursor.peek().clone();
+            let epoch = *fetch_epoch.peek();
+            let url = url.clone();
+            loading_more.set(true);
+            spawn(async move {
+                let result = data::get_ebooks_page(
+                    &url, p.sort_key, p.sort_dir, p.filters, cursor, PAGE_SIZE,
+                )
+                .await;
+                // Drop the append if a page-1 refetch (sort/filter/query change)
+                // superseded us mid-flight — otherwise we'd splice an old result
+                // stream onto the new list and overwrite its cursor.
+                if *fetch_epoch.peek() != epoch {
+                    loading_more.set(false);
+                    return;
+                }
+                match result {
+                    Ok(page) => {
+                        books.with_mut(|b| b.extend(page.books));
+                        next_cursor.set(page.next_cursor);
+                    }
+                    Err(e) => error.set(Some(e.to_string())),
+                }
+                loading_more.set(false);
+            });
+        });
+    }
+
+    // Web: auto-load when the Load-more sentinel nears the viewport. The
+    // `IntersectionObserver` simply `.click()`s the button, whose Dioxus
+    // `onclick` bumps `want_more` — one-way `eval` only (the established
+    // interop pattern; no markup divergence, since the button renders on every
+    // target and only the observer is gated). The effect reads `next_cursor`
+    // so it re-arms after each page append, disconnecting the prior observer
+    // first so they can't accumulate.
+    #[cfg(feature = "web")]
+    {
+        use_effect(move || {
+            let _rearm_on = next_cursor.read().is_some();
+            let _ = dioxus::document::eval(
+                r#"
+                if (window.__omnibusLoadMoreObs) {
+                    window.__omnibusLoadMoreObs.disconnect();
+                    window.__omnibusLoadMoreObs = null;
+                }
+                const el = document.querySelector('[data-testid="lib-load-more"]');
+                if (el) {
+                    const obs = new IntersectionObserver((entries) => {
+                        if (entries.some((e) => e.isIntersecting)) { el.click(); }
+                    }, { rootMargin: "400px" });
+                    obs.observe(el);
+                    window.__omnibusLoadMoreObs = obs;
+                }
+                "#,
+            );
+        });
+    }
+
+    // Hydrate persisted prefs when the library path resolves. The `!=` guard
+    // makes this idempotent: re-running it after a page-1 refetch (which re-sets
+    // `lib_path`) is a no-op once prefs match, so it can't loop with the
+    // fetch effect.
     use_effect(move || {
-        if let Some(path) = library.read().path.clone() {
+        if let Some(path) = lib_path.read().clone() {
             let stored = view_prefs::load(&path);
-            if stored != prefs.peek().clone() {
+            if stored != *prefs.peek() {
                 prefs.set(stored);
             }
         }
     });
 
-    // Memoize the two O(N) derivations so unrelated re-renders (the
-    // `loading` flag flipping, search-query churn that doesn't change the
-    // hydrated list) don't re-walk every book. `use_memo` re-runs only
-    // when a signal it reads changes — so `facets` is keyed implicitly on
-    // `library`, and `visible` on `library + prefs` (filters + sort).
-    let facets = use_memo(move || facet_counts(&library.read().books));
+    // Browse is already server-ordered + server-filtered; render `books`
+    // verbatim. Search sorts + filters the capped result set client-side.
     let visible = use_memo(move || {
-        let p = prefs();
-        sort_books(
-            apply_filters(&library.read().books, &p.filters),
-            p.sort_key,
-            p.sort_dir,
-        )
+        let is_search = !query().trim().is_empty();
+        let bs = books();
+        if is_search {
+            let p = prefs();
+            sort_books(apply_filters(&bs, &p.filters), p.sort_key, p.sort_dir)
+        } else {
+            bs
+        }
+    });
+    // Facets come from the server on browse, client-tally on search.
+    let facets = use_memo(move || match server_facets() {
+        Some(s) => FacetCounts::from_shared(s),
+        None => facet_counts(&books()),
     });
 
-    let lib = library();
     let is_loading = loading();
     let page_error = error();
-    let book_count = lib.books.len();
+    let path_value = lib_path();
+    let lib_err = lib_error();
+    let is_search = !query().trim().is_empty();
+    // Header count: the full library total on browse; the (capped) result
+    // count on search.
+    let book_count = if is_search {
+        books().len()
+    } else {
+        total()
+            .map(|t| usize::try_from(t).unwrap_or(0))
+            .unwrap_or_else(|| books().len())
+    };
     let view_mode = prefs().view_mode;
     let visible_books = visible();
     let visible_is_empty = visible_books.is_empty();
     let facet_counts_view = facets();
+    let has_more = next_cursor().is_some();
+    let is_loading_more = loading_more();
 
     let server_url_for_row = server_url.clone();
-    let path_for_save = lib.path.clone();
+    let path_for_save = path_value.clone();
     let save = {
         let path = path_for_save.clone();
         move |new_prefs: ViewPrefs| {
@@ -165,17 +320,16 @@ pub fn LandingPage() -> Element {
         }
     };
 
-    let path_subtitle = lib.path.as_ref().map(|p| short_path(p)).unwrap_or_default();
+    let path_subtitle = path_value
+        .as_ref()
+        .map(|p| short_path(p))
+        .unwrap_or_default();
     let visible_count = visible_books.len();
     let filters_for_chips = prefs().filters.clone();
 
     rsx! {
         header { class: "lib-header", "data-testid": "lib-header",
             div { class: "lib-header-kicker",
-                // Semantic page title — kept visually small (label-style) so
-                // the cinematic count below reads as the dominant element,
-                // but assistive tech and `getByRole("heading", { level: 1 })`
-                // still find a stable "Your Library" anchor.
                 h1 { class: "label lib-header-kicker-title", "Your Library" }
                 if !path_subtitle.is_empty() {
                     span { class: "mono lib-header-path", " · {path_subtitle}" }
@@ -192,7 +346,7 @@ pub fn LandingPage() -> Element {
                     on_change: save.clone(),
                 }
             }
-            if lib.path.is_none() {
+            if path_value.is_none() {
                 p { class: "lib-header-hint",
                     "Configure your ebook library path in Settings."
                 }
@@ -200,7 +354,7 @@ pub fn LandingPage() -> Element {
             if let Some(msg) = page_error.as_ref() {
                 p { class: "error", "⚠ {msg}" }
             }
-            if let Some(msg) = lib.error.as_ref() {
+            if let Some(msg) = lib_err.as_ref() {
                 p { class: "error", "⚠ {msg}" }
             }
         }
@@ -237,7 +391,7 @@ pub fn LandingPage() -> Element {
             div { class: "lib-main",
                 if is_loading {
                     p { class: "library-empty", "Loading..." }
-                } else if !visible_is_empty || lib.error.is_some() || page_error.is_some() {
+                } else if !visible_is_empty || lib_err.is_some() || page_error.is_some() {
                     match view_mode {
                         ViewMode::Table => rsx! {
                             BookTable {
@@ -271,7 +425,24 @@ pub fn LandingPage() -> Element {
                             }
                         },
                     }
-                } else if lib.books.is_empty() {
+                    // Browse pagination sentinel — the button is the
+                    // deterministic (mobile + Playwright) trigger; on web an
+                    // IntersectionObserver auto-bumps it as it nears the
+                    // viewport. Absent in search mode (no `next_cursor`).
+                    if has_more {
+                        div { class: "lib-load-more-row",
+                            button {
+                                class: "btn lib-load-more",
+                                "data-testid": "lib-load-more",
+                                disabled: is_loading_more,
+                                onclick: move |_| {
+                                    want_more.with_mut(|n| *n += 1);
+                                },
+                                if is_loading_more { "Loading…" } else { "Load more" }
+                            }
+                        }
+                    }
+                } else if books().is_empty() {
                     p { class: "library-empty", "No ebooks found." }
                 } else {
                     EmptyFiltered {
