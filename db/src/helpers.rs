@@ -75,8 +75,12 @@ pub(crate) fn split_filename(filename: &str) -> (String, String, String) {
     (parent, stem, ext)
 }
 
+/// Parse a series index, rejecting non-finite values. `"nan"`/`"inf"` parse to
+/// floats SQLite stores happily, but a non-finite `series_index` corrupts the
+/// Series-axis ordering and breaks the keyset cursor (`serde_json` refuses to
+/// encode NaN/Inf), so drop them here at the source.
 pub(crate) fn parse_series_index(s: &str) -> Option<f64> {
-    s.trim().parse::<f64>().ok()
+    s.trim().parse::<f64>().ok().filter(|n| n.is_finite())
 }
 
 /// Defense-in-depth gate on `books.accent_color`. The indexer's

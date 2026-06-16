@@ -18,6 +18,7 @@ use crate::helpers::{
 };
 use crate::normalize::{normalize_author, normalize_title};
 use crate::settings::upsert_library;
+use crate::sort_keys::series_sort_value;
 use crate::taxonomy::{
     resolve_or_insert_language, resolve_or_insert_publisher, resolve_or_insert_series,
 };
@@ -649,7 +650,7 @@ async fn update_book_row(
 
     sqlx::query(
         "UPDATE books SET
-            path = ?, title = ?, sort = ?, author_sort = ?, series_index = ?,
+            path = ?, title = ?, sort = ?, author_sort = ?, series_sort = ?, series_index = ?,
             pubdate = ?, has_cover = ?, description = ?, accent_color = ?,
             title_norm = ?, author_norm = ?,
             last_modified = datetime('now')
@@ -659,6 +660,7 @@ async fn update_book_row(
     .bind(&title)
     .bind(&title)
     .bind(&author_sort)
+    .bind(series_sort_value(m))
     .bind(series_index_num)
     .bind(&m.published)
     .bind(has_cover)
@@ -743,9 +745,9 @@ async fn insert_book_row(
 
     let book_id = sqlx::query_scalar::<_, i64>(
         "INSERT INTO books
-            (uuid, scan_key, library_id, path, title, sort, author_sort, series_index,
+            (uuid, scan_key, library_id, path, title, sort, author_sort, series_sort, series_index,
              pubdate, has_cover, description, accent_color, title_norm, author_norm)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(&uuid)
@@ -755,6 +757,7 @@ async fn insert_book_row(
     .bind(&title)
     .bind(&title)
     .bind(&author_sort)
+    .bind(series_sort_value(m))
     .bind(series_index_num)
     .bind(&m.published)
     .bind(has_cover)
@@ -802,7 +805,10 @@ async fn insert_metadata_links(
 ) -> Result<(), sqlx::Error> {
     insert_author_links(tx, book_id, m).await?;
 
-    if let Some(series_name) = m.series.as_deref().filter(|s| !s.is_empty()) {
+    // Trim before resolving so the linked `series.name` matches the trimmed
+    // `series_sort` denormalized onto the row (`series_sort_value`) — keeps the
+    // sort key and the link in lockstep, and dedups whitespace variants.
+    if let Some(series_name) = m.series.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         let series_id = resolve_or_insert_series(tx, series_name).await?;
         sqlx::query("INSERT OR IGNORE INTO books_series_link (book, series) VALUES (?, ?)")
             .bind(book_id)

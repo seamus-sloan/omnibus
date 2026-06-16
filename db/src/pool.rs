@@ -21,6 +21,8 @@ pub enum InitDbError {
     Db(#[from] sqlx::Error),
     #[error(transparent)]
     Normalize(#[from] NormalizeError),
+    #[error(transparent)]
+    SortKeys(#[from] crate::sort_keys::SortKeysError),
 }
 
 /// Initialize or open the SQLite pool at `database_url`, apply per-connection PRAGMAs, run pending
@@ -69,6 +71,11 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, InitDbError> {
     // migration 0026. Pure DB work (reconstructed from stored columns, no
     // filesystem reads), idempotent, safe against in-memory test DBs.
     crate::identity::backfill_scan_keys(&pool).await?;
+
+    // One-time fill of the F5b `series_sort` keyset column for rows indexed
+    // before migration 0028. Reconstructed from the existing series link;
+    // idempotent and a no-op once every linked book is filled.
+    crate::sort_keys::backfill_series_sort(&pool).await?;
 
     // Issue #94: the previous `stable_uuid` implementation hashed via
     // `DefaultHasher` and produced toolchain-dependent UUIDs. Switching to
