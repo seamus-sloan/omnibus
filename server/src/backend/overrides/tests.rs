@@ -406,23 +406,28 @@ async fn api_post_cover_rejects_undetectable_format() {
 
 #[tokio::test]
 async fn api_post_cover_cleans_up_orphan_file_when_db_upsert_fails() {
-    // Disk write succeeds, the `metadata_overrides` DB step fails — the
+    // Disk write succeeds, the `metadata_overrides` UPSERT fails — the
     // handler must remove the file it just wrote so the cover doesn't
-    // live on disk with no row pointing at it (#516). We force the DB
-    // failure by dropping the `metadata_overrides` table after the book
-    // is seeded; both `get_metadata_overrides` and
-    // `upsert_metadata_overrides` then return `sqlx::Error`, exercising
-    // the cleanup-on-failure branches.
+    // live on disk with no row pointing at it (#516). Force the UPSERT
+    // (but NOT the prior `get_metadata_overrides`) to fail by installing
+    // a `BEFORE INSERT ... RAISE(FAIL)` trigger on `metadata_overrides`:
+    // the SELECT still works against the empty table, the INSERT branch
+    // of the `INSERT ... ON CONFLICT DO UPDATE` upsert raises, and the
+    // disk write between them gets to lay down a real orphan to clean up.
     let _covers = CoversDirGuard::new("orphan_cleanup");
     let (app, _state, pool) = fixture().await;
     let (_id, uuid) = seed_book_with_uuid(&pool, "/lib", "OrphanBook").await;
     let admin = auth_test_support::create_admin(&pool, "admin").await;
     let token = auth_test_support::bearer_token(&pool, admin.id).await;
 
-    sqlx::query("DROP TABLE metadata_overrides")
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER block_overrides_insert
+           BEFORE INSERT ON metadata_overrides
+           BEGIN SELECT RAISE(FAIL, 'forced failure'); END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let (content_type, body) = build_cover_multipart("image/png", TINY_PNG);
     let res = app
@@ -441,19 +446,99 @@ async fn api_post_cover_cleans_up_orphan_file_when_db_upsert_fails() {
 
     // No `override-<uuid>.*` file should remain on disk — the handler
     // must have invoked `delete_override_cover` on the failure path.
-    // `write_override_cover` lays down `override-<uuid>.png` for PNG
-    // input, but check every extension the read-side probes so a future
-    // format change in `write_override_cover` doesn't silently bypass
-    // this assertion.
-    let dir = db::covers_dir();
-    let leftover: Vec<std::path::PathBuf> = ["png", "jpg", "jpeg", "webp", "gif", "svg", "bin"]
-        .iter()
-        .map(|ext| dir.join(format!("override-{uuid}.{ext}")))
-        .filter(|p| p.exists())
-        .collect();
+    // Scan the covers dir for any filename starting with `override-<uuid>.`
+    // so the assertion stays correct if `write_override_cover` ever picks
+    // up a new extension.
+    let leftover = leftover_override_files(&db::covers_dir(), &uuid);
     assert!(
         leftover.is_empty(),
         "DB failure path must remove the orphan cover file from disk; \
          leftover files: {leftover:?}"
+    );
+}
+
+/// Return every `override-<uuid>.*` file present in `dir`, by scanning the
+/// directory rather than probing a fixed extension list — keeps the cleanup
+/// assertions robust to new image formats.
+fn leftover_override_files(dir: &std::path::Path, uuid: &str) -> Vec<std::path::PathBuf> {
+    let prefix = format!("override-{uuid}.");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with(prefix.as_str()))
+        .map(|e| e.path())
+        .collect()
+}
+
+#[tokio::test]
+async fn api_post_cover_preserves_prior_cover_when_db_upsert_fails() {
+    // When the user already had `has_cover_override = 1` from a prior upload
+    // and a second upload's DB step fails, the cleanup path must NOT delete
+    // the on-disk override file — that file would otherwise be left without
+    // a row pointing at it, but the row that points at it is still the
+    // pre-existing one (the failing upsert hasn't changed it). Cleaning up
+    // here would compound the failure by removing a cover the user already
+    // had. The new file `write_override_cover` just laid down stays on disk
+    // and IS what the existing row resolves to; the previously-stored bytes
+    // are gone, but the row+file pair stays consistent — which is the best
+    // we can do without a transaction spanning disk + DB (#529).
+    let _covers = CoversDirGuard::new("preserve_prior");
+    let (app, _state, pool) = fixture().await;
+    let (_id, uuid) = seed_book_with_uuid(&pool, "/lib", "PriorCoverBook").await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    // Seed: a prior override cover is on disk and the row says so.
+    db::write_override_cover(&uuid, "image/png", TINY_PNG).expect("seed prior cover file");
+    db::upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &omnibus_shared::MetadataOverrides::default(),
+        true,
+        admin.id,
+    )
+    .await
+    .expect("seed prior overrides row");
+    let prior_path = db::covers_dir().join(format!("override-{uuid}.png"));
+    assert!(prior_path.exists(), "fixture should be on disk");
+
+    // Force the next upsert (which hits the `DO UPDATE` branch because a
+    // row already exists) to fail without breaking the prior `SELECT`.
+    sqlx::query(
+        "CREATE TRIGGER block_overrides_update
+           BEFORE UPDATE ON metadata_overrides
+           BEGIN SELECT RAISE(FAIL, 'forced failure'); END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let (content_type, body) = build_cover_multipart("image/png", TINY_PNG);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/ebooks/{uuid}/cover"))
+                .method("POST")
+                .header("content-type", content_type)
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    // The new file `write_override_cover` laid down must still be on disk —
+    // cleanup is skipped when `has_cover_override` was already true. The
+    // prior row pointed at an override cover, so the file-system state is
+    // still coherent with that row.
+    let leftover = leftover_override_files(&db::covers_dir(), &uuid);
+    assert!(
+        !leftover.is_empty(),
+        "prior-cover preservation: cleanup must not delete the file when an \
+         override already existed (would leave the prior row pointing at \
+         nothing); leftover files: {leftover:?}"
     );
 }
