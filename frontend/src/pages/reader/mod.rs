@@ -28,9 +28,13 @@ const JSZIP_JS: Asset = asset!("/assets/vendor/jszip.min.js");
 const EPUBJS_JS: Asset = asset!("/assets/vendor/epub.min.js");
 const READER_GLUE_JS: Asset = asset!("/assets/vendor/epub-reader-glue.js");
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[cfg_attr(not(feature = "web"), allow(dead_code))]
 enum ReaderStatus {
+    // INVARIANT: `Loading` is the SSR/WASM-first-paint seed (see
+    // `BookReadPage`). Changing the default flips the rendered overlay and
+    // breaks hydration — see .claude/rules/07-hydration.md.
+    #[default]
     Loading,
     Ready,
     Failed,
@@ -76,17 +80,14 @@ fn parse_file_id_from_url() -> Option<i64> {
 pub fn BookReadPage(uuid: String) -> Element {
     let theme = use_context::<Signal<Theme>>();
 
+    // Seed identically on SSR and WASM so the first client render matches the
+    // server-rendered markup — the overlay (rendered when `Loading`) must be
+    // present in both, otherwise Dioxus mis-adopts nodes during hydration
+    // (see .claude/rules/07-hydration.md). The web `use_effect` below
+    // transitions to `Ready` via the JS glue's `on_status` callback after the
+    // reader mounts.
     #[cfg_attr(not(feature = "web"), allow(unused_mut))]
-    let mut status = use_signal(|| {
-        #[cfg(feature = "web")]
-        {
-            ReaderStatus::Loading
-        }
-        #[cfg(not(feature = "web"))]
-        {
-            ReaderStatus::Ready
-        }
-    });
+    let mut status = use_signal(ReaderStatus::default);
 
     #[cfg_attr(not(feature = "web"), allow(unused_variables, unused_mut))]
     let mut font_size = use_signal(|| 18i32);
@@ -650,5 +651,20 @@ fn ReaderPageTurnButtons(
                 path { d: "M9.5 5l7 7-7 7" }
             }
         }
+    }
+}
+
+#[cfg(all(test, not(any(feature = "web", feature = "mobile"))))]
+mod ssr_tests {
+    use super::*;
+
+    // First-paint contract: `BookReadPage` seeds `status` from
+    // `ReaderStatus::default()` so SSR and the first WASM render produce
+    // identical markup (the `rd-overlay` loading node is present in both).
+    // Flipping this default would re-introduce the hydration mismatch
+    // described in .claude/rules/07-hydration.md.
+    #[test]
+    fn reader_status_default_is_loading_for_ssr_wasm_parity() {
+        assert_eq!(ReaderStatus::default(), ReaderStatus::Loading);
     }
 }
