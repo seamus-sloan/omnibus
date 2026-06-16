@@ -27,12 +27,7 @@ use super::authors::insert_author_links;
 use super::backfill::backfill_stat_chunks;
 use super::fts::{delete_fts, upsert_fts};
 
-/// Internal error type for the sync write path. `pub(crate)` so it cannot
-/// be observed (or pattern-matched on its inner `sqlx::Error`) outside the
-/// `db` crate — the public sync entry points return `anyhow::Result<()>` and
-/// callers see only an opaque `anyhow::Error`. Internal helpers in
-/// [`super::books`] and [`super::audiobooks`] use this enum so `?` keeps
-/// converting `sqlx::Error` cleanly without a per-call `.context(...)`.
+/// Crate-internal error wrapping `sqlx::Error` so `?` propagates cleanly in the audiobook sync helpers.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SyncError {
     #[error(transparent)]
