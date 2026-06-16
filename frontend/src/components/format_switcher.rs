@@ -56,10 +56,7 @@ pub fn FormatSwitcher(
 }
 
 #[component]
-fn FormatRow(
-    kind: FormatKind,
-    #[cfg_attr(feature = "mobile", allow(unused_variables))] uuid: String,
-) -> Element {
+fn FormatRow(kind: FormatKind, uuid: String) -> Element {
     let label = kind.label();
     let testid = format!("format-row-{}", label.to_ascii_lowercase());
     rsx! {
@@ -71,30 +68,11 @@ fn FormatRow(
             div { class: "format-actions",
                 match kind {
                     FormatKind::Epub => rsx! {
-                        {
-                            // F2.2: web routes into the immersive reader; mobile
-                            // stays disabled (no JS engine for epub.js — see F6.2).
-                            #[cfg(not(feature = "mobile"))]
-                            let read_action = rsx! {
-                                Link {
-                                    to: Route::BookRead { uuid: uuid.clone() },
-                                    class: "btn",
-                                    "data-testid": "action-read",
-                                    "Read"
-                                }
-                            };
-                            #[cfg(feature = "mobile")]
-                            let read_action = rsx! {
-                                button {
-                                    class: "btn",
-                                    disabled: true,
-                                    title: "Reading on mobile coming soon",
-                                    "data-testid": "action-read",
-                                    "Read"
-                                }
-                            };
-                            read_action
-                        }
+                        // F2.2: web routes into the immersive reader; mobile
+                        // stays disabled (no JS engine for epub.js — see F6.2).
+                        // The cfg lives at the helper definition (rule 07:
+                        // hydration parity — keep cfg gates out of rsx).
+                        {read_book_action(&uuid)}
                         button {
                             class: "btn",
                             disabled: true,
@@ -104,31 +82,10 @@ fn FormatRow(
                         }
                     },
                     FormatKind::M4b | FormatKind::Mp3 => rsx! {
-                        {
-                            // F2.3: web routes into the immersive player; mobile
-                            // stays disabled (no `<audio>` binding in the Dioxus
-                            // Native shell yet — see F6.x).
-                            #[cfg(not(feature = "mobile"))]
-                            let listen_action = rsx! {
-                                Link {
-                                    to: Route::BookListen { uuid: uuid.clone() },
-                                    class: "btn",
-                                    "data-testid": "action-listen",
-                                    "Listen"
-                                }
-                            };
-                            #[cfg(feature = "mobile")]
-                            let listen_action = rsx! {
-                                button {
-                                    class: "btn",
-                                    disabled: true,
-                                    title: "Listening on mobile coming soon",
-                                    "data-testid": "action-listen",
-                                    "Listen"
-                                }
-                            };
-                            listen_action
-                        }
+                        // F2.3: web routes into the immersive player; mobile
+                        // stays disabled (no `<audio>` binding in the Dioxus
+                        // Native shell yet — see F6.x).
+                        {listen_book_action(&uuid)}
                     },
                     FormatKind::Other(_) => rsx! {
                         span { class: "format-actions-empty", "No actions yet" }
@@ -142,11 +99,7 @@ fn FormatRow(
 /// Expandable row for formats with multiple files (after merge). Shows the
 /// format badge with a file count, and sub-rows for each file.
 #[component]
-fn MultiFileRow(
-    kind: FormatKind,
-    #[cfg_attr(feature = "mobile", allow(unused_variables))] uuid: String,
-    files: Vec<BookFileInfo>,
-) -> Element {
+fn MultiFileRow(kind: FormatKind, uuid: String, files: Vec<BookFileInfo>) -> Element {
     let label = kind.label();
     let testid = format!("format-row-{}", label.to_ascii_lowercase());
     let count = files.len();
@@ -165,6 +118,7 @@ fn MultiFileRow(
                 let file_label = file.label.clone()
                     .unwrap_or_else(|| format!("Part {}", file.ordinal + 1));
                 let file_testid = format!("format-file-{}", file.id);
+                let file_id = file.id;
                 rsx! {
                     div {
                         class: "format-row format-subrow",
@@ -172,57 +126,14 @@ fn MultiFileRow(
                         span { class: "format-sublabel", "{file_label}" }
                         div { class: "format-actions",
                             match kind {
+                                // Per-file actions delegate to platform-gated
+                                // helpers (rule 07: hydration parity — keep
+                                // cfg gates out of rsx bodies).
                                 FormatKind::Epub => rsx! {
-                                    {
-                                        #[cfg(not(feature = "mobile"))]
-                                        let read_action = {
-                                            let href = format!("/read/{uuid}?file_id={}", file.id);
-                                            rsx! {
-                                                Link {
-                                                    to: "{href}",
-                                                    class: "btn",
-                                                    "data-testid": "action-read",
-                                                    "Read"
-                                                }
-                                            }
-                                        };
-                                        #[cfg(feature = "mobile")]
-                                        let read_action = rsx! {
-                                            button {
-                                                class: "btn",
-                                                disabled: true,
-                                                "data-testid": "action-read",
-                                                "Read"
-                                            }
-                                        };
-                                        read_action
-                                    }
+                                    {read_file_action(&uuid, file_id)}
                                 },
                                 FormatKind::M4b | FormatKind::Mp3 => rsx! {
-                                    {
-                                        #[cfg(not(feature = "mobile"))]
-                                        let listen_action = {
-                                            let href = format!("/listen/{uuid}?file_id={}", file.id);
-                                            rsx! {
-                                                Link {
-                                                    to: "{href}",
-                                                    class: "btn",
-                                                    "data-testid": "action-listen",
-                                                    "Listen"
-                                                }
-                                            }
-                                        };
-                                        #[cfg(feature = "mobile")]
-                                        let listen_action = rsx! {
-                                            button {
-                                                class: "btn",
-                                                disabled: true,
-                                                "data-testid": "action-listen",
-                                                "Listen"
-                                            }
-                                        };
-                                        listen_action
-                                    }
+                                    {listen_file_action(&uuid, file_id)}
                                 },
                                 FormatKind::Other(_) => rsx! {
                                     span { class: "format-actions-empty", "No actions yet" }
@@ -232,6 +143,121 @@ fn MultiFileRow(
                     }
                 }
             }
+        }
+    }
+}
+
+// ── Per-target action helpers ────────────────────────────────────
+//
+// The cfg gate lives at the helper definition, not inside an rsx body.
+// SSR (`feature = "server"`) and WASM (`feature = "web"`) both hit the
+// `not(feature = "mobile")` arm and emit an identical `<a>` Link — so
+// hydration parity holds (rule 07). Mobile (`feature = "mobile"`) is
+// Dioxus Native, doesn't hydrate, and renders a disabled `<button>` as
+// a placeholder until F6.x lands the native reader/player.
+
+/// "Read" CTA for the book-level row. Web/SSR routes into the immersive
+/// reader; mobile renders a disabled placeholder.
+#[cfg(not(feature = "mobile"))]
+fn read_book_action(uuid: &str) -> Element {
+    rsx! {
+        Link {
+            to: Route::BookRead { uuid: uuid.to_string() },
+            class: "btn",
+            "data-testid": "action-read",
+            "Read"
+        }
+    }
+}
+
+#[cfg(feature = "mobile")]
+fn read_book_action(_uuid: &str) -> Element {
+    rsx! {
+        button {
+            class: "btn",
+            disabled: true,
+            title: "Reading on mobile coming soon",
+            "data-testid": "action-read",
+            "Read"
+        }
+    }
+}
+
+/// "Listen" CTA for the book-level row.
+#[cfg(not(feature = "mobile"))]
+fn listen_book_action(uuid: &str) -> Element {
+    rsx! {
+        Link {
+            to: Route::BookListen { uuid: uuid.to_string() },
+            class: "btn",
+            "data-testid": "action-listen",
+            "Listen"
+        }
+    }
+}
+
+#[cfg(feature = "mobile")]
+fn listen_book_action(_uuid: &str) -> Element {
+    rsx! {
+        button {
+            class: "btn",
+            disabled: true,
+            title: "Listening on mobile coming soon",
+            "data-testid": "action-listen",
+            "Listen"
+        }
+    }
+}
+
+/// Per-file "Read" CTA used inside a `MultiFileRow`. Routes carry a
+/// `file_id` query so the reader opens the chosen file.
+#[cfg(not(feature = "mobile"))]
+fn read_file_action(uuid: &str, file_id: i64) -> Element {
+    let href = format!("/read/{uuid}?file_id={file_id}");
+    rsx! {
+        Link {
+            to: "{href}",
+            class: "btn",
+            "data-testid": "action-read",
+            "Read"
+        }
+    }
+}
+
+#[cfg(feature = "mobile")]
+fn read_file_action(_uuid: &str, _file_id: i64) -> Element {
+    rsx! {
+        button {
+            class: "btn",
+            disabled: true,
+            "data-testid": "action-read",
+            "Read"
+        }
+    }
+}
+
+/// Per-file "Listen" CTA used inside a `MultiFileRow`.
+#[cfg(not(feature = "mobile"))]
+fn listen_file_action(uuid: &str, file_id: i64) -> Element {
+    let href = format!("/listen/{uuid}?file_id={file_id}");
+    rsx! {
+        Link {
+            to: "{href}",
+            class: "btn",
+            "data-testid": "action-listen",
+            "Listen"
+        }
+    }
+}
+
+#[cfg(feature = "mobile")]
+fn listen_file_action(_uuid: &str, _file_id: i64) -> Element {
+    rsx! {
+        button {
+            class: "btn",
+            disabled: true,
+            "data-testid": "action-listen",
+            "Listen"
         }
     }
 }

@@ -156,6 +156,17 @@ pub async fn logout() -> Result<(), String> {
     Ok(())
 }
 
+/// Non-web stub for `logout`. Mirrors the `current_user` SSR/mobile
+/// stub: the real REST call is web-only, but exposing a no-op under SSR
+/// (and any non-web build that compiles `UserMenu`) lets the sign-out
+/// closure call `data::logout()` unconditionally — so SSR and WASM emit
+/// identical RSX (rule 07-hydration), without each call site needing a
+/// `#[cfg]` gate inside its closure body.
+#[cfg(all(any(feature = "server", feature = "mobile"), not(feature = "web")))]
+pub async fn logout() -> Result<(), String> {
+    Ok(())
+}
+
 /// GET `/api/auth/me` (web) — resolve the currently-authenticated user, if any.
 #[cfg(feature = "web")]
 pub async fn current_user() -> Result<Option<UserSummary>, String> {
