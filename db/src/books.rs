@@ -17,14 +17,17 @@
 //! Public API is re-exported here so callers (`server/`, `frontend/`, sibling
 //! `db/` modules) keep importing through `omnibus_db::books::*` unchanged.
 
+mod facets;
 mod get;
 mod list;
+mod page;
 mod projection;
 mod search;
 
 #[cfg(test)]
 mod tests;
 
+pub use facets::library_facets;
 pub use get::{
     book_file_path, book_file_path_by_id, get_book, get_book_by_uuid, get_book_files,
     resolve_book_id_by_uuid, resolve_book_id_by_uuid_exec, resolve_canonical_book_uuid,
@@ -36,6 +39,7 @@ pub use list::{
     list_books_for_paths, list_indexed_rows, list_indexed_rows_for_formats,
     list_merged_rows_for_formats, IndexedRow,
 };
+pub use page::{list_books_page, BookPage, CursorError, PageCursor};
 pub use projection::MAX_BOOKS_RETURNED;
 pub use search::{count_search_books, search_books, search_books_with_total};
 
