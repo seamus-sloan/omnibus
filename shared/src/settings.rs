@@ -5,18 +5,10 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Maximum byte length of a library path field. Paths persisted into the
-/// `settings` KV are matched against on every reindex, so an unbounded
-/// blob would let an authed admin push pathological strings into the row
-/// or the scanner. POSIX `PATH_MAX` is typically 4 KiB; 4096 bytes covers
-/// every reasonable real-world install with margin.
+/// Maximum byte length of a library path field.
 pub const PATH_MAX_LEN: usize = 4096;
 
 /// Validation failure modes for [`Settings`].
-///
-/// Callers branch on the variant to produce the right wire response — REST
-/// returns `422 Unprocessable Entity` with `e.to_string()`, the Dioxus
-/// server function wraps the message in `ServerFnError::new`.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum SettingsError {
     /// One of the library-path fields exceeded [`PATH_MAX_LEN`].
@@ -32,14 +24,8 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Validate field lengths. Call at the handler boundary before
-    /// persisting so an over-long path returns a typed 422 instead of
-    /// landing in the `settings` KV. `None` fields (path cleared) are
-    /// always permitted.
-    ///
-    /// Lengths are measured in bytes — paths are filesystem-level and
-    /// match the kernel's `PATH_MAX` semantics rather than the Unicode
-    /// scalar-value cap used by user-facing text fields.
+    /// Validate field lengths. Lengths are measured in bytes (filesystem
+    /// `PATH_MAX` semantics), not Unicode scalar values.
     pub fn validate(&self) -> Result<(), SettingsError> {
         if let Some(p) = &self.ebook_library_path {
             if p.len() > PATH_MAX_LEN {
