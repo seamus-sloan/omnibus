@@ -571,7 +571,8 @@ async fn insert_audiobook_parts(
 }
 
 /// Insert `file_chapters` rows. If no chapters were extracted, synthesize
-/// one chapter per part so the frontend always gets `chapters.len() >= 1`.
+/// one chapter per part — yielding zero rows only when both `chapters` and
+/// `parts` are empty (the empty-parts edge case).
 ///
 /// Both branches first materialize the row tuples and then hand them to
 /// [`bulk_insert_chapters`], which issues a single VALUES-list `INSERT` per
@@ -583,8 +584,14 @@ pub(crate) async fn insert_chapters(
     chapters: &[crate::audiobook::RawChapter],
     parts: &[crate::audiobook::AudiobookPart],
 ) -> Result<(), SyncError> {
-    // (ordinal, title, start_seconds, duration_seconds)
-    let mut rows: Vec<(i64, String, f64, f64)> = Vec::new();
+    // (ordinal, title, start_seconds, duration_seconds). Exactly one branch
+    // below runs, so the needed capacity is whichever input it drains.
+    let capacity = if chapters.is_empty() {
+        parts.len()
+    } else {
+        chapters.len()
+    };
+    let mut rows: Vec<(i64, String, f64, f64)> = Vec::with_capacity(capacity);
     if !chapters.is_empty() {
         let total_duration: f64 = parts.iter().map(|p| p.duration_seconds).sum();
         // Chapter timestamps are milliseconds; `f64` has 53 bits of

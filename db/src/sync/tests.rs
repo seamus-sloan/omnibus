@@ -1457,12 +1457,7 @@ async fn sync_audiobooks_with_removed_above_bind_cap_succeeds() {
     );
 }
 
-// ── Bulk-insert of parts and chapters ─────────────────────────────
-//
-// `insert_audiobook_parts` and `insert_chapters` issue a single
-// VALUES-list `INSERT` per chunk (one round-trip), not one per row.
-// These tests pin the row contents identical to the previous one-at-a-time
-// loop so the batching is observably behavior-preserving.
+// Audiobook parts + chapters: row contents and edge cases.
 
 #[tokio::test]
 async fn sync_audiobooks_writes_all_parts_for_a_five_part_audiobook() {
