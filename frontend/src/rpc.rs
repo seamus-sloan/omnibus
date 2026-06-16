@@ -17,10 +17,10 @@ use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
     AuthorDetail, AuthorPhotoScanResult, AuthorSummary, CreateHighlight, EbookLibrary,
-    EbookMetadata, Highlight, HighlightColor, LibraryContents, MergeBooksResult, MetadataOverrides,
-    PaletteResults, ProgressFormat, ProgressRecord, ProgressUpdate, SeriesDetail, SeriesSummary,
-    SessionReport, Settings, TagWeight, UpdateHighlightNote, WorkerStatus,
-    AUTHOR_PHOTO_URL_MAX_LEN,
+    EbookMetadata, Highlight, HighlightColor, LibraryContents, LibraryPage, MergeBooksResult,
+    MetadataOverrides, PaletteResults, ProgressFormat, ProgressRecord, ProgressUpdate,
+    SeriesDetail, SeriesSummary, SessionReport, Settings, SortDir, SortKey, TagWeight,
+    UpdateHighlightNote, ViewFilters, WorkerStatus, AUTHOR_PHOTO_URL_MAX_LEN,
 };
 
 #[cfg(feature = "server")]
@@ -230,6 +230,72 @@ pub async fn rpc_get_ebooks() -> Result<EbookLibrary> {
         settings.audiobook_library_path.as_deref(),
     )
     .await?)
+}
+
+/// F5b keyset-paginated landing read (the web path's Option-B replacement for
+/// the full-library `rpc_get_ebooks`). POST — like `rpc_search` — so the sort /
+/// filter / cursor arguments ride in the JSON body that Dioxus `#[get]` server
+/// functions can't carry.
+///
+/// The server owns the sort order, so the client drives `sort_key`/`sort_dir`
+/// and appends pages by feeding `next_cursor` back as `cursor`. The first page
+/// (`cursor == None`) also returns the full-library `total` (header count) and
+/// the sidebar `facets`; later pages omit both so an infinite scroll doesn't
+/// re-pay the aggregate cost — the client caches them.
+#[post("/api/rpc/ebooks/page", pool: PoolExt, _user: AuthUser)]
+pub async fn rpc_get_ebooks_page(
+    sort_key: SortKey,
+    sort_dir: SortDir,
+    filters: ViewFilters,
+    cursor: Option<String>,
+    limit: i64,
+) -> Result<LibraryPage> {
+    let settings = db::get_settings(&pool.0).await?;
+    let ebook = settings.ebook_library_path;
+    let audiobook = settings.audiobook_library_path;
+    // The `EbookLibrary.path` convention: report the ebook path when set,
+    // else the audiobook path (keys per-library view prefs on the client).
+    let path = ebook.clone().or_else(|| audiobook.clone());
+    let paths = db::collect_paths(ebook.as_deref(), audiobook.as_deref());
+
+    // A malformed cursor is a client error. The web client only echoes a
+    // server-issued cursor, so this is defensive — surface it rather than
+    // silently restarting at the top.
+    let decoded = match cursor.as_deref() {
+        Some(c) => match db::PageCursor::decode(c) {
+            Ok(p) => Some(p),
+            Err(e) => return Err(ServerFnError::new(e.to_string()).into()),
+        },
+        None => None,
+    };
+
+    let page = db::list_books_page(
+        &pool.0,
+        &paths,
+        sort_key,
+        sort_dir,
+        &filters,
+        decoded.as_ref(),
+        limit,
+    )
+    .await?;
+
+    let (total, facets) = if decoded.is_none() {
+        (
+            Some(db::count_books_for_paths(&pool.0, &paths).await?),
+            Some(db::library_facets(&pool.0, &paths).await?),
+        )
+    } else {
+        (None, None)
+    };
+
+    Ok(LibraryPage {
+        path,
+        books: page.books,
+        next_cursor: page.next.map(|c| c.encode()),
+        total,
+        facets,
+    })
 }
 
 /// POST (not GET) for the same reason as `rpc_search`: Dioxus `#[get]`
