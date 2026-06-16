@@ -5,11 +5,58 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Maximum byte length of a library path field. Paths persisted into the
+/// `settings` KV are matched against on every reindex, so an unbounded
+/// blob would let an authed admin push pathological strings into the row
+/// or the scanner. POSIX `PATH_MAX` is typically 4 KiB; 4096 bytes covers
+/// every reasonable real-world install with margin.
+pub const PATH_MAX_LEN: usize = 4096;
+
+/// Validation failure modes for [`Settings`].
+///
+/// Callers branch on the variant to produce the right wire response — REST
+/// returns `422 Unprocessable Entity` with `e.to_string()`, the Dioxus
+/// server function wraps the message in `ServerFnError::new`.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum SettingsError {
+    /// One of the library-path fields exceeded [`PATH_MAX_LEN`].
+    #[error("{field} exceeds {PATH_MAX_LEN} bytes")]
+    PathTooLong { field: &'static str },
+}
+
 /// User-configurable paths for the ebook and audiobook libraries.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Settings {
     pub ebook_library_path: Option<String>,
     pub audiobook_library_path: Option<String>,
+}
+
+impl Settings {
+    /// Validate field lengths. Call at the handler boundary before
+    /// persisting so an over-long path returns a typed 422 instead of
+    /// landing in the `settings` KV. `None` fields (path cleared) are
+    /// always permitted.
+    ///
+    /// Lengths are measured in bytes — paths are filesystem-level and
+    /// match the kernel's `PATH_MAX` semantics rather than the Unicode
+    /// scalar-value cap used by user-facing text fields.
+    pub fn validate(&self) -> Result<(), SettingsError> {
+        if let Some(p) = &self.ebook_library_path {
+            if p.len() > PATH_MAX_LEN {
+                return Err(SettingsError::PathTooLong {
+                    field: "ebook_library_path",
+                });
+            }
+        }
+        if let Some(p) = &self.audiobook_library_path {
+            if p.len() > PATH_MAX_LEN {
+                return Err(SettingsError::PathTooLong {
+                    field: "audiobook_library_path",
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One half of the library listing (either ebooks or audiobooks).
@@ -32,3 +79,6 @@ pub struct LibraryContents {
     pub ebooks: LibrarySection,
     pub audiobooks: LibrarySection,
 }
+
+#[cfg(test)]
+mod tests;

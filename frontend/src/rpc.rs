@@ -151,6 +151,9 @@ pub async fn rpc_get_settings() -> Result<Settings> {
 
 #[post("/api/rpc/settings", pool: PoolExt, worker: WorkerExt, _admin: AdminUser)]
 pub async fn rpc_save_settings(settings: Settings) -> Result<Settings> {
+    if let Err(e) = settings.validate() {
+        return Err(ServerFnError::new(e.to_string()).into());
+    }
     db::set_settings(&pool.0, &settings).await?;
     let updated = db::get_settings(&pool.0).await?;
     // Library path may have changed (and even when it hasn't, the user has
@@ -668,6 +671,7 @@ pub async fn rpc_delete_highlight(id: i64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{validate_author_photo_url, AUTHOR_PHOTO_URL_MAX_LEN};
+    use omnibus_shared::{Settings, SettingsError, PATH_MAX_LEN};
 
     #[test]
     fn validate_author_photo_url_rejects_url_over_max_len() {
@@ -693,5 +697,55 @@ mod tests {
             err.to_string().contains("required"),
             "error message should say required: {err}"
         );
+    }
+
+    // `rpc_save_settings` is wired to `Settings::validate()`; these tests
+    // pin the contract the wrapper enforces (the RPC body calls
+    // `validate()` and surfaces the error message) so a future refactor
+    // can't silently drop the guard. The full handler body needs the
+    // axum extractors to dispatch, so we exercise the shared validator
+    // it delegates to — the same code path REST takes.
+
+    #[test]
+    fn rpc_save_settings_validation_rejects_over_long_ebook_path() {
+        let settings = Settings {
+            ebook_library_path: Some("a".repeat(PATH_MAX_LEN + 1)),
+            audiobook_library_path: None,
+        };
+        let err = settings
+            .validate()
+            .expect_err("over-long ebook path must be rejected");
+        assert_eq!(
+            err,
+            SettingsError::PathTooLong {
+                field: "ebook_library_path"
+            }
+        );
+    }
+
+    #[test]
+    fn rpc_save_settings_validation_rejects_over_long_audiobook_path() {
+        let settings = Settings {
+            ebook_library_path: None,
+            audiobook_library_path: Some("a".repeat(PATH_MAX_LEN + 1)),
+        };
+        let err = settings
+            .validate()
+            .expect_err("over-long audiobook path must be rejected");
+        assert_eq!(
+            err,
+            SettingsError::PathTooLong {
+                field: "audiobook_library_path"
+            }
+        );
+    }
+
+    #[test]
+    fn rpc_save_settings_validation_accepts_paths_at_max_len() {
+        let settings = Settings {
+            ebook_library_path: Some("a".repeat(PATH_MAX_LEN)),
+            audiobook_library_path: Some("b".repeat(PATH_MAX_LEN)),
+        };
+        assert!(settings.validate().is_ok());
     }
 }
