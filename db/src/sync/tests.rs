@@ -1456,3 +1456,198 @@ async fn sync_audiobooks_with_removed_above_bind_cap_succeeds() {
         "FTS rows should be cleared for every ghosted audiobook"
     );
 }
+
+// ── Bulk-insert of parts and chapters ─────────────────────────────
+//
+// `insert_audiobook_parts` and `insert_chapters` issue a single
+// VALUES-list `INSERT` per chunk (one round-trip), not one per row.
+// These tests pin the row contents identical to the previous one-at-a-time
+// loop so the batching is observably behavior-preserving.
+
+#[tokio::test]
+async fn sync_audiobooks_writes_all_parts_for_a_five_part_audiobook() {
+    let _covers = CoversTempDir::new("ab_bulk_parts");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    let mut book = indexed_audiobook("Author/Book", "Big Book", Some("Author"));
+    book.parts = (0..5)
+        .map(|i| crate::audiobook::AudiobookPart {
+            ordinal: i,
+            filename: format!("Author/Book/part{i:02}.m4b"),
+            size_bytes: 1000 + i,
+            mtime_epoch: 100 + i,
+            duration_seconds: 60.0 * (i + 1) as f64,
+        })
+        .collect();
+    // No embedded chapters → synthetic-fallback path writes one chapter per part.
+    book.chapters = vec![];
+
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            new_books: vec![book],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let rows: Vec<(i64, String, i64, i64, f64)> = sqlx::query_as(
+        "SELECT ordinal, filename, size_bytes, mtime_epoch, duration_seconds \
+         FROM book_file_parts ORDER BY ordinal",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(rows.len(), 5);
+    for (i, (ordinal, filename, size_bytes, mtime_epoch, duration_seconds)) in
+        rows.iter().enumerate()
+    {
+        let i = i as i64;
+        assert_eq!(*ordinal, i);
+        assert_eq!(filename, &format!("Author/Book/part{i:02}.m4b"));
+        assert_eq!(*size_bytes, 1000 + i);
+        assert_eq!(*mtime_epoch, 100 + i);
+        assert_eq!(*duration_seconds, 60.0 * (i + 1) as f64);
+    }
+}
+
+#[tokio::test]
+async fn sync_audiobooks_writes_all_fifty_chapters_for_a_five_part_audiobook() {
+    let _covers = CoversTempDir::new("ab_bulk_chapters");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    let mut book = indexed_audiobook("Author/Big.m4b", "Big Book", Some("Author"));
+    // One 60-minute part — chapter timestamps are absolute from book start.
+    book.parts = vec![crate::audiobook::AudiobookPart {
+        ordinal: 0,
+        filename: "Author/Big.m4b".into(),
+        size_bytes: 99_999,
+        mtime_epoch: 500,
+        duration_seconds: 3600.0,
+    }];
+    // 50 sequential chapters, each 60 s, with `end_ms == 0` so the gap-fill
+    // branch derives the duration from the next chapter's start.
+    book.chapters = (0..50)
+        .map(|i| crate::audiobook::RawChapter {
+            title: format!("Chapter {i}"),
+            start_ms: (i as u64) * 60_000,
+            end_ms: 0,
+        })
+        .collect();
+
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            new_books: vec![book],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let chapters: Vec<(i64, String, f64, f64)> = sqlx::query_as(
+        "SELECT ordinal, title, start_seconds, duration_seconds \
+         FROM file_chapters ORDER BY ordinal",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(chapters.len(), 50);
+    for (i, (ordinal, title, start_seconds, duration_seconds)) in chapters.iter().enumerate() {
+        let i = i as i64;
+        assert_eq!(*ordinal, i);
+        assert_eq!(title, &format!("Chapter {i}"));
+        assert_eq!(*start_seconds, (i as f64) * 60.0);
+        // Chapters 0..=48 fall to the gap-fill branch (next chapter's start
+        // minus this chapter's start = 60 s). Chapter 49 has no next, so it
+        // falls back to `total_duration - start` = 3600 - 2940 = 660 s.
+        let expected = if i < 49 { 60.0 } else { 660.0 };
+        assert_eq!(*duration_seconds, expected, "ordinal {i} duration mismatch");
+    }
+}
+
+#[tokio::test]
+async fn sync_audiobooks_writes_zero_parts_and_synthesized_chapter_for_empty_parts_edge_case() {
+    let _covers = CoversTempDir::new("ab_bulk_empty");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    let mut book = indexed_audiobook("Author/Only.m4b", "Only", Some("Author"));
+    book.parts = vec![];
+    book.chapters = vec![];
+
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            new_books: vec![book],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let parts_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM book_file_parts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(parts_count, 0, "empty `parts` writes no `book_file_parts`");
+
+    let chapters_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM file_chapters")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        chapters_count, 0,
+        "no parts and no chapters → synthetic fallback is also empty"
+    );
+}
+
+#[tokio::test]
+async fn sync_audiobooks_writes_one_chapter_when_single_chapter_provided() {
+    let _covers = CoversTempDir::new("ab_bulk_single_chap");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    let mut book = indexed_audiobook("Author/One.m4b", "Solo", Some("Author"));
+    book.parts = vec![crate::audiobook::AudiobookPart {
+        ordinal: 0,
+        filename: "Author/One.m4b".into(),
+        size_bytes: 2048,
+        mtime_epoch: 42,
+        duration_seconds: 120.0,
+    }];
+    book.chapters = vec![crate::audiobook::RawChapter {
+        title: "Only".into(),
+        start_ms: 0,
+        end_ms: 0,
+    }];
+
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            new_books: vec![book],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let rows: Vec<(i64, String, f64, f64)> = sqlx::query_as(
+        "SELECT ordinal, title, start_seconds, duration_seconds \
+         FROM file_chapters ORDER BY ordinal",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0, 0);
+    assert_eq!(rows[0].1, "Only");
+    assert_eq!(rows[0].2, 0.0);
+    // Single chapter with end_ms == 0 → duration falls back to total_duration - start = 120 s.
+    assert_eq!(rows[0].3, 120.0);
+}
