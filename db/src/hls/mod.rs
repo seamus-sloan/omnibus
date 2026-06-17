@@ -1,10 +1,12 @@
 //! HLS transcode cache for audiobooks.
 //!
-//! One ffmpeg invocation per `(book_id, profile)` writes all segments
-//! atomically to `$OMNIBUS_DATA_DIR/hls/<book_id>/<profile>/`. The only
-//! profile today is `"audio64"` (AAC-LC 64 kbps mono, 10 s segments).
-//! Segments are served directly by the axum handler via `tower-http`
-//! `ServeFile`; the manifest is built per-request from the stored
+//! One ffmpeg invocation per `(book_id, profile)` streams all segments
+//! into `$OMNIBUS_DATA_DIR/hls/<book_id>/<profile>/` (no rename-style
+//! atomicity — partials are wiped via `cleanup_segment_dir` on failure
+//! so a retry starts from a clean slate). The only profile today is
+//! `"audio64"` (AAC-LC 64 kbps mono, 10 s segments). Segments are served
+//! directly by the axum handler via `tower-http` `ServeFile`; the
+//! manifest is built per-request from the stored
 //! `book_file_parts.duration_seconds` values so it is always accurate even
 //! before a transcode completes.
 

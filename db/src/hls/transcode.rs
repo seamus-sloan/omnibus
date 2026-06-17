@@ -17,7 +17,7 @@ use super::{
 
 /// Heartbeat cadence written to the `.progress` sentinel while ffmpeg is
 /// alive. Long enough to keep filesystem traffic negligible; short enough
-/// that the stale-progress threshold can be three heartbeats wide without
+/// that the stale-progress threshold can be six heartbeats wide without
 /// the orphan detector mistaking a slow disk for a dead transcode.
 const HEARTBEAT_PERIOD: Duration = Duration::from_secs(5);
 

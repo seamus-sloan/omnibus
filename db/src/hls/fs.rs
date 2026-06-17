@@ -8,7 +8,8 @@ use std::time::{Duration, SystemTime};
 /// Mtime age past which an in-flight `.progress` sentinel is treated as
 /// orphaned (server crashed / hot-reloaded mid-transcode, leaving the
 /// `0.x` value pinned forever without a live ffmpeg behind it).
-/// Three heartbeats wide so transient I/O stalls don't trip it.
+/// Six `HEARTBEAT_PERIOD` ticks (5 s × 6 = 30 s) so transient I/O stalls
+/// don't trip it.
 pub(super) const STALE_PROGRESS_THRESHOLD: Duration = Duration::from_secs(30);
 
 /// Root directory for the HLS segment cache.
