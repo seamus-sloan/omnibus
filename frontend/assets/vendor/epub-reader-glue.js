@@ -34,8 +34,8 @@
  *
  * Selection callback:
  *   - `__omnibusOnSelection(json)` — invoked when the user selects text,
- *     with { cfiRange, text, rect: { x, y, width, height } } where rect
- *     is in viewport coordinates.
+ *     with { cfiRange, rect: { x, y, width } } where rect is in viewport
+ *     coordinates.
  */
 (function () {
   "use strict";
@@ -209,7 +209,6 @@
       if (!contents || !contents.window) return;
       var sel = contents.window.getSelection();
       if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
-      var text = sel.toString().trim();
       var range = sel.getRangeAt(0);
       var iframeRect = { x: 0, y: 0 };
       try {
@@ -224,11 +223,9 @@
         x: r.left + iframeRect.x,
         y: r.top + iframeRect.y,
         width: r.width,
-        height: r.height,
       };
       window.__omnibusOnSelection(JSON.stringify({
         cfiRange: cfiRange,
-        text: text,
         rect: rect,
       }));
     });
