@@ -65,3 +65,11 @@ async fn backfill_fills_null_scan_keys_once_and_is_idempotent() {
             .unwrap();
     assert_eq!(still.as_deref(), Some("Author/Title.epub"));
 }
+
+#[tokio::test]
+async fn backfill_scan_keys_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = backfill_scan_keys(&pool).await.unwrap_err();
+    assert!(matches!(err, IdentityError::Db(_)));
+}

@@ -7,6 +7,7 @@ use std::path::Path;
 use sqlx::{sqlite::SqlitePoolOptions, Executor, SqlitePool};
 
 use crate::covers::covers_dir;
+use crate::identity::IdentityError;
 use crate::normalize::NormalizeError;
 
 /// Schema migrations embedded at compile time from `db/migrations/`.
@@ -21,6 +22,8 @@ pub enum InitDbError {
     Db(#[from] sqlx::Error),
     #[error(transparent)]
     Normalize(#[from] NormalizeError),
+    #[error(transparent)]
+    Identity(#[from] IdentityError),
     #[error(transparent)]
     SortKeys(#[from] crate::sort_keys::SortKeysError),
 }

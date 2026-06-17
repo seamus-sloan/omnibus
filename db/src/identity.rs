@@ -10,6 +10,13 @@
 
 use sqlx::SqlitePool;
 
+/// Errors returned by [`backfill_scan_keys`].
+#[derive(Debug, thiserror::Error)]
+pub enum IdentityError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
 /// Reconstruct a book/attachment's `scan_key` (its scanner-relative path)
 /// from the stored `(path, filename, format)` and the part count, matching
 /// exactly what the Phase-A walk would emit so the diff doesn't
@@ -37,7 +44,7 @@ fn reconstruct_scan_key(path: &str, filename: &str, format: &str, part_count: i6
 /// indexed before migration 0026. Idempotent — only touches rows where
 /// `scan_key IS NULL` — and pure DB work, so it runs on every boot from
 /// `init_db` and against in-memory test DBs.
-pub async fn backfill_scan_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+pub async fn backfill_scan_keys(pool: &SqlitePool) -> Result<(), IdentityError> {
     backfill_books_scan_keys(pool).await?;
     backfill_merged_scan_keys(pool).await?;
     Ok(())
