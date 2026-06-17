@@ -4,6 +4,8 @@
 //! `ffmpeg_progress_fraction`) plus the on-disk-sentinel + orphan-recovery
 //! invariants that the status handler depends on.
 
+use std::time::{Duration, SystemTime};
+
 use super::*;
 use crate::test_support::EnvVarGuard;
 
