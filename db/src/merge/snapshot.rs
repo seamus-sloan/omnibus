@@ -52,48 +52,38 @@ pub(super) struct SourceSnapshot {
     pub merged_uuid_rows: Vec<(String, String, String)>,
 }
 
+/// The flat `books` + `scan_roots` row that seeds a [`SourceSnapshot`].
+/// `sqlx::FromRow` is name-based, so SELECT aliases must match the field
+/// names exactly — `l.path` is aliased to `library_path` to disambiguate
+/// it from `b.path`.
+#[derive(sqlx::FromRow)]
+struct BookSnapshot {
+    uuid: String,
+    library_path: String,
+    path: String,
+    title: String,
+    sort: Option<String>,
+    author_sort: Option<String>,
+    series_sort: Option<String>,
+    series_index: Option<f64>,
+    pubdate: Option<String>,
+    timestamp: Option<String>,
+    has_cover: i64,
+    description: Option<String>,
+    accent_color: Option<String>,
+    title_norm: Option<String>,
+    author_norm: Option<String>,
+}
+
 /// Load the full snapshot for `book_id` inside the merge transaction.
 pub(super) async fn build_snapshot(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
 ) -> Result<SourceSnapshot, sqlx::Error> {
-    #[allow(clippy::type_complexity)]
-    let (
-        uuid,
-        library_path,
-        path,
-        title,
-        sort,
-        author_sort,
-        series_sort,
-        series_index,
-        pubdate,
-        timestamp,
-        has_cover,
-        description,
-        accent_color,
-        title_norm,
-        author_norm,
-    ): (
-        String,
-        String,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<f64>,
-        Option<String>,
-        Option<String>,
-        i64,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    ) = sqlx::query_as(
-        "SELECT b.uuid, l.path, b.path, b.title, b.sort, b.author_sort, b.series_sort,
-                b.series_index, b.pubdate, b.timestamp, b.has_cover, b.description,
-                b.accent_color, b.title_norm, b.author_norm
+    let row: BookSnapshot = sqlx::query_as(
+        "SELECT b.uuid, l.path AS library_path, b.path, b.title, b.sort, b.author_sort,
+                b.series_sort, b.series_index, b.pubdate, b.timestamp, b.has_cover,
+                b.description, b.accent_color, b.title_norm, b.author_norm
            FROM books b JOIN scan_roots l ON l.id = b.library_id
           WHERE b.id = ?",
     )
@@ -167,21 +157,21 @@ pub(super) async fn build_snapshot(
             .await?;
 
     Ok(SourceSnapshot {
-        uuid,
-        library_path,
-        path,
-        title,
-        sort,
-        author_sort,
-        series_sort,
-        series_index,
-        pubdate,
-        timestamp,
-        has_cover,
-        description,
-        accent_color,
-        title_norm,
-        author_norm,
+        uuid: row.uuid,
+        library_path: row.library_path,
+        path: row.path,
+        title: row.title,
+        sort: row.sort,
+        author_sort: row.author_sort,
+        series_sort: row.series_sort,
+        series_index: row.series_index,
+        pubdate: row.pubdate,
+        timestamp: row.timestamp,
+        has_cover: row.has_cover,
+        description: row.description,
+        accent_color: row.accent_color,
+        title_norm: row.title_norm,
+        author_norm: row.author_norm,
         moved_formats,
         moved_file_ids,
         native_formats,
