@@ -6,31 +6,19 @@ use dioxus::prelude::*;
 use omnibus_shared::HighlightColor;
 
 /// Selection event data from epub.js glue (deserialized from JSON).
-// INVARIANT: full deserialize shape preserved for forward-compat with
-// the epub.js glue payload. `text` isn't surfaced in the popover today,
-// but the glue always sends it and downstream highlight-export work
-// needs it; thinning the schema now would force a re-add when that
-// lands.
 #[derive(Clone, Default, serde::Deserialize)]
-#[allow(dead_code)]
 pub(crate) struct SelectionData {
     #[serde(rename = "cfiRange")]
     pub(crate) cfi_range: String,
-    pub(crate) text: String,
     pub(crate) rect: SelectionRect,
 }
 
-// INVARIANT: full deserialize shape kept even though `height` isn't
-// read — the popover only positions horizontally today, but the glue
-// always emits all four fields and a vertical-flip placement is on
-// deck.
+/// Bounding rect of a live selection in viewport coordinates.
 #[derive(Clone, Default, serde::Deserialize)]
-#[allow(dead_code)]
 pub(crate) struct SelectionRect {
     pub(crate) x: f64,
     pub(crate) y: f64,
     pub(crate) width: f64,
-    pub(crate) height: f64,
 }
 
 /// Floating popover shown over a text selection with highlight color swatches.

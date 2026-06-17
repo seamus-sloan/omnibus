@@ -41,16 +41,12 @@ enum ReaderStatus {
 }
 
 /// Relocated event data from epub.js glue (deserialized from JSON).
-// INVARIANT: full deserialize shape preserved for forward-compat with
-// the epub.js glue payload. The render path consumes every field on
-// `web`, where epub.js deserializes the event; on non-`web` targets the
-// reader compiles but the deserialize call is `#[cfg]`'d out, so
-// dead_code fires on `cfi`. The allow holds the schema steady across
-// feature combos.
 #[derive(Clone, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 struct RelocateData {
+    // Only the web-feature progress-save path reads `cfi`; the other
+    // fields are read unconditionally by the bottom-bar render.
+    #[cfg_attr(not(feature = "web"), allow(dead_code))]
     cfi: Option<String>,
     page: u32,
     total_pages: u32,
