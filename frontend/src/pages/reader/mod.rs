@@ -44,8 +44,7 @@ enum ReaderStatus {
 #[derive(Clone, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RelocateData {
-    // Only the web-feature progress-save path reads `cfi`; the other
-    // fields are read unconditionally by the bottom-bar render.
+    // Only the web-feature progress-save path reads `cfi`; the other fields are read unconditionally by the bottom-bar render.
     #[cfg_attr(not(feature = "web"), allow(dead_code))]
     cfi: Option<String>,
     page: u32,
