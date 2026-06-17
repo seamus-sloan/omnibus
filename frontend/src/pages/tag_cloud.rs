@@ -60,16 +60,11 @@ pub fn TagCloudPage() -> Element {
                 }
             }
 
-            // Two-column: cloud + sidebar stub
-            div { class: "disc-two-col",
-                // The cloud
-                div { class: "tag-cloud",
-                    for tag in tag_list.iter() {
-                        { render_tag_item(tag, max_count) }
-                    }
+            // The cloud
+            div { class: "tag-cloud",
+                for tag in tag_list.iter() {
+                    { render_tag_item(tag, max_count) }
                 }
-                // TODO(F1.13): Tag overlap matrix — related-tag panel.
-                aside { class: "card", aria_hidden: "true" }
             }
         }
     }

@@ -997,19 +997,6 @@ body.atrium,
   font-size: 14px;
 }
 
-/* Two-column layout for tag cloud + sidebar */
-.disc-two-col {
-  padding: 12px 0 48px;
-  display: grid;
-  grid-template-columns: 1fr 280px;
-  gap: 40px;
-  align-items: flex-start;
-}
-@media (max-width: 900px) {
-  .disc-two-col { grid-template-columns: 1fr; }
-  .disc-two-col > aside { display: none; }
-}
-
 /* Tag cloud container */
 .tag-cloud {
   display: flex;
