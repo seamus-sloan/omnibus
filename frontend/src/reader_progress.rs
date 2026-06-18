@@ -61,10 +61,14 @@ mod mobile_store {
         MAP.get_or_init(|| RwLock::new(HashMap::new()))
     }
 
+    /// Read the cached CFI for `uuid` from the process-local map.
+    /// Returns `None` when no entry exists or the lock is poisoned.
     pub fn get(uuid: &str) -> Option<String> {
         map().read().ok().and_then(|g| g.get(uuid).cloned())
     }
 
+    /// Insert/overwrite the cached CFI for `uuid` in the process-local map.
+    /// Silently no-ops if the lock is poisoned; the in-memory copy resets on cold launch.
     pub fn set(uuid: &str, cfi: String) {
         if let Ok(mut g) = map().write() {
             g.insert(uuid.to_string(), cfi);
