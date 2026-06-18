@@ -108,10 +108,14 @@ mod mobile_store {
         MAP.get_or_init(|| RwLock::new(HashMap::new()))
     }
 
+    /// Read the cached position (seconds) for `uuid` from the process-local map.
+    /// Returns `None` when no entry exists or the lock is poisoned.
     pub fn get(uuid: &str) -> Option<f64> {
         map().read().ok().and_then(|g| g.get(uuid).copied())
     }
 
+    /// Insert/overwrite the cached position (seconds) for `uuid` in the process-local map.
+    /// Silently no-ops if the lock is poisoned; the in-memory copy resets on cold launch.
     pub fn set(uuid: &str, seconds: f64) {
         if let Ok(mut g) = map().write() {
             g.insert(uuid.to_string(), seconds);
@@ -121,12 +125,16 @@ mod mobile_store {
     fn rate_key(uuid: &str) -> String {
         format!("rate::{uuid}")
     }
+    /// Read the cached playback-rate preference for `uuid` from the process-local map.
+    /// Returns `None` when no entry exists or the lock is poisoned.
     pub fn get_rate(uuid: &str) -> Option<f64> {
         map()
             .read()
             .ok()
             .and_then(|g| g.get(&rate_key(uuid)).copied())
     }
+    /// Insert/overwrite the cached playback-rate preference for `uuid` in the process-local map.
+    /// Silently no-ops if the lock is poisoned; the in-memory copy resets on cold launch.
     pub fn set_rate(uuid: &str, r: f64) {
         if let Ok(mut g) = map().write() {
             g.insert(rate_key(uuid), r);

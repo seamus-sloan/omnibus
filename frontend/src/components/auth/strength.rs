@@ -21,6 +21,7 @@ impl StrengthScore {
         Self(raw.min(Self::MAX))
     }
 
+    /// Return the underlying clamped score (0..=[`Self::MAX`]).
     pub fn value(self) -> u8 {
         self.0
     }
