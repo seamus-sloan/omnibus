@@ -1,9 +1,8 @@
-//! Cross-bucket helpers shared by `sync_new` and `sync_changed`: the
+//! Cross-bucket helpers shared by `sync_new` and `sync_changed`:
 //! canonical row writers (`insert_book_row` / `update_book_row` /
-//! `insert_book_file_row`), metadata link dispatch
-//! (`insert_metadata_links` and its batched tag / identifier inserts),
-//! the rewrite-in-place + cross-format attach paths, and the post-commit
-//! cover materialization + ghost helper.
+//! `insert_book_file_row`), metadata + tag + identifier link dispatch,
+//! the rewrite-in-place and cross-format attach paths, and the
+//! post-commit cover materialization + ghost helper.
 
 use sqlx::Transaction;
 

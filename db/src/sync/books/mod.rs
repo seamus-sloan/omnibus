@@ -1,10 +1,8 @@
 //! Transactional orchestrator for the indexer write path. Owns
 //! `sync_books`, the per-bucket helpers (`sync_removed` / `sync_changed`
-//! / `sync_new`), the `replace_books` nuke-and-pave shim, per-book row
-//! writers (`insert_book_row` / `update_book_row`), the metadata
-//! dispatcher, and post-commit cover materialization. All `books_fts`
-//! maintenance is delegated to the [`super::fts`] choke-point
-//! (`upsert_fts` / `delete_fts`) rather than written inline.
+//! / `sync_new`), `replace_books`, and post-commit cover materialization.
+//! All `books_fts` maintenance is delegated to the [`super::fts`]
+//! choke-point (`upsert_fts` / `delete_fts`) rather than written inline.
 
 use sqlx::{SqlitePool, Transaction};
 
@@ -63,7 +61,9 @@ pub struct SyncPlan {
 ///
 /// Inside a single transaction, in this order:
 /// 1. Upsert the `scan_roots` row.
-/// 2. Delete Removed: explicit FTS clear + cascade DELETE from `books`.
+/// 2. Ghost Removed (F2): clear FTS + drop `book_files` and per-book
+///    link rows, but retain the `books` row so the uuid and soft-ref
+///    user data (overrides, progress, bookmarks) survive.
 /// 3. Update Changed in place (preserves `books.id`); wipe-and-rewrite
 ///    link rows + FTS row for each.
 /// 4. Insert New (autoincrement assigns a fresh id).
