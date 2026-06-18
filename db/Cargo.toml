@@ -34,10 +34,20 @@ tracing.workspace = true
 # crate for this security-critical path. rand_core is pinned to 0.6 (same
 # version already in the lock via password-hash) with `getrandom` enabled so
 # that OsRng is available for SaltString::generate in password.rs.
+#
+# Why the version mix isn't uniformly "latest":
+# * argon2 0.5 is the latest *stable* release; 0.6 is only available as
+#   pre-release (0.6.0-rc.*) and we don't ship release candidates of
+#   password-hashing code. 0.5.3 has no open advisories.
+# * rand_core stays at 0.6 because argon2 0.5's transitive `password-hash`
+#   pulls 0.6, and our direct dep only exists to flip on the `getrandom`
+#   feature on that *same* 0.6 instance — a 0.9 direct bump would be dead
+#   weight (separate version, doesn't reach argon2's OsRng). Lock-stepped
+#   with the argon2 bump above.
 argon2 = "0.5"
-getrandom = "0.2"
+getrandom = "0.3"
 rand_core = { version = "0.6", features = ["getrandom"] }
-sha2 = "0.10"
+sha2 = "0.11"
 base64 = "0.22"
 
 # F1.2 thumbnail pipeline: decode EPUB covers (JPEG/PNG/WebP) and re-encode
