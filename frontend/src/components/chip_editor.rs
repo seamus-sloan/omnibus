@@ -22,8 +22,7 @@ pub struct SuggestionItem {
 }
 
 impl SuggestionItem {
-    /// Build a [`SuggestionItem`] from a canonical name and the count of
-    /// books currently linked to it (display-only).
+    /// Build a [`SuggestionItem`] from a canonical name and its linked-book count (display-only).
     pub fn new(name: impl Into<String>, count: usize) -> Self {
         Self {
             name: name.into(),
