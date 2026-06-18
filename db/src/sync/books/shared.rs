@@ -1,375 +1,32 @@
-//! Transactional orchestrator for the indexer write path. Owns
-//! `sync_books`, the per-bucket helpers (`sync_removed` / `sync_changed`
-//! / `sync_new`), the `replace_books` nuke-and-pave shim, per-book row
-//! writers (`insert_book_row` / `update_book_row`), the metadata
-//! dispatcher, and post-commit cover materialization. All `books_fts`
-//! maintenance is delegated to the [`super::fts`] choke-point
-//! (`upsert_fts` / `delete_fts`) rather than written inline.
+//! Cross-bucket helpers shared by `sync_new` and `sync_changed`:
+//! canonical row writers (`insert_book_row` / `update_book_row` /
+//! `insert_book_file_row`), metadata + tag + identifier link dispatch,
+//! the rewrite-in-place and cross-format attach paths, and the
+//! post-commit cover materialization + ghost helper.
 
-use std::collections::HashMap;
-
-use sqlx::{SqlitePool, Transaction};
+use sqlx::Transaction;
 
 use omnibus_shared::EbookMetadata;
 
-use crate::covers::{delete_cover_files_for, write_cover_file};
+use crate::covers::write_cover_file;
 use crate::helpers::{
     mint_uuid, parse_series_index, sanitize_accent_color, scan_key_for, split_filename, stable_uuid,
 };
 use crate::normalize::{normalize_author, normalize_title};
-use crate::settings::upsert_library;
 use crate::sort_keys::series_sort_value;
 use crate::taxonomy::{
     resolve_or_insert_language, resolve_or_insert_publisher, resolve_or_insert_series,
 };
 
-use super::attach;
-use super::authors::insert_author_links;
-use super::backfill::backfill_stat_chunks;
-use super::fts::{delete_fts, upsert_fts};
-
-/// Crate-internal error wrapping `sqlx::Error` so `?` propagates cleanly in the audiobook sync helpers.
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum SyncError {
-    #[error(transparent)]
-    Db(#[from] sqlx::Error),
-}
-
-impl From<crate::settings::SettingsError> for SyncError {
-    fn from(e: crate::settings::SettingsError) -> Self {
-        match e {
-            crate::settings::SettingsError::Db(inner) => SyncError::Db(inner),
-        }
-    }
-}
-
-/// Per-bucket payload for [`sync_books`]. Built by
-/// `crate::indexer::diff_library` (plus the Phase-B parse for new + changed).
-///
-/// The four buckets are mutually exclusive — a given uuid appears in at
-/// most one of them per sync — and the diff already ordered them
-/// deterministically.
-#[derive(Debug, Default)]
-pub struct SyncPlan {
-    pub new_books: Vec<crate::ebook::IndexedBook>,
-    pub changed_books: Vec<crate::ebook::IndexedBook>,
-    pub removed_uuids: Vec<String>,
-    /// `(uuid, mtime_epoch, size_bytes)` — see the Backfill section of
-    /// the [`crate::indexer`] module doc for why this exists.
-    pub backfill: Vec<(String, i64, i64)>,
-}
-
-/// Apply a per-bucket sync plan atomically. Unchanged books are not in
-/// the plan, so their `books.id` is preserved by definition; Changed
-/// books are UPDATEd in place so their `books.id` is preserved too.
-///
-/// Inside a single transaction, in this order:
-/// 1. Upsert the `scan_roots` row.
-/// 2. Delete Removed: explicit FTS clear + cascade DELETE from `books`.
-/// 3. Update Changed in place (preserves `books.id`); wipe-and-rewrite
-///    link rows + FTS row for each.
-/// 4. Insert New (autoincrement assigns a fresh id).
-/// 5. Backfill: UPDATE `book_files.(mtime_epoch, size_bytes)` only — no
-///    OPF re-parse, no link writes, no FTS write. See the Backfill rule
-///    in the [`crate::indexer`] module doc.
-/// 6. Stamp `scan_roots.last_indexed`.
-///
-/// Post-commit (best-effort, logged on failure — covers are a
-/// rebuildable cache):
-/// - Delete cover files for Removed uuids only.
-/// - Write cover files for New + Changed (overwrites the old file in
-///   place; mime change sweeps the stale-extension orphan).
-///
-/// `metadata_overrides` is intentionally not touched — keyed by
-/// `book_uuid` with no FK to `books.id` (see `0007_metadata_overrides.sql`).
-/// User edits survive Changed UPDATEs and even Removed→New cycles for
-/// the same filename.
-pub async fn sync_books(
-    pool: &SqlitePool,
-    library_path: &str,
-    plan: SyncPlan,
-) -> anyhow::Result<()> {
-    sync_books_with_progress(pool, library_path, plan, |_, _| {}).await
-}
-
-/// [`sync_books`] variant that calls `on_progress(processed, total)`
-/// after each per-book write so the worker can surface a determinate
-/// progress bar. `total` is the count of buckets that loop per book —
-/// Changed + New. Removed and Backfill are batched and not reported as
-/// per-book progress (they're invisible to the user-facing "Scanning"
-/// step).
-pub async fn sync_books_with_progress(
-    pool: &SqlitePool,
-    library_path: &str,
-    plan: SyncPlan,
-    mut on_progress: impl FnMut(u32, u32),
-) -> anyhow::Result<()> {
-    let total: u32 = (plan.changed_books.len() + plan.new_books.len())
-        .try_into()
-        .unwrap_or(u32::MAX);
-    // Emit an initial (0, total) tick so the UI flips from indeterminate
-    // spinner to determinate bar before the first per-book write lands.
-    on_progress(0, total);
-
-    let mut tx = pool.begin().await?;
-    let library_id = upsert_library(&mut tx, library_path).await?;
-
-    sync_removed(&mut tx, library_id, &plan.removed_uuids).await?;
-    // Removed uuids that were cross-format attachments have no `books`
-    // row — drop their `book_files` row + `merged_uuids` entry instead
-    // (the target book survives, possibly fileless).
-    attach::remove_attached_files(&mut tx, &plan.removed_uuids).await?;
-    let mut processed: u32 = 0;
-    let changed_covers = sync_changed(
-        &mut tx,
-        library_id,
-        library_path,
-        &plan.changed_books,
-        || {
-            processed = processed.saturating_add(1);
-            on_progress(processed, total);
-        },
-    )
-    .await?;
-    let new_covers = sync_new(&mut tx, library_id, library_path, &plan.new_books, || {
-        processed = processed.saturating_add(1);
-        on_progress(processed, total);
-    })
-    .await?;
-    backfill_stat_chunks(&mut tx, library_id, &plan.backfill).await?;
-    stamp_last_indexed(&mut tx, library_id).await?;
-
-    tx.commit().await?;
-
-    // DB commit succeeded — reconcile the covers directory. All three steps
-    // are synchronous `std::fs` (unlink orphans, write new/changed covers)
-    // and scale with the diff size — thousands of files on a fresh library —
-    // so run them together on the blocking pool rather than pinning a tokio
-    // worker. A `JoinError` (panic in the reconcile) is logged and swallowed:
-    // covers are a rebuildable cache, so a failed reconcile must not fail the
-    // committed sync.
-    let removed_uuids = plan.removed_uuids;
-    if let Err(join_err) = tokio::task::spawn_blocking(move || {
-        delete_cover_files_for(&removed_uuids);
-        materialize_new_covers(new_covers);
-        materialize_new_covers(changed_covers);
-    })
-    .await
-    {
-        tracing::error!("sync_books: cover reconcile spawn_blocking failed: {join_err}");
-    }
-
-    Ok(())
-}
-
-/// Ghost a batch of removed books by uuid (F2). The file is gone, but the
-/// `books` row — and every soft-ref user-data row keyed on `books.uuid` —
-/// is **retained**: drop the `book_files` row (parts/chapters cascade) and
-/// clear the `books_fts` row (FTS5 is standalone — no FK) so the now-fileless
-/// ghost is hidden from search, then leave the `books` row in place. A
-/// returning file re-attaches via the Changed path, preserving the uuid.
-/// Idempotent: re-ghosting an already-fileless row deletes zero `book_files`.
-async fn sync_removed(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    library_id: i64,
-    removed_uuids: &[String],
-) -> Result<(), sqlx::Error> {
-    if removed_uuids.is_empty() {
-        return Ok(());
-    }
-    let mut ghosted = 0usize;
-    // library_id + 1 bind per uuid; chunk at 500 to stay under SQLite's
-    // 999-param cap when a whole library (or any large diff) is removed.
-    for chunk in removed_uuids.chunks(500) {
-        let placeholders = std::iter::repeat_n("?", chunk.len())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        // Resolve the affected ids, clear each FTS row via the door, then
-        // drop the file rows — keeping the `books` row as a fileless ghost.
-        let id_sql =
-            format!("SELECT id FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
-        let mut q = sqlx::query_scalar::<_, i64>(&id_sql).bind(library_id);
-        for uuid in chunk {
-            q = q.bind(uuid);
-        }
-        let ids = q.fetch_all(&mut **tx).await?;
-        ghosted += ids.len();
-        for id in ids {
-            ghost_book_by_id(tx, id).await?;
-        }
-    }
-    if ghosted > 0 {
-        // GC of long-fileless ghosts is deferred to F10; log the count so
-        // accumulation is observable until then.
-        tracing::info!(ghosted, "sync: retained removed books as fileless ghosts");
-    }
-    Ok(())
-}
-
-/// Apply Changed entries: wipe-and-rewrite the per-book link rows for each,
-/// UPDATE the `books` row in place (preserving id), and re-insert the FTS
-/// row. Returns `(uuid, mime, bytes)` triples for the post-commit cover
-/// materialization.
-///
-/// If the diff said this uuid existed but a concurrent process removed it
-/// between Phase A and the write, fall back to inserting it as a new book
-/// rather than failing the whole sync over a TOCTOU.
-async fn sync_changed(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    library_id: i64,
-    library_path: &str,
-    changed_books: &[crate::ebook::IndexedBook],
-    mut on_book_written: impl FnMut(),
-) -> Result<Vec<(String, String, Vec<u8>)>, sqlx::Error> {
-    if changed_books.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Pre-compute the `scan_key` (relative path, F2) for each Changed
-    // entry so we can batch the id lookup. The diff matches on scan_key,
-    // and we carry each row's durable `uuid` back for the cover triple
-    // (cover files are uuid-named).
-    let all_scan_keys: Vec<String> = changed_books
-        .iter()
-        .map(|b| scan_key_for(&b.metadata.filename))
-        .collect();
-
-    // One batch SELECT per chunk (chunked at 499 to stay under SQLite's
-    // 999-parameter cap: 1 bind for library_id + up to 499 scan_key binds).
-    let mut id_map: HashMap<String, (i64, String)> = HashMap::new();
-    for chunk in all_scan_keys.chunks(499) {
-        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-        let id_sql = format!(
-            "SELECT scan_key, id, uuid FROM books
-              WHERE library_id = ? AND scan_key IN ({placeholders})"
-        );
-        let mut q = sqlx::query_as::<_, (String, i64, String)>(&id_sql).bind(library_id);
-        for sk in chunk {
-            q = q.bind(sk);
-        }
-        for (sk, id, uuid) in q.fetch_all(&mut **tx).await? {
-            id_map.insert(sk, (id, uuid));
-        }
-    }
-
-    // Wipe-and-rewrite the per-book link rows for each Changed entry,
-    // then UPDATE the `books` row and re-insert FTS. This preserves
-    // `books.id` and `books.uuid` — the invariants external callers and
-    // F1 soft-refs depend on.
-    let mut changed_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
-    for (b, scan_key) in changed_books.iter().zip(all_scan_keys.iter()) {
-        sync_changed_one(
-            tx,
-            library_id,
-            library_path,
-            b,
-            scan_key,
-            &id_map,
-            &mut changed_covers,
-        )
-        .await?;
-        on_book_written();
-    }
-    Ok(changed_covers)
-}
-
-/// Apply a single Changed entry — extracted so `sync_changed`'s outer
-/// loop stays a clean per-book progress tick.
-async fn sync_changed_one(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    library_id: i64,
-    library_path: &str,
-    b: &crate::ebook::IndexedBook,
-    scan_key: &str,
-    id_map: &HashMap<String, (i64, String)>,
-    changed_covers: &mut Vec<(String, String, Vec<u8>)>,
-) -> Result<(), sqlx::Error> {
-    let Some((book_id, uuid)) = id_map.get(scan_key).map(|(id, u)| (*id, u.clone())) else {
-        // No primary `books` row with this scan_key. Either the file is an
-        // attachment on another book (recorded in merged_uuids, matched by
-        // `(library_path, scan_key)` so it survives a repoint — refresh that
-        // book_files row against the stored ledger uuid, leaving the target
-        // book's metadata alone) …
-        if let Some((merged_uuid, target_id, format)) =
-            attach::find_attachment_by_scan_key(tx, library_path, scan_key).await?
-        {
-            attach_ebook_file(
-                tx,
-                target_id,
-                &format,
-                library_path,
-                &merged_uuid,
-                b,
-                changed_covers,
-            )
-            .await?;
-            return Ok(());
-        }
-        // … or a TOCTOU: the diff said this scan_key existed in the DB,
-        // but a concurrent process removed it between Phase A and
-        // the write. Promote to a New insert so the file still gets
-        // indexed.
-        let inserted = insert_book_row(tx, library_id, library_path, b).await?;
-        insert_metadata_links(tx, inserted.book_id, &b.metadata).await?;
-        // Source the FTS row from the rows we just wrote via the door.
-        upsert_fts(tx, inserted.book_id).await?;
-        if let Some((mime, bytes)) = &b.cover {
-            changed_covers.push((inserted.uuid, mime.clone(), bytes.clone()));
-        }
-        return Ok(());
-    };
-
-    // Rewrites in place, re-creating the `book_files` row whether the book
-    // had one (a real content change) or not (a fileless ghost whose file
-    // returned — the re-attach path, F2). `books.uuid` is preserved.
-    rewrite_book_in_place(tx, book_id, &uuid, b, changed_covers).await?;
-    Ok(())
-}
-
-/// Insert a batch of New entries: canonical `books` + `book_files` row,
-/// metadata link rows, FTS row. Returns the post-commit cover triples.
-async fn sync_new(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    library_id: i64,
-    library_path: &str,
-    new_books: &[crate::ebook::IndexedBook],
-    mut on_book_written: impl FnMut(),
-) -> Result<Vec<(String, String, Vec<u8>)>, sqlx::Error> {
-    let mut new_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
-    for b in new_books {
-        // A row with this exact scan_key (relative path) already exists — a
-        // fileless ghost whose file returned, or the same file marked New by
-        // `replace_books` after being ghosted in the same call. This is the
-        // *same native file*, so rewrite it in place (preserving
-        // `books.uuid`) — checked before the cross-format attach heuristic,
-        // which would otherwise mis-bind the returning file to the ghost as
-        // an attachment.
-        let scan_key = scan_key_for(&b.metadata.filename);
-        if let Some((book_id, uuid)) = existing_by_scan_key(tx, library_id, &scan_key).await? {
-            rewrite_book_in_place(tx, book_id, &uuid, b, &mut new_covers).await?;
-            on_book_written();
-            continue;
-        }
-        if try_attach_new_ebook(tx, library_path, b, &mut new_covers).await? {
-            on_book_written();
-            continue;
-        }
-        let inserted = insert_book_row(tx, library_id, library_path, b).await?;
-        insert_metadata_links(tx, inserted.book_id, &b.metadata).await?;
-        upsert_fts(tx, inserted.book_id).await?;
-        if let Some((mime, bytes)) = &b.cover {
-            new_covers.push((inserted.uuid, mime.clone(), bytes.clone()));
-        }
-        on_book_written();
-    }
-    Ok(new_covers)
-}
+use super::super::attach;
+use super::super::authors::insert_author_links;
+use super::super::fts::{delete_fts, upsert_fts};
+use super::wipe_per_book_link_rows;
 
 /// Resolve an existing `books` row (id + uuid) under `library_id` by its
 /// `scan_key`. Used by the New path to re-attach to a ghost / same-path row
 /// instead of inserting a colliding one.
-async fn existing_by_scan_key(
+pub(super) async fn existing_by_scan_key(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_id: i64,
     scan_key: &str,
@@ -387,7 +44,7 @@ async fn existing_by_scan_key(
 /// the `books` scalars, wipe + re-insert this format's `book_files` and the
 /// per-book links, and refresh FTS — preserving `books.id`/`books.uuid`.
 /// Shared by the Changed update path and the New re-attach path.
-async fn rewrite_book_in_place(
+pub(super) async fn rewrite_book_in_place(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
     uuid: &str,
@@ -415,7 +72,7 @@ async fn rewrite_book_in_place(
 /// `true` when the file was attached (the caller skips its normal
 /// insert). Per-file parse errors never attach — their metadata is a
 /// filename fallback, not a real title.
-async fn try_attach_new_ebook(
+pub(super) async fn try_attach_new_ebook(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_path: &str,
     b: &crate::ebook::IndexedBook,
@@ -473,7 +130,7 @@ async fn try_attach_new_ebook(
 /// target metadata wins — but the FTS row is refreshed via the door so
 /// the newly-unioned identifiers (incl. an attached-only ISBN) become
 /// searchable immediately.
-async fn attach_ebook_file(
+pub(super) async fn attach_ebook_file(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
     format: &str,
@@ -517,30 +174,13 @@ async fn attach_ebook_file(
     Ok(())
 }
 
-/// Stamp `scan_roots.last_indexed` with the current wall-clock seconds.
-async fn stamp_last_indexed(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    library_id: i64,
-) -> Result<(), sqlx::Error> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    sqlx::query("UPDATE scan_roots SET last_indexed = ? WHERE id = ?")
-        .bind(now)
-        .bind(library_id)
-        .execute(&mut **tx)
-        .await?;
-    Ok(())
-}
-
 /// Turn a book into a fileless ghost (F2): drop its `book_files` (parts and
 /// chapters cascade), clear its FTS row, and wipe its taxonomy + identifier
 /// links — so the ghost is invisible to the library grid, search, and the
 /// author/series/tag browse pages — while **retaining** the `books` row, its
 /// `uuid`/`scan_key`, `metadata_overrides`, and every soft-ref user-data row.
 /// A returning file re-populates all of it via the Changed re-parse.
-pub(super) async fn ghost_book_by_id(
+pub(in crate::sync) async fn ghost_book_by_id(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
 ) -> Result<(), sqlx::Error> {
@@ -560,48 +200,6 @@ pub(super) async fn ghost_book_by_id(
         .bind(book_id)
         .execute(&mut **tx)
         .await?;
-    Ok(())
-}
-
-/// Delete every per-book link row for `book_id`. Used by `sync_changed`
-/// before re-inserting fresh rows — cascade delete on FK isn't an option
-/// here (the `books` row stays), so we wipe explicitly. All these tables
-/// have UNIQUE(book, ...) constraints, so a re-insert without the wipe
-/// would fail.
-///
-/// `book_files` is scoped to the changed file's own `format`: a blanket
-/// wipe would also destroy a cross-format attachment (e.g. the M4B row
-/// hanging off this book via `merged_uuids`) every time the ebook
-/// re-parses.
-async fn wipe_per_book_link_rows(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    book_id: i64,
-    format: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM book_files WHERE book_id = ? AND format = ?")
-        .bind(book_id)
-        .bind(format)
-        .execute(&mut **tx)
-        .await?;
-    for table in &[
-        "book_identifiers",
-        "books_authors_link",
-        "books_tags_link",
-        "books_publishers_link",
-        "books_series_link",
-        "books_languages_link",
-    ] {
-        // Note: the link tables use `book` (not `book_id`) as the FK
-        // column, but `book_identifiers` uses `book_id`. Switch on the
-        // table name.
-        let col = if *table == "book_identifiers" {
-            "book_id"
-        } else {
-            "book"
-        };
-        let sql = format!("DELETE FROM {table} WHERE {col} = ?");
-        sqlx::query(&sql).bind(book_id).execute(&mut **tx).await?;
-    }
     Ok(())
 }
 
@@ -675,40 +273,6 @@ async fn update_book_row(
     Ok(())
 }
 
-/// Atomically replace every book under `library_path` with `books` and stamp
-/// the last-indexed time. Thin compatibility shim over [`sync_books`]: it
-/// computes the diff implicitly by treating every existing book as
-/// Removed and every passed-in book as New. Kept for tests and any
-/// caller that still wants the nuke-and-pave semantics; production
-/// reindex goes through [`sync_books`] directly via
-/// `crate::indexer::reindex`.
-pub async fn replace_books(
-    pool: &SqlitePool,
-    library_path: &str,
-    books: Vec<crate::ebook::IndexedBook>,
-) -> anyhow::Result<()> {
-    let removed_uuids: Vec<String> = sqlx::query_scalar(
-        "SELECT b.uuid FROM books b
-         JOIN scan_roots l ON l.id = b.library_id
-         WHERE l.path = ?",
-    )
-    .bind(library_path)
-    .fetch_all(pool)
-    .await?;
-
-    sync_books(
-        pool,
-        library_path,
-        SyncPlan {
-            new_books: books,
-            changed_books: vec![],
-            removed_uuids,
-            backfill: vec![],
-        },
-    )
-    .await
-}
-
 /// Fields the per-book outer loop needs after the canonical `books` /
 /// `book_files` inserts have run. The FTS row is sourced from the written
 /// rows via [`upsert_fts`], so the loop only needs the id (for the upsert
@@ -720,7 +284,7 @@ pub(super) struct InsertedBook {
 
 /// Insert the canonical `books` row (returning its id) and its single
 /// `book_files` row.
-async fn insert_book_row(
+pub(super) async fn insert_book_row(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_id: i64,
     // F2: identity is minted, not path-derived, so `library_path` no longer
@@ -798,7 +362,7 @@ async fn insert_book_row(
 /// constant handful per book, which keeps the SQLite write lock from being
 /// held for the whole of a bulk import. Series / publisher / language are
 /// single-valued per book, so they keep the simple resolve-then-link path.
-async fn insert_metadata_links(
+pub(super) async fn insert_metadata_links(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
     m: &EbookMetadata,
@@ -932,7 +496,7 @@ async fn insert_identifier_links(
 /// Write the cover bytes that accompanied a successful sync transaction.
 /// Filesystem side-effect, so deliberately split out of the transactional
 /// path — failures are logged, not fatal.
-pub(super) fn materialize_new_covers(new_covers: Vec<(String, String, Vec<u8>)>) {
+pub(in crate::sync) fn materialize_new_covers(new_covers: Vec<(String, String, Vec<u8>)>) {
     for (uuid, mime, bytes) in new_covers {
         if let Err(e) = write_cover_file(&uuid, &mime, &bytes) {
             tracing::error!(
