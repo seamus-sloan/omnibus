@@ -59,7 +59,8 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
         let Some(uuid) = playback.uuid.read().clone() else {
             // Dismissed via the dock × button. The handler already stopped
             // the element; clear the book so the dock hides everywhere.
-            playback.book.clone().set(None);
+            let mut book = playback.book;
+            book.set(None);
             return;
         };
         boot_new_book(&cb_holder, &uuid, playback);
