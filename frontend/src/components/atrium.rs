@@ -37,6 +37,8 @@ pub enum Theme {
 }
 
 impl Theme {
+    /// Map this theme variant to its `data-theme` HTML attribute string
+    /// (e.g. `"dark"`, `"light"`, `"sepia"`).
     pub fn as_attr(self) -> &'static str {
         match self {
             Theme::Dark => "dark",
@@ -45,6 +47,8 @@ impl Theme {
         }
     }
 
+    /// Parse a `data-theme` attribute string back into a [`Theme`].
+    /// Returns `None` for any value outside the known set.
     pub fn from_attr(s: &str) -> Option<Self> {
         match s {
             "dark" => Some(Theme::Dark),

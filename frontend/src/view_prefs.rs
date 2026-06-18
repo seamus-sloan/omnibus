@@ -73,6 +73,8 @@ mod mobile_store {
         MAP.get_or_init(|| RwLock::new(HashMap::new()))
     }
 
+    /// Read the cached prefs for `library_path` from the process-local map.
+    /// Returns [`ViewPrefs::default`] when no entry exists or the lock is poisoned.
     pub fn get(library_path: &str) -> ViewPrefs {
         map()
             .read()
@@ -81,6 +83,8 @@ mod mobile_store {
             .unwrap_or_default()
     }
 
+    /// Insert/overwrite the cached prefs for `library_path` in the process-local map.
+    /// Silently no-ops if the lock is poisoned; the in-memory copy resets on cold launch.
     pub fn set(library_path: &str, prefs: ViewPrefs) {
         if let Ok(mut g) = map().write() {
             g.insert(library_path.to_string(), prefs);
