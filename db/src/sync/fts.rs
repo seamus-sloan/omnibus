@@ -8,6 +8,7 @@
 //! (`&mut **tx`) and on a pooled connection alike. The full-index repair
 //! job [`rebuild_all_fts`] is built on the same door.
 
+use anyhow::Context;
 use sqlx::{Row, SqliteConnection, SqlitePool};
 
 /// Delete-then-insert the `books_fts` row for `book_id`, sourcing the
@@ -78,22 +79,31 @@ pub(crate) async fn delete_fts(
 /// mid-rebuild. Orphan `books_fts` rows (rowid with no `books` row) are
 /// swept by the leading `DELETE`.
 pub async fn rebuild_all_fts(pool: &SqlitePool) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = pool
+        .begin()
+        .await
+        .context("rebuild_all_fts: begin transaction")?;
     sqlx::query("DELETE FROM books_fts")
         .execute(&mut *tx)
-        .await?;
+        .await
+        .context("rebuild_all_fts: clear books_fts")?;
     let ids: Vec<i64> = sqlx::query("SELECT id FROM books ORDER BY id")
         .fetch_all(&mut *tx)
-        .await?
+        .await
+        .context("rebuild_all_fts: list book ids")?
         .into_iter()
         .map(|r| r.get::<i64, _>("id"))
         .collect();
     for id in ids {
         // The DELETE above already cleared every row, but `upsert_fts`
         // re-runs a per-id delete first; harmless on an empty table.
-        upsert_fts(&mut tx, id).await?;
+        upsert_fts(&mut tx, id)
+            .await
+            .with_context(|| format!("rebuild_all_fts: upsert book {id}"))?;
     }
-    tx.commit().await?;
+    tx.commit()
+        .await
+        .context("rebuild_all_fts: commit transaction")?;
     Ok(())
 }
 
