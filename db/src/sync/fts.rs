@@ -77,7 +77,7 @@ pub(crate) async fn delete_fts(
 /// Runs in a single transaction so the index is never observed empty
 /// mid-rebuild. Orphan `books_fts` rows (rowid with no `books` row) are
 /// swept by the leading `DELETE`.
-pub async fn rebuild_all_fts(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+pub async fn rebuild_all_fts(pool: &SqlitePool) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM books_fts")
         .execute(&mut *tx)
