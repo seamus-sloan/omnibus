@@ -16,19 +16,99 @@ use crate::{data, use_server_url};
 pub fn SettingsPage() -> Element {
     let server_url = use_server_url();
 
-    let mut ebook_path = use_signal(String::new);
-    let mut audiobook_path = use_signal(String::new);
-    let mut status = use_signal(|| None::<String>);
-    let mut status_is_error = use_signal(|| false);
-    let mut library = use_signal(LibraryContents::default);
-    let mut refetch_in_flight = use_signal(|| false);
-    let mut backfill_in_flight = use_signal(|| false);
+    let ebook_path = use_signal(String::new);
+    let audiobook_path = use_signal(String::new);
+    let status = use_signal(|| None::<String>);
+    let status_is_error = use_signal(|| false);
+    let library = use_signal(LibraryContents::default);
+    let refetch_in_flight = use_signal(|| false);
+    let backfill_in_flight = use_signal(|| false);
     // Bumped after a successful save to re-trigger the library-refresh effect.
-    let mut library_refresh = use_signal(|| 0u32);
+    let library_refresh = use_signal(|| 0u32);
 
-    let url_for_initial = server_url.clone();
+    spawn_initial_settings_load(
+        server_url.clone(),
+        ebook_path,
+        audiobook_path,
+        status,
+        status_is_error,
+    );
+    spawn_library_refresh(server_url.clone(), library, library_refresh);
+
+    let on_submit = save_settings_handler(
+        server_url,
+        ebook_path,
+        audiobook_path,
+        status,
+        status_is_error,
+        library_refresh,
+    );
+
+    rsx! {
+        section { class: "card",
+            h1 { "Settings" }
+            p { class: "subtitle", "Configure your library paths." }
+
+            form {
+                id: "settings-form",
+                class: "settings-form",
+                onsubmit: on_submit,
+                LibraryPathFields {
+                    ebook_path,
+                    audiobook_path,
+                    library,
+                }
+                {worker_status_slot()}
+
+                div { class: "settings-actions",
+                    button { r#type: "submit", class: "btn", "Save" }
+                    MaintenanceActions {
+                        status,
+                        status_is_error,
+                        refetch_in_flight,
+                        backfill_in_flight,
+                    }
+                }
+            }
+
+            p {
+                id: "settings-status",
+                "data-testid": "settings-status",
+                role: "status",
+                class: if status_is_error() { "settings-status error" } else { "settings-status success" },
+                if let Some(msg) = status() { "{msg}" }
+            }
+        }
+    }
+}
+
+/// Background-worker progress indicator. Mounted above the Save button so the
+/// user sees the post-save scan kick in without leaving the page. Web/server
+/// only; the mobile build omits the indicator entirely until the REST mirror
+/// in issue #69 ships. `cfg` attrs aren't legal directly on rsx component
+/// calls, so the slot is bound as an Element outside the macro and embedded
+/// by reference.
+fn worker_status_slot() -> Element {
+    #[cfg(not(feature = "mobile"))]
+    {
+        rsx! { WorkerStatusIndicator {} }
+    }
+    #[cfg(feature = "mobile")]
+    {
+        rsx! {}
+    }
+}
+
+/// Hydrates the saved [`Settings`] into the path inputs on mount.
+fn spawn_initial_settings_load(
+    url: String,
+    mut ebook_path: Signal<String>,
+    mut audiobook_path: Signal<String>,
+    mut status: Signal<Option<String>>,
+    mut status_is_error: Signal<bool>,
+) {
     use_effect(move || {
-        let url = url_for_initial.clone();
+        let url = url.clone();
         spawn(async move {
             match data::get_settings(&url).await {
                 Ok(settings) => {
@@ -42,171 +122,163 @@ pub fn SettingsPage() -> Element {
             }
         });
     });
+}
 
-    let url_for_library = server_url.clone();
+/// Refetches the live per-extension counts whenever `library_refresh` ticks.
+fn spawn_library_refresh(
+    url: String,
+    mut library: Signal<LibraryContents>,
+    library_refresh: Signal<u32>,
+) {
     use_effect(move || {
         let _ = library_refresh();
-        let url = url_for_library.clone();
+        let url = url.clone();
         spawn(async move {
             if let Ok(contents) = data::get_library(&url).await {
                 library.set(contents);
             }
         });
     });
+}
 
+/// Builds the `<form onsubmit>` handler that POSTs the path inputs and
+/// reports success / failure via the status signal.
+fn save_settings_handler(
+    url: String,
+    ebook_path: Signal<String>,
+    audiobook_path: Signal<String>,
+    mut status: Signal<Option<String>>,
+    mut status_is_error: Signal<bool>,
+    mut library_refresh: Signal<u32>,
+) -> impl FnMut(FormEvent) {
+    move |evt: FormEvent| {
+        evt.prevent_default();
+        let url = url.clone();
+        let ebook = ebook_path().trim().to_string();
+        let audiobook = audiobook_path().trim().to_string();
+        spawn(async move {
+            let payload = Settings {
+                ebook_library_path: (!ebook.is_empty()).then_some(ebook),
+                audiobook_library_path: (!audiobook.is_empty()).then_some(audiobook),
+            };
+            match data::save_settings(&url, payload).await {
+                Ok(_) => {
+                    status.set(Some("Settings saved.".to_string()));
+                    status_is_error.set(false);
+                    library_refresh.set(library_refresh() + 1);
+                }
+                Err(_) => {
+                    status.set(Some("Failed to save settings.".to_string()));
+                    status_is_error.set(true);
+                }
+            }
+        });
+    }
+}
+
+/// Ebook + audiobook path inputs with their live per-extension summaries.
+#[component]
+fn LibraryPathFields(
+    mut ebook_path: Signal<String>,
+    mut audiobook_path: Signal<String>,
+    library: Signal<LibraryContents>,
+) -> Element {
+    rsx! {
+        div { class: "settings-field",
+            label { r#for: "ebook-library-path", "Ebook Library Path" }
+            input {
+                r#type: "text",
+                id: "ebook-library-path",
+                name: "ebook_library_path",
+                value: "{ebook_path}",
+                placeholder: "/path/to/ebooks",
+                oninput: move |evt| ebook_path.set(evt.value()),
+            }
+            LibrarySummary {
+                testid: "ebook-library-summary",
+                section: library().ebooks,
+            }
+        }
+        div { class: "settings-field",
+            label { r#for: "audiobook-library-path", "Audiobook Library Path" }
+            input {
+                r#type: "text",
+                id: "audiobook-library-path",
+                name: "audiobook_library_path",
+                value: "{audiobook_path}",
+                placeholder: "/path/to/audiobooks",
+                oninput: move |evt| audiobook_path.set(evt.value()),
+            }
+            LibrarySummary {
+                testid: "audiobook-library-summary",
+                section: library().audiobooks,
+            }
+        }
+    }
+}
+
+/// Ghost buttons for one-off maintenance jobs (author photo refetch, chapter backfill).
+#[component]
+fn MaintenanceActions(
+    mut status: Signal<Option<String>>,
+    mut status_is_error: Signal<bool>,
+    mut refetch_in_flight: Signal<bool>,
+    mut backfill_in_flight: Signal<bool>,
+) -> Element {
+    let server_url = use_server_url();
     let url_for_refetch = server_url.clone();
-    let url_for_backfill = server_url.clone();
-
-    let worker_status_slot: Element = {
-        #[cfg(not(feature = "mobile"))]
-        {
-            rsx! { WorkerStatusIndicator {} }
-        }
-        #[cfg(feature = "mobile")]
-        {
-            rsx! {}
-        }
-    };
+    let url_for_backfill = server_url;
 
     rsx! {
-        section { class: "card",
-            h1 { "Settings" }
-            p { class: "subtitle", "Configure your library paths." }
-
-            form {
-                id: "settings-form",
-                class: "settings-form",
-                onsubmit: move |evt| {
-                    evt.prevent_default();
-                    let url = server_url.clone();
-                    let ebook = ebook_path().trim().to_string();
-                    let audiobook = audiobook_path().trim().to_string();
-                    spawn(async move {
-                        let payload = Settings {
-                            ebook_library_path: (!ebook.is_empty()).then_some(ebook),
-                            audiobook_library_path: (!audiobook.is_empty()).then_some(audiobook),
-                        };
-                        match data::save_settings(&url, payload).await {
-                            Ok(_) => {
-                                status.set(Some("Settings saved.".to_string()));
-                                status_is_error.set(false);
-                                library_refresh.set(library_refresh() + 1);
-                            }
-                            Err(_) => {
-                                status.set(Some("Failed to save settings.".to_string()));
-                                status_is_error.set(true);
-                            }
+        button {
+            r#type: "button",
+            class: "btn ghost",
+            disabled: refetch_in_flight(),
+            "data-testid": "refetch-author-photos",
+            onclick: move |_| {
+                let url = url_for_refetch.clone();
+                refetch_in_flight.set(true);
+                spawn(async move {
+                    match data::refetch_author_photos(&url).await {
+                        Ok(()) => {
+                            status.set(Some("Author photo refetch queued.".into()));
+                            status_is_error.set(false);
+                            refetch_in_flight.set(false);
                         }
-                    });
-                },
-                div { class: "settings-field",
-                    label { r#for: "ebook-library-path", "Ebook Library Path" }
-                    input {
-                        r#type: "text",
-                        id: "ebook-library-path",
-                        name: "ebook_library_path",
-                        value: "{ebook_path}",
-                        placeholder: "/path/to/ebooks",
-                        oninput: move |evt| ebook_path.set(evt.value()),
+                        Err(e) => {
+                            status.set(Some(format!("Failed to start photo refetch: {e}")));
+                            status_is_error.set(true);
+                            refetch_in_flight.set(false);
+                        }
                     }
-                    LibrarySummary {
-                        testid: "ebook-library-summary",
-                        section: library().ebooks,
+                });
+            },
+            "Refetch Author Pictures"
+        }
+        button {
+            r#type: "button",
+            class: "btn ghost",
+            disabled: backfill_in_flight(),
+            "data-testid": "backfill-chapters",
+            onclick: move |_| {
+                let url = url_for_backfill.clone();
+                backfill_in_flight.set(true);
+                spawn(async move {
+                    match data::backfill_chapters(&url).await {
+                        Ok(()) => {
+                            status.set(Some("Chapter extraction queued.".into()));
+                            status_is_error.set(false);
+                            backfill_in_flight.set(false);
+                        }
+                        Err(e) => {
+                            status.set(Some(format!("Failed to start chapter extraction: {e}")));
+                            status_is_error.set(true);
+                            backfill_in_flight.set(false);
+                        }
                     }
-                }
-                div { class: "settings-field",
-                    label { r#for: "audiobook-library-path", "Audiobook Library Path" }
-                    input {
-                        r#type: "text",
-                        id: "audiobook-library-path",
-                        name: "audiobook_library_path",
-                        value: "{audiobook_path}",
-                        placeholder: "/path/to/audiobooks",
-                        oninput: move |evt| audiobook_path.set(evt.value()),
-                    }
-                    LibrarySummary {
-                        testid: "audiobook-library-summary",
-                        section: library().audiobooks,
-                    }
-                }
-                // Background-worker progress (scan / thumbs / author
-                // photos / future cleanup actions). Mounted above the Save
-                // button so the user sees the post-save scan kick in
-                // without leaving the page. Web-only; the mobile build
-                // omits the indicator entirely until issue #69 follow-up
-                // ships a REST mirror. `cfg` attrs aren't legal directly
-                // on rsx component calls, so the slot is bound as an
-                // Element outside the macro and embedded by reference.
-                {worker_status_slot}
-
-                div { class: "settings-actions",
-                    button { r#type: "submit", class: "btn", "Save" }
-                    button {
-                        r#type: "button",
-                        class: "btn ghost",
-                        disabled: refetch_in_flight(),
-                        "data-testid": "refetch-author-photos",
-                        onclick: {
-                            let url = url_for_refetch.clone();
-                            move |_| {
-                                let url = url.clone();
-                                refetch_in_flight.set(true);
-                                spawn(async move {
-                                    match data::refetch_author_photos(&url).await {
-                                        Ok(()) => {
-                                            status.set(Some("Author photo refetch queued.".into()));
-                                            status_is_error.set(false);
-                                            refetch_in_flight.set(false);
-                                        }
-                                        Err(e) => {
-                                            status.set(Some(format!("Failed to start photo refetch: {e}")));
-                                            status_is_error.set(true);
-                                            refetch_in_flight.set(false);
-                                        }
-                                    }
-                                });
-                            }
-                        },
-                        "Refetch Author Pictures"
-                    }
-                    button {
-                        r#type: "button",
-                        class: "btn ghost",
-                        disabled: backfill_in_flight(),
-                        "data-testid": "backfill-chapters",
-                        onclick: {
-                            let url = url_for_backfill.clone();
-                            move |_| {
-                                let url = url.clone();
-                                backfill_in_flight.set(true);
-                                spawn(async move {
-                                    match data::backfill_chapters(&url).await {
-                                        Ok(()) => {
-                                            status.set(Some("Chapter extraction queued.".into()));
-                                            status_is_error.set(false);
-                                            backfill_in_flight.set(false);
-                                        }
-                                        Err(e) => {
-                                            status.set(Some(format!("Failed to start chapter extraction: {e}")));
-                                            status_is_error.set(true);
-                                            backfill_in_flight.set(false);
-                                        }
-                                    }
-                                });
-                            }
-                        },
-                        "Extract Audiobook Chapters"
-                    }
-                }
-            }
-
-            p {
-                id: "settings-status",
-                "data-testid": "settings-status",
-                role: "status",
-                class: if status_is_error() { "settings-status error" } else { "settings-status success" },
-                if let Some(msg) = status() { "{msg}" }
-            }
+                });
+            },
+            "Extract Audiobook Chapters"
         }
     }
 }
