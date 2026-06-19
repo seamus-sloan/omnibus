@@ -2,6 +2,8 @@
 //! surface, mirroring the `SeriesIndex` design comp from
 //! `screens/indices.jsx`.
 
+use std::cmp::Reverse;
+
 use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::SeriesSummary;
@@ -55,11 +57,7 @@ pub fn SeriesIndexPage() -> Element {
     }
 }
 
-/// Spawn the one-shot `list_series` fetch and surface its outcome as three
-/// signals (data, loading flag, error message). Declaring the signals and the
-/// effect here keeps the hook order in `SeriesIndexPage` short and stable —
-/// every render still calls `use_signal` three times and `use_effect` once,
-/// in the same order, on every target.
+/// Hook: own the `list_series` fetch and surface (data, loading, error) signals.
 fn use_series_data(
     server_url: String,
 ) -> (
@@ -89,10 +87,7 @@ fn use_series_data(
     (series, loading, error)
 }
 
-/// Filter `items` by `query` (case-insensitive, matched against series name
-/// and primary author), then sort the remaining references by the chosen
-/// axis. Returns borrowed references so the caller can keep the original
-/// `Vec` alive without per-keystroke cloning.
+/// Filter by `query` (name + primary author, case-insensitive), then sort by `sort`.
 fn apply_filter_and_sort<'a>(
     items: &'a [SeriesSummary],
     query: &str,
@@ -113,13 +108,13 @@ fn apply_filter_and_sort<'a>(
             })
             .collect()
     };
+    // `sort_by_cached_key` evaluates the key once per element instead of
+    // re-running `to_lowercase()` on every comparison.
     match sort {
-        Sort::Name => filtered.sort_by_key(|a| sort_key(a).to_lowercase()),
-        Sort::BookCount => filtered.sort_by(|a, b| {
-            b.book_count
-                .cmp(&a.book_count)
-                .then_with(|| sort_key(a).to_lowercase().cmp(&sort_key(b).to_lowercase()))
-        }),
+        Sort::Name => filtered.sort_by_cached_key(|a| sort_key(a).to_lowercase()),
+        Sort::BookCount => {
+            filtered.sort_by_cached_key(|a| (Reverse(a.book_count), sort_key(a).to_lowercase()))
+        }
     }
     filtered
 }
@@ -139,9 +134,7 @@ fn render_error_state(msg: &str) -> Element {
     }
 }
 
-/// Body grid: either the empty-state copy or the filtered card grid.
-/// `library_empty` distinguishes "no series indexed yet" from "filter
-/// matches nothing" so the copy can address each case directly.
+/// Body grid: empty-state copy when `filtered` is empty, otherwise the card grid.
 fn render_series_body(filtered: &[&SeriesSummary], library_empty: bool) -> Element {
     rsx! {
         div { class: "idx-body",
