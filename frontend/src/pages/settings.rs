@@ -82,12 +82,7 @@ pub fn SettingsPage() -> Element {
     }
 }
 
-/// Background-worker progress indicator. Mounted above the Save button so the
-/// user sees the post-save scan kick in without leaving the page. Web/server
-/// only; the mobile build omits the indicator entirely until the REST mirror
-/// in issue #69 ships. `cfg` attrs aren't legal directly on rsx component
-/// calls, so the slot is bound as an Element outside the macro and embedded
-/// by reference.
+/// Worker-status indicator slot — emits `WorkerStatusIndicator` on web/server, nothing on mobile.
 fn worker_status_slot() -> Element {
     #[cfg(not(feature = "mobile"))]
     {
@@ -141,8 +136,7 @@ fn spawn_library_refresh(
     });
 }
 
-/// Builds the `<form onsubmit>` handler that POSTs the path inputs and
-/// reports success / failure via the status signal.
+/// Returns the `<form onsubmit>` handler that POSTs the path inputs.
 fn save_settings_handler(
     url: String,
     ebook_path: Signal<String>,
