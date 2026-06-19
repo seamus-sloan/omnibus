@@ -2,6 +2,8 @@
 //! surface, mirroring the `SeriesIndex` design comp from
 //! `screens/indices.jsx`.
 
+use std::cmp::Reverse;
+
 use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::SeriesSummary;
@@ -18,15 +20,57 @@ enum Sort {
 #[component]
 pub fn SeriesIndexPage() -> Element {
     let server_url = use_server_url();
+    let mut filter = use_signal(String::new);
+    let mut sort = use_signal(|| Sort::Name);
+    let (series, loading, error) = use_series_data(server_url);
+
+    if loading() {
+        return render_loading_state();
+    }
+    if let Some(msg) = error() {
+        return render_error_state(&msg);
+    }
+
+    // Borrow the signal's contents instead of cloning — see authors_index
+    // for the same shape and rationale (up to `INDEX_LIMIT` rows, copied
+    // on every keystroke would be wasted work).
+    let all = series.read();
+    let total_series = all.len();
+    let total_books: usize = all.iter().map(|s| s.book_count).sum();
+
+    let filter_text = filter();
+    let current_sort = sort();
+    let filtered = apply_filter_and_sort(&all, &filter_text, current_sort);
+
+    rsx! {
+        div { class: "idx-page",
+            SeriesIndexHeader {
+                total_series,
+                total_books,
+                filter: filter_text,
+                sort: current_sort,
+                on_filter: move |v| filter.set(v),
+                on_sort: move |s| sort.set(s),
+            }
+            {render_series_body(&filtered, all.is_empty())}
+        }
+    }
+}
+
+/// Hook: own the `list_series` fetch and surface (data, loading, error) signals.
+fn use_series_data(
+    server_url: String,
+) -> (
+    Signal<Vec<SeriesSummary>>,
+    Signal<bool>,
+    Signal<Option<String>>,
+) {
     let mut series: Signal<Vec<SeriesSummary>> = use_signal(Vec::new);
     let mut loading = use_signal(|| true);
     let mut error: Signal<Option<String>> = use_signal(|| None);
-    let mut filter = use_signal(String::new);
-    let mut sort = use_signal(|| Sort::Name);
 
-    let url = server_url.clone();
     use_effect(move || {
-        let url = url.clone();
+        let url = server_url.clone();
         spawn(async move {
             loading.set(true);
             match data::list_series(&url).await {
@@ -40,30 +84,21 @@ pub fn SeriesIndexPage() -> Element {
         });
     });
 
-    if loading() {
-        return rsx! {
-            p { class: "subtitle", "Loading\u{2026}" }
-        };
-    }
-    if let Some(msg) = error() {
-        return rsx! {
-            p { role: "alert", class: "subtitle", "{msg}" }
-            Link { to: Route::Landing {}, class: "btn", "Back to library" }
-        };
-    }
+    (series, loading, error)
+}
 
-    // Borrow the signal's contents instead of cloning — see authors_index
-    // for the same shape and rationale (up to `INDEX_LIMIT` rows, copied
-    // on every keystroke would be wasted work).
-    let all = series.read();
-    let total_series = all.len();
-    let total_books: usize = all.iter().map(|s| s.book_count).sum();
-
-    let q = filter.read().to_lowercase();
+/// Filter by `query` (name + primary author, case-insensitive), then sort by `sort`.
+fn apply_filter_and_sort<'a>(
+    items: &'a [SeriesSummary],
+    query: &str,
+    sort: Sort,
+) -> Vec<&'a SeriesSummary> {
+    let q = query.to_lowercase();
     let mut filtered: Vec<&SeriesSummary> = if q.is_empty() {
-        all.iter().collect()
+        items.iter().collect()
     } else {
-        all.iter()
+        items
+            .iter()
             .filter(|s| {
                 s.name.to_lowercase().contains(&q)
                     || s.primary_author
@@ -73,39 +108,48 @@ pub fn SeriesIndexPage() -> Element {
             })
             .collect()
     };
-    match sort() {
-        Sort::Name => filtered.sort_by_key(|a| sort_key(a).to_lowercase()),
-        Sort::BookCount => filtered.sort_by(|a, b| {
-            b.book_count
-                .cmp(&a.book_count)
-                .then_with(|| sort_key(a).to_lowercase().cmp(&sort_key(b).to_lowercase()))
-        }),
+    // `sort_by_cached_key` evaluates the key once per element instead of
+    // re-running `to_lowercase()` on every comparison.
+    match sort {
+        Sort::Name => filtered.sort_by_cached_key(|a| sort_key(a).to_lowercase()),
+        Sort::BookCount => {
+            filtered.sort_by_cached_key(|a| (Reverse(a.book_count), sort_key(a).to_lowercase()))
+        }
     }
+    filtered
+}
 
+/// Loading placeholder shown while `list_series` is in flight.
+fn render_loading_state() -> Element {
     rsx! {
-        div { class: "idx-page",
-            SeriesIndexHeader {
-                total_series,
-                total_books,
-                filter: filter(),
-                sort: sort(),
-                on_filter: move |v| filter.set(v),
-                on_sort: move |s| sort.set(s),
-            }
-            div { class: "idx-body",
-                if filtered.is_empty() {
-                    p { class: "subtitle idx-empty",
-                        if all.is_empty() {
-                            "No series yet \u{2014} index a library to see them here."
-                        } else {
-                            "No series match that filter."
-                        }
+        p { class: "subtitle", "Loading\u{2026}" }
+    }
+}
+
+/// Error state with the fetch message and a link back to the library.
+fn render_error_state(msg: &str) -> Element {
+    rsx! {
+        p { role: "alert", class: "subtitle", "{msg}" }
+        Link { to: Route::Landing {}, class: "btn", "Back to library" }
+    }
+}
+
+/// Body grid: empty-state copy when `filtered` is empty, otherwise the card grid.
+fn render_series_body(filtered: &[&SeriesSummary], library_empty: bool) -> Element {
+    rsx! {
+        div { class: "idx-body",
+            if filtered.is_empty() {
+                p { class: "subtitle idx-empty",
+                    if library_empty {
+                        "No series yet \u{2014} index a library to see them here."
+                    } else {
+                        "No series match that filter."
                     }
-                } else {
-                    div { class: "idx-series-grid",
-                        for s in filtered.iter() {
-                            div { key: "{s.id}", {render_series_card(s)} }
-                        }
+                }
+            } else {
+                div { class: "idx-series-grid",
+                    for s in filtered.iter() {
+                        div { key: "{s.id}", {render_series_card(s)} }
                     }
                 }
             }
@@ -266,5 +310,62 @@ mod tests {
         // "Theology" must not have "The" stripped — only the "The " word.
         assert_eq!(sort_key(&summary("Theology", None)), "Theology");
         assert_eq!(sort_key(&summary("Dune", None)), "Dune");
+    }
+
+    fn summary_full(name: &str, author: Option<&str>, book_count: usize) -> SeriesSummary {
+        SeriesSummary {
+            name: name.to_string(),
+            primary_author: author.map(String::from),
+            book_count,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn apply_filter_and_sort_returns_all_when_query_is_empty() {
+        let items = vec![
+            summary_full("Foundation", Some("Asimov"), 7),
+            summary_full("Dune", Some("Herbert"), 6),
+        ];
+        let out = apply_filter_and_sort(&items, "", Sort::Name);
+        assert_eq!(out.len(), 2);
+        // Sort::Name orders alphabetically by sort_key.
+        assert_eq!(out[0].name, "Dune");
+        assert_eq!(out[1].name, "Foundation");
+    }
+
+    #[test]
+    fn apply_filter_and_sort_filters_by_name_case_insensitive() {
+        let items = vec![
+            summary_full("Foundation", Some("Asimov"), 7),
+            summary_full("Dune", Some("Herbert"), 6),
+        ];
+        let out = apply_filter_and_sort(&items, "FOUND", Sort::Name);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "Foundation");
+    }
+
+    #[test]
+    fn apply_filter_and_sort_filters_by_primary_author() {
+        let items = vec![
+            summary_full("Foundation", Some("Asimov"), 7),
+            summary_full("Dune", Some("Herbert"), 6),
+        ];
+        let out = apply_filter_and_sort(&items, "herbert", Sort::Name);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "Dune");
+    }
+
+    #[test]
+    fn apply_filter_and_sort_sorts_by_book_count_descending_then_name() {
+        let items = vec![
+            summary_full("Alpha", None, 3),
+            summary_full("Bravo", None, 7),
+            summary_full("Charlie", None, 7),
+        ];
+        let out = apply_filter_and_sort(&items, "", Sort::BookCount);
+        assert_eq!(out[0].name, "Bravo");
+        assert_eq!(out[1].name, "Charlie");
+        assert_eq!(out[2].name, "Alpha");
     }
 }
