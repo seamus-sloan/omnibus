@@ -104,6 +104,9 @@ jobs:
       - name: cargo test (frontend)
         run: nix develop --command cargo test -p omnibus-frontend --features server
 
+      - name: cargo test (shared)
+        run: nix develop --command cargo test -p omnibus-shared
+
   security:
     name: cargo audit
     runs-on: ubuntu-latest
