@@ -2,7 +2,7 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::EbookMetadata;
+use omnibus_shared::{EbookMetadata, Identifier};
 
 use crate::components::atrium::Cover;
 use crate::components::FormatSwitcher;
@@ -89,7 +89,7 @@ pub(super) fn BdRailSection(
                         if let Some(l) = b.language.clone() { BdMetaRow { k: "Language".to_string(), v: l } }
                         for ident in b.identifiers.iter() {
                             BdMetaRow {
-                                key: "{ident.scheme.as_deref().unwrap_or(ident.value.as_str())}",
+                                key: "{bd_identifier_key(ident)}",
                                 k: ident.scheme.clone().unwrap_or_else(|| "ID".into()),
                                 v: ident.value.clone(),
                             }
@@ -147,5 +147,50 @@ pub(super) fn BdRailSection(
                 }
             }
         }
+    }
+}
+
+/// Collision-free list key for an identifier row. A book can carry several
+/// identifiers sharing one `scheme` (the projection keeps every distinct
+/// value per scheme), so the key folds in `value` to stay unique among the
+/// keyed siblings — Dioxus panics when two keyed siblings share a key.
+fn bd_identifier_key(ident: &Identifier) -> String {
+    format!(
+        "{}|{}",
+        ident.scheme.as_deref().unwrap_or_default(),
+        ident.value
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bd_identifier_key_is_unique_for_same_scheme_distinct_values() {
+        // The book-detail crash repro: two `unknown`-scheme identifiers on
+        // one book must not collide on the rendered list key.
+        let isbn = Identifier {
+            value: "978-1-938570-40-7".into(),
+            scheme: Some("unknown".into()),
+        };
+        let urn = Identifier {
+            value: "urn:uuid:c0e51a66-085f-4805-b116-a0d451d281bd".into(),
+            scheme: Some("unknown".into()),
+        };
+        assert_ne!(bd_identifier_key(&isbn), bd_identifier_key(&urn));
+    }
+
+    #[test]
+    fn bd_identifier_key_is_unique_for_schemeless_distinct_values() {
+        let a = Identifier {
+            value: "a".into(),
+            scheme: None,
+        };
+        let b = Identifier {
+            value: "b".into(),
+            scheme: None,
+        };
+        assert_ne!(bd_identifier_key(&a), bd_identifier_key(&b));
     }
 }
