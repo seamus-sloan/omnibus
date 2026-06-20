@@ -1,9 +1,8 @@
-//! Unit tests for `auth::device` — exercises both the SQL roundtrip
-//! (`register_device` / `list_devices_for_user`) and the input-validation
-//! guards on `device_name` / `client_version` (length cap and control-char
-//! rejection). The validation tests are pure unit; the register/list pair
-//! and the pre-insert rejection tests share an in-memory pool via
-//! `auth::test_support::pool`.
+//! Unit tests for `auth::device` — covers the SQL roundtrip
+//! (`register_device` / `list_devices_for_user`) plus the input-validation
+//! guards on `device_name` / `client_version` (length cap, control-char
+//! rejection). Validation tests are pure unit; register/list and pre-insert
+//! rejection tests share an in-memory pool via `auth::test_support::pool`.
 
 use super::*;
 use crate::auth::test_support::pool;
