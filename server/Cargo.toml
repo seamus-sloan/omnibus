@@ -2,6 +2,7 @@
 name = "omnibus"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 # Unified Dioxus fullstack binary. Built twice by `dx serve`:
 # - Once as native (features: `server`) — axum backend + SSR + DB

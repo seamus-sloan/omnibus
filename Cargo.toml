@@ -7,6 +7,14 @@ members = ["server", "mobile", "shared", "frontend", "db"]
 default-members = ["server", "shared", "frontend"]
 resolver = "2"
 
+# Inherited package metadata. Members opt in with `<field>.workspace = true`
+# in their own `[package]` block. The `license` field is what flips
+# `cargo deny check licenses` from "unlicensed" to MIT for every workspace
+# crate — see LICENSE at the repo root and the `licenses` check in
+# `.github/workflows/rust.yml`.
+[workspace.package]
+license = "MIT"
+
 # Centralized dependency versions shared across crates. Crates pull these in
 # via `<dep>.workspace = true` (or `{ workspace = true, features = [...] }`
 # when they need extra features beyond the workspace baseline). Only deps
