@@ -5,6 +5,7 @@
 //! target; the JS interop that mounts a book is web-only.
 
 mod aa_panel;
+mod bootstrap;
 mod selection;
 mod typography;
 
@@ -19,6 +20,8 @@ use crate::data;
 use omnibus_shared::{EbookMetadata, Highlight, HighlightColor};
 
 use aa_panel::ReaderAaPanel;
+#[cfg(feature = "web")]
+use bootstrap::{reader_bootstrap_js, BootstrapArgs};
 use selection::{SelectionData, SelectionPopover};
 #[cfg(feature = "web")]
 use typography::{load_reader_pref, save_reader_pref};
@@ -263,9 +266,16 @@ pub fn BookReadPage(uuid: String) -> Element {
                 .and_then(|r| r.epub_cfi);
                 let chosen = server_cfi.or(local_saved);
                 let cfi_arg = serde_json::to_string(&chosen).unwrap_or_else(|_| "null".into());
-                let js = format!(
-                    r#"(function(){{ var n=0; (function go(){{ if (window.OmnibusReader && window.ePub) {{ window.OmnibusReader.init("omnibus-viewer", {url_lit}, {{ cfi: {cfi_arg}, fontSize: {size}, theme: {theme_lit}, fontFamily: {font_family_lit}, lineHeight: {line_height_lit}, maxWidth: {max_width_lit}, justify: {justify_val} }}); }} else if (n++ < 200) {{ setTimeout(go, 50); }} else if (typeof window.__omnibusOnStatus === "function") {{ window.__omnibusOnStatus("error"); }} }})(); }})();"#
-                );
+                let js = reader_bootstrap_js(&BootstrapArgs {
+                    url_lit: &url_lit,
+                    cfi_arg: &cfi_arg,
+                    font_size: size,
+                    theme_lit: &theme_lit,
+                    font_family_lit: &font_family_lit,
+                    line_height_lit: &line_height_lit,
+                    max_width_lit: &max_width_lit,
+                    justify_val,
+                });
                 let _ = dioxus::document::eval(&js);
 
                 let hl_uuid = uuid_for_fetch.clone();
@@ -426,6 +436,74 @@ pub fn BookReadPage(uuid: String) -> Element {
     let font_pct = (font_offset / 20.0 * 100.0).clamp(0.0, 100.0);
 
     rsx! {
+        ReaderLayout {
+            uuid: uuid.clone(),
+            book_title,
+            chapter_title: chapter_title_display,
+            page_str,
+            chapter_str,
+            pct,
+            status: status(),
+            theme: *theme.read(),
+            font_pct,
+            typeface: typeface(),
+            line_spacing: line_spacing(),
+            margins: margins(),
+            justify: justify(),
+            show_aa,
+            selection,
+            highlights,
+            on_keydown,
+            on_back,
+            on_prev,
+            on_next,
+            on_set_theme: set_theme,
+            on_font_decrease,
+            on_font_increase,
+            on_set_typeface,
+            on_set_line_spacing,
+            on_set_margins,
+            on_toggle_justify,
+        }
+    }
+}
+
+/// Reader chrome + panels: top bar, viewer stage, page-turn gutters, bottom
+/// status bar, Aa panel, and selection popover. State that the layout
+/// itself mutates (`show_aa`, `selection`, `highlights`) is passed by
+/// `Signal` so the parent and child observe the same source of truth.
+#[component]
+#[allow(clippy::too_many_arguments)]
+fn ReaderLayout(
+    uuid: String,
+    book_title: String,
+    chapter_title: String,
+    page_str: String,
+    chapter_str: String,
+    pct: u32,
+    status: ReaderStatus,
+    theme: Theme,
+    font_pct: f32,
+    typeface: Typeface,
+    line_spacing: LineSpacing,
+    margins: Margins,
+    justify: bool,
+    show_aa: Signal<bool>,
+    selection: Signal<Option<SelectionData>>,
+    highlights: Signal<Vec<Highlight>>,
+    on_keydown: EventHandler<KeyboardEvent>,
+    on_back: EventHandler<MouseEvent>,
+    on_prev: EventHandler<MouseEvent>,
+    on_next: EventHandler<MouseEvent>,
+    on_set_theme: EventHandler<Theme>,
+    on_font_decrease: EventHandler<MouseEvent>,
+    on_font_increase: EventHandler<MouseEvent>,
+    on_set_typeface: EventHandler<Typeface>,
+    on_set_line_spacing: EventHandler<LineSpacing>,
+    on_set_margins: EventHandler<Margins>,
+    on_toggle_justify: EventHandler<MouseEvent>,
+) -> Element {
+    rsx! {
         document::Script { src: JSZIP_JS }
         document::Script { src: EPUBJS_JS }
         document::Script { src: READER_GLUE_JS }
@@ -434,19 +512,22 @@ pub fn BookReadPage(uuid: String) -> Element {
             class: "rd-surface",
             tabindex: "0",
             autofocus: true,
-            onkeydown: on_keydown,
+            onkeydown: move |evt| on_keydown.call(evt),
 
             div { class: "rd-wash" }
 
             ReaderTopChrome {
                 book_title: book_title.clone(),
-                chapter_title: chapter_title_display.clone(),
+                chapter_title: chapter_title.clone(),
                 show_aa: show_aa(),
                 on_back,
-                on_toggle_aa: move |_| show_aa.set(!show_aa()),
+                on_toggle_aa: move |_| {
+                    let mut show_aa = show_aa;
+                    show_aa.set(!show_aa());
+                },
             }
 
-            ReaderViewerStage { status: status() }
+            ReaderViewerStage { status }
 
             ReaderPageTurnButtons { on_prev, on_next }
 
@@ -460,20 +541,23 @@ pub fn BookReadPage(uuid: String) -> Element {
 
             if show_aa() {
                 ReaderAaPanel {
-                    theme: *theme.read(),
+                    theme,
                     font_pct,
-                    typeface: typeface(),
-                    line_spacing: line_spacing(),
-                    margins: margins(),
-                    justify: justify(),
-                    on_set_theme: set_theme,
+                    typeface,
+                    line_spacing,
+                    margins,
+                    justify,
+                    on_set_theme,
                     on_font_decrease,
                     on_font_increase,
                     on_set_typeface,
                     on_set_line_spacing,
                     on_set_margins,
                     on_toggle_justify,
-                    on_close: move |_| show_aa.set(false),
+                    on_close: move |_| {
+                        let mut show_aa = show_aa;
+                        show_aa.set(false);
+                    },
                 }
             }
 
@@ -483,7 +567,10 @@ pub fn BookReadPage(uuid: String) -> Element {
                     sel_rect_y: sel.rect.y,
                     sel_rect_width: sel.rect.width,
                     sel_cfi: sel.cfi_range.clone(),
-                    on_dismiss: move |_| selection.set(None),
+                    on_dismiss: move |_| {
+                        let mut selection = selection;
+                        selection.set(None);
+                    },
                     on_highlight: move |(cfi, color): (String, HighlightColor)| {
                         #[cfg(feature = "web")]
                         {
@@ -501,6 +588,8 @@ pub fn BookReadPage(uuid: String) -> Element {
                         };
                         #[cfg(feature = "web")]
                         let cfi_rollback = cfi.clone();
+                        let mut selection = selection;
+                        let mut highlights = highlights;
                         selection.set(None);
                         spawn(async move {
                             if let Ok(h) = data::create_highlight("", create).await {
