@@ -5,7 +5,7 @@
 #[cfg(not(feature = "mobile"))]
 use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]
-use omnibus_shared::MergeBooksResult;
+use omnibus_shared::{EbookMetadata, MergeBooksResult};
 
 #[cfg(not(feature = "mobile"))]
 use crate::components::MergeDialog;
@@ -44,15 +44,13 @@ pub(super) fn build_merge_ui(
     mut undo_error: Signal<Option<String>>,
     mut refresh: Signal<u32>,
     server_url: String,
-    page_uuid: String,
-    page_title: String,
+    target: EbookMetadata,
 ) -> Option<Element> {
     let undo_url = server_url;
     Some(rsx! {
         if merge_open() {
             MergeDialog {
-                target_uuid: page_uuid.clone(),
-                target_title: page_title.clone(),
+                target: target.clone(),
                 on_merged: move |res: MergeBooksResult| {
                     merge_open.set(false);
                     undo_error.set(None);

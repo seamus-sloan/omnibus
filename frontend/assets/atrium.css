@@ -3767,18 +3767,78 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-swatch[data-color="rose"]   { background: rgba(244,63,94,.7); }
 .rd-swatch[data-color="violet"] { background: rgba(139,92,246,.7); }
 
-/* ── F5.10 merge dialog + toast (book detail) ──────────────────── */
-.bd-merge-modal { max-width: 520px; width: 100%; }
-.bd-merge-results { list-style: none; margin: 10px 0 0; padding: 0;
-  display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
-.bd-merge-candidate { display: flex; flex-direction: column; align-items: flex-start;
-  gap: 2px; width: 100%; text-align: left; }
-.bd-merge-candidate-title { font-size: 14.5px; color: var(--ink-0); }
-.bd-merge-candidate-meta { font-size: 11px; color: var(--ink-2); }
-.bd-merge-confirm-copy { font-size: 14px; line-height: 1.55; color: var(--ink-1); }
-.bd-merge-confirm-actions { display: flex; gap: 10px; margin-top: 14px; }
-.bd-merge-error { color: var(--danger, #e5484d); font-size: 13px; margin-top: 10px; }
-.bd-merge-foot { display: flex; justify-content: flex-end; margin-top: 12px; }
+/* ── F5.10 merge dialog (book detail) — "Merge duplicates" redesign ──
+ * Wide modal: pinned keeper rail + search + result rows with covers.
+ * Three-zone flex column (head / scrolling body / foot). Replaces the
+ * earlier stacked-button layout whose `.btn` line-height fought the
+ * two-line candidate and overlapped the text. */
+.mg-modal { width: min(720px, 100%); max-height: calc(100vh - 40px);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-xl);
+  box-shadow: 0 40px 90px -20px color-mix(in oklch, #000 70%, transparent), 0 0 0 1px var(--line-2); }
+.mg-head { padding: 26px 30px 0; }
+.mg-kicker { color: var(--accent); margin-bottom: 8px; }
+.mg-title { margin: 0; font-family: var(--serif); font-style: italic; font-size: 38px; line-height: 1; }
+.mg-body { display: flex; flex-direction: column; gap: 16px; padding: 16px 30px 4px; overflow-y: auto; }
+.mg-intro { margin: 0; max-width: 540px; font-size: 15px; line-height: 1.5; color: var(--ink-1); }
+
+/* Pinned "everything folds into" keeper context. */
+.mg-target-rail { display: flex; align-items: center; gap: 14px;
+  padding: 12px 14px; border-radius: var(--r-md);
+  background: var(--bg-2); border: 1px solid var(--line-2); }
+.mg-target-cover { width: 38px; flex: 0 0 38px; border-radius: 3px; overflow: hidden; }
+.mg-target-main { flex: 1; min-width: 0; }
+.mg-target-kicker { margin-bottom: 3px; font-size: 9.5px; color: var(--ink-3); }
+.mg-target-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.mg-target-title { font-family: var(--serif); font-style: italic; font-size: 18px; color: var(--ink-0);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mg-target-sub { flex: 0 0 auto; font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+.mg-target-note { flex: 0 0 auto; font-size: 10px; color: var(--ink-3); }
+
+/* Search field. */
+.mg-search { display: flex; align-items: center; gap: 12px;
+  height: 50px; padding: 0 16px; border-radius: var(--r-md);
+  background: var(--bg-0); border: 1px solid var(--line); }
+.mg-search:focus-within { border-color: var(--accent); }
+.mg-search-icon { flex: 0 0 18px; color: var(--ink-3); }
+.mg-search-input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none;
+  color: var(--ink-0); font-size: 16px; font-family: var(--sans); }
+.mg-search-input::placeholder { color: var(--ink-3); }
+
+/* Result rows: cover · title/meta · signal + format badges. */
+.mg-results-head { display: flex; align-items: center; justify-content: space-between; }
+.mg-results-hint { font-size: 10px; color: var(--ink-3); }
+.mg-results { list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 2px; max-height: 340px; overflow-y: auto; }
+.mg-row { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left;
+  padding: 10px 12px; border-radius: var(--r-md); cursor: pointer;
+  background: transparent; border: 1px solid transparent; }
+.mg-row:hover, .mg-row:focus-visible { background: var(--bg-2); border-color: var(--line-2); outline: none; }
+.mg-row-cover { width: 40px; flex: 0 0 40px; border-radius: 3px; overflow: hidden; }
+.mg-row-main { flex: 1; min-width: 0; }
+.mg-row-title { font-size: 15px; color: var(--ink-0);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mg-row-meta { margin-top: 3px; font-size: 11px; color: var(--ink-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mg-row-aside { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.mg-row-signal { display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 10px; color: var(--ok); }
+.mg-row-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--ok); }
+.mg-fmt { display: inline-flex; align-items: center; padding: 3px 7px;
+  border: 1px solid var(--line-2); border-radius: 5px;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--ink-2); }
+
+/* Confirm step (kept functional; field-by-field reconciliation deferred). */
+.mg-confirm { display: flex; flex-direction: column; gap: 14px; }
+.mg-confirm-copy { margin: 0; font-size: 14px; line-height: 1.55; color: var(--ink-1); }
+.mg-confirm-actions { display: flex; gap: 10px; }
+
+/* Footer: reversibility note + Cancel, pinned below the scrolling body. */
+.mg-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 16px 30px; border-top: 1px solid var(--line-2); }
+.mg-foot-note { font-size: 11px; color: var(--ink-3); }
+.bd-merge-error { color: var(--bad); font-size: 13px; margin: 4px 0 0; }
 .bd-merge-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
   z-index: 110; display: flex; align-items: center; gap: 12px; padding: 12px 16px;
   box-shadow: 0 6px 24px rgba(0,0,0,.35); }
