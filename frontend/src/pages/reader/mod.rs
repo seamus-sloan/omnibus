@@ -468,10 +468,7 @@ pub fn BookReadPage(uuid: String) -> Element {
     }
 }
 
-/// Reader chrome + panels: top bar, viewer stage, page-turn gutters, bottom
-/// status bar, Aa panel, and selection popover. State that the layout
-/// itself mutates (`show_aa`, `selection`, `highlights`) is passed by
-/// `Signal` so the parent and child observe the same source of truth.
+/// Reader chrome + panels (top bar, viewer stage, gutters, status bar, Aa panel, selection popover).
 #[component]
 #[allow(clippy::too_many_arguments)]
 fn ReaderLayout(
