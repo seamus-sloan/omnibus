@@ -2,6 +2,7 @@
 name = "omnibus-db"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 # Server-side data layer: schema migrations, SQLite pool init, query layer,
 # and the indexing pipeline (file scanner → ebook metadata extraction →
