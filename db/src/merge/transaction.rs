@@ -45,14 +45,36 @@ pub async fn merge_books(
     // links.
     delete_fts(&mut tx, source_id).await?;
 
-    // Re-point uuids of earlier merges/attachments into the source
-    // *before* the source delete cascades them away, then guard the
-    // source's own uuid so a reindex re-attaches its file to the target
-    // instead of resurrecting the duplicate.
+    rewire_merged_uuid_refs(&mut tx, source_id, target_id, source_uuid, &snapshot).await?;
+
+    let merge_log_id = finalize_merge(&mut tx, target_id, source_id, &snapshot, merged_by).await?;
+
+    tx.commit().await?;
+
+    run_post_commit_side_effects(pool, source_uuid, target_uuid, adopt_cover).await;
+
+    Ok(MergeOutcome {
+        merge_log_id,
+        target_uuid: target_uuid.to_owned(),
+    })
+}
+
+/// Re-point earlier merge/attach ledger rows from the source onto the
+/// target, then plant a guard row per native format so the next reindex
+/// re-attaches the source file by `scan_key` instead of resurrecting the
+/// duplicate. Must run before the source `books` row is deleted in
+/// `finalize_merge` — that delete cascades through `merged_uuids`.
+async fn rewire_merged_uuid_refs(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    source_id: i64,
+    target_id: i64,
+    source_uuid: &str,
+    snapshot: &SourceSnapshot,
+) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE merged_uuids SET book_id = ? WHERE book_id = ?")
         .bind(target_id)
         .bind(source_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     // The source file's relative path (F2 scan_key) so the next reindex
     // recognizes the now-attached file by scan_key and classifies it
@@ -60,7 +82,7 @@ pub async fn merge_books(
     let source_scan_key: Option<String> =
         sqlx::query_scalar("SELECT scan_key FROM books WHERE id = ?")
             .bind(source_id)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut **tx)
             .await?;
     for fmt in &snapshot.native_formats {
         sqlx::query(
@@ -72,17 +94,22 @@ pub async fn merge_books(
         .bind(fmt)
         .bind(&snapshot.library_path)
         .bind(&source_scan_key)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
+    Ok(())
+}
 
-    let merge_log_id = finalize_merge(&mut tx, target_id, source_id, &snapshot, merged_by).await?;
-
-    tx.commit().await?;
-
-    // Post-commit, best-effort: copy the source's cover file under the
-    // target's uuid (cover files are uuid-named) and rebuild the
-    // target's FTS row so the unioned authors/tags are searchable.
+/// Best-effort post-commit fixups: adopt the source's cover file under
+/// the target's uuid (cover files are uuid-named) and rebuild the
+/// target's FTS row so the unioned authors/tags are searchable. Failures
+/// are logged but never propagated — the commit has already landed.
+async fn run_post_commit_side_effects(
+    pool: &SqlitePool,
+    source_uuid: &str,
+    target_uuid: &str,
+    adopt_cover: bool,
+) {
     if adopt_cover {
         let src = source_uuid.to_owned();
         let tgt = target_uuid.to_owned();
@@ -101,11 +128,6 @@ pub async fn merge_books(
     {
         tracing::warn!(error = %e, uuid = %target_uuid, "merge: target FTS rebuild failed");
     }
-
-    Ok(MergeOutcome {
-        merge_log_id,
-        target_uuid: target_uuid.to_owned(),
-    })
 }
 
 /// Resolve both uuids to row ids, re-check same-book, then freeze the

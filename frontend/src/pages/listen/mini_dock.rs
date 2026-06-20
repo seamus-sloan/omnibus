@@ -46,55 +46,15 @@ pub fn MiniDock() -> Element {
         return rsx! { div { class: "mini-dock-host" } };
     };
 
-    let elapsed_sig = playback.elapsed;
-    let duration_sig = playback.duration;
-    let playing_sig = playback.playing;
-    let rate_sig = playback.rate;
-    let chapters_sig = playback.chapters;
-
-    let elapsed = elapsed_sig();
-    let duration = duration_sig();
-    let playing = playing_sig();
-    let rate = rate_sig();
-    let chapters = chapters_sig();
+    let elapsed = (playback.elapsed)();
+    let duration = (playback.duration)();
+    let playing = (playback.playing)();
+    let rate = (playback.rate)();
+    let chapters = (playback.chapters)();
 
     let idx = chapter_index_for_elapsed(&chapters, elapsed);
     let chapter_sub = chapter_sub_text(&chapters, idx);
-    let fill = format!("width: {:.1}%", progress_pct(elapsed, duration));
     let title = book.title.clone().unwrap_or_else(|| book.filename.clone());
-    let play_label = if playing { "Pause" } else { "Play" }.to_string();
-    let rate_label = format!("{rate:.2}\u{00d7}");
-    let elapsed_label = format_hms(elapsed);
-    let total_label = format_hms(duration);
-
-    let on_toggle = move |_: MouseEvent| {
-        #[cfg(feature = "web")]
-        super::helpers::audio_call("toggle", "");
-    };
-    let on_skip_back = move |_: MouseEvent| {
-        #[cfg(feature = "web")]
-        super::helpers::audio_call("skip", "-30");
-    };
-    let on_skip_forward = move |_: MouseEvent| {
-        #[cfg(feature = "web")]
-        super::helpers::audio_call("skip", "30");
-    };
-    let on_dismiss = {
-        let mut uuid_sig = playback.uuid;
-        let mut book_sig = playback.book;
-        let mut playing_set = playback.playing;
-        move |_: MouseEvent| {
-            // Fully stop the shared element (pause + clear src + reset mode) so a
-            // media-key resume can't restart a dismissed book with no visible
-            // control. Clear `book` before `uuid` so the dock hides immediately
-            // and PlaybackState stays coherent for any other consumer.
-            #[cfg(feature = "web")]
-            super::helpers::audio_call("stop", "");
-            book_sig.set(None);
-            playing_set.set(false);
-            uuid_sig.set(None);
-        }
-    };
 
     rsx! {
         div { class: "mini-dock-host",
@@ -118,67 +78,130 @@ pub fn MiniDock() -> Element {
                     }
                 }
 
-                div { class: "mini-dock-track",
-                    div { class: "mini-dock-times",
-                        span { "{elapsed_label}" }
-                        span { "{total_label}" }
-                    }
-                    div { class: "pbar",
-                        i { style: "{fill}" }
-                    }
-                }
+                MiniDockProgress { elapsed: elapsed, duration: duration }
+                MiniDockControls { playing: playing, rate: rate }
+                MiniDockActions { uuid: uuid.clone() }
+            }
+        }
+    }
+}
 
-                div { class: "mini-dock-controls",
-                    button {
-                        class: "mini-dock-btn mini-dock-skip",
-                        r#type: "button",
-                        "data-testid": "mini-dock-skip-back",
-                        "aria-label": "Back 30 seconds",
-                        onclick: on_skip_back,
-                        "-30"
-                    }
-                    button {
-                        class: "mini-dock-play",
-                        r#type: "button",
-                        "data-testid": "mini-dock-toggle",
-                        "aria-label": "{play_label}",
-                        onclick: on_toggle,
-                        if playing {
-                            div { class: "mini-dock-ico-pause",
-                                div { class: "mini-dock-ico-pause-bar" }
-                                div { class: "mini-dock-ico-pause-bar" }
-                            }
-                        } else {
-                            div { class: "mini-dock-ico-play" }
-                        }
-                    }
-                    button {
-                        class: "mini-dock-btn mini-dock-skip",
-                        r#type: "button",
-                        "data-testid": "mini-dock-skip-forward",
-                        "aria-label": "Forward 30 seconds",
-                        onclick: on_skip_forward,
-                        "+30"
-                    }
-                    span { class: "mini-dock-rate", "data-testid": "mini-dock-rate", "{rate_label}" }
-                }
+/// Times + thin progress bar for the dock. Pure presentation — derives
+/// labels and the fill percent from the elapsed/duration props so the
+/// parent doesn't have to thread formatting helpers into the rsx.
+#[component]
+fn MiniDockProgress(elapsed: f64, duration: f64) -> Element {
+    let fill = format!("width: {:.1}%", progress_pct(elapsed, duration));
+    let elapsed_label = format_hms(elapsed);
+    let total_label = format_hms(duration);
+    rsx! {
+        div { class: "mini-dock-track",
+            div { class: "mini-dock-times",
+                span { "{elapsed_label}" }
+                span { "{total_label}" }
+            }
+            div { class: "pbar",
+                i { style: "{fill}" }
+            }
+        }
+    }
+}
 
-                div { class: "mini-dock-actions",
-                    Link {
-                        to: Route::BookListen { uuid: uuid.clone() },
-                        class: "mini-dock-btn mini-dock-expand-btn",
-                        "data-testid": "mini-dock-expand-btn",
-                        "\u{2191} Expand"
+/// Transport cluster: skip-back, play/pause, skip-forward, rate badge.
+/// Calls the shared `audio_call` seam directly so the parent doesn't
+/// re-define closures for what is a fixed transport contract.
+#[component]
+fn MiniDockControls(playing: bool, rate: f64) -> Element {
+    let play_label = if playing { "Pause" } else { "Play" }.to_string();
+    let rate_label = format!("{rate:.2}\u{00d7}");
+    let on_toggle = move |_: MouseEvent| {
+        #[cfg(feature = "web")]
+        super::helpers::audio_call("toggle", "");
+    };
+    let on_skip_back = move |_: MouseEvent| {
+        #[cfg(feature = "web")]
+        super::helpers::audio_call("skip", "-30");
+    };
+    let on_skip_forward = move |_: MouseEvent| {
+        #[cfg(feature = "web")]
+        super::helpers::audio_call("skip", "30");
+    };
+    rsx! {
+        div { class: "mini-dock-controls",
+            button {
+                class: "mini-dock-btn mini-dock-skip",
+                r#type: "button",
+                "data-testid": "mini-dock-skip-back",
+                "aria-label": "Back 30 seconds",
+                onclick: on_skip_back,
+                "-30"
+            }
+            button {
+                class: "mini-dock-play",
+                r#type: "button",
+                "data-testid": "mini-dock-toggle",
+                "aria-label": "{play_label}",
+                onclick: on_toggle,
+                if playing {
+                    div { class: "mini-dock-ico-pause",
+                        div { class: "mini-dock-ico-pause-bar" }
+                        div { class: "mini-dock-ico-pause-bar" }
                     }
-                    button {
-                        class: "mini-dock-btn mini-dock-dismiss",
-                        r#type: "button",
-                        "data-testid": "mini-dock-dismiss",
-                        "aria-label": "Stop and close player",
-                        onclick: on_dismiss,
-                        "\u{00d7}"
-                    }
+                } else {
+                    div { class: "mini-dock-ico-play" }
                 }
+            }
+            button {
+                class: "mini-dock-btn mini-dock-skip",
+                r#type: "button",
+                "data-testid": "mini-dock-skip-forward",
+                "aria-label": "Forward 30 seconds",
+                onclick: on_skip_forward,
+                "+30"
+            }
+            span { class: "mini-dock-rate", "data-testid": "mini-dock-rate", "{rate_label}" }
+        }
+    }
+}
+
+/// Expand link + dismiss button. The dismiss closure mutates the
+/// app-level [`crate::PlaybackState`] signals directly (read via
+/// `use_playback` inside the sub-component) so the parent doesn't have
+/// to thread three signal handles down as props.
+#[component]
+fn MiniDockActions(uuid: String) -> Element {
+    let playback = use_playback();
+    let on_dismiss = {
+        let mut uuid_sig = playback.uuid;
+        let mut book_sig = playback.book;
+        let mut playing_set = playback.playing;
+        move |_: MouseEvent| {
+            // Fully stop the shared element (pause + clear src + reset mode) so a
+            // media-key resume can't restart a dismissed book with no visible
+            // control. Clear `book` before `uuid` so the dock hides immediately
+            // and PlaybackState stays coherent for any other consumer.
+            #[cfg(feature = "web")]
+            super::helpers::audio_call("stop", "");
+            book_sig.set(None);
+            playing_set.set(false);
+            uuid_sig.set(None);
+        }
+    };
+    rsx! {
+        div { class: "mini-dock-actions",
+            Link {
+                to: Route::BookListen { uuid: uuid.clone() },
+                class: "mini-dock-btn mini-dock-expand-btn",
+                "data-testid": "mini-dock-expand-btn",
+                "\u{2191} Expand"
+            }
+            button {
+                class: "mini-dock-btn mini-dock-dismiss",
+                r#type: "button",
+                "data-testid": "mini-dock-dismiss",
+                "aria-label": "Stop and close player",
+                onclick: on_dismiss,
+                "\u{00d7}"
             }
         }
     }

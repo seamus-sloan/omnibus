@@ -76,90 +76,101 @@ pub fn SearchPage(query: String) -> Element {
         };
     };
 
-    let total = r.total_count();
     rsx! {
         section { class: "search-page",
             {header}
-            p { class: "subtitle", "data-testid": "search-result-count",
-                "{total} result{plural(total)} \u{00b7} {r.duration_ms}ms"
+            SearchResults { results: r, query: query.clone() }
+        }
+    }
+}
+
+/// Renders the grouped result lists plus the count subtitle. Extracted
+/// so `SearchPage` stays focused on the fetch effect; this component is
+/// pure presentation of an already-loaded [`PaletteResults`].
+#[component]
+fn SearchResults(results: PaletteResults, query: String) -> Element {
+    let total = results.total_count();
+    let r = results;
+    rsx! {
+        p { class: "subtitle", "data-testid": "search-result-count",
+            "{total} result{plural(total)} \u{00b7} {r.duration_ms}ms"
+        }
+        if total == 0 {
+            p { class: "subtitle", "data-testid": "search-empty",
+                "No results for \u{201c}{query}\u{201d}."
             }
-            if total == 0 {
-                p { class: "subtitle", "data-testid": "search-empty",
-                    "No results for \u{201c}{query}\u{201d}."
+        }
+        if !r.books.is_empty() {
+            SearchGroup { label: "Books", count: r.books.len() }
+            ul { class: "search-results",
+                for book in r.books.iter().cloned() {
+                    li {
+                        key: "{book.uuid}",
+                        Link {
+                            to: Route::BookDetail { uuid: book.uuid.clone() },
+                            class: "search-result-row",
+                            "data-testid": "search-book-row",
+                            div { class: "search-row-title", "{book.title}" }
+                            div { class: "search-row-sub", "{book.author_display}" }
+                        }
+                    }
                 }
             }
-            if !r.books.is_empty() {
-                SearchGroup { label: "Books", count: r.books.len() }
-                ul { class: "search-results",
-                    for book in r.books.iter().cloned() {
-                        li {
-                            key: "{book.uuid}",
-                            Link {
-                                to: Route::BookDetail { uuid: book.uuid.clone() },
-                                class: "search-result-row",
-                                "data-testid": "search-book-row",
-                                div { class: "search-row-title", "{book.title}" }
-                                div { class: "search-row-sub", "{book.author_display}" }
+        }
+        if !r.authors.is_empty() {
+            SearchGroup { label: "Authors", count: r.authors.len() }
+            ul { class: "search-results",
+                for author in r.authors.iter().cloned() {
+                    li {
+                        key: "{author.id}",
+                        Link {
+                            to: Route::AuthorDetail { id: author.id },
+                            class: "search-result-row",
+                            "data-testid": "search-author-row",
+                            div { class: "search-row-title", "{author.name}" }
+                            div { class: "search-row-sub",
+                                "{author.book_count} book{plural(author.book_count as usize)}"
                             }
                         }
                     }
                 }
             }
-            if !r.authors.is_empty() {
-                SearchGroup { label: "Authors", count: r.authors.len() }
-                ul { class: "search-results",
-                    for author in r.authors.iter().cloned() {
-                        li {
-                            key: "{author.id}",
-                            Link {
-                                to: Route::AuthorDetail { id: author.id },
-                                class: "search-result-row",
-                                "data-testid": "search-author-row",
-                                div { class: "search-row-title", "{author.name}" }
-                                div { class: "search-row-sub",
-                                    "{author.book_count} book{plural(author.book_count as usize)}"
+        }
+        if !r.series.is_empty() {
+            SearchGroup { label: "Series", count: r.series.len() }
+            ul { class: "search-results",
+                for s in r.series.iter().cloned() {
+                    li {
+                        key: "{s.id}",
+                        Link {
+                            to: Route::SeriesDetail { id: s.id },
+                            class: "search-result-row",
+                            "data-testid": "search-series-row",
+                            div { class: "search-row-title", "{s.name}" }
+                            div { class: "search-row-sub",
+                                "{s.book_count} book{plural(s.book_count as usize)}"
+                                if let Some(ref a) = s.author_display {
+                                    " \u{00b7} {a}"
                                 }
                             }
                         }
                     }
                 }
             }
-            if !r.series.is_empty() {
-                SearchGroup { label: "Series", count: r.series.len() }
-                ul { class: "search-results",
-                    for s in r.series.iter().cloned() {
-                        li {
-                            key: "{s.id}",
-                            Link {
-                                to: Route::SeriesDetail { id: s.id },
-                                class: "search-result-row",
-                                "data-testid": "search-series-row",
-                                div { class: "search-row-title", "{s.name}" }
-                                div { class: "search-row-sub",
-                                    "{s.book_count} book{plural(s.book_count as usize)}"
-                                    if let Some(ref a) = s.author_display {
-                                        " \u{00b7} {a}"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if !r.tags.is_empty() {
-                SearchGroup { label: "Tags", count: r.tags.len() }
-                ul { class: "search-results",
-                    for tag in r.tags.iter().cloned() {
-                        li {
-                            key: "{tag.id}",
-                            Link {
-                                to: Route::Search { query: format!("tag:{}", tag.name) },
-                                class: "search-result-row",
-                                "data-testid": "search-tag-row",
-                                div { class: "search-row-title", "# {tag.name}" }
-                                div { class: "search-row-sub",
-                                    "{tag.book_count} book{plural(tag.book_count as usize)}"
-                                }
+        }
+        if !r.tags.is_empty() {
+            SearchGroup { label: "Tags", count: r.tags.len() }
+            ul { class: "search-results",
+                for tag in r.tags.iter().cloned() {
+                    li {
+                        key: "{tag.id}",
+                        Link {
+                            to: Route::Search { query: format!("tag:{}", tag.name) },
+                            class: "search-result-row",
+                            "data-testid": "search-tag-row",
+                            div { class: "search-row-title", "# {tag.name}" }
+                            div { class: "search-row-sub",
+                                "{tag.book_count} book{plural(tag.book_count as usize)}"
                             }
                         }
                     }
