@@ -241,20 +241,15 @@ jobs:
           fi
 
       # cargo deny adds coverage cargo-audit lacks: advisories against the ~31
-      # git-pinned Dioxus crates, source allow-listing, and duplicate-version
-      # bans. deny.toml in the repo root is the config.
+      # git-pinned Dioxus crates, source allow-listing, duplicate-version bans,
+      # and license-allowlist enforcement. deny.toml in the repo root is the
+      # config.
       #
-      # Scoped to `advisories sources bans` for now — the `licenses` check is
-      # intentionally NOT run here yet: the workspace member crates carry no
-      # `license` field (they're unpublished), which cargo-deny reports as
-      # "unlicensed", and the full transitive license set hasn't been validated
-      # against deny.toml's allow-list locally. The [licenses] config is left in
-      # deny.toml so enabling it is a one-line follow-up once verified.
-      #
-      # Now a hard gate: a violation in advisories, sources, or bans fails the
-      # job. If a deny.toml policy needs to relax (e.g. a new git-pinned source
-      # appears for a Dioxus crate), update deny.toml's `[sources.allow-git]`
-      # or the relevant `ignore`/`skip` list rather than re-introducing
-      # `continue-on-error: true`.
+      # All four checks are hard gates: a violation in advisories, sources,
+      # bans, or licenses fails the job. If a policy needs to relax (e.g. a new
+      # git-pinned source appears for a Dioxus crate, or a transitive dep
+      # introduces a license not yet on the allowlist), update deny.toml's
+      # `[sources.allow-git]`, `[licenses].allow`, or the relevant
+      # `ignore`/`skip` list rather than re-introducing `continue-on-error: true`.
       - name: cargo deny check
-        run: nix develop .#audit --command cargo deny check advisories sources bans
+        run: nix develop .#audit --command cargo deny check advisories sources bans licenses

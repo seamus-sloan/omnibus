@@ -54,7 +54,9 @@ ignore = [
 # ---------------------------------------------------------------------------
 # Permissive set covering everything currently in the dependency tree.
 # Add entries here (never remove) when `cargo deny check licenses` reports
-# an unlicensed or denied crate after a dependency bump.
+# an unlicensed or denied crate after a dependency bump. Crate-specific
+# carve-outs go under `[[licenses.exceptions]]` below so the global allow
+# list stays minimal.
 [licenses]
 version = 2
 allow = [
@@ -64,15 +66,44 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
-    "Unicode-DFS-2016",
     "Unicode-3.0",
     "Zlib",
     "MPL-2.0",
     "CC0-1.0",
+    # Boost Software License — permissive, OSI-approved. Used by `xxhash-rust`
+    # (transitive via dioxus-fullstack).
+    "BSL-1.0",
+    # Community Data License Agreement, Permissive 2.0 — Linux Foundation
+    # license used by `webpki-roots` (Mozilla CA bundle data). Permissive;
+    # any TLS-via-rustls project hits this.
+    "CDLA-Permissive-2.0",
 ]
 # With version = 2 the allow-list above is authoritative: any license not
 # listed is denied, and a crate whose license cannot be determined is an
 # error. (The pre-v2 `unlicensed` / `copyleft` keys were removed in v2.)
+
+# Per-crate license carve-outs. Prefer this over expanding `allow` when a
+# single crate is the only user of an otherwise-undesirable license.
+[[licenses.exceptions]]
+# `epub` is GPL-3.0, used in `omnibus-db` to parse EPUB metadata. This is a
+# direct dependency carried over from before the licenses check was wired up;
+# the rest of the workspace is MIT. Scoping the GPL-3.0 acceptance to this one
+# crate keeps the policy honest — any other GPL crate sneaking in via a future
+# dependency bump still fails the check. Revisit by either porting metadata
+# extraction onto a non-GPL EPUB parser or accepting the copyleft posture
+# explicitly in LICENSE.
+allow = ["GPL-3.0"]
+name = "epub"
+
+[[licenses.exceptions]]
+# `libfuzzer-sys` is `(MIT OR Apache-2.0) AND NCSA`. NCSA (University of
+# Illinois/NCSA Open Source License) is permissive and OSI-approved, but is
+# the only crate in the tree that uses it, so scoping it here keeps the global
+# allow list lean. The crate enters the lock graph via `rav1e → ravif → image`
+# (and `dioxus-desktop`); our `image` features (`jpeg`, `png`, `webp`) do not
+# enable `avif`, so this never actually links into the runtime binary.
+allow = ["MIT", "Apache-2.0", "NCSA"]
+name = "libfuzzer-sys"
 
 # ---------------------------------------------------------------------------
 # Bans
