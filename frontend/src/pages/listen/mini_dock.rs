@@ -86,9 +86,7 @@ pub fn MiniDock() -> Element {
     }
 }
 
-/// Times + thin progress bar for the dock. Pure presentation — derives
-/// labels and the fill percent from the elapsed/duration props so the
-/// parent doesn't have to thread formatting helpers into the rsx.
+/// Elapsed/total labels and progress bar for the dock.
 #[component]
 fn MiniDockProgress(elapsed: f64, duration: f64) -> Element {
     let fill = format!("width: {:.1}%", progress_pct(elapsed, duration));
@@ -108,8 +106,6 @@ fn MiniDockProgress(elapsed: f64, duration: f64) -> Element {
 }
 
 /// Transport cluster: skip-back, play/pause, skip-forward, rate badge.
-/// Calls the shared `audio_call` seam directly so the parent doesn't
-/// re-define closures for what is a fixed transport contract.
 #[component]
 fn MiniDockControls(playing: bool, rate: f64) -> Element {
     let play_label = if playing { "Pause" } else { "Play" }.to_string();
@@ -164,10 +160,7 @@ fn MiniDockControls(playing: bool, rate: f64) -> Element {
     }
 }
 
-/// Expand link + dismiss button. The dismiss closure mutates the
-/// app-level [`crate::PlaybackState`] signals directly (read via
-/// `use_playback` inside the sub-component) so the parent doesn't have
-/// to thread three signal handles down as props.
+/// Expand link + dismiss button; dismiss clears [`crate::PlaybackState`] via `use_playback`.
 #[component]
 fn MiniDockActions(uuid: String) -> Element {
     let playback = use_playback();

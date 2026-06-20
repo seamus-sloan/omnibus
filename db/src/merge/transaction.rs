@@ -59,11 +59,10 @@ pub async fn merge_books(
     })
 }
 
-/// Re-point earlier merge/attach ledger rows from the source onto the
-/// target, then plant a guard row per native format so the next reindex
-/// re-attaches the source file by `scan_key` instead of resurrecting the
-/// duplicate. Must run before the source `books` row is deleted in
-/// `finalize_merge` — that delete cascades through `merged_uuids`.
+/// Re-point `merged_uuids` from source to target and plant per-format guard rows.
+///
+/// Must run before `finalize_merge` deletes the source `books` row — that
+/// delete cascades through `merged_uuids`.
 async fn rewire_merged_uuid_refs(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     source_id: i64,
@@ -100,10 +99,7 @@ async fn rewire_merged_uuid_refs(
     Ok(())
 }
 
-/// Best-effort post-commit fixups: adopt the source's cover file under
-/// the target's uuid (cover files are uuid-named) and rebuild the
-/// target's FTS row so the unioned authors/tags are searchable. Failures
-/// are logged but never propagated — the commit has already landed.
+/// Best-effort post-commit fixups: cover adopt + target FTS rebuild; failures are logged, not propagated.
 async fn run_post_commit_side_effects(
     pool: &SqlitePool,
     source_uuid: &str,

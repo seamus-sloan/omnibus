@@ -84,9 +84,7 @@ pub fn SearchPage(query: String) -> Element {
     }
 }
 
-/// Renders the grouped result lists plus the count subtitle. Extracted
-/// so `SearchPage` stays focused on the fetch effect; this component is
-/// pure presentation of an already-loaded [`PaletteResults`].
+/// Grouped result lists + count subtitle for a loaded [`PaletteResults`].
 #[component]
 fn SearchResults(results: PaletteResults, query: String) -> Element {
     let total = results.total_count();
