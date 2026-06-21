@@ -205,12 +205,23 @@ fn build_crumbs(
     crumbs
 }
 
-/// Render the fully-loaded book detail view.
-fn render_loaded(
-    b: EbookMetadata,
-    author_books: Vec<EbookMetadata>,
-    merge_button: Option<Element>,
-) -> Element {
+/// Pre-derived strings + flags ready to feed the loaded-book sections.
+/// Split out of [`render_loaded`] so the rsx body stays a thin composition
+/// of named sub-components.
+struct LoadedBookView {
+    title: String,
+    primary_author: String,
+    authors_line: String,
+    kicker: String,
+    series: Option<String>,
+    accent_style: String,
+    has_audio: bool,
+    has_ebook: bool,
+    crumbs: Vec<BdCrumbItem>,
+}
+
+/// Compute the per-section display fields from the loaded book.
+fn derive_loaded_view(b: &EbookMetadata) -> LoadedBookView {
     let title = b.title.clone().unwrap_or_else(|| b.filename.clone());
     let primary_author = b
         .creators
@@ -236,7 +247,6 @@ fn render_loaded(
         .as_deref()
         .map(|a| format!("--accent: {a};"))
         .unwrap_or_default();
-
     let has_audio = b
         .formats
         .iter()
@@ -245,15 +255,44 @@ fn render_loaded(
         .formats
         .iter()
         .any(|f| f.eq_ignore_ascii_case("epub") || f.eq_ignore_ascii_case("pdf"));
+    let crumbs = build_crumbs(b, &title, &primary_author, &series);
+    LoadedBookView {
+        title,
+        primary_author,
+        authors_line,
+        kicker,
+        series,
+        accent_style,
+        has_audio,
+        has_ebook,
+        crumbs,
+    }
+}
 
-    let crumbs = build_crumbs(&b, &title, &primary_author, &series);
+/// Render the fully-loaded book detail view.
+fn render_loaded(
+    b: EbookMetadata,
+    author_books: Vec<EbookMetadata>,
+    merge_button: Option<Element>,
+) -> Element {
+    let LoadedBookView {
+        title,
+        primary_author,
+        authors_line,
+        kicker,
+        series,
+        accent_style,
+        has_audio,
+        has_ebook,
+        crumbs,
+    } = derive_loaded_view(&b);
 
     rsx! {
         div { class: "bd-root", style: "{accent_style}",
             BdHeroSection {
                 b: b.clone(),
                 title: title.clone(),
-                kicker: kicker.clone(),
+                kicker,
                 crumbs,
                 has_ebook,
                 has_audio,
@@ -261,36 +300,42 @@ fn render_loaded(
             section { class: "bd-body-grid",
                 BdBodyMain {
                     title: title.clone(),
-                    primary_author: primary_author.clone(),
-                    author_books: author_books.clone(),
+                    primary_author,
+                    author_books,
                 }
                 BdRailSection {
-                    b: b.clone(),
-                    title: title.clone(),
-                    authors_line: authors_line.clone(),
-                    series: series.clone(),
+                    b,
+                    title,
+                    authors_line,
+                    series,
                     merge_button,
                 }
             }
             div { class: "bd-footer",
                 Link { to: Route::Landing {}, class: "btn", "Back to library" }
             }
-            // Hidden slots preserved for the F1.4 contract — the hero
-            // rating card and the cover-fan strips are the visible
-            // surfaces; these stay attached so anything keying off the
-            // slot testids still finds them.
-            div {
-                class: "ratings-slot",
-                "data-testid": "ratings-slot",
-                aria_label: "Ratings \u{2014} coming soon",
-                hidden: true,
-            }
-            div {
-                class: "suggestions-slot",
-                "data-testid": "suggestions-slot",
-                aria_label: "Suggestions \u{2014} coming soon",
-                hidden: true,
-            }
+            BdHiddenSlots {}
+        }
+    }
+}
+
+/// Reserved hidden slots — the F1.4 contract still has anything keying off
+/// the `ratings-slot` / `suggestions-slot` testids; the hero rating card
+/// and cover-fan strips are the visible surfaces.
+#[component]
+fn BdHiddenSlots() -> Element {
+    rsx! {
+        div {
+            class: "ratings-slot",
+            "data-testid": "ratings-slot",
+            aria_label: "Ratings \u{2014} coming soon",
+            hidden: true,
+        }
+        div {
+            class: "suggestions-slot",
+            "data-testid": "suggestions-slot",
+            aria_label: "Suggestions \u{2014} coming soon",
+            hidden: true,
         }
     }
 }
