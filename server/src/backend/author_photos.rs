@@ -5,10 +5,6 @@
 //! `DELETE` accepts an uploaded photo or a remote URL via the SSRF-guarded
 //! `fetch_remote_image` helper.
 
-// ---------------------------------------------------------------------------
-// F1.11 Author profile photos.
-// ---------------------------------------------------------------------------
-
 use axum::{
     extract::{Path, State},
     http::header,

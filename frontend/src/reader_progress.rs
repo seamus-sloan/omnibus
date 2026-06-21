@@ -1,8 +1,8 @@
 //! Reading-position persistence — saved EPUB CFI per book. Web stores
 //! per-UUID in `localStorage`, mobile keeps an in-memory map, SSR is a
-//! no-op. Now the offline / first-paint cache for the progress-sync
-//! endpoint: reader reads here synchronously then reconciles against
-//! the server; saves write here AND fire-and-forget POST.
+//! no-op. Offline / first-paint cache for the progress-sync endpoint:
+//! reader reads sync, saves write here AND fire-and-forget POST.
+//! In-file `#[cfg]`-framing dividers retained per rule 05's nav-aid exception.
 
 #[cfg(feature = "web")]
 const STORAGE_PREFIX: &str = "omn.reading::";
