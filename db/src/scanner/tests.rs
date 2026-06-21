@@ -105,6 +105,7 @@ fn list_files_returns_section_with_error_when_path_missing() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn list_files_surfaces_io_error_on_unreadable_dir() {
     // Silent contract: when `read_dir` fails mid-walk (e.g. the directory
