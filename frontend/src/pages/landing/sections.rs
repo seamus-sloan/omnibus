@@ -15,9 +15,7 @@ use super::sorting::{default_dir_for, toggle_dir};
 use super::table::{BookTable, BookTableContext};
 use super::toolbar::Toolbar;
 
-/// Sticky page header: kicker + title + count + toolbar, with the
-/// `data-testid="lib-header"` contract the E2E specs hook into. Errors
-/// (page-level fetch + library-path) render here too.
+/// Sticky `data-testid="lib-header"` header; also renders page-level + library-path errors.
 #[component]
 pub(super) fn LandingHeader(
     path_subtitle: String,
@@ -85,9 +83,7 @@ pub(super) struct LandingContentProps {
     pub on_clear_filters: EventHandler<()>,
 }
 
-/// Sidebar + main column: facet sidebar, the grid/table switch, the
-/// load-more sentinel, and the empty/filtered fallbacks. Stateless —
-/// every mutation routes back through the parent's handlers.
+/// Sidebar + grid/table column with load-more sentinel; stateless, mutations route through parent handlers.
 #[component]
 pub(super) fn LandingContent(props: LandingContentProps) -> Element {
     let LandingContentProps {

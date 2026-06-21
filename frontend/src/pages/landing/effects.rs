@@ -10,18 +10,14 @@ use crate::data;
 
 use super::PAGE_SIZE;
 
-/// Per-page handle on the suggestion pool signals; `LandingPage` constructs
-/// one and passes the bundle into render so the chip-editor `ReadSignal`s
-/// stay stable across re-renders.
+/// Stable per-page handle on the chip-editor suggestion pool signals (authors, tags).
 #[derive(Copy, Clone)]
 pub(super) struct SuggestionPools {
     pub(super) authors: Signal<Vec<SuggestionItem>>,
     pub(super) tags: Signal<Vec<SuggestionItem>>,
 }
 
-/// Page-1 fetch + epoch bookkeeping handles. Bundled so the
-/// `LandingPage` body can pass one struct into [`spawn_page_fetch_effect`]
-/// rather than ten signals.
+/// Bundle of fetch-target signals + epoch counter passed into [`spawn_page_fetch_effect`].
 #[derive(Copy, Clone)]
 pub(super) struct FetchSignals {
     pub(super) books: Signal<Vec<EbookMetadata>>,
@@ -36,9 +32,7 @@ pub(super) struct FetchSignals {
     pub(super) fetch_epoch: Signal<u64>,
 }
 
-/// Fetch the admin-only suggestion pools (authors + tags) when `is_admin`
-/// flips true. Idempotent — the effect re-runs whenever the admin signal
-/// changes, and the pools overwrite themselves on each fetch.
+/// Refetch the admin-only author/tag suggestion pools whenever `is_admin` changes.
 pub(super) fn spawn_suggestion_pools_effect(
     server_url: String,
     is_admin: Signal<bool>,
@@ -72,9 +66,7 @@ pub(super) fn spawn_suggestion_pools_effect(
     });
 }
 
-/// Refetch page 1 whenever the search query or a *data-affecting* pref
-/// (sort axis/dir or filters) changes. Captures the fetch epoch so a stale
-/// in-flight request drops its result instead of overwriting newer state.
+/// Refetch page 1 on query/sort/filter changes; epoch-guarded so stale in-flight requests drop.
 pub(super) fn spawn_page_fetch_effect(
     server_url: String,
     fetch_key: Memo<(
@@ -163,9 +155,7 @@ pub(super) fn spawn_page_fetch_effect(
     });
 }
 
-/// Append the next browse page when `want_more` is bumped (button click or
-/// the web scroll observer). Guards against concurrent/empty loads and
-/// drops the append if a page-1 refetch superseded it mid-flight.
+/// Append the next page when `want_more` bumps; drops the append if a page-1 refetch supersedes it.
 pub(super) fn spawn_load_more_effect(
     server_url: String,
     want_more: Signal<u32>,
@@ -213,11 +203,7 @@ pub(super) fn spawn_load_more_effect(
     });
 }
 
-/// Web: auto-load when the Load-more sentinel nears the viewport. The
-/// `IntersectionObserver` simply `.click()`s the button, whose Dioxus
-/// `onclick` bumps `want_more` — one-way `eval` only (no markup
-/// divergence, since the button renders on every target). The effect
-/// reads `next_cursor` so it re-arms after each page append.
+/// Web-only: arm an `IntersectionObserver` on the load-more sentinel; re-arms after each page append.
 #[cfg(feature = "web")]
 pub(super) fn spawn_load_more_observer(next_cursor: Signal<Option<String>>) {
     use_effect(move || {
