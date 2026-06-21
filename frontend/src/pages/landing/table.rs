@@ -443,7 +443,7 @@ fn EbookRowCells(
         EbookRowCoverCell { thumb_base, has_cover, alt_title: cover_alt }
         RowTitleCell {
             title,
-            error: book.error.clone(),
+            error: book.error,
             is_admin,
             editing,
             save_field,
@@ -477,7 +477,7 @@ fn EbookRowCells(
             editing,
             save_field,
         }
-        EbookRowFormatsCell { formats: book.formats.clone() }
+        EbookRowFormatsCell { formats: book.formats }
         td { class: "ebook-col-updated", "data-testid": "ebook-cell-updated", "{updated}" }
         td { class: "ebook-col-added", "data-testid": "ebook-cell-added", "{added}" }
         RowScalarCell {
