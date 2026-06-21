@@ -162,8 +162,12 @@ pub fn MergeDialog(
                                 id: "bd-merge-search",
                                 class: "mg-search-input",
                                 "data-testid": "merge-search",
+                                "aria-label": "Search your library for a book to merge",
                                 r#type: "search",
-                                placeholder: "Search your library \u{2014} title, author, ISBN\u{2026}",
+                                // Merge search scopes to title/authors/series only
+                                // (`db::search_books` excludes ISBN), so the
+                                // placeholder must not advertise ISBN.
+                                placeholder: "Search your library \u{2014} title, author, series\u{2026}",
                                 value: "{query}",
                                 autofocus: true,
                                 oninput: move |evt| {
