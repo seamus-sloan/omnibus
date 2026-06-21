@@ -10,32 +10,35 @@
 //! [`crate::view_prefs`].
 
 use dioxus::prelude::*;
-use omnibus_shared::{
-    EbookMetadata, FacetCounts as ServerFacetCounts, SortKey, TagWeight, ViewFilters, ViewMode,
-    ViewPrefs,
-};
+use omnibus_shared::{EbookMetadata, FacetCounts as ServerFacetCounts, ViewFilters, ViewPrefs};
 
-use crate::components::chip_editor::{collect_suggestions, SuggestionItem};
-use crate::{data, use_search_query, use_server_url, view_prefs};
+use crate::components::chip_editor::SuggestionItem;
+use crate::{use_search_query, use_server_url, view_prefs};
 
+mod effects;
 mod filtering;
 mod filters;
 mod grid;
+mod sections;
 mod sorting;
 mod table;
 mod toolbar;
 
+#[cfg(feature = "web")]
+use effects::spawn_load_more_observer;
+use effects::{
+    spawn_load_more_effect, spawn_page_fetch_effect, spawn_suggestion_pools_effect, FetchSignals,
+    SuggestionPools,
+};
 use filtering::{apply_filters, facet_counts, FacetCounts};
-use filters::{EmptyFiltered, FilterSidebar, FormatChips};
-use grid::BookGrid;
-use sorting::{default_dir_for, sort_books, toggle_dir};
-use table::{BookTable, BookTableContext};
-use toolbar::Toolbar;
+use filters::FormatChips;
+use sections::{LandingContent, LandingContentProps, LandingHeader};
+use sorting::sort_books;
 
 /// Keyset page size for the browse path (F5b open question #1). A grid renders
 /// ~30–60 cards above the fold and the table more; 100 covers both without an
 /// oversized first paint.
-const PAGE_SIZE: i64 = 100;
+pub(super) const PAGE_SIZE: i64 = 100;
 
 /// Landing page — primary library surface. See the module doc for the
 /// browse-paginates / search-stays-client-side split.
@@ -44,15 +47,15 @@ pub fn LandingPage() -> Element {
     let server_url = use_server_url();
     // Accumulated result rows: one growing browse list, or the capped search
     // result set. `next_cursor` is `Some` only while more browse pages remain.
-    let mut books = use_signal(Vec::<EbookMetadata>::new);
-    let mut next_cursor = use_signal(|| None::<String>);
-    let mut server_facets = use_signal(|| None::<ServerFacetCounts>);
-    let mut total = use_signal(|| None::<i64>);
-    let mut lib_path = use_signal(|| None::<String>);
-    let mut lib_error = use_signal(|| None::<String>);
-    let mut loading = use_signal(|| true);
-    let mut loading_more = use_signal(|| false);
-    let mut error = use_signal(|| None::<String>);
+    let books = use_signal(Vec::<EbookMetadata>::new);
+    let next_cursor = use_signal(|| None::<String>);
+    let server_facets = use_signal(|| None::<ServerFacetCounts>);
+    let total = use_signal(|| None::<i64>);
+    let lib_path = use_signal(|| None::<String>);
+    let lib_error = use_signal(|| None::<String>);
+    let loading = use_signal(|| true);
+    let loading_more = use_signal(|| false);
+    let error = use_signal(|| None::<String>);
     let mut prefs = use_signal(ViewPrefs::default);
     // Bumped by the Load-more button and the web scroll observer; one effect
     // watches it and appends the next page.
@@ -61,7 +64,7 @@ pub fn LandingPage() -> Element {
     // page-1 fetch or load-more append captures the epoch and drops its result
     // if a newer fetch (sort/dir/filter/query change) superseded it mid-flight
     // — otherwise it would splice an old result stream onto the new list.
-    let mut fetch_epoch = use_signal(|| 0u64);
+    let fetch_epoch = use_signal(|| 0u64);
     // Search box lives in the top nav; the query is shared via context.
     let query = use_search_query().0;
 
@@ -79,33 +82,11 @@ pub fn LandingPage() -> Element {
 
     // Suggestion pools for the inline Authors chip editor and the
     // (future-reserved) Tags pool, each carrying the dropdown book-count.
-    let mut author_suggestions: Signal<Vec<SuggestionItem>> = use_signal(Vec::new);
-    let mut tag_suggestions: Signal<Vec<SuggestionItem>> = use_signal(Vec::new);
-    {
-        let url = server_url.clone();
-        use_effect(move || {
-            if !is_admin() {
-                return;
-            }
-            let url = url.clone();
-            spawn(async move {
-                if let Ok(authors) = data::list_authors(&url).await {
-                    let items: Vec<SuggestionItem> = authors
-                        .into_iter()
-                        .map(|a| SuggestionItem::new(a.name, a.book_count))
-                        .collect();
-                    author_suggestions.set(collect_suggestions(items));
-                }
-                if let Ok(tags) = data::get_tag_cloud(&url).await {
-                    let items: Vec<SuggestionItem> = tags
-                        .into_iter()
-                        .map(|t: TagWeight| SuggestionItem::new(t.name, t.count))
-                        .collect();
-                    tag_suggestions.set(collect_suggestions(items));
-                }
-            });
-        });
-    }
+    let pools = SuggestionPools {
+        authors: use_signal(Vec::<SuggestionItem>::new),
+        tags: use_signal(Vec::<SuggestionItem>::new),
+    };
+    spawn_suggestion_pools_effect(server_url.clone(), is_admin, pools);
 
     // Refetch page 1 whenever the search query or a *data-affecting* pref
     // (sort axis/dir or filters) changes. The `use_memo` keys the effect on
@@ -119,142 +100,22 @@ pub fn LandingPage() -> Element {
             p.filters.clone(),
         )
     });
-    {
-        let url = server_url.clone();
-        use_effect(move || {
-            let (q, sort_key, sort_dir, filters) = fetch_key();
-            let epoch = {
-                fetch_epoch.with_mut(|e| *e += 1);
-                *fetch_epoch.peek()
-            };
-            let url = url.clone();
-            spawn(async move {
-                loading.set(true);
-                error.set(None);
-                next_cursor.set(None);
-                if q.is_empty() {
-                    // Browse: server keyset page 1 (server-side sort + filter,
-                    // facets + total ride along on the first page).
-                    let result =
-                        data::get_ebooks_page(&url, sort_key, sort_dir, filters, None, PAGE_SIZE)
-                            .await;
-                    if *fetch_epoch.peek() != epoch {
-                        return; // a newer fetch superseded us — drop this result
-                    }
-                    match result {
-                        Ok(page) => {
-                            lib_path.set(page.path);
-                            lib_error.set(None);
-                            next_cursor.set(page.next_cursor);
-                            total.set(page.total);
-                            server_facets.set(page.facets);
-                            books.set(page.books);
-                        }
-                        Err(e) => {
-                            error.set(Some(e.to_string()));
-                            // Clear the derived signals so the error state doesn't
-                            // render a stale header count or facet sidebar.
-                            books.set(Vec::new());
-                            total.set(None);
-                            server_facets.set(None);
-                            lib_error.set(None);
-                        }
-                    }
-                } else {
-                    // Search: capped full result set, sorted/filtered client-side.
-                    let result = data::search_ebooks(&url, &q).await;
-                    if *fetch_epoch.peek() != epoch {
-                        return;
-                    }
-                    match result {
-                        Ok(lib) => {
-                            lib_path.set(lib.path);
-                            lib_error.set(lib.error);
-                            total.set(lib.total);
-                            server_facets.set(None); // client computes search facets
-                            books.set(lib.books);
-                        }
-                        Err(e) => {
-                            error.set(Some(e.to_string()));
-                            books.set(Vec::new());
-                            total.set(None);
-                            server_facets.set(None);
-                            lib_error.set(None);
-                        }
-                    }
-                }
-                loading.set(false);
-            });
-        });
-    }
-
-    // Append the next browse page when `want_more` is bumped (button click or
-    // the web scroll observer). Guards against concurrent/empty loads.
-    {
-        let url = server_url.clone();
-        use_effect(move || {
-            let trigger = want_more();
-            if trigger == 0 || *loading_more.peek() || next_cursor.peek().is_none() {
-                return;
-            }
-            let p = prefs.peek().clone();
-            let cursor = next_cursor.peek().clone();
-            let epoch = *fetch_epoch.peek();
-            let url = url.clone();
-            loading_more.set(true);
-            spawn(async move {
-                let result = data::get_ebooks_page(
-                    &url, p.sort_key, p.sort_dir, p.filters, cursor, PAGE_SIZE,
-                )
-                .await;
-                // Drop the append if a page-1 refetch (sort/filter/query change)
-                // superseded us mid-flight — otherwise we'd splice an old result
-                // stream onto the new list and overwrite its cursor.
-                if *fetch_epoch.peek() != epoch {
-                    loading_more.set(false);
-                    return;
-                }
-                match result {
-                    Ok(page) => {
-                        books.with_mut(|b| b.extend(page.books));
-                        next_cursor.set(page.next_cursor);
-                    }
-                    Err(e) => error.set(Some(e.to_string())),
-                }
-                loading_more.set(false);
-            });
-        });
-    }
-
-    // Web: auto-load when the Load-more sentinel nears the viewport. The
-    // `IntersectionObserver` simply `.click()`s the button, whose Dioxus
-    // `onclick` bumps `want_more` — one-way `eval` only (the established
-    // interop pattern; no markup divergence, since the button renders on every
-    // target and only the observer is gated). The effect reads `next_cursor`
-    // so it re-arms after each page append, disconnecting the prior observer
-    // first so they can't accumulate.
+    let sigs = FetchSignals {
+        books,
+        next_cursor,
+        server_facets,
+        total,
+        lib_path,
+        lib_error,
+        loading,
+        loading_more,
+        error,
+        fetch_epoch,
+    };
+    spawn_page_fetch_effect(server_url.clone(), fetch_key, sigs);
+    spawn_load_more_effect(server_url.clone(), want_more, prefs, sigs);
     #[cfg(feature = "web")]
-    {
-        use_effect(move || {
-            let _rearm_on = next_cursor.read().is_some();
-            let _ = dioxus::document::eval(
-                r#"
-                if (window.__omnibusLoadMoreObs) {
-                    window.__omnibusLoadMoreObs.disconnect();
-                    window.__omnibusLoadMoreObs = null;
-                }
-                const el = document.querySelector('[data-testid="lib-load-more"]');
-                if (el) {
-                    const obs = new IntersectionObserver((entries) => {
-                        if (entries.some((e) => e.isIntersecting)) { el.click(); }
-                    }, { rootMargin: "400px" });
-                    obs.observe(el);
-                    window.__omnibusLoadMoreObs = obs;
-                }
-                "#,
-            );
-        });
-    }
+    spawn_load_more_observer(next_cursor);
 
     // Hydrate persisted prefs when the library path resolves. The `!=` guard
     // makes this idempotent: re-running it after a page-1 refetch (which re-sets
@@ -327,135 +188,70 @@ pub fn LandingPage() -> Element {
     let visible_count = visible_books.len();
     let filters_for_chips = prefs().filters.clone();
 
+    let on_prefs_change = {
+        let mut save = save.clone();
+        move |next: ViewPrefs| save(next)
+    };
+    let on_formats_change = {
+        let mut save = save.clone();
+        move |formats: Vec<String>| {
+            let mut next = prefs.peek().clone();
+            next.filters.formats = formats;
+            save(next);
+        }
+    };
+    let on_load_more = move |_| {
+        want_more.with_mut(|n| *n += 1);
+    };
+    let on_clear_filters = {
+        let mut save = save.clone();
+        move |_| {
+            let mut next = prefs.peek().clone();
+            next.filters = ViewFilters::default();
+            save(next);
+        }
+    };
+    let books_empty = books().is_empty();
+
     rsx! {
-        header { class: "lib-header", "data-testid": "lib-header",
-            div { class: "lib-header-kicker",
-                h1 { class: "label lib-header-kicker-title", "Your Library" }
-                if !path_subtitle.is_empty() {
-                    span { class: "mono lib-header-path", " · {path_subtitle}" }
-                }
-            }
-            div { class: "lib-header-row",
-                p { class: "lib-header-title",
-                    em { "{book_count}" }
-                    " "
-                    if book_count == 1 { "book" } else { "books" }
-                }
-                Toolbar {
-                    prefs: prefs(),
-                    on_change: save.clone(),
-                }
-            }
-            if path_value.is_none() {
-                p { class: "lib-header-hint",
-                    "Configure your ebook library path in Settings."
-                }
-            }
-            if let Some(msg) = page_error.as_ref() {
-                p { class: "error", "⚠ {msg}" }
-            }
-            if let Some(msg) = lib_err.as_ref() {
-                p { class: "error", "⚠ {msg}" }
-            }
+        LandingHeader {
+            path_subtitle,
+            book_count,
+            prefs: prefs(),
+            on_prefs_change: on_prefs_change.clone(),
+            path_missing: path_value.is_none(),
+            page_error: page_error.clone(),
+            lib_err: lib_err.clone(),
         }
 
         FormatChips {
             counts: facet_counts_view.formats.clone(),
-            visible_count: visible_count,
-            book_count: book_count,
+            visible_count,
+            book_count,
             selected: filters_for_chips.formats.clone(),
-            on_change: {
-                let mut save = save.clone();
-                move |formats: Vec<String>| {
-                    let mut next = prefs.peek().clone();
-                    next.filters.formats = formats;
-                    save(next);
-                }
-            },
+            on_change: on_formats_change,
         }
 
-        div { class: if prefs().filters_open { "lib-layout" } else { "lib-layout lib-layout--collapsed" },
-            FilterSidebar {
-                facets: facet_counts_view,
-                filters: prefs().filters.clone(),
-                on_change: {
-                    let mut save = save.clone();
-                    move |filters: ViewFilters| {
-                        let mut next = prefs.peek().clone();
-                        next.filters = filters;
-                        save(next);
-                    }
-                },
-            }
-
-            div { class: "lib-main",
-                if is_loading {
-                    p { class: "library-empty", "Loading..." }
-                } else if !visible_is_empty || lib_err.is_some() || page_error.is_some() {
-                    match view_mode {
-                        ViewMode::Table => rsx! {
-                            BookTable {
-                                books: visible_books.clone(),
-                                prefs: prefs(),
-                                on_sort: {
-                                    let mut save = save.clone();
-                                    move |key: SortKey| {
-                                        let mut next = prefs.peek().clone();
-                                        next.sort_dir = if next.sort_key == key {
-                                            toggle_dir(next.sort_dir)
-                                        } else {
-                                            default_dir_for(key)
-                                        };
-                                        next.sort_key = key;
-                                        save(next);
-                                    }
-                                },
-                                ctx: BookTableContext {
-                                    server_url: server_url_for_row.clone(),
-                                    is_admin: is_admin(),
-                                    author_suggestions: author_suggestions.into(),
-                                    tag_suggestions: tag_suggestions.into(),
-                                },
-                            }
-                        },
-                        ViewMode::Grid => rsx! {
-                            BookGrid {
-                                books: visible_books.clone(),
-                                server_url: server_url_for_row.clone(),
-                            }
-                        },
-                    }
-                    // Browse pagination sentinel — the button is the
-                    // deterministic (mobile + Playwright) trigger; on web an
-                    // IntersectionObserver auto-bumps it as it nears the
-                    // viewport. Absent in search mode (no `next_cursor`).
-                    if has_more {
-                        div { class: "lib-load-more-row",
-                            button {
-                                class: "btn lib-load-more",
-                                "data-testid": "lib-load-more",
-                                disabled: is_loading_more,
-                                onclick: move |_| {
-                                    want_more.with_mut(|n| *n += 1);
-                                },
-                                if is_loading_more { "Loading…" } else { "Load more" }
-                            }
-                        }
-                    }
-                } else if books().is_empty() {
-                    p { class: "library-empty", "No ebooks found." }
-                } else {
-                    EmptyFiltered {
-                        on_clear: {
-                            let mut save = save.clone();
-                            move |_| {
-                                let mut next = prefs.peek().clone();
-                                next.filters = ViewFilters::default();
-                                save(next);
-                            }
-                        },
-                    }
-                }
+        LandingContent {
+            ..LandingContentProps {
+                is_loading,
+                visible_books,
+                visible_is_empty,
+                books_empty,
+                lib_err,
+                page_error,
+                view_mode,
+                prefs: prefs(),
+                facet_counts_view,
+                has_more,
+                is_loading_more,
+                server_url: server_url_for_row.clone(),
+                is_admin: is_admin(),
+                author_suggestions: pools.authors.into(),
+                tag_suggestions: pools.tags.into(),
+                on_prefs_change: EventHandler::new(on_prefs_change),
+                on_load_more: EventHandler::new(on_load_more),
+                on_clear_filters: EventHandler::new(on_clear_filters),
             }
         }
     }
