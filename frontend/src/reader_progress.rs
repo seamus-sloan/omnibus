@@ -3,6 +3,11 @@
 //! no-op. Now the offline / first-paint cache for the progress-sync
 //! endpoint: reader reads here synchronously then reconciles against
 //! the server; saves write here AND fire-and-forget POST.
+//!
+//! The `#[cfg(feature = ...)]` blocks below carry the three per-target
+//! implementations of `load_impl`/`save_impl`. A directory split would force
+//! one `mod.rs` per target plus a re-export shim, so the framing dividers
+//! between web / mobile / SSR / tests stay as in-file nav aids.
 
 #[cfg(feature = "web")]
 const STORAGE_PREFIX: &str = "omn.reading::";

@@ -2,6 +2,11 @@
 //! per library-path in `localStorage`, mobile keeps an in-memory map, SSR
 //! returns defaults so first-hydration markup matches the WASM client.
 //! Shape lives in `omnibus-shared` so a future server endpoint can reuse it.
+//!
+//! The `#[cfg(feature = ...)]` blocks below carry the three per-target
+//! implementations of `load_impl`/`save_impl`. A directory split would force
+//! one `mod.rs` per target plus a re-export shim, so the framing dividers
+//! between web / mobile / SSR / tests stay as in-file nav aids.
 
 use omnibus_shared::ViewPrefs;
 

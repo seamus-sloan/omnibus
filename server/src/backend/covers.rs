@@ -154,10 +154,6 @@ mod tests {
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 
-    // -------------------------------------------------------------------
-    // /api/thumbs — thumbnail pipeline endpoint
-    // -------------------------------------------------------------------
-
     #[tokio::test]
     async fn api_thumbs_returns_400_for_bad_size() {
         let (app, _, pool) = fixture().await;
