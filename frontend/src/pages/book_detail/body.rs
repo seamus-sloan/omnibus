@@ -154,12 +154,15 @@ pub(super) fn BdRailSection(
 /// identifiers sharing one `scheme` (the projection keeps every distinct
 /// value per scheme), so the key folds in `value` to stay unique among the
 /// keyed siblings — Dioxus panics when two keyed siblings share a key.
+///
+/// Both fields are `Debug`-quoted (not joined with a plain separator): a raw
+/// `scheme|value` join collides when the data itself contains the delimiter
+/// (`scheme="a|b", value="c"` vs `scheme="a", value="b|c"`), which would
+/// reintroduce the very panic this guards against. `Debug` escapes embedded
+/// quotes/backslashes, so the `(scheme, value)` pair maps injectively to the
+/// key.
 fn bd_identifier_key(ident: &Identifier) -> String {
-    format!(
-        "{}|{}",
-        ident.scheme.as_deref().unwrap_or_default(),
-        ident.value
-    )
+    format!("{:?}\u{1f}{:?}", ident.scheme, ident.value)
 }
 
 #[cfg(test)]
@@ -192,5 +195,23 @@ mod tests {
             scheme: None,
         };
         assert_ne!(bd_identifier_key(&a), bd_identifier_key(&b));
+    }
+
+    #[test]
+    fn bd_identifier_key_does_not_collide_when_data_contains_the_delimiter() {
+        // A naive `scheme|value` join would map both of these to "a|b|c";
+        // the `Debug`-quoted encoding keeps them distinct.
+        let split_scheme = Identifier {
+            value: "c".into(),
+            scheme: Some("a|b".into()),
+        };
+        let split_value = Identifier {
+            value: "b|c".into(),
+            scheme: Some("a".into()),
+        };
+        assert_ne!(
+            bd_identifier_key(&split_scheme),
+            bd_identifier_key(&split_value)
+        );
     }
 }
