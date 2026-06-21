@@ -4,10 +4,6 @@
 //! reads happen via the standard ebook endpoints, which merge overrides
 //! into the wire DTO. Mounted on the REST router in [`super::rest_router`].
 
-// ---------------------------------------------------------------------------
-// F5.1 Metadata overrides (REST — mobile client).
-// ---------------------------------------------------------------------------
-
 use axum::{
     extract::{Path, State},
     response::{IntoResponse, Response},

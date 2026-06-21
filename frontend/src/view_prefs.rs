@@ -2,6 +2,7 @@
 //! per library-path in `localStorage`, mobile keeps an in-memory map, SSR
 //! returns defaults so first-hydration markup matches the WASM client.
 //! Shape lives in `omnibus-shared` so a future server endpoint can reuse it.
+//! In-file `#[cfg]`-framing dividers retained per rule 05's nav-aid exception.
 
 use omnibus_shared::ViewPrefs;
 

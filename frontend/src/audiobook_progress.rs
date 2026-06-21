@@ -12,6 +12,7 @@
 //! for an instant local position, then reconciles against the server
 //! before mounting. Saves write here AND fire-and-forget POST to the
 //! server. The stored value is the raw second-offset (no JSON envelope).
+//! In-file `#[cfg]`-framing dividers retained per rule 05's nav-aid exception.
 
 #[cfg(feature = "web")]
 const STORAGE_PREFIX: &str = "omn.listening::";
