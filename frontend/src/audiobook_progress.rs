@@ -12,12 +12,7 @@
 //! for an instant local position, then reconciles against the server
 //! before mounting. Saves write here AND fire-and-forget POST to the
 //! server. The stored value is the raw second-offset (no JSON envelope).
-//!
-//! The `#[cfg(feature = ...)]` blocks below carry the three per-target
-//! implementations of `load_impl`/`save_impl`/`load_rate_impl`/
-//! `save_rate_impl`. A directory split would force one `mod.rs` per target
-//! plus a re-export shim, so the framing dividers between web / mobile /
-//! SSR / tests stay as in-file nav aids.
+//! In-file `#[cfg]`-framing dividers retained per rule 05's nav-aid exception.
 
 #[cfg(feature = "web")]
 const STORAGE_PREFIX: &str = "omn.listening::";
