@@ -2,7 +2,7 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::EbookMetadata;
+use omnibus_shared::{EbookMetadata, Identifier};
 
 use crate::components::atrium::Cover;
 use crate::components::FormatSwitcher;
@@ -89,7 +89,7 @@ pub(super) fn BdRailSection(
                         if let Some(l) = b.language.clone() { BdMetaRow { k: "Language".to_string(), v: l } }
                         for ident in b.identifiers.iter() {
                             BdMetaRow {
-                                key: "{ident.scheme.as_deref().unwrap_or(ident.value.as_str())}",
+                                key: "{bd_identifier_key(ident)}",
                                 k: ident.scheme.clone().unwrap_or_else(|| "ID".into()),
                                 v: ident.value.clone(),
                             }
@@ -147,5 +147,71 @@ pub(super) fn BdRailSection(
                 }
             }
         }
+    }
+}
+
+/// Collision-free list key for an identifier row. A book can carry several
+/// identifiers sharing one `scheme` (the projection keeps every distinct
+/// value per scheme), so the key folds in `value` to stay unique among the
+/// keyed siblings — Dioxus panics when two keyed siblings share a key.
+///
+/// Both fields are `Debug`-quoted (not joined with a plain separator): a raw
+/// `scheme|value` join collides when the data itself contains the delimiter
+/// (`scheme="a|b", value="c"` vs `scheme="a", value="b|c"`), which would
+/// reintroduce the very panic this guards against. `Debug` escapes embedded
+/// quotes/backslashes, so the `(scheme, value)` pair maps injectively to the
+/// key.
+fn bd_identifier_key(ident: &Identifier) -> String {
+    format!("{:?}\u{1f}{:?}", ident.scheme, ident.value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bd_identifier_key_is_unique_for_same_scheme_distinct_values() {
+        // The book-detail crash repro: two `unknown`-scheme identifiers on
+        // one book must not collide on the rendered list key.
+        let isbn = Identifier {
+            value: "978-1-938570-40-7".into(),
+            scheme: Some("unknown".into()),
+        };
+        let urn = Identifier {
+            value: "urn:uuid:c0e51a66-085f-4805-b116-a0d451d281bd".into(),
+            scheme: Some("unknown".into()),
+        };
+        assert_ne!(bd_identifier_key(&isbn), bd_identifier_key(&urn));
+    }
+
+    #[test]
+    fn bd_identifier_key_is_unique_for_schemeless_distinct_values() {
+        let a = Identifier {
+            value: "a".into(),
+            scheme: None,
+        };
+        let b = Identifier {
+            value: "b".into(),
+            scheme: None,
+        };
+        assert_ne!(bd_identifier_key(&a), bd_identifier_key(&b));
+    }
+
+    #[test]
+    fn bd_identifier_key_does_not_collide_when_data_contains_the_delimiter() {
+        // A naive `scheme|value` join would map both of these to "a|b|c";
+        // the `Debug`-quoted encoding keeps them distinct.
+        let split_scheme = Identifier {
+            value: "c".into(),
+            scheme: Some("a|b".into()),
+        };
+        let split_value = Identifier {
+            value: "b|c".into(),
+            scheme: Some("a".into()),
+        };
+        assert_ne!(
+            bd_identifier_key(&split_scheme),
+            bd_identifier_key(&split_value)
+        );
     }
 }
