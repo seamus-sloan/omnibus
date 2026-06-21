@@ -205,12 +205,23 @@ fn build_crumbs(
     crumbs
 }
 
-/// Render the fully-loaded book detail view.
-fn render_loaded(
-    b: EbookMetadata,
-    author_books: Vec<EbookMetadata>,
-    merge_button: Option<Element>,
-) -> Element {
+/// Derived strings + flags `render_loaded` threads into the hero / rail /
+/// body sub-components. Computed once per render so the rsx stays a clean
+/// composition rather than re-doing every `.first()` / `.iter()` inline.
+struct BdViewData {
+    title: String,
+    primary_author: String,
+    authors_line: String,
+    kicker: String,
+    series: Option<String>,
+    accent_style: String,
+    has_audio: bool,
+    has_ebook: bool,
+    crumbs: Vec<BdCrumbItem>,
+}
+
+/// Compute the per-render derived view data for a loaded book.
+fn derive_view_data(b: &EbookMetadata) -> BdViewData {
     let title = b.title.clone().unwrap_or_else(|| b.filename.clone());
     let primary_author = b
         .creators
@@ -229,46 +240,59 @@ fn render_loaded(
         .and_then(|p| p.get(0..4))
         .unwrap_or("")
         .to_string();
-    let kicker = kicker_label(&year);
     let series = series_label(b.series.as_deref(), b.series_index.as_deref());
-    let accent_style = b
-        .accent
-        .as_deref()
-        .map(|a| format!("--accent: {a};"))
-        .unwrap_or_default();
+    let crumbs = build_crumbs(b, &title, &primary_author, &series);
+    BdViewData {
+        kicker: kicker_label(&year),
+        accent_style: b
+            .accent
+            .as_deref()
+            .map(|a| format!("--accent: {a};"))
+            .unwrap_or_default(),
+        has_audio: b
+            .formats
+            .iter()
+            .any(|f| f.eq_ignore_ascii_case("m4b") || f.eq_ignore_ascii_case("mp3")),
+        has_ebook: b
+            .formats
+            .iter()
+            .any(|f| f.eq_ignore_ascii_case("epub") || f.eq_ignore_ascii_case("pdf")),
+        title,
+        primary_author,
+        authors_line,
+        series,
+        crumbs,
+    }
+}
 
-    let has_audio = b
-        .formats
-        .iter()
-        .any(|f| f.eq_ignore_ascii_case("m4b") || f.eq_ignore_ascii_case("mp3"));
-    let has_ebook = b
-        .formats
-        .iter()
-        .any(|f| f.eq_ignore_ascii_case("epub") || f.eq_ignore_ascii_case("pdf"));
-
-    let crumbs = build_crumbs(&b, &title, &primary_author, &series);
-
+/// Render the fully-loaded book detail view.
+fn render_loaded(
+    b: EbookMetadata,
+    author_books: Vec<EbookMetadata>,
+    merge_button: Option<Element>,
+) -> Element {
+    let v = derive_view_data(&b);
     rsx! {
-        div { class: "bd-root", style: "{accent_style}",
+        div { class: "bd-root", style: "{v.accent_style}",
             BdHeroSection {
                 b: b.clone(),
-                title: title.clone(),
-                kicker: kicker.clone(),
-                crumbs,
-                has_ebook,
-                has_audio,
+                title: v.title.clone(),
+                kicker: v.kicker,
+                crumbs: v.crumbs,
+                has_ebook: v.has_ebook,
+                has_audio: v.has_audio,
             }
             section { class: "bd-body-grid",
                 BdBodyMain {
-                    title: title.clone(),
-                    primary_author: primary_author.clone(),
-                    author_books: author_books.clone(),
+                    title: v.title.clone(),
+                    primary_author: v.primary_author,
+                    author_books,
                 }
                 BdRailSection {
-                    b: b.clone(),
-                    title: title.clone(),
-                    authors_line: authors_line.clone(),
-                    series: series.clone(),
+                    b,
+                    title: v.title,
+                    authors_line: v.authors_line,
+                    series: v.series,
                     merge_button,
                 }
             }
