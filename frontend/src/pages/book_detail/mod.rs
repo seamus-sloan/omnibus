@@ -121,10 +121,6 @@ pub fn BookDetailPage(uuid: String) -> Element {
     // client after `current_user()` resolves an admin user, so this read
     // returns `false` during SSR and for non-admins on every platform.
     let is_admin_flag = is_admin();
-    #[cfg_attr(feature = "mobile", allow(unused_variables))]
-    let page_title = b.title.clone().unwrap_or_else(|| b.filename.clone());
-    #[cfg_attr(feature = "mobile", allow(unused_variables))]
-    let page_uuid = b.unique_identifier.clone().unwrap_or_default();
 
     // Rail "Merge with…" button (admin, web only) — threaded down as a
     // prebuilt Element so the rail component stays platform-agnostic.
@@ -140,8 +136,7 @@ pub fn BookDetailPage(uuid: String) -> Element {
         undo_error,
         refresh,
         server_url.clone(),
-        page_uuid,
-        page_title,
+        b.clone(),
     );
     #[cfg(feature = "mobile")]
     let merge_ui: Option<Element> = merge::build_merge_ui();
