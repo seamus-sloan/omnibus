@@ -220,19 +220,21 @@ fn derive_view_state(sigs: &LandingSignals, query: Signal<String>) -> LandingVie
     let prefs_sig = sigs.prefs;
     let visible = use_memo(move || {
         let is_search = !query().trim().is_empty();
-        let bs = books_sig();
         if is_search {
-            let p = prefs_sig();
+            let bs = books_sig.read();
+            let p = prefs_sig.read();
             sort_books(apply_filters(&bs, &p.filters), p.sort_key, p.sort_dir)
         } else {
-            bs
+            // Browse renders the server-ordered list verbatim; the memo stores
+            // a `Vec` by value, so a clone is unavoidable on this branch.
+            books_sig()
         }
     });
     // Facets come from the server on browse, client-tally on search.
     let server_facets_sig = sigs.server_facets;
     let facets = use_memo(move || match server_facets_sig() {
         Some(s) => FacetCounts::from_shared(s),
-        None => facet_counts(&books_sig()),
+        None => facet_counts(&books_sig.read()),
     });
 
     let is_search = !query().trim().is_empty();
@@ -240,11 +242,11 @@ fn derive_view_state(sigs: &LandingSignals, query: Signal<String>) -> LandingVie
     // Header count: the full library total on browse; the (capped) result
     // count on search.
     let book_count = if is_search {
-        (sigs.books)().len()
+        sigs.books.read().len()
     } else {
         (sigs.total)()
             .map(|t| usize::try_from(t).unwrap_or(0))
-            .unwrap_or_else(|| (sigs.books)().len())
+            .unwrap_or_else(|| sigs.books.read().len())
     };
     let visible_books = visible();
     let visible_is_empty = visible_books.is_empty();
@@ -264,7 +266,7 @@ fn derive_view_state(sigs: &LandingSignals, query: Signal<String>) -> LandingVie
         visible_count: visible_books.len(),
         visible_books,
         visible_is_empty,
-        books_empty: (sigs.books)().is_empty(),
+        books_empty: sigs.books.read().is_empty(),
         view_mode: prefs_snapshot.view_mode,
         facet_counts_view: facets(),
         filters_for_chips: prefs_snapshot.filters.clone(),
