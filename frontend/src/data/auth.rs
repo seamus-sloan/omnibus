@@ -1,13 +1,8 @@
-//! Login / register / logout / me transport.
-//!
-//! Mobile uses bearer tokens via REST; web hits the same REST endpoints
-//! through `gloo-net` (the browser round-trips the session cookie) instead
-//! of going through Dioxus server functions so cookie handling lives on
-//! the existing CookieJar extractor. The two transports are kept in one
-//! file (rather than split into sibling modules) because their public
-//! surfaces don't overlap — mobile exposes `mobile_login` / `mobile_register`,
-//! web exposes `login` / `register` — so a module split would only move the
-//! `#[cfg]` gates without consolidating any duplication.
+//! Login / register / logout / me transport. Mobile uses bearer tokens
+//! via REST; web hits the same REST endpoints through `gloo-net` so
+//! cookie handling stays on the existing CookieJar extractor. Login and
+//! register diverge by name across the `#[cfg]` split (`mobile_login` vs
+//! `login`); `logout` and `current_user` are shared names with per-target bodies.
 
 #[cfg(any(feature = "web", feature = "mobile"))]
 use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};

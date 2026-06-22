@@ -1,9 +1,7 @@
-//! Reading/listening progress-sync transport. Wraps `POST /api/progress`,
-//! `GET /api/progress/{uuid}`, and `POST /api/progress/sessions` for
-//! mobile, plus the matching `rpc_save_progress` / `rpc_get_progress` /
-//! `rpc_record_sessions` server functions on the web/SSR path. Mobile and
-//! web/SSR variants share each function's public signature so callers stay
-//! platform-agnostic; the `#[cfg]` gates carry the split.
+//! Progress sync transport: `save_progress` / `get_progress` /
+//! `record_sessions` over REST on mobile, plus matching `rpc_*` server
+//! functions on web/SSR. Public signatures are identical across the
+//! `#[cfg]` split so callers stay platform-agnostic.
 
 use omnibus_shared::{ProgressFormat, ProgressRecord, ProgressUpdate, SessionReport};
 

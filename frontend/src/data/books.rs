@@ -1,10 +1,8 @@
-//! Book / library / search / settings / overrides / worker fetchers.
-//!
-//! Each function has a mobile variant (REST via `reqwest`) and a web/SSR
-//! variant (Dioxus server-function wrapper). The signatures are identical
-//! across feature gates so call sites stay platform-agnostic; the
-//! `#[cfg]` gates carry the split. Web/SSR wrappers ignore `server_url`
-//! because server functions resolve against the page origin.
+//! Book / library / search / settings / overrides / worker fetchers. Each
+//! function has a mobile REST variant (`reqwest`) and a web/SSR variant
+//! (Dioxus server-function wrapper) with identical signatures across the
+//! `#[cfg]` split. Web/SSR wrappers ignore `server_url` because server
+//! functions resolve against the page origin.
 
 use omnibus_shared::{
     EbookLibrary, EbookMetadata, LibraryContents, LibraryPage, MergeBooksResult, MetadataOverrides,
