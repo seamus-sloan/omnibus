@@ -1,6 +1,8 @@
 //! Highlight annotation transport. Wraps the five highlight CRUD operations
 //! for mobile (`/api/highlights/*` via reqwest) and web/SSR (RPC server
-//! functions in `crate::rpc`).
+//! functions in `crate::rpc`). Mobile and web/SSR variants share each
+//! function's public signature so callers stay platform-agnostic; the
+//! `#[cfg]` gates carry the split.
 
 use omnibus_shared::{CreateHighlight, Highlight, HighlightColor, UpdateHighlightNote};
 
@@ -9,8 +11,6 @@ use super::note_server_fn_err;
 use super::DataError;
 #[cfg(feature = "mobile")]
 use super::{drain_error, http_client, note_status, with_bearer};
-
-// ===== Mobile: highlight CRUD =====
 
 #[cfg(feature = "mobile")]
 pub async fn create_highlight(
@@ -88,8 +88,6 @@ pub async fn delete_highlight(server_url: &str, id: i64) -> Result<(), DataError
     }
     Ok(())
 }
-
-// ===== Web / SSR: highlight CRUD =====
 
 #[cfg(not(feature = "mobile"))]
 pub async fn create_highlight(

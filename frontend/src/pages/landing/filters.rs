@@ -132,10 +132,7 @@ fn FacetSection(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Format chips (top-of-page inline filter)
-// ---------------------------------------------------------------------------
-
+/// Format chips — top-of-page inline filter to toggle visible formats (epub, pdf, …).
 #[component]
 pub(super) fn FormatChips(
     counts: Vec<(String, usize)>,

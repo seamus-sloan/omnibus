@@ -113,7 +113,7 @@ fn AuthorPhotoEditModal(
                     p { class: "subtitle author-photo-modal__sub", "{author_name}" }
                 }
 
-                // ===== Option 1: paste image URL =====
+                // Option 1: paste image URL.
                 section { class: "author-photo-modal__section",
                     label { class: "label", r#for: "author-photo-url",
                         "Paste image URL"
@@ -161,7 +161,7 @@ fn AuthorPhotoEditModal(
                     }
                 }
 
-                // ===== Option 2: upload file =====
+                // Option 2: upload file.
                 section { class: "author-photo-modal__section",
                     label { class: "label", r#for: "author-photo-file",
                         "Upload from this device"
@@ -216,7 +216,7 @@ fn AuthorPhotoEditModal(
                     }
                 }
 
-                // ===== Option 3: scan Open Library =====
+                // Option 3: scan Open Library.
                 section { class: "author-photo-modal__section",
                     label { class: "label", "Or fetch automatically" }
                     button {

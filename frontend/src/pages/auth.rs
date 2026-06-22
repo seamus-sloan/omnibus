@@ -359,8 +359,6 @@ fn PasswordRequirementRow(ok: bool, text: String) -> Element {
     }
 }
 
-// ---- presentational helpers ---------------------------------------------
-
 #[derive(Clone, Debug, PartialEq)]
 enum RegisterError {
     Username(String),
@@ -429,20 +427,17 @@ fn score_password(pw: &str) -> (StrengthScore, &'static str, [bool; 3]) {
     (score, label, [len_ok, mixed_case, has_number_or_symbol])
 }
 
-// ---- submit helpers ------------------------------------------------------
-//
 // Per-target HTTP transports for auth. The cfg gates are kept mutually
-// exclusive within this file: the web impl compiles only for `web`
-// builds without `mobile`, the mobile impl compiles for any `mobile`
-// build, and the no-feature stub covers SSR-without-web. The
-// `web` + `mobile` combination is rejected at crate level by a
-// `compile_error!` in `frontend/src/components/mod.rs`, so this layer
-// is defense-in-depth rather than the primary guard — but keeping the
-// gates precise here means a future change that loosens the crate-level
-// guard won't silently produce duplicate `submit_*` definitions.
-// `server`-only builds (no `web` and no `mobile`) get a compile-only
-// stub — SSR never executes the submit closure, so the stub is
-// unreachable at runtime.
+// exclusive within this file: the web impl compiles only for `web` builds
+// without `mobile`, the mobile impl compiles for any `mobile` build, and
+// the no-feature stub covers SSR-without-web. The `web` + `mobile`
+// combination is rejected at crate level by a `compile_error!` in
+// `frontend/src/components/mod.rs`, so this layer is defense-in-depth
+// rather than the primary guard — but keeping the gates precise here
+// means a future change that loosens the crate-level guard won't silently
+// produce duplicate `submit_*` definitions. `server`-only builds (no
+// `web` and no `mobile`) get a compile-only stub — SSR never executes
+// the submit closure, so the stub is unreachable at runtime.
 
 #[cfg(all(feature = "web", not(feature = "mobile")))]
 async fn submit_login(_server_url: &str, username: String, password: String) -> Result<(), String> {
