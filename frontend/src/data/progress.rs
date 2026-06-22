@@ -1,7 +1,9 @@
 //! Reading/listening progress-sync transport. Wraps `POST /api/progress`,
 //! `GET /api/progress/{uuid}`, and `POST /api/progress/sessions` for
 //! mobile, plus the matching `rpc_save_progress` / `rpc_get_progress` /
-//! `rpc_record_sessions` server functions on the web/SSR path.
+//! `rpc_record_sessions` server functions on the web/SSR path. Mobile and
+//! web/SSR variants share each function's public signature so callers stay
+//! platform-agnostic; the `#[cfg]` gates carry the split.
 
 use omnibus_shared::{ProgressFormat, ProgressRecord, ProgressUpdate, SessionReport};
 
@@ -10,8 +12,6 @@ use super::note_server_fn_err;
 use super::DataError;
 #[cfg(feature = "mobile")]
 use super::{drain_error, http_client, note_status, with_bearer};
-
-// ===== Mobile: F2.1 progress sync =====
 
 /// POST `/api/progress` — persist the latest reading/listening position.
 #[cfg(feature = "mobile")]
@@ -67,8 +67,6 @@ pub async fn record_sessions(
     let body: serde_json::Value = response.json().await?;
     Ok(body.get("recorded").and_then(|v| v.as_u64()).unwrap_or(0))
 }
-
-// ===== Web / SSR: F2.1 progress sync =====
 
 /// Web/SSR `save_progress` — server-function wrapper that proxies to `rpc_save_progress`.
 #[cfg(not(feature = "mobile"))]

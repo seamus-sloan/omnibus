@@ -379,10 +379,6 @@ pub async fn rpc_search(q: String) -> Result<EbookLibrary> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// Discovery pages (F1.8)
-// ---------------------------------------------------------------------------
-
 /// Fetch a single author and all their books. POST for the same reason as
 /// `rpc_get_ebook` — needs `id` in the body.
 ///
@@ -598,13 +594,10 @@ pub async fn rpc_delete_author(id: i64) -> Result<u64> {
     Ok(db::delete_author(&pool.0, id).await?)
 }
 
-// ---------------------------------------------------------------------------
-// F2.1 Progress sync (web RPC). Mobile uses the analogous REST routes in
-// `server::backend::progress`. All three use POST because Dioxus `#[get]`
-// server functions can't carry an argument body — same rationale as
-// `rpc_get_ebook`.
-// ---------------------------------------------------------------------------
-
+/// Progress-sync save. Mobile uses the analogous REST route in
+/// `server::backend::progress`. POST because Dioxus `#[get]` server
+/// functions can't carry an argument body — same rationale as
+/// `rpc_get_ebook`; the next two endpoints follow the same pattern.
 #[post("/api/rpc/progress", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_save_progress(update: ProgressUpdate) -> Result<ProgressRecord> {
     if let Err(msg) = update.validate() {
@@ -654,11 +647,9 @@ pub async fn rpc_search_palette(q: String) -> Result<PaletteResults> {
     Ok(db::search_palette(&pool.0, &path, &q).await?)
 }
 
-// ---------------------------------------------------------------------------
-// F2.4b Highlight annotations (web RPC). Mobile uses the REST routes in
-// `server::backend::highlights`.
-// ---------------------------------------------------------------------------
-
+/// Create a highlight on a book. Mobile uses the analogous REST route in
+/// `server::backend::highlights`; the rest of this family of RPCs follows
+/// the same web-vs-mobile split.
 #[post("/api/rpc/highlights/create", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_create_highlight(input: CreateHighlight) -> Result<Highlight> {
     if let Err(msg) = input.validate() {

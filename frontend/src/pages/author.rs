@@ -76,10 +76,6 @@ pub fn AuthorPage(id: i64) -> Element {
     render_author(a, server_url, author, is_admin_flag)
 }
 
-// ---------------------------------------------------------------------------
-// View
-// ---------------------------------------------------------------------------
-
 fn render_author(
     a: AuthorDetail,
     server_url: String,

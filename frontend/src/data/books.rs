@@ -2,7 +2,9 @@
 //!
 //! Each function has a mobile variant (REST via `reqwest`) and a web/SSR
 //! variant (Dioxus server-function wrapper). The signatures are identical
-//! across feature gates so call sites stay platform-agnostic.
+//! across feature gates so call sites stay platform-agnostic; the
+//! `#[cfg]` gates carry the split. Web/SSR wrappers ignore `server_url`
+//! because server functions resolve against the page origin.
 
 use omnibus_shared::{
     EbookLibrary, EbookMetadata, LibraryContents, LibraryPage, MergeBooksResult, MetadataOverrides,
@@ -208,11 +210,6 @@ pub async fn delete_overrides(
     }
     Ok(Some(response.json::<EbookMetadata>().await?))
 }
-
-// ===== Web / fullstack-SSR transport: dioxus-fullstack server functions =====
-//
-// `server_url` is unused here — server functions always resolve against the
-// page origin. We keep the parameter so the call sites stay platform-agnostic.
 
 /// Web/SSR `get_settings` — server-function wrapper that proxies to `rpc_get_settings`.
 #[cfg(not(feature = "mobile"))]

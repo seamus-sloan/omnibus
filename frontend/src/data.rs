@@ -35,18 +35,16 @@ pub use progress::*;
 pub use series::*;
 pub use tags::*;
 
-// ===== Typed transport error (#96) =====
-//
-// Replaces the previous `Result<T, String>` everywhere in this module so
-// callers can distinguish failure modes by type — most importantly
-// `Unauthorized`, which the mobile 401 handler and the web router both key
-// on. The variants that carry a foreign error type (`reqwest`, `serde_json`)
-// are feature-gated to match the optional deps that provide them: `reqwest`
-// is mobile-only, `serde_json` is web+mobile. `Unauthorized`, `Http`, and
-// the `Other` catch-all are always present so the enum's public shape is
-// stable across every build that compiles the callers.
-
 /// Errors surfaced by the feature-gated data transport.
+///
+/// Replaces the previous `Result<T, String>` so callers can distinguish
+/// failure modes by type — most importantly `Unauthorized`, which the
+/// mobile 401 handler and the web router both key on. The variants that
+/// carry a foreign error type (`reqwest`, `serde_json`) are feature-gated
+/// to match the optional deps that provide them: `reqwest` is mobile-only,
+/// `serde_json` is web+mobile. `Unauthorized`, `Http`, and the `Other`
+/// catch-all are always present so the enum's public shape is stable
+/// across every build that compiles the callers.
 #[derive(Debug, thiserror::Error)]
 pub enum DataError {
     /// `reqwest`-level failure on the mobile transport: connect / timeout /
@@ -90,8 +88,6 @@ impl DataError {
         matches!(self, DataError::Unauthorized)
     }
 }
-
-// ===== Mobile transport: reqwest =====
 
 /// Dioxus context wrapper holding the backend base URL for mobile clients.
 #[cfg(feature = "mobile")]
@@ -441,21 +437,20 @@ pub(crate) async fn drain_error(
     }
 }
 
-// ===== Web auth state =====
-//
-// #57: web counterpart to `token_store::subscribe()`. The web client uses
-// session cookies (round-tripped automatically by the browser), so there's
-// no client-side token to clear — but we still need a reactive signal so
-// the router can redirect to /login when any data-layer call returns 401
-// (session expired, server restarted, admin revoked). All web data
-// wrappers route their errors through [`note_server_fn_err`] below, which
-// pushes `false` onto this channel on a 401 response; `ScreenLayout`
-// subscribes and `nav.replace`s.
-
 #[cfg(feature = "web")]
 pub mod web_auth_state {
     //! Reactive web-side auth-state channel used by `ScreenLayout` to
     //! redirect to `/login` whenever a data call surfaces a 401.
+    //!
+    //! The web counterpart to [`super::token_store::subscribe`]: the web
+    //! client uses session cookies (round-tripped automatically by the
+    //! browser) so there's no client-side token to clear, but the router
+    //! still needs a reactive signal to redirect to `/login` when any
+    //! data-layer call returns 401 (session expired, server restarted,
+    //! admin revoked). All web data wrappers route their errors through
+    //! [`super::note_server_fn_err`], which pushes `false` onto this
+    //! channel on a 401 response; `ScreenLayout` subscribes and
+    //! `nav.replace`s.
 
     use std::sync::OnceLock;
     use tokio::sync::watch;
