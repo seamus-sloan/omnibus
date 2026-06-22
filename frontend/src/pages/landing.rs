@@ -10,7 +10,9 @@
 //! [`crate::view_prefs`].
 
 use dioxus::prelude::*;
-use omnibus_shared::{EbookMetadata, FacetCounts as ServerFacetCounts, ViewFilters, ViewPrefs};
+use omnibus_shared::{
+    EbookMetadata, FacetCounts as ServerFacetCounts, ViewFilters, ViewMode, ViewPrefs,
+};
 
 use crate::components::chip_editor::SuggestionItem;
 use crate::{use_search_query, use_server_url, view_prefs};
@@ -40,11 +42,30 @@ use sorting::sort_books;
 /// oversized first paint.
 pub(super) const PAGE_SIZE: i64 = 100;
 
-/// Landing page — primary library surface. See the module doc for the
-/// browse-paginates / search-stays-client-side split.
-#[component]
-pub fn LandingPage() -> Element {
-    let server_url = use_server_url();
+/// Owned handles for every reactive signal the landing page wires up.
+/// Returned by [`setup_landing_signals`] so [`LandingPage`] can stay a thin
+/// composition of named stages.
+#[derive(Copy, Clone)]
+struct LandingSignals {
+    books: Signal<Vec<EbookMetadata>>,
+    next_cursor: Signal<Option<String>>,
+    server_facets: Signal<Option<ServerFacetCounts>>,
+    total: Signal<Option<i64>>,
+    lib_path: Signal<Option<String>>,
+    lib_error: Signal<Option<String>>,
+    loading: Signal<bool>,
+    loading_more: Signal<bool>,
+    error: Signal<Option<String>>,
+    prefs: Signal<ViewPrefs>,
+    want_more: Signal<u32>,
+    is_admin: Signal<bool>,
+    pools: SuggestionPools,
+}
+
+/// Construct every signal the landing page owns and arm the effects that
+/// fetch data into them. Must run from inside [`LandingPage`] — every call
+/// here is a Dioxus hook, so the call order is stable across renders.
+fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSignals {
     // Accumulated result rows: one growing browse list, or the capped search
     // result set. `next_cursor` is `Some` only while more browse pages remain.
     let books = use_signal(Vec::<EbookMetadata>::new);
@@ -56,18 +77,57 @@ pub fn LandingPage() -> Element {
     let loading = use_signal(|| true);
     let loading_more = use_signal(|| false);
     let error = use_signal(|| None::<String>);
-    let mut prefs = use_signal(ViewPrefs::default);
+    let prefs = use_signal(ViewPrefs::default);
     // Bumped by the Load-more button and the web scroll observer; one effect
     // watches it and appends the next page.
-    let mut want_more = use_signal(|| 0u32);
+    let want_more = use_signal(|| 0u32);
     // Monotonic fetch epoch, bumped on every page-1 refetch. An in-flight
     // page-1 fetch or load-more append captures the epoch and drops its result
     // if a newer fetch (sort/dir/filter/query change) superseded it mid-flight
     // — otherwise it would splice an old result stream onto the new list.
     let fetch_epoch = use_signal(|| 0u64);
-    // Search box lives in the top nav; the query is shared via context.
-    let query = use_search_query().0;
+    let is_admin = setup_admin_signal();
+    // Suggestion pools for the inline Authors chip editor and the
+    // (future-reserved) Tags pool, each carrying the dropdown book-count.
+    let pools = SuggestionPools {
+        authors: use_signal(Vec::<SuggestionItem>::new),
+        tags: use_signal(Vec::<SuggestionItem>::new),
+    };
+    let fetch_sigs = FetchSignals {
+        books,
+        next_cursor,
+        server_facets,
+        total,
+        lib_path,
+        lib_error,
+        loading,
+        loading_more,
+        error,
+        fetch_epoch,
+    };
+    wire_landing_effects(
+        server_url, query, prefs, want_more, is_admin, pools, fetch_sigs,
+    );
+    LandingSignals {
+        books,
+        next_cursor,
+        server_facets,
+        total,
+        lib_path,
+        lib_error,
+        loading,
+        loading_more,
+        error,
+        prefs,
+        want_more,
+        is_admin,
+        pools,
+    }
+}
 
+/// Wire `is_admin` to the current-user context on web; SSR/mobile leave it
+/// at its `false` default so the first paint matches.
+fn setup_admin_signal() -> Signal<bool> {
     // F5.9-lite: admin-only inline-edit affordances on the power-user table.
     // Reads from the App-wide `CurrentUser` context — no per-mount round-trip.
     #[cfg_attr(not(feature = "web"), allow(unused_mut))]
@@ -79,14 +139,23 @@ pub fn LandingPage() -> Element {
             is_admin.set(matches!(user_ctx(), Some(Some(ref u)) if u.is_admin));
         });
     }
+    is_admin
+}
 
-    // Suggestion pools for the inline Authors chip editor and the
-    // (future-reserved) Tags pool, each carrying the dropdown book-count.
-    let pools = SuggestionPools {
-        authors: use_signal(Vec::<SuggestionItem>::new),
-        tags: use_signal(Vec::<SuggestionItem>::new),
-    };
-    spawn_suggestion_pools_effect(server_url.clone(), is_admin, pools);
+/// Arm every reactive side-effect the landing page needs: admin-gated
+/// suggestion-pool refetch, page-1 fetch on sort/filter/query change, the
+/// load-more append + web scroll observer, and prefs hydration once the
+/// library path resolves.
+fn wire_landing_effects(
+    server_url: &str,
+    query: Signal<String>,
+    mut prefs: Signal<ViewPrefs>,
+    want_more: Signal<u32>,
+    is_admin: Signal<bool>,
+    pools: SuggestionPools,
+    fetch_sigs: FetchSignals,
+) {
+    spawn_suggestion_pools_effect(server_url.to_string(), is_admin, pools);
 
     // Refetch page 1 whenever the search query or a *data-affecting* pref
     // (sort axis/dir or filters) changes. The `use_memo` keys the effect on
@@ -100,27 +169,16 @@ pub fn LandingPage() -> Element {
             p.filters.clone(),
         )
     });
-    let sigs = FetchSignals {
-        books,
-        next_cursor,
-        server_facets,
-        total,
-        lib_path,
-        lib_error,
-        loading,
-        loading_more,
-        error,
-        fetch_epoch,
-    };
-    spawn_page_fetch_effect(server_url.clone(), fetch_key, sigs);
-    spawn_load_more_effect(server_url.clone(), want_more, prefs, sigs);
+    spawn_page_fetch_effect(server_url.to_string(), fetch_key, fetch_sigs);
+    spawn_load_more_effect(server_url.to_string(), want_more, prefs, fetch_sigs);
     #[cfg(feature = "web")]
-    spawn_load_more_observer(next_cursor);
+    spawn_load_more_observer(fetch_sigs.next_cursor);
 
     // Hydrate persisted prefs when the library path resolves. The `!=` guard
     // makes this idempotent: re-running it after a page-1 refetch (which re-sets
     // `lib_path`) is a no-op once prefs match, so it can't loop with the
     // fetch effect.
+    let lib_path = fetch_sigs.lib_path;
     use_effect(move || {
         if let Some(path) = lib_path.read().clone() {
             let stored = view_prefs::load(&path);
@@ -129,129 +187,205 @@ pub fn LandingPage() -> Element {
             }
         }
     });
+}
 
+/// Per-render snapshot of the data the markup sub-components consume.
+/// Computed by [`derive_view_state`] so the [`LandingPage`] body is just
+/// composition.
+struct LandingViewState {
+    is_loading: bool,
+    page_error: Option<String>,
+    lib_err: Option<String>,
+    path_subtitle: String,
+    path_missing: bool,
+    book_count: usize,
+    visible_count: usize,
+    visible_books: Vec<EbookMetadata>,
+    visible_is_empty: bool,
+    books_empty: bool,
+    view_mode: ViewMode,
+    facet_counts_view: FacetCounts,
+    filters_for_chips: ViewFilters,
+    has_more: bool,
+    is_loading_more: bool,
+}
+
+/// Snapshot every signal the markup needs in one place. Reads are cheap, but
+/// doing them inline in `rsx!` would multiply each `prefs()`/`books()` call
+/// across the three child components.
+fn derive_view_state(sigs: &LandingSignals, query: Signal<String>) -> LandingViewState {
     // Browse is already server-ordered + server-filtered; render `books`
     // verbatim. Search sorts + filters the capped result set client-side.
+    let books_sig = sigs.books;
+    let prefs_sig = sigs.prefs;
     let visible = use_memo(move || {
         let is_search = !query().trim().is_empty();
-        let bs = books();
+        let bs = books_sig();
         if is_search {
-            let p = prefs();
+            let p = prefs_sig();
             sort_books(apply_filters(&bs, &p.filters), p.sort_key, p.sort_dir)
         } else {
             bs
         }
     });
     // Facets come from the server on browse, client-tally on search.
-    let facets = use_memo(move || match server_facets() {
+    let server_facets_sig = sigs.server_facets;
+    let facets = use_memo(move || match server_facets_sig() {
         Some(s) => FacetCounts::from_shared(s),
-        None => facet_counts(&books()),
+        None => facet_counts(&books_sig()),
     });
 
-    let is_loading = loading();
-    let page_error = error();
-    let path_value = lib_path();
-    let lib_err = lib_error();
     let is_search = !query().trim().is_empty();
+    let path_value = (sigs.lib_path)();
     // Header count: the full library total on browse; the (capped) result
     // count on search.
     let book_count = if is_search {
-        books().len()
+        (sigs.books)().len()
     } else {
-        total()
+        (sigs.total)()
             .map(|t| usize::try_from(t).unwrap_or(0))
-            .unwrap_or_else(|| books().len())
+            .unwrap_or_else(|| (sigs.books)().len())
     };
-    let view_mode = prefs().view_mode;
     let visible_books = visible();
     let visible_is_empty = visible_books.is_empty();
-    let facet_counts_view = facets();
-    let has_more = next_cursor().is_some();
-    let is_loading_more = loading_more();
-
-    let server_url_for_row = server_url.clone();
-    let path_for_save = path_value.clone();
-    let save = {
-        let path = path_for_save.clone();
-        move |new_prefs: ViewPrefs| {
-            if let Some(path) = path.as_ref() {
-                view_prefs::save(path, &new_prefs);
-            }
-            prefs.set(new_prefs);
-        }
-    };
-
     let path_subtitle = path_value
         .as_ref()
         .map(|p| short_path(p))
         .unwrap_or_default();
-    let visible_count = visible_books.len();
-    let filters_for_chips = prefs().filters.clone();
+    let prefs_snapshot = (sigs.prefs)();
 
-    let on_prefs_change = {
-        let mut save = save.clone();
-        move |next: ViewPrefs| save(next)
-    };
-    let on_formats_change = {
-        let mut save = save.clone();
-        move |formats: Vec<String>| {
-            let mut next = prefs.peek().clone();
-            next.filters.formats = formats;
-            save(next);
+    LandingViewState {
+        is_loading: (sigs.loading)(),
+        page_error: (sigs.error)(),
+        lib_err: (sigs.lib_error)(),
+        path_subtitle,
+        path_missing: path_value.is_none(),
+        book_count,
+        visible_count: visible_books.len(),
+        visible_books,
+        visible_is_empty,
+        books_empty: (sigs.books)().is_empty(),
+        view_mode: prefs_snapshot.view_mode,
+        facet_counts_view: facets(),
+        filters_for_chips: prefs_snapshot.filters.clone(),
+        has_more: (sigs.next_cursor)().is_some(),
+        is_loading_more: (sigs.loading_more)(),
+    }
+}
+
+/// `EventHandler` bundle dispatched into by the markup sub-components.
+/// Built by [`build_handlers`] from the owned signals so the
+/// [`LandingPage`] body stays a thin composition.
+struct LandingHandlers {
+    on_prefs_change_header: EventHandler<ViewPrefs>,
+    on_prefs_change_content: EventHandler<ViewPrefs>,
+    on_formats_change: EventHandler<Vec<String>>,
+    on_load_more: EventHandler<()>,
+    on_clear_filters: EventHandler<()>,
+}
+
+/// Build the UI-event handlers from the landing signals. `save` is `Copy`
+/// because every capture (`prefs`, `lib_path` — both `Signal`) is `Copy`,
+/// so each handler can take its own reference to the same persisted-prefs
+/// update path without cloning closure state.
+fn build_handlers(sigs: &LandingSignals) -> LandingHandlers {
+    let mut prefs = sigs.prefs;
+    let lib_path = sigs.lib_path;
+    let mut want_more = sigs.want_more;
+    let save = move |new_prefs: ViewPrefs| {
+        if let Some(path) = lib_path.peek().as_ref() {
+            view_prefs::save(path, &new_prefs);
         }
+        prefs.set(new_prefs);
     };
-    let on_load_more = move |_| {
-        want_more.with_mut(|n| *n += 1);
-    };
-    let on_clear_filters = {
-        let mut save = save.clone();
-        move |_| {
-            let mut next = prefs.peek().clone();
-            next.filters = ViewFilters::default();
-            save(next);
-        }
-    };
-    let books_empty = books().is_empty();
+    LandingHandlers {
+        on_prefs_change_header: EventHandler::new({
+            let mut save = save;
+            move |next: ViewPrefs| save(next)
+        }),
+        on_prefs_change_content: EventHandler::new({
+            let mut save = save;
+            move |next: ViewPrefs| save(next)
+        }),
+        on_formats_change: EventHandler::new({
+            let mut save = save;
+            move |formats: Vec<String>| {
+                let mut next = prefs.peek().clone();
+                next.filters.formats = formats;
+                save(next);
+            }
+        }),
+        on_load_more: EventHandler::new(move |_: ()| {
+            want_more.with_mut(|n| *n += 1);
+        }),
+        on_clear_filters: EventHandler::new({
+            let mut save = save;
+            move |_: ()| {
+                let mut next = prefs.peek().clone();
+                next.filters = ViewFilters::default();
+                save(next);
+            }
+        }),
+    }
+}
+
+/// Landing page — primary library surface. See the module doc for the
+/// browse-paginates / search-stays-client-side split.
+#[component]
+pub fn LandingPage() -> Element {
+    let server_url = use_server_url();
+    // Search box lives in the top nav; the query is shared via context.
+    let query = use_search_query().0;
+    let sigs = setup_landing_signals(&server_url, query);
+    let view = derive_view_state(&sigs, query);
+    let prefs = sigs.prefs;
+    let LandingHandlers {
+        on_prefs_change_header,
+        on_prefs_change_content,
+        on_formats_change,
+        on_load_more,
+        on_clear_filters,
+    } = build_handlers(&sigs);
 
     rsx! {
         LandingHeader {
-            path_subtitle,
-            book_count,
+            path_subtitle: view.path_subtitle,
+            book_count: view.book_count,
             prefs: prefs(),
-            on_prefs_change: on_prefs_change.clone(),
-            path_missing: path_value.is_none(),
-            page_error: page_error.clone(),
-            lib_err: lib_err.clone(),
+            on_prefs_change: on_prefs_change_header,
+            path_missing: view.path_missing,
+            page_error: view.page_error.clone(),
+            lib_err: view.lib_err.clone(),
         }
 
         FormatChips {
-            counts: facet_counts_view.formats.clone(),
-            visible_count,
-            book_count,
-            selected: filters_for_chips.formats.clone(),
+            counts: view.facet_counts_view.formats.clone(),
+            visible_count: view.visible_count,
+            book_count: view.book_count,
+            selected: view.filters_for_chips.formats.clone(),
             on_change: on_formats_change,
         }
 
         LandingContent {
             ..LandingContentProps {
-                is_loading,
-                visible_books,
-                visible_is_empty,
-                books_empty,
-                lib_err,
-                page_error,
-                view_mode,
+                is_loading: view.is_loading,
+                visible_books: view.visible_books,
+                visible_is_empty: view.visible_is_empty,
+                books_empty: view.books_empty,
+                lib_err: view.lib_err,
+                page_error: view.page_error,
+                view_mode: view.view_mode,
                 prefs: prefs(),
-                facet_counts_view,
-                has_more,
-                is_loading_more,
-                server_url: server_url_for_row.clone(),
-                is_admin: is_admin(),
-                author_suggestions: pools.authors.into(),
-                tag_suggestions: pools.tags.into(),
-                on_prefs_change: EventHandler::new(on_prefs_change),
-                on_load_more: EventHandler::new(on_load_more),
-                on_clear_filters: EventHandler::new(on_clear_filters),
+                facet_counts_view: view.facet_counts_view,
+                has_more: view.has_more,
+                is_loading_more: view.is_loading_more,
+                server_url,
+                is_admin: (sigs.is_admin)(),
+                author_suggestions: sigs.pools.authors.into(),
+                tag_suggestions: sigs.pools.tags.into(),
+                on_prefs_change: on_prefs_change_content,
+                on_load_more,
+                on_clear_filters,
             }
         }
     }
