@@ -1,31 +1,26 @@
 //! Frosted-glass typography settings panel: theme switcher, typeface,
-//! text size, line spacing, margins, and justify toggle.
+//! text size, line spacing, margins, and justify toggle. Reads the
+//! current preference set from the `ReaderPrefs` context published by
+//! `BookReadPage`, so the panel takes no preference / handler props.
 
 use dioxus::prelude::*;
 
 use crate::components::atrium::Theme;
 
+use super::prefs::ReaderPrefs;
 use super::typography::{LineSpacing, Margins, Typeface};
 
 /// Frosted-glass typography settings panel: theme switcher, typeface,
 /// text size, line spacing, margins, and justify toggle.
 #[component]
-pub(crate) fn ReaderAaPanel(
-    theme: Theme,
-    font_pct: f32,
-    typeface: Typeface,
-    line_spacing: LineSpacing,
-    margins: Margins,
-    justify: bool,
-    on_set_theme: EventHandler<Theme>,
-    on_font_decrease: EventHandler<MouseEvent>,
-    on_font_increase: EventHandler<MouseEvent>,
-    on_set_typeface: EventHandler<Typeface>,
-    on_set_line_spacing: EventHandler<LineSpacing>,
-    on_set_margins: EventHandler<Margins>,
-    on_toggle_justify: EventHandler<MouseEvent>,
-    on_close: EventHandler<MouseEvent>,
-) -> Element {
+pub(crate) fn ReaderAaPanel(on_close: EventHandler<MouseEvent>) -> Element {
+    let prefs = use_context::<ReaderPrefs>();
+    let theme = *prefs.theme.read();
+    let typeface = *prefs.typeface.read();
+    let line_spacing = *prefs.line_spacing.read();
+    let margins = *prefs.margins.read();
+    let justify = *prefs.justify.read();
+    let font_pct = prefs.font_pct();
     rsx! {
         div { class: "rd-scrim", onclick: on_close }
         div {
@@ -39,19 +34,19 @@ pub(crate) fn ReaderAaPanel(
                     button {
                         class: if theme == Theme::Dark { "on" } else { "" },
                         r#type: "button",
-                        onclick: move |_| on_set_theme.call(Theme::Dark),
+                        onclick: move |_| prefs.set_theme(Theme::Dark),
                         "Dark"
                     }
                     button {
                         class: if theme == Theme::Light { "on" } else { "" },
                         r#type: "button",
-                        onclick: move |_| on_set_theme.call(Theme::Light),
+                        onclick: move |_| prefs.set_theme(Theme::Light),
                         "Light"
                     }
                     button {
                         class: if theme == Theme::Sepia { "on" } else { "" },
                         r#type: "button",
-                        onclick: move |_| on_set_theme.call(Theme::Sepia),
+                        onclick: move |_| prefs.set_theme(Theme::Sepia),
                         "Sepia"
                     }
                 }
@@ -64,21 +59,21 @@ pub(crate) fn ReaderAaPanel(
                     button {
                         class: if typeface == Typeface::Editorial { "rd-typeface-chip on" } else { "rd-typeface-chip" },
                         r#type: "button",
-                        onclick: move |_| on_set_typeface.call(Typeface::Editorial),
+                        onclick: move |_| prefs.set_typeface(Typeface::Editorial),
                         span { class: "preview", style: "font-family:'Instrument Serif',serif;", "Aa" }
                         span { class: "name", "Editorial" }
                     }
                     button {
                         class: if typeface == Typeface::Classic { "rd-typeface-chip on" } else { "rd-typeface-chip" },
                         r#type: "button",
-                        onclick: move |_| on_set_typeface.call(Typeface::Classic),
+                        onclick: move |_| prefs.set_typeface(Typeface::Classic),
                         span { class: "preview", style: "font-family:'EB Garamond',serif;", "Aa" }
                         span { class: "name", "Classic" }
                     }
                     button {
                         class: if typeface == Typeface::Modern { "rd-typeface-chip on" } else { "rd-typeface-chip" },
                         r#type: "button",
-                        onclick: move |_| on_set_typeface.call(Typeface::Modern),
+                        onclick: move |_| prefs.set_typeface(Typeface::Modern),
                         span { class: "preview", style: "font-family:Georgia,serif;", "Aa" }
                         span { class: "name", "Modern" }
                     }
@@ -94,7 +89,7 @@ pub(crate) fn ReaderAaPanel(
                         r#type: "button",
                         "aria-label": "Decrease font size",
                         "data-testid": "reader-font-decrease",
-                        onclick: on_font_decrease,
+                        onclick: move |_| prefs.decrease_font(),
                         style: "font-family:var(--serif); font-size:13px; color:var(--ink-2); min-width:24px; height:24px; padding:0;",
                         "A"
                     }
@@ -108,7 +103,7 @@ pub(crate) fn ReaderAaPanel(
                         r#type: "button",
                         "aria-label": "Increase font size",
                         "data-testid": "reader-font-increase",
-                        onclick: on_font_increase,
+                        onclick: move |_| prefs.increase_font(),
                         style: "font-family:var(--serif); font-size:24px; color:var(--ink-1); min-width:24px; height:24px; padding:0;",
                         "A"
                     }
@@ -122,19 +117,19 @@ pub(crate) fn ReaderAaPanel(
                     button {
                         class: if line_spacing == LineSpacing::Tight { "on" } else { "" },
                         r#type: "button",
-                        onclick: move |_| on_set_line_spacing.call(LineSpacing::Tight),
+                        onclick: move |_| prefs.set_line_spacing(LineSpacing::Tight),
                         "Tight"
                     }
                     button {
                         class: if line_spacing == LineSpacing::Cozy { "on" } else { "" },
                         r#type: "button",
-                        onclick: move |_| on_set_line_spacing.call(LineSpacing::Cozy),
+                        onclick: move |_| prefs.set_line_spacing(LineSpacing::Cozy),
                         "Cozy"
                     }
                     button {
                         class: if line_spacing == LineSpacing::Airy { "on" } else { "" },
                         r#type: "button",
-                        onclick: move |_| on_set_line_spacing.call(LineSpacing::Airy),
+                        onclick: move |_| prefs.set_line_spacing(LineSpacing::Airy),
                         "Airy"
                     }
                 }
@@ -147,19 +142,19 @@ pub(crate) fn ReaderAaPanel(
                     button {
                         class: if margins == Margins::Narrow { "on" } else { "" },
                         r#type: "button",
-                        onclick: move |_| on_set_margins.call(Margins::Narrow),
+                        onclick: move |_| prefs.set_margins(Margins::Narrow),
                         "Narrow"
                     }
                     button {
                         class: if margins == Margins::Normal { "on" } else { "" },
                         r#type: "button",
-                        onclick: move |_| on_set_margins.call(Margins::Normal),
+                        onclick: move |_| prefs.set_margins(Margins::Normal),
                         "Normal"
                     }
                     button {
                         class: if margins == Margins::Wide { "on" } else { "" },
                         r#type: "button",
-                        onclick: move |_| on_set_margins.call(Margins::Wide),
+                        onclick: move |_| prefs.set_margins(Margins::Wide),
                         "Wide"
                     }
                 }
@@ -170,7 +165,7 @@ pub(crate) fn ReaderAaPanel(
                 span { style: "font-size:13px; color:var(--ink-1);", "Justify text" }
                 div {
                     class: if justify { "rd-toggle-track on" } else { "rd-toggle-track" },
-                    onclick: on_toggle_justify,
+                    onclick: move |_| prefs.toggle_justify(),
                     div { class: "rd-toggle-knob" }
                 }
             }
