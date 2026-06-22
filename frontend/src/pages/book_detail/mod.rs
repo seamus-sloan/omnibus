@@ -148,10 +148,8 @@ pub fn BookDetailPage(uuid: String) -> Element {
     }
 }
 
-// ---------------------------------------------------------------------------
-// View — split out so the loaded-book case is the only thing rendered and
-// the data-fetch shell stays small.
-// ---------------------------------------------------------------------------
+// View helpers — the loaded-book case is the only thing rendered, so the
+// data-fetch shell above stays small.
 
 fn kicker_label(year: &str) -> String {
     if year.is_empty() {
@@ -340,11 +338,9 @@ fn BdHiddenSlots() -> Element {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Page-local primitives. None of these introduce business logic — they're
 // markup-only adapters so the page reads as a composition of named blocks
 // rather than nested rsx.
-// ---------------------------------------------------------------------------
 
 /// One breadcrumb segment. When `target` is `Some`, the segment renders as a
 /// router `Link`; otherwise it's a plain `<span>` for the current page or a

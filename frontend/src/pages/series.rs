@@ -53,10 +53,6 @@ pub fn SeriesPage(id: i64) -> Element {
     render_series(s)
 }
 
-// ---------------------------------------------------------------------------
-// View
-// ---------------------------------------------------------------------------
-
 fn render_series(s: SeriesDetail) -> Element {
     // Derive accent from the first book that has one.
     let accent = s

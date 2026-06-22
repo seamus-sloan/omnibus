@@ -1,9 +1,8 @@
-//! Login / register / logout / me transport.
-//!
-//! Mobile uses bearer tokens via REST; web hits the same REST endpoints
-//! through `gloo-net` (the browser round-trips the session cookie) instead
-//! of going through Dioxus server functions so cookie handling lives on
-//! the existing CookieJar extractor.
+//! Login / register / logout / me transport. Mobile uses bearer tokens
+//! via REST; web hits the same REST endpoints through `gloo-net` so
+//! cookie handling stays on the existing CookieJar extractor. Login and
+//! register diverge by name across the `#[cfg]` split (`mobile_login` vs
+//! `login`); `logout` and `current_user` are shared names with per-target bodies.
 
 #[cfg(any(feature = "web", feature = "mobile"))]
 use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};
@@ -17,8 +16,6 @@ use omnibus_shared::UserSummary;
 #[cfg(feature = "mobile")]
 use super::{client_kind, drain_error, http_client, token_store, with_bearer, DataError};
 
-// ===== Mobile auth transport: bearer token =====
-//
 // Mobile cannot use cookies (Dioxus Native is not a webview), so login
 // requests carry `client_kind: "ios"|"android"|"bearer"`, which the server
 // uses as the signal to issue a bearer token in the JSON response instead
@@ -108,8 +105,6 @@ async fn post_mobile_auth<T: serde::Serialize>(
     Ok(response.json::<LoginResponse>().await?)
 }
 
-// ===== Auth transport (web only) =====
-//
 // The web client hits the REST auth endpoints directly via `gloo-net` rather
 // than going through a Dioxus server function. The REST endpoints already
 // know how to set/clear the `omnibus_session` cookie via the `CookieJar`

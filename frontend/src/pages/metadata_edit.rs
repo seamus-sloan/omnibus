@@ -71,12 +71,9 @@ pub fn MetadataEditPage(uuid: String) -> Element {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Edit form — the loaded-book case. Owns all the per-field signals and the
-// save/discard logic; renders composition over the page-local
-// sub-components in `fields`/`form_grid`/`header`/`sidebar`/`save_bar`.
-// ---------------------------------------------------------------------------
-
+/// Edit form — the loaded-book case. Owns all the per-field signals and the
+/// save/discard logic; renders composition over the page-local sub-components
+/// in `fields`/`form_grid`/`header`/`sidebar`/`save_bar`.
 #[component]
 fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
     let server_url = use_server_url();
@@ -317,12 +314,10 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Build the MetadataOverrides from the edited fields. Only sets `Some` for
-// fields that differ from the initially loaded book (which already has any
-// prior overrides merged in). Server-side merge ensures prior overrides on
-// untouched fields are preserved.
-// ---------------------------------------------------------------------------
+// `build_overrides` (further down) constructs the `MetadataOverrides` from the
+// edited fields. Only sets `Some` for fields that differ from the initially
+// loaded book (which already has any prior overrides merged in); server-side
+// merge then preserves prior overrides on untouched fields.
 
 /// Edited scalar and list fields collected from the form signals before a save.
 struct EditedFields<'a> {
