@@ -6,14 +6,16 @@
 
 mod aa_panel;
 mod bootstrap;
+mod chrome_handlers;
+#[cfg(feature = "web")]
+mod interop;
+mod prefs;
 mod selection;
 mod typography;
 
 use dioxus::prelude::*;
-#[cfg(not(feature = "mobile"))]
-use dioxus_router::use_navigator;
 
-use crate::components::atrium::{persist_theme, Theme};
+use crate::components::atrium::Theme;
 use crate::contexts::use_server_url;
 use crate::data;
 
@@ -21,11 +23,9 @@ use omnibus_shared::{EbookMetadata, Highlight, HighlightColor};
 
 use aa_panel::ReaderAaPanel;
 #[cfg(feature = "web")]
-use bootstrap::{reader_bootstrap_js, BootstrapArgs};
+use interop::{install_reader_web_interop, InteropSignals};
+use prefs::init_reader_prefs;
 use selection::{SelectionData, SelectionPopover};
-#[cfg(feature = "web")]
-use typography::{load_reader_pref, save_reader_pref};
-use typography::{LineSpacing, Margins, Typeface};
 
 const JSZIP_JS: Asset = asset!("/assets/vendor/jszip.min.js");
 const EPUBJS_JS: Asset = asset!("/assets/vendor/epub.min.js");
@@ -46,7 +46,7 @@ enum ReaderStatus {
 /// Relocated event data from epub.js glue (deserialized from JSON).
 #[derive(Clone, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RelocateData {
+pub(crate) struct RelocateData {
     // Only the web-feature progress-save path reads `cfi`; the other fields are read unconditionally by the bottom-bar render.
     #[cfg_attr(not(feature = "web"), allow(dead_code))]
     cfi: Option<String>,
@@ -73,6 +73,46 @@ fn parse_file_id_from_url() -> Option<i64> {
     params.get("file_id")?.parse().ok()
 }
 
+/// Format the bottom-bar `page` and `chapter` strings from a relocate
+/// event. Returns `("", "")` until epub.js has produced a relocation.
+fn format_progress_labels(loc: &RelocateData) -> (String, String) {
+    let page = if loc.total_pages > 0 {
+        format!(
+            "p.\u{a0}{} of {}\u{a0}\u{b7}\u{a0}{}%",
+            loc.page, loc.total_pages, loc.pct
+        )
+    } else if loc.pct > 0 {
+        format!("{}%", loc.pct)
+    } else {
+        String::new()
+    };
+    let chapter = if loc.total_chapters > 0 {
+        format!("Ch\u{a0}{} of {}", loc.chapter, loc.total_chapters)
+    } else {
+        String::new()
+    };
+    (page, chapter)
+}
+
+/// Drop the previous book's title and kick off a fresh `get_ebook` fetch
+/// whenever `uuid` changes. SPA navigations between books would otherwise
+/// flash the previous title while the request is in flight.
+fn use_book_metadata(uuid: String) -> Signal<Option<EbookMetadata>> {
+    let mut book_meta: Signal<Option<EbookMetadata>> = use_signal(|| None);
+    let server_url = use_server_url();
+    use_effect(use_reactive!(|uuid| {
+        book_meta.set(None);
+        let url = server_url.clone();
+        let uuid = uuid.clone();
+        spawn(async move {
+            if let Ok(Some(b)) = data::get_ebook(&url, &uuid).await {
+                book_meta.set(Some(b));
+            }
+        });
+    }));
+    book_meta
+}
+
 /// Full-screen EPUB reader page (web-feature interop, all-target chrome).
 #[component]
 pub fn BookReadPage(uuid: String) -> Element {
@@ -84,356 +124,46 @@ pub fn BookReadPage(uuid: String) -> Element {
     // (see .claude/rules/07-hydration.md). The web `use_effect` below
     // transitions to `Ready` via the JS glue's `on_status` callback after the
     // reader mounts.
-    #[cfg_attr(not(feature = "web"), allow(unused_mut))]
-    let mut status = use_signal(ReaderStatus::default);
+    let status = use_signal(ReaderStatus::default);
 
-    #[cfg_attr(not(feature = "web"), allow(unused_variables, unused_mut))]
-    let mut font_size = use_signal(|| 18i32);
+    let prefs = init_reader_prefs(theme);
+    use_context_provider(|| prefs);
 
-    #[cfg_attr(not(feature = "web"), allow(unused_variables, unused_mut))]
-    let mut typeface = use_signal(|| {
-        #[cfg(feature = "web")]
-        {
-            load_reader_pref("omn.typeface")
-                .and_then(|s| Typeface::from_storage(&s))
-                .unwrap_or(Typeface::Editorial)
-        }
-        #[cfg(not(feature = "web"))]
-        Typeface::Editorial
-    });
-    #[cfg_attr(not(feature = "web"), allow(unused_variables, unused_mut))]
-    let mut line_spacing = use_signal(|| {
-        #[cfg(feature = "web")]
-        {
-            load_reader_pref("omn.lineSpacing")
-                .and_then(|s| LineSpacing::from_storage(&s))
-                .unwrap_or(LineSpacing::Cozy)
-        }
-        #[cfg(not(feature = "web"))]
-        LineSpacing::Cozy
-    });
-    #[cfg_attr(not(feature = "web"), allow(unused_variables, unused_mut))]
-    let mut margins = use_signal(|| {
-        #[cfg(feature = "web")]
-        {
-            load_reader_pref("omn.margins")
-                .and_then(|s| Margins::from_storage(&s))
-                .unwrap_or(Margins::Normal)
-        }
-        #[cfg(not(feature = "web"))]
-        Margins::Normal
-    });
-    #[cfg_attr(not(feature = "web"), allow(unused_variables, unused_mut))]
-    let mut justify = use_signal(|| {
-        #[cfg(feature = "web")]
-        {
-            load_reader_pref("omn.justify").as_deref() == Some("true")
-        }
-        #[cfg(not(feature = "web"))]
-        false
-    });
+    let show_aa = use_signal(|| false);
+    let selection: Signal<Option<SelectionData>> = use_signal(|| None);
+    let highlights: Signal<Vec<Highlight>> = use_signal(Vec::new);
+    let loc = use_signal(RelocateData::default);
+    let book_meta = use_book_metadata(uuid.clone());
 
-    let mut show_aa = use_signal(|| false);
-
-    #[cfg_attr(not(feature = "web"), allow(unused_mut))]
-    let mut selection: Signal<Option<SelectionData>> = use_signal(|| None);
-
-    #[cfg_attr(not(feature = "web"), allow(unused_mut))]
-    let mut highlights: Signal<Vec<Highlight>> = use_signal(Vec::new);
-
-    // Relocated data from epub.js (page, chapter, pct).
-    #[cfg_attr(not(feature = "web"), allow(unused_mut))]
-    let mut loc = use_signal(RelocateData::default);
-
-    // Book metadata for the top-bar title.
-    let book_meta: Signal<Option<EbookMetadata>> = use_signal(|| None);
-    let server_url = use_server_url();
-    let uuid_for_meta = uuid.clone();
-    {
-        let mut book_meta = book_meta;
-        use_effect(use_reactive!(|uuid_for_meta| {
-            // Clear stale title immediately so SPA navigations between books
-            // don't flash the previous book's name while the fetch is in flight.
-            book_meta.set(None);
-            let url = server_url.clone();
-            let uuid = uuid_for_meta.clone();
-            spawn(async move {
-                if let Ok(Some(b)) = data::get_ebook(&url, &uuid).await {
-                    book_meta.set(Some(b));
-                }
-            });
-        }));
-    }
-
-    // ── Web interop: mount the reader once the async scripts are ready. ──
     #[cfg(feature = "web")]
-    {
-        use wasm_bindgen::prelude::*;
+    install_reader_web_interop(
+        uuid.clone(),
+        prefs,
+        InteropSignals {
+            status,
+            loc,
+            selection,
+            highlights,
+        },
+    );
 
-        let cb_holder: std::rc::Rc<std::cell::RefCell<Vec<Closure<dyn FnMut(String)>>>> =
-            use_hook(|| std::rc::Rc::new(std::cell::RefCell::new(Vec::new())));
+    let (on_back, on_prev, on_next, on_keydown) =
+        chrome_handlers::install_chrome_handlers(selection, show_aa);
 
-        let uuid_for_mount = uuid.clone();
-        let uuid_for_cb = uuid.clone();
-        use_effect(use_reactive!(|uuid_for_mount| {
-            let uuid = uuid_for_mount.clone();
-            let uuid_cb = uuid_for_cb.clone();
-            status.set(ReaderStatus::Loading);
-
-            let local_saved = crate::reader_progress::load(&uuid);
-            let size = font_size();
-            let theme_name = theme.read().as_attr();
-            let file_url = match parse_file_id_from_url() {
-                Some(fid) => format!("/api/ebooks/{uuid}/file?file_id={fid}"),
-                None => format!("/api/ebooks/{uuid}/file"),
-            };
-            let url_lit = serde_json::to_string(&file_url).unwrap_or_else(|_| "\"\"".into());
-            let theme_lit = serde_json::to_string(theme_name).unwrap_or_else(|_| "\"dark\"".into());
-            let font_family_lit =
-                serde_json::to_string(typeface().to_css()).unwrap_or_else(|_| "null".into());
-            let line_height_lit =
-                serde_json::to_string(line_spacing().to_css()).unwrap_or_else(|_| "null".into());
-            let max_width_lit =
-                serde_json::to_string(margins().to_css()).unwrap_or_else(|_| "null".into());
-            let justify_val = justify();
-
-            if let Some(window) = web_sys::window() {
-                let uuid_for_save = uuid_cb.clone();
-                let relocate = Closure::<dyn FnMut(String)>::new(move |json: String| {
-                    if let Ok(data) = serde_json::from_str::<RelocateData>(&json) {
-                        if let Some(ref cfi) = data.cfi {
-                            crate::reader_progress::save(&uuid_for_save, cfi);
-                            let uuid_for_post = uuid_for_save.clone();
-                            let cfi_for_post = cfi.clone();
-                            wasm_bindgen_futures::spawn_local(async move {
-                                let body = serde_json::json!({
-                                    "update": {
-                                        "book_uuid": uuid_for_post,
-                                        "format": "epub",
-                                        "epub_cfi": cfi_for_post,
-                                    }
-                                });
-                                if let Ok(req) =
-                                    gloo_net::http::Request::post("/api/rpc/progress").json(&body)
-                                {
-                                    let _ = req.send().await;
-                                }
-                            });
-                        }
-                        loc.set(data);
-                    }
-                });
-                let on_status = Closure::<dyn FnMut(String)>::new(move |state: String| {
-                    status.set(match state.as_str() {
-                        "ready" => ReaderStatus::Ready,
-                        "error" => ReaderStatus::Failed,
-                        _ => ReaderStatus::Loading,
-                    });
-                });
-                let _ = js_sys::Reflect::set(
-                    &window,
-                    &JsValue::from_str("__omnibusOnRelocate"),
-                    relocate.as_ref().unchecked_ref(),
-                );
-                let on_selection = Closure::<dyn FnMut(String)>::new(move |json: String| {
-                    if let Ok(data) = serde_json::from_str::<SelectionData>(&json) {
-                        selection.set(Some(data));
-                    }
-                });
-                let _ = js_sys::Reflect::set(
-                    &window,
-                    &JsValue::from_str("__omnibusOnStatus"),
-                    on_status.as_ref().unchecked_ref(),
-                );
-                let _ = js_sys::Reflect::set(
-                    &window,
-                    &JsValue::from_str("__omnibusOnSelection"),
-                    on_selection.as_ref().unchecked_ref(),
-                );
-                *cb_holder.borrow_mut() = vec![relocate, on_status, on_selection];
-            }
-
-            let uuid_for_fetch = uuid.clone();
-            spawn(async move {
-                let server_cfi = crate::data::get_progress(
-                    "",
-                    &uuid_for_fetch,
-                    omnibus_shared::ProgressFormat::Epub,
-                )
-                .await
-                .ok()
-                .flatten()
-                .and_then(|r| r.epub_cfi);
-                let chosen = server_cfi.or(local_saved);
-                let cfi_arg = serde_json::to_string(&chosen).unwrap_or_else(|_| "null".into());
-                let js = reader_bootstrap_js(&BootstrapArgs {
-                    url_lit: &url_lit,
-                    cfi_arg: &cfi_arg,
-                    font_size: size,
-                    theme_lit: &theme_lit,
-                    font_family_lit: &font_family_lit,
-                    line_height_lit: &line_height_lit,
-                    max_width_lit: &max_width_lit,
-                    justify_val,
-                });
-                let _ = dioxus::document::eval(&js);
-
-                let hl_uuid = uuid_for_fetch.clone();
-                if let Ok(list) = data::list_highlights("", &hl_uuid).await {
-                    for h in &list {
-                        let cfi_lit = serde_json::to_string(&h.epub_cfi_range)
-                            .unwrap_or_else(|_| "\"\"".into());
-                        let color_lit = serde_json::to_string(h.color.as_str())
-                            .unwrap_or_else(|_| "\"amber\"".into());
-                        reader_call("addAnnotation", &format!("{cfi_lit}, {color_lit}"));
-                    }
-                    highlights.set(list);
-                }
-            });
-        }));
-
-        use_effect(move || {
-            let attr_lit =
-                serde_json::to_string(theme.read().as_attr()).unwrap_or_else(|_| "\"dark\"".into());
-            reader_call("setTheme", &attr_lit);
-        });
-    }
-
-    // ── Chrome handlers ─────────────────────────────────────────────────
-    #[cfg(not(feature = "mobile"))]
-    let nav = use_navigator();
-
-    let on_back = move |_| {
-        #[cfg(not(feature = "mobile"))]
-        nav.go_back();
-    };
-
-    let on_font_decrease = move |_| {
-        let next = (font_size() - 1).clamp(12, 32);
-        font_size.set(next);
-        #[cfg(feature = "web")]
-        reader_call("setFontSize", &next.to_string());
-    };
-    let on_font_increase = move |_| {
-        let next = (font_size() + 1).clamp(12, 32);
-        font_size.set(next);
-        #[cfg(feature = "web")]
-        reader_call("setFontSize", &next.to_string());
-    };
-
-    let on_set_typeface = move |t: Typeface| {
-        typeface.set(t);
-        #[cfg(feature = "web")]
-        {
-            let lit = serde_json::to_string(t.to_css()).unwrap_or_else(|_| "null".into());
-            reader_call("setFont", &lit);
-            save_reader_pref("omn.typeface", t.to_storage());
-        }
-    };
-    let on_set_line_spacing = move |ls: LineSpacing| {
-        line_spacing.set(ls);
-        #[cfg(feature = "web")]
-        {
-            let lit = serde_json::to_string(ls.to_css()).unwrap_or_else(|_| "null".into());
-            reader_call("setLineHeight", &lit);
-            save_reader_pref("omn.lineSpacing", ls.to_storage());
-        }
-    };
-    let on_set_margins = move |m: Margins| {
-        margins.set(m);
-        #[cfg(feature = "web")]
-        {
-            let lit = serde_json::to_string(m.to_css()).unwrap_or_else(|_| "null".into());
-            reader_call("setMargins", &lit);
-            save_reader_pref("omn.margins", m.to_storage());
-        }
-    };
-    let on_toggle_justify = move |_: MouseEvent| {
-        let next = !justify();
-        justify.set(next);
-        #[cfg(feature = "web")]
-        {
-            reader_call("setJustify", if next { "true" } else { "false" });
-            save_reader_pref("omn.justify", if next { "true" } else { "false" });
-        }
-    };
-
-    let on_prev = move |_| {
-        #[cfg(feature = "web")]
-        {
-            selection.set(None);
-            reader_call("prev", "");
-        }
-    };
-    let on_next = move |_| {
-        #[cfg(feature = "web")]
-        {
-            selection.set(None);
-            reader_call("next", "");
-        }
-    };
-
-    let set_theme = move |t: Theme| {
-        let mut theme = theme;
-        theme.set(t);
-        persist_theme(t);
-    };
-
-    let on_keydown = move |evt: KeyboardEvent| match evt.key() {
-        Key::ArrowLeft => {
-            evt.prevent_default();
-            #[cfg(feature = "web")]
-            reader_call("prev", "");
-        }
-        Key::ArrowRight => {
-            evt.prevent_default();
-            #[cfg(feature = "web")]
-            reader_call("next", "");
-        }
-        Key::Escape => {
-            evt.prevent_default();
-            if selection.read().is_some() {
-                selection.set(None);
-            } else if show_aa() {
-                show_aa.set(false);
-            } else {
-                #[cfg(not(feature = "mobile"))]
-                nav.go_back();
-            }
-        }
-        _ => {}
-    };
-
-    let current = loc.read();
-    let pct = current.pct;
-    let page_str = if current.total_pages > 0 {
-        format!(
-            "p.\u{a0}{} of {}\u{a0}\u{b7}\u{a0}{}%",
-            current.page, current.total_pages, pct
-        )
-    } else if pct > 0 {
-        format!("{}%", pct)
-    } else {
-        String::new()
-    };
-    let chapter_str = if current.total_chapters > 0 {
-        format!("Ch\u{a0}{} of {}", current.chapter, current.total_chapters)
-    } else {
-        String::new()
-    };
-    let chapter_title_display = current.chapter_title.clone();
-
+    let (page_str, chapter_str) = format_progress_labels(&loc.read());
+    let pct = loc.read().pct;
+    let chapter_title_display = loc.read().chapter_title.clone();
     let book_title = book_meta
         .read()
         .as_ref()
         .and_then(|b| b.title.clone())
         .unwrap_or_default();
 
-    // Font size is a small i32 slider value in `[12, 32]`; the `as f32`
-    // cast is exact within that range.
-    #[allow(clippy::cast_precision_loss)]
-    let font_offset = (font_size() - 12) as f32;
-    let font_pct = (font_offset / 20.0 * 100.0).clamp(0.0, 100.0);
+    // Suppress the `prefs` unused-variable warning on non-web targets:
+    // `install_reader_web_interop` is web-only, so on SSR / mobile the
+    // local binding is published via context but never read.
+    #[cfg(not(feature = "web"))]
+    let _ = prefs;
 
     rsx! {
         ReaderLayout {
@@ -444,12 +174,6 @@ pub fn BookReadPage(uuid: String) -> Element {
             chapter_str,
             pct,
             status: status(),
-            theme: *theme.read(),
-            font_pct,
-            typeface: typeface(),
-            line_spacing: line_spacing(),
-            margins: margins(),
-            justify: justify(),
             show_aa,
             selection,
             highlights,
@@ -457,20 +181,12 @@ pub fn BookReadPage(uuid: String) -> Element {
             on_back,
             on_prev,
             on_next,
-            on_set_theme: set_theme,
-            on_font_decrease,
-            on_font_increase,
-            on_set_typeface,
-            on_set_line_spacing,
-            on_set_margins,
-            on_toggle_justify,
         }
     }
 }
 
 /// Reader chrome + panels (top bar, viewer stage, gutters, status bar, Aa panel, selection popover).
 #[component]
-#[allow(clippy::too_many_arguments)]
 fn ReaderLayout(
     uuid: String,
     book_title: String,
@@ -479,12 +195,6 @@ fn ReaderLayout(
     chapter_str: String,
     pct: u32,
     status: ReaderStatus,
-    theme: Theme,
-    font_pct: f32,
-    typeface: Typeface,
-    line_spacing: LineSpacing,
-    margins: Margins,
-    justify: bool,
     show_aa: Signal<bool>,
     selection: Signal<Option<SelectionData>>,
     highlights: Signal<Vec<Highlight>>,
@@ -492,13 +202,6 @@ fn ReaderLayout(
     on_back: EventHandler<MouseEvent>,
     on_prev: EventHandler<MouseEvent>,
     on_next: EventHandler<MouseEvent>,
-    on_set_theme: EventHandler<Theme>,
-    on_font_decrease: EventHandler<MouseEvent>,
-    on_font_increase: EventHandler<MouseEvent>,
-    on_set_typeface: EventHandler<Typeface>,
-    on_set_line_spacing: EventHandler<LineSpacing>,
-    on_set_margins: EventHandler<Margins>,
-    on_toggle_justify: EventHandler<MouseEvent>,
 ) -> Element {
     rsx! {
         document::Script { src: JSZIP_JS }
@@ -538,19 +241,6 @@ fn ReaderLayout(
 
             if show_aa() {
                 ReaderAaPanel {
-                    theme,
-                    font_pct,
-                    typeface,
-                    line_spacing,
-                    margins,
-                    justify,
-                    on_set_theme,
-                    on_font_decrease,
-                    on_font_increase,
-                    on_set_typeface,
-                    on_set_line_spacing,
-                    on_set_margins,
-                    on_toggle_justify,
                     on_close: move |_| {
                         let mut show_aa = show_aa;
                         show_aa.set(false);
@@ -747,5 +437,49 @@ mod ssr_tests {
     #[test]
     fn reader_status_default_is_loading_for_ssr_wasm_parity() {
         assert_eq!(ReaderStatus::default(), ReaderStatus::Loading);
+    }
+
+    #[test]
+    fn format_progress_labels_returns_empty_strings_before_first_relocate() {
+        let (page, chapter) = format_progress_labels(&RelocateData::default());
+        assert_eq!(page, "");
+        assert_eq!(chapter, "");
+    }
+
+    #[test]
+    fn format_progress_labels_formats_page_and_chapter_strings() {
+        let data = RelocateData {
+            cfi: None,
+            page: 42,
+            total_pages: 300,
+            pct: 14,
+            chapter: 3,
+            total_chapters: 24,
+            chapter_title: String::new(),
+        };
+        let (page, chapter) = format_progress_labels(&data);
+        assert!(page.contains("p."));
+        assert!(page.contains("42"));
+        assert!(page.contains("300"));
+        assert!(page.contains("14%"));
+        assert!(chapter.contains("Ch"));
+        assert!(chapter.contains("3"));
+        assert!(chapter.contains("24"));
+    }
+
+    #[test]
+    fn format_progress_labels_falls_back_to_pct_only_when_total_pages_unknown() {
+        let data = RelocateData {
+            cfi: None,
+            page: 0,
+            total_pages: 0,
+            pct: 7,
+            chapter: 0,
+            total_chapters: 0,
+            chapter_title: String::new(),
+        };
+        let (page, chapter) = format_progress_labels(&data);
+        assert_eq!(page, "7%");
+        assert_eq!(chapter, "");
     }
 }

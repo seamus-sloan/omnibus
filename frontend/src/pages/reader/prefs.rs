@@ -1,0 +1,188 @@
+//! Reader preferences context: a Copy-able bundle of signals (theme,
+//! typeface, line spacing, margins, justify, font size) plus the
+//! side-effecting setters that thread the new value into the epub.js glue
+//! and persist it under the `omn.*` localStorage keys.
+//!
+//! `BookReadPage` publishes this via `use_context_provider`; the AA panel
+//! reads it through `use_context` so it can render the current preference
+//! state and call setters without prop threading.
+
+use dioxus::prelude::*;
+
+use crate::components::atrium::{persist_theme, Theme};
+
+#[cfg(feature = "web")]
+use super::reader_call;
+#[cfg(feature = "web")]
+use super::typography::save_reader_pref;
+use super::typography::{LineSpacing, Margins, Typeface};
+
+/// Min/max for the AA-panel font-size slider, in CSS px. Kept in sync with
+/// the `font_pct` accessor below so the slider thumb tracks the value.
+const FONT_SIZE_MIN: i32 = 12;
+const FONT_SIZE_MAX: i32 = 32;
+
+/// Copy-able handle to every reader preference plus its setter. Lives in
+/// the Dioxus context for the duration of a reader page mount.
+#[derive(Copy, Clone)]
+pub(crate) struct ReaderPrefs {
+    pub theme: Signal<Theme>,
+    pub font_size: Signal<i32>,
+    pub typeface: Signal<Typeface>,
+    pub line_spacing: Signal<LineSpacing>,
+    pub margins: Signal<Margins>,
+    pub justify: Signal<bool>,
+}
+
+impl ReaderPrefs {
+    /// Apply `t` and persist it via the atrium theme writer. Themes are
+    /// app-wide (not just reader-scoped) so persistence is shared.
+    pub(crate) fn set_theme(self, t: Theme) {
+        let mut theme = self.theme;
+        theme.set(t);
+        persist_theme(t);
+    }
+
+    /// Step the font size down one px (clamped to `FONT_SIZE_MIN`) and
+    /// push the new value into the epub.js glue.
+    pub(crate) fn decrease_font(self) {
+        let mut font_size = self.font_size;
+        let next = (*font_size.read() - 1).clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
+        font_size.set(next);
+        #[cfg(feature = "web")]
+        reader_call("setFontSize", &next.to_string());
+    }
+
+    /// Step the font size up one px (clamped to `FONT_SIZE_MAX`).
+    pub(crate) fn increase_font(self) {
+        let mut font_size = self.font_size;
+        let next = (*font_size.read() + 1).clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
+        font_size.set(next);
+        #[cfg(feature = "web")]
+        reader_call("setFontSize", &next.to_string());
+    }
+
+    /// Apply a typeface, push to JS, persist to localStorage.
+    #[cfg_attr(not(feature = "web"), allow(unused_variables))]
+    pub(crate) fn set_typeface(self, t: Typeface) {
+        let mut typeface = self.typeface;
+        typeface.set(t);
+        #[cfg(feature = "web")]
+        {
+            let lit = serde_json::to_string(t.to_css()).unwrap_or_else(|_| "null".into());
+            reader_call("setFont", &lit);
+            save_reader_pref("omn.typeface", t.to_storage());
+        }
+    }
+
+    /// Apply a line-spacing choice, push to JS, persist to localStorage.
+    #[cfg_attr(not(feature = "web"), allow(unused_variables))]
+    pub(crate) fn set_line_spacing(self, ls: LineSpacing) {
+        let mut line_spacing = self.line_spacing;
+        line_spacing.set(ls);
+        #[cfg(feature = "web")]
+        {
+            let lit = serde_json::to_string(ls.to_css()).unwrap_or_else(|_| "null".into());
+            reader_call("setLineHeight", &lit);
+            save_reader_pref("omn.lineSpacing", ls.to_storage());
+        }
+    }
+
+    /// Apply a margins choice, push to JS, persist to localStorage.
+    #[cfg_attr(not(feature = "web"), allow(unused_variables))]
+    pub(crate) fn set_margins(self, m: Margins) {
+        let mut margins = self.margins;
+        margins.set(m);
+        #[cfg(feature = "web")]
+        {
+            let lit = serde_json::to_string(m.to_css()).unwrap_or_else(|_| "null".into());
+            reader_call("setMargins", &lit);
+            save_reader_pref("omn.margins", m.to_storage());
+        }
+    }
+
+    /// Flip the justify toggle and push the new boolean into the JS glue.
+    pub(crate) fn toggle_justify(self) {
+        let mut justify = self.justify;
+        let next = !*justify.read();
+        justify.set(next);
+        #[cfg(feature = "web")]
+        {
+            reader_call("setJustify", if next { "true" } else { "false" });
+            save_reader_pref("omn.justify", if next { "true" } else { "false" });
+        }
+    }
+
+    /// Slider position for the AA-panel size track, expressed as 0–100%.
+    pub(crate) fn font_pct(self) -> f32 {
+        // Font size is a small i32 slider value in `[FONT_SIZE_MIN,
+        // FONT_SIZE_MAX]`; the casts are exact within that range.
+        #[allow(clippy::cast_precision_loss)]
+        let offset = (*self.font_size.read() - FONT_SIZE_MIN) as f32;
+        #[allow(clippy::cast_precision_loss)]
+        let span = (FONT_SIZE_MAX - FONT_SIZE_MIN) as f32;
+        (offset / span * 100.0).clamp(0.0, 100.0)
+    }
+}
+
+/// Construct the reader-prefs signals, seeding each from localStorage on
+/// web (with a target-agnostic default fallback). `theme` is borrowed from
+/// the app-wide atrium signal so changes here flip both reader and the
+/// surrounding chrome.
+pub(crate) fn init_reader_prefs(theme: Signal<Theme>) -> ReaderPrefs {
+    let font_size = use_signal(|| 18i32);
+    let typeface = use_signal(load_typeface_or_default);
+    let line_spacing = use_signal(load_line_spacing_or_default);
+    let margins = use_signal(load_margins_or_default);
+    let justify = use_signal(load_justify_or_default);
+    ReaderPrefs {
+        theme,
+        font_size,
+        typeface,
+        line_spacing,
+        margins,
+        justify,
+    }
+}
+
+fn load_typeface_or_default() -> Typeface {
+    #[cfg(feature = "web")]
+    {
+        super::typography::load_reader_pref("omn.typeface")
+            .and_then(|s| Typeface::from_storage(&s))
+            .unwrap_or(Typeface::Editorial)
+    }
+    #[cfg(not(feature = "web"))]
+    Typeface::Editorial
+}
+
+fn load_line_spacing_or_default() -> LineSpacing {
+    #[cfg(feature = "web")]
+    {
+        super::typography::load_reader_pref("omn.lineSpacing")
+            .and_then(|s| LineSpacing::from_storage(&s))
+            .unwrap_or(LineSpacing::Cozy)
+    }
+    #[cfg(not(feature = "web"))]
+    LineSpacing::Cozy
+}
+
+fn load_margins_or_default() -> Margins {
+    #[cfg(feature = "web")]
+    {
+        super::typography::load_reader_pref("omn.margins")
+            .and_then(|s| Margins::from_storage(&s))
+            .unwrap_or(Margins::Normal)
+    }
+    #[cfg(not(feature = "web"))]
+    Margins::Normal
+}
+
+fn load_justify_or_default() -> bool {
+    #[cfg(feature = "web")]
+    {
+        super::typography::load_reader_pref("omn.justify").as_deref() == Some("true")
+    }
+    #[cfg(not(feature = "web"))]
+    false
+}
