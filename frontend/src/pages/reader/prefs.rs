@@ -1,11 +1,8 @@
-//! Reader preferences context: a Copy-able bundle of signals (theme,
-//! typeface, line spacing, margins, justify, font size) plus the
-//! side-effecting setters that thread the new value into the epub.js glue
-//! and persist it under the `omn.*` localStorage keys.
-//!
-//! `BookReadPage` publishes this via `use_context_provider`; the AA panel
-//! reads it through `use_context` so it can render the current preference
-//! state and call setters without prop threading.
+//! Reader preferences context: a Copy-able bundle of typography signals
+//! (theme, typeface, line spacing, margins, justify, font size) plus
+//! setters that thread each new value into the epub.js glue and persist
+//! it under `omn.*` localStorage keys. `BookReadPage` publishes via
+//! `use_context_provider`; the AA panel reads via `use_context`.
 
 use dioxus::prelude::*;
 
@@ -43,27 +40,33 @@ impl ReaderPrefs {
         persist_theme(t);
     }
 
-    /// Step the font size down one px (clamped to `FONT_SIZE_MIN`) and
-    /// push the new value into the epub.js glue.
+    /// Step the font size down one px (clamped to `FONT_SIZE_MIN`), push
+    /// to JS, persist to localStorage.
     pub(crate) fn decrease_font(self) {
         let mut font_size = self.font_size;
         let next = (*font_size.read() - 1).clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
         font_size.set(next);
         #[cfg(feature = "web")]
-        reader_call("setFontSize", &next.to_string());
+        {
+            reader_call("setFontSize", &next.to_string());
+            save_reader_pref("omn.fontSize", &next.to_string());
+        }
     }
 
-    /// Step the font size up one px (clamped to `FONT_SIZE_MAX`).
+    /// Step the font size up one px (clamped to `FONT_SIZE_MAX`), push to
+    /// JS, persist to localStorage.
     pub(crate) fn increase_font(self) {
         let mut font_size = self.font_size;
         let next = (*font_size.read() + 1).clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
         font_size.set(next);
         #[cfg(feature = "web")]
-        reader_call("setFontSize", &next.to_string());
+        {
+            reader_call("setFontSize", &next.to_string());
+            save_reader_pref("omn.fontSize", &next.to_string());
+        }
     }
 
     /// Apply a typeface, push to JS, persist to localStorage.
-    #[cfg_attr(not(feature = "web"), allow(unused_variables))]
     pub(crate) fn set_typeface(self, t: Typeface) {
         let mut typeface = self.typeface;
         typeface.set(t);
@@ -76,7 +79,6 @@ impl ReaderPrefs {
     }
 
     /// Apply a line-spacing choice, push to JS, persist to localStorage.
-    #[cfg_attr(not(feature = "web"), allow(unused_variables))]
     pub(crate) fn set_line_spacing(self, ls: LineSpacing) {
         let mut line_spacing = self.line_spacing;
         line_spacing.set(ls);
@@ -89,7 +91,6 @@ impl ReaderPrefs {
     }
 
     /// Apply a margins choice, push to JS, persist to localStorage.
-    #[cfg_attr(not(feature = "web"), allow(unused_variables))]
     pub(crate) fn set_margins(self, m: Margins) {
         let mut margins = self.margins;
         margins.set(m);
@@ -130,7 +131,7 @@ impl ReaderPrefs {
 /// the app-wide atrium signal so changes here flip both reader and the
 /// surrounding chrome.
 pub(crate) fn init_reader_prefs(theme: Signal<Theme>) -> ReaderPrefs {
-    let font_size = use_signal(|| 18i32);
+    let font_size = use_signal(load_font_size_or_default);
     let typeface = use_signal(load_typeface_or_default);
     let line_spacing = use_signal(load_line_spacing_or_default);
     let margins = use_signal(load_margins_or_default);
@@ -143,6 +144,18 @@ pub(crate) fn init_reader_prefs(theme: Signal<Theme>) -> ReaderPrefs {
         margins,
         justify,
     }
+}
+
+fn load_font_size_or_default() -> i32 {
+    #[cfg(feature = "web")]
+    {
+        super::typography::load_reader_pref("omn.fontSize")
+            .and_then(|s| s.parse::<i32>().ok())
+            .map(|n| n.clamp(FONT_SIZE_MIN, FONT_SIZE_MAX))
+            .unwrap_or(18)
+    }
+    #[cfg(not(feature = "web"))]
+    18
 }
 
 fn load_typeface_or_default() -> Typeface {

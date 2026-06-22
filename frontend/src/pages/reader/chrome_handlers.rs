@@ -49,19 +49,18 @@ enum Direction {
 }
 
 /// Clear any live selection and ask the epub.js glue to page in `dir`.
-/// No-op on non-web targets (the JS glue only exists in the browser).
-#[cfg_attr(not(feature = "web"), allow(unused_variables))]
-fn advance_page(selection: Signal<Option<SelectionData>>, dir: Direction) {
-    #[cfg(feature = "web")]
-    {
-        let mut selection = selection;
-        selection.set(None);
-        match dir {
-            Direction::Prev => super::reader_call("prev", ""),
-            Direction::Next => super::reader_call("next", ""),
-        }
+#[cfg(feature = "web")]
+fn advance_page(mut selection: Signal<Option<SelectionData>>, dir: Direction) {
+    selection.set(None);
+    match dir {
+        Direction::Prev => super::reader_call("prev", ""),
+        Direction::Next => super::reader_call("next", ""),
     }
 }
+
+/// Non-web stub: the JS glue only exists in the browser, so paging is a no-op.
+#[cfg(not(feature = "web"))]
+fn advance_page(_: Signal<Option<SelectionData>>, _: Direction) {}
 
 /// Reader keyboard map: arrows page the book; Escape closes a live
 /// selection, then the AA panel, then navigates back.
