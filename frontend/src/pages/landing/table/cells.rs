@@ -1,9 +1,8 @@
 //! Per-cell components for the landing table's inline-editable rows.
 //!
-//! Each helper here wraps an [`EditableCell`] (or, for authors, hosts a
-//! [`ChipEditor`] directly) and is composed by `EbookRowCells` in
-//! [`super::row`]. The two `build_save_*` helpers manufacture the
-//! `on_save` callbacks the row passes down into the cells.
+//! Each helper wraps an [`EditableCell`] (or, for authors, hosts a [`ChipEditor`]
+//! directly) and is composed by `EbookRowCells` in [`super::row`].
+//! `build_save_*` produce the row's per-field save callbacks.
 
 use dioxus::prelude::*;
 use omnibus_shared::{Contributor, EbookMetadata, MetadataOverrides};
@@ -210,15 +209,11 @@ pub(super) fn EbookRowFormatsCell(formats: Vec<String>) -> Element {
     }
 }
 
-/// Inline-editable text cell used by `EbookRow`. Renders a span of
-/// text by default; in admin mode, a click swaps to a text input that
-/// commits via `EditField::on_save` on Enter or blur and cancels on
-/// Escape. The input's `onclick` stops propagation so the row-level
-/// navigate handler doesn't fire while the user is editing.
-///
-/// `suppress_inline_input` is the Authors-cell escape hatch: the click
-/// still toggles `editing` (so the expansion row appears) but the
-/// in-cell input never renders.
+/// Inline-editable text cell used by `EbookRow`. Renders a span of text by
+/// default; in admin mode, a click swaps to a text input that commits via the
+/// `on_save` prop on Enter or blur and cancels on Escape. The input's `onclick`
+/// stops propagation so the row-level navigate handler doesn't fire while the
+/// user is editing.
 #[component]
 pub(super) fn EditableCell(
     col_class: String,

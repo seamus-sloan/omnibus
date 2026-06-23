@@ -1,9 +1,8 @@
 //! Row-level components for the landing table.
 //!
-//! Hosts the per-row state plumbing (`use_row_state`, `derive_row_display`)
-//! and the `EbookRow` / `EbookRowMarkup` / `EbookRowCells` chain that
-//! `BookTable` in [`super`] renders for each book. Per-cell rendering
-//! lives one module over in [`super::cells`].
+//! Hosts per-row state plumbing and the `EbookRow` → `EbookRowMarkup` →
+//! `EbookRowCells` chain that `BookTable` in [`super`] renders per book.
+//! Per-cell rendering lives in [`super::cells`].
 
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
@@ -18,15 +17,15 @@ use super::{BookTableContext, EditField};
 use crate::components::chip_editor::SuggestionItem;
 use crate::Route;
 
+/// One row in the power-user table for `book`.
 #[component]
 pub(super) fn EbookRow(book: EbookMetadata, ctx: BookTableContext) -> Element {
     let BookTableContext {
         server_url,
         is_admin,
         author_suggestions,
-        tag_suggestions,
+        tag_suggestions: _tag_suggestions,
     } = ctx;
-    let _ = tag_suggestions; // reserved for a future inline-tag editor
 
     let uuid = book.unique_identifier.clone().unwrap_or_default();
     let (book_state, editing, authors_draft) = use_row_state(book.clone());

@@ -1,9 +1,8 @@
 //! Power-user table view for the landing page.
 //!
-//! Dense `<table>` rendering with inline-editable authors / title / tags
-//! for admins. Used by [`super::LandingPage`] when the view-mode toggle is
-//! set to table. Per-row state plumbing lives in [`row`]; per-cell
-//! renderers and save-callback factories live in [`cells`].
+//! Dense `<table>` with inline-editable title / series / authors for admins,
+//! used by [`super::LandingPage`] when the view-mode toggle is set to table.
+//! Row plumbing in [`row`]; per-cell rendering in [`cells`].
 
 mod cells;
 mod row;
@@ -44,6 +43,7 @@ pub(super) struct BookTableContext {
     pub(super) tag_suggestions: ReadSignal<Vec<SuggestionItem>>,
 }
 
+/// Power-user table view of `books`: sortable column headers and inline-editable cells.
 #[component]
 pub(super) fn BookTable(
     books: Vec<EbookMetadata>,
