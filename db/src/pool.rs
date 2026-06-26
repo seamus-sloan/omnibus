@@ -63,7 +63,6 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, InitDbError> {
         .connect(database_url)
         .await?;
 
-    // Migration failures surface as `InitDbError::Migrate` via `#[from]`.
     MIGRATOR.run(&pool).await?;
 
     // One-time fill of the auto-attach match key for rows indexed before
