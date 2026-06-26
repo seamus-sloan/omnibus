@@ -63,11 +63,7 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, InitDbError> {
         .connect(database_url)
         .await?;
 
-    // Migration failures surface as `InitDbError::Migrate` via `#[from]`;
-    // previously this hand-wrapped `sqlx::migrate::MigrateError` inside
-    // `sqlx::Error::Migrate` just so the `?` could ride the
-    // `From<sqlx::Error>` impl — pointless indirection that buried the
-    // category of failure under a generic `sqlx::Error` envelope.
+    // Migration failures surface as `InitDbError::Migrate` via `#[from]`.
     MIGRATOR.run(&pool).await?;
 
     // One-time fill of the auto-attach match key for rows indexed before
