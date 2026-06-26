@@ -500,3 +500,67 @@ async fn upsert_overrides_materializes_series_link_for_new_series() {
         "series_id should be set after override materializes the link"
     );
 }
+
+/// The override row and the `books_series_link` row must land
+/// atomically: after `upsert_metadata_overrides` commits, a direct
+/// SELECT on `books_series_link` must already reflect the new series.
+/// Guards the post-#576 invariant that the link materialize runs inside
+/// the same transaction as the override row, so the book detail page
+/// never observes a fresh override against a stale link.
+#[tokio::test]
+async fn upsert_overrides_persists_books_series_link_row_for_new_series() {
+    let _covers = CoversTempDir::new("series_link_row");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed(
+            "link.epub",
+            Some("A Book"),
+            &["Author"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let uuid = books[0].unique_identifier.clone().unwrap();
+    let book_id = books[0].id;
+
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            series: Some("Linked Series".into()),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let linked_series: Option<String> = sqlx::query_scalar(
+        "SELECT s.name
+           FROM books_series_link bsl
+           JOIN series s ON s.id = bsl.series
+          WHERE bsl.book = ?",
+    )
+    .bind(book_id)
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        linked_series.as_deref(),
+        Some("Linked Series"),
+        "books_series_link should reflect the new override series after upsert commits"
+    );
+}
