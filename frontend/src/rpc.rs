@@ -152,8 +152,8 @@ pub async fn rpc_get_settings() -> Result<Settings> {
 
 /// Persist server settings and return the saved row. Admin-only. On success,
 /// kicks off a reindex of any configured ebook / audiobook library path via
-/// the shared `Worker` so concurrent saves serialize per-path; returns 422
-/// when `Settings::validate()` rejects the payload.
+/// the shared `Worker` so concurrent saves serialize per-path; returns an
+/// error when `Settings::validate()` rejects the payload.
 #[post("/api/rpc/settings", pool: PoolExt, worker: WorkerExt, _admin: AdminUser)]
 pub async fn rpc_save_settings(settings: Settings) -> Result<Settings> {
     if let Err(e) = settings.validate() {
