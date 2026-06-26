@@ -144,11 +144,16 @@ mod server_auth {
     }
 }
 
+/// Fetch the current server settings row. Admin-only.
 #[get("/api/rpc/settings", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_get_settings() -> Result<Settings> {
     Ok(db::get_settings(&pool.0).await?)
 }
 
+/// Persist server settings and return the saved row. Admin-only. On success,
+/// kicks off a reindex of any configured ebook / audiobook library path via
+/// the shared `Worker` so concurrent saves serialize per-path; returns an
+/// error when `Settings::validate()` rejects the payload.
 #[post("/api/rpc/settings", pool: PoolExt, worker: WorkerExt, _admin: AdminUser)]
 pub async fn rpc_save_settings(settings: Settings) -> Result<Settings> {
     if let Err(e) = settings.validate() {
@@ -197,6 +202,9 @@ pub async fn rpc_worker_status() -> Result<WorkerStatus> {
     Ok(worker.0.progress_snapshot())
 }
 
+/// Scan the configured ebook and audiobook library paths from disk and
+/// return the raw directory contents (without DB indexing). Used by the
+/// settings page to show what's on disk before reindex completes.
 #[get("/api/rpc/library", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_get_library() -> Result<LibraryContents> {
     let settings = db::get_settings(&pool.0).await?;
@@ -206,6 +214,9 @@ pub async fn rpc_get_library() -> Result<LibraryContents> {
     ))
 }
 
+/// Return the full indexed library (ebooks and audiobooks combined) for the
+/// landing grid. Result is capped at `db::MAX_BOOKS_RETURNED` rows; clients
+/// that need pagination should use `rpc_get_ebooks_page` instead.
 #[get("/api/rpc/ebooks", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_get_ebooks() -> Result<EbookLibrary> {
     let settings = db::get_settings(&pool.0).await?;
@@ -612,6 +623,9 @@ pub async fn rpc_save_progress(update: ProgressUpdate) -> Result<ProgressRecord>
     }
 }
 
+/// Fetch the saved reading position for `(user, book uuid, format)`. Returns
+/// `Ok(None)` when the book is unknown or has no progress row for that
+/// format yet — the client treats both as "start from the beginning".
 #[post("/api/rpc/progress/get", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_get_progress(
     uuid: String,
@@ -620,6 +634,13 @@ pub async fn rpc_get_progress(
     Ok(db::progress::get_progress(&pool.0, user.id, &uuid, format).await?)
 }
 
+/// Persist a batch of reading- or listening-session reports and return the
+/// inserted count. Validates every report up-front before any insert; the
+/// inserts then run sequentially (not in a single transaction), so a DB
+/// error mid-batch commits the rows that already succeeded and propagates
+/// the error to the caller — the count of committed rows is then lost.
+/// Reports whose `book_uuid` is unknown are silently dropped (counted out)
+/// rather than failing the batch.
 #[post("/api/rpc/progress/sessions", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_record_sessions(reports: Vec<SessionReport>) -> Result<u64> {
     for r in &reports {
@@ -669,6 +690,9 @@ pub async fn rpc_create_highlight(input: CreateHighlight) -> Result<Highlight> {
     }
 }
 
+/// List all highlights for the given book uuid, scoped to the current user
+/// and ordered by creation time. Returns an empty list — not an error — when
+/// the uuid is unknown or has no highlights yet.
 #[post("/api/rpc/highlights/list", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_list_highlights(book_uuid: String) -> Result<Vec<Highlight>> {
     match db::highlights::list_highlights(&pool.0, user.id, &book_uuid).await {
@@ -680,6 +704,10 @@ pub async fn rpc_list_highlights(book_uuid: String) -> Result<Vec<Highlight>> {
     }
 }
 
+/// Change the color of an existing highlight owned by the current user.
+/// Errors with `"highlight not found"` when the id does not exist or
+/// belongs to another user (the two cases are deliberately indistinguishable
+/// to avoid leaking ownership).
 #[post("/api/rpc/highlights/update-color", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_update_highlight_color(id: i64, color: HighlightColor) -> Result<()> {
     match db::highlights::update_highlight_color(&pool.0, user.id, id, color).await {
@@ -694,6 +722,10 @@ pub async fn rpc_update_highlight_color(id: i64, color: HighlightColor) -> Resul
     }
 }
 
+/// Set or clear the free-text note on a highlight owned by the current
+/// user. Validates `body` against `UpdateHighlightNote::validate()` (note
+/// length cap) and errors with `"highlight not found"` when the id does
+/// not exist or belongs to another user.
 #[post("/api/rpc/highlights/update-note", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_update_highlight_note(id: i64, body: UpdateHighlightNote) -> Result<()> {
     if let Err(msg) = body.validate() {
@@ -711,6 +743,9 @@ pub async fn rpc_update_highlight_note(id: i64, body: UpdateHighlightNote) -> Re
     }
 }
 
+/// Delete a highlight owned by the current user. Errors with
+/// `"highlight not found"` when the id does not exist or belongs to another
+/// user (the two cases are deliberately indistinguishable).
 #[post("/api/rpc/highlights/delete", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_delete_highlight(id: i64) -> Result<()> {
     match db::highlights::delete_highlight(&pool.0, user.id, id).await {
