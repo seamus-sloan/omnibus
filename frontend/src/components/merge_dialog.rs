@@ -314,7 +314,7 @@ fn render_candidate(
                         }
                     }
                     for fmt in formats.iter() {
-                        span { class: "mg-fmt", "{fmt}" }
+                        span { key: "{fmt}", class: "mg-fmt", "{fmt}" }
                     }
                 }
             }

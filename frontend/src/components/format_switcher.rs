@@ -121,6 +121,7 @@ fn MultiFileRow(kind: FormatKind, uuid: String, files: Vec<BookFileInfo>) -> Ele
                 let file_id = file.id;
                 rsx! {
                     div {
+                        key: "{file_id}",
                         class: "format-row format-subrow",
                         "data-testid": "{file_testid}",
                         span { class: "format-sublabel", "{file_label}" }
