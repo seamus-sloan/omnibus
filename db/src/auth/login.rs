@@ -13,14 +13,20 @@ const LOCKOUT_DURATION_SECS: i64 = 15 * 60;
 
 /// Sentinel PHC string used when the username is unknown, so we still
 /// spend ~250ms in argon2 verify and don't leak username existence via
-/// response-timing. Generated once at module init.
-fn sentinel_hash() -> &'static str {
+/// response-timing. Generated lazily on first miss; an argon2 failure
+/// here is surfaced as `AuthError::Crypto` rather than crashing every
+/// subsequent login.
+fn sentinel_hash() -> AuthResult<&'static str> {
     use std::sync::OnceLock;
     static HASH: OnceLock<String> = OnceLock::new();
-    HASH.get_or_init(|| {
-        hash_password("__timing_equalizer_not_a_real_password__")
-            .expect("sentinel hash always succeeds")
-    })
+    if let Some(h) = HASH.get() {
+        return Ok(h.as_str());
+    }
+    let hashed = hash_password("__timing_equalizer_not_a_real_password__")?;
+    // The first racer wins; either the inserted value or the value already
+    // present is fine because both are valid PHC strings for the same
+    // sentinel password.
+    Ok(HASH.get_or_init(|| hashed).as_str())
 }
 
 /// Verify a login attempt. On success returns the user; on failure returns
@@ -39,8 +45,10 @@ pub async fn verify_login(pool: &SqlitePool, username: &str, password: &str) -> 
     let now = now_unix();
 
     let Some(row) = row else {
-        // Equalize timing against the found-user path.
-        let _ = verify_password(password, sentinel_hash());
+        // Equalize timing against the found-user path. A sentinel-hash
+        // failure here is treated as `AuthError::Crypto` (500) — better
+        // than swallowing it and silently leaking timing info.
+        let _ = verify_password(password, sentinel_hash()?);
         return Err(AuthError::InvalidCredentials);
     };
 

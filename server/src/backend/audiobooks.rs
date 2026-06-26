@@ -22,6 +22,7 @@
 use axum::{
     body::Body,
     extract::{Path, Query, Request, State},
+    http::HeaderValue,
     response::{IntoResponse, Response},
     Json,
 };
@@ -37,6 +38,12 @@ use tower_http::services::ServeFile;
 
 use super::{internal, AppState};
 use crate::auth::AuthUser;
+
+/// Content-Type for MPEG-TS audio segments served by the HLS fallback.
+/// Defined at module scope so the per-request `HeaderValue` insert is a
+/// cheap clone of a compile-time-validated static instead of a `.parse()`
+/// + `.expect()` on every segment fetch.
+static MPEGTS_CONTENT_TYPE: HeaderValue = HeaderValue::from_static("video/MP2T");
 
 /// Query parameters for `GET /api/audiobooks/{uuid}/manifest`.
 #[derive(Deserialize)]
@@ -324,7 +331,7 @@ pub(super) async fn get_audiobook_segment(
     let (mut parts, body) = res.into_parts();
     parts.headers.insert(
         axum::http::header::CONTENT_TYPE,
-        "video/MP2T".parse().expect("static content-type"),
+        MPEGTS_CONTENT_TYPE.clone(),
     );
     Response::from_parts(parts, Body::new(body))
 }

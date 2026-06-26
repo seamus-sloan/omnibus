@@ -20,6 +20,8 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 pub enum InitDbError {
     #[error(transparent)]
     Db(#[from] sqlx::Error),
+    #[error("database migrations failed: {0}")]
+    Migrate(#[from] sqlx::migrate::MigrateError),
     #[error(transparent)]
     Normalize(#[from] NormalizeError),
     #[error(transparent)]
@@ -61,10 +63,7 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, InitDbError> {
         .connect(database_url)
         .await?;
 
-    MIGRATOR
-        .run(&pool)
-        .await
-        .map_err(|e| sqlx::Error::Migrate(Box::new(e)))?;
+    MIGRATOR.run(&pool).await?;
 
     // One-time fill of the auto-attach match key for rows indexed before
     // migration 0016. Idempotent and a no-op once caught up.
