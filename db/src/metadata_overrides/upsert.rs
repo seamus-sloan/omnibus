@@ -69,11 +69,15 @@ where
 /// Upsert user metadata overrides for a book identified by its stable UUID.
 /// The `overrides` are JSON-serialized into the `metadata_overrides` table.
 ///
-/// After the upsert, the book's `books_fts` row is rebuilt from the merged
-/// (canonical + override) metadata so that search results stay consistent
-/// with what the UI displays. The FTS rebuild is best-effort: rebuild
-/// failures are logged but do not fail the override save, since the
-/// override write is the user's actual intent.
+/// The override row write and the `books_series_link` materialization run
+/// inside one `BEGIN IMMEDIATE` transaction — matching the
+/// [`merge_metadata_overrides`] pattern — so a failure in the series-link
+/// materialize rolls back the override row instead of leaving the book
+/// detail page reading a fresh override against a stale series link.
+///
+/// The `books_fts` rebuild runs best-effort after commit: a stale FTS row
+/// is recoverable (next reindex / next save corrects it) and is far less
+/// user-visible than a stale series association.
 pub async fn upsert_metadata_overrides(
     pool: &SqlitePool,
     book_uuid: &str,
@@ -82,10 +86,17 @@ pub async fn upsert_metadata_overrides(
     user_id: i64,
 ) -> Result<(), MetadataOverridesError> {
     let json = serde_json::to_string(overrides)?;
-    upsert_overrides_row(pool, book_uuid, &json, has_cover_override, user_id).await?;
-    if let Err(e) = materialize_series_link(pool, book_uuid, overrides).await {
-        tracing::warn!(book_uuid, error = %e, "series link materialize after override upsert failed");
-    }
+
+    // `begin_with("BEGIN IMMEDIATE")` matches `merge_metadata_overrides` — the
+    // RESERVED lock at start makes this writer wait for any in-flight writer
+    // (SQLite is single-writer at the database level), and the returned
+    // `sqlx::Transaction` issues a structured ROLLBACK on any `?` early-return
+    // below.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    upsert_overrides_row(&mut *tx, book_uuid, &json, has_cover_override, user_id).await?;
+    materialize_series_link(&mut tx, book_uuid, overrides).await?;
+    tx.commit().await?;
+
     if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
         tracing::warn!(book_uuid, error = %e, "books_fts rebuild after override upsert failed");
     }
@@ -97,8 +108,9 @@ pub async fn upsert_metadata_overrides(
 /// transaction, so two concurrent edits to the same book can't interleave
 /// and silently drop each other's changes. The existing `has_cover_override`
 /// flag is carried forward — a text-only edit must not clear a cover the
-/// user uploaded earlier. The `books_fts` rebuild runs best-effort after
-/// commit.
+/// user uploaded earlier. The series-link materialization runs inside the
+/// same transaction so the override row and `books_series_link` land
+/// atomically; the `books_fts` rebuild runs best-effort after commit.
 pub async fn merge_metadata_overrides(
     pool: &SqlitePool,
     book_uuid: &str,
@@ -106,11 +118,12 @@ pub async fn merge_metadata_overrides(
     user_id: i64,
 ) -> Result<(), MetadataOverridesError> {
     // `begin_with("BEGIN IMMEDIATE")` gives the same RESERVED-lock-at-start
-    // semantics as the old hand-rolled statement (so concurrent edits to the
-    // same book serialize instead of interleaving), but returns a real
-    // `sqlx::Transaction`. Any `?` early-return below drops `tx` without a
-    // commit, and the Drop impl issues a structured ROLLBACK — no reliance on
-    // connection-drop implicit cleanup.
+    // semantics as the old hand-rolled statement (SQLite is single-writer at
+    // the database level, so this writer waits for any in-flight writer
+    // before acquiring), but returns a real `sqlx::Transaction`. Any `?`
+    // early-return below drops `tx` without a commit, and the Drop impl
+    // issues a structured ROLLBACK — no reliance on connection-drop implicit
+    // cleanup.
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     let existing: Option<(String, i64)> = sqlx::query_as(
@@ -130,11 +143,9 @@ pub async fn merge_metadata_overrides(
 
     let json = serde_json::to_string(&merged)?;
     upsert_overrides_row(&mut *tx, book_uuid, &json, has_cover_override, user_id).await?;
+    materialize_series_link(&mut tx, book_uuid, &merged).await?;
     tx.commit().await?;
 
-    if let Err(e) = materialize_series_link(pool, book_uuid, &merged).await {
-        tracing::warn!(book_uuid, error = %e, "series link materialize after override merge failed");
-    }
     if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
         tracing::warn!(book_uuid, error = %e, "books_fts rebuild after override merge failed");
     }
