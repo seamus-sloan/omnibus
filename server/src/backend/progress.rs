@@ -61,12 +61,16 @@ pub(super) async fn get_progress(
     }
 }
 
+/// Hard cap on `SessionReport`s per `post_sessions` batch.
+pub(super) const MAX_SESSION_BATCH: usize = 500;
+
 /// Append a batch of session reports. Mobile posts these on reconnect; web
 /// posts best-effort on unmount. Each report is validated at the API
 /// boundary (negative durations / inverted time ranges → 400); unknown
 /// book uuids are silently skipped inside the db layer (best-effort
 /// telemetry). `recorded` reflects the **inserted** row count so callers
-/// can tell which queued reports actually persisted.
+/// can tell which queued reports actually persisted. Batches larger than
+/// `MAX_SESSION_BATCH` are rejected with 422 before any DB work.
 ///
 /// The entire batch runs inside a single transaction — a DB error mid-loop
 /// rolls back all previously inserted rows so the client can safely retry
@@ -76,6 +80,14 @@ pub(super) async fn post_sessions(
     State(state): State<AppState>,
     Json(reports): Json<Vec<SessionReport>>,
 ) -> Response {
+    if reports.len() > MAX_SESSION_BATCH {
+        let msg = format!(
+            "batch too large: {} records exceeds maximum of {}",
+            reports.len(),
+            MAX_SESSION_BATCH
+        );
+        return (axum::http::StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
+    }
     for r in &reports {
         if let Err(msg) = r.validate() {
             return (axum::http::StatusCode::BAD_REQUEST, msg).into_response();
