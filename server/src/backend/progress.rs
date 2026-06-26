@@ -61,9 +61,7 @@ pub(super) async fn get_progress(
     }
 }
 
-/// Hard cap on records per batch — keeps a single request from holding
-/// the SQLite WAL write lock for an unbounded time, since the global 1
-/// MiB body limit alone permits thousands of compact `SessionReport`s.
+/// Hard cap on `SessionReport`s per `post_sessions` batch.
 pub(super) const MAX_SESSION_BATCH: usize = 500;
 
 /// Append a batch of session reports. Mobile posts these on reconnect; web

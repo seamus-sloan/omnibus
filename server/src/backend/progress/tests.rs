@@ -308,7 +308,7 @@ async fn post_sessions_rejects_oversized_batch() {
     let (_, uuid) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
     let user = auth_test_support::create_user(&pool, "alice").await;
     let token = auth_test_support::bearer_token(&pool, user.id).await;
-    let reports: Vec<_> = (0..MAX_SESSION_BATCH + 1)
+    let reports: Vec<_> = (0..=MAX_SESSION_BATCH)
         .map(|_| {
             serde_json::json!({
                 "book_uuid": uuid,
