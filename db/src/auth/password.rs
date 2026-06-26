@@ -77,15 +77,19 @@ const COMMON_PASSWORDS: &[&str] = &[
     "internet1",
 ];
 
-pub(crate) fn argon2_hasher() -> Argon2<'static> {
+pub(crate) fn argon2_hasher() -> AuthResult<Argon2<'static>> {
+    // `Params::new` is fallible because it validates the supplied tuning
+    // values at runtime. Our parameters are module-level `const`s and
+    // satisfy argon2's bounds today, but propagating the error keeps a
+    // future constants tweak from turning every auth call into a panic.
     let params = Params::new(
         ARGON2_MEMORY_KIB,
         ARGON2_ITERATIONS,
         ARGON2_PARALLELISM,
         None,
     )
-    .expect("argon2 params are compile-time valid");
-    Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+    .map_err(|e| AuthError::Crypto(format!("argon2 params invalid: {e}")))?;
+    Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
 }
 
 /// Validate a plaintext password against the policy rules (length bounds and common-password reject-list).
@@ -167,7 +171,7 @@ pub fn validate_username(username: &str) -> AuthResult<()> {
 /// Hash `password` with Argon2id using OWASP-recommended parameters; returns a PHC-format string suitable for storage.
 pub fn hash_password(password: &str) -> AuthResult<String> {
     let salt = SaltString::generate(&mut PhcOsRng);
-    let phc = argon2_hasher()
+    let phc = argon2_hasher()?
         .hash_password(password.as_bytes(), &salt)?
         .to_string();
     Ok(phc)
@@ -177,7 +181,7 @@ pub fn hash_password(password: &str) -> AuthResult<String> {
 /// internal equality check. Returns Ok(true) only on match.
 pub fn verify_password(password: &str, phc: &str) -> AuthResult<bool> {
     let parsed = PasswordHash::new(phc)?;
-    match argon2_hasher().verify_password(password.as_bytes(), &parsed) {
+    match argon2_hasher()?.verify_password(password.as_bytes(), &parsed) {
         Ok(()) => Ok(true),
         Err(argon2::password_hash::Error::Password) => Ok(false),
         Err(e) => Err(e.into()),
