@@ -63,7 +63,7 @@ pub fn TagCloudPage() -> Element {
             // The cloud
             div { class: "tag-cloud",
                 for tag in tag_list.iter() {
-                    { render_tag_item(tag, max_count) }
+                    TagCloudItem { key: "{tag.name}", tag: tag.clone(), max_count }
                 }
             }
         }
@@ -71,7 +71,8 @@ pub fn TagCloudPage() -> Element {
 }
 
 /// Render a single tag in the cloud with size/opacity scaled by weight.
-fn render_tag_item(tag: &TagWeight, max_count: usize) -> Element {
+#[component]
+fn TagCloudItem(tag: TagWeight, max_count: usize) -> Element {
     // Tag counts and library sizes both comfortably fit a `u32`, well within
     // the f64-exactly-representable integer range. Saturating cast guards
     // against the unlikely-but-possible >4B case rather than asserting.
