@@ -16,10 +16,10 @@ use omnibus_shared::MetadataOverrides;
 ///
 /// Takes `&mut SqliteConnection` so the caller can run the four statements
 /// (book lookup, series upsert, series read, link insert) inside an open
-/// transaction — pass `&mut *tx` from a `sqlx::Transaction`. Running
-/// outside a transaction would split the materialize across separate
-/// connections and reopen the partial-failure window this helper exists to
-/// close.
+/// transaction — pass `&mut tx` from a `sqlx::Transaction`. Running
+/// outside a transaction would let each statement commit independently
+/// in autocommit mode, reopening the partial-failure window this helper
+/// exists to close.
 pub(super) async fn materialize_series_link(
     conn: &mut SqliteConnection,
     book_uuid: &str,

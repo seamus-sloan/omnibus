@@ -88,12 +88,13 @@ pub async fn upsert_metadata_overrides(
     let json = serde_json::to_string(overrides)?;
 
     // `begin_with("BEGIN IMMEDIATE")` matches `merge_metadata_overrides` — the
-    // RESERVED lock at start serializes concurrent writers to the same book,
-    // and the returned `sqlx::Transaction` issues a structured ROLLBACK on
-    // any `?` early-return below.
+    // RESERVED lock at start makes this writer wait for any in-flight writer
+    // (SQLite is single-writer at the database level), and the returned
+    // `sqlx::Transaction` issues a structured ROLLBACK on any `?` early-return
+    // below.
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     upsert_overrides_row(&mut *tx, book_uuid, &json, has_cover_override, user_id).await?;
-    materialize_series_link(&mut *tx, book_uuid, overrides).await?;
+    materialize_series_link(&mut tx, book_uuid, overrides).await?;
     tx.commit().await?;
 
     if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
@@ -117,11 +118,12 @@ pub async fn merge_metadata_overrides(
     user_id: i64,
 ) -> Result<(), MetadataOverridesError> {
     // `begin_with("BEGIN IMMEDIATE")` gives the same RESERVED-lock-at-start
-    // semantics as the old hand-rolled statement (so concurrent edits to the
-    // same book serialize instead of interleaving), but returns a real
-    // `sqlx::Transaction`. Any `?` early-return below drops `tx` without a
-    // commit, and the Drop impl issues a structured ROLLBACK — no reliance on
-    // connection-drop implicit cleanup.
+    // semantics as the old hand-rolled statement (SQLite is single-writer at
+    // the database level, so this writer waits for any in-flight writer
+    // before acquiring), but returns a real `sqlx::Transaction`. Any `?`
+    // early-return below drops `tx` without a commit, and the Drop impl
+    // issues a structured ROLLBACK — no reliance on connection-drop implicit
+    // cleanup.
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     let existing: Option<(String, i64)> = sqlx::query_as(
@@ -141,7 +143,7 @@ pub async fn merge_metadata_overrides(
 
     let json = serde_json::to_string(&merged)?;
     upsert_overrides_row(&mut *tx, book_uuid, &json, has_cover_override, user_id).await?;
-    materialize_series_link(&mut *tx, book_uuid, &merged).await?;
+    materialize_series_link(&mut tx, book_uuid, &merged).await?;
     tx.commit().await?;
 
     if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
