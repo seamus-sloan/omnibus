@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use anyhow::Context;
 use sqlx::SqlitePool;
 use tokio::io::AsyncBufReadExt;
 
@@ -93,9 +94,8 @@ pub async fn transcode_book(
     let _ = std::fs::write(&progress_file, "0.01");
 
     let total_secs: f64 = parts.iter().map(|p| p.duration_seconds).sum();
-    let outcome = run_ffmpeg_with_progress(book_id, profile, &concat_path, &outdir, total_secs)
-        .await
-        .map_err(anyhow::Error::msg);
+    let outcome =
+        run_ffmpeg_with_progress(book_id, profile, &concat_path, &outdir, total_secs).await;
     finalize_transcode(book_id, profile, outcome)
 }
 
@@ -144,17 +144,14 @@ async fn run_ffmpeg_with_progress(
     concat_path: &Path,
     outdir: &Path,
     total_secs: f64,
-) -> Result<FfmpegOutcome, String> {
+) -> anyhow::Result<FfmpegOutcome> {
     let timeout_secs: u64 = std::env::var("OMNIBUS_HLS_TRANSCODE_TIMEOUT_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(1800);
 
     let mut child = spawn_ffmpeg(concat_path, outdir)?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "ffmpeg stdout pipe missing".to_string())?;
+    let stdout = child.stdout.take().context("ffmpeg stdout pipe missing")?;
 
     let progress_file = progress_path(book_id, profile);
     let progress_task = tokio::spawn(stream_progress(stdout, progress_file, total_secs));
@@ -163,7 +160,7 @@ async fn run_ffmpeg_with_progress(
 }
 
 /// Spawn the ffmpeg child process for HLS transcoding with piped stdout/stderr.
-fn spawn_ffmpeg(concat_path: &Path, outdir: &Path) -> Result<tokio::process::Child, String> {
+fn spawn_ffmpeg(concat_path: &Path, outdir: &Path) -> anyhow::Result<tokio::process::Child> {
     let ffmpeg = std::env::var("OMNIBUS_FFMPEG_PATH").unwrap_or_else(|_| "ffmpeg".into());
     let seg_pattern = outdir.join("seg-%04d.ts");
     let manifest_out = outdir.join("index.m3u8");
@@ -204,7 +201,7 @@ fn spawn_ffmpeg(concat_path: &Path, outdir: &Path) -> Result<tokio::process::Chi
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("ffmpeg spawn failed: {e}"))
+        .with_context(|| format!("ffmpeg spawn failed (binary: {ffmpeg})"))
 }
 
 /// Await ffmpeg exit under `timeout_secs`, then map the result to
@@ -215,7 +212,7 @@ async fn wait_for_ffmpeg(
     child: tokio::process::Child,
     progress_task: tokio::task::JoinHandle<()>,
     timeout_secs: u64,
-) -> Result<FfmpegOutcome, String> {
+) -> anyhow::Result<FfmpegOutcome> {
     let wait_result = tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
         child.wait_with_output(),
@@ -237,7 +234,7 @@ async fn wait_for_ffmpeg(
         }
         Ok(Err(io_err)) => {
             let _ = progress_task.await;
-            Err(format!("ffmpeg wait failed: {io_err}"))
+            Err(anyhow::Error::new(io_err).context("ffmpeg wait failed"))
         }
         Err(_elapsed) => {
             // `kill_on_drop(true)` reaps the child when the wait future is

@@ -20,6 +20,8 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 pub enum InitDbError {
     #[error(transparent)]
     Db(#[from] sqlx::Error),
+    #[error("database migrations failed: {0}")]
+    Migrate(#[from] sqlx::migrate::MigrateError),
     #[error(transparent)]
     Normalize(#[from] NormalizeError),
     #[error(transparent)]
@@ -61,10 +63,12 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, InitDbError> {
         .connect(database_url)
         .await?;
 
-    MIGRATOR
-        .run(&pool)
-        .await
-        .map_err(|e| sqlx::Error::Migrate(Box::new(e)))?;
+    // Migration failures surface as `InitDbError::Migrate` via `#[from]`;
+    // previously this hand-wrapped `sqlx::migrate::MigrateError` inside
+    // `sqlx::Error::Migrate` just so the `?` could ride the
+    // `From<sqlx::Error>` impl — pointless indirection that buried the
+    // category of failure under a generic `sqlx::Error` envelope.
+    MIGRATOR.run(&pool).await?;
 
     // One-time fill of the auto-attach match key for rows indexed before
     // migration 0016. Idempotent and a no-op once caught up.
