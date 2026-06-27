@@ -151,30 +151,55 @@ fn ScreenLayout(children: Element) -> Element {
 /// the WASM bundle.
 const ATRIUM_CSS: Asset = asset!("/assets/atrium.css");
 
-/// Root app component. Renders global styles and the router.
-#[component]
-pub fn App() -> Element {
-    use_context_provider(|| SearchQuery(Signal::new(String::new())));
-    #[cfg(not(feature = "mobile"))]
+/// Install the search-palette context and the global `⌘K` shortcut.
+///
+/// Called unconditionally from [`App`] per rule 07 so the call site has no
+/// `cfg`-gated hooks; the mobile target compiles to a no-op body, so hook
+/// counts stay parallel between targets and a future hydration-sensitive
+/// build won't drift.
+#[cfg(not(feature = "mobile"))]
+fn use_palette_setup() {
     use_context_provider(|| components::search_palette::PaletteOpen(Signal::new(false)));
-
     // App mounts once for the app's lifetime; registering the keydown
     // listener here keeps a single closure alive across route changes.
-    #[cfg(not(feature = "mobile"))]
     components::search_palette::use_palette_global_shortcut();
+}
 
+/// Mobile stub: no palette, no global shortcut.
+#[cfg(feature = "mobile")]
+fn use_palette_setup() {}
+
+/// Install the cached-user and playback contexts. Web (and SSR) only;
+/// mobile uses bearer tokens via `token_store` and stubs the listen page.
+///
+/// Called unconditionally from [`App`] per rule 07 (cfg lives in the body,
+/// not at the call site).
+#[cfg(not(feature = "mobile"))]
+fn use_user_and_playback_contexts() {
     // Cached `/api/auth/me`. Provided unconditionally on non-mobile builds
     // so SSR can render the placeholder topbar without resolving anything;
     // the WASM hydration phase then runs the boot effect below to fill it
     // in once for the lifetime of the App instance.
-    #[cfg(not(feature = "mobile"))]
-    {
-        use_context_provider(|| CurrentUser(Signal::new(None)));
-        // App-wide audiobook playback. Provided unconditionally on
-        // not(mobile) so SSR markup matches the WASM client; the web-only
-        // driver below reacts to its `uuid` signal.
-        use_context_provider(PlaybackState::new);
-    }
+    use_context_provider(|| CurrentUser(Signal::new(None)));
+    // App-wide audiobook playback. Provided unconditionally on
+    // not(mobile) so SSR markup matches the WASM client; the web-only
+    // driver below reacts to its `uuid` signal.
+    use_context_provider(PlaybackState::new);
+}
+
+/// Mobile stub: no `/me` cache, no playback context.
+#[cfg(feature = "mobile")]
+fn use_user_and_playback_contexts() {}
+
+/// Root app component. Renders global styles and the router.
+#[component]
+pub fn App() -> Element {
+    use_context_provider(|| SearchQuery(Signal::new(String::new())));
+    // Per rule 07, hook calls in App() are unconditional — feature gates
+    // live inside the helper bodies so the call sequence is identical on
+    // every target.
+    use_palette_setup();
+    use_user_and_playback_contexts();
 
     // Single boot-time `/me` fetch (replaces the per-component effects in
     // user_menu / landing / author). Also subscribes to `web_auth_state`
