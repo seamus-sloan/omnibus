@@ -53,7 +53,7 @@ mod speed_panel;
 mod stage;
 
 #[cfg(not(feature = "mobile"))]
-use ready_player::ReadyPlayer;
+use ready_player::{PlaybackSignals, ReadyPlayer};
 
 // App-root re-exports: the audio element + dock are mounted by `App` /
 // `ScreenLayout`, and the playback driver is called once from `App`.
@@ -116,11 +116,13 @@ pub fn BookListenPage(uuid: String) -> Element {
                     ReadyPlayer {
                         book: b,
                         uuid: uuid.clone(),
-                        duration: playback.duration,
-                        elapsed: playback.elapsed,
-                        playing: playback.playing,
-                        rate: playback.rate,
-                        hls_ready: playback.hls_ready,
+                        signals: PlaybackSignals {
+                            duration: playback.duration,
+                            elapsed: playback.elapsed,
+                            playing: playback.playing,
+                            rate: playback.rate,
+                            hls_ready: playback.hls_ready,
+                        },
                         playback_failed: playback.playback_failed,
                         chapters: playback.chapters,
                     }
