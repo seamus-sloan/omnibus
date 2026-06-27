@@ -153,10 +153,12 @@ const ATRIUM_CSS: Asset = asset!("/assets/atrium.css");
 
 /// Install the search-palette context and the global `⌘K` shortcut.
 ///
-/// Called unconditionally from [`App`] per rule 07 so the call site has no
-/// `cfg`-gated hooks; the mobile target compiles to a no-op body, so hook
-/// counts stay parallel between targets and a future hydration-sensitive
-/// build won't drift.
+/// Called unconditionally from [`App`] so the call site has no
+/// `cfg`-gated hooks — the cfg lives in the helper body. The mobile
+/// build compiles to a no-op stub below; hook-count parity across
+/// targets isn't claimed (the palette + shortcut aren't reachable on
+/// mobile), but rule 07's invariant for SSR-vs-WASM hydration within
+/// the web build is preserved.
 #[cfg(not(feature = "mobile"))]
 fn use_palette_setup() {
     use_context_provider(|| components::search_palette::PaletteOpen(Signal::new(false)));
@@ -172,8 +174,13 @@ fn use_palette_setup() {}
 /// Install the cached-user and playback contexts. Web (and SSR) only;
 /// mobile uses bearer tokens via `token_store` and stubs the listen page.
 ///
-/// Called unconditionally from [`App`] per rule 07 (cfg lives in the body,
-/// not at the call site).
+/// Called unconditionally from [`App`] so the cfg lives in the body,
+/// not at the call site. The mobile build compiles to a no-op stub
+/// (the underlying `CurrentUser`/`PlaybackState` types are themselves
+/// `cfg(not(mobile))` in `contexts.rs`, so true hook-count parity
+/// across mobile isn't reachable without lifting those gates — out of
+/// scope here). Rule 07's invariant for SSR-vs-WASM hydration within
+/// the web build is preserved because both targets share `not(mobile)`.
 #[cfg(not(feature = "mobile"))]
 fn use_user_and_playback_contexts() {
     // Cached `/api/auth/me`. Provided unconditionally on non-mobile builds
