@@ -1,6 +1,6 @@
 //! Background ebook indexing (server-only). Scans the configured library,
 //! diffs the result against the `books` table, and applies only the
-//! per-book changes the on-disk state demands. Reindex fires from
+//! per-book changes the on-disk state demands. Reindex is driven by
 //! [`crate::worker::Worker`] on startup (when stale) and on settings save;
 //! scans run via `spawn_blocking` so the axum runtime stays responsive.
 
