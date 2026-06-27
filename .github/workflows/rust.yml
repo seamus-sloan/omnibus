@@ -101,7 +101,7 @@ jobs:
       # it explicitly with `-p` so lint regressions in the mobile shell are
       # gated on every PR. Host target only — the iOS/Android cross toolchains
       # are not on the ubuntu-latest runner.
-      - name: Clippy mobile
+      - name: cargo clippy (mobile)
         run: nix develop --command cargo clippy -p omnibus-mobile --all-targets -- -D warnings
 
       - name: cargo test (server)
