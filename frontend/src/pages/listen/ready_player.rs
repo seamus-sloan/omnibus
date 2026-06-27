@@ -138,19 +138,30 @@ mod tests {
     }
 }
 
+/// Grouped playback signals (duration, elapsed, playing, rate, hls_ready).
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct PlaybackSignals {
+    pub duration: Signal<f64>,
+    pub elapsed: Signal<f64>,
+    pub playing: Signal<bool>,
+    pub rate: Signal<f64>,
+    pub hls_ready: Signal<bool>,
+}
+
 /// Render the ready-state player chrome and bind the transport handlers.
 #[component]
 pub(super) fn ReadyPlayer(
     book: EbookMetadata,
     uuid: String,
-    duration: Signal<f64>,
-    elapsed: Signal<f64>,
-    playing: Signal<bool>,
-    rate: Signal<f64>,
-    hls_ready: Signal<bool>,
+    signals: PlaybackSignals,
     playback_failed: Signal<bool>,
     chapters: Signal<Vec<ChapterInfo>>,
 ) -> Element {
+    let duration = signals.duration;
+    let elapsed = signals.elapsed;
+    let playing = signals.playing;
+    let rate = signals.rate;
+    let hls_ready = signals.hls_ready;
     let mut speed_panel_open = use_signal(|| false);
     let mut sleep_panel_open = use_signal(|| false);
     let mut bookmarks_open = use_signal(|| false);
