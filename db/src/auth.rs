@@ -50,10 +50,8 @@ pub enum AuthError {
     AccountLocked { until_unix: i64 },
     #[error("registration is disabled")]
     RegistrationDisabled,
-    /// Opaque internal failure (DB I/O, etc). The variant intentionally
-    /// carries no `sqlx::Error` so the storage backend doesn't leak
-    /// through `db::auth`'s public API (rule 02 — module-boundary).
-    /// Callers map this to HTTP 500.
+    /// Opaque internal failure (DB I/O, etc). Carries no `sqlx::Error`
+    /// so the storage backend doesn't leak through this crate's API.
     #[error("internal database error: {0}")]
     Internal(String),
     /// Argon2 hash/verify or CSPRNG byte-generation failure (maps to 500).
