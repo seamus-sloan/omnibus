@@ -50,11 +50,21 @@ pub enum AuthError {
     AccountLocked { until_unix: i64 },
     #[error("registration is disabled")]
     RegistrationDisabled,
-    #[error(transparent)]
-    Db(#[from] sqlx::Error),
+    /// Opaque internal failure (DB I/O, etc). The variant intentionally
+    /// carries no `sqlx::Error` so the storage backend doesn't leak
+    /// through `db::auth`'s public API (rule 02 — module-boundary).
+    /// Callers map this to HTTP 500.
+    #[error("internal database error: {0}")]
+    Internal(String),
     /// Argon2 hash/verify or CSPRNG byte-generation failure (maps to 500).
     #[error("{0}")]
     Crypto(String),
+}
+
+impl From<sqlx::Error> for AuthError {
+    fn from(e: sqlx::Error) -> Self {
+        AuthError::Internal(e.to_string())
+    }
 }
 
 impl From<argon2::password_hash::Error> for AuthError {
@@ -145,5 +155,20 @@ pub(crate) mod test_support {
 
     pub async fn pool() -> SqlitePool {
         init_db("sqlite::memory:").await.expect("pool init")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_error_from_sqlx_error_maps_to_internal_without_leaking_variant_type() {
+        // Use any sqlx::Error variant — the conversion must collapse it
+        // into the opaque `Internal` variant so server-side callers
+        // cannot match on a `sqlx::Error` value (rule 02).
+        let sqlx_err = sqlx::Error::RowNotFound;
+        let auth_err: AuthError = sqlx_err.into();
+        assert!(matches!(auth_err, AuthError::Internal(_)));
     }
 }
