@@ -95,6 +95,15 @@ jobs:
       - name: Clippy shared
         run: nix develop --command cargo clippy -p omnibus-shared --all-targets -- -D warnings
 
+      # `omnibus-mobile` is excluded from `default-members` in the workspace
+      # `Cargo.toml` (its `mobile` feature on `omnibus-frontend` is mutually
+      # exclusive with `web`), so the bare clippy steps above skip it. Target
+      # it explicitly with `-p` so lint regressions in the mobile shell are
+      # gated on every PR. Host target only — the iOS/Android cross toolchains
+      # are not on the ubuntu-latest runner.
+      - name: Clippy mobile
+        run: nix develop --command cargo clippy -p omnibus-mobile --all-targets -- -D warnings
+
       - name: cargo test (server)
         run: nix develop --command cargo test -p omnibus
 
