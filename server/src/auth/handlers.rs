@@ -88,7 +88,7 @@ fn auth_error_to_response(e: AuthError) -> Response {
             (StatusCode::FORBIDDEN, "registration disabled").into_response()
         }
         AuthError::SessionNotFound => (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
-        AuthError::Db(e) => internal(e),
+        AuthError::Internal(e) => internal(e),
         AuthError::Crypto(e) => internal(e),
     }
 }
