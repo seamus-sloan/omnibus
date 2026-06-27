@@ -1,41 +1,8 @@
-//! Background ebook indexing (server-only).
-//!
-//! The web and mobile list endpoints read from the `books` table instead of
-//! walking the filesystem on every request. This module owns the write side:
-//! scan the configured library, diff the result against the DB, and apply
-//! only the per-book changes that the on-disk state demands.
-//!
-//! Two triggers fire a reindex (both routed through
-//! [`crate::worker::Worker`] so concurrency and per-path serialization are
-//! enforced centrally):
-//! - On startup, if no index exists yet or the existing one is older than
-//!   [`REFRESH_AFTER_SECS`].
-//! - On every settings save (the library path may have changed, and even if
-//!   it didn't the user likely just added or removed books).
-//!
-//! Scans run on the blocking pool via `spawn_blocking` so the hot axum
-//! runtime stays responsive while the walk + OPF parse + cover reads go.
-//!
-//! ## Diff classification
-//!
-//! [`diff_library`] takes the Phase-A stat output and the DB's current
-//! state and buckets each file:
-//!
-//! - **Unchanged** — on disk, in DB, `(mtime_epoch, size_bytes)` matches.
-//!   No work. `books.id` preserved.
-//! - **New** — on disk, not in DB. Full Phase-B parse + insert.
-//! - **Changed** — on disk, in DB, stat differs. Full Phase-B parse, then
-//!   UPDATE in place (preserves `books.id`).
-//! - **Removed** — a file-backed book whose file is gone. Its `book_files`
-//!   row is dropped so the book becomes a **fileless ghost** (the `books`
-//!   row + its soft-ref user data are retained, not deleted); a returning
-//!   file re-attaches via Changed. An already-fileless ghost is left alone.
-//! - **Backfill** — in DB, in disk, DB has the migration default
-//!   `(mtime_epoch=0, size_bytes=0)`. Treated as the sentinel for "fs
-//!   metadata never observed" (post-migration), so the writer only
-//!   updates the stat columns; the OPF is not re-parsed. Without this,
-//!   the first reindex after the migration would treat every existing
-//!   row as Changed.
+//! Background ebook indexing (server-only). Scans the configured library,
+//! diffs the result against the `books` table, and applies only the
+//! per-book changes the on-disk state demands. Reindex fires from
+//! [`crate::worker::Worker`] on startup (when stale) and on settings save;
+//! scans run via `spawn_blocking` so the axum runtime stays responsive.
 
 use std::path::{Path, PathBuf};
 
@@ -137,6 +104,24 @@ pub struct ReindexDiff {
 /// `library_root` is the absolute path the scanner walked; we join it
 /// with each `filename` to fill `ParseTarget.absolute` so Phase B can
 /// open files directly without re-walking.
+///
+/// # Bucket semantics
+///
+/// - **Unchanged** — on disk, in DB, `(mtime_epoch, size_bytes)` matches.
+///   No work. `books.id` preserved.
+/// - **New** — on disk, not in DB. Full Phase-B parse + insert.
+/// - **Changed** — on disk, in DB, stat differs. Full Phase-B parse, then
+///   UPDATE in place (preserves `books.id`).
+/// - **Removed** — a file-backed book whose file is gone. Its `book_files`
+///   row is dropped so the book becomes a **fileless ghost** (the `books`
+///   row + its soft-ref user data are retained, not deleted); a returning
+///   file re-attaches via Changed. An already-fileless ghost is left alone.
+/// - **Backfill** — in DB, in disk, DB has the migration default
+///   `(mtime_epoch=0, size_bytes=0)`. Treated as the sentinel for "fs
+///   metadata never observed" (post-migration), so the writer only
+///   updates the stat columns; the OPF is not re-parsed. Without this,
+///   the first reindex after the migration would treat every existing
+///   row as Changed.
 pub fn diff_library(
     disk: &[ebook::StatEntry],
     db: &[books::IndexedRow],
