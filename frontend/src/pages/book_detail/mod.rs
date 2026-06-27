@@ -5,9 +5,7 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::EbookMetadata;
-#[cfg(not(feature = "mobile"))]
-use omnibus_shared::MergeBooksResult;
+use omnibus_shared::{EbookMetadata, MergeBooksResult};
 
 use crate::{data, use_server_url, Route};
 
@@ -49,12 +47,17 @@ pub fn BookDetailPage(uuid: String) -> Element {
         });
     });
 
-    #[cfg(not(feature = "mobile"))]
+    // Merge dialog state. Declared unconditionally per rule 07 so the hook
+    // count is identical on every target — mobile compiles the signals but
+    // never reads them (the rsx that consumes them is still cfg-gated below
+    // and `build_merge_*` are stubbed to `None` on mobile).
     let merge_open = use_signal(|| false);
-    #[cfg(not(feature = "mobile"))]
     let merge_result: Signal<Option<MergeBooksResult>> = use_signal(|| None);
-    #[cfg(not(feature = "mobile"))]
     let undo_error: Signal<Option<String>> = use_signal(|| None);
+    // Mobile's merge builders are `None`-returning stubs that take no args,
+    // so the three signals above would otherwise be unused on that target.
+    #[cfg(feature = "mobile")]
+    let _ = (merge_open, merge_result, undo_error);
 
     let url = server_url.clone();
     use_effect(use_reactive!(|uuid| {
