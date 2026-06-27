@@ -138,9 +138,7 @@ mod tests {
     }
 }
 
-/// Live playback-state signals consumed by [`ReadyPlayer`] and any future
-/// sub-components that read them together. Grouped because all five are
-/// written and read by the same HLS + transport layer and travel as a unit.
+/// Grouped playback signals (duration, elapsed, playing, rate, hls_ready).
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct PlaybackSignals {
     pub duration: Signal<f64>,
