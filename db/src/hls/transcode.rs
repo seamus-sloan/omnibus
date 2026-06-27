@@ -65,7 +65,7 @@ pub async fn transcode_book(
     }
 
     let outdir = segment_dir(book_id, profile);
-    std::fs::create_dir_all(&outdir)?;
+    tokio::fs::create_dir_all(&outdir).await?;
 
     // Self-healing: if a previous run left an orphan `.progress` (server
     // restart mid-transcode), wipe it before spawning a fresh ffmpeg so
@@ -75,7 +75,7 @@ pub async fn transcode_book(
     // can be live behind the sentinel.
     let progress_file = progress_path(book_id, profile);
     if progress_file.exists() && is_progress_stale_at(&progress_file) {
-        if let Err(e) = std::fs::remove_file(&progress_file) {
+        if let Err(e) = tokio::fs::remove_file(&progress_file).await {
             tracing::warn!(
                 book_id = book_id,
                 profile = profile,
@@ -85,18 +85,18 @@ pub async fn transcode_book(
         }
     }
 
-    let concat_path = write_concat_input(&outdir, library_path, &parts)?;
+    let concat_path = write_concat_input(&outdir, library_path, &parts).await?;
 
     // Bootstrap heartbeat: write a tiny non-zero value so a racing
     // status-poll between `post(...)` and the first parsed `out_time_us`
     // line still sees motion. The async progress task will overwrite this
     // on its first tick.
-    let _ = std::fs::write(&progress_file, "0.01");
+    let _ = tokio::fs::write(&progress_file, "0.01").await;
 
     let total_secs: f64 = parts.iter().map(|p| p.duration_seconds).sum();
     let outcome =
         run_ffmpeg_with_progress(book_id, profile, &concat_path, &outdir, total_secs).await;
-    finalize_transcode(book_id, profile, outcome)
+    finalize_transcode(book_id, profile, outcome).await
 }
 
 /// Possible outcomes of one ffmpeg invocation, as observed by
@@ -116,7 +116,7 @@ enum FfmpegOutcome {
 
 /// Write the `concat.txt` input that ffmpeg's concat demuxer reads. Each
 /// part becomes one `file '<abs-path>'` line with single-quote escaping.
-fn write_concat_input(
+async fn write_concat_input(
     outdir: &Path,
     library_path: &str,
     parts: &[HlsPart],
@@ -130,7 +130,7 @@ fn write_concat_input(
         let abs_str = abs.to_string_lossy().replace('\'', "'\\''");
         content.push_str(&format!("file '{}'\n", abs_str));
     }
-    std::fs::write(&concat_path, &content)?;
+    tokio::fs::write(&concat_path, &content).await?;
     Ok(concat_path)
 }
 
@@ -288,17 +288,28 @@ async fn stream_progress(
 /// Apply the success / failure / timeout side-effects of one ffmpeg run.
 /// Split out of [`transcode_book`] so the spawn + heartbeat + wait stages
 /// can stay under the function-length cap.
-fn finalize_transcode(
+async fn finalize_transcode(
     book_id: i64,
     profile: &str,
     outcome: Result<FfmpegOutcome, anyhow::Error>,
 ) -> anyhow::Result<()> {
     match outcome {
         Ok(FfmpegOutcome::Success) => {
-            std::fs::write(progress_path(book_id, profile), "1.0")?;
+            tokio::fs::write(progress_path(book_id, profile), "1.0").await?;
+            // Eviction walks every book dir under the HLS cache (recursive
+            // read_dir + remove_dir_all). Push it onto the blocking pool so
+            // a packed cache can't stall the worker thread for hundreds of
+            // ms while ffmpeg's own progress reader keeps draining.
             let cap = cap_bytes();
-            if let Err(e) = evict_if_over_cap(cap) {
-                tracing::warn!(error = %e, "HLS eviction failed after successful transcode");
+            let evict_res = tokio::task::spawn_blocking(move || evict_if_over_cap(cap)).await;
+            match evict_res {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "HLS eviction failed after successful transcode");
+                }
+                Err(join_err) => {
+                    tracing::warn!(error = %join_err, "HLS eviction task panicked or was cancelled");
+                }
             }
             Ok(())
         }
@@ -310,7 +321,7 @@ fn finalize_transcode(
                 stderr = %stderr,
                 "ffmpeg transcode failed"
             );
-            cleanup_segment_dir(book_id, profile);
+            cleanup_segment_dir(book_id, profile).await;
             anyhow::bail!("ffmpeg exited with status {status}")
         }
         Ok(FfmpegOutcome::Timeout { timeout_secs }) => {
@@ -320,12 +331,12 @@ fn finalize_transcode(
                 timeout_secs = timeout_secs,
                 "ffmpeg transcode timed out"
             );
-            cleanup_segment_dir(book_id, profile);
+            cleanup_segment_dir(book_id, profile).await;
             anyhow::bail!("ffmpeg transcode timed out after {timeout_secs}s")
         }
         Err(e) => {
             tracing::error!(book_id = book_id, error = %e, "ffmpeg spawn/wait error");
-            cleanup_segment_dir(book_id, profile);
+            cleanup_segment_dir(book_id, profile).await;
             Err(e)
         }
     }
@@ -340,18 +351,18 @@ fn finalize_transcode(
 /// just-removed segment dir) so a retry is only possible after either
 /// (a) operator intervention removing the marker, or (b) a cache
 /// eviction sweep that wipes the entire `<book_id>/` directory.
-fn cleanup_segment_dir(book_id: i64, profile: &str) {
+async fn cleanup_segment_dir(book_id: i64, profile: &str) {
     let dir = segment_dir(book_id, profile);
-    if let Err(e) = std::fs::remove_dir_all(&dir) {
+    if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
         tracing::warn!(path = ?dir, error = %e, "failed to clean up segment dir after error");
     }
     let book_dir = hls_dir().join(book_id.to_string());
-    if let Err(e) = std::fs::create_dir_all(&book_dir) {
+    if let Err(e) = tokio::fs::create_dir_all(&book_dir).await {
         tracing::warn!(path = ?book_dir, error = %e, "failed to create book dir for .failed marker");
         return;
     }
     let marker = failed_path(book_id, profile);
-    if let Err(e) = std::fs::write(&marker, "") {
+    if let Err(e) = tokio::fs::write(&marker, "").await {
         tracing::warn!(path = ?marker, error = %e, "failed to write .failed marker");
     }
 }
