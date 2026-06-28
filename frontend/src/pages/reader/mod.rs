@@ -527,7 +527,7 @@ fn ReaderTopChrome(
                         width: "19", height: "19", view_box: "0 0 24 24",
                         fill: "none", stroke: "currentColor",
                         stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
-                        path { d: "M4 19.5l1.6-4 8.2-8.2 3 3-8.2 8.2-4.6.0z" }
+                        path { d: "M4 19.5l1.6-4 8.2-8.2 3 3-8.2 8.2-4.6 0z" }
                         path { d: "M13.2 6.1l2.7-2.7a1.3 1.3 0 0 1 1.9 0l1.8 1.8a1.3 1.3 0 0 1 0 1.9l-2.7 2.7" }
                     }
                     if highlight_count > 0 {

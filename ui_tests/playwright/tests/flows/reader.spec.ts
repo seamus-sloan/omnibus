@@ -1,5 +1,6 @@
 import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
@@ -11,8 +12,11 @@ test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
 });
 
-// A fixture with predictable, distinctive metadata to drive both tests.
+// A fixture with predictable, distinctive metadata to drive most tests.
 const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "alpha")!;
+// A separate book for the highlight action test so seeding/deleting highlights
+// doesn't pollute the empty-state assertions on TARGET (tests run in parallel).
+const HL_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "beta")!;
 
 test("renders the reader layout", async ({ page, request }) => {
   // Deep-link straight to the immersive reader by the book's stable uuid,
@@ -64,6 +68,50 @@ test("opens the contents and highlights drawers from the top chrome", async ({
   // Contents drawer opens from the top chrome.
   await page.getByTestId("reader-toc").click();
   await expect(page.getByTestId("reader-toc-drawer")).toBeVisible();
+});
+
+test("seeds a highlight and deletes it from the highlights drawer", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, HL_BOOK.title);
+
+  // Seed a highlight via the REST API (bearer-authed request fixture) so the
+  // reader loads it into the drawer on mount. A unique quote keeps the test
+  // robust against the shared, persistent dev DB.
+  const quote = `seeded passage ${Date.now()}`;
+  const created = await request.post("/api/highlights", {
+    data: {
+      book_uuid: uuid,
+      epub_cfi_range: "epubcfi(/6/4!/4/2,/1:0,/1:40)",
+      color: "amber",
+      text: quote,
+    },
+  });
+  expect(created.status(), "seed highlight").toBe(200);
+
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  // Open the highlights drawer — the seeded highlight is listed.
+  await page.getByTestId("reader-highlights").click();
+  await expect(page.getByTestId("reader-highlights-drawer")).toBeVisible();
+  const row = page
+    .getByTestId("reader-highlight-row")
+    .filter({ hasText: quote });
+  await expect(row).toHaveCount(1);
+
+  // Delete it — the delete RPC must fire, and the row disappears.
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: /\/api\/rpc\/highlights\/delete(?:\?|$)/,
+      expectedStatus: 200,
+    },
+    async () => row.getByTestId("highlight-delete").click(),
+  );
+  await expect(page.getByText(quote)).toHaveCount(0);
 });
 
 test("opens the reader from the book detail Read action", async ({ page, request }) => {

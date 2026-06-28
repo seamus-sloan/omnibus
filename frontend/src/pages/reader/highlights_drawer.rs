@@ -106,6 +106,9 @@ fn HighlightRow(highlight: Highlight, highlights: Signal<Vec<Highlight>>) -> Ele
     let note = highlight.note.clone();
     let cfi = highlight.epub_cfi_range.clone();
     let copy_src = highlight.text.clone().unwrap_or_default();
+    // Legacy highlights created before the text column have nothing to copy;
+    // disable the action rather than offer a silent no-op.
+    let has_text = highlight.text.is_some();
     let id = highlight.id;
 
     let on_delete = move |_| {
@@ -142,6 +145,7 @@ fn HighlightRow(highlight: Highlight, highlights: Signal<Vec<Highlight>>) -> Ele
                 button {
                     class: "rd-act sm",
                     r#type: "button",
+                    disabled: !has_text,
                     onclick: move |_| copy_text(&copy_src),
                     "Copy"
                 }
