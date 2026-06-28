@@ -12,6 +12,7 @@ use crate::{data, use_server_url, Route};
 mod body;
 mod hero;
 mod merge;
+mod rating;
 
 use body::{BdBodyMain, BdRailSection};
 use hero::BdHeroSection;
@@ -320,18 +321,13 @@ fn render_loaded(
     }
 }
 
-/// Reserved hidden slots — the F1.4 contract still has anything keying off
-/// the `ratings-slot` / `suggestions-slot` testids; the hero rating card
-/// and cover-fan strips are the visible surfaces.
+/// Reserved hidden slot for F3.3 suggestions — anything keying off the
+/// `suggestions-slot` testid still finds it. Ratings now ship as the
+/// interactive hero rating card (`rating-stars`), so the old `ratings-slot`
+/// placeholder is gone.
 #[component]
 fn BdHiddenSlots() -> Element {
     rsx! {
-        div {
-            class: "ratings-slot",
-            "data-testid": "ratings-slot",
-            aria_label: "Ratings \u{2014} coming soon",
-            hidden: true,
-        }
         div {
             class: "suggestions-slot",
             "data-testid": "suggestions-slot",
@@ -403,33 +399,6 @@ pub(super) fn BdSectionHead(kicker: String, title: String) -> Element {
 pub(super) fn BdFormatBadge(fmt: String) -> Element {
     rsx! {
         div { class: "bd-fmt-badge", "data-testid": "bd-format-badge", "{fmt}" }
-    }
-}
-
-/// Read-only star display. Half-filled stars are rounded down to nearest
-/// integer in the stub; the interactive widget will replace this later.
-#[component]
-pub(super) fn BdStars(value: f32) -> Element {
-    // Clamped to `[0, 5]` so the cast is a trivial in-range truncation.
-    // NaN gets the explicit `is_nan()` branch — Rust's `f32::clamp`
-    // returns NaN for NaN inputs, so the branch is required for the
-    // collapse-to-0 behavior.
-    let bounded = if value.is_nan() {
-        0.0
-    } else {
-        value.floor().clamp(0.0, 5.0)
-    };
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let full = bounded as u32;
-    rsx! {
-        span { class: "bd-stars-row",
-            for i in 0..5u32 {
-                span {
-                    class: if i < full { "bd-star bd-star-on" } else { "bd-star" },
-                    "\u{2605}"
-                }
-            }
-        }
     }
 }
 

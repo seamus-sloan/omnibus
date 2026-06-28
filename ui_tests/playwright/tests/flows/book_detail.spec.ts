@@ -1,4 +1,5 @@
 import { expect, test } from "../fixtures/test";
+import { expectMutation } from "../utils/api";
 import { AUDIOBOOK_BOOKS, AUDIOBOOK_BOOK_COUNT } from "../fixtures/audiobooks";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { fetchBookUuidByTitle, getRow } from "../utils/ebooks";
@@ -243,8 +244,9 @@ test("renders the detail contents for the selected book", async ({ page, request
   // button only renders when both formats are present.)
   await expect(switcher.getByTestId("action-listen")).toHaveCount(0);
 
-  // F3.2 / F3.3 placeholder slots must be in the DOM (may be invisible)
-  await expect(page.getByTestId("ratings-slot")).toBeAttached();
+  // F3.2 ratings ship as the interactive hero rating card; F3.3 suggestions
+  // is still a hidden placeholder slot.
+  await expect(page.getByTestId("rating-stars")).toBeVisible();
   await expect(page.getByTestId("suggestions-slot")).toBeAttached();
 
   // Back link still navigates to landing
@@ -253,6 +255,68 @@ test("renders the detail contents for the selected book", async ({ page, request
   await backLink.click();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByTestId("ebook-table")).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// Action — star rating (F3.2)
+// ---------------------------------------------------------------------------
+
+test("rates a book a half-star, persists across reload, then un-rates", async ({ page, request }) => {
+  // Use a Wirth book so the rating never collides with the alpha-focused
+  // assertions elsewhere in this serial file.
+  const uuid = await fetchBookUuidByTitle(request, WIRTH_LEAD.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  const stars = page.getByTestId("rating-stars");
+  await expect(stars).toBeVisible();
+  await expect(page.getByTestId("rating-meta")).toHaveText("Not rated yet");
+
+  // Click the left half of the 5th star → 4.5 → POST set, meta shows "of 5".
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/ratings/set", expectedStatus: 200 },
+    async () => stars.getByRole("button", { name: "Rate 4.5 stars" }).click(),
+  );
+  await expect(page.getByTestId("rating-meta")).toContainText("4.5 of 5");
+
+  // The saved rating survives a reload (the post-mount effect refetches it).
+  await gotoReady(page, `/books/${uuid}`);
+  await expect(page.getByTestId("rating-meta")).toContainText("4.5 of 5");
+
+  // Re-clicking the active half-star clears the rating (un-rate) and cleans up
+  // shared server state for the next run.
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/ratings/clear", expectedStatus: 200 },
+    async () =>
+      page
+        .getByTestId("rating-stars")
+        .getByRole("button", { name: "Rate 4.5 stars" })
+        .click(),
+  );
+  await expect(page.getByTestId("rating-meta")).toHaveText("Not rated yet");
+});
+
+test("surfaces an error and leaves the rating unchanged when the save fails", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, WIRTH_LEAD.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  await page.route("**/api/rpc/ratings/set", (route) =>
+    route.fulfill({ status: 500, contentType: "text/plain", body: "rating exploded" }),
+  );
+
+  const stars = page.getByTestId("rating-stars");
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/ratings/set", expectedStatus: 500 },
+    async () => stars.getByRole("button", { name: "Rate 3 stars" }).click(),
+  );
+
+  // The optimistic pick rolls back and the status line reports the failure.
+  await expect(page.getByTestId("rating-meta")).toHaveText("Couldn't save rating — try again");
 });
 
 test("breadcrumb author segment links to the author page", async ({ page, request }) => {

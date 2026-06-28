@@ -19,8 +19,9 @@ use omnibus_shared::{
     AuthorDetail, AuthorPhotoScanResult, AuthorSummary, Bookmark, CreateBookmark, CreateHighlight,
     EbookLibrary, EbookMetadata, Highlight, HighlightColor, LibraryContents, LibraryPage,
     MergeBooksResult, MetadataOverrides, PaletteResults, ProgressFormat, ProgressRecord,
-    ProgressUpdate, SeriesDetail, SeriesSummary, SessionReport, Settings, SortDir, SortKey,
-    TagWeight, UpdateBookmark, UpdateHighlightNote, ViewFilters, WorkerStatus,
+    ProgressUpdate, RatingRecord, RatingUpdate, SeriesDetail, SeriesSummary, SessionReport,
+    Settings, SortDir, SortKey, TagWeight, UpdateBookmark, UpdateHighlightNote, ViewFilters,
+    WorkerStatus,
 };
 
 // Only `validate_author_photo_url` (server-gated) and its tests reference this
@@ -853,6 +854,37 @@ pub async fn rpc_delete_bookmark(id: i64) -> Result<()> {
         Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(bookmark_db_error("delete", e)),
         Err(e) => Err(bookmark_db_error("delete", e)),
     }
+}
+
+/// Set (or change) the current user's star rating for a book. Mobile uses the
+/// analogous REST route in `server::backend::ratings`. POST carries the
+/// `RatingUpdate` body — same rationale as `rpc_save_progress`.
+#[post("/api/rpc/ratings/set", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_set_rating(update: RatingUpdate) -> Result<RatingRecord> {
+    if let Err(msg) = update.validate() {
+        return Err(ServerFnError::new(msg).into());
+    }
+    match db::ratings::set_rating(&pool.0, user.id, &update).await {
+        Ok(rec) => Ok(rec),
+        Err(db::ratings::RatingError::BookNotFound) => {
+            Err(ServerFnError::new("book not found").into())
+        }
+        Err(db::ratings::RatingError::Sqlx(e)) => Err(ServerFnError::new(e.to_string()).into()),
+    }
+}
+
+/// Fetch the current user's rating for a book. Returns `Ok(None)` when the
+/// book is unknown or the user has not rated it yet.
+#[post("/api/rpc/ratings/get", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_get_rating(uuid: String) -> Result<Option<RatingRecord>> {
+    Ok(db::ratings::get_rating(&pool.0, user.id, &uuid).await?)
+}
+
+/// Clear (un-rate) the current user's rating for a book. A no-op when no
+/// rating exists, so it always succeeds for a known or unknown uuid.
+#[post("/api/rpc/ratings/clear", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_clear_rating(uuid: String) -> Result<()> {
+    Ok(db::ratings::delete_rating(&pool.0, user.id, &uuid).await?)
 }
 
 // `server`-gated alongside `validate_author_photo_url`: these tests exercise
