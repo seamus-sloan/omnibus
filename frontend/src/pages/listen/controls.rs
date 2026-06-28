@@ -1,4 +1,4 @@
-//! Transport controls, scrubber, toolbar, and top bar for the listen page.
+//! Transport controls, toolbar, and top bar for the listen page.
 //!
 //! Pure presentation: receives playback-state values plus per-action handlers
 //! from `ready_player`. The eval/interop layer lives in `bootstrap.rs`.
@@ -6,8 +6,6 @@
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;
-
-use super::helpers::format_hms;
 
 // --- Pure helpers extracted so they can be unit-tested without a renderer.
 
@@ -47,12 +45,6 @@ pub(super) fn chapters_toggle_label(open: bool) -> &'static str {
     }
 }
 
-/// CSS fill style string for the scrubber track (0–100 range).
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
-pub(super) fn scrub_fill_style(pct: f64) -> String {
-    format!("--fill: {pct:.1}%")
-}
-
 /// The hidden HTML5 `<audio>` element bound by the JS shim. Mounted once at
 /// the App root (not per-route) so playback persists across navigation.
 #[component]
@@ -63,43 +55,6 @@ pub(crate) fn AudioElement() -> Element {
             "data-testid": "listen-audio",
             style: "display:none;",
             preload: "auto",
-        }
-    }
-}
-
-/// Scrub bar with custom-styled range input + elapsed / remaining / total.
-#[component]
-pub(super) fn Scrubber(
-    elapsed: f64,
-    duration: f64,
-    remaining: f64,
-    scrub_max: f64,
-    fill_pct: f64,
-    on_seek: EventHandler<Event<FormData>>,
-) -> Element {
-    let fill_style = scrub_fill_style(fill_pct);
-
-    rsx! {
-        div { class: "lp-scrubber",
-            input {
-                r#type: "range",
-                class: "lp-scrub-input",
-                min: "0",
-                max: "{scrub_max}",
-                step: "0.5",
-                value: "{elapsed}",
-                style: "{fill_style}",
-                "aria-label": "Seek",
-                "data-testid": "listen-scrub",
-                oninput: move |evt| on_seek.call(evt),
-            }
-            div { class: "lp-scrub-times",
-                span { "{format_hms(elapsed)}" }
-                span { class: "lp-scrub-remaining",
-                    "\u{00b7} {format_hms(remaining)} remaining"
-                }
-                span { "{format_hms(duration)}" }
-            }
         }
     }
 }
@@ -235,16 +190,6 @@ mod tests {
     #[test]
     fn chapters_toggle_label_open_shows_down_arrow() {
         assert_eq!(chapters_toggle_label(true), "Chapters \u{2193}");
-    }
-
-    #[test]
-    fn scrub_fill_style_formats_css_custom_property() {
-        assert_eq!(scrub_fill_style(42.5), "--fill: 42.5%");
-    }
-
-    #[test]
-    fn scrub_fill_style_formats_zero_fill() {
-        assert_eq!(scrub_fill_style(0.0), "--fill: 0.0%");
     }
 }
 
