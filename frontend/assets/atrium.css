@@ -2665,28 +2665,44 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .value-line { font-size: 1.25rem; margin-bottom: 1rem; }
 
 /* ── Auth pages (F1.6 primitives) ──────────────────────────────────── */
-.auth-footer { font-size: 0.85rem; color: #94a3b8; margin-top: 1rem; text-align: center; }
-.auth-footer a { color: #22d3ee; }
+.auth-footer { font-size: 0.85rem; color: var(--ink-2); margin-top: 1.6rem; text-align: center; }
+.auth-footer a { color: var(--ink-0); border-bottom: 1px solid var(--line); }
+.auth-footer a:hover { border-bottom-color: var(--ink-2); }
 
-:root {
-  --auth-ink-0: #f8fafc;
-  --auth-ink-1: #cbd5e1;
-  --auth-ink-2: #94a3b8;
-  --auth-ink-3: #64748b;
-  --auth-bg-0: rgba(15, 23, 42, 0.92);
-  --auth-bg-1: rgba(15, 23, 42, 0.65);
-  --auth-bg-2: rgba(30, 41, 59, 0.5);
-  --auth-line: rgba(100, 116, 139, 0.25);
-  --auth-line-2: rgba(100, 116, 139, 0.45);
+/* The auth pages predate the shared theme tokens and once carried their own
+   dark-only palette, which left the login/register screens unreadable under
+   the light/sepia themes (grey inputs on a cream panel, washed-out helper
+   text). Alias every `--auth-*` token onto the active theme token so the auth
+   shell adapts with the rest of the app — matches the imported design, which
+   styles these screens straight off the theme tokens.
+
+   Declared on `.atrium` (not `:root`): the theme overrides live on the
+   `.atrium[data-theme=…]` element, so a `var(--bg-1)` reference only resolves
+   to the active theme when the alias is computed there. At `:root` it would
+   freeze to the dark defaults and the page would ignore light/sepia. */
+.atrium {
+  --auth-ink-0: var(--ink-0);
+  --auth-ink-1: var(--ink-1);
+  --auth-ink-2: var(--ink-2);
+  --auth-ink-3: var(--ink-3);
+  --auth-bg-0: var(--bg-0);
+  --auth-bg-1: var(--bg-1);
+  --auth-bg-2: var(--bg-2);
+  --auth-line: var(--line);
+  --auth-line-2: var(--line-2);
+  /* Accent stays a fixed cyan rather than `--accent`: the light theme leaves
+     `--accent` at the dark default (a pale orange) that fails contrast as link
+     text. Cyan reads on the dark, cream, and parchment grounds alike — the
+     same reason breadcrumb links keep it. */
   --auth-accent: #22d3ee;
   --auth-accent-ink: #03131c;
-  --auth-ok: #34d399;
-  --auth-warn: #fbbf24;
-  --auth-bad: #f87171;
-  --auth-info: #60a5fa;
-  --auth-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --auth-serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
-  --auth-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --auth-ok: var(--ok);
+  --auth-warn: var(--warn);
+  --auth-bad: var(--bad);
+  --auth-info: var(--accent);
+  --auth-sans: var(--sans);
+  --auth-serif: var(--serif);
+  --auth-mono: var(--mono);
 }
 
 .auth-shell-grid {
