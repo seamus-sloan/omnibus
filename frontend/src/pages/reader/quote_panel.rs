@@ -149,7 +149,7 @@ pub(super) fn QuotePanel(
                                 class: "rd-quote-swatch",
                                 r#type: "button",
                                 style: "background:{p.bg};",
-                                "aria-label": "Background",
+                                "aria-label": "Background {p.bg}",
                                 onclick: move |_| {
                                     bg.set(p.bg.to_string());
                                     ink.set(p.ink.to_string());
@@ -159,6 +159,7 @@ pub(super) fn QuotePanel(
                         label { class: "rd-quote-custom",
                             input {
                                 r#type: "color",
+                                "aria-label": "Custom background color",
                                 value: "{custom}",
                                 oninput: move |e| {
                                     let hex = e.value();
