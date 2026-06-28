@@ -4,6 +4,18 @@
 
 Follow-on to [F2.4 Reader experience](2-4-reader-experience.md) — the interactive, data-driven features that sit on top of the cosmetic reader chrome.
 
+## Status
+
+Shipped across a stacked train: selection-popover Note/Copy/Quote/Share
+actions, the text-anchored note composer, the Contents and color-filterable
+Highlights & notes drawers, in-book search, the typeface/spacing/margins/justify
+controls plus the single/two-page **Page view** toggle, reader bookmarks (on the
+unified bookmarks backend, position = CFI), and the quote-card lifecycle with PNG
+export (a bespoke canvas renderer, not html2canvas — the card is a fixed layout).
+Highlights now persist the selected text (migration 0029) so drawers and quote
+cards render the passage. Per-book accent feeds the quote card's default
+background. "Open in composer →" is stubbed until [F5.7](5-7-journal-quote-cards.md).
+
 ## Objective
 
 Ship the interactive reader features that require new data models, epub.js annotation APIs, and backend support: highlights with palette-color selection, the highlight→quote lifecycle (select → highlight → promote to quote card), text-anchored notes, right-side drawers (table of contents, highlights & notes), in-book search, functional typography controls (typeface, spacing, margins, justify), bookmarks, and per-book accent colors.

@@ -31,9 +31,10 @@ test("renders the reader layout", async ({ page, request }) => {
   // SSR markup and are robust to that.
   await expect(page.getByTestId("reader-viewer")).toBeVisible();
 
-  // Top chrome: back, contents, Aa display settings, highlights, bookmark.
+  // Top chrome: back, contents, search, Aa, highlights, bookmark.
   await expect(page.getByTestId("reader-back")).toBeVisible();
   await expect(page.getByTestId("reader-toc")).toBeVisible();
+  await expect(page.getByTestId("reader-search")).toBeVisible();
   await expect(page.getByTestId("reader-aa")).toBeVisible();
   await expect(page.getByTestId("reader-highlights")).toBeVisible();
   await expect(page.getByTestId("reader-bookmark")).toBeVisible();
@@ -42,10 +43,33 @@ test("renders the reader layout", async ({ page, request }) => {
   await expect(page.getByTestId("reader-prev")).toBeVisible();
   await expect(page.getByTestId("reader-next")).toBeVisible();
 
-  // Font controls are inside the Aa panel — open it first.
+  // Font + page-view controls are inside the Aa panel — open it first.
   await page.getByTestId("reader-aa").click();
   await expect(page.getByTestId("reader-font-decrease")).toBeVisible();
   await expect(page.getByTestId("reader-font-increase")).toBeVisible();
+  await expect(page.getByTestId("reader-spread-single")).toBeVisible();
+  await expect(page.getByTestId("reader-spread-double")).toBeVisible();
+});
+
+test("opens the search and bookmarks drawers from the top chrome", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  // Search drawer: input is focused and ready for a query.
+  await page.getByTestId("reader-search").click();
+  await expect(page.getByTestId("reader-search-drawer")).toBeVisible();
+  await expect(page.getByTestId("reader-search-input")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("reader-search-drawer")).toHaveCount(0);
+
+  // Bookmarks drawer: empty state + the "+ Bookmark" affordance.
+  await page.getByTestId("reader-bookmark").click();
+  await expect(page.getByTestId("reader-bookmarks-drawer")).toBeVisible();
+  await expect(page.getByTestId("reader-bookmark-add")).toBeVisible();
 });
 
 test("opens the contents and highlights drawers from the top chrome", async ({
