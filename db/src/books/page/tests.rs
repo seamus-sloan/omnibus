@@ -25,7 +25,7 @@ async fn insert_lib(pool: &SqlitePool, path: &str) -> i64 {
 }
 
 /// Insert a book with an explicit `(title, sort, series_sort, series_index)`
-/// plus a backing `book_files` row (so the ghost filter keeps it). Returns the
+/// plus a backing `book_files` row (so the fileless filter keeps it). Returns the
 /// new book id.
 async fn insert_book(
     pool: &SqlitePool,

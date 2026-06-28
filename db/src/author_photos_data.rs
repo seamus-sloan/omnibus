@@ -146,7 +146,7 @@ pub async fn delete_author_photo(
 /// Returns the number of books that were un-linked (used by the admin
 /// confirmation modal to show "this affects N books"). Returns `Ok(0)`
 /// without touching the blocklist if `author_id` does not exist — a
-/// stale tab firing a second Delete must not leak a ghost row into
+/// stale tab firing a second Delete must not leak a stale row into
 /// `ignored_authors`.
 ///
 /// FTS refresh runs best-effort *after* commit, mirroring

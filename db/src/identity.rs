@@ -52,7 +52,7 @@ pub async fn backfill_scan_keys(pool: &SqlitePool) -> Result<(), IdentityError> 
 
 /// Fill `books.scan_key` from each book's **native** `book_files` row — the
 /// format that is *not* recorded in `merged_uuids` (attachments keep their
-/// own key). A fileless ghost has no `book_files` row, but ghosts are a
+/// own key). A fileless book has no `book_files` row, but fileless rows are a
 /// post-0026 concept and always carry a `scan_key`, so the INNER JOIN never
 /// drops a row that needs filling.
 async fn backfill_books_scan_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> {

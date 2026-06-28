@@ -130,7 +130,7 @@ async fn sync_changed_one(
     };
 
     // Rewrites in place, re-creating the `book_files` row whether the book
-    // had one (a real content change) or not (a fileless ghost whose file
+    // had one (a real content change) or not (a fileless book whose file
     // returned — the re-attach path, F2). `books.uuid` is preserved.
     rewrite_book_in_place(tx, book_id, &uuid, b, changed_covers).await?;
     Ok(())

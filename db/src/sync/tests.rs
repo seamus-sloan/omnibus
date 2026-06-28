@@ -302,12 +302,12 @@ async fn sync_overrides_survive_changed() {
     let after = list_books(&pool, "/lib").await.unwrap();
     assert_eq!(after[0].title.as_deref(), Some("User Title"));
 }
-/// A Removed uuid is ghosted (F2): the `books` row is **retained** (so its
-/// soft-ref user data survives), but its `book_files`, `books_fts`, and
-/// taxonomy/author links are cleared so the ghost is invisible to the grid,
-/// search, and browse pages.
+/// Removing a file (F2) drops only the book's `book_files` row; the `books`
+/// row, its taxonomy/author links, FTS row, and soft-ref user data are all
+/// retained, so the book stays in browse/search — only the grid/facets hide it
+/// via their own `EXISTS book_files` filter.
 #[tokio::test]
-async fn sync_removes_book_cascades_links_and_fts() {
+async fn removing_a_books_file_keeps_its_links_and_fts() {
     let _covers = CoversTempDir::new("sync_removed_cascade");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -356,19 +356,22 @@ async fn sync_removes_book_cascades_links_and_fts() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(books_count, 1, "books row retained as a fileless ghost");
-    assert_eq!(files_count, 0);
-    assert_eq!(link_count, 0);
-    assert_eq!(fts_count, 0);
+    assert_eq!(books_count, 1, "books row retained as a fileless book");
+    assert_eq!(files_count, 0, "only the file rows are dropped");
+    assert_eq!(link_count, 1, "author link retained");
+    assert_eq!(
+        fts_count, 1,
+        "FTS row retained — fileless books stay searchable"
+    );
 }
-/// F2 acceptance: removing a file ghosts its book (hidden from the grid but
+/// F2 acceptance: removing a file makes its book fileless (hidden from the grid but
 /// the row + durable `books.uuid` survive); when the same file returns it
 /// re-attaches to that row, preserving the uuid (auto-relink). This is what
 /// makes user data keyed on `books.uuid` durable across a removed→re-added
 /// cycle.
 #[tokio::test]
-async fn removed_file_ghosts_then_returning_file_relinks_same_uuid() {
-    let _covers = CoversTempDir::new("ghost_relink");
+async fn removed_file_goes_fileless_then_returning_file_relinks_same_uuid() {
+    let _covers = CoversTempDir::new("fileless_relink");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
         &pool,
@@ -379,7 +382,7 @@ async fn removed_file_ghosts_then_returning_file_relinks_same_uuid() {
     .unwrap();
     let uuid1 = crate::test_support::uuid_by_scan_key(&pool, "a.epub").await;
 
-    // File gone → ghosted: hidden from the list, but the row + uuid survive.
+    // File gone → fileless: hidden from the list, but the row + uuid survive.
     sync_books(
         &pool,
         "/lib",
@@ -392,12 +395,12 @@ async fn removed_file_ghosts_then_returning_file_relinks_same_uuid() {
     .unwrap();
     assert!(
         list_books(&pool, "/lib").await.unwrap().is_empty(),
-        "fileless ghost is hidden from the library grid"
+        "fileless book is hidden from the library grid"
     );
     assert_eq!(
         crate::test_support::uuid_by_scan_key(&pool, "a.epub").await,
         uuid1,
-        "ghost retains its scan_key and durable uuid"
+        "fileless book retains its scan_key and durable uuid"
     );
 
     // File returns → re-attaches to the same row (same uuid), listed again.
@@ -797,23 +800,20 @@ async fn reindex_keeps_fts_row_count_in_sync() {
     .await
     .unwrap();
 
-    // F2: removed book `b` is retained as a fileless ghost, so total books
-    // is 2 but only the file-backed `a` carries an FTS row.
-    let file_backed: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM books b
-          WHERE EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    // F2: removed book `b` is retained as a fileless book and keeps its FTS
+    // row, so the FTS count tracks total books (2), not just file-backed (1).
+    let books_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     let fts_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books_fts")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(file_backed, 1);
+    assert_eq!(books_total, 2);
     assert_eq!(
-        fts_count, 1,
-        "FTS row count must match file-backed book count"
+        fts_count, 2,
+        "every book — fileless included — keeps an FTS row"
     );
 }
 #[tokio::test]
@@ -1445,15 +1445,19 @@ async fn sync_audiobooks_with_removed_above_bind_cap_succeeds() {
 
     assert!(
         list_books(&pool, "/lib").await.unwrap().is_empty(),
-        "every audiobook is hidden (ghosted) after wholesale removal"
+        "every audiobook is hidden from the grid (fileless) after wholesale removal"
     );
+    let books_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     let fts_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books_fts")
         .fetch_one(&pool)
         .await
         .unwrap();
     assert_eq!(
-        fts_count, 0,
-        "FTS rows should be cleared for every ghosted audiobook"
+        books_total, fts_count,
+        "every fileless audiobook keeps its books + FTS row"
     );
 }
 
