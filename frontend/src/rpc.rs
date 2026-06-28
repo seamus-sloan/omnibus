@@ -20,8 +20,14 @@ use omnibus_shared::{
     EbookMetadata, Highlight, HighlightColor, LibraryContents, LibraryPage, MergeBooksResult,
     MetadataOverrides, PaletteResults, ProgressFormat, ProgressRecord, ProgressUpdate,
     SeriesDetail, SeriesSummary, SessionReport, Settings, SortDir, SortKey, TagWeight,
-    UpdateHighlightNote, ViewFilters, WorkerStatus, AUTHOR_PHOTO_URL_MAX_LEN,
+    UpdateHighlightNote, ViewFilters, WorkerStatus,
 };
+
+// Only `validate_author_photo_url` (server-gated) and its tests reference this
+// cap, so keep the import `server`-gated too — otherwise it's an unused import
+// in the `mobile`/`web` client builds.
+#[cfg(feature = "server")]
+use omnibus_shared::AUTHOR_PHOTO_URL_MAX_LEN;
 
 #[cfg(feature = "server")]
 use omnibus_db::{self as db, scanner};
@@ -468,6 +474,11 @@ pub async fn rpc_backfill_chapters() -> Result<()> {
 
 /// Validate and trim an author photo URL: non-empty, within
 /// `AUTHOR_PHOTO_URL_MAX_LEN` bytes. Returns the trimmed slice on success.
+///
+/// Only the server-side body of `rpc_set_author_photo_url` calls this, so it
+/// is `server`-gated like the other server-only helpers above — otherwise it
+/// is dead code in the `mobile`/`web` client builds (caught by clippy).
+#[cfg(feature = "server")]
 fn validate_author_photo_url(url: &str) -> Result<&str, ServerFnError> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
@@ -760,7 +771,10 @@ pub async fn rpc_delete_highlight(id: i64) -> Result<()> {
     }
 }
 
-#[cfg(test)]
+// `server`-gated alongside `validate_author_photo_url`: these tests exercise
+// that helper, which only exists in the server build. CI runs the frontend
+// suite as `cargo test -p omnibus-frontend --features server`.
+#[cfg(all(test, feature = "server"))]
 mod tests {
     use super::{validate_author_photo_url, AUTHOR_PHOTO_URL_MAX_LEN};
 
