@@ -299,18 +299,21 @@ test("opens sleep panel and shows preset duration rail", async ({
   await page.getByRole("button", { name: /^sleep/i }).click();
 
   // Panel container is in the DOM.
-  await expect(page.getByTestId("sleep-panel")).toBeVisible();
+  const panel = page.getByTestId("sleep-panel");
+  await expect(panel).toBeVisible();
 
-  // Preset rail: Off through 4 hours.
-  await expect(page.getByRole("button", { name: "Off" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "15 min" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "30 min" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "45 min" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "1 hour" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "2 hours" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "3 hours" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "4 hours" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "End of chapter" })).toBeVisible();
+  // Preset rail: Off through 4 hours. Scope to the panel — the toolbar Sleep
+  // button reads "Sleep · off" when no timer is armed, which would otherwise
+  // also match a bare { name: "Off" } and trip Playwright's strict mode.
+  await expect(panel.getByRole("button", { name: "Off" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "15 min" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "30 min" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "45 min" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "1 hour" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "2 hours" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "3 hours" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "4 hours" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "End of chapter" })).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
@@ -321,10 +324,11 @@ test("opens bookmarks drawer and shows empty state", async ({
   page,
   request,
 }) => {
-  // Use the M4B book — no other spec creates bookmarks against it, so the
-  // empty state holds even on the shared, persistent dev DB. (The create
-  // flow below bookmarks MP3_BOOK, so reusing it here would be flaky.)
-  const uuid = await fetchBookUuidByTitle(request, M4B_BOOK.title);
+  // Use the multipart generated MP3 — it reaches direct-play mode reliably in
+  // headless (unlike the large public-domain M4B), and no other spec creates
+  // bookmarks against it, so the empty state holds on the shared dev DB. (The
+  // create flow below bookmarks MP3_BOOK, so reusing that here would be flaky.)
+  const uuid = await fetchBookUuidByTitle(request, MULTIPART_MP3_BOOK.title);
   await gotoReady(page, `/listen/${uuid}`);
   await waitForPlayerReady(page);
 
