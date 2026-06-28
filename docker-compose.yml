@@ -1,0 +1,67 @@
+# Omnibus — self-hosted ebook/audiobook library.
+#
+# Quick start:
+#   1. Edit the two `:ro` library bind mounts below to point at your books.
+#   2. Set OMNIBUS_PUBLIC_ORIGIN to the URL you'll actually open in a browser.
+#   3. `docker compose up -d --build`
+#   4. Open the app and register — the FIRST account created becomes admin.
+#
+# Volume model (Jellyfin-style):
+#   /config      durable state — SQLite DB + cover images (back this up)
+#   /cache       regenerable — WebP thumbnails + HLS transcode segments
+#   /books       your ebook library      (read-only)
+#   /audiobooks  your audiobook library  (read-only)
+
+services:
+  omnibus:
+    build: .
+    # Once you publish an image you can swap the build for:
+    # image: ghcr.io/youruser/omnibus:latest
+    container_name: omnibus
+    restart: unless-stopped
+
+    ports:
+      # host:container — change the host side if 3000 is taken.
+      - "3000:3000"
+
+    volumes:
+      # Persistent app state and regenerable cache. Created on first run.
+      - ./config:/config
+      - ./cache:/cache
+      # Your media. Edit the left side; keep `:ro` so Omnibus never writes here.
+      - /path/to/your/ebooks:/books:ro
+      - /path/to/your/audiobooks:/audiobooks:ro
+
+    environment:
+      # Run the server as this host user/group so it can write ./config and
+      # ./cache and so files land owned by you. Set to your `id -u` / `id -g`
+      # (default 1000:1000). Same convention as the linuxserver.io images.
+      PUID: "1000"
+      PGID: "1000"
+
+      # The origin(s) you load the app from. MUST match the browser URL or
+      # logged-in POSTs are rejected (403). Comma-separate multiple origins,
+      # e.g. "http://localhost:3000,http://192.168.1.10:3000".
+      OMNIBUS_PUBLIC_ORIGIN: "http://localhost:3000"
+
+      # Serving over plain http:// (LAN / no TLS) requires this, otherwise the
+      # session cookie is marked Secure and never sent — login silently fails.
+      # Set to 1 (or remove) when you put Omnibus behind HTTPS.
+      OMNIBUS_SECURE_COOKIES: "0"
+
+      # Library locations inside the container. These are the mount targets
+      # above. Leave them set to scan on every boot, or comment BOTH out to
+      # instead configure libraries from the in-app Settings page (setting
+      # only one clears the other).
+      EBOOK_LIBRARY_PATH: "/books"
+      AUDIOBOOK_LIBRARY_PATH: "/audiobooks"
+
+      # --- Optional tuning (sensible defaults baked into the image) ----------
+      # OMNIBUS_THUMBS_CAP_BYTES: "5368709120"   # thumbnail cache cap (5 GiB)
+      # OMNIBUS_HLS_CAP_BYTES: "5368709120"      # HLS transcode cache cap (5 GiB)
+      # OMNIBUS_HLS_TRANSCODE_TIMEOUT_SECS: "1800"
+
+      # --- One-time admin recovery ------------------------------------------
+      # If you lock yourself out, set this to an existing username, restart
+      # once to regain admin, then REMOVE it (it re-promotes on every boot).
+      # OMNIBUS_INITIAL_ADMIN: "yourusername"
