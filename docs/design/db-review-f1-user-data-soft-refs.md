@@ -345,10 +345,13 @@ The F1 ↔ F2 ↔ F10 chain:
 
 ## Open questions
 
-1. **Grace window shape (deferred to F10).** When GC eventually lands,
-   what disqualifies a row from pruning — uuid absent from both
-   `books.uuid` and `merged_uuids` for N boots? A timestamp column? This is
-   F10's to answer; flagged here because Decision 1b would force it early.
+1. **Grace window shape (resolved by F10).** F10 has now answered this:
+   soft-detach via a `detached_at` column (uuid absent from both `books.uuid`
+   and `merged_uuids` → mark detached, filter from reads, hard-purge after a
+   30-day retention measured from detach time). The user-data tables here
+   **inherit the soft-detach disposition** — they must never hard-delete,
+   since a journal entry is not regenerable the way a metadata override is.
+   See [db-review-f10-override-gc.md](db-review-f10-override-gc.md).
 2. **Migration ordering with F2 (resolved).** F2 does **not** re-key
    `books.uuid` — it keeps existing values verbatim and only adds a `scan_key`
    column — so this migration's `INSERT … SELECT JOIN books` backfill produces

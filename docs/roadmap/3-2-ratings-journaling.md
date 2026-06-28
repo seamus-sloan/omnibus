@@ -50,6 +50,11 @@ When a book is pruned, its rating row becomes *detached* (orphaned) rather than 
 
 A reconciliation step on re-index can attempt to re-link detached user data by `(author, title)` similarity when a UUID still doesn't match — surfaced as "unlinked annotations" in the UI rather than silently lost.
 
+**Reconcile/GC shape inherited from F10.** The orphan reconcile + GC mechanism is built first for `metadata_overrides` under [F10](../design/db-review-f10-override-gc.md), and the user-data tables here reuse it. Two constraints carry over:
+
+1. **User data must soft-detach, never hard-delete.** F10's `metadata_overrides` rows are regenerable (an override can be re-entered), so its explicit-removal path may hard-delete. A journal entry is **not** regenerable — `user_ratings` / `user_journal_entries` must use the soft-detach disposition (a `detached_at` marker, read-path filtered, retained for a grace window) and only hard-purge after a long retention. Do not point a hard-delete GC at these tables.
+2. **The admin "unlinked edits/annotations" UI lands here.** F10 builds the detach + GC data layer now but defers the admin surface to this feature, so `metadata_overrides` and user-data orphans are presented through one consistent "unlinked" view when F3.2 ships.
+
 ## Dependencies
 
 - [F0.1 Schema refactor](0-1-schema-refactor.md).
