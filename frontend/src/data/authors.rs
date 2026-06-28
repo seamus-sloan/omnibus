@@ -191,8 +191,8 @@ pub async fn upload_author_photo(
     let u8 = js_sys::Uint8Array::from(bytes.as_slice());
     let parts = js_sys::Array::new();
     parts.push(&u8);
-    let mut opts = web_sys::BlobPropertyBag::new();
-    opts.type_(&mime);
+    let opts = web_sys::BlobPropertyBag::new();
+    opts.set_type(&mime);
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts)
         .map_err(|e| DataError::Other(format!("Blob::new: {e:?}")))?;
     form.append_with_blob_and_filename("photo", &blob, &filename)
