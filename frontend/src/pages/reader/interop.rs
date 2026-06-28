@@ -8,6 +8,7 @@ use dioxus::prelude::*;
 use omnibus_shared::Highlight;
 
 use super::prefs::ReaderPrefs;
+use super::search_panel::SearchResult;
 use super::selection::SelectionData;
 use super::toc_drawer::TocEntry;
 use super::ReaderStatus;
@@ -23,6 +24,7 @@ pub(crate) struct InteropSignals {
     pub selection: Signal<Option<SelectionData>>,
     pub highlights: Signal<Vec<Highlight>>,
     pub toc: Signal<Vec<TocEntry>>,
+    pub search_results: Signal<Vec<SearchResult>>,
 }
 
 /// Boxed list of the `__omnibusOn*` window callbacks. Held on the heap
@@ -53,6 +55,7 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
         mut selection,
         mut highlights,
         mut toc,
+        mut search_results,
     } = sigs;
 
     let uuid_for_mount = uuid.clone();
@@ -78,6 +81,8 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
         let max_width_lit =
             serde_json::to_string(prefs.margins.read().to_css()).unwrap_or_else(|_| "null".into());
         let justify_val = *prefs.justify.read();
+        let spread_lit = serde_json::to_string(prefs.spread.read().to_css())
+            .unwrap_or_else(|_| "\"auto\"".into());
 
         if let Some(window) = web_sys::window() {
             let uuid_for_save = uuid_cb.clone();
@@ -127,6 +132,11 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
                     toc.set(entries);
                 }
             });
+            let on_search = Closure::<dyn FnMut(String)>::new(move |json: String| {
+                if let Ok(rs) = serde_json::from_str::<Vec<SearchResult>>(&json) {
+                    search_results.set(rs);
+                }
+            });
             let _ = js_sys::Reflect::set(
                 &window,
                 &JsValue::from_str("__omnibusOnStatus"),
@@ -142,7 +152,12 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
                 &JsValue::from_str("__omnibusOnToc"),
                 on_toc.as_ref().unchecked_ref(),
             );
-            *cb_holder.borrow_mut() = vec![relocate, on_status, on_selection, on_toc];
+            let _ = js_sys::Reflect::set(
+                &window,
+                &JsValue::from_str("__omnibusOnSearchResults"),
+                on_search.as_ref().unchecked_ref(),
+            );
+            *cb_holder.borrow_mut() = vec![relocate, on_status, on_selection, on_toc, on_search];
         }
 
         let uuid_for_fetch = uuid.clone();
@@ -167,6 +182,7 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
                 line_height_lit: &line_height_lit,
                 max_width_lit: &max_width_lit,
                 justify_val,
+                spread_lit: &spread_lit,
             });
             let _ = dioxus::document::eval(&js);
 

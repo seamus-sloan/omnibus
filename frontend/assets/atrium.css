@@ -3956,6 +3956,63 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-note-hint { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
 .rd-note-buttons { display: flex; gap: 8px; }
 
+/* Search panel (F2.4b). */
+.rd-search-box { padding: 12px 20px; border-bottom: 1px solid var(--line-2); }
+.rd-search-input { width: 100%; background: var(--bg-2); color: var(--ink-0);
+  border: 1px solid var(--line-2); border-radius: 9px; padding: 9px 12px;
+  font-size: 14px; }
+.rd-search-row { display: block; width: 100%; text-align: left; cursor: pointer;
+  background: transparent; border: 0; border-radius: 8px; padding: 9px 10px;
+  transition: background .14s; }
+.rd-search-row:hover { background: var(--bg-2); }
+.rd-search-chapter { display: block; font-family: var(--mono); font-size: 10px;
+  color: var(--accent); margin-bottom: 3px; }
+.rd-search-excerpt { display: block; font-size: 13px; color: var(--ink-1);
+  line-height: 1.4; }
+
+/* Reader bookmarks drawer rows (F2.4b). */
+.rd-bm-row { display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-radius: 8px; }
+.rd-bm-row:hover { background: var(--bg-2); }
+.rd-bm-main { flex: 1; display: flex; align-items: center; gap: 10px;
+  background: transparent; border: 0; cursor: pointer; padding: 0;
+  text-align: left; color: var(--ink-0); min-width: 0; }
+.rd-bm-flag { color: var(--accent); flex: 0 0 auto; }
+.rd-bm-label { font-family: var(--serif); font-style: italic; font-size: 15px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Quote-card panel (F2.4b). */
+.rd-quote-drawer { width: 432px; }
+.rd-quote-kicker { font-family: var(--mono); font-size: 10px;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--accent);
+  margin-bottom: 4px; }
+.rd-quote-card { width: 100%; border-radius: 12px; padding: 30px 28px;
+  display: flex; flex-direction: column; justify-content: space-between;
+  gap: 18px; font-family: var(--serif);
+  box-shadow: 0 24px 50px -22px rgba(0,0,0,.6); }
+.rd-quote-card-head { font-family: var(--mono); font-size: 9px;
+  letter-spacing: .22em; opacity: .55; }
+.rd-quote-card-body { font-size: 22px; line-height: 1.24; font-style: italic;
+  text-wrap: balance; }
+.rd-quote-card-foot { border-top: 1px solid currentColor; opacity: .85;
+  padding-top: 10px; }
+.rd-quote-card-author { font-family: var(--sans); font-size: 9.5px;
+  letter-spacing: .14em; text-transform: uppercase; opacity: .8; }
+.rd-quote-card-sub { font-size: 14px; font-style: italic; margin-top: 1px; }
+.rd-quote-controls { margin-top: 20px; }
+.rd-quote-label { font-family: var(--mono); font-size: 10px; color: var(--ink-3);
+  margin: 16px 0 8px; }
+.rd-quote-swatches { display: flex; gap: 8px; align-items: center; }
+.rd-quote-swatch { width: 30px; height: 30px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--line-2); }
+.rd-quote-custom { position: relative; width: 30px; height: 30px;
+  border-radius: 8px; overflow: hidden; border: 1px solid var(--line-2);
+  cursor: pointer; }
+.rd-quote-custom input { position: absolute; inset: -4px; width: calc(100% + 8px);
+  height: calc(100% + 8px); border: 0; padding: 0; cursor: pointer; }
+.rd-quote-ratios { display: flex; gap: 6px; }
+.rd-quote-actions { display: flex; gap: 8px; margin-top: 22px; }
+
 /* ── F5.10 merge dialog (book detail) — "Merge duplicates" redesign ──
  * Wide modal: pinned keeper rail + search + result rows with covers.
  * Three-zone flex column (head / scrolling body / foot). Replaces the
