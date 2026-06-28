@@ -27,15 +27,6 @@ pub(super) fn toolbar_btn_class(active: bool) -> &'static str {
     }
 }
 
-/// Label for the sleep toolbar button, reflecting active state.
-pub(super) fn sleep_label(active: bool) -> &'static str {
-    if active {
-        "Sleep \u{00b7} on"
-    } else {
-        "Sleep \u{00b7} off"
-    }
-}
-
 /// Label for the chapters toolbar button, reflecting open/closed state.
 pub(super) fn chapters_toggle_label(open: bool) -> &'static str {
     if open {
@@ -173,16 +164,6 @@ mod tests {
     }
 
     #[test]
-    fn sleep_label_inactive_shows_off() {
-        assert_eq!(sleep_label(false), "Sleep \u{00b7} off");
-    }
-
-    #[test]
-    fn sleep_label_active_shows_on() {
-        assert_eq!(sleep_label(true), "Sleep \u{00b7} on");
-    }
-
-    #[test]
     fn chapters_toggle_label_closed_shows_up_arrow() {
         assert_eq!(chapters_toggle_label(false), "Chapters \u{2191}");
     }
@@ -200,6 +181,7 @@ mod tests {
 #[component]
 pub(super) fn Toolbar(
     sleep_active: bool,
+    sleep_label: String,
     bookmarks_active: bool,
     chapters_active: bool,
     on_sleep: EventHandler<MouseEvent>,
@@ -209,7 +191,6 @@ pub(super) fn Toolbar(
     let sleep_cls = toolbar_btn_class(sleep_active);
     let bm_class = toolbar_btn_class(bookmarks_active);
     let ch_class = toolbar_btn_class(chapters_active);
-    let slp_label = sleep_label(sleep_active);
     let ch_label = chapters_toggle_label(chapters_active);
 
     rsx! {
@@ -217,12 +198,14 @@ pub(super) fn Toolbar(
             button {
                 class: sleep_cls,
                 r#type: "button",
+                "data-testid": "listen-sleep",
                 onclick: move |evt| on_sleep.call(evt),
-                "{slp_label}"
+                "{sleep_label}"
             }
             button {
                 class: bm_class,
                 r#type: "button",
+                "data-testid": "listen-bookmark",
                 onclick: move |evt| on_bookmark.call(evt),
                 "Bookmark"
             }

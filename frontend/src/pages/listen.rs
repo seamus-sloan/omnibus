@@ -29,6 +29,8 @@ use dioxus_router::Link;
 use crate::{use_playback, Route};
 
 #[cfg(not(feature = "mobile"))]
+mod bookmarks;
+#[cfg(not(feature = "mobile"))]
 mod bookmarks_drawer;
 #[cfg(feature = "web")]
 mod bootstrap;
@@ -45,6 +47,8 @@ mod mini_dock;
 mod overlays;
 #[cfg(not(feature = "mobile"))]
 mod ready_player;
+#[cfg(not(feature = "mobile"))]
+mod sleep;
 #[cfg(not(feature = "mobile"))]
 mod sleep_panel;
 #[cfg(not(feature = "mobile"))]

@@ -120,6 +120,7 @@ pub(super) struct PlayerCallbacks {
 #[derive(Clone, PartialEq)]
 pub(super) struct ToolbarState {
     pub sleep_active: bool,
+    pub sleep_label: String,
     pub bookmarks_active: bool,
     pub chapters_active: bool,
     pub on_sleep: EventHandler<MouseEvent>,
@@ -183,6 +184,7 @@ pub(super) fn PlayerStage(
 
                 Toolbar {
                     sleep_active: toolbar.sleep_active,
+                    sleep_label: toolbar.sleep_label,
                     bookmarks_active: toolbar.bookmarks_active,
                     chapters_active: toolbar.chapters_active,
                     on_sleep: toolbar.on_sleep,

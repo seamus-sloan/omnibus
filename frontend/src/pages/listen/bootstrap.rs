@@ -340,6 +340,9 @@ fn transport_controls_js() -> &'static str {
       pause:   function(){ el.pause(); },
       toggle:  function(){ if (el.paused) { this.play(); } else { this.pause(); } },
       setRate: function(r){ try { el.playbackRate = r; } catch(_) {} },
+      // Sleep-timer volume fade. Clamps to [0,1]; the Rust countdown ramps
+      // this down over the final seconds and restores 1.0 on cancel/expiry.
+      setVolume: function(v){ try { el.volume = Math.max(0, Math.min(1, v)); } catch(_) {} },
 
       // Hard stop for the dock's dismiss: pause, drop the source so a
       // media-key resume can't restart it, and reset direct-mode state.
