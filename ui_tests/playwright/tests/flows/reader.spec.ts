@@ -59,7 +59,7 @@ test("opens the search and bookmarks drawers from the top chrome", async ({
   await gotoReady(page, `/read/${uuid}`);
   await expect(page.getByTestId("reader-viewer")).toBeVisible();
 
-  // Search drawer: input is focused and ready for a query.
+  // Search drawer opens with its query input visible.
   await page.getByTestId("reader-search").click();
   await expect(page.getByTestId("reader-search-drawer")).toBeVisible();
   await expect(page.getByTestId("reader-search-input")).toBeVisible();
