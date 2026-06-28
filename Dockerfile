@@ -1,0 +1,76 @@
+# syntax=docker/dockerfile:1
+
+###############################################################################
+# Builder — compiles the Dioxus fullstack web bundle (native Axum server +
+# the hydrated WASM client). Mirrors the CI bundle step in
+# .github/workflows/e2e.yml: `dx bundle --platform web --package omnibus
+# --fullstack --release`, which emits target/dx/omnibus/release/web/.
+#
+# This deliberately does NOT use the Nix dev shell — a plain Rust toolchain
+# keeps the image conventional and light. `dx` downloads the matching
+# wasm-bindgen + wasm-opt itself, so the wasm-bindgen pin in flake.nix is not
+# needed here. The Dioxus libraries are patched to the v0.7.9 git tag (see
+# [patch.crates-io] in Cargo.toml), so the CLI is pinned to the same 0.7.9.
+###############################################################################
+FROM rust:1-bookworm AS builder
+
+# `clang`/`pkg-config` cover the handful of -sys crates; `curl` is for the
+# cargo-binstall bootstrap below. sqlite is statically bundled by
+# libsqlite3-sys and TLS is rustls, so no libsqlite3/openssl dev packages.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        clang pkg-config curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN rustup target add wasm32-unknown-unknown
+
+# Pull the prebuilt Dioxus CLI release binary (compiling it from source would
+# add many minutes). Pinned to v0.7.9 to match the patched Dioxus libraries.
+RUN curl -L --proto '=https' --tlsv1.2 -sSf \
+        https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash \
+    && cargo binstall -y dioxus-cli@0.7.9
+
+WORKDIR /src
+COPY . .
+
+# Produces /src/target/dx/omnibus/release/web/{server, public/, ...}.
+RUN dx bundle --platform web --package omnibus --fullstack --release
+
+###############################################################################
+# Runtime — slim image carrying just the bundle, ffmpeg (audiobook HLS
+# transcode), CA certs (remote cover/author-photo fetches), curl (health
+# probe), and gosu (privilege drop). Starts as root so the PUID/PGID
+# entrypoint can remap the app user, then drops to it before serving.
+###############################################################################
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg ca-certificates curl gosu \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid 1000 --user-group --create-home --shell /usr/sbin/nologin omnibus
+
+WORKDIR /app
+# The server locates its `public/` assets relative to the binary, so keep the
+# whole bundle directory intact.
+COPY --from=builder /src/target/dx/omnibus/release/web/ /app/
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Bind on all interfaces (Dioxus defaults to 127.0.0.1, unreachable from
+# outside the container) and default the persistent paths into the /config
+# and /cache volumes. Everything here is overridable in docker-compose.yml.
+ENV IP=0.0.0.0 \
+    PORT=3000 \
+    DATABASE_URL="sqlite:///config/omnibus.db?mode=rwc" \
+    OMNIBUS_COVERS_DIR=/config/covers \
+    OMNIBUS_THUMBS_DIR=/cache/thumbs \
+    OMNIBUS_DATA_DIR=/cache/data
+
+EXPOSE 3000
+VOLUME ["/config", "/cache"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${PORT}/api/_health" || exit 1
+
+# Runs as root; the entrypoint applies PUID/PGID and drops to the omnibus user.
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["/app/server"]

@@ -1,0 +1,36 @@
+# Keep the build context small and reproducible. The builder runs a clean
+# `dx bundle`, so none of these are needed (and several would poison it).
+
+# Rust build output (multi-GB) — the image rebuilds from source.
+target/
+**/target/
+
+# Local DB + WAL/SHM — never bake a dev database into the image.
+omnibus.db
+omnibus.db-*
+
+# Runtime data that the compose volumes provide instead.
+config/
+cache/
+covers/
+thumbs/
+data/
+
+# Nix / direnv / editor / VCS cruft irrelevant to the build.
+.direnv/
+.git/
+.github/
+.zellij/
+result
+result-*
+
+# Node / Playwright (E2E only, not part of the server bundle).
+ui_tests/**/node_modules/
+
+# Local secrets — must not leak into an image layer.
+.env
+
+# Docker files themselves.
+Dockerfile
+docker-compose.yml
+.dockerignore

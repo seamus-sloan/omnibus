@@ -5,6 +5,11 @@ Self-hosted ebook and audiobook library — the Plex/Jellyfin for your book coll
 > **Status:** early development. Foundations and browse/discovery have shipped and reading/listening is in progress — landing grid/table, EPUB reader, audiobook player, command-palette search, and auth are live. See [docs/roadmap/0-0-summary.md](docs/roadmap/0-0-summary.md) for the full roadmap.
 
 ## Running
+
+> **Just want to deploy it?** See [docs/docker.md](docs/docker.md) for a
+> Jellyfin-style `docker compose` setup (bind-mount your library, durable
+> state in `/config`, cache in `/cache`). The Nix flow below is for development.
+
 This project utilizes [Nix](https://wiki.nixos.org/wiki/NixOS_Wiki) to save all dependencies.
 ```bash
 # Launch the nix shell (slim default — daily cargo/clippy/test)
