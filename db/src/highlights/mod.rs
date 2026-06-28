@@ -37,13 +37,14 @@ pub async fn create_highlight(
         .await?
         .ok_or(HighlightError::BookNotFound)?;
     let id = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO highlights (user_id, book_uuid, epub_cfi_range, color)
-         VALUES (?, ?, ?, ?) RETURNING id",
+        "INSERT INTO highlights (user_id, book_uuid, epub_cfi_range, color, text)
+         VALUES (?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(user_id)
     .bind(&book_uuid)
     .bind(&input.epub_cfi_range)
     .bind(input.color.as_str())
+    .bind(input.text.as_deref())
     .fetch_one(pool)
     .await?;
 
@@ -60,7 +61,7 @@ pub async fn list_highlights(
         return Ok(vec![]);
     };
     let rows = sqlx::query(
-        "SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, h.created_at
+        "SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, h.text, h.created_at
          FROM highlights h
          WHERE h.user_id = ? AND h.book_uuid = ?
          ORDER BY h.created_at ASC",
@@ -134,7 +135,7 @@ async fn get_highlight_by_id(
     highlight_id: i64,
 ) -> Result<Highlight, HighlightError> {
     let row = sqlx::query(
-        "SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, h.created_at
+        "SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, h.text, h.created_at
          FROM highlights h
          WHERE h.id = ? AND h.user_id = ?",
     )
@@ -156,6 +157,7 @@ fn row_to_highlight(row: &sqlx::sqlite::SqliteRow) -> Result<Highlight, Highligh
         epub_cfi_range: row.try_get("epub_cfi_range")?,
         color,
         note: row.try_get("note")?,
+        text: row.try_get("text")?,
         created_at: row.try_get("created_at")?,
     })
 }

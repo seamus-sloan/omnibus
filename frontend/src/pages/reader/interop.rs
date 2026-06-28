@@ -9,6 +9,7 @@ use omnibus_shared::Highlight;
 
 use super::prefs::ReaderPrefs;
 use super::selection::SelectionData;
+use super::toc_drawer::TocEntry;
 use super::ReaderStatus;
 
 /// All the signals the reader needs to drive from JS callbacks; passed as
@@ -21,6 +22,7 @@ pub(crate) struct InteropSignals {
     pub loc: Signal<super::RelocateData>,
     pub selection: Signal<Option<SelectionData>>,
     pub highlights: Signal<Vec<Highlight>>,
+    pub toc: Signal<Vec<TocEntry>>,
 }
 
 /// Boxed list of the `__omnibusOn*` window callbacks. Held on the heap
@@ -50,6 +52,7 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
         mut loc,
         mut selection,
         mut highlights,
+        mut toc,
     } = sigs;
 
     let uuid_for_mount = uuid.clone();
@@ -119,6 +122,11 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
                     selection.set(Some(data));
                 }
             });
+            let on_toc = Closure::<dyn FnMut(String)>::new(move |json: String| {
+                if let Ok(entries) = serde_json::from_str::<Vec<TocEntry>>(&json) {
+                    toc.set(entries);
+                }
+            });
             let _ = js_sys::Reflect::set(
                 &window,
                 &JsValue::from_str("__omnibusOnStatus"),
@@ -129,7 +137,12 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
                 &JsValue::from_str("__omnibusOnSelection"),
                 on_selection.as_ref().unchecked_ref(),
             );
-            *cb_holder.borrow_mut() = vec![relocate, on_status, on_selection];
+            let _ = js_sys::Reflect::set(
+                &window,
+                &JsValue::from_str("__omnibusOnToc"),
+                on_toc.as_ref().unchecked_ref(),
+            );
+            *cb_holder.borrow_mut() = vec![relocate, on_status, on_selection, on_toc];
         }
 
         let uuid_for_fetch = uuid.clone();

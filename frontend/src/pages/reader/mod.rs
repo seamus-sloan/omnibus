@@ -7,10 +7,13 @@
 mod aa_panel;
 mod bootstrap;
 mod chrome_handlers;
+mod highlights_drawer;
 #[cfg(feature = "web")]
 mod interop;
+mod note_composer;
 mod prefs;
 mod selection;
+mod toc_drawer;
 mod typography;
 
 use dioxus::prelude::*;
@@ -22,10 +25,13 @@ use crate::data;
 use omnibus_shared::{EbookMetadata, Highlight, HighlightColor};
 
 use aa_panel::ReaderAaPanel;
+use highlights_drawer::HighlightsDrawer;
 #[cfg(feature = "web")]
 use interop::{install_reader_web_interop, InteropSignals};
+use note_composer::NoteComposer;
 use prefs::init_reader_prefs;
 use selection::{SelectionData, SelectionPopover};
+use toc_drawer::{TocDrawer, TocEntry};
 
 const JSZIP_JS: Asset = asset!("/assets/vendor/jszip.min.js");
 const EPUBJS_JS: Asset = asset!("/assets/vendor/epub.min.js");
@@ -62,6 +68,52 @@ pub(crate) struct RelocateData {
 fn reader_call(method: &str, arg_js: &str) {
     let js = format!("window.OmnibusReader && window.OmnibusReader.{method}({arg_js});");
     let _ = dioxus::document::eval(&js);
+}
+
+/// Optimistically annotate the selection, persist the highlight, and — when
+/// `open_note` — open the note composer on the created row. Shared by the
+/// swatch (highlight) and Note popover actions. Rolls the optimistic
+/// annotation back if the write fails.
+fn spawn_create_highlight(
+    uuid: String,
+    cfi: String,
+    color: HighlightColor,
+    text: String,
+    mut highlights: Signal<Vec<Highlight>>,
+    mut note_target: Signal<Option<Highlight>>,
+    open_note: bool,
+) {
+    #[cfg(feature = "web")]
+    {
+        let cfi_lit = serde_json::to_string(&cfi).unwrap_or_else(|_| "\"\"".into());
+        let color_lit =
+            serde_json::to_string(color.as_str()).unwrap_or_else(|_| "\"amber\"".into());
+        reader_call("addAnnotation", &format!("{cfi_lit}, {color_lit}"));
+    }
+    let create = omnibus_shared::CreateHighlight {
+        book_uuid: uuid,
+        epub_cfi_range: cfi.clone(),
+        color,
+        text: if text.is_empty() { None } else { Some(text) },
+    };
+    spawn(async move {
+        match data::create_highlight("", create).await {
+            Ok(h) => {
+                highlights.write().push(h.clone());
+                if open_note {
+                    note_target.set(Some(h));
+                }
+            }
+            Err(_) => {
+                #[cfg(feature = "web")]
+                {
+                    let cfi_lit = serde_json::to_string(&cfi).unwrap_or_else(|_| "\"\"".into());
+                    reader_call("removeAnnotation", &cfi_lit);
+                }
+                let _ = &cfi;
+            }
+        }
+    });
 }
 
 /// Extract `file_id` from the current URL's query string (`?file_id=N`),
@@ -132,6 +184,10 @@ pub fn BookReadPage(uuid: String) -> Element {
     let show_aa = use_signal(|| false);
     let selection: Signal<Option<SelectionData>> = use_signal(|| None);
     let highlights: Signal<Vec<Highlight>> = use_signal(Vec::new);
+    let toc: Signal<Vec<TocEntry>> = use_signal(Vec::new);
+    let show_toc = use_signal(|| false);
+    let show_highlights = use_signal(|| false);
+    let note_target: Signal<Option<Highlight>> = use_signal(|| None);
     let loc = use_signal(RelocateData::default);
     let book_meta = use_book_metadata(uuid.clone());
 
@@ -144,11 +200,19 @@ pub fn BookReadPage(uuid: String) -> Element {
             loc,
             selection,
             highlights,
+            toc,
         },
     );
 
-    let (on_back, on_prev, on_next, on_keydown) =
-        chrome_handlers::install_chrome_handlers(selection, show_aa);
+    let (on_back, on_prev, on_next, on_keydown) = chrome_handlers::install_chrome_handlers(
+        selection,
+        chrome_handlers::OverlaySignals {
+            show_aa,
+            show_toc,
+            show_highlights,
+            note_target,
+        },
+    );
 
     let (page_str, chapter_str) = format_progress_labels(&loc.read());
     let pct = loc.read().pct;
@@ -177,6 +241,10 @@ pub fn BookReadPage(uuid: String) -> Element {
             show_aa,
             selection,
             highlights,
+            toc,
+            show_toc,
+            show_highlights,
+            note_target,
             on_keydown,
             on_back,
             on_prev,
@@ -198,11 +266,16 @@ fn ReaderLayout(
     show_aa: Signal<bool>,
     selection: Signal<Option<SelectionData>>,
     highlights: Signal<Vec<Highlight>>,
+    toc: Signal<Vec<TocEntry>>,
+    show_toc: Signal<bool>,
+    show_highlights: Signal<bool>,
+    note_target: Signal<Option<Highlight>>,
     on_keydown: EventHandler<KeyboardEvent>,
     on_back: EventHandler<MouseEvent>,
     on_prev: EventHandler<MouseEvent>,
     on_next: EventHandler<MouseEvent>,
 ) -> Element {
+    let highlight_count = highlights.read().len();
     rsx! {
         document::Script { src: JSZIP_JS }
         document::Script { src: EPUBJS_JS }
@@ -220,10 +293,31 @@ fn ReaderLayout(
                 book_title: book_title.clone(),
                 chapter_title: chapter_title.clone(),
                 show_aa: show_aa(),
+                toc_active: show_toc(),
+                highlights_active: show_highlights(),
+                highlight_count,
                 on_back,
                 on_toggle_aa: move |_| {
                     let mut show_aa = show_aa;
                     show_aa.set(!show_aa());
+                },
+                on_toggle_toc: move |_| {
+                    let mut show_toc = show_toc;
+                    let mut show_highlights = show_highlights;
+                    let next = !show_toc();
+                    show_toc.set(next);
+                    if next {
+                        show_highlights.set(false);
+                    }
+                },
+                on_toggle_highlights: move |_| {
+                    let mut show_toc = show_toc;
+                    let mut show_highlights = show_highlights;
+                    let next = !show_highlights();
+                    show_highlights.set(next);
+                    if next {
+                        show_toc.set(false);
+                    }
                 },
             }
 
@@ -249,51 +343,112 @@ fn ReaderLayout(
             }
 
             if let Some(sel) = selection.read().as_ref() {
-                SelectionPopover {
-                    sel_rect_x: sel.rect.x,
-                    sel_rect_y: sel.rect.y,
-                    sel_rect_width: sel.rect.width,
-                    sel_cfi: sel.cfi_range.clone(),
-                    on_dismiss: move |_| {
-                        let mut selection = selection;
-                        selection.set(None);
-                    },
-                    on_highlight: move |(cfi, color): (String, HighlightColor)| {
-                        #[cfg(feature = "web")]
-                        {
-                            let cfi_lit = serde_json::to_string(&cfi)
-                                .unwrap_or_else(|_| "\"\"".into());
-                            let color_lit = serde_json::to_string(color.as_str())
-                                .unwrap_or_else(|_| "\"amber\"".into());
-                            reader_call("addAnnotation", &format!("{cfi_lit}, {color_lit}"));
-                        }
-
-                        let create = omnibus_shared::CreateHighlight {
-                            book_uuid: uuid.clone(),
-                            epub_cfi_range: cfi.clone(),
-                            color,
-                        };
-                        #[cfg(feature = "web")]
-                        let cfi_rollback = cfi.clone();
-                        let mut selection = selection;
-                        let mut highlights = highlights;
-                        selection.set(None);
-                        spawn(async move {
-                            if let Ok(h) = data::create_highlight("", create).await {
-                                highlights.write().push(h);
-                            } else {
-                                // The annotation was added optimistically above;
-                                // if the write didn't land, roll it back so a
-                                // failed create doesn't leave a highlight that
-                                // vanishes on the next reload.
+                {
+                    let uuid_pop = uuid.clone();
+                    rsx! {
+                        SelectionPopover {
+                            sel_rect_x: sel.rect.x,
+                            sel_rect_y: sel.rect.y,
+                            sel_rect_width: sel.rect.width,
+                            sel_cfi: sel.cfi_range.clone(),
+                            sel_text: sel.text.clone(),
+                            on_dismiss: move |_| {
+                                let mut selection = selection;
+                                selection.set(None);
+                            },
+                            on_highlight: {
+                                let uuid_pop = uuid_pop.clone();
+                                move |(cfi, color, text): (String, HighlightColor, String)| {
+                                    let mut selection = selection;
+                                    selection.set(None);
+                                    spawn_create_highlight(
+                                        uuid_pop.clone(), cfi, color, text,
+                                        highlights, note_target, false,
+                                    );
+                                }
+                            },
+                            on_note: {
+                                let uuid_pop = uuid_pop.clone();
+                                move |(cfi, text): (String, String)| {
+                                    let mut selection = selection;
+                                    selection.set(None);
+                                    spawn_create_highlight(
+                                        uuid_pop.clone(), cfi, HighlightColor::Amber, text,
+                                        highlights, note_target, true,
+                                    );
+                                }
+                            },
+                            on_copy: move |text: String| {
                                 #[cfg(feature = "web")]
                                 {
-                                    let cfi_lit = serde_json::to_string(&cfi_rollback)
+                                    let lit = serde_json::to_string(&text)
                                         .unwrap_or_else(|_| "\"\"".into());
-                                    reader_call("removeAnnotation", &cfi_lit);
+                                    reader_call("copyText", &lit);
                                 }
-                            }
-                        });
+                                let _ = &text;
+                                let mut selection = selection;
+                                selection.set(None);
+                            },
+                            on_share: move |text: String| {
+                                #[cfg(feature = "web")]
+                                {
+                                    let lit = serde_json::to_string(&text)
+                                        .unwrap_or_else(|_| "\"\"".into());
+                                    reader_call("shareText", &lit);
+                                }
+                                let _ = &text;
+                                let mut selection = selection;
+                                selection.set(None);
+                            },
+                        }
+                    }
+                }
+            }
+
+            if show_toc() {
+                TocDrawer {
+                    entries: toc.read().clone(),
+                    current_title: chapter_title.clone(),
+                    on_navigate: move |href: String| {
+                        #[cfg(feature = "web")]
+                        {
+                            let lit = serde_json::to_string(&href).unwrap_or_else(|_| "\"\"".into());
+                            reader_call("display", &lit);
+                        }
+                        let _ = &href;
+                        let mut show_toc = show_toc;
+                        show_toc.set(false);
+                    },
+                    on_close: move |_| {
+                        let mut show_toc = show_toc;
+                        show_toc.set(false);
+                    },
+                }
+            }
+
+            if show_highlights() {
+                HighlightsDrawer {
+                    highlights,
+                    on_close: move |_| {
+                        let mut show_highlights = show_highlights;
+                        show_highlights.set(false);
+                    },
+                }
+            }
+
+            if let Some(h) = note_target.read().clone() {
+                NoteComposer {
+                    highlight: h,
+                    on_saved: move |(id, note): (i64, Option<String>)| {
+                        let mut highlights = highlights;
+                        let idx = highlights.read().iter().position(|x| x.id == id);
+                        if let Some(i) = idx {
+                            highlights.write()[i].note = note;
+                        }
+                    },
+                    on_close: move |_| {
+                        let mut note_target = note_target;
+                        note_target.set(None);
                     },
                 }
             }
@@ -307,8 +462,13 @@ fn ReaderTopChrome(
     book_title: String,
     chapter_title: String,
     show_aa: bool,
+    toc_active: bool,
+    highlights_active: bool,
+    highlight_count: usize,
     on_back: EventHandler<MouseEvent>,
     on_toggle_aa: EventHandler<MouseEvent>,
+    on_toggle_toc: EventHandler<MouseEvent>,
+    on_toggle_highlights: EventHandler<MouseEvent>,
 ) -> Element {
     rsx! {
         div {
@@ -337,12 +497,42 @@ fn ReaderTopChrome(
             div {
                 style: "display:flex; align-items:center; gap:2px;",
                 button {
+                    class: if toc_active { "rd-tool on" } else { "rd-tool" },
+                    r#type: "button",
+                    "data-testid": "reader-toc",
+                    "aria-label": "Contents",
+                    onclick: on_toggle_toc,
+                    svg {
+                        width: "19", height: "19", view_box: "0 0 24 24",
+                        fill: "none", stroke: "currentColor",
+                        stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                        path { d: "M4 6h16M4 12h16M4 18h11" }
+                    }
+                }
+                button {
                     class: if show_aa { "rd-tool rd-aa on" } else { "rd-tool rd-aa" },
                     r#type: "button",
                     "data-testid": "reader-aa",
                     "aria-label": "Display settings",
                     onclick: on_toggle_aa,
                     "Aa"
+                }
+                button {
+                    class: if highlights_active { "rd-tool on" } else { "rd-tool" },
+                    r#type: "button",
+                    "data-testid": "reader-highlights",
+                    "aria-label": "Highlights and notes",
+                    onclick: on_toggle_highlights,
+                    svg {
+                        width: "19", height: "19", view_box: "0 0 24 24",
+                        fill: "none", stroke: "currentColor",
+                        stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                        path { d: "M4 19.5l1.6-4 8.2-8.2 3 3-8.2 8.2-4.6.0z" }
+                        path { d: "M13.2 6.1l2.7-2.7a1.3 1.3 0 0 1 1.9 0l1.8 1.8a1.3 1.3 0 0 1 0 1.9l-2.7 2.7" }
+                    }
+                    if highlight_count > 0 {
+                        span { class: "rd-badge", "{highlight_count}" }
+                    }
                 }
                 button {
                     class: "rd-tool",

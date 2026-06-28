@@ -7,6 +7,7 @@ fn ok_create(cfi: &str) -> CreateHighlight {
         book_uuid: "uuid-1".into(),
         epub_cfi_range: cfi.into(),
         color: HighlightColor::Amber,
+        text: None,
     }
 }
 
@@ -48,6 +49,21 @@ fn create_highlight_validate_rejects_empty_cfi() {
         .validate()
         .expect_err("blank epub_cfi_range must be rejected");
     assert!(err.contains("epub_cfi_range"), "got: {err}");
+}
+
+#[test]
+fn create_highlight_validate_accepts_text_at_max_len() {
+    let mut c = ok_create("epubcfi(/6/4)");
+    c.text = Some("t".repeat(CreateHighlight::TEXT_MAX_LEN));
+    assert!(c.validate().is_ok());
+}
+
+#[test]
+fn create_highlight_validate_rejects_text_over_max_len() {
+    let mut c = ok_create("epubcfi(/6/4)");
+    c.text = Some("t".repeat(CreateHighlight::TEXT_MAX_LEN + 1));
+    let err = c.validate().expect_err("over-long text must be rejected");
+    assert!(err.contains("text"), "got: {err}");
 }
 
 #[test]
