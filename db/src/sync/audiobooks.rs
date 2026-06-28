@@ -108,7 +108,7 @@ pub async fn sync_audiobooks_with_progress(
 }
 
 /// Apply the Removed bucket (F2 ghosting): resolve affected ids and, via
-/// `books::ghost_book_by_id`, clear each `books_fts` row + links and drop the
+/// `books::mark_book_files_missing`, clear each `books_fts` row + links and drop the
 /// `book_files` rows (parts/chapters cascade) — but **retain** the `books`
 /// row as a fileless ghost so its soft-ref user data survives and a returning
 /// group re-attaches via Changed. Also drop any `book_files` rows whose uuid
@@ -141,7 +141,7 @@ async fn sync_audiobooks_removed(
         let ids = q.fetch_all(&mut **tx).await?;
         ghosted += ids.len();
         for id in ids {
-            super::books::ghost_book_by_id(tx, id).await?;
+            super::books::mark_book_files_missing(tx, id).await?;
         }
     }
     if ghosted > 0 {
@@ -531,6 +531,9 @@ async fn insert_audiobook_file_row(
     .bind(b.max_mtime_epoch)
     .fetch_one(&mut **tx)
     .await?;
+    // A returning group clears the F10 missing-files flag (no-op on a fresh
+    // insert) — the audiobook file-write chokepoint, mirroring the ebook path.
+    super::books::clear_missing_files_flag(tx, book_id).await?;
     Ok(id)
 }
 

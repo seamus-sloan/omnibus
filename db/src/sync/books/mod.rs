@@ -17,7 +17,9 @@ mod new;
 mod removed;
 mod shared;
 
-pub(super) use shared::{ghost_book_by_id, materialize_new_covers};
+pub(super) use shared::{
+    clear_missing_files_flag, mark_book_files_missing, materialize_new_covers,
+};
 
 use backfill::stamp_last_indexed;
 use changed::sync_changed;

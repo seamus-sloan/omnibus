@@ -2,7 +2,7 @@
 //! canonical row writers (`insert_book_row` / `update_book_row` /
 //! `insert_book_file_row`), metadata + tag + identifier link dispatch,
 //! the rewrite-in-place and cross-format attach paths, and the
-//! post-commit cover materialization + ghost helper.
+//! post-commit cover materialization + missing-files marker helper.
 
 use sqlx::Transaction;
 
@@ -174,13 +174,15 @@ pub(super) async fn attach_ebook_file(
     Ok(())
 }
 
-/// Turn a book into a fileless ghost (F2): drop its `book_files` (parts and
-/// chapters cascade), clear its FTS row, and wipe its taxonomy + identifier
-/// links — so the ghost is invisible to the library grid, search, and the
-/// author/series/tag browse pages — while **retaining** the `books` row, its
-/// `uuid`/`scan_key`, `metadata_overrides`, and every soft-ref user-data row.
-/// A returning file re-populates all of it via the Changed re-parse.
-pub(in crate::sync) async fn ghost_book_by_id(
+/// Mark a book's files missing (F2): drop its `book_files` (parts and chapters
+/// cascade), clear its FTS row, and wipe its taxonomy + identifier links — so
+/// it is invisible to the library grid, search, and the author/series/tag
+/// browse pages — while **retaining** the `books` row, its `uuid`/`scan_key`,
+/// `metadata_overrides`, and every soft-ref user-data row. A returning file
+/// re-populates all of it via the Changed re-parse. Stamps the F10
+/// missing-files flag + retention clock so a long-missing, user-data-free row
+/// is eligible for `missing_files::gc_books_missing_files`.
+pub(in crate::sync) async fn mark_book_files_missing(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
 ) -> Result<(), sqlx::Error> {
@@ -200,6 +202,17 @@ pub(in crate::sync) async fn ghost_book_by_id(
         .bind(book_id)
         .execute(&mut **tx)
         .await?;
+    // Flag the now-fileless row + start its retention clock (F10). The
+    // `is_missing_files = 0` guard preserves the original `missing_files_since`
+    // if this somehow re-runs on an already-missing row.
+    sqlx::query(
+        "UPDATE books
+            SET is_missing_files = 1, missing_files_since = unixepoch()
+          WHERE id = ? AND is_missing_files = 0",
+    )
+    .bind(book_id)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 
@@ -222,6 +235,24 @@ async fn insert_book_file_row(
     .bind(&file_stem)
     .bind(b.size_bytes)
     .bind(b.mtime_epoch)
+    .execute(&mut **tx)
+    .await?;
+    clear_missing_files_flag(tx, book_id).await?;
+    Ok(())
+}
+
+/// Clear the F10 missing-files flag for a book that just (re)gained a file —
+/// the Changed/New file-write chokepoint. Guarded on `is_missing_files = 1` so
+/// it's a no-op for the common already-attached insert.
+pub(in crate::sync) async fn clear_missing_files_flag(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE books SET is_missing_files = 0, missing_files_since = NULL
+          WHERE id = ? AND is_missing_files = 1",
+    )
+    .bind(book_id)
     .execute(&mut **tx)
     .await?;
     Ok(())

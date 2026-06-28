@@ -380,9 +380,19 @@ F2 sits in a tight chain with F1 and F10:
   stacked pair sharing two adjacent migration numbers with F2's the lower —
   F1's migration shape must be known so the two don't collide on a number.
   Both are needed before F3.2.
-- **F10 (override GC / reconcile).** The ghost-row GC this doc adds to
-  `reindex` is the same machinery F10 needs to reap orphaned overrides and cover
-  files. Build the GC pass once, shared.
+- **F10 (missing-files GC).** F2's ghosting (a removed file retains its `books`
+  row fileless) is what F10's GC reaps: it purges long-missing, user-data-free
+  ghost rows. Shipped — see
+  [db-review-f10-override-gc.md](db-review-f10-override-gc.md).
+- **Known limitation — path-based identity smears overrides (revisit here).**
+  A book is identified by `(library slot, relative scan_key)`, not file content.
+  Repointing a slot to a directory whose file sits at the *same relative path*
+  adopts the prior book's identity — so a `metadata_overrides` row (and user
+  data) persists onto a physically different file rather than the two being
+  recognized as distinct books. Surfaced by F10's
+  `identical_relative_path_in_repointed_directory_*` test. The fix, if wanted,
+  is a content-based anchor (the dropped `dc:identifier`/hash proposal) and
+  belongs to this finding, not F10.
 - **F3.2 ratings & journaling** is the downstream feature blocked on this —
   the roadmap lists the uuid fix as "must land before this feature ships."
 - **Audiobooks** need no separate work — they share the ebook scheme verbatim,

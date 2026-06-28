@@ -5,7 +5,7 @@
 
 use sqlx::Transaction;
 
-use super::shared::ghost_book_by_id;
+use super::shared::mark_book_files_missing;
 
 /// Ghost a batch of removed books by uuid (F2). The file is gone, but the
 /// `books` row — and every soft-ref user-data row keyed on `books.uuid` —
@@ -41,12 +41,12 @@ pub(super) async fn sync_removed(
         let ids = q.fetch_all(&mut **tx).await?;
         ghosted += ids.len();
         for id in ids {
-            ghost_book_by_id(tx, id).await?;
+            mark_book_files_missing(tx, id).await?;
         }
     }
     if ghosted > 0 {
-        // GC of long-fileless ghosts is deferred to F10; log the count so
-        // accumulation is observable until then.
+        // These rows are flagged missing (F10); `missing_files::gc_books_missing_files`
+        // purges the long-missing, user-data-free ones on a later reindex.
         tracing::info!(ghosted, "sync: retained removed books as fileless ghosts");
     }
     Ok(())

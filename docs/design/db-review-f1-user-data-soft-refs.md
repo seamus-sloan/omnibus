@@ -345,13 +345,15 @@ The F1 ↔ F2 ↔ F10 chain:
 
 ## Open questions
 
-1. **Grace window shape (resolved by F10).** F10 has now answered this:
-   soft-detach via a `detached_at` column (uuid absent from both `books.uuid`
-   and `merged_uuids` → mark detached, filter from reads, hard-purge after a
-   30-day retention measured from detach time). The user-data tables here
-   **inherit the soft-detach disposition** — they must never hard-delete,
-   since a journal entry is not regenerable the way a metadata override is.
-   See [db-review-f10-override-gc.md](db-review-f10-override-gc.md).
+1. **GC interaction (resolved by F10).** F10 shipped as a **missing-files GC**,
+   not an orphan-row reconcile: post-F2 a removed file ghosts its `books` row
+   (retained fileless) rather than deleting it, so user-data rows here don't
+   orphan on a normal removal — they ride along on the retained row and re-link
+   when the file returns. The GC purges only long-missing books that carry **no**
+   user data; a book any of these tables references is **never purged**, so this
+   data is protected by exclusion (no soft-detach machinery needed). When a new
+   user-data table lands it must be added to F10's GC guard list. See
+   [db-review-f10-override-gc.md](db-review-f10-override-gc.md).
 2. **Migration ordering with F2 (resolved).** F2 does **not** re-key
    `books.uuid` — it keeps existing values verbatim and only adds a `scan_key`
    column — so this migration's `INSERT … SELECT JOIN books` backfill produces

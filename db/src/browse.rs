@@ -76,6 +76,7 @@ pub async fn list_authors(
                 ON a2.name = json_extract(je.value, '$.name') COLLATE NOCASE
              WHERE l.path IN (SELECT p FROM lib_paths)
                AND json_type(mo.overrides, '$.creators') IS NOT NULL
+               AND b.is_missing_files = 0
         ),
         counts AS (
             SELECT author_id, COUNT(*) AS book_count
@@ -187,6 +188,7 @@ fn series_index_sql(n: usize) -> String {
                 ON s2.name = json_extract(mo.overrides, '$.series') COLLATE NOCASE
              WHERE l.path IN (SELECT p FROM lib_paths)
                AND json_type(mo.overrides, '$.series') IS NOT NULL
+               AND b.is_missing_files = 0
         ),
         counts AS (
             SELECT series_id, COUNT(*) AS book_count

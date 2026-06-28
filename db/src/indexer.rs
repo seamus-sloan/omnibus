@@ -273,7 +273,26 @@ pub async fn reindex_with_progress(
         backfill: diff.backfill,
     };
     sync::sync_books_with_progress(pool, library_path, plan, on_progress).await?;
+    gc_missing_files_best_effort(pool).await;
     Ok(())
+}
+
+/// Best-effort F10 GC of books whose files have been missing past the retention
+/// window and that carry no user data. Logged, never surfaced as an error so a
+/// GC failure can never abort a reindex — matches the best-effort cover/FTS
+/// pattern. The sweep is global (not library-scoped), so running it after each
+/// per-library reindex is cheap and idempotent.
+async fn gc_missing_files_best_effort(pool: &SqlitePool) {
+    match crate::missing_files::gc_books_missing_files(
+        pool,
+        crate::missing_files::MISSING_FILES_RETENTION_DAYS,
+    )
+    .await
+    {
+        Ok(purged) if purged > 0 => tracing::info!(purged, "reindex: GC'd books missing files"),
+        Ok(_) => {}
+        Err(e) => tracing::error!("reindex: missing-files GC failed: {e}"),
+    }
 }
 
 /// Audiobook-library sibling of [`reindex`]. Groups audio files by folder,
@@ -370,6 +389,7 @@ pub async fn reindex_audiobooks_with_progress(
         backfill: diff.backfill,
     };
     sync::sync_audiobooks_with_progress(pool, library_path, plan, on_progress).await?;
+    gc_missing_files_best_effort(pool).await;
     Ok(())
 }
 

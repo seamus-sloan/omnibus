@@ -8,6 +8,7 @@ use sqlx::{sqlite::SqlitePoolOptions, Executor, SqlitePool};
 
 use crate::covers::covers_dir;
 use crate::identity::IdentityError;
+use crate::missing_files::MissingFilesError;
 use crate::normalize::NormalizeError;
 
 /// Schema migrations embedded at compile time from `db/migrations/`.
@@ -28,6 +29,8 @@ pub enum InitDbError {
     Identity(#[from] IdentityError),
     #[error(transparent)]
     SortKeys(#[from] crate::sort_keys::SortKeysError),
+    #[error(transparent)]
+    MissingFiles(#[from] MissingFilesError),
 }
 
 /// Initialize or open the SQLite pool at `database_url`, apply per-connection PRAGMAs, run pending
@@ -78,6 +81,11 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, InitDbError> {
     // before migration 0028. Reconstructed from the existing series link;
     // idempotent and a no-op once every linked book is filled.
     crate::sort_keys::backfill_series_sort(&pool).await?;
+
+    // One-time stamp of the F10 missing-files flags for rows that were already
+    // fileless before migration 0029, starting their GC clock at boot time.
+    // Idempotent and a no-op once caught up.
+    crate::missing_files::backfill_missing_files_flags(&pool).await?;
 
     // Issue #94: the previous `stable_uuid` implementation hashed via
     // `DefaultHasher` and produced toolchain-dependent UUIDs. Switching to
