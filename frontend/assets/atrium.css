@@ -2660,7 +2660,10 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .value-line { font-size: 1.25rem; margin-bottom: 1rem; }
 
 /* ── Auth pages (F1.6 primitives) ──────────────────────────────────── */
-.auth-footer { font-size: 0.85rem; color: var(--ink-2); margin-top: 1.6rem; text-align: center; }
+/* Scoped under `.atrium` so the top margin outranks the `.atrium p { margin: 0 }`
+   reset (0,1,1) — a bare `.auth-footer` (0,1,0) loses to it and the spacing
+   above the "No account? / Already have an account?" line collapses to 0. */
+.atrium .auth-footer { font-size: 0.85rem; color: var(--ink-2); margin-top: 2.4rem; text-align: center; }
 .auth-footer a { color: var(--ink-0); border-bottom: 1px solid var(--line); }
 .auth-footer a:hover { border-bottom-color: var(--ink-2); }
 
