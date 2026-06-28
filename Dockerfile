@@ -12,7 +12,10 @@
 # needed here. The Dioxus libraries are patched to the v0.7.9 git tag (see
 # [patch.crates-io] in Cargo.toml), so the CLI is pinned to the same 0.7.9.
 ###############################################################################
-FROM rust:1-bookworm AS builder
+# Debian 13 (trixie) for glibc >= 2.39: the prebuilt `dx` release binary is
+# linked against GLIBC_2.39, which bookworm (2.36) doesn't provide. The runtime
+# stage must share this glibc baseline since the server binary is compiled here.
+FROM rust:1-trixie AS builder
 
 # `clang`/`pkg-config` cover the handful of -sys crates; `curl` is for the
 # cargo-binstall bootstrap below. sqlite is statically bundled by
@@ -41,7 +44,8 @@ RUN dx bundle --platform web --package omnibus --fullstack --release
 # probe), and gosu (privilege drop). Starts as root so the PUID/PGID
 # entrypoint can remap the app user, then drops to it before serving.
 ###############################################################################
-FROM debian:bookworm-slim AS runtime
+# Must match the builder's glibc (trixie) — the server binary is linked against it.
+FROM debian:trixie-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg ca-certificates curl gosu \
