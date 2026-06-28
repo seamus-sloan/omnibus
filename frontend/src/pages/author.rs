@@ -146,7 +146,7 @@ fn render_author(
                 // Breadcrumb
                 nav { class: "breadcrumb",
                     Link { to: Route::Landing {}, "Library" }
-                    span { " › " }
+                    span { class: "breadcrumb-sep", " › " }
                     span { "{a.name}" }
                 }
                 div { class: "disc-hero-grid",
