@@ -16,11 +16,11 @@
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
-    AuthorDetail, AuthorPhotoScanResult, AuthorSummary, CreateHighlight, EbookLibrary,
-    EbookMetadata, Highlight, HighlightColor, LibraryContents, LibraryPage, MergeBooksResult,
-    MetadataOverrides, PaletteResults, ProgressFormat, ProgressRecord, ProgressUpdate,
-    SeriesDetail, SeriesSummary, SessionReport, Settings, SortDir, SortKey, TagWeight,
-    UpdateHighlightNote, ViewFilters, WorkerStatus,
+    AuthorDetail, AuthorPhotoScanResult, AuthorSummary, Bookmark, CreateBookmark, CreateHighlight,
+    EbookLibrary, EbookMetadata, Highlight, HighlightColor, LibraryContents, LibraryPage,
+    MergeBooksResult, MetadataOverrides, PaletteResults, ProgressFormat, ProgressRecord,
+    ProgressUpdate, SeriesDetail, SeriesSummary, SessionReport, Settings, SortDir, SortKey,
+    TagWeight, UpdateBookmark, UpdateHighlightNote, ViewFilters, WorkerStatus,
 };
 
 // Only `validate_author_photo_url` (server-gated) and its tests reference this
@@ -767,6 +767,73 @@ pub async fn rpc_delete_highlight(id: i64) -> Result<()> {
         Err(db::highlights::HighlightError::Sqlx(e)) => {
             Err(ServerFnError::new(e.to_string()).into())
         }
+        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+    }
+}
+
+/// Create a bookmark on a book. Mobile uses the analogous REST route in
+/// `server::backend::bookmarks`; the rest of this family follows the same
+/// web-vs-mobile split. One model serves the audiobook player (position =
+/// seconds) and the reader (position = EPUB CFI).
+#[post("/api/rpc/bookmarks/create", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_create_bookmark(input: CreateBookmark) -> Result<Bookmark> {
+    if let Err(msg) = input.validate() {
+        return Err(ServerFnError::new(msg).into());
+    }
+    match db::bookmarks::create_bookmark(&pool.0, user.id, &input).await {
+        Ok(b) => Ok(b),
+        Err(db::bookmarks::BookmarkError::BookNotFound) => {
+            Err(ServerFnError::new("book not found").into())
+        }
+        Err(db::bookmarks::BookmarkError::NotFound) => {
+            Err(ServerFnError::new("bookmark not found").into())
+        }
+        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(ServerFnError::new(e.to_string()).into()),
+    }
+}
+
+/// List all bookmarks for the given book uuid, scoped to the current user and
+/// ordered by creation time. Returns an empty list — not an error — when the
+/// uuid is unknown or has no bookmarks yet.
+#[post("/api/rpc/bookmarks/list", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_list_bookmarks(book_uuid: String) -> Result<Vec<Bookmark>> {
+    match db::bookmarks::list_bookmarks(&pool.0, user.id, &book_uuid).await {
+        Ok(list) => Ok(list),
+        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+    }
+}
+
+/// Set or clear the title/note on a bookmark owned by the current user.
+/// Validates `body` against `UpdateBookmark::validate()` and errors with
+/// `"bookmark not found"` when the id does not exist or belongs to another
+/// user (the two cases are deliberately indistinguishable).
+#[post("/api/rpc/bookmarks/update", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_update_bookmark(id: i64, body: UpdateBookmark) -> Result<()> {
+    if let Err(msg) = body.validate() {
+        return Err(ServerFnError::new(msg).into());
+    }
+    match db::bookmarks::update_bookmark(&pool.0, user.id, id, body.title.as_deref()).await {
+        Ok(()) => Ok(()),
+        Err(db::bookmarks::BookmarkError::NotFound) => {
+            Err(ServerFnError::new("bookmark not found").into())
+        }
+        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+    }
+}
+
+/// Delete a bookmark owned by the current user. Errors with
+/// `"bookmark not found"` when the id does not exist or belongs to another
+/// user (the two cases are deliberately indistinguishable).
+#[post("/api/rpc/bookmarks/delete", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_delete_bookmark(id: i64) -> Result<()> {
+    match db::bookmarks::delete_bookmark(&pool.0, user.id, id).await {
+        Ok(()) => Ok(()),
+        Err(db::bookmarks::BookmarkError::NotFound) => {
+            Err(ServerFnError::new("bookmark not found").into())
+        }
+        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(ServerFnError::new(e.to_string()).into()),
         Err(e) => Err(ServerFnError::new(e.to_string()).into()),
     }
 }

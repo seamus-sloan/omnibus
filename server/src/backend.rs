@@ -23,6 +23,7 @@ use crate::rate_limit::{rate_limit_by_ip, RateLimiter};
 mod audiobooks;
 mod author_photos;
 mod authors;
+mod bookmarks;
 mod covers;
 mod ebooks;
 mod health;
@@ -228,6 +229,18 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             patch(highlights::patch_highlight_note),
         )
         .route("/api/highlights/{id}", delete(highlights::delete_highlight))
+        // Bookmarks — mobile-facing REST. Web hits the analogous
+        // `/api/rpc/bookmarks/*` server functions. One model serves both the
+        // audiobook player and the reader (position = seconds or EPUB CFI).
+        .route("/api/bookmarks", post(bookmarks::post_bookmark))
+        .route(
+            "/api/bookmarks/book/{book_uuid}",
+            get(bookmarks::get_bookmarks),
+        )
+        .route(
+            "/api/bookmarks/{id}",
+            put(bookmarks::put_bookmark).delete(bookmarks::delete_bookmark),
+        )
         // GET/DELETE for author photos carry no upload body (DELETE mutates,
         // but cheaply — it clears photo state, it doesn't ingest one), so
         // they stay outside the rate-limited `upload_router`. Only the binary
