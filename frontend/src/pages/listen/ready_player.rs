@@ -9,9 +9,11 @@
 use dioxus::prelude::*;
 use omnibus_shared::{ChapterInfo, EbookMetadata};
 
+use super::bookmarks::use_bookmarks;
 use super::bookmarks_drawer::BookmarksDrawer;
 use super::chapters_drawer::ChaptersDrawer;
 use super::overlays::{FailedOverlay, PreparingOverlay};
+use super::sleep::{end_of_chapter_seconds, sleep_toolbar_label, use_sleep_timer};
 use super::sleep_panel::SleepPanel;
 use super::speed_panel::SpeedPanel;
 use super::stage::{PlaybackPosition, PlayerCallbacks, PlayerStage, ToolbarState, TransportState};
@@ -167,6 +169,12 @@ pub(super) fn ReadyPlayer(
     let mut bookmarks_open = use_signal(|| false);
     let mut chapters_open = use_signal(|| false);
 
+    // Sleep timer + bookmark state. Both are custom hooks declared
+    // unconditionally so SSR/WASM hook order matches (rule 07); their web
+    // interop is gated internally.
+    let sleep = use_sleep_timer();
+    let bookmarks = use_bookmarks(uuid.clone());
+
     // Derive current chapter index from elapsed position.
     let current_chapter_index = use_memo(move || {
         let chs = chapters();
@@ -249,6 +257,15 @@ pub(super) fn ReadyPlayer(
     let chs = chapters();
     let ch_idx = current_chapter_index();
 
+    // Reactive sleep-timer reads — re-render the toolbar label + panel live.
+    let sleep_remaining = (sleep.remaining)();
+    let sleep_choice = (sleep.choice)();
+    let sleep_fade = (sleep.fade)();
+    let sleep_active = matches!(sleep_remaining, Some(s) if s > 0);
+    let sleep_btn_label = sleep_toolbar_label(sleep_remaining);
+    let has_chapters = !chs.is_empty();
+    let bookmark_toast = (bookmarks.toast)();
+
     rsx! {
         div { class: "lp-root", style: "{accent_style}",
             div { class: "lp-backdrop" }
@@ -289,7 +306,8 @@ pub(super) fn ReadyPlayer(
                     on_chapter_seek: EventHandler::new(on_chapter_seek),
                 },
                 toolbar: ToolbarState {
-                    sleep_active: sleep_panel_open(),
+                    sleep_active: sleep_active || sleep_panel_open(),
+                    sleep_label: sleep_btn_label,
                     bookmarks_active: bookmarks_open(),
                     chapters_active: chapters_open(),
                     on_sleep: EventHandler::new(move |_| {
@@ -333,12 +351,40 @@ pub(super) fn ReadyPlayer(
             }
             if sleep_panel_open() {
                 SleepPanel {
+                    remaining: sleep_remaining,
+                    choice: sleep_choice,
+                    fade: sleep_fade,
+                    has_chapters,
+                    on_select: move |secs: i32| sleep.select_seconds(secs),
+                    on_end_of_chapter: move |_| {
+                        let chs_now = chapters.peek().clone();
+                        let idx = current_chapter_index();
+                        if let Some(secs) = end_of_chapter_seconds(&chs_now, idx, *elapsed.peek()) {
+                            sleep.select_end_of_chapter(secs);
+                        }
+                    },
+                    on_toggle_fade: move |_| sleep.toggle_fade(),
                     on_close: move |_| sleep_panel_open.set(false),
                 }
             }
             if bookmarks_open() {
                 BookmarksDrawer {
+                    controller: bookmarks,
+                    chapters: chs.clone(),
+                    on_seek: EventHandler::new(on_chapter_seek),
+                    on_add: EventHandler::new(move |_| {
+                        let chs_now = chapters.peek().clone();
+                        bookmarks.create(*elapsed.peek(), &chs_now);
+                    }),
                     on_close: move |_| bookmarks_open.set(false),
+                }
+            }
+
+            if let Some(toast) = bookmark_toast {
+                div { class: "lp-toast", "data-testid": "bookmark-toast",
+                    span { class: "lp-toast-icon", "\u{2691}" }
+                    span { class: "lp-toast-text", "Bookmark saved" }
+                    span { class: "lp-toast-meta", "{toast.time_label} \u{00b7} {toast.chapter_label}" }
                 }
             }
             if chapters_open() {
