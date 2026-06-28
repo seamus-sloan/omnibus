@@ -695,9 +695,7 @@ pub async fn rpc_create_highlight(input: CreateHighlight) -> Result<Highlight> {
         Err(db::highlights::HighlightError::NotFound) => {
             Err(ServerFnError::new("highlight not found").into())
         }
-        Err(db::highlights::HighlightError::Sqlx(e)) => {
-            Err(ServerFnError::new(e.to_string()).into())
-        }
+        Err(db::highlights::HighlightError::Sqlx(e)) => Err(rpc_db_error("highlights/create", e)),
     }
 }
 
@@ -708,10 +706,8 @@ pub async fn rpc_create_highlight(input: CreateHighlight) -> Result<Highlight> {
 pub async fn rpc_list_highlights(book_uuid: String) -> Result<Vec<Highlight>> {
     match db::highlights::list_highlights(&pool.0, user.id, &book_uuid).await {
         Ok(list) => Ok(list),
-        Err(db::highlights::HighlightError::Sqlx(e)) => {
-            Err(ServerFnError::new(e.to_string()).into())
-        }
-        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(db::highlights::HighlightError::Sqlx(e)) => Err(rpc_db_error("highlights/list", e)),
+        Err(e) => Err(rpc_db_error("highlights/list", e)),
     }
 }
 
@@ -727,9 +723,9 @@ pub async fn rpc_update_highlight_color(id: i64, color: HighlightColor) -> Resul
             Err(ServerFnError::new("highlight not found").into())
         }
         Err(db::highlights::HighlightError::Sqlx(e)) => {
-            Err(ServerFnError::new(e.to_string()).into())
+            Err(rpc_db_error("highlights/update-color", e))
         }
-        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(e) => Err(rpc_db_error("highlights/update-color", e)),
     }
 }
 
@@ -748,9 +744,9 @@ pub async fn rpc_update_highlight_note(id: i64, body: UpdateHighlightNote) -> Re
             Err(ServerFnError::new("highlight not found").into())
         }
         Err(db::highlights::HighlightError::Sqlx(e)) => {
-            Err(ServerFnError::new(e.to_string()).into())
+            Err(rpc_db_error("highlights/update-note", e))
         }
-        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(e) => Err(rpc_db_error("highlights/update-note", e)),
     }
 }
 
@@ -764,23 +760,22 @@ pub async fn rpc_delete_highlight(id: i64) -> Result<()> {
         Err(db::highlights::HighlightError::NotFound) => {
             Err(ServerFnError::new("highlight not found").into())
         }
-        Err(db::highlights::HighlightError::Sqlx(e)) => {
-            Err(ServerFnError::new(e.to_string()).into())
-        }
-        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(db::highlights::HighlightError::Sqlx(e)) => Err(rpc_db_error("highlights/delete", e)),
+        Err(e) => Err(rpc_db_error("highlights/delete", e)),
     }
 }
 
-/// Log a bookmark DB error server-side and return a generic client error so
-/// raw `sqlx` text (which can carry SQL / schema details) never reaches the
-/// authed client — mirrors the REST `internal(...)` helper.
+/// Log an RPC DB error server-side and return a generic client error so raw
+/// `sqlx` text (which can carry SQL / schema details) never reaches the authed
+/// client — mirrors the REST `internal(...)` helper. Shared by the bookmark and
+/// highlight RPC families; `op` carries the `<family>/<action>` for the log.
 #[cfg(feature = "server")]
-fn bookmark_db_error<E, R>(op: &str, e: E) -> R
+fn rpc_db_error<E, R>(op: &str, e: E) -> R
 where
     E: std::fmt::Display,
     R: From<ServerFnError>,
 {
-    tracing::error!(op = op, error = %e, "rpc bookmark db error");
+    tracing::error!(op = op, error = %e, "rpc db error");
     ServerFnError::new("internal server error").into()
 }
 
@@ -805,7 +800,7 @@ pub async fn rpc_create_bookmark(input: CreateBookmark) -> Result<Bookmark> {
             tracing::error!(error = %e, "rpc_create_bookmark: inserted row could not be re-read");
             Err(ServerFnError::new("internal server error").into())
         }
-        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(bookmark_db_error("create", e)),
+        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(rpc_db_error("bookmarks/create", e)),
     }
 }
 
@@ -816,8 +811,8 @@ pub async fn rpc_create_bookmark(input: CreateBookmark) -> Result<Bookmark> {
 pub async fn rpc_list_bookmarks(book_uuid: String) -> Result<Vec<Bookmark>> {
     match db::bookmarks::list_bookmarks(&pool.0, user.id, &book_uuid).await {
         Ok(list) => Ok(list),
-        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(bookmark_db_error("list", e)),
-        Err(e) => Err(bookmark_db_error("list", e)),
+        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(rpc_db_error("bookmarks/list", e)),
+        Err(e) => Err(rpc_db_error("bookmarks/list", e)),
     }
 }
 
@@ -835,8 +830,8 @@ pub async fn rpc_update_bookmark(id: i64, body: UpdateBookmark) -> Result<()> {
         Err(db::bookmarks::BookmarkError::NotFound) => {
             Err(ServerFnError::new("bookmark not found").into())
         }
-        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(bookmark_db_error("update", e)),
-        Err(e) => Err(bookmark_db_error("update", e)),
+        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(rpc_db_error("bookmarks/update", e)),
+        Err(e) => Err(rpc_db_error("bookmarks/update", e)),
     }
 }
 
@@ -850,8 +845,8 @@ pub async fn rpc_delete_bookmark(id: i64) -> Result<()> {
         Err(db::bookmarks::BookmarkError::NotFound) => {
             Err(ServerFnError::new("bookmark not found").into())
         }
-        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(bookmark_db_error("delete", e)),
-        Err(e) => Err(bookmark_db_error("delete", e)),
+        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(rpc_db_error("bookmarks/delete", e)),
+        Err(e) => Err(rpc_db_error("bookmarks/delete", e)),
     }
 }
 
