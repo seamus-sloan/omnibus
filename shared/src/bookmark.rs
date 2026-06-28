@@ -1,11 +1,7 @@
-//! Bookmark wire types shared between web and mobile clients.
-//!
-//! A single bookmark model serves both surfaces. `position` is an opaque
-//! location token — seconds-as-string for the audiobook player, an EPUB CFI
-//! for the reader — and `title` is the optional user-entered name/note. The
-//! backing `bookmarks` table (migration 0013, soft-ref'd to `book_uuid` by
-//! 0027) has no dedicated note column, so `title` carries the user's text and
-//! the chapter label shown in the UI is derived from `position` at render.
+//! Bookmark wire types shared between web and mobile clients. One model
+//! serves both surfaces: `position` is an opaque location token (seconds for
+//! the audiobook player, an EPUB CFI for the reader) and `title` is the
+//! optional user name/note (the `bookmarks` table has no separate note column).
 
 use serde::{Deserialize, Serialize};
 

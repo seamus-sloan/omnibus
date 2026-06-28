@@ -51,7 +51,7 @@ pub async fn create_bookmark(
     get_bookmark_by_id(pool, user_id, id).await
 }
 
-/// List all bookmarks for a user + book, ordered by position then creation.
+/// List all bookmarks for a user + book, ordered by creation time (oldest first).
 pub async fn list_bookmarks(
     pool: &SqlitePool,
     user_id: i64,

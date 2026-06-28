@@ -785,8 +785,12 @@ pub async fn rpc_create_bookmark(input: CreateBookmark) -> Result<Bookmark> {
         Err(db::bookmarks::BookmarkError::BookNotFound) => {
             Err(ServerFnError::new("book not found").into())
         }
-        Err(db::bookmarks::BookmarkError::NotFound) => {
-            Err(ServerFnError::new("bookmark not found").into())
+        // NotFound on create means the just-inserted row couldn't be re-read —
+        // a server invariant break, not a missing client resource. Log it and
+        // surface a generic internal error rather than a misleading 404.
+        Err(e @ db::bookmarks::BookmarkError::NotFound) => {
+            tracing::error!(error = %e, "rpc_create_bookmark: inserted row could not be re-read");
+            Err(ServerFnError::new("internal server error").into())
         }
         Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(ServerFnError::new(e.to_string()).into()),
     }
