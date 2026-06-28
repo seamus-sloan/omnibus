@@ -27,9 +27,11 @@ test("renders the reader layout", async ({ page, request }) => {
   // SSR markup and are robust to that.
   await expect(page.getByTestId("reader-viewer")).toBeVisible();
 
-  // Top chrome: back button, Aa display settings, bookmark.
+  // Top chrome: back, contents, Aa display settings, highlights, bookmark.
   await expect(page.getByTestId("reader-back")).toBeVisible();
+  await expect(page.getByTestId("reader-toc")).toBeVisible();
   await expect(page.getByTestId("reader-aa")).toBeVisible();
+  await expect(page.getByTestId("reader-highlights")).toBeVisible();
   await expect(page.getByTestId("reader-bookmark")).toBeVisible();
 
   // Page-turn gutters.
@@ -40,6 +42,28 @@ test("renders the reader layout", async ({ page, request }) => {
   await page.getByTestId("reader-aa").click();
   await expect(page.getByTestId("reader-font-decrease")).toBeVisible();
   await expect(page.getByTestId("reader-font-increase")).toBeVisible();
+});
+
+test("opens the contents and highlights drawers from the top chrome", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  // Highlights drawer opens with the (empty) palette filter rail.
+  await page.getByTestId("reader-highlights").click();
+  await expect(page.getByTestId("reader-highlights-drawer")).toBeVisible();
+  await expect(page.getByText("No highlights yet")).toBeVisible();
+
+  // Escape peels the drawer back (its scrim otherwise covers the chrome).
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("reader-highlights-drawer")).toHaveCount(0);
+
+  // Contents drawer opens from the top chrome.
+  await page.getByTestId("reader-toc").click();
+  await expect(page.getByTestId("reader-toc-drawer")).toBeVisible();
 });
 
 test("opens the reader from the book detail Read action", async ({ page, request }) => {

@@ -55,6 +55,10 @@ pub struct Highlight {
     pub epub_cfi_range: String,
     pub color: HighlightColor,
     pub note: Option<String>,
+    /// The highlighted prose. `None` for highlights created before the text
+    /// column shipped (migration 0029).
+    #[serde(default)]
+    pub text: Option<String>,
     pub created_at: i64,
 }
 
@@ -64,6 +68,10 @@ pub struct CreateHighlight {
     pub book_uuid: String,
     pub epub_cfi_range: String,
     pub color: HighlightColor,
+    /// The selected prose at creation time. Optional so older clients (and
+    /// the mobile REST body) can omit it.
+    #[serde(default)]
+    pub text: Option<String>,
 }
 
 impl CreateHighlight {
@@ -71,6 +79,10 @@ impl CreateHighlight {
     /// rarely exceeds a few hundred bytes; 4 KiB is a generous ceiling that
     /// stops an authed client from persisting megabyte-sized blobs per row.
     pub const EPUB_CFI_RANGE_MAX_LEN: usize = 4096;
+
+    /// Maximum length (in chars) of the stored highlighted text. A single
+    /// selection is at most a few paragraphs; 8 KiB is a generous ceiling.
+    pub const TEXT_MAX_LEN: usize = 8192;
 
     /// Validate field lengths and required-ness. Call at the handler
     /// boundary before persisting so over-long inputs surface as 400
@@ -90,6 +102,11 @@ impl CreateHighlight {
                 "epub_cfi_range exceeds {} characters",
                 Self::EPUB_CFI_RANGE_MAX_LEN
             ));
+        }
+        if let Some(ref text) = self.text {
+            if text.chars().count() > Self::TEXT_MAX_LEN {
+                return Err(format!("text exceeds {} characters", Self::TEXT_MAX_LEN));
+            }
         }
         Ok(())
     }
