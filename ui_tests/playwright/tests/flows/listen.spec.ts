@@ -321,10 +321,11 @@ test("opens bookmarks drawer and shows empty state", async ({
   page,
   request,
 }) => {
-  // Use the M4B book — no other spec creates bookmarks against it, so the
-  // empty state holds even on the shared, persistent dev DB. (The create
-  // flow below bookmarks MP3_BOOK, so reusing it here would be flaky.)
-  const uuid = await fetchBookUuidByTitle(request, M4B_BOOK.title);
+  // Use the multipart generated MP3 — it reaches direct-play mode reliably in
+  // headless (unlike the large public-domain M4B), and no other spec creates
+  // bookmarks against it, so the empty state holds on the shared dev DB. (The
+  // create flow below bookmarks MP3_BOOK, so reusing that here would be flaky.)
+  const uuid = await fetchBookUuidByTitle(request, MULTIPART_MP3_BOOK.title);
   await gotoReady(page, `/listen/${uuid}`);
   await waitForPlayerReady(page);
 
