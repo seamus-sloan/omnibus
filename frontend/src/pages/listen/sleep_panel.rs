@@ -89,6 +89,8 @@ pub(super) fn SleepPanel(
             button {
                 class: fade_cls,
                 r#type: "button",
+                "aria-pressed": fade,
+                "aria-label": "Fade out volume",
                 onclick: move |_| on_toggle_fade.call(()),
                 span { class: "lp-sleep-fade-track",
                     span { class: "lp-sleep-fade-thumb" }

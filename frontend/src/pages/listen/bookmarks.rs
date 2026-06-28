@@ -129,7 +129,16 @@ pub(super) fn use_bookmarks(uuid: String) -> BookmarksController {
         #[cfg(feature = "web")]
         spawn(async move {
             if let Ok(items) = crate::data::list_bookmarks("", &_uuid).await {
-                _list.set(items);
+                // The unified table can also hold reader bookmarks (CFI
+                // positions) for a dual-format book; the listen drawer is
+                // audio-only, so drop any non-numeric position rather than
+                // render it as 0:00 and seek to the start.
+                _list.set(
+                    items
+                        .into_iter()
+                        .filter(|b| b.position.parse::<f64>().is_ok())
+                        .collect(),
+                );
             }
         });
     });

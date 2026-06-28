@@ -20,7 +20,9 @@ pub(super) fn BookmarksDrawer(
     on_add: EventHandler<()>,
     on_close: EventHandler<()>,
 ) -> Element {
-    let marks = controller.list.read().clone();
+    // Hold the read guard and iterate it directly — no need to clone the whole
+    // list on every render (rows clone individual bookmarks as they need them).
+    let marks = controller.list.read();
     let fresh = (controller.fresh_id)();
     let count = marks.len();
 
