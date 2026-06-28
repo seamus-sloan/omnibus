@@ -20,11 +20,11 @@ use crate::taxonomy::{
 
 use super::super::attach;
 use super::super::authors::insert_author_links;
-use super::super::fts::{delete_fts, upsert_fts};
+use super::super::fts::upsert_fts;
 use super::wipe_per_book_link_rows;
 
 /// Resolve an existing `books` row (id + uuid) under `library_id` by its
-/// `scan_key`. Used by the New path to re-attach to a ghost / same-path row
+/// `scan_key`. Used by the New path to re-attach to a fileless / same-path row
 /// instead of inserting a colliding one.
 pub(super) async fn existing_by_scan_key(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
@@ -174,30 +174,20 @@ pub(super) async fn attach_ebook_file(
     Ok(())
 }
 
-/// Mark a book's files missing (F2): drop its `book_files` (parts and chapters
-/// cascade), clear its FTS row, and wipe its taxonomy + identifier links — so
-/// it is invisible to the library grid, search, and the author/series/tag
-/// browse pages — while **retaining** the `books` row, its `uuid`/`scan_key`,
-/// `metadata_overrides`, and every soft-ref user-data row. A returning file
-/// re-populates all of it via the Changed re-parse. Stamps the F10
-/// missing-files flag + retention clock so a long-missing, user-data-free row
-/// is eligible for `missing_files::gc_books_missing_files`.
+/// Record that a book's file is gone (F2): drop only its `book_files` row
+/// (parts and chapters cascade) and flag it missing, **retaining everything
+/// else** — the `books` row, its `uuid`/`scan_key`, scalar metadata, taxonomy
+/// links, FTS row, and every soft-ref user-data row. So a fileless book still
+/// appears under its authors/series/tags and in search; only the library grid
+/// and facets hide it, via their own `EXISTS book_files` filter. A returning
+/// file re-attaches via the Changed re-parse (clearing the flag); a book
+/// missing past the retention window with no user data is purged by
+/// `missing_files::gc_books_missing_files`, which then prunes any taxonomy the
+/// purge orphaned.
 pub(in crate::sync) async fn mark_book_files_missing(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
 ) -> Result<(), sqlx::Error> {
-    delete_fts(tx, book_id).await?;
-    for (table, col) in [
-        ("book_identifiers", "book_id"),
-        ("books_authors_link", "book"),
-        ("books_tags_link", "book"),
-        ("books_publishers_link", "book"),
-        ("books_series_link", "book"),
-        ("books_languages_link", "book"),
-    ] {
-        let sql = format!("DELETE FROM {table} WHERE {col} = ?");
-        sqlx::query(&sql).bind(book_id).execute(&mut **tx).await?;
-    }
     sqlx::query("DELETE FROM book_files WHERE book_id = ?")
         .bind(book_id)
         .execute(&mut **tx)

@@ -38,7 +38,7 @@ pub async fn gc_books_missing_files(
     retention_days: i64,
 ) -> Result<u64, MissingFilesError> {
     // `has_file = 0` (the NOT EXISTS book_files arm) is the authoritative
-    // ghost test, so a stale `is_missing_files` flag on a re-attached book can
+    // fileless test, so a stale `is_missing_files` flag on a re-attached book can
     // never cause a wrong purge.
     let victims: Vec<(i64, String)> = sqlx::query_as(
         "SELECT b.id, b.uuid FROM books b
@@ -83,7 +83,21 @@ pub async fn gc_books_missing_files(
             q = q.bind(id);
         }
         q.execute(&mut *tx).await?;
+
+        // `books_fts` has no FK to `books`; a missing book stays searchable, so
+        // its search twin (rowid = book id) only leaves the index when the book
+        // is hard-deleted here.
+        let del_fts = format!("DELETE FROM books_fts WHERE rowid IN ({placeholders})");
+        let mut q = sqlx::query(&del_fts);
+        for (id, _) in chunk {
+            q = q.bind(id);
+        }
+        q.execute(&mut *tx).await?;
     }
+    // Authors / series / tags / publishers / languages the purge left with zero
+    // books are removed too (a book a user kept reading is never purged, so its
+    // taxonomy survives with it).
+    crate::taxonomy::delete_orphan_taxonomy(&mut tx).await?;
     tx.commit().await?;
 
     let purged = victims.len() as u64;

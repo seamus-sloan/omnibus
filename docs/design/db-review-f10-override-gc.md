@@ -17,11 +17,13 @@ and created a different one:
   (`db/src/settings.rs`) keeps a removed root's books (and their overrides +
   soft-ref user data); only *childless* `scan_roots` are swept. A re-added or
   repointed path re-links every book by its relative `scan_key`, uuid intact.
-- **File removal ghosts, it doesn't delete.** `mark_book_files_missing`
-  (`db/src/sync/books/shared.rs`, the renamed `ghost_book_by_id`) drops a
-  removed file's `book_files`/links/FTS but **retains** the `books` row, its
-  `uuid`, `metadata_overrides`, and every soft-ref user-data row, so a returning
-  file re-attaches to the same uuid (durable user data).
+- **File removal keeps the book, it doesn't delete.** `mark_book_files_missing`
+  (`db/src/sync/books/shared.rs`, the renamed `ghost_book_by_id`) drops only the
+  removed file's `book_files` row and **retains** everything else — the `books`
+  row, its `uuid`, metadata, taxonomy links, FTS, `metadata_overrides`, and every
+  soft-ref user-data row — so the book still shows under its authors/series and
+  in search (the grid hides it via `EXISTS book_files`), and a returning file
+  re-attaches to the same uuid (durable user data).
 
 So `metadata_overrides` essentially never orphans (only a merge hard-deletes a
 book, already handled at `db/src/merge/transaction.rs`). Instead, **fileless
@@ -86,15 +88,19 @@ once caught up — the `normalize::backfill_norm_columns` pattern.
 - **GC:** `gc_books_missing_files(pool, retention_days)` selects books that are
   missing, non-override, past retention, **and** have no `book_files`, no
   `merged_uuids` attachment anchor, and no soft-ref user-data row; then deletes
-  their `metadata_overrides` + `books` rows (chunked at 500) and unlinks their
-  cover + override-cover files off the runtime. Returns the purged count.
-  `NOT EXISTS book_files` is the authoritative guard, so a stale flag can never
-  cause a wrong purge.
-- **Read path:** ghosts are already hidden from browse/discovery (links/FTS
-  wiped). The override-creators/series *arms* in `browse.rs` /
-  `discovery/authors.rs` join `metadata_overrides` without going through links,
-  so they gained `AND b.is_missing_files = 0` to keep a missing book with a
-  creators/series override from surfacing.
+  their `metadata_overrides`, `books`, and `books_fts` rows (chunked at 500),
+  prunes any now-bookless taxonomy via `taxonomy::delete_orphan_taxonomy`, and
+  unlinks their cover + override-cover files off the runtime. Returns the purged
+  count. `NOT EXISTS book_files` is the authoritative guard, so a stale flag can
+  never cause a wrong purge. The same `delete_orphan_taxonomy` also runs after
+  the merge source-delete (`merge/transaction.rs`).
+- **Visibility:** a fileless book is **not** detached —
+  `mark_book_files_missing` drops only `book_files`, keeping the book's
+  metadata, taxonomy links, and FTS row. So it still appears under its
+  authors/series/tags and in search; only the library grid and facets hide it,
+  via their own `EXISTS book_files` filter. Its author/series therefore survives
+  until the book is actually purged, at which point the orphan-taxonomy sweep
+  removes anything left at zero books.
 
 ---
 
@@ -105,10 +111,11 @@ once caught up — the `normalize::backfill_norm_columns` pattern.
 | `db/migrations/0029_books_missing_files.sql` | NEW columns + partial index |
 | `db/src/missing_files.rs` (+ `tests.rs`) | NEW `gc_books_missing_files`, `backfill_missing_files_flags`, `MissingFilesError`, `MISSING_FILES_RETENTION_DAYS` |
 | `db/src/lib.rs`, `db/src/pool.rs` | module + re-exports; `init_db` backfill call + `InitDbError::MissingFiles` |
-| `db/src/sync/books/shared.rs` | `ghost_book_by_id` → `mark_book_files_missing` (sets flag) + `clear_missing_files_flag` on file write |
+| `db/src/sync/books/shared.rs` | `ghost_book_by_id` → `mark_book_files_missing` (drops only `book_files`, sets flag) + `clear_missing_files_flag` on file write |
 | `db/src/sync/books/{mod,removed}.rs`, `db/src/sync/audiobooks.rs` | rename + flag clear at the audiobook file-write chokepoint |
+| `db/src/taxonomy.rs` | NEW `delete_orphan_taxonomy` — prunes zero-book authors/series/tags/publishers/languages |
 | `db/src/indexer.rs` | `gc_missing_files_best_effort` after each reindex |
-| `db/src/browse.rs`, `db/src/discovery/authors.rs` | `is_missing_files = 0` guard on the override arms |
+| `db/src/merge/transaction.rs` | prune orphan taxonomy after the merge source-delete |
 
 ---
 

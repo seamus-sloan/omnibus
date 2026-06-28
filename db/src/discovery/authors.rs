@@ -109,7 +109,6 @@ const EFFECTIVE_AUTHOR_CTE: &str = r#"WITH effective AS (
                FROM books b
                JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
               WHERE json_type(mo.overrides, '$.creators') IS NOT NULL
-                AND b.is_missing_files = 0
                 AND EXISTS (
                   SELECT 1 FROM json_each(mo.overrides, '$.creators') je
                    WHERE json_extract(je.value, '$.name') = ?1 COLLATE NOCASE

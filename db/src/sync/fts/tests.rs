@@ -37,46 +37,28 @@ fn indexed_with_isbn(filename: &str, title: &str, author: &str, isbn: &str) -> I
 /// `books` row has exactly one `books_fts` row, and no `books_fts` row is
 /// orphaned (no backing `books` row).
 async fn assert_fts_invariant(pool: &sqlx::SqlitePool) {
-    // The FTS row set tracks **file-backed** books. A fileless ghost (F2) is
-    // retained in `books` but has its FTS row cleared, so the invariant is
-    // scoped to books that still have a `book_files` row.
-    let file_backed = count_rows(
-        pool,
-        "SELECT COUNT(*) FROM books b
-          WHERE EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)",
-    )
-    .await;
+    // Every `books` row — file-backed or fileless (F2) — keeps exactly one
+    // `books_fts` row, so a fileless book stays searchable; the grid/facets
+    // hide it via their own `EXISTS book_files` filter.
+    let books = count_rows(pool, "SELECT COUNT(*) FROM books").await;
     let fts = count_rows(pool, "SELECT COUNT(*) FROM books_fts").await;
-    assert_eq!(
-        file_backed, fts,
-        "books_fts row count must equal file-backed books count"
-    );
+    assert_eq!(books, fts, "books_fts row count must equal books count");
 
     let missing = count_rows(
         pool,
         "SELECT COUNT(*) FROM books b
-          WHERE EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)
-            AND NOT EXISTS (SELECT 1 FROM books_fts f WHERE f.rowid = b.id)",
+          WHERE NOT EXISTS (SELECT 1 FROM books_fts f WHERE f.rowid = b.id)",
     )
     .await;
-    assert_eq!(
-        missing, 0,
-        "every file-backed book must have a books_fts row"
-    );
+    assert_eq!(missing, 0, "every book must have a books_fts row");
 
     let orphans = count_rows(
         pool,
         "SELECT COUNT(*) FROM books_fts f
-          WHERE NOT EXISTS (
-              SELECT 1 FROM books b
-                JOIN book_files bf ON bf.book_id = b.id
-               WHERE b.id = f.rowid)",
+          WHERE NOT EXISTS (SELECT 1 FROM books b WHERE b.id = f.rowid)",
     )
     .await;
-    assert_eq!(
-        orphans, 0,
-        "no books_fts row may point at a missing or fileless-ghost book"
-    );
+    assert_eq!(orphans, 0, "no books_fts row may point at a deleted book");
 }
 
 /// Count `books_fts` rows whose `isbn` column MATCHes the term.
@@ -130,9 +112,9 @@ async fn fts_invariant_holds_after_sync_books_new_changed_and_removed() {
     .unwrap();
     assert_fts_invariant(&pool).await;
 
-    // Removed — ghosted (F2). Identity is minted, so resolve b.epub's uuid
-    // by scan_key, then assert it is retained as a fileless ghost (one
-    // file-backed book left, FTS cleared for the ghost).
+    // Removed → fileless (F2). Identity is minted, so resolve b.epub's uuid
+    // by scan_key, then assert it is retained as a fileless book that keeps
+    // its FTS row (2 books total, 1 file-backed).
     let b_uuid = crate::test_support::uuid_by_scan_key(&pool, "b.epub").await;
     sync_books(
         &pool,
@@ -147,7 +129,7 @@ async fn fts_invariant_holds_after_sync_books_new_changed_and_removed() {
     assert_eq!(
         count_rows(&pool, "SELECT COUNT(*) FROM books").await,
         2,
-        "removed book retained as a fileless ghost"
+        "removed book retained as a fileless book"
     );
     assert_eq!(
         count_rows(
@@ -179,7 +161,7 @@ async fn fts_invariant_holds_after_replace_books() {
     assert_fts_invariant(&pool).await;
 
     // Replace again with one fewer book — the dropped book's FTS row must go,
-    // but the book is retained as a fileless ghost (F2): 2 books total, 1
+    // but the book is retained as a fileless book (F2): 2 books total, 1
     // file-backed (and therefore 1 FTS row).
     crate::sync::replace_books(
         &pool,
@@ -240,8 +222,8 @@ async fn fts_invariant_holds_after_sync_audiobooks_new_changed_and_removed() {
     .unwrap();
     assert_fts_invariant(&pool).await;
 
-    // Removed — ghosted (F2): the books row is retained fileless, the
-    // book_files row is gone, and the FTS row is cleared.
+    // Removed → fileless (F2): the books row is retained, its book_files row
+    // is gone, but its links + FTS row stay (it remains searchable).
     sync_audiobooks(
         &pool,
         "/audio",
@@ -255,7 +237,7 @@ async fn fts_invariant_holds_after_sync_audiobooks_new_changed_and_removed() {
     assert_eq!(
         count_rows(&pool, "SELECT COUNT(*) FROM books").await,
         1,
-        "removed book is retained as a fileless ghost"
+        "removed book is retained as a fileless book"
     );
     assert_eq!(
         count_rows(&pool, "SELECT COUNT(*) FROM book_files").await,
@@ -400,7 +382,7 @@ async fn rebuild_all_fts_reconstructs_index_after_corruption() {
         .unwrap();
     sqlx::query(
         "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn) \
-                 VALUES (999999, 'ghost', '', '', '', '', '')",
+                 VALUES (999999, 'orphan', '', '', '', '', '')",
     )
     .execute(&pool)
     .await
@@ -425,7 +407,7 @@ async fn rebuild_all_fts_reconstructs_index_after_corruption() {
         missing_before, 1,
         "the dropped book should now lack an FTS row"
     );
-    assert_eq!(orphans_before, 1, "the ghost row should be an orphan");
+    assert_eq!(orphans_before, 1, "the planted row should be an orphan");
     assert_eq!(fts_isbn_hits(&pool, "9782222222222").await, 0);
 
     rebuild_all_fts(&pool).await.unwrap();
@@ -433,8 +415,9 @@ async fn rebuild_all_fts_reconstructs_index_after_corruption() {
     // Invariant restored, orphan swept, the dropped ISBN searchable again.
     assert_fts_invariant(&pool).await;
     assert_eq!(fts_isbn_hits(&pool, "9782222222222").await, 1);
-    let ghost = count_rows(&pool, "SELECT COUNT(*) FROM books_fts WHERE rowid = 999999").await;
-    assert_eq!(ghost, 0, "orphan row must be swept by the rebuild");
+    let orphan_after =
+        count_rows(&pool, "SELECT COUNT(*) FROM books_fts WHERE rowid = 999999").await;
+    assert_eq!(orphan_after, 0, "orphan row must be swept by the rebuild");
 }
 
 #[tokio::test]

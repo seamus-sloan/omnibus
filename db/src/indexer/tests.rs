@@ -52,8 +52,8 @@ fn row(scan_key: &str, mtime: i64, size: i64) -> IndexedRow {
         size_bytes: size,
     }
 }
-/// A fileless ghost row (F2): retained book whose file is gone.
-fn ghost_row(scan_key: &str) -> IndexedRow {
+/// A fileless book row (F2): retained book whose file is gone.
+fn fileless_row(scan_key: &str) -> IndexedRow {
     IndexedRow {
         uuid: scan_key.into(),
         scan_key: scan_key.into(),
@@ -179,24 +179,24 @@ fn diff_ignores_empty_uuid_placeholders_from_stat_walk() {
 }
 
 #[test]
-fn diff_routes_returning_file_for_a_ghost_through_changed() {
-    // A fileless ghost (F2) whose file is back on disk must classify Changed
+fn diff_routes_returning_file_for_a_fileless_book_through_changed() {
+    // A fileless book (F2) whose file is back on disk must classify Changed
     // — so the writer re-attaches, preserving the existing uuid — not New
     // (which would mint a fresh uuid and orphan its soft-ref user data).
     let disk = vec![entry("a.epub", "a.epub", 100, 1000)];
-    let db = vec![ghost_row("a.epub")];
+    let db = vec![fileless_row("a.epub")];
     let d = diff_library(&disk, &db, Path::new("/lib"));
-    assert!(d.new.is_empty(), "a ghost match is not New");
+    assert!(d.new.is_empty(), "a fileless match is not New");
     assert_eq!(d.changed.len(), 1);
     assert_eq!(d.changed[0].filename, "a.epub");
     assert!(d.removed.is_empty());
 }
 
 #[test]
-fn diff_leaves_a_still_missing_ghost_untouched() {
-    // A ghost whose file is still gone stays a ghost — not re-Removed.
+fn diff_leaves_a_still_missing_fileless_book_untouched() {
+    // A fileless book whose file is still gone stays fileless — not re-Removed.
     let disk: Vec<StatEntry> = vec![];
-    let db = vec![ghost_row("a.epub")];
+    let db = vec![fileless_row("a.epub")];
     let d = diff_library(&disk, &db, Path::new("/lib"));
     assert!(d.removed.is_empty());
     assert!(d.new.is_empty());

@@ -168,7 +168,7 @@ async fn delete_author_is_no_op_for_missing_id() {
         .unwrap();
     assert_eq!(
         blocklist_count, 0,
-        "missing id must not leak a ghost blocklist row"
+        "missing id must not leak a stale blocklist row"
     );
 }
 #[tokio::test]

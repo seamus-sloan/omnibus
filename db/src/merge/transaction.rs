@@ -187,6 +187,10 @@ async fn finalize_merge(
         .execute(&mut **tx)
         .await?;
 
+    // The source's authors/series/tags were copied to the target above; prune
+    // any taxonomy the source delete left referencing zero books.
+    crate::taxonomy::delete_orphan_taxonomy(tx).await?;
+
     Ok(merge_log_id)
 }
 

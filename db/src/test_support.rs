@@ -221,7 +221,7 @@ pub async fn seed_minimal_books(pool: &SqlitePool, count: i64) {
     .execute(pool)
     .await
     .unwrap();
-    // Give every seeded book a `book_files` row so the ghost filter (F2) —
+    // Give every seeded book a `book_files` row so the fileless filter (F2) —
     // which hides fileless books from list/count reads — doesn't drop them.
     sqlx::query(
         "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch)

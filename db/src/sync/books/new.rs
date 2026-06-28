@@ -1,6 +1,6 @@
 //! New bucket: insert canonical `books` + `book_files` rows for each
 //! entry, write its metadata links, and refresh FTS. Re-attaches to a
-//! same-scan_key ghost in place to preserve `books.uuid`, and tries the
+//! same-scan_key fileless row in place to preserve `books.uuid`, and tries the
 //! cross-format auto-attach heuristic before minting a fresh row.
 
 use sqlx::Transaction;
@@ -25,11 +25,11 @@ pub(super) async fn sync_new(
     let mut new_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
     for b in new_books {
         // A row with this exact scan_key (relative path) already exists — a
-        // fileless ghost whose file returned, or the same file marked New by
-        // `replace_books` after being ghosted in the same call. This is the
+        // fileless book whose file returned, or the same file marked New by
+        // `replace_books` after being marked missing in the same call. This is the
         // *same native file*, so rewrite it in place (preserving
         // `books.uuid`) — checked before the cross-format attach heuristic,
-        // which would otherwise mis-bind the returning file to the ghost as
+        // which would otherwise mis-bind the returning file to the fileless row as
         // an attachment.
         let scan_key = scan_key_for(&b.metadata.filename);
         if let Some((book_id, uuid)) = existing_by_scan_key(tx, library_id, &scan_key).await? {

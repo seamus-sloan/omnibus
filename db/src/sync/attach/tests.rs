@@ -245,8 +245,8 @@ async fn removed_attached_file_drops_attachment_but_keeps_book() {
 }
 
 #[tokio::test]
-async fn removed_ebook_with_attached_audiobook_ghosts_and_audiobook_reattaches() {
-    // F2: removing the ebook file ghosts its books row (retained, fileless)
+async fn removed_ebook_goes_fileless_and_audiobook_reattaches() {
+    // F2: removing the ebook file makes its books row fileless (retained, fileless)
     // rather than deleting it, so the attachment ledger survives. The book's
     // identity (and any user data on it) is preserved, and re-scanning the
     // still-present audiobook re-attaches to the same row — now audiobook-only.
@@ -269,7 +269,7 @@ async fn removed_ebook_with_attached_audiobook_ghosts_and_audiobook_reattaches()
     )
     .await
     .unwrap();
-    // Ghosted: the books row + its merged_uuids ledger survive; all file rows
+    // Fileless: the books row + its merged_uuids ledger survive; all file rows
     // are dropped.
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 1);
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM merged_uuids").await, 1);

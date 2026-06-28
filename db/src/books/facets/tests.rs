@@ -57,15 +57,15 @@ async fn library_facets_orders_by_count_desc_then_value_asc() {
 }
 
 #[tokio::test]
-async fn library_facets_excludes_ghost_books() {
+async fn library_facets_excludes_fileless_books() {
     let (pool, _guard) = seed_discovery_fixture().await;
-    // A fileless ghost: a book row with an author link but no book_files.
+    // A fileless book: a book row with an author link but no book_files.
     let lib_id: i64 = sqlx::query_scalar("SELECT id FROM scan_roots WHERE path = '/lib'")
         .fetch_one(&pool)
         .await
         .unwrap();
     let book_id: i64 = sqlx::query_scalar(
-        "INSERT INTO books (uuid, library_id, path, title) VALUES ('ghost', ?, '/lib', 'Ghost Book')
+        "INSERT INTO books (uuid, library_id, path, title) VALUES ('fileless', ?, '/lib', 'Fileless Book')
          RETURNING id",
     )
     .bind(lib_id)
@@ -73,7 +73,7 @@ async fn library_facets_excludes_ghost_books() {
     .await
     .unwrap();
     let author_id: i64 = sqlx::query_scalar(
-        "INSERT INTO authors (name, sort) VALUES ('Ghostwriter', 'Ghostwriter') RETURNING id",
+        "INSERT INTO authors (name, sort) VALUES ('Fadeaway', 'Fadeaway') RETURNING id",
     )
     .fetch_one(&pool)
     .await
@@ -87,7 +87,7 @@ async fn library_facets_excludes_ghost_books() {
 
     let facets = library_facets(&pool, &["/lib"]).await.unwrap();
     assert!(
-        facets.authors.iter().all(|f| f.value != "Ghostwriter"),
+        facets.authors.iter().all(|f| f.value != "Fadeaway"),
         "a book with no backing file must not contribute to facet counts"
     );
 }

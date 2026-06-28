@@ -253,11 +253,13 @@ async fn backfill_flags_existing_fileless_books_and_is_idempotent() {
         .execute(&pool)
         .await
         .unwrap();
-    // Pre-migration fileless ghost (no book_files row).
-    sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES ('ghost', 1, '', 'G')")
-        .execute(&pool)
-        .await
-        .unwrap();
+    // Pre-migration fileless book (no book_files row).
+    sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title) VALUES ('fileless', 1, '', 'G')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     // A live book with a file must stay un-flagged.
     sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES ('live', 1, '', 'L')")
         .execute(&pool)
@@ -273,7 +275,7 @@ async fn backfill_flags_existing_fileless_books_and_is_idempotent() {
 
     backfill_missing_files_flags(&pool).await.unwrap();
     let (flag, since): (i64, Option<i64>) = sqlx::query_as(
-        "SELECT is_missing_files, missing_files_since FROM books WHERE uuid='ghost'",
+        "SELECT is_missing_files, missing_files_since FROM books WHERE uuid='fileless'",
     )
     .fetch_one(&pool)
     .await
@@ -289,7 +291,7 @@ async fn backfill_flags_existing_fileless_books_and_is_idempotent() {
     // Second run is a no-op — the IS NULL/= 0 guard keeps `since` stable.
     backfill_missing_files_flags(&pool).await.unwrap();
     let since2: Option<i64> =
-        sqlx::query_scalar("SELECT missing_files_since FROM books WHERE uuid='ghost'")
+        sqlx::query_scalar("SELECT missing_files_since FROM books WHERE uuid='fileless'")
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -552,4 +554,46 @@ async fn backfill_skips_intentionally_fileless_override_rows() {
     .unwrap();
     assert_eq!(flag, 0, "wishlist row is never flagged missing");
     assert!(since.is_none());
+}
+
+#[tokio::test]
+async fn fileless_book_still_appears_in_author_browse() {
+    let _covers = CoversTempDir::new("fileless_browse");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    // Seeded with author "A"; then its file goes missing.
+    seed_and_make_missing(&pool, "gone.epub").await;
+
+    // The grid hides a fileless book (its own EXISTS book_files filter)…
+    assert!(
+        list_books(&pool, "/lib").await.unwrap().is_empty(),
+        "the grid hides a fileless book"
+    );
+    // …but author browse still lists its author, with the book counted.
+    let authors = crate::browse::list_authors(&pool, &["/lib"]).await.unwrap();
+    assert_eq!(authors.len(), 1, "author still shown for a fileless book");
+    assert_eq!(authors[0].book_count, 1);
+}
+
+#[tokio::test]
+async fn gc_purges_orphan_author_when_its_last_book_is_deleted() {
+    let _covers = CoversTempDir::new("gc_orphan_tax");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let uuid = seed_and_make_missing(&pool, "solo.epub").await;
+    backdate_missing_since(&pool, &uuid, 40).await;
+    // The author survives while the (fileless) book still references it.
+    let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM authors")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(before, 1);
+
+    let purged = gc_books_missing_files(&pool, MISSING_FILES_RETENTION_DAYS)
+        .await
+        .unwrap();
+    assert_eq!(purged, 1);
+    let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM authors")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(after, 0, "the purged book's now-bookless author is GC'd");
 }

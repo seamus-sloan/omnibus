@@ -42,5 +42,32 @@ resolve_or_insert_simple!(resolve_or_insert_tag, "tags", "name");
 resolve_or_insert_simple!(resolve_or_insert_publisher, "publishers", "name");
 resolve_or_insert_simple!(resolve_or_insert_language, "languages", "code");
 
+/// Delete taxonomy rows (`authors`, `series`, `tags`, `publishers`,
+/// `languages`) no longer referenced by any book. Run after a book row is
+/// deleted — the missing-files GC purge and the merge source delete — so an
+/// author or series left with zero books doesn't linger. `author_photos`
+/// cascades on the author delete; the link tables have no taxonomy-side
+/// cascade, so a row is only deletable once its last link is gone, which is
+/// exactly the set this targets. Table/column names are compile-time literals,
+/// not caller input.
+pub(crate) async fn delete_orphan_taxonomy(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+) -> Result<(), sqlx::Error> {
+    for (table, link, col) in [
+        ("authors", "books_authors_link", "author"),
+        ("series", "books_series_link", "series"),
+        ("tags", "books_tags_link", "tag"),
+        ("publishers", "books_publishers_link", "publisher"),
+        ("languages", "books_languages_link", "language"),
+    ] {
+        let sql = format!(
+            "DELETE FROM {table} \
+              WHERE NOT EXISTS (SELECT 1 FROM {link} WHERE {col} = {table}.id)"
+        );
+        sqlx::query(&sql).execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;

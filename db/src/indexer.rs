@@ -91,7 +91,7 @@ pub struct ReindexDiff {
     pub changed: Vec<ebook::ParseTarget>,
     /// A file-backed book whose file is gone (by `books.uuid`). The writer
     /// drops its `book_files` row + clears FTS, retaining the `books` row as
-    /// a fileless ghost; cover files get cleaned up post-commit.
+    /// a fileless book; cover files get cleaned up post-commit.
     pub removed: Vec<String>,
     /// In the DB and on disk, but the DB row carries the post-migration
     /// `(mtime_epoch=0, size_bytes=0)` sentinel. Writer fills in the stat
@@ -113,9 +113,9 @@ pub struct ReindexDiff {
 /// - **Changed** — on disk, in DB, stat differs. Full Phase-B parse, then
 ///   UPDATE in place (preserves `books.id`).
 /// - **Removed** — a file-backed book whose file is gone. Its `book_files`
-///   row is dropped so the book becomes a **fileless ghost** (the `books`
+///   row is dropped so the book becomes a **fileless book** (the `books`
 ///   row + its soft-ref user data are retained, not deleted); a returning
-///   file re-attaches via Changed. An already-fileless ghost is left alone.
+///   file re-attaches via Changed. An already-fileless book is left alone.
 /// - **Backfill** — in DB, in disk, DB has the migration default
 ///   `(mtime_epoch=0, size_bytes=0)`. Treated as the sentinel for "fs
 ///   metadata never observed" (post-migration), so the writer only
@@ -157,7 +157,7 @@ pub fn diff_library(
         match db_by_key.get(scan_key) {
             None => out.new.push(target(entry)),
             Some(row) if !row.has_file => {
-                // A fileless ghost whose file is back on disk. Route through
+                // A fileless book whose file is back on disk. Route through
                 // Changed: the writer re-creates the `book_files` row while
                 // preserving the existing `books.uuid` (auto-relink, F2).
                 out.changed.push(target(entry));
@@ -184,8 +184,8 @@ pub fn diff_library(
         }
         if !disk_by_key.contains_key(row.scan_key.as_str()) {
             // A file-backed book whose file is gone becomes a fileless
-            // ghost (the row + its soft-ref user data are retained, not
-            // deleted). An already-fileless ghost is left untouched.
+            // book (the row + its soft-ref user data are retained, not
+            // deleted). An already-fileless book is left untouched.
             if row.has_file {
                 out.removed.push(row.uuid.clone());
             }
