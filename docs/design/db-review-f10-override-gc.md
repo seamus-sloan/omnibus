@@ -25,8 +25,10 @@ Both decisions from [Decision required](#decision-required) are settled:
   **both** post-every-reindex (best-effort, logged) **and** on explicit library
   removal. Both arms soft-detach — the explicit-removal arm does *not*
   hard-delete, keeping one uniform path. Detach is immediate on detection; the
-  row is retained and re-linkable for **30 days**, then a long-retention sweep
-  hard-purges it.
+  row is retained for **30 days**, then a long-retention sweep hard-purges it.
+  On the reindex path a detached row re-links (clears `detached_at`) if its
+  book resolves again; rows detached via explicit removal can't re-link (re-add
+  mints fresh uuids — see the caveat below) and just age out.
 - **Visibility: admin "unlinked edits" UI deferred to F3.2.** The detach + GC
   data layer and an `info`-level pruned-count log ship now; the admin surface
   lands with F3.2's "unlinked annotations" view so both present as one
