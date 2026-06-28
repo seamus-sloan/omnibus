@@ -33,7 +33,7 @@ pub struct AudiobookSyncPlan {
 ///
 /// Transaction order:
 /// 1. Upsert `scan_roots` row.
-/// 2. Delete Removed (explicit FTS clear + cascade DELETE from `books`).
+/// 2. Mark Removed files missing (drop `book_files`, retain the `books` row).
 /// 3. Update Changed in-place: wipe `book_files` + `book_file_parts` + author
 ///    link + FTS, then re-insert them.
 /// 4. Insert New.
@@ -107,13 +107,13 @@ pub async fn sync_audiobooks_with_progress(
     Ok(())
 }
 
-/// Apply the Removed bucket (F2 ghosting): resolve affected ids and, via
-/// `books::ghost_book_by_id`, clear each `books_fts` row + links and drop the
-/// `book_files` rows (parts/chapters cascade) — but **retain** the `books`
-/// row as a fileless ghost so its soft-ref user data survives and a returning
-/// group re-attaches via Changed. Also drop any `book_files` rows whose uuid
-/// lived only in `merged_uuids` (cross-format attachments — the target book
-/// survives).
+/// Apply the Removed bucket (F2): resolve affected ids and, via
+/// `books::mark_book_files_missing`, drop the `book_files` rows (parts/chapters
+/// cascade) and flag each book missing — but **retain** the `books` row, its
+/// links, FTS, and soft-ref user data, so the book stays in browse/search (the
+/// grid hides it via `EXISTS book_files`) and a returning group re-attaches via
+/// Changed. Also drop any `book_files` rows whose uuid lived only in
+/// `merged_uuids` (cross-format attachments — the target book survives).
 async fn sync_audiobooks_removed(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_id: i64,
@@ -122,7 +122,7 @@ async fn sync_audiobooks_removed(
     if removed_uuids.is_empty() {
         return Ok(());
     }
-    let mut ghosted = 0usize;
+    let mut missing = 0usize;
     // Chunk at 500 to stay under SQLite's 999-param cap when a whole library
     // (or any large diff) is removed — same convention as `sync_removed` in
     // `books.rs`.
@@ -130,8 +130,8 @@ async fn sync_audiobooks_removed(
         let placeholders = std::iter::repeat_n("?", chunk.len())
             .collect::<Vec<_>>()
             .join(", ");
-        // Resolve affected ids, clear each FTS row, and drop the file rows —
-        // retaining each `books` row as a fileless ghost (F2).
+        // Resolve affected ids and drop their file rows — retaining each
+        // `books` row (and its links/FTS) as a fileless book (F2).
         let id_sql =
             format!("SELECT id FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
         let mut q = sqlx::query_scalar::<_, i64>(&id_sql).bind(library_id);
@@ -139,15 +139,15 @@ async fn sync_audiobooks_removed(
             q = q.bind(uuid);
         }
         let ids = q.fetch_all(&mut **tx).await?;
-        ghosted += ids.len();
+        missing += ids.len();
         for id in ids {
-            super::books::ghost_book_by_id(tx, id).await?;
+            super::books::mark_book_files_missing(tx, id).await?;
         }
     }
-    if ghosted > 0 {
+    if missing > 0 {
         tracing::info!(
-            ghosted,
-            "sync: retained removed audiobooks as fileless ghosts"
+            missing,
+            "sync: retained removed audiobooks as fileless books"
         );
     }
 
@@ -202,7 +202,7 @@ async fn sync_audiobooks_changed(
             // No primary books row with this scan_key — either an attachment
             // on another book (matched by the repoint-stable
             // `(library_path, scan_key)`) or a TOCTOU promote to a New insert.
-            // (A fileless ghost whose group returned still has its books row,
+            // (A fileless book whose group returned still has its books row,
             // so it takes the update branch below and re-creates book_files.)
             if let Some((_uuid, target_id, format)) =
                 attach::find_attachment_by_scan_key(tx, library_path, &b.scan_key).await?
@@ -227,7 +227,7 @@ async fn sync_audiobooks_changed(
 /// preserving `books.id`/`books.uuid`: refresh the `books` scalars, wipe +
 /// re-insert this format's `book_files`/parts/chapters and the author link,
 /// and refresh FTS. Shared by the Changed update path and the New re-attach
-/// path (a fileless ghost whose group returned, or a `replace_books`
+/// path (a fileless book whose group returned, or a `replace_books`
 /// re-add). The `book_files` delete is scoped to this group's own format so
 /// a cross-format attachment (e.g. an EPUB row via `merged_uuids`) survives.
 async fn rewrite_audiobook_in_place(
@@ -270,7 +270,7 @@ async fn sync_audiobooks_new(
 ) -> Result<Vec<(String, String, Vec<u8>)>, SyncError> {
     let mut new_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
     for b in new_books {
-        // Same-scan_key row (a fileless ghost whose group returned, or a
+        // Same-scan_key row (a fileless book whose group returned, or a
         // `replace_books` re-add) → rewrite in place, *before* the
         // cross-format attach heuristic, preserving `books.uuid`.
         let existing: Option<(i64, String)> =
@@ -531,6 +531,9 @@ async fn insert_audiobook_file_row(
     .bind(b.max_mtime_epoch)
     .fetch_one(&mut **tx)
     .await?;
+    // A returning group clears the F10 missing-files flag (no-op on a fresh
+    // insert) — the audiobook file-write chokepoint, mirroring the ebook path.
+    super::books::clear_missing_files_flag(tx, book_id).await?;
     Ok(id)
 }
 

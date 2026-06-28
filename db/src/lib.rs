@@ -21,6 +21,7 @@ pub mod indexer;
 pub mod library_layout;
 pub mod merge;
 pub mod metadata_overrides;
+pub mod missing_files;
 pub mod normalize;
 pub mod palette;
 pub mod pool;
@@ -55,6 +56,10 @@ pub use discovery::*;
 pub use helpers::{build_fts_match, sanitize_fts_query};
 pub use merge::{merge_books, undo_merge, MergeError, MergeOutcome};
 pub use metadata_overrides::*;
+pub use missing_files::{
+    backfill_missing_files_flags, gc_books_missing_files, MissingFilesError,
+    MISSING_FILES_RETENTION_DAYS,
+};
 pub use palette::*;
 pub use pool::*;
 pub use settings::*;

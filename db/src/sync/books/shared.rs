@@ -2,7 +2,7 @@
 //! canonical row writers (`insert_book_row` / `update_book_row` /
 //! `insert_book_file_row`), metadata + tag + identifier link dispatch,
 //! the rewrite-in-place and cross-format attach paths, and the
-//! post-commit cover materialization + ghost helper.
+//! post-commit cover materialization + missing-files marker helper.
 
 use sqlx::Transaction;
 
@@ -20,11 +20,11 @@ use crate::taxonomy::{
 
 use super::super::attach;
 use super::super::authors::insert_author_links;
-use super::super::fts::{delete_fts, upsert_fts};
+use super::super::fts::upsert_fts;
 use super::wipe_per_book_link_rows;
 
 /// Resolve an existing `books` row (id + uuid) under `library_id` by its
-/// `scan_key`. Used by the New path to re-attach to a ghost / same-path row
+/// `scan_key`. Used by the New path to re-attach to a fileless / same-path row
 /// instead of inserting a colliding one.
 pub(super) async fn existing_by_scan_key(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
@@ -174,32 +174,37 @@ pub(super) async fn attach_ebook_file(
     Ok(())
 }
 
-/// Turn a book into a fileless ghost (F2): drop its `book_files` (parts and
-/// chapters cascade), clear its FTS row, and wipe its taxonomy + identifier
-/// links — so the ghost is invisible to the library grid, search, and the
-/// author/series/tag browse pages — while **retaining** the `books` row, its
-/// `uuid`/`scan_key`, `metadata_overrides`, and every soft-ref user-data row.
-/// A returning file re-populates all of it via the Changed re-parse.
-pub(in crate::sync) async fn ghost_book_by_id(
+/// Record that a book's file is gone (F2): drop only its `book_files` row
+/// (parts and chapters cascade) and flag it missing, **retaining everything
+/// else** — the `books` row, its `uuid`/`scan_key`, scalar metadata, taxonomy
+/// links, FTS row, and every soft-ref user-data row. So a fileless book still
+/// appears under its authors/series/tags and in search; only the library grid
+/// and facets hide it, via their own `EXISTS book_files` filter. A returning
+/// file re-attaches via the Changed re-parse (clearing the flag); a book
+/// missing past the retention window with no user data is purged by
+/// `missing_files::gc_books_missing_files`, which then prunes any taxonomy the
+/// purge orphaned.
+pub(in crate::sync) async fn mark_book_files_missing(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
 ) -> Result<(), sqlx::Error> {
-    delete_fts(tx, book_id).await?;
-    for (table, col) in [
-        ("book_identifiers", "book_id"),
-        ("books_authors_link", "book"),
-        ("books_tags_link", "book"),
-        ("books_publishers_link", "book"),
-        ("books_series_link", "book"),
-        ("books_languages_link", "book"),
-    ] {
-        let sql = format!("DELETE FROM {table} WHERE {col} = ?");
-        sqlx::query(&sql).bind(book_id).execute(&mut **tx).await?;
-    }
     sqlx::query("DELETE FROM book_files WHERE book_id = ?")
         .bind(book_id)
         .execute(&mut **tx)
         .await?;
+    // Flag the now-fileless row + start its retention clock. The
+    // `is_missing_files = 0` guard preserves the original `missing_files_since`
+    // if this somehow re-runs; the `is_missing_files_override = 0` guard leaves
+    // intentionally-fileless rows (wishlist) un-flagged so reads keep showing
+    // them.
+    sqlx::query(
+        "UPDATE books
+            SET is_missing_files = 1, missing_files_since = unixepoch()
+          WHERE id = ? AND is_missing_files = 0 AND is_missing_files_override = 0",
+    )
+    .bind(book_id)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 
@@ -222,6 +227,24 @@ async fn insert_book_file_row(
     .bind(&file_stem)
     .bind(b.size_bytes)
     .bind(b.mtime_epoch)
+    .execute(&mut **tx)
+    .await?;
+    clear_missing_files_flag(tx, book_id).await?;
+    Ok(())
+}
+
+/// Clear the F10 missing-files flag for a book that just (re)gained a file —
+/// the Changed/New file-write chokepoint. Guarded on `is_missing_files = 1` so
+/// it's a no-op for the common already-attached insert.
+pub(in crate::sync) async fn clear_missing_files_flag(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE books SET is_missing_files = 0, missing_files_since = NULL
+          WHERE id = ? AND is_missing_files = 1",
+    )
+    .bind(book_id)
     .execute(&mut **tx)
     .await?;
     Ok(())

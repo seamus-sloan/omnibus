@@ -47,10 +47,10 @@ When a book is pruned, its rating row becomes *detached* (orphaned) rather than 
 
 A reconciliation step on re-index can still attempt to re-link detached user data by `(author, title)` similarity when no uuid matches — the case where a library was *removed* and re-added, minting fresh uuids — surfaced as "unlinked annotations" in the UI rather than silently lost.
 
-**Reconcile/GC shape inherited from F10.** The orphan reconcile + GC mechanism is built first for `metadata_overrides` under [F10](../design/db-review-f10-override-gc.md), and the user-data tables here reuse it. Two constraints carry over:
+**GC interaction inherited from F10.** F10 shipped as a **missing-files GC** (see [F10](../design/db-review-f10-override-gc.md)): post-F2 a removed file ghosts its `books` row (retained fileless) rather than deleting it, and the GC only purges long-missing books that carry **no** user data. Two things carry over here:
 
-1. **User data must soft-detach, never hard-delete.** F10's orphan reconcile/GC soft-detaches in *both* arms (post-reindex *and* explicit library removal) — only a *user-driven* override deletion hard-deletes. An override is regenerable (it can be re-entered) so its eventual purge is tolerable; a journal entry is **not** regenerable, so `user_ratings` / `user_journal_entries` must use the soft-detach disposition (a `detached_at` marker, read-path filtered, retained for a grace window, hard-purged only after a long retention) and never be the target of a hard-delete GC.
-2. **The admin "unlinked edits/annotations" UI lands here.** F10 builds the detach + GC data layer now but defers the admin surface to this feature, so `metadata_overrides` and user-data orphans are presented through one consistent "unlinked" view when F3.2 ships.
+1. **Add the new tables to F10's user-data guard.** `user_ratings` / `user_journal_entries` are soft-ref user data, so the GC must treat them like the existing five tables: a missing book that any of them references is **never purged**. This protects non-regenerable journal/rating data by exclusion — no soft-detach machinery needed. Wire the new tables into the `NOT EXISTS` guard in `missing_files::gc_books_missing_files` when they land.
+2. **The admin "unlinked annotations" UI lands here.** F10 deferred any user-visible surface to this feature; a book whose file is gone but whose ratings/journal survive (a retained ghost) is the row this view would present.
 
 ## Dependencies
 

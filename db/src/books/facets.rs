@@ -12,7 +12,7 @@ use omnibus_shared::{FacetCount, FacetCounts};
 
 /// Per-facet book counts for `library_paths`, ordered by count descending then
 /// value ascending (the order the sidebar renders). Empty `library_paths`
-/// returns empty facets. Books with no backing file (F2 ghosts) are excluded,
+/// returns empty facets. Books with no backing file (fileless, F2) are excluded,
 /// matching the list/count read paths.
 pub async fn library_facets(
     pool: &SqlitePool,
@@ -62,7 +62,7 @@ pub async fn library_facets(
     )
     .await?;
 
-    // The JOIN to `book_files` already excludes ghosts (a row with no file
+    // The JOIN to `book_files` already excludes fileless books (a row with no file
     // contributes none), so no extra EXISTS is needed here. `(book_id, format)`
     // is unique, so COUNT(DISTINCT b.id) per lowercased format equals the
     // number of books carrying it.

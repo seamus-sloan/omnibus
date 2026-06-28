@@ -62,10 +62,10 @@ async fn fetch_list_rows(
     let placeholders = std::iter::repeat_n("?", library_paths.len())
         .collect::<Vec<_>>()
         .join(", ");
-    // Exclude fileless ghosts (F2): a book whose file was removed keeps its
+    // Exclude fileless books (F2): a book whose file was removed keeps its
     // row + soft-ref user data, but must not render as a broken tile in the
     // library grid. Search already excludes them (their FTS row is cleared
-    // when ghosted); this is the list-view equivalent.
+    // when its file is gone); this is the list-view equivalent.
     let sql = format!(
         r"
         SELECT {BOOK_COLUMNS}
@@ -92,9 +92,9 @@ async fn fetch_list_rows(
 /// `scan_key` is the durable diff key (the library-relative path, F2): the
 /// diff matches disk-vs-DB on it. `uuid` is the book's durable identity
 /// (carried for the Removed/Backfill buckets, which act by uuid).
-/// `has_file` is false for a **fileless ghost** — a book whose file was
+/// `has_file` is false for a **fileless book** — a book whose file was
 /// removed but whose row (and soft-ref user data) is retained; the diff
-/// routes a ghost whose file reappears back through Changed to re-attach.
+/// routes a fileless book whose file reappears back through Changed to re-attach.
 ///
 /// `mtime_epoch` / `size_bytes` come from the matching `book_files` row;
 /// `(0, 0)` with `has_file = true` is the "never observed" Backfill
@@ -179,7 +179,7 @@ pub async fn list_indexed_rows_for_formats(
         .join(", ");
     // The format filter lives in the LEFT JOIN's ON clause (not WHERE) so a
     // book with no `book_files` of `formats` is still returned when it has
-    // **no files at all** — a fileless ghost the diff needs to see so a
+    // **no files at all** — a fileless book the diff needs to see so a
     // returning file re-attaches instead of inserting a duplicate. A book
     // that only has a *different* format's file is correctly excluded
     // (`has_file = 0` and it still has files), preserving the cross-format
@@ -284,7 +284,7 @@ pub async fn count_books_for_paths(
     let placeholders = std::iter::repeat_n("?", library_paths.len())
         .collect::<Vec<_>>()
         .join(", ");
-    // Match `fetch_list_rows`: fileless ghosts (F2) are excluded from the
+    // Match `fetch_list_rows`: fileless books (F2) are excluded from the
     // count so the truncation hint stays consistent with the listed rows.
     let sql = format!(
         r"

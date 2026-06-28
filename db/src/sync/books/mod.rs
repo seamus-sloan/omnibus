@@ -17,7 +17,9 @@ mod new;
 mod removed;
 mod shared;
 
-pub(super) use shared::{ghost_book_by_id, materialize_new_covers};
+pub(super) use shared::{
+    clear_missing_files_flag, mark_book_files_missing, materialize_new_covers,
+};
 
 use backfill::stamp_last_indexed;
 use changed::sync_changed;
@@ -61,9 +63,10 @@ pub struct SyncPlan {
 ///
 /// Inside a single transaction, in this order:
 /// 1. Upsert the `scan_roots` row.
-/// 2. Ghost Removed (F2): clear FTS + drop `book_files` and per-book
-///    link rows, but retain the `books` row so the uuid and soft-ref
-///    user data (overrides, progress, bookmarks) survive.
+/// 2. Mark Removed files missing (F2): drop each removed book's
+///    `book_files` row but retain the `books` row, its links, FTS, and
+///    soft-ref user data so the book stays in browse/search (the grid
+///    hides it via `EXISTS book_files`) and the uuid survives.
 /// 3. Update Changed in place (preserves `books.id`); wipe-and-rewrite
 ///    link rows + FTS row for each.
 /// 4. Insert New (autoincrement assigns a fresh id).
