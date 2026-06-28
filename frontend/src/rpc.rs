@@ -692,8 +692,12 @@ pub async fn rpc_create_highlight(input: CreateHighlight) -> Result<Highlight> {
         Err(db::highlights::HighlightError::BookNotFound) => {
             Err(ServerFnError::new("book not found").into())
         }
-        Err(db::highlights::HighlightError::NotFound) => {
-            Err(ServerFnError::new("highlight not found").into())
+        // NotFound on create means the just-inserted row couldn't be re-read —
+        // a server invariant break, not a missing client resource. Log it and
+        // surface a generic internal error rather than a misleading 404.
+        Err(e @ db::highlights::HighlightError::NotFound) => {
+            tracing::error!(error = %e, "rpc_create_highlight: inserted row could not be re-read");
+            Err(ServerFnError::new("internal server error").into())
         }
         Err(db::highlights::HighlightError::Sqlx(e)) => Err(rpc_db_error("highlights/create", e)),
     }
