@@ -1,11 +1,53 @@
 # F10 — `metadata_overrides` reconcile / GC for orphans
 
-Status: Proposed — deferred from db.md F10, awaiting decision.
+Status: Decided (2026-06-28) — **Option C (soft-detach)** with both GC arms
+(auto post-reindex + explicit library removal), a 30-day retention before
+hard-purge, and the admin "unlinked" surface deferred to F3.2. Supersedes the
+doc's original Option B recommendation: F2 (durable stored `uuid` +
+relative-path `scan_key`) has since landed, removing the mass-orphan footgun
+that made B's caution necessary. The chosen answers are recorded in
+[Decision (resolved)](#decision-resolved); the Options and original
+Recommendation below are retained as the considered alternatives.
 
-This doc frames a data-model decision the operator must make before any
-schema or code is written. It is decision-support, not an implementation
-plan: nothing here should be applied until the choice in
-[Decision required](#decision-required) is made.
+---
+
+## Decision (resolved)
+
+Both decisions from [Decision required](#decision-required) are settled:
+
+- **D1 — Disposition: soft-detach (Option C).** Orphaned override rows are
+  marked with a new nullable `detached_at` column, not deleted. They are
+  filtered out of the browse/discovery read path immediately, re-link (clear
+  `detached_at`) when the book resolves again on a later reindex, and are
+  hard-purged only after a long retention. This is the F3.2-aligned shape, so
+  the same mechanism serves `user_ratings` / `user_journal_entries` later.
+- **D2 — When GC runs + grace: both arms, 30-day retention.** Reconcile runs
+  **both** post-every-reindex (best-effort, logged) **and** on explicit library
+  removal. Both arms soft-detach — the explicit-removal arm does *not*
+  hard-delete, keeping one uniform path. Detach is immediate on detection; the
+  row is retained for **30 days**, then a long-retention sweep hard-purges it.
+  On the reindex path a detached row re-links (clears `detached_at`) if its
+  book resolves again; rows detached via explicit removal can't re-link (re-add
+  mints fresh uuids — see the caveat below) and just age out.
+- **Visibility: admin "unlinked edits" UI deferred to F3.2.** The detach + GC
+  data layer and an `info`-level pruned-count log ship now; the admin surface
+  lands with F3.2's "unlinked annotations" view so both present as one
+  consistent surface. Recorded in
+  [`docs/roadmap/3-2-ratings-journaling.md`](../roadmap/3-2-ratings-journaling.md).
+
+**Why Option C over the doc's original Option B recommendation: F2 has
+landed.** A library-root repoint now preserves every `books.uuid` (the reindex
+diff matches on the relative-path `scan_key` —
+`db/src/sync/books/changed.rs`), so an orphan genuinely means "the file is
+permanently gone." The mass-orphan hazard that made B's hard-delete dangerous
+is gone, so the deciding factors became F3.2 alignment and no-data-loss on a
+wrong detach, both of which favour C. The per-reindex arm — the part B gated
+behind F2 — is therefore safe to enable now.
+
+**Accepted caveat.** Soft-detach gives no re-link recovery on the
+explicit-removal path specifically: re-adding a removed library mints fresh
+uuids, so those rows sit as "unlinked" until the 30-day sweep. This was an
+accepted trade for a single uniform code path.
 
 ---
 
@@ -39,12 +81,16 @@ Two consequences:
    (`db/src/browse.rs:52,150,175`, `db/src/discovery/authors.rs:67`). The
    join itself is PK-indexed, but orphan rows inflate the table the
    planner scans on the override-extracted-subjects path.
-2. **Path-based `stable_uuid` makes the leak permanent and total.** Today
-   an orphan re-attaches for free when the same file is re-indexed (same
-   uuid). But `stable_uuid` is derived from `library_path + filename`
-   (db.md "Path-based stable_uuid breaks durability", finding F2), so a
-   library-root change re-keys *every* uuid at once — every override row
-   orphans permanently with no possibility of re-link.
+2. **(Historical — resolved by F2.)** This finding was originally compounded
+   by the path-based `stable_uuid` (`library_path + filename`): a library-root
+   change re-keyed *every* uuid at once, orphaning every override row
+   permanently with no possibility of re-link. **F2 has since landed** —
+   `books.uuid` is now a durable stored value and the reindex diff matches on
+   the relative-path `scan_key` (`db/src/sync/books/changed.rs`), so a repoint
+   preserves every uuid and no longer mass-orphans anything. The remaining leak
+   is the narrow, legitimate one: an individual file (or an explicitly-removed
+   library) that is *actually* gone. That is exactly the safe condition the
+   per-reindex GC needs — which is why the decision enables it.
 
 Already handled (do not re-solve): orphan override **cover files**
 (`override-<uuid>.<ext>`) are already swept. `delete_cover_files_for`
@@ -231,6 +277,13 @@ overrides as "unlinked."
 
 ## Recommendation
 
+> **Superseded by the [Decision (resolved)](#decision-resolved): the operator
+> chose Option C, not B.** This section is the doc's *original* analysis,
+> retained for context. It recommended B because F2 had not yet landed; once
+> F2 shipped (durable uuid + `scan_key`), the mass-orphan risk that justified
+> B's caution disappeared and C's F3.2 alignment won. Read it as "why B *was*
+> the conservative call," not as current guidance.
+
 **Adopt Option B (hard-delete reconcile + grace window) now**, structured
 so Option C is a clean follow-on rather than a rewrite.
 
@@ -274,10 +327,15 @@ that is the only condition under which C beats B today.
 
 ## Migration plan
 
-> **SKETCH — not to be applied.** Numbers/DDL shown for the chosen option
-> only. Option B (recommended) needs **no migration at all**.
+> **SKETCH — not to be applied.** The chosen option is **C (soft-detach)**, so
+> the single `ALTER TABLE … ADD COLUMN detached_at` migration (under
+> [Option C](#option-c--soft-detach-detached_at-f32-aligned) below) **does**
+> apply, alongside the read-path `detached_at IS NULL` filter and the
+> UPDATE-then-retention-DELETE reconcile state machine. The "no migration"
+> sketch immediately below is Option B's, retained as the considered
+> alternative.
 
-**Option B (recommended): no migration.** All work is in Rust:
+**Option B (the considered alternative): no migration.** All work is in Rust:
 
 1. `db/src/metadata_overrides/upsert.rs`
    - `pub(crate) async fn delete_overrides_for_uuids(tx, uuids: &[String]) -> Result<(), sqlx::Error>`
@@ -414,12 +472,12 @@ This finding sits in the F1↔F2↔F10 user-data-durability chain and the scout
 flags it co-dependent with F2, F3, F6, F8, F11, F12, F13, F16, F17, F18.
 The load-bearing edges:
 
-- **F2 (path-based `stable_uuid`) must land first** if the per-reindex GC
-  is enabled. While the uuid moves on every path change, a per-reindex GC
-  is a mass-deletion hazard. With F2 fixed (`dc:identifier`/content-hash
-  anchored uuid), an orphan genuinely means "the file is gone," and GC is
-  safe. **If F2 has not landed, ship Option A / B's explicit-removal arm
-  only and leave the per-reindex hook disabled.**
+- **F2 has landed → the per-reindex GC arm is enabled.** F2 shipped as a
+  durable stored `books.uuid` plus a relative-path `scan_key` diff (not the
+  earlier `dc:identifier`/content-hash proposal, which was dropped). A
+  library-root repoint now preserves every uuid, so an orphan genuinely means
+  "the file is gone" and the per-reindex GC is safe to run — which is why the
+  decision enables it rather than gating it off behind explicit removal.
 - **F1 (migrate the five user-data tables to `book_uuid` soft-refs)** is
   the sibling problem: those tables have the *opposite* bug today
   (cascade-delete on reindex). F10's reconcile is the GC half of the
@@ -438,22 +496,24 @@ operator removed a root, where mass-orphaning is intended.
 
 ## Open questions
 
-1. **Grace-window semantics.** `updated_at` is *last user edit* time, not
-   *detach* time. A row last edited a year ago whose book vanished
-   yesterday is immediately past any reasonable grace — so the grace window
-   protects *recently-edited* orphans, not *recently-detached* ones, which
-   is subtly wrong. Is that acceptable for B, or does even B want a cheap
-   `detached_at`-style marker to measure grace from detach? (Leaning:
-   acceptable for B, because a recently-detached-but-long-untouched override
-   is exactly the low-value case; revisit if it bites.)
-2. **Grace length.** 7 days proposed for the per-reindex path. Long enough
-   to span a library swap an admin would notice, short enough to bound dead
-   rows. Operator's call.
-3. **Should the explicit-removal arm get a grace at all?** Recommendation
-   says no — removing a root is unambiguous intent. Confirm.
-4. **F3.2 retention under C.** If C ships, how long are detached rows kept
-   before the long-retention sweep hard-deletes them (90 days?), and is
-   that per-table configurable?
-5. **Observability.** Is the `info`-level GC count log sufficient, or does
-   this warrant a metric / an admin-visible "N orphaned overrides pruned"
-   surface (ties to the F3.2 "unlinked annotations" UI)?
+All five are now resolved by the [Decision (resolved)](#decision-resolved);
+kept here with their resolutions for the record.
+
+1. **Grace-window semantics — RESOLVED.** Option C adds a real `detached_at`
+   column, so grace is measured from *detach* time, not the imperfect
+   `updated_at` last-edit proxy. The original concern (grace protecting
+   recently-*edited* rather than recently-*detached* rows) no longer applies.
+2. **Grace / retention length — RESOLVED: 30 days.** Detached rows are kept
+   and re-linkable for 30 days before the long-retention sweep hard-purges
+   them. (The earlier "7 days" proposal was for B's hard-delete grace; under
+   soft-detach the equivalent knob is the retention-before-purge, set to 30.)
+3. **Should the explicit-removal arm get a grace? — RESOLVED.** It soft-detaches
+   like the scan path (no immediate hard-delete) and shares the same 30-day
+   retention, for one uniform code path. Accepted caveat: those rows can't
+   re-link on re-add (fresh uuids), so they sit "unlinked" until the sweep.
+4. **F3.2 retention under C — RESOLVED for `metadata_overrides`: 30 days.**
+   Per-table configurability and the user-data tables' own retention are F3.2's
+   to set when it adopts this mechanism; F10 fixes only the override table.
+5. **Observability — RESOLVED.** `info`-level pruned-count log ships now; the
+   admin-visible "N orphaned overrides pruned" / "unlinked" surface is deferred
+   to F3.2 so it lands as one consistent view with "unlinked annotations".
