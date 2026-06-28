@@ -1,7 +1,7 @@
-//! Tests for the F10 missing-files GC: the `gc_books_missing_files` purge
-//! predicate (retention window, user-data / attachment / override guards), the
-//! boot backfill, and the sync-wired lifecycle (a removed file flags the row,
-//! a returning file clears it, identity + overrides survive a repoint).
+//! Tests for the missing-files GC: the `gc_books_missing_files` purge predicate
+//! (retention window, user-data / attachment / override guards), the boot
+//! backfill, and the sync-wired lifecycle (a removed file flags the row, a
+//! returning file clears it, identity + overrides survive a repoint).
 
 use super::*;
 
@@ -523,4 +523,33 @@ async fn identical_relative_path_in_repointed_directory_keeps_one_book_and_prese
         .await
         .unwrap()
         .is_some());
+}
+
+#[tokio::test]
+async fn backfill_skips_intentionally_fileless_override_rows() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'Lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // An intentionally-fileless (wishlist) row must stay un-flagged so reads
+    // keep showing it.
+    sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title, is_missing_files_override)
+         VALUES ('wish', 1, '', 'W', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    backfill_missing_files_flags(&pool).await.unwrap();
+
+    let (flag, since): (i64, Option<i64>) = sqlx::query_as(
+        "SELECT is_missing_files, missing_files_since FROM books WHERE uuid = 'wish'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(flag, 0, "wishlist row is never flagged missing");
+    assert!(since.is_none());
 }

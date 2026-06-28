@@ -1,11 +1,8 @@
-//! Missing-files GC (F10): purge `books` rows whose files have been gone past
-//! a retention window, when they carry no user data. Post-F2 a removed file
-//! leaves its `books` row in place (retained fileless so a returning file
-//! re-links by `scan_key`), so without a GC these rows accumulate forever. The
-//! reindex path calls [`gc_books_missing_files`] best-effort; `init_db` calls
-//! [`backfill_missing_files_flags`] once at boot. The flags themselves are
-//! maintained in `sync` (`mark_book_files_missing` sets them; the file-write
-//! chokepoints clear them).
+//! Garbage-collects `books` rows whose files have disappeared. A removed file
+//! leaves its row in place (fileless, so a returning file re-links by its
+//! relative path); without a GC those rows accumulate. [`gc_books_missing_files`]
+//! (run by the indexer after each reindex) purges long-missing, user-data-free
+//! rows; [`backfill_missing_files_flags`] stamps pre-existing fileless rows at boot.
 
 use sqlx::SqlitePool;
 
@@ -115,6 +112,7 @@ pub async fn backfill_missing_files_flags(pool: &SqlitePool) -> Result<(), Missi
         "UPDATE books
             SET is_missing_files = 1, missing_files_since = unixepoch()
           WHERE is_missing_files = 0
+            AND is_missing_files_override = 0
             AND NOT EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = books.id)",
     )
     .execute(pool)

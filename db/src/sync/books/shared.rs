@@ -202,13 +202,15 @@ pub(in crate::sync) async fn mark_book_files_missing(
         .bind(book_id)
         .execute(&mut **tx)
         .await?;
-    // Flag the now-fileless row + start its retention clock (F10). The
+    // Flag the now-fileless row + start its retention clock. The
     // `is_missing_files = 0` guard preserves the original `missing_files_since`
-    // if this somehow re-runs on an already-missing row.
+    // if this somehow re-runs; the `is_missing_files_override = 0` guard leaves
+    // intentionally-fileless rows (wishlist) un-flagged so reads keep showing
+    // them.
     sqlx::query(
         "UPDATE books
             SET is_missing_files = 1, missing_files_since = unixepoch()
-          WHERE id = ? AND is_missing_files = 0",
+          WHERE id = ? AND is_missing_files = 0 AND is_missing_files_override = 0",
     )
     .bind(book_id)
     .execute(&mut **tx)
