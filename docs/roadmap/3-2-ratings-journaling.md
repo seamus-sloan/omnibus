@@ -41,20 +41,22 @@ CREATE TABLE user_ratings (
 );
 ```
 
-When a book is pruned, its rating row becomes *detached* (orphaned) rather than deleted. When the same book reappears under a new path, re-linking is automatic because the UUID matches.
+When a book is pruned, its rating row becomes *detached* (orphaned) rather than deleted. A library-root *repoint* detaches nothing — F2 preserves `books.uuid` (see below) — so detach only happens when a file is genuinely removed; if that file later returns at the same relative path, re-linking is automatic because the uuid is preserved.
 
-**UUID stability requires a content-based anchor.** The current `stable_uuid(library_path, filename)` scheme breaks this: changing the library root produces a new UUID for every book. Before this feature ships, `stable_uuid` must be replaced with:
+**UUID stability has landed (F2).** This durability depends on a stable `books.uuid`. F2 has since shipped: `books.uuid` is a durable stored value (minted once, never recomputed) and the reindex diff matches disk-vs-DB on a relative-path `scan_key`, so changing the library root preserves every uuid. (This superseded an earlier proposal to anchor the uuid on EPUB `dc:identifier` / content-hash, which was dropped — see [F2](../design/db-review-f2-stable-uuid-identity.md).)
 
-1. **Primary:** EPUB `dc:identifier` from the OPF (already parsed during indexing). This is spec-required, survives path changes, library reorganizations from [F0.6](0-6-library-filesystem.md), and metadata edits (which never touch the file).
-2. **Fallback:** SHA-256 of the file's byte contents, when `dc:identifier` is absent, empty, or a random per-export UUID (many EPUB editors generate a fresh one each export — detect by checking for the `urn:uuid:` prefix without a stable publisher or ISBN pattern).
+A reconciliation step on re-index can still attempt to re-link detached user data by `(author, title)` similarity when no uuid matches — the case where a library was *removed* and re-added, minting fresh uuids — surfaced as "unlinked annotations" in the UI rather than silently lost.
 
-A reconciliation step on re-index can attempt to re-link detached user data by `(author, title)` similarity when a UUID still doesn't match — surfaced as "unlinked annotations" in the UI rather than silently lost.
+**Reconcile/GC shape inherited from F10.** The orphan reconcile + GC mechanism is built first for `metadata_overrides` under [F10](../design/db-review-f10-override-gc.md), and the user-data tables here reuse it. Two constraints carry over:
+
+1. **User data must soft-detach, never hard-delete.** F10's orphan reconcile/GC soft-detaches in *both* arms (post-reindex *and* explicit library removal) — only a *user-driven* override deletion hard-deletes. An override is regenerable (it can be re-entered) so its eventual purge is tolerable; a journal entry is **not** regenerable, so `user_ratings` / `user_journal_entries` must use the soft-detach disposition (a `detached_at` marker, read-path filtered, retained for a grace window, hard-purged only after a long retention) and never be the target of a hard-delete GC.
+2. **The admin "unlinked edits/annotations" UI lands here.** F10 builds the detach + GC data layer now but defers the admin surface to this feature, so `metadata_overrides` and user-data orphans are presented through one consistent "unlinked" view when F3.2 ships.
 
 ## Dependencies
 
 - [F0.1 Schema refactor](0-1-schema-refactor.md).
 - [F0.3 Auth](0-3-auth.md).
-- UUID identity fix (replace `stable_uuid(library_path, filename)` with `dc:identifier`-anchored scheme) — **must land before this feature ships**.
+- UUID identity (F2: durable stored `books.uuid` + relative-path `scan_key`) — **landed**; this feature depends on it.
 
 ---
 
