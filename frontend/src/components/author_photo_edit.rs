@@ -110,7 +110,6 @@ fn AuthorPhotoEditModal(
 
                 div { class: "author-photo-modal__head",
                     h2 { class: "author-photo-modal__title", "Edit photo" }
-                    p { class: "subtitle author-photo-modal__sub", "{author_name}" }
                 }
 
                 // Option 1: paste image URL.
