@@ -95,6 +95,21 @@ jobs:
       - name: Clippy shared
         run: nix develop --command cargo clippy -p omnibus-shared --all-targets -- -D warnings
 
+      # `omnibus-mobile` is excluded from `default-members` in the workspace
+      # `Cargo.toml` (its `mobile` feature on `omnibus-frontend` is mutually
+      # exclusive with `web`), so the bare clippy steps above skip it. Target
+      # it explicitly with `-p` so lint regressions in the mobile shell are
+      # gated on every PR. Host target only — the iOS/Android cross toolchains
+      # are not on the ubuntu-latest runner.
+      #
+      # Runs in the `.#mobile` shell (not the default one): the `mobile`
+      # feature compiles the wry/GTK desktop backend for the Linux host, which
+      # needs the GTK 3 + WebKitGTK system libs that only the mobile shell
+      # provides (see flake.nix `mobileExtras`). The default shell lacks them
+      # and `glib-sys` fails at `pkg-config`.
+      - name: cargo clippy (mobile)
+        run: nix develop .#mobile --command cargo clippy -p omnibus-mobile --all-targets -- -D warnings
+
       - name: cargo test (server)
         run: nix develop --command cargo test -p omnibus
 

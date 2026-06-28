@@ -154,8 +154,21 @@
 
         # Mobile extras: JDK for the Android NDK toolchain. Mobile rust
         # targets are bundled into rustMobile (used in place of rustCore).
+        #
+        # On Linux the `dioxus` `mobile` feature compiles the wry/tao desktop
+        # webview backend for the host target, which links GTK 3 + WebKitGTK
+        # via `glib-sys`/`webkit2gtk-sys`. Those system libs aren't needed on
+        # macOS (Dioxus uses the native WKWebView there), so guard them behind
+        # `isLinux` — this is what lets CI's `cargo clippy -p omnibus-mobile`
+        # build the host target on ubuntu-latest. `gtk3` propagates
+        # glib/cairo/pango/gdk-pixbuf/atk into PKG_CONFIG_PATH transitively.
         mobileExtras = [
           pkgs.jdk21
+        ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+          pkgs.glib
+          pkgs.gtk3
+          pkgs.webkitgtk_4_1
+          pkgs.libsoup_3
         ];
 
         # CI / occasional-local audit tooling. Not needed for daily work.
