@@ -1802,11 +1802,6 @@ a.idx-letter-on:focus-visible {
   line-height: 1.1;
   margin: 0;
 }
-.author-photo-modal__sub {
-  margin: 0;
-  font-size: 16px;
-  color: var(--ink-1);
-}
 .author-photo-modal__section {
   display: flex;
   flex-direction: column;
