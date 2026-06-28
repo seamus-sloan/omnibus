@@ -348,11 +348,11 @@ body.atrium,
   font-size: 28px; font-weight: 500; color: var(--ink-0); margin: 0;
 }
 .search-page-query { font-style: italic; color: var(--ink-1); }
-.search-group-head { margin: 24px 0 8px; }
-.search-results { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.search-group-head { margin: 28px 0 12px; }
+.search-results { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
 .search-result-row {
-  display: flex; flex-direction: column; gap: 2px;
-  padding: 10px 14px; border-radius: 10px;
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 14px 18px; border-radius: 10px;
   background: var(--bg-1); border: 1px solid var(--line-2);
   color: var(--ink-0); text-decoration: none;
   transition: border-color .15s, background .15s;
@@ -1802,11 +1802,6 @@ a.idx-letter-on:focus-visible {
   line-height: 1.1;
   margin: 0;
 }
-.author-photo-modal__sub {
-  margin: 0;
-  font-size: 13px;
-  color: var(--ink-2);
-}
 .author-photo-modal__section {
   display: flex;
   flex-direction: column;
@@ -2665,28 +2660,47 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .value-line { font-size: 1.25rem; margin-bottom: 1rem; }
 
 /* ── Auth pages (F1.6 primitives) ──────────────────────────────────── */
-.auth-footer { font-size: 0.85rem; color: #94a3b8; margin-top: 1rem; text-align: center; }
-.auth-footer a { color: #22d3ee; }
+/* Scoped under `.atrium` so the top margin outranks the `.atrium p { margin: 0 }`
+   reset (0,1,1) — a bare `.auth-footer` (0,1,0) loses to it and the spacing
+   above the "No account? / Already have an account?" line collapses to 0. */
+.atrium .auth-footer { font-size: 0.85rem; color: var(--ink-2); margin-top: 2.4rem; text-align: center; }
+.auth-footer a { color: var(--ink-0); border-bottom: 1px solid var(--line); }
+.auth-footer a:hover { border-bottom-color: var(--ink-2); }
 
-:root {
-  --auth-ink-0: #f8fafc;
-  --auth-ink-1: #cbd5e1;
-  --auth-ink-2: #94a3b8;
-  --auth-ink-3: #64748b;
-  --auth-bg-0: rgba(15, 23, 42, 0.92);
-  --auth-bg-1: rgba(15, 23, 42, 0.65);
-  --auth-bg-2: rgba(30, 41, 59, 0.5);
-  --auth-line: rgba(100, 116, 139, 0.25);
-  --auth-line-2: rgba(100, 116, 139, 0.45);
+/* The auth pages predate the shared theme tokens and once carried their own
+   dark-only palette, which left the login/register screens unreadable under
+   the light/sepia themes (grey inputs on a cream panel, washed-out helper
+   text). Alias every `--auth-*` token onto the active theme token so the auth
+   shell adapts with the rest of the app — matches the imported design, which
+   styles these screens straight off the theme tokens.
+
+   Declared on `.atrium` (not `:root`): the theme overrides live on the
+   `.atrium[data-theme=…]` element, so a `var(--bg-1)` reference only resolves
+   to the active theme when the alias is computed there. At `:root` it would
+   freeze to the dark defaults and the page would ignore light/sepia. */
+.atrium {
+  --auth-ink-0: var(--ink-0);
+  --auth-ink-1: var(--ink-1);
+  --auth-ink-2: var(--ink-2);
+  --auth-ink-3: var(--ink-3);
+  --auth-bg-0: var(--bg-0);
+  --auth-bg-1: var(--bg-1);
+  --auth-bg-2: var(--bg-2);
+  --auth-line: var(--line);
+  --auth-line-2: var(--line-2);
+  /* Accent stays a fixed cyan rather than `--accent`: the light theme leaves
+     `--accent` at the dark default (a pale orange) that fails contrast as link
+     text. Cyan reads on the dark, cream, and parchment grounds alike — the
+     same reason breadcrumb links keep it. */
   --auth-accent: #22d3ee;
   --auth-accent-ink: #03131c;
-  --auth-ok: #34d399;
-  --auth-warn: #fbbf24;
-  --auth-bad: #f87171;
-  --auth-info: #60a5fa;
-  --auth-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --auth-serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
-  --auth-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --auth-ok: var(--ok);
+  --auth-warn: var(--warn);
+  --auth-bad: var(--bad);
+  --auth-info: var(--accent);
+  --auth-sans: var(--sans);
+  --auth-serif: var(--serif);
+  --auth-mono: var(--mono);
 }
 
 .auth-shell-grid {
@@ -3100,16 +3114,16 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .settings-field label, .settings-label {
   font-size: 0.875rem;
   font-weight: 500;
-  color: #cbd5e1;
+  color: var(--ink-2);
 }
 .settings-field input[type="text"],
 .settings-field input[type="password"],
 .settings-field input[type="email"],
 .settings-input {
-  background: rgba(30, 41, 59, 0.8);
-  border: 1px solid rgba(100, 116, 139, 0.4);
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
   border-radius: 8px;
-  color: #e5e7eb;
+  color: var(--ink-0);
   font-size: 0.95rem;
   padding: 0.55rem 0.75rem;
   width: 100%;
@@ -3119,7 +3133,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .settings-field input[type="email"]:focus,
 .settings-input:focus {
   outline: none;
-  border-color: #3b82f6;
+  border-color: var(--accent);
 }
 
 .settings-status { font-size: 0.875rem; margin-top: 0.5rem; min-height: 1.2em; }
@@ -3621,10 +3635,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .book-detail-meta { display: flex; flex-direction: column; gap: .5rem; min-width: 0; }
 .breadcrumb {
   display: flex; gap: .5rem; align-items: center;
-  font-size: .85rem; color: rgba(255,255,255,.5); margin-bottom: .5rem;
+  font-size: .85rem; color: var(--ink-2); margin-bottom: .5rem;
 }
 .breadcrumb a { color: #22d3ee; text-decoration: none; }
 .breadcrumb a:hover { text-decoration: underline; }
+.breadcrumb-sep { color: var(--ink-3); }
 .book-detail-description { line-height: 1.6; color: rgba(255,255,255,.8); margin: .5rem 0 1rem; }
 .book-detail-description > :first-child { margin-top: 0; }
 .book-detail-description > :last-child { margin-bottom: 0; }
