@@ -299,18 +299,21 @@ test("opens sleep panel and shows preset duration rail", async ({
   await page.getByRole("button", { name: /^sleep/i }).click();
 
   // Panel container is in the DOM.
-  await expect(page.getByTestId("sleep-panel")).toBeVisible();
+  const panel = page.getByTestId("sleep-panel");
+  await expect(panel).toBeVisible();
 
-  // Preset rail: Off through 4 hours.
-  await expect(page.getByRole("button", { name: "Off" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "15 min" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "30 min" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "45 min" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "1 hour" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "2 hours" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "3 hours" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "4 hours" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "End of chapter" })).toBeVisible();
+  // Preset rail: Off through 4 hours. Scope to the panel — the toolbar Sleep
+  // button reads "Sleep · off" when no timer is armed, which would otherwise
+  // also match a bare { name: "Off" } and trip Playwright's strict mode.
+  await expect(panel.getByRole("button", { name: "Off" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "15 min" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "30 min" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "45 min" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "1 hour" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "2 hours" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "3 hours" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "4 hours" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "End of chapter" })).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
@@ -321,7 +324,11 @@ test("opens bookmarks drawer and shows empty state", async ({
   page,
   request,
 }) => {
-  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  // Use the multipart generated MP3 — it reaches direct-play mode reliably in
+  // headless (unlike the large public-domain M4B), and no other spec creates
+  // bookmarks against it, so the empty state holds on the shared dev DB. (The
+  // create flow below bookmarks MP3_BOOK, so reusing that here would be flaky.)
+  const uuid = await fetchBookUuidByTitle(request, MULTIPART_MP3_BOOK.title);
   await gotoReady(page, `/listen/${uuid}`);
   await waitForPlayerReady(page);
 
@@ -336,6 +343,63 @@ test("opens bookmarks drawer and shows empty state", async ({
   await expect(
     page.getByText("Tap the Bookmark button while listening to save"),
   ).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// 9b. Bookmark create → toast → row (PR4)
+// ---------------------------------------------------------------------------
+
+test("saves a bookmark from the drawer and shows a confirmation toast", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  // Open the drawer, then add a bookmark at the current position. The create
+  // RPC must fire with the book uuid before the row + toast appear.
+  await page.getByRole("button", { name: "Bookmark" }).click();
+  await expect(page.getByTestId("bookmarks-drawer")).toBeVisible();
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: /\/api\/rpc\/bookmarks\/create(?:\?|$)/,
+      expectedStatus: 200,
+    },
+    async () => page.getByTestId("bookmark-add").click(),
+  );
+
+  // The freshly-created bookmark row and the confirmation toast appear.
+  await expect(page.getByTestId("bookmark-row").first()).toBeVisible();
+  await expect(page.getByTestId("bookmark-toast")).toBeVisible();
+  await expect(page.getByText("Bookmark saved")).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// 8b. Sleep timer countdown (PR5)
+// ---------------------------------------------------------------------------
+
+test("arms a sleep preset and shows a live countdown", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  await page.getByRole("button", { name: /^sleep/i }).click();
+  await expect(page.getByTestId("sleep-panel")).toBeVisible();
+
+  // Selecting "15 min" arms the timer; the status shows a sub-15-minute
+  // countdown (it begins decrementing immediately).
+  await page.getByRole("button", { name: "15 min" }).click();
+  await expect(page.getByTestId("sleep-status")).toHaveText(/^1[45]:\d\d$/);
+
+  // The toolbar Sleep button reflects the live countdown.
+  await expect(page.getByRole("button", { name: /^Sleep · 1[45]:/ })).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
