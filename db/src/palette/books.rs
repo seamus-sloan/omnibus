@@ -14,20 +14,33 @@ use super::PaletteError;
 
 /// Run the FTS5 books arm of the palette for `trimmed` (already-trimmed,
 /// length-capped query) scoped to `library_path`, capped to `limit`.
-/// Returns an empty vec when `build_fts_match` can't produce a MATCH
+///
+/// Returns the (capped) display hits alongside the *true* FTS5 match count
+/// (before the cap), computed in a single pass: the `bm25` MATCH scan runs
+/// once inside a `MATERIALIZED` CTE and the total is a scalar `COUNT(*)` over
+/// it — so the results header can show "N books" even when only `limit` ship.
+/// Returns `(vec![], 0)` when `build_fts_match` can't produce a MATCH
 /// expression for the input.
 pub async fn search_books(
     pool: &SqlitePool,
     library_path: &str,
     trimmed: &str,
     limit: i32,
-) -> Result<Vec<PaletteBookHit>, PaletteError> {
+) -> Result<(Vec<PaletteBookHit>, i64), PaletteError> {
     let Some(match_expr) = build_fts_match(trimmed) else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     };
 
     let rows = sqlx::query(
         r"
+        WITH matches AS MATERIALIZED (
+            SELECT books_fts.rowid AS bid,
+                   bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0) AS rank
+            FROM books_fts
+            JOIN books b ON b.id = books_fts.rowid
+            JOIN scan_roots l ON l.id = b.library_id
+            WHERE books_fts MATCH ?1 AND l.path = ?2
+        )
         SELECT b.id, b.uuid, b.title, b.has_cover, b.accent_color,
                SUBSTR(b.pubdate, 1, 4) AS year,
 
@@ -40,13 +53,13 @@ pub async fn search_books(
                (SELECT json_group_array(format)
                   FROM (SELECT format FROM book_files
                          WHERE book_id = b.id
-                         ORDER BY format))                  AS formats_json
+                         ORDER BY format))                  AS formats_json,
 
-        FROM books_fts
-        JOIN books b ON b.id = books_fts.rowid
-        JOIN scan_roots l ON l.id = b.library_id
-        WHERE books_fts MATCH ?1 AND l.path = ?2
-        ORDER BY bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0), b.sort, b.id
+               (SELECT COUNT(*) FROM matches)               AS total_count
+
+        FROM matches m
+        JOIN books b ON b.id = m.bid
+        ORDER BY m.rank, b.sort, b.id
         LIMIT ?3
         ",
     )
@@ -55,6 +68,10 @@ pub async fn search_books(
     .bind(limit)
     .fetch_all(pool)
     .await?;
+
+    // `total_count` is the scalar COUNT over the materialized matches, so it's
+    // identical on every row; read it off the first. No rows ⇒ zero matches.
+    let total: i64 = rows.first().map(|r| r.get("total_count")).unwrap_or(0);
 
     let mut uuids: Vec<String> = Vec::with_capacity(rows.len());
     let mut hits: Vec<PaletteBookHit> = Vec::with_capacity(rows.len());
@@ -98,5 +115,5 @@ pub async fn search_books(
         }
     }
 
-    Ok(hits)
+    Ok((hits, total))
 }

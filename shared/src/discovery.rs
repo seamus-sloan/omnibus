@@ -172,12 +172,24 @@ pub struct PaletteResults {
     pub series: Vec<PaletteSeriesHit>,
     pub tags: Vec<PaletteTagHit>,
     pub duration_ms: u64,
+    /// True match counts per category, before the 5-hit display cap.
+    // `#[serde(default)]` keeps older/partial payloads (and the command
+    // palette, which ignores these) deserializing.
+    #[serde(default)]
+    pub book_total: u32,
+    #[serde(default)]
+    pub author_total: u32,
+    #[serde(default)]
+    pub series_total: u32,
+    #[serde(default)]
+    pub tag_total: u32,
 }
 
 impl PaletteResults {
-    /// Total number of hits across every result category.
+    /// Total number of matches across every result category, using the true
+    /// per-category totals (not the capped `Vec` lengths).
     pub fn total_count(&self) -> usize {
-        self.books.len() + self.authors.len() + self.series.len() + self.tags.len()
+        (self.book_total + self.author_total + self.series_total + self.tag_total) as usize
     }
 }
 
@@ -207,6 +219,11 @@ pub struct PaletteAuthorHit {
     pub name: String,
     /// Number of books by this author in the active library.
     pub book_count: u32,
+    /// Title of this author's first book in the library (by sort order),
+    /// used for the "incl. <title>" line on the results page. `None` when
+    /// the author has no resolvable book title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_book_title: Option<String>,
 }
 
 /// Series hit for the search palette.
@@ -217,6 +234,11 @@ pub struct PaletteSeriesHit {
     pub book_count: u32,
     /// Primary author of the first book in the series, if any.
     pub author_display: Option<String>,
+    /// Title of the first book in the series (by sort order), used for the
+    /// "incl. <title>" line on the results page. `None` when the series has
+    /// no resolvable book title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_book_title: Option<String>,
 }
 
 /// Tag hit for the search palette.

@@ -85,3 +85,29 @@ pub async fn search_tags(
         })
         .collect())
 }
+
+/// Count visible tags matching `like_pattern` in `library_path` — the
+/// uncapped total behind the palette's 5-hit tag cap. Visibility mirrors
+/// [`search_tags`]: at least one canonical link in this library.
+pub async fn count_tags(
+    pool: &SqlitePool,
+    library_path: &str,
+    like_pattern: &str,
+) -> Result<i64, PaletteError> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        r"
+        SELECT COUNT(*) FROM tags t
+        WHERE t.name LIKE ?2 ESCAPE '\'
+          AND EXISTS (
+            SELECT 1 FROM books_tags_link btl
+              JOIN books b ON b.id = btl.book
+              JOIN scan_roots l ON l.id = b.library_id
+             WHERE btl.tag = t.id AND l.path = ?1
+          )
+        ",
+    )
+    .bind(library_path)
+    .bind(like_pattern)
+    .fetch_one(pool)
+    .await?)
+}
