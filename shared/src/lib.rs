@@ -10,6 +10,7 @@
 
 pub mod audiobook;
 pub mod auth;
+pub mod bookmark;
 pub mod discovery;
 pub mod ebook;
 pub mod highlight;
@@ -25,6 +26,7 @@ pub const AUTHOR_PHOTO_URL_MAX_LEN: usize = 2048;
 
 pub use audiobook::*;
 pub use auth::*;
+pub use bookmark::*;
 pub use discovery::*;
 pub use ebook::*;
 pub use highlight::*;
