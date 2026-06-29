@@ -11,7 +11,7 @@ use crate::test_support::{indexed, CoversTempDir};
 use omnibus_shared::{Contributor, MetadataOverrides};
 use sqlx::{Row, SqlitePool};
 
-// ── search_palette ──────────────────────────────────────────────
+// ── search_palette ───────────────────────────────────────────────
 #[tokio::test]
 async fn palette_books_match_title() {
     let _covers = CoversTempDir::new("palette_books");
@@ -1067,5 +1067,9 @@ async fn palette_totals_report_uncapped_counts() {
     assert_eq!(results.authors.len(), 1);
     assert_eq!(results.tag_total, 1, "one matching tag");
     assert_eq!(results.series_total, 0, "no series seeded");
-    assert_eq!(results.total_count(), 7 + 1 + 1, "books + authors + tags (no series)");
+    assert_eq!(
+        results.total_count(),
+        7 + 1 + 1,
+        "books + authors + tags (no series)"
+    );
 }
