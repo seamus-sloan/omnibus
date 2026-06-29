@@ -167,6 +167,7 @@
       if (opts.lineHeight) setLineHeight(opts.lineHeight);
       if (opts.maxWidth) setMargins(opts.maxWidth);
       if (opts.justify !== undefined) setJustify(opts.justify);
+      if (opts.spread) rendition.spread(opts.spread);
     } catch (e) {
       emitStatus("error");
       return;
@@ -288,6 +289,17 @@
     rendition.themes.override("text-align", on ? "justify" : "start");
   }
 
+  // Single vs two-page spread. "none" forces one column; "auto" lets epub.js
+  // pair pages when the viewport is wide enough.
+  function setSpread(mode) {
+    if (!rendition) return;
+    try {
+      rendition.spread(mode);
+    } catch (e) {
+      /* older epub.js builds may not expose spread() */
+    }
+  }
+
   // Solid fills — transparency is applied once via the `fill-opacity`
   // attribute below. Baking alpha into the color too would multiply with
   // fill-opacity (0.3 x 0.3) and render the highlight nearly invisible.
@@ -394,6 +406,127 @@
     }
   }
 
+  // In-book search. Walks each spine section, loads it, runs epub.js's
+  // section.find(query), and hands a flat [{ cfi, excerpt, chapter }] array
+  // back via __omnibusOnSearchResults. Section loads are throttled by the
+  // promise chain so a large book doesn't open every section at once.
+  function search(query) {
+    if (typeof window.__omnibusOnSearchResults !== "function") return;
+    if (!book || !book.spine || !query || !query.trim()) {
+      window.__omnibusOnSearchResults(JSON.stringify([]));
+      return;
+    }
+    var q = query.trim();
+    var results = [];
+    var chain = Promise.resolve();
+    book.spine.each(function (section) {
+      chain = chain.then(function () {
+        if (results.length >= 80) return null;
+        return section
+          .load(book.load.bind(book))
+          .then(function () {
+            var found = section.find(q) || [];
+            var chap = findChapter(section.href);
+            for (var i = 0; i < found.length && results.length < 80; i++) {
+              results.push({
+                cfi: found[i].cfi,
+                excerpt: (found[i].excerpt || "").trim(),
+                chapter: chap ? chap.title : "",
+              });
+            }
+            section.unload();
+          })
+          .catch(function () {
+            /* skip unreadable section */
+          });
+      });
+    });
+    chain.then(function () {
+      window.__omnibusOnSearchResults(JSON.stringify(results));
+    });
+  }
+
+  // Render a quote card to a canvas and trigger a PNG download. Drawn directly
+  // (rather than rasterizing DOM) because the card is a fixed, bespoke layout —
+  // a solid background, an italic serif quote, and an attribution footer — so
+  // hand-drawing yields crisp output with no heavyweight DOM-capture dependency.
+  function exportQuoteCard(json) {
+    var o;
+    try {
+      o = JSON.parse(json);
+    } catch (e) {
+      return;
+    }
+    var ratios = { "1:1": [1080, 1080], "4:5": [1080, 1350], "9:16": [1080, 1920], "3:4": [1080, 1440] };
+    var dim = ratios[o.ratio] || ratios["1:1"];
+    var W = dim[0], H = dim[1];
+    var canvas = document.createElement("canvas");
+    canvas.width = W;
+    canvas.height = H;
+    var ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    var pad = Math.round(W * 0.1);
+    ctx.fillStyle = o.bg || "#1a1a1a";
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = o.ink || "#ffffff";
+    ctx.textBaseline = "top";
+
+    // Header kicker.
+    ctx.font = "600 " + Math.round(W * 0.018) + "px ui-monospace, monospace";
+    ctx.globalAlpha = 0.55;
+    ctx.fillText("OMNIBUS · QUOTE", pad, pad);
+    ctx.globalAlpha = 1;
+
+    // Quote body — word-wrapped italic serif.
+    var quote = "“" + (o.text || "") + "”";
+    var fontPx = Math.round(W * 0.052);
+    ctx.font = "italic " + fontPx + "px Georgia, 'Times New Roman', serif";
+    var maxW = W - pad * 2;
+    var words = quote.split(/\s+/);
+    var lines = [];
+    var line = "";
+    for (var i = 0; i < words.length; i++) {
+      var test = line ? line + " " + words[i] : words[i];
+      if (ctx.measureText(test).width > maxW && line) {
+        lines.push(line);
+        line = words[i];
+      } else {
+        line = test;
+      }
+    }
+    if (line) lines.push(line);
+    var lineH = Math.round(fontPx * 1.3);
+    var blockH = lines.length * lineH;
+    var startY = Math.max(pad * 2.2, (H - blockH) / 2 - lineH);
+    for (var j = 0; j < lines.length; j++) {
+      ctx.fillText(lines[j], pad, startY + j * lineH);
+    }
+
+    // Attribution footer.
+    var footY = H - pad - Math.round(W * 0.06);
+    ctx.globalAlpha = 0.85;
+    ctx.fillRect(pad, footY - Math.round(W * 0.02), W - pad * 2, 2);
+    ctx.font = Math.round(W * 0.022) + "px ui-sans-serif, system-ui, sans-serif";
+    ctx.fillText((o.author || "").toUpperCase(), pad, footY);
+    ctx.font = "italic " + Math.round(W * 0.026) + "px Georgia, serif";
+    ctx.fillText(o.subtitle || "", pad, footY + Math.round(W * 0.035));
+    ctx.globalAlpha = 1;
+
+    canvas.toBlob(function (blob) {
+      if (!blob) return;
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = (o.filename || "omnibus-quote") + ".png";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () {
+        URL.revokeObjectURL(url);
+      }, 1000);
+    }, "image/png");
+  }
+
   window.OmnibusReader = {
     init: init,
     next: next,
@@ -404,6 +537,7 @@
     setLineHeight: setLineHeight,
     setMargins: setMargins,
     setJustify: setJustify,
+    setSpread: setSpread,
     addAnnotation: addAnnotation,
     removeAnnotation: removeAnnotation,
     clearAnnotations: clearAnnotations,
@@ -411,6 +545,8 @@
     display: display,
     copyText: copyText,
     shareText: shareText,
+    search: search,
+    exportQuoteCard: exportQuoteCard,
     destroy: destroy,
   };
 })();

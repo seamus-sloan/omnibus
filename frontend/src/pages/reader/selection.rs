@@ -36,6 +36,7 @@ pub(crate) fn SelectionPopover(
     on_highlight: EventHandler<(String, HighlightColor, String)>,
     on_note: EventHandler<(String, String)>,
     on_copy: EventHandler<String>,
+    on_quote: EventHandler<(String, String)>,
     on_share: EventHandler<String>,
 ) -> Element {
     let top = (sel_rect_y - 52.0).max(8.0);
@@ -94,6 +95,17 @@ pub(crate) fn SelectionPopover(
                         move |_| on_copy.call(text.clone())
                     },
                     "Copy"
+                }
+                button {
+                    class: "rd-act",
+                    r#type: "button",
+                    "data-testid": "selection-quote",
+                    onclick: {
+                        let cfi = sel_cfi.clone();
+                        let text = sel_text.clone();
+                        move |_| on_quote.call((cfi.clone(), text.clone()))
+                    },
+                    "Quote"
                 }
                 button {
                     class: "rd-act",

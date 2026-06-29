@@ -110,6 +110,40 @@ impl Margins {
     }
 }
 
+/// Single-page vs two-page spread. Maps to epub.js `rendition.spread(...)`:
+/// `"none"` forces a single column, `"auto"` lets epub.js pair pages when the
+/// viewport is wide enough.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Spread {
+    Single,
+    Double,
+}
+
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
+impl Spread {
+    pub(crate) fn to_css(self) -> &'static str {
+        match self {
+            Self::Single => "none",
+            Self::Double => "auto",
+        }
+    }
+
+    pub(crate) fn to_storage(self) -> &'static str {
+        match self {
+            Self::Single => "single",
+            Self::Double => "double",
+        }
+    }
+
+    pub(crate) fn from_storage(s: &str) -> Option<Self> {
+        match s {
+            "single" => Some(Self::Single),
+            "double" => Some(Self::Double),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(feature = "web")]
 fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window().and_then(|w| w.local_storage().ok().flatten())

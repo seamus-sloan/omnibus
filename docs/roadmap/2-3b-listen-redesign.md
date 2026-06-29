@@ -24,8 +24,13 @@ listening.
   the web `ScreenLayout` (absent on the immersive `/listen` + `/read` routes),
   with cover/title/chapter/progress, ±30s + play/pause, speed, Expand, and a
   dismiss button.
-- **PR 4 — Bookmarks** and **PR 5 — Sleep timer:** not yet started (the
-  toolbar buttons + panels are inert visual shells).
+- **PR 4 — Bookmarks:** shipped. Built on the unified bookmarks backend
+  (shared `Bookmark` type, `db::bookmarks`, `/api/bookmarks*` REST +
+  `/api/rpc/bookmarks/*`). The drawer lists/creates/notes/deletes marks and a
+  "Bookmark saved" toast confirms a save.
+- **PR 5 — Sleep timer:** shipped. Self-re-arming countdown (presets +
+  end-of-chapter), live `Sleep · MM:SS` toolbar label, and pause + optional
+  30s volume fade on expiry (`OmnibusAudio.setVolume`). Session-only.
 
 ## PR breakdown
 

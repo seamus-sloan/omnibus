@@ -8,7 +8,7 @@ use dioxus::prelude::*;
 use crate::components::atrium::Theme;
 
 use super::prefs::ReaderPrefs;
-use super::typography::{LineSpacing, Margins, Typeface};
+use super::typography::{LineSpacing, Margins, Spread, Typeface};
 
 /// Frosted-glass typography settings panel: theme switcher, typeface,
 /// text size, line spacing, margins, and justify toggle.
@@ -20,6 +20,7 @@ pub(crate) fn ReaderAaPanel(on_close: EventHandler<MouseEvent>) -> Element {
     let line_spacing = *prefs.line_spacing.read();
     let margins = *prefs.margins.read();
     let justify = *prefs.justify.read();
+    let spread = *prefs.spread.read();
     let font_pct = prefs.font_pct();
     rsx! {
         div { class: "rd-scrim", onclick: on_close }
@@ -156,6 +157,27 @@ pub(crate) fn ReaderAaPanel(on_close: EventHandler<MouseEvent>) -> Element {
                         r#type: "button",
                         onclick: move |_| prefs.set_margins(Margins::Wide),
                         "Wide"
+                    }
+                }
+            }
+
+            div { class: "rd-aa-row",
+                div { class: "rd-aa-label", "Page view" }
+                div {
+                    class: "rd-seg",
+                    button {
+                        class: if spread == Spread::Single { "on" } else { "" },
+                        r#type: "button",
+                        "data-testid": "reader-spread-single",
+                        onclick: move |_| prefs.set_spread(Spread::Single),
+                        "Single"
+                    }
+                    button {
+                        class: if spread == Spread::Double { "on" } else { "" },
+                        r#type: "button",
+                        "data-testid": "reader-spread-double",
+                        onclick: move |_| prefs.set_spread(Spread::Double),
+                        "Two-page"
                     }
                 }
             }
