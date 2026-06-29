@@ -15,8 +15,9 @@
 services:
   omnibus:
     build: .
-    # Once you publish an image you can swap the build for:
-    # image: ghcr.io/youruser/omnibus:latest
+    # Once the Docker workflow has published a release, swap the local build
+    # for the pushed image:
+    # image: sesloan/omnibus:latest
     container_name: omnibus
     restart: unless-stopped
 
