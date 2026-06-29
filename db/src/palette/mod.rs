@@ -24,10 +24,10 @@ mod tests;
 // publicly exposed pre-split; the arm helpers stay reachable internally
 // for `search_palette` and externally only via the fully-qualified
 // `palette::authors::search_authors` path.
-use authors::search_authors;
+use authors::{count_authors, search_authors};
 use books::search_books;
-use series::search_series;
-use tags::search_tags;
+use series::{count_series, search_series};
+use tags::{count_tags, search_tags};
 
 /// Errors returned by the search palette.
 #[derive(Debug, thiserror::Error)]
@@ -35,6 +35,10 @@ pub enum PaletteError {
     #[error(transparent)]
     Db(#[from] sqlx::Error),
 }
+
+/// Per-category display cap. Each arm returns at most this many hits; the
+/// uncapped per-category totals (`book_total` etc.) are computed separately.
+const LIMIT: i32 = 5;
 
 /// Grouped command-palette results: up to 5 books, authors, series, and
 /// tags scoped to `library_path`, plus server-side timing in `duration_ms`.
@@ -54,14 +58,14 @@ pub async fn search_palette(
     let trimmed = trimmed.as_str();
 
     let start = std::time::Instant::now();
-    const LIMIT: i32 = 5;
 
     // A. Books — FTS5 MATCH with BM25 ranking, slim projection. After
     // hydration we overlay metadata_overrides so the title and author line
     // shown in the palette match the merged values the rest of the app
     // displays (FTS already matches on the merged text — see
-    // `rebuild_fts_for_book` in the override write path).
-    let books = search_books(pool, library_path, trimmed, LIMIT).await?;
+    // `rebuild_fts_for_book` in the override write path). The books arm also
+    // returns its uncapped total in the same FTS5 pass.
+    let (books, book_total) = search_books(pool, library_path, trimmed, LIMIT).await?;
 
     // Escape the query for LIKE pattern: backslash first (it's the ESCAPE char),
     // then the LIKE wildcards percent and underscore.
@@ -80,6 +84,20 @@ pub async fn search_palette(
     // D. Tags — substring match, scoped to library.
     let tags = search_tags(pool, library_path, &like_pattern, LIMIT).await?;
 
+    // Uncapped per-category totals for the full-page results header. Each is a
+    // cheap COUNT over the same visibility predicate the arm uses; books got
+    // theirs in-pass above. Skipped when the capped vec already holds the whole
+    // match set (len < LIMIT ⇒ no more rows to count).
+    let author_total = total_for(authors.len(), || {
+        count_authors(pool, library_path, &like_pattern)
+    })
+    .await?;
+    let series_total = total_for(series.len(), || {
+        count_series(pool, library_path, &like_pattern)
+    })
+    .await?;
+    let tag_total = total_for(tags.len(), || count_tags(pool, library_path, &like_pattern)).await?;
+
     let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     Ok(PaletteResults {
@@ -89,5 +107,24 @@ pub async fn search_palette(
         series,
         tags,
         duration_ms,
+        book_total: u32::try_from(book_total).unwrap_or(u32::MAX),
+        author_total,
+        series_total,
+        tag_total,
     })
+}
+
+/// Resolve a category's uncapped total, skipping the COUNT query when the
+/// capped result already holds the entire match set. The arms cap at `LIMIT`,
+/// so a vec shorter than the cap is exhaustive and `len` *is* the total — only
+/// a full vec might be hiding further matches worth counting.
+async fn total_for<F, Fut>(returned: usize, count: F) -> Result<u32, PaletteError>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<i64, PaletteError>>,
+{
+    if returned < LIMIT as usize {
+        return Ok(u32::try_from(returned).unwrap_or(u32::MAX));
+    }
+    Ok(u32::try_from(count().await?).unwrap_or(u32::MAX))
 }

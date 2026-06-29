@@ -70,6 +70,13 @@ async fn palette_authors_match_substring() {
     assert!(!results.authors.is_empty(), "should match author substring");
     assert_eq!(results.authors[0].name, "R. F. Kuang");
     assert_eq!(results.authors[0].book_count, 1);
+    // F1 results page: the "incl. <title>" line draws on the author's first
+    // book in the library.
+    assert_eq!(
+        results.authors[0].lead_book_title.as_deref(),
+        Some("Babel"),
+        "author hit should carry its lead book title"
+    );
 }
 #[tokio::test]
 async fn palette_series_match() {
@@ -104,6 +111,13 @@ async fn palette_series_match() {
     assert!(!results.series.is_empty(), "should match series substring");
     assert_eq!(results.series[0].name, "Poppy War");
     assert_eq!(results.series[0].book_count, 2);
+    // F1 results page: the "incl. <title>" line draws on the first book in
+    // the series by sort order.
+    assert_eq!(
+        results.series[0].lead_book_title.as_deref(),
+        Some("Book One"),
+        "series hit should carry its lead book title"
+    );
 }
 #[tokio::test]
 async fn palette_tags_match() {
@@ -1018,4 +1032,40 @@ async fn palette_taxonomy_query_plans_use_indexes() {
         !plan.contains("SCAN books_tags_link") && !plan.contains("SCAN btl"),
         "tags plan should not full-scan the link table:\n{plan}"
     );
+}
+/// F1 results-page header: per-category totals report the true match count
+/// even when the 5-hit display cap clips the returned vec. Seven books share
+/// a title token, one author, and one tag — so the books arm caps at 5 hits
+/// but `book_total` is 7, while `author_total`/`tag_total` (under the cap)
+/// equal their vec lengths. `total_count()` sums the true totals.
+#[tokio::test]
+async fn palette_totals_report_uncapped_counts() {
+    let _covers = CoversTempDir::new("palette_totals");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let books: Vec<_> = (0..7)
+        .map(|i| {
+            indexed(
+                &format!("q{i}.epub"),
+                Some(&format!("Quest {i}")),
+                &["Quest Author"],
+                &["questing"],
+                None,
+                None,
+            )
+        })
+        .collect();
+    replace_books(&pool, "/lib", books).await.unwrap();
+
+    let results = search_palette(&pool, "/lib", "quest").await.unwrap();
+
+    assert_eq!(results.books.len(), 5, "books arm caps display at 5");
+    assert_eq!(
+        results.book_total, 7,
+        "book_total is the uncapped match count"
+    );
+    assert_eq!(results.author_total, 1, "one matching author");
+    assert_eq!(results.authors.len(), 1);
+    assert_eq!(results.tag_total, 1, "one matching tag");
+    assert_eq!(results.series_total, 0, "no series seeded");
+    assert_eq!(results.total_count(), 7 + 1 + 0 + 1);
 }

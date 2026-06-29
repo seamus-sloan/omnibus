@@ -66,7 +66,14 @@ pub async fn search_authors(
         )
         SELECT a.id, a.name,
           (SELECT COUNT(*) FROM effective e
-            WHERE e.author_id = a.id OR e.author_name = a.name) AS book_count
+            WHERE e.author_id = a.id OR e.author_name = a.name) AS book_count,
+          (SELECT COALESCE(json_extract(mo3.overrides, '$.title'), b3.title)
+             FROM books_authors_link bal3
+             JOIN books b3 ON b3.id = bal3.book
+             JOIN scan_roots l3 ON l3.id = b3.library_id
+             LEFT JOIN metadata_overrides mo3 ON mo3.book_uuid = b3.uuid
+            WHERE bal3.author = a.id AND l3.path = ?1
+            ORDER BY b3.sort, b3.id LIMIT 1) AS lead_book_title
         FROM authors a
         WHERE a.name LIKE ?2 ESCAPE '\'
           AND EXISTS (
@@ -91,6 +98,34 @@ pub async fn search_authors(
             id: r.get("id"),
             name: r.get("name"),
             book_count: u32::try_from(r.get::<i32, _>("book_count")).unwrap_or(0),
+            lead_book_title: r.get("lead_book_title"),
         })
         .collect())
+}
+
+/// Count visible authors matching `like_pattern` in `library_path` — the
+/// uncapped total behind the palette's 5-hit author cap. "Visible" mirrors
+/// [`search_authors`]: the author needs at least one canonical link in this
+/// library (override-only names have no navigable id and are excluded).
+pub async fn count_authors(
+    pool: &SqlitePool,
+    library_path: &str,
+    like_pattern: &str,
+) -> Result<i64, PaletteError> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        r"
+        SELECT COUNT(*) FROM authors a
+        WHERE a.name LIKE ?2 ESCAPE '\'
+          AND EXISTS (
+            SELECT 1 FROM books_authors_link bal
+              JOIN books b ON b.id = bal.book
+              JOIN scan_roots l ON l.id = b.library_id
+             WHERE bal.author = a.id AND l.path = ?1
+          )
+        ",
+    )
+    .bind(library_path)
+    .bind(like_pattern)
+    .fetch_one(pool)
+    .await?)
 }
