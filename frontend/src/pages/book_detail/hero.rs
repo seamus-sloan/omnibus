@@ -49,7 +49,8 @@ pub(super) fn BdHeroSection(
                     div { class: "divider" }
                     div { class: "label bd-action-head", "Actions" }
                     div { class: "bd-actions",
-                        button { class: "btn ghost bd-action-row", disabled: true,
+                        a { class: "btn ghost bd-action-row", href: "#journal",
+                            "data-testid": "hero-write-journal",
                             span { "Write a journal entry" }
                             span { class: "bd-action-row-arrow", "\u{2192}" }
                         }

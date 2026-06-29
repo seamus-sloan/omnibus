@@ -11,6 +11,7 @@ use crate::{data, use_server_url, Route};
 
 mod body;
 mod hero;
+mod journal;
 mod merge;
 mod rating;
 
@@ -289,6 +290,7 @@ fn render_loaded(
         crumbs,
     } = derive_loaded_view(&b);
 
+    let uuid = b.unique_identifier.clone().unwrap_or_default();
     rsx! {
         div { class: "bd-root", style: "{accent_style}",
             BdHeroSection {
@@ -301,6 +303,7 @@ fn render_loaded(
             }
             section { class: "bd-body-grid",
                 BdBodyMain {
+                    uuid: uuid.clone(),
                     title: title.clone(),
                     primary_author,
                     author_books,

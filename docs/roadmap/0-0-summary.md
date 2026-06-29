@@ -125,6 +125,7 @@ Phase 6  Mobile                   (feature parity on native)
 
 - [F3.1 Libraries with metadata filters](3-1-libraries.md)
 - [F3.2 Ratings & journaling](3-2-ratings-journaling.md)
+- [F3.2b Rich journal editor](3-2b-journal-rich-editor.md)
 - [F3.3 Suggestions](3-3-suggestions.md)
 - [F3.4 Reading stats](3-4-stats.md)
 - [F3.5 Shared shelves](3-5-shared-shelves.md)
