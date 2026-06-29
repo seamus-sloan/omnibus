@@ -1,4 +1,4 @@
-//! Body grid of the book-detail page — two-column main (journal + highlights stubs + cover-fan rail) plus a sticky right rail (file details, [`FormatSwitcher`], series info, insights).
+//! Body grid of the book-detail page — two-column main (public journal feed + highlights stub + cover-fan rail) plus a sticky right rail (file details, [`FormatSwitcher`], series info, insights).
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
@@ -8,22 +8,20 @@ use crate::components::atrium::Cover;
 use crate::components::FormatSwitcher;
 use crate::Route;
 
+use super::journal::BdJournalSection;
 use super::{BdInsightCell, BdMetaRow, BdSectionHead};
 
-/// Main column: journal stub, highlights stub, from-the-same-hand fan, suggestions stub.
+/// Main column: public journal feed, highlights stub, from-the-same-hand fan, suggestions stub.
 #[component]
 pub(super) fn BdBodyMain(
+    uuid: String,
     title: String,
     primary_author: String,
     author_books: Vec<EbookMetadata>,
 ) -> Element {
     rsx! {
         div { class: "bd-body-main",
-            BdSectionHead { kicker: "Your journal · 0 entries".to_string(), title: "What you've written".to_string() }
-            div { class: "bd-journal-empty card", aria_hidden: "true",
-                p { class: "mono", "No journal entries yet." }
-                p { class: "bd-stub-hint", "Journaling lands in F3.2." }
-            }
+            BdJournalSection { uuid }
             div { class: "divider" }
             BdSectionHead { kicker: "0 highlights".to_string(), title: "Passages you saved".to_string() }
             div { class: "bd-journal-empty card", aria_hidden: "true",

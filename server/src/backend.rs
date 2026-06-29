@@ -28,6 +28,7 @@ mod covers;
 mod ebooks;
 mod health;
 mod highlights;
+mod journals;
 mod overrides;
 mod progress;
 mod ratings;
@@ -248,6 +249,21 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
         .route(
             "/api/ratings/{uuid}",
             get(ratings::get_rating).delete(ratings::delete_rating),
+        )
+        // F3.2 public journal entries — mobile-facing REST. Web hits the
+        // analogous `/api/rpc/journals/*` server functions.
+        .route("/api/journals", post(journals::post_journal))
+        .route(
+            "/api/journals/book/{book_uuid}",
+            get(journals::get_journal_entries),
+        )
+        .route(
+            "/api/journals/preview",
+            post(journals::post_journal_preview),
+        )
+        .route(
+            "/api/journals/{id}",
+            patch(journals::patch_journal).delete(journals::delete_journal),
         )
         // GET/DELETE for author photos carry no upload body (DELETE mutates,
         // but cheaply — it clears photo state, it doesn't ingest one), so

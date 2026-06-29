@@ -19,6 +19,7 @@ pub mod highlights;
 pub mod hls;
 pub mod identity;
 pub mod indexer;
+pub mod journals;
 pub mod library_layout;
 pub mod merge;
 pub mod metadata_overrides;
