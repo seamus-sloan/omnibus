@@ -51,11 +51,13 @@ async fn create_highlight_round_trips_fields() {
         book_uuid: uuid.clone(),
         epub_cfi_range: "epubcfi(/6/4!/4/2,/1:0,/1:100)".into(),
         color: HighlightColor::Blue,
+        text: Some("the quoted passage".into()),
     };
     let h = create_highlight(&pool, user, &input).await.unwrap();
     assert_eq!(h.book_uuid, uuid);
     assert_eq!(h.epub_cfi_range, "epubcfi(/6/4!/4/2,/1:0,/1:100)");
     assert_eq!(h.color, HighlightColor::Blue);
+    assert_eq!(h.text.as_deref(), Some("the quoted passage"));
     assert!(h.note.is_none());
     assert!(h.created_at > 0);
 }
@@ -68,6 +70,7 @@ async fn create_highlight_returns_book_not_found_for_unknown_uuid() {
         book_uuid: "no-such-uuid".into(),
         epub_cfi_range: "epubcfi(/6/4)".into(),
         color: HighlightColor::Amber,
+        text: None,
     };
     let err = create_highlight(&pool, user, &input).await.unwrap_err();
     assert!(matches!(err, HighlightError::BookNotFound));
@@ -94,11 +97,13 @@ async fn list_highlights_isolates_by_user_and_book() {
         book_uuid: uuid_a.clone(),
         epub_cfi_range: "epubcfi(/6/4)".into(),
         color: HighlightColor::Amber,
+        text: None,
     };
     let input_b = CreateHighlight {
         book_uuid: uuid_b.clone(),
         epub_cfi_range: "epubcfi(/6/8)".into(),
         color: HighlightColor::Green,
+        text: None,
     };
     create_highlight(&pool, alice, &input_a).await.unwrap();
     create_highlight(&pool, alice, &input_b).await.unwrap();
@@ -126,6 +131,7 @@ async fn update_highlight_color_changes_color() {
             book_uuid: uuid.clone(),
             epub_cfi_range: "epubcfi(/6/4)".into(),
             color: HighlightColor::Amber,
+            text: None,
         },
     )
     .await
@@ -151,6 +157,7 @@ async fn update_highlight_color_returns_not_found_for_other_user() {
             book_uuid: uuid.clone(),
             epub_cfi_range: "epubcfi(/6/4)".into(),
             color: HighlightColor::Amber,
+            text: None,
         },
     )
     .await
@@ -174,6 +181,7 @@ async fn update_highlight_note_sets_and_clears() {
             book_uuid: uuid.clone(),
             epub_cfi_range: "epubcfi(/6/4)".into(),
             color: HighlightColor::Green,
+            text: None,
         },
     )
     .await
@@ -205,6 +213,7 @@ async fn delete_highlight_removes_row() {
             book_uuid: uuid.clone(),
             epub_cfi_range: "epubcfi(/6/4)".into(),
             color: HighlightColor::Rose,
+            text: None,
         },
     )
     .await
@@ -228,6 +237,7 @@ async fn delete_highlight_returns_not_found_for_other_user() {
             book_uuid: uuid.clone(),
             epub_cfi_range: "epubcfi(/6/4)".into(),
             color: HighlightColor::Blue,
+            text: None,
         },
     )
     .await

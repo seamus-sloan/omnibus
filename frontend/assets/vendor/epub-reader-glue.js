@@ -30,12 +30,19 @@
  *   addAnnotation(cfiRange, color)
  *   removeAnnotation(cfiRange)
  *   clearAnnotations()
+ *   requestToc()                    re-emits __omnibusOnToc
+ *   display(target)                 navigate to a TOC href or CFI
+ *   copyText(text)                  clipboard write
+ *   shareText(text)                 navigator.share, clipboard fallback
  *   destroy()
  *
  * Selection callback:
  *   - `__omnibusOnSelection(json)` — invoked when the user selects text,
- *     with { cfiRange, rect: { x, y, width } } where rect is in viewport
- *     coordinates.
+ *     with { cfiRange, text, rect: { x, y, width } } where rect is in
+ *     viewport coordinates.
+ * Table-of-contents callback:
+ *   - `__omnibusOnToc(json)` — invoked once the book is ready (and on
+ *     requestToc()), with a flat [{ label, href, level }] array.
  */
 (function () {
   "use strict";
@@ -171,6 +178,7 @@
         if (book.navigation && book.navigation.toc) {
           flattenToc(book.navigation.toc, tocFlat);
         }
+        emitToc();
         return book.locations.generate(1024);
       })
       .then(function () {
@@ -226,6 +234,7 @@
       };
       window.__omnibusOnSelection(JSON.stringify({
         cfiRange: cfiRange,
+        text: sel.toString(),
         rect: rect,
       }));
     });
@@ -323,6 +332,68 @@
     teardown();
   }
 
+  // Walk the nested TOC into a flat [{label, href, level}] list and hand it
+  // to the Rust side. Level is the nesting depth (0 = top), used to indent
+  // the contents drawer. Re-emittable on demand via requestToc().
+  function collectToc(items, level, out) {
+    if (!items) return;
+    for (var i = 0; i < items.length; i++) {
+      out.push({
+        label: (items[i].label || "").trim(),
+        href: items[i].href || "",
+        level: level,
+      });
+      if (items[i].subitems) collectToc(items[i].subitems, level + 1, out);
+    }
+  }
+
+  function emitToc() {
+    if (typeof window.__omnibusOnToc !== "function") return;
+    var out = [];
+    if (book && book.navigation && book.navigation.toc) {
+      collectToc(book.navigation.toc, 0, out);
+    }
+    try {
+      window.__omnibusOnToc(JSON.stringify(out));
+    } catch (e) {
+      /* ignore handler errors */
+    }
+  }
+
+  function requestToc() {
+    emitToc();
+  }
+
+  // Navigate to a TOC href or a CFI (highlight / bookmark target).
+  function display(target) {
+    if (!rendition || !target) return;
+    rendition.display(target);
+  }
+
+  function copyText(text) {
+    if (!text) return;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text);
+      }
+    } catch (e) {
+      /* clipboard unavailable */
+    }
+  }
+
+  function shareText(text) {
+    if (!text) return;
+    try {
+      if (navigator.share) {
+        navigator.share({ text: text }).catch(function () {});
+      } else {
+        copyText(text);
+      }
+    } catch (e) {
+      copyText(text);
+    }
+  }
+
   window.OmnibusReader = {
     init: init,
     next: next,
@@ -336,6 +407,10 @@
     addAnnotation: addAnnotation,
     removeAnnotation: removeAnnotation,
     clearAnnotations: clearAnnotations,
+    requestToc: requestToc,
+    display: display,
+    copyText: copyText,
+    shareText: shareText,
     destroy: destroy,
   };
 })();

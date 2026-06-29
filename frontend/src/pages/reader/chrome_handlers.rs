@@ -7,14 +7,26 @@ use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]
 use dioxus_router::use_navigator;
 
+use omnibus_shared::Highlight;
+
 use super::selection::SelectionData;
+
+/// Overlay-dismissal signals threaded into the Escape handler so a single
+/// Escape press peels back the topmost open overlay before navigating away.
+#[derive(Copy, Clone)]
+pub(super) struct OverlaySignals {
+    pub show_aa: Signal<bool>,
+    pub show_toc: Signal<bool>,
+    pub show_highlights: Signal<bool>,
+    pub note_target: Signal<Option<Highlight>>,
+}
 
 /// Build the `(on_back, on_prev, on_next, on_keydown)` handlers consumed
 /// by `ReaderLayout`. Each handler closes over the passed signals and
 /// (where applicable) the router navigator.
 pub(super) fn install_chrome_handlers(
     selection: Signal<Option<SelectionData>>,
-    show_aa: Signal<bool>,
+    overlays: OverlaySignals,
 ) -> (
     EventHandler<MouseEvent>,
     EventHandler<MouseEvent>,
@@ -33,7 +45,7 @@ pub(super) fn install_chrome_handlers(
         handle_keydown(
             evt,
             selection,
-            show_aa,
+            overlays,
             #[cfg(not(feature = "mobile"))]
             nav,
         );
@@ -62,12 +74,13 @@ fn advance_page(mut selection: Signal<Option<SelectionData>>, dir: Direction) {
 #[cfg(not(feature = "web"))]
 fn advance_page(_: Signal<Option<SelectionData>>, _: Direction) {}
 
-/// Reader keyboard map: arrows page the book; Escape closes a live
-/// selection, then the AA panel, then navigates back.
+/// Reader keyboard map: arrows page the book; Escape peels back the topmost
+/// overlay (selection → note composer → contents → highlights → AA panel)
+/// before navigating back.
 fn handle_keydown(
     evt: KeyboardEvent,
     selection: Signal<Option<SelectionData>>,
-    show_aa: Signal<bool>,
+    overlays: OverlaySignals,
     #[cfg(not(feature = "mobile"))] nav: dioxus_router::Navigator,
 ) {
     match evt.key() {
@@ -84,9 +97,18 @@ fn handle_keydown(
         Key::Escape => {
             evt.prevent_default();
             let mut selection = selection;
-            let mut show_aa = show_aa;
+            let mut show_aa = overlays.show_aa;
+            let mut show_toc = overlays.show_toc;
+            let mut show_highlights = overlays.show_highlights;
+            let mut note_target = overlays.note_target;
             if selection.read().is_some() {
                 selection.set(None);
+            } else if note_target.read().is_some() {
+                note_target.set(None);
+            } else if *show_toc.read() {
+                show_toc.set(false);
+            } else if *show_highlights.read() {
+                show_highlights.set(false);
             } else if *show_aa.read() {
                 show_aa.set(false);
             } else {
