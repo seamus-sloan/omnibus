@@ -15,7 +15,7 @@ use axum::{
     Json,
 };
 use omnibus_db::{self as db, journals::JournalError};
-use omnibus_shared::{CreateJournalEntry, UpdateJournalEntry};
+use omnibus_shared::{CreateJournalEntry, UpdateJournalEntry, BODY_MAX_LEN};
 
 use super::{internal, AppState};
 use crate::auth::AuthUser;
@@ -75,8 +75,16 @@ pub(super) async fn patch_journal(
 
 /// Render a draft journal body to sanitized HTML for the composer preview,
 /// using the same renderer as the persisted read path. The request and response
-/// bodies are both bare JSON strings.
+/// bodies are both bare JSON strings. Rejects bodies over `BODY_MAX_LEN` so an
+/// authenticated client can't drive arbitrary markdown+sanitize work.
 pub(super) async fn post_journal_preview(_user: AuthUser, Json(body_md): Json<String>) -> Response {
+    if body_md.len() > BODY_MAX_LEN {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            format!("journal entry must be {BODY_MAX_LEN} bytes or fewer"),
+        )
+            .into_response();
+    }
     Json(db::journals::markdown::render(&body_md)).into_response()
 }
 

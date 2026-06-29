@@ -223,6 +223,28 @@ async fn api_journal_preview_renders_sanitized_html() {
     assert!(!html.contains("<script"));
 }
 
+#[tokio::test]
+async fn api_journal_preview_rejects_body_over_max_len() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let body_md = "a".repeat(omnibus_shared::BODY_MAX_LEN + 1);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/journals/preview")
+                .method("POST")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(serde_json::to_string(&body_md).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
 /// Decode a single created/updated entry from a handler response.
 async fn entries_one(res: axum::response::Response) -> JournalEntry {
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
