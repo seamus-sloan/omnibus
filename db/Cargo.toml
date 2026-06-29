@@ -56,12 +56,17 @@ base64 = "0.22"
 # compile times and binary size down.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
-# HTML sanitization for EPUB description fields (issue #62). OPF
-# `<dc:description>` is often HTML; we sanitize server-side with a strict
-# allowlist so the `book_detail` page can render it via `dangerous_inner_html`
-# without exposing XSS. Done at read time in `get_book` so existing rows in
-# the DB are sanitized without a reindex.
+# HTML sanitization for EPUB description fields (issue #62) and F3.2 journal
+# entries. OPF `<dc:description>` is often HTML; journal bodies are
+# user-authored markdown. Both are rendered server-side and sanitized with a
+# strict allowlist so `book_detail` can render them via `dangerous_inner_html`
+# without exposing XSS. Done at read time so stored rows are always sanitized.
 ammonia = "4"
+
+# F3.2 journals: render user-authored markdown to HTML server-side (then
+# sanitized by `ammonia` above). Strikethrough is enabled to match the
+# composer's formatting affordances; a custom `||spoiler||` pass runs first.
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 
 # F2.3 audiobook metadata: read title/artist/album/duration and embedded
 # cover artwork from m4b/m4a/mp3 (and any other container lofty supports).

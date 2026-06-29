@@ -17,11 +17,11 @@ use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
     AuthorDetail, AuthorPhotoScanResult, AuthorSummary, Bookmark, CreateBookmark, CreateHighlight,
-    EbookLibrary, EbookMetadata, Highlight, HighlightColor, LibraryContents, LibraryPage,
-    MergeBooksResult, MetadataOverrides, PaletteResults, ProgressFormat, ProgressRecord,
-    ProgressUpdate, RatingRecord, RatingUpdate, SeriesDetail, SeriesSummary, SessionReport,
-    Settings, SortDir, SortKey, TagWeight, UpdateBookmark, UpdateHighlightNote, ViewFilters,
-    WorkerStatus,
+    CreateJournalEntry, EbookLibrary, EbookMetadata, Highlight, HighlightColor, JournalEntry,
+    LibraryContents, LibraryPage, MergeBooksResult, MetadataOverrides, PaletteResults,
+    ProgressFormat, ProgressRecord, ProgressUpdate, RatingRecord, RatingUpdate, SeriesDetail,
+    SeriesSummary, SessionReport, Settings, SortDir, SortKey, TagWeight, UpdateBookmark,
+    UpdateHighlightNote, UpdateJournalEntry, ViewFilters, WorkerStatus,
 };
 
 // Only `validate_author_photo_url` (server-gated) and its tests reference this
@@ -885,6 +885,75 @@ pub async fn rpc_get_rating(uuid: String) -> Result<Option<RatingRecord>> {
 #[post("/api/rpc/ratings/clear", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_clear_rating(uuid: String) -> Result<()> {
     Ok(db::ratings::delete_rating(&pool.0, user.id, &uuid).await?)
+}
+
+/// Create a public journal entry on a book. Mobile uses the analogous REST
+/// route in `server::backend::journals`; the rest of this family follows the
+/// same web-vs-mobile split.
+#[post("/api/rpc/journals/create", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_create_journal_entry(input: CreateJournalEntry) -> Result<JournalEntry> {
+    if let Err(msg) = input.validate() {
+        return Err(ServerFnError::new(msg).into());
+    }
+    match db::journals::create_journal_entry(&pool.0, user.id, &input).await {
+        Ok(entry) => Ok(entry),
+        Err(db::journals::JournalError::BookNotFound) => {
+            Err(ServerFnError::new("book not found").into())
+        }
+        Err(db::journals::JournalError::NotFound) => {
+            Err(ServerFnError::new("journal entry not found").into())
+        }
+        Err(db::journals::JournalError::Sqlx(e)) => Err(ServerFnError::new(e.to_string()).into()),
+    }
+}
+
+/// List all journal entries for a book (every user's — journals are public),
+/// newest first. Returns an empty list when the uuid is unknown or has no
+/// entries yet.
+#[post("/api/rpc/journals/list", pool: PoolExt, _user: AuthUser)]
+pub async fn rpc_list_journal_entries(book_uuid: String) -> Result<Vec<JournalEntry>> {
+    match db::journals::list_journal_entries(&pool.0, &book_uuid).await {
+        Ok(list) => Ok(list),
+        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+    }
+}
+
+/// Edit a journal entry owned by the current user. Errors with
+/// `"journal entry not found"` when the id does not exist or belongs to another
+/// user (the two cases are deliberately indistinguishable).
+#[post("/api/rpc/journals/update", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_update_journal_entry(id: i64, input: UpdateJournalEntry) -> Result<JournalEntry> {
+    if let Err(msg) = input.validate() {
+        return Err(ServerFnError::new(msg).into());
+    }
+    match db::journals::update_journal_entry(&pool.0, user.id, id, &input).await {
+        Ok(entry) => Ok(entry),
+        Err(db::journals::JournalError::NotFound) => {
+            Err(ServerFnError::new("journal entry not found").into())
+        }
+        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+    }
+}
+
+/// Delete a journal entry owned by the current user. Errors with
+/// `"journal entry not found"` when the id does not exist or belongs to another
+/// user.
+#[post("/api/rpc/journals/delete", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_delete_journal_entry(id: i64) -> Result<()> {
+    match db::journals::delete_journal_entry(&pool.0, user.id, id).await {
+        Ok(()) => Ok(()),
+        Err(db::journals::JournalError::NotFound) => {
+            Err(ServerFnError::new("journal entry not found").into())
+        }
+        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+    }
+}
+
+/// Render a draft journal body to sanitized HTML for the composer's live
+/// preview, using the same renderer as the persisted read path.
+#[post("/api/rpc/journals/preview", _pool: PoolExt, _user: AuthUser)]
+pub async fn rpc_preview_journal_markdown(body_md: String) -> Result<String> {
+    Ok(db::journals::markdown::render(&body_md))
 }
 
 // `server`-gated alongside `validate_author_photo_url`: these tests exercise

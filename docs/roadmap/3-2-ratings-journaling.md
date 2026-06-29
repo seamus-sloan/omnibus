@@ -10,9 +10,18 @@ Per-user star ratings and free-form journal entries per book.
 > `/api/ratings*` REST + `/api/rpc/ratings/*` server functions, and the
 > interactive **half-star** widget in the book-detail hero card (`rating-stars`):
 > click left/right half of a star for `x.5`/`x`, re-click to un-rate, with a
-> "rated {N} ago · {value} of 5" status line. **Journaling is not yet built** —
-> the `user_journal_entries` table, `pulldown-cmark` rendering, and the journal
-> UI remain to do.
+> "rated {N} ago · {value} of 5" status line.
+>
+> **Journaling has shipped** — the `journal_entries` table (migration `0032`,
+> soft-ref `book_uuid`, optional per-entry `progress`, wired into the F10 GC
+> user-data guard), `db::journals` with server-side markdown rendering
+> (`pulldown-cmark` + `ammonia`, incl. a `||spoiler||` pass), `/api/journals*`
+> REST + `/api/rpc/journals/*` server functions, and the inline composer +
+> public entry feed in the book-detail body. Note a **product change from the
+> spec below**: journals are **public to all users** (a shared per-book log with
+> author attribution; edit/delete stay owner-scoped), not the private per-user
+> model originally described. The richer WYSIWYG editor is deferred to
+> [F3.2b](3-2b-journal-rich-editor.md).
 
 ## Objective
 
