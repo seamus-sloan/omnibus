@@ -5,9 +5,13 @@ import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { expectNavVisible, gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
-// Journals are public + global per book, so every test creates a uniquely
-// marked entry and deletes it before finishing — keeping the shared server
-// state clean for re-runs and other specs.
+// Journals are public + global per book: every test here lands on the same
+// `alpha` book and mutates the shared per-book feed, so run serially (mirrors
+// book_detail.spec.ts) — `playwright.config.ts` is otherwise `fullyParallel`,
+// which would interleave these and let one test's entries race another's
+// assertions. Each test still creates a uniquely-marked entry and deletes it.
+test.describe.configure({ mode: "serial" });
+
 test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
 });
@@ -77,13 +81,16 @@ test("publishes an entry attributed to the current user, edits it, then deletes 
   await expect(card).toBeVisible();
   await expect(card.getByText("you")).toBeVisible();
 
-  // Owner edit → the body updates in place.
+  // Owner edit → the body updates in place. Entering edit mode swaps the
+  // rendered body for a textarea, so the marker-filtered `card` stops matching
+  // (a textarea's value isn't DOM text) — target the single open editor at page
+  // level instead.
   await card.getByTestId("journal-edit").click();
-  await card.getByTestId("journal-edit-body").fill(`Revised thoughts ${marker}`);
+  await page.getByTestId("journal-edit-body").fill(`Revised thoughts ${marker}`);
   await expectMutation(
     page,
     { method: "POST", url: "/api/rpc/journals/update", expectedStatus: 200 },
-    async () => card.getByTestId("journal-edit-save").click(),
+    async () => page.getByTestId("journal-edit-save").click(),
   );
   await expect(
     page.getByTestId("journal-entry").filter({ hasText: `Revised thoughts ${marker}` }),
