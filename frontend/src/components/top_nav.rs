@@ -5,7 +5,7 @@
 //! [`crate::ScreenLayout`] on every web route except the immersive reader.
 
 use dioxus::prelude::*;
-use dioxus_router::{use_route, Link};
+use dioxus_router::{use_navigator, use_route, Link};
 
 use crate::components::search_palette::SearchPaletteHost;
 use crate::components::user_menu::UserMenu;
@@ -14,6 +14,7 @@ use crate::Route;
 #[component]
 pub fn TopNav() -> Element {
     let route = use_route::<Route>();
+    let nav = use_navigator();
     // Hide the search trigger on `/settings` — the page has its own dense
     // form layout and a search button wedged into the nav above it just
     // clutters the chrome.
@@ -58,6 +59,9 @@ pub fn TopNav() -> Element {
                     class: "btn primary sm",
                     r#type: "button",
                     "data-testid": "add-books-button",
+                    onclick: move |_| {
+                        nav.push(Route::AddBooks {});
+                    },
                     "Add books"
                 }
                 UserMenu {}

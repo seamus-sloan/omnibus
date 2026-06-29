@@ -2013,3 +2013,31 @@ async fn migration_creates_composite_library_sort_index_for_landing_projection()
     .unwrap();
     assert_eq!(exists.as_deref(), Some("idx_books_library_sort"));
 }
+
+#[tokio::test]
+async fn get_book_uuid_by_scan_key_returns_uuid_for_known_path() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 3).await;
+    // `seed_minimal_books` files books under scan_root `/lib` with scan_key
+    // `b<i>.epub` and uuid `uuid-<i>`.
+    let uuid = get_book_uuid_by_scan_key(&pool, "/lib", "b2.epub")
+        .await
+        .unwrap();
+    assert_eq!(uuid.as_deref(), Some("uuid-2"));
+}
+
+#[tokio::test]
+async fn get_book_uuid_by_scan_key_returns_none_for_unknown_key() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    // Unknown scan_key under a known root, and a known key under an unknown
+    // root, both resolve to None.
+    assert!(get_book_uuid_by_scan_key(&pool, "/lib", "missing.epub")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(get_book_uuid_by_scan_key(&pool, "/other", "b1.epub")
+        .await
+        .unwrap()
+        .is_none());
+}

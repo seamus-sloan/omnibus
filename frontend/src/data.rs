@@ -27,6 +27,7 @@ mod series;
 mod shelves;
 mod suggestions;
 mod tags;
+mod uploads;
 
 // auth exports exist under web, mobile, and server-only (the last only
 // re-exports the SSR `current_user` stub so pages can call `data::current_user`
@@ -44,6 +45,7 @@ pub use series::*;
 pub use shelves::*;
 pub use suggestions::*;
 pub use tags::*;
+pub use uploads::*;
 
 /// Errors surfaced by the feature-gated data transport.
 ///

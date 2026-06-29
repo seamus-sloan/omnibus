@@ -22,6 +22,7 @@ pub mod ratings;
 pub mod settings;
 pub mod shelves;
 pub mod suggestion;
+pub mod upload;
 pub mod view_prefs;
 pub mod worker;
 
@@ -45,5 +46,6 @@ pub use ratings::*;
 pub use settings::*;
 pub use shelves::*;
 pub use suggestion::*;
+pub use upload::*;
 pub use view_prefs::*;
 pub use worker::*;

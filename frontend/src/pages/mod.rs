@@ -4,6 +4,7 @@
 //! below re-exports the page component the router instantiates; flow logic
 //! (data fetching, signal effects) lives inside the page modules.
 
+mod add_books;
 mod auth;
 mod author;
 mod authors_index;
@@ -19,6 +20,7 @@ mod settings;
 mod shelf_detail;
 mod tag_cloud;
 
+pub use add_books::AddBooksPage;
 pub use auth::{LoginPage, RegisterPage};
 pub use author::AuthorPage;
 pub use authors_index::AuthorsIndexPage;

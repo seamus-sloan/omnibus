@@ -38,6 +38,7 @@ mod settings;
 mod shelves;
 mod suggestions;
 mod tags;
+mod uploads;
 
 /// Per-IP rate-limit budget for `/api/search/*` and the `/api/rpc/search-*`
 /// server functions. Each request runs four FTS5 queries plus joins, so the
@@ -297,6 +298,7 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             get(author_photos::get_author_photo).delete(author_photos::delete_author_photo),
         )
         .merge(upload_router())
+        .merge(book_upload_router())
         .merge(search_router(search_limiter))
         .route("/api/covers/{uuid}", get(covers::get_cover))
         .route("/api/thumbs/{uuid}/{size}", get(covers::get_thumb))
@@ -390,6 +392,43 @@ fn upload_router() -> Router<AppState> {
         .layer(axum::extract::DefaultBodyLimit::max(11 * 1024 * 1024))
         // Rate-limit layer added last so it is outermost: an over-budget
         // request is rejected before the body is buffered or the handler runs.
+        .layer(axum::middleware::from_fn_with_state(
+            limiter,
+            rate_limit_by_ip,
+        ))
+}
+
+/// Per-IP rate-limited router for the "add your own books" upload endpoints.
+/// Kept separate from [`upload_router`] because book/audiobook payloads are far
+/// larger than cover/photo images, so these routes carry their own (much
+/// higher) `DefaultBodyLimit` from `OMNIBUS_MAX_UPLOAD_BYTES` rather than
+/// raising the image routes' 11 MiB cap. Shares the same per-IP frequency
+/// budget as the image uploads.
+fn book_upload_router() -> Router<AppState> {
+    let limiter = std::sync::Arc::new(RateLimiter::with_policy(
+        UPLOAD_RATE_LIMIT_WINDOW,
+        UPLOAD_RATE_LIMIT_MAX,
+    ));
+    Router::new()
+        .route(
+            "/api/uploads/ebooks/inspect",
+            post(uploads::post_inspect_ebook),
+        )
+        .route("/api/uploads/ebooks", post(uploads::post_upload_ebook))
+        .route(
+            "/api/uploads/audiobooks/inspect",
+            post(uploads::post_inspect_audiobook),
+        )
+        .route(
+            "/api/uploads/audiobooks",
+            post(uploads::post_upload_audiobook),
+        )
+        // Book uploads need far more than the global 1 MiB cap; layered closer
+        // to the handler so axum picks this larger value for these routes.
+        .layer(axum::extract::DefaultBodyLimit::max(
+            uploads::max_upload_bytes(),
+        ))
+        // Outermost: reject an over-budget request before buffering the body.
         .layer(axum::middleware::from_fn_with_state(
             limiter,
             rate_limit_by_ip,
