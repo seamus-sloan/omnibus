@@ -17,6 +17,7 @@
 
 mod auth;
 mod authors;
+mod bookmarks;
 mod books;
 mod highlights;
 mod progress;
@@ -29,6 +30,7 @@ mod tags;
 #[cfg(any(feature = "web", feature = "mobile", feature = "server"))]
 pub use auth::*;
 pub use authors::*;
+pub use bookmarks::*;
 pub use books::*;
 pub use highlights::*;
 pub use progress::*;

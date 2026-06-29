@@ -8,6 +8,7 @@ pub mod audiobook;
 pub mod auth;
 pub mod author_photos;
 pub mod author_photos_data;
+pub mod bookmarks;
 pub mod books;
 pub mod browse;
 pub mod covers;
