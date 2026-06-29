@@ -78,7 +78,14 @@ pub async fn search_series(
              JOIN scan_roots l2 ON l2.id = b2.library_id
              LEFT JOIN metadata_overrides mo2 ON mo2.book_uuid = b2.uuid
             WHERE bsl2.series = s.id AND l2.path = ?1
-            ORDER BY b2.sort, b2.id LIMIT 1) AS author_display
+            ORDER BY b2.sort, b2.id LIMIT 1) AS author_display,
+          (SELECT COALESCE(json_extract(mo3.overrides, '$.title'), b3.title)
+             FROM books_series_link bsl3
+             JOIN books b3 ON b3.id = bsl3.book
+             JOIN scan_roots l3 ON l3.id = b3.library_id
+             LEFT JOIN metadata_overrides mo3 ON mo3.book_uuid = b3.uuid
+            WHERE bsl3.series = s.id AND l3.path = ?1
+            ORDER BY b3.sort, b3.id LIMIT 1) AS lead_book_title
         FROM series s
         WHERE s.name LIKE ?2 ESCAPE '\'
           AND EXISTS (
@@ -104,6 +111,33 @@ pub async fn search_series(
             name: r.get("name"),
             book_count: u32::try_from(r.get::<i32, _>("book_count")).unwrap_or(0),
             author_display: r.get("author_display"),
+            lead_book_title: r.get("lead_book_title"),
         })
         .collect())
+}
+
+/// Count visible series matching `like_pattern` in `library_path` — the
+/// uncapped total behind the palette's 5-hit series cap. Visibility mirrors
+/// [`search_series`]: at least one canonical link in this library.
+pub async fn count_series(
+    pool: &SqlitePool,
+    library_path: &str,
+    like_pattern: &str,
+) -> Result<i64, PaletteError> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        r"
+        SELECT COUNT(*) FROM series s
+        WHERE s.name LIKE ?2 ESCAPE '\'
+          AND EXISTS (
+            SELECT 1 FROM books_series_link bsl
+              JOIN books b ON b.id = bsl.book
+              JOIN scan_roots l ON l.id = b.library_id
+             WHERE bsl.series = s.id AND l.path = ?1
+          )
+        ",
+    )
+    .bind(library_path)
+    .bind(like_pattern)
+    .fetch_one(pool)
+    .await?)
 }

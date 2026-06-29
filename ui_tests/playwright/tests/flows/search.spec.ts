@@ -91,24 +91,37 @@ test("tag substring shows tag or book results", async ({ page }) => {
 
 // ── /search/:query full-page route ────────────────────────────────────
 
-test("renders the /search results page with back link and results", async ({ page }) => {
+test("renders the /search results page layout", async ({ page }) => {
   await gotoReady(page, "/search/dracula");
 
-  // Back affordance always present and routes to /.
-  const back = page.getByTestId("search-back");
-  await expect(back).toBeVisible();
+  // Breadcrumb back affordance present.
+  await expect(page.getByTestId("search-back")).toBeVisible();
 
-  // Result count line shows up once the RPC settles.
+  // Heading echoes the query, and the summary stat line shows the engine +
+  // timing once the RPC settles.
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(/dracula/i);
   await expect
     .poll(async () => page.getByTestId("search-result-count").count())
     .toBe(1);
-  await expect(page.getByTestId("search-result-count")).toContainText(/result/);
+  await expect(page.getByTestId("search-result-count")).toContainText(/fts5/);
 
-  // At least one book row for "dracula".
+  // At least one book cover card for "dracula".
   await expect
     .poll(async () => page.getByTestId("search-book-row").count())
     .toBeGreaterThanOrEqual(1);
 
+  // The matched term is highlighted at least once on the page.
+  await expect(page.locator(".search-hit").first()).toBeVisible();
+
+  // "On this page" jump rail is present.
+  await expect(page.getByText("On this page")).toBeVisible();
+});
+
+test("search back link returns to the library", async ({ page }) => {
+  await gotoReady(page, "/search/dracula");
+
+  const back = page.getByTestId("search-back");
+  await expect(back).toBeVisible();
   await back.click();
   await expect(page).toHaveURL(/\/$/);
 });

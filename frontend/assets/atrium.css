@@ -341,25 +341,136 @@ body.atrium,
 }
 
 /* ── /search results page ──────────────────────────────────────── */
-.search-page { padding: 16px 0 48px; }
-.search-page-header { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
-.search-page-title {
-  font-family: var(--serif, "Iowan Old Style", Palatino, Georgia, serif);
-  font-size: 28px; font-weight: 500; color: var(--ink-0); margin: 0;
+.search-page { padding: 8px 0 56px; }
+
+/* Header: kicker + big serif title on the left, sort/view on the right. */
+.search-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 24px; flex-wrap: wrap; margin-bottom: 4px;
 }
-.search-page-query { font-style: italic; color: var(--ink-1); }
-.search-group-head { margin: 28px 0 12px; }
-.search-results { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
-.search-result-row {
-  display: flex; flex-direction: column; gap: 4px;
-  padding: 14px 18px; border-radius: 10px;
-  background: var(--bg-1); border: 1px solid var(--line-2);
-  color: var(--ink-0); text-decoration: none;
+.search-title {
+  font-family: var(--serif); font-weight: 400; color: var(--ink-0);
+  font-size: clamp(32px, 5vw, 52px); line-height: 1.0;
+  margin: 10px 0 0; letter-spacing: -0.01em;
+}
+.search-title-n { font-style: italic; }
+.search-hit { font-style: inherit; font-weight: 600; color: var(--accent); }
+.search-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.search-view-active { background: var(--bg-3); }
+.search-summary {
+  font-size: 11px; color: var(--ink-3); margin: 14px 0 30px;
+}
+
+.search-layout {
+  display: grid; grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 56px; align-items: start;
+}
+.search-main { min-width: 0; }
+.search-section-slot { display: contents; }
+.search-section { scroll-margin-top: 84px; }
+.search-section-head {
+  display: flex; align-items: baseline; gap: 12px;
+  flex-wrap: wrap; margin-bottom: 16px;
+}
+.search-section-count { font-size: 11px; color: var(--ink-3); }
+.search-section-sub { margin-left: auto; font-size: 12px; color: var(--ink-3); }
+
+/* Books — dense cover grid with the matched term lit in the title. */
+.search-cover-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 28px 20px;
+}
+.search-cover-card { display: block; text-decoration: none; color: inherit; }
+.search-cover-thumb {
+  display: block; width: 100%; aspect-ratio: 2 / 3; object-fit: cover;
+  border-radius: var(--r-sm); border: 1px solid var(--line-2);
+  background: var(--bg-2); transition: border-color .15s;
+}
+.search-cover-fallback {
+  display: grid; place-items: center;
+  font-family: var(--serif); font-style: italic; font-size: 30px;
+  color: var(--cover-fallback-ink);
+}
+.search-cover-card:hover .search-cover-thumb { border-color: var(--accent); }
+.search-cover-title {
+  margin-top: 8px; font-size: 13px; color: var(--ink-0);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.search-cover-card:hover .search-cover-title { color: var(--accent); }
+.search-cover-sub {
+  font-size: 12px; color: var(--ink-2); margin-top: 1px;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+
+/* Authors & series — two-up entity cards. */
+.search-card-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+.search-entity {
+  display: flex; gap: 14px; align-items: center;
+  padding: 14px 16px; border-radius: 12px;
+  border: 1px solid var(--line-2); background: var(--bg-1);
+  text-decoration: none; color: inherit;
   transition: border-color .15s, background .15s;
 }
-.search-result-row:hover { border-color: var(--accent); background: var(--bg-2); }
-.search-row-title { font-size: 14px; font-weight: 500; }
-.search-row-sub { font-size: 12px; color: var(--ink-2); }
+.search-entity:hover { border-color: var(--accent); background: var(--bg-2); }
+.search-avatar {
+  flex: 0 0 44px; width: 44px; height: 44px; border-radius: 999px;
+  background: var(--bg-3); display: grid; place-items: center;
+  font-family: var(--serif); font-style: italic; font-size: 20px; color: var(--ink-1);
+}
+.search-avatar-series { border-radius: 8px; }
+.search-entity-body { flex: 1; min-width: 0; }
+.search-entity-title {
+  font-size: 16px; color: var(--ink-0);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.search-entity-title-serif { font-family: var(--serif); font-style: italic; }
+.search-entity-sub {
+  font-size: 11px; color: var(--ink-3); margin-top: 2px;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.search-entity-arrow { flex: 0 0 auto; color: var(--ink-3); font-size: 18px; }
+.search-entity-n { flex: 0 0 auto; color: var(--ink-2); font-size: 12px; }
+
+/* Tags — chips, matched names lit. */
+.search-tags { display: flex; gap: 8px; flex-wrap: wrap; }
+.search-tag { text-decoration: none; }
+.search-tag-matched {
+  background: var(--bg-2); border-color: var(--accent); color: var(--ink-0);
+}
+.search-tag-count { color: var(--ink-3); }
+
+/* Right rail — jump links + a context card. */
+.search-rail { position: sticky; top: 80px; align-self: start; }
+.search-rail-head { margin-bottom: 12px; }
+.search-rail-list { display: flex; flex-direction: column; gap: 2px; }
+.search-rail-item {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 9px 12px; border-radius: 8px; color: var(--ink-1);
+  text-decoration: none; border-left: 2px solid transparent;
+  font-size: 13.5px; transition: background .15s;
+}
+.search-rail-item:hover { background: var(--bg-1); }
+.search-rail-item-active { background: var(--bg-2); border-left-color: var(--accent); }
+.search-rail-count { color: var(--ink-3); font-size: 11px; }
+.search-refine {
+  padding: 16px; border-radius: 12px;
+  border: 1px solid var(--line-2); background: var(--bg-1);
+}
+.search-refine-title {
+  font-family: var(--serif); font-style: italic; font-size: 17px; color: var(--ink-0);
+}
+.search-refine-body {
+  font-size: 12.5px; color: var(--ink-2); margin-top: 6px; line-height: 1.5;
+}
+.search-refine-btn { margin-top: 12px; width: 100%; justify-content: center; }
+
+@media (max-width: 900px) {
+  .search-layout { grid-template-columns: 1fr; gap: 28px; }
+  .search-rail { position: static; }
+}
 
 /* ── Buttons ────────────────────────────────────────────────────── */
 .btn {
