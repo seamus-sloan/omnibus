@@ -172,12 +172,9 @@ pub struct PaletteResults {
     pub series: Vec<PaletteSeriesHit>,
     pub tags: Vec<PaletteTagHit>,
     pub duration_ms: u64,
-    /// True match counts per category, *before* the 5-hit display cap. The
-    /// full-page results header ("N results") and the per-group counts read
-    /// these rather than the capped `Vec` lengths, so a query that matches
-    /// 40 books still reports 40 even though only 5 hits ship. `#[serde(default)]`
-    /// keeps older/partial payloads (and the command palette, which ignores
-    /// them) deserializing.
+    /// True match counts per category, before the 5-hit display cap.
+    // `#[serde(default)]` keeps older/partial payloads (and the command
+    // palette, which ignores these) deserializing.
     #[serde(default)]
     pub book_total: u32,
     #[serde(default)]

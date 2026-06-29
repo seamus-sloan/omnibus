@@ -1,10 +1,8 @@
-//! Search results page — the full page you land on when you press Enter on
-//! the command-palette input (or click a Tag result). Reuses the
-//! `data::search_palette` RPC and groups the hits by type (Books, Authors,
-//! Series, Tags), each section linking into the relevant detail page. The
-//! matched term is highlighted throughout, an "On this page" rail jumps
-//! between sections, and a query that lands inside tag names leads with the
-//! Tags group.
+//! Search results page — the full page reached from the command palette.
+//! Reuses the `data::search_palette` RPC and groups hits by type (Books,
+//! Authors, Series, Tags) with the matched term highlighted, an "On this
+//! page" jump rail, and a tags-first ordering when the query matches tag
+//! names.
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
