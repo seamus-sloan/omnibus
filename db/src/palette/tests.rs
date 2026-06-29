@@ -1067,5 +1067,5 @@ async fn palette_totals_report_uncapped_counts() {
     assert_eq!(results.authors.len(), 1);
     assert_eq!(results.tag_total, 1, "one matching tag");
     assert_eq!(results.series_total, 0, "no series seeded");
-    assert_eq!(results.total_count(), 7 + 1 + 0 + 1);
+    assert_eq!(results.total_count(), 7 + 1 + 1, "books + authors + tags (no series)");
 }
