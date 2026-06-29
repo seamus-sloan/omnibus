@@ -950,9 +950,18 @@ pub async fn rpc_delete_journal_entry(id: i64) -> Result<()> {
 }
 
 /// Render a draft journal body to sanitized HTML for the composer's live
-/// preview, using the same renderer as the persisted read path.
+/// preview, using the same renderer as the persisted read path. Rejects bodies
+/// over `BODY_MAX_LEN` so an authenticated client can't drive arbitrary
+/// markdown+sanitize work.
 #[post("/api/rpc/journals/preview", _pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_preview_journal_markdown(body_md: String) -> Result<String> {
+    if body_md.len() > omnibus_shared::BODY_MAX_LEN {
+        return Err(ServerFnError::new(format!(
+            "journal entry must be {} bytes or fewer",
+            omnibus_shared::BODY_MAX_LEN
+        ))
+        .into());
+    }
     Ok(db::journals::markdown::render(&body_md))
 }
 
