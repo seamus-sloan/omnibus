@@ -656,6 +656,21 @@ body.atrium,
 .bd-stars-row { display: inline-flex; gap: 2px; font-size: 26px; line-height: 1; }
 .bd-star { color: var(--bg-3); }
 .bd-star-on { color: var(--accent); }
+/* Interactive half-star rating. Each slot stacks an empty star (bg) and an
+   accent-colored star (fg) clipped to a 0/50/100% width, with two transparent
+   click targets (left half = x.5, right half = x). */
+.bd-stars-interactive { display: inline-flex; gap: 2px; font-size: 26px; line-height: 1; }
+.bd-star-slot { position: relative; display: inline-block; width: 1em; height: 1em; }
+.bd-star-bg, .bd-star-fg { position: absolute; inset: 0; line-height: 1; pointer-events: none; }
+.bd-star-bg { color: var(--bg-3); }
+.bd-star-fg { color: var(--accent); overflow: hidden; white-space: nowrap; }
+.bd-star-half {
+  position: absolute; top: 0; height: 100%; width: 50%;
+  margin: 0; padding: 0; border: 0; background: none; cursor: pointer; z-index: 2;
+}
+.bd-star-half-left { left: 0; }
+.bd-star-half-right { right: 0; }
+.bd-star-half:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .bd-action-head, .bd-shelves-head { margin-bottom: 8px; }
 .bd-actions {
   display: flex; flex-direction: column; gap: 4px;

@@ -4,6 +4,16 @@
 
 Per-user star ratings and free-form journal entries per book.
 
+> **Status:** Ratings have shipped — `user_ratings` (migration `0031`, soft-ref
+> `book_uuid`, half-star storage `half_stars` 1–10, wired into the F10 GC
+> user-data guard), `db::ratings` (`set_rating`/`get_rating`/`delete_rating`),
+> `/api/ratings*` REST + `/api/rpc/ratings/*` server functions, and the
+> interactive **half-star** widget in the book-detail hero card (`rating-stars`):
+> click left/right half of a star for `x.5`/`x`, re-click to un-rate, with a
+> "rated {N} ago · {value} of 5" status line. **Journaling is not yet built** —
+> the `user_journal_entries` table, `pulldown-cmark` rendering, and the journal
+> UI remain to do.
+
 ## Objective
 
 1-5 star rating per user per book, plus a free-form markdown journal (multiple dated entries) on each book detail page.

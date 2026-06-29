@@ -21,6 +21,7 @@ mod bookmarks;
 mod books;
 mod highlights;
 mod progress;
+mod ratings;
 mod series;
 mod tags;
 
@@ -34,6 +35,7 @@ pub use bookmarks::*;
 pub use books::*;
 pub use highlights::*;
 pub use progress::*;
+pub use ratings::*;
 pub use series::*;
 pub use tags::*;
 
