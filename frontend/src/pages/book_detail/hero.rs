@@ -7,7 +7,8 @@ use omnibus_shared::EbookMetadata;
 use crate::components::atrium::Cover;
 use crate::Route;
 
-use super::{BdCrumb, BdCrumbItem, BdFormatBadge, BdStars};
+use super::rating::BdRatingWidget;
+use super::{BdCrumb, BdCrumbItem, BdFormatBadge};
 
 /// Hero section: breadcrumb, cover + format badges, title + CTAs, rating card.
 #[component]
@@ -44,8 +45,7 @@ pub(super) fn BdHeroSection(
                 }
                 aside { class: "card bd-rating-card",
                     div { class: "label", "Your rating" }
-                    div { class: "bd-stars", aria_hidden: "true", BdStars { value: 0.0 } }
-                    div { class: "mono bd-rating-meta", "Not rated yet" }
+                    BdRatingWidget { uuid: uuid.clone() }
                     div { class: "divider" }
                     div { class: "label bd-action-head", "Actions" }
                     div { class: "bd-actions",

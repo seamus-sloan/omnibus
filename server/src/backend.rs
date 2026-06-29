@@ -30,6 +30,7 @@ mod health;
 mod highlights;
 mod overrides;
 mod progress;
+mod ratings;
 mod search;
 mod series;
 mod settings;
@@ -240,6 +241,13 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
         .route(
             "/api/bookmarks/{id}",
             put(bookmarks::put_bookmark).delete(bookmarks::delete_bookmark),
+        )
+        // F3.2 star ratings — mobile-facing REST. Web hits the analogous
+        // `/api/rpc/ratings/*` server functions.
+        .route("/api/ratings", post(ratings::post_rating))
+        .route(
+            "/api/ratings/{uuid}",
+            get(ratings::get_rating).delete(ratings::delete_rating),
         )
         // GET/DELETE for author photos carry no upload body (DELETE mutates,
         // but cheaply — it clears photo state, it doesn't ingest one), so

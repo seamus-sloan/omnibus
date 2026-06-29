@@ -27,6 +27,7 @@ pub mod normalize;
 pub mod palette;
 pub mod pool;
 pub mod progress;
+pub mod ratings;
 pub mod scanner;
 pub mod settings;
 pub mod sort_keys;
