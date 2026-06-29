@@ -37,6 +37,7 @@ fn copy_text(text: &str) {
 #[component]
 pub(super) fn HighlightsDrawer(
     highlights: Signal<Vec<Highlight>>,
+    on_quote: EventHandler<Highlight>,
     on_close: EventHandler<()>,
 ) -> Element {
     let mut filter = use_signal(|| None::<HighlightColor>);
@@ -88,7 +89,7 @@ pub(super) fn HighlightsDrawer(
                     div { class: "rd-drawer-empty", "No highlights yet." }
                 } else {
                     for h in shown.iter() {
-                        HighlightRow { key: "{h.id}", highlight: h.clone(), highlights }
+                        HighlightRow { key: "{h.id}", highlight: h.clone(), highlights, on_quote }
                     }
                 }
             }
@@ -97,7 +98,11 @@ pub(super) fn HighlightsDrawer(
 }
 
 #[component]
-fn HighlightRow(highlight: Highlight, highlights: Signal<Vec<Highlight>>) -> Element {
+fn HighlightRow(
+    highlight: Highlight,
+    highlights: Signal<Vec<Highlight>>,
+    on_quote: EventHandler<Highlight>,
+) -> Element {
     let color = highlight.color.as_str();
     let quote = highlight
         .text
@@ -142,6 +147,16 @@ fn HighlightRow(highlight: Highlight, highlights: Signal<Vec<Highlight>>) -> Ele
                 div { class: "rd-hl-note", "{n}" }
             }
             div { class: "rd-hl-actions",
+                button {
+                    class: "rd-act sm",
+                    r#type: "button",
+                    "data-testid": "highlight-quote",
+                    onclick: {
+                        let h = highlight.clone();
+                        move |_| on_quote.call(h.clone())
+                    },
+                    "Quote"
+                }
                 button {
                     class: "rd-act sm",
                     r#type: "button",

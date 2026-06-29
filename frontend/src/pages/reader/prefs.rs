@@ -12,7 +12,7 @@ use crate::components::atrium::{persist_theme, Theme};
 use super::reader_call;
 #[cfg(feature = "web")]
 use super::typography::save_reader_pref;
-use super::typography::{LineSpacing, Margins, Typeface};
+use super::typography::{LineSpacing, Margins, Spread, Typeface};
 
 /// Min/max for the AA-panel font-size slider, in CSS px. Kept in sync with
 /// the `font_pct` accessor below so the slider thumb tracks the value.
@@ -29,6 +29,7 @@ pub(crate) struct ReaderPrefs {
     pub line_spacing: Signal<LineSpacing>,
     pub margins: Signal<Margins>,
     pub justify: Signal<bool>,
+    pub spread: Signal<Spread>,
 }
 
 impl ReaderPrefs {
@@ -102,6 +103,18 @@ impl ReaderPrefs {
         }
     }
 
+    /// Apply a page-view (spread) choice, push to JS, persist to localStorage.
+    pub(crate) fn set_spread(self, s: Spread) {
+        let mut spread = self.spread;
+        spread.set(s);
+        #[cfg(feature = "web")]
+        {
+            let lit = serde_json::to_string(s.to_css()).unwrap_or_else(|_| "\"auto\"".into());
+            reader_call("setSpread", &lit);
+            save_reader_pref("omn.spread", s.to_storage());
+        }
+    }
+
     /// Flip the justify toggle and push the new boolean into the JS glue.
     pub(crate) fn toggle_justify(self) {
         let mut justify = self.justify;
@@ -136,6 +149,7 @@ pub(crate) fn init_reader_prefs(theme: Signal<Theme>) -> ReaderPrefs {
     let line_spacing = use_signal(load_line_spacing_or_default);
     let margins = use_signal(load_margins_or_default);
     let justify = use_signal(load_justify_or_default);
+    let spread = use_signal(load_spread_or_default);
     ReaderPrefs {
         theme,
         font_size,
@@ -143,6 +157,7 @@ pub(crate) fn init_reader_prefs(theme: Signal<Theme>) -> ReaderPrefs {
         line_spacing,
         margins,
         justify,
+        spread,
     }
 }
 
@@ -198,4 +213,15 @@ fn load_justify_or_default() -> bool {
     }
     #[cfg(not(feature = "web"))]
     false
+}
+
+fn load_spread_or_default() -> Spread {
+    #[cfg(feature = "web")]
+    {
+        super::typography::load_reader_pref("omn.spread")
+            .and_then(|s| Spread::from_storage(&s))
+            .unwrap_or(Spread::Double)
+    }
+    #[cfg(not(feature = "web"))]
+    Spread::Double
 }

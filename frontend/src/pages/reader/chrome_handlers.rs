@@ -17,8 +17,11 @@ use super::selection::SelectionData;
 pub(super) struct OverlaySignals {
     pub show_aa: Signal<bool>,
     pub show_toc: Signal<bool>,
+    pub show_search: Signal<bool>,
     pub show_highlights: Signal<bool>,
+    pub show_bookmarks: Signal<bool>,
     pub note_target: Signal<Option<Highlight>>,
+    pub quote_target: Signal<Option<Highlight>>,
 }
 
 /// Build the `(on_back, on_prev, on_next, on_keydown)` handlers consumed
@@ -99,16 +102,25 @@ fn handle_keydown(
             let mut selection = selection;
             let mut show_aa = overlays.show_aa;
             let mut show_toc = overlays.show_toc;
+            let mut show_search = overlays.show_search;
             let mut show_highlights = overlays.show_highlights;
+            let mut show_bookmarks = overlays.show_bookmarks;
             let mut note_target = overlays.note_target;
+            let mut quote_target = overlays.quote_target;
             if selection.read().is_some() {
                 selection.set(None);
             } else if note_target.read().is_some() {
                 note_target.set(None);
+            } else if quote_target.read().is_some() {
+                quote_target.set(None);
+            } else if *show_search.read() {
+                show_search.set(false);
             } else if *show_toc.read() {
                 show_toc.set(false);
             } else if *show_highlights.read() {
                 show_highlights.set(false);
+            } else if *show_bookmarks.read() {
+                show_bookmarks.set(false);
             } else if *show_aa.read() {
                 show_aa.set(false);
             } else {

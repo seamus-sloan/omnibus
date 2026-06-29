@@ -12,6 +12,9 @@ mod highlights_drawer;
 mod interop;
 mod note_composer;
 mod prefs;
+mod quote_panel;
+mod reader_bookmarks;
+mod search_panel;
 mod selection;
 mod toc_drawer;
 mod typography;
@@ -30,6 +33,9 @@ use highlights_drawer::HighlightsDrawer;
 use interop::{install_reader_web_interop, InteropSignals};
 use note_composer::NoteComposer;
 use prefs::init_reader_prefs;
+use quote_panel::QuotePanel;
+use reader_bookmarks::ReaderBookmarksDrawer;
+use search_panel::{SearchPanel, SearchResult};
 use selection::{SelectionData, SelectionPopover};
 use toc_drawer::{TocDrawer, TocEntry};
 
@@ -70,10 +76,19 @@ fn reader_call(method: &str, arg_js: &str) {
     let _ = dioxus::document::eval(&js);
 }
 
-/// Optimistically annotate the selection, persist the highlight, and — when
-/// `open_note` — open the note composer on the created row. Shared by the
-/// swatch (highlight) and Note popover actions. Rolls the optimistic
-/// annotation back if the write fails.
+/// What to open on the created highlight after the swatch/Note/Quote actions.
+#[derive(Clone, Copy)]
+enum PostCreate {
+    None,
+    Note,
+    Quote,
+}
+
+/// Optimistically annotate the selection, persist the highlight, and — per
+/// `post` — open the note composer or quote panel on the created row. Shared
+/// by the swatch (highlight), Note, and Quote popover actions. Rolls the
+/// optimistic annotation back if the write fails.
+#[allow(clippy::too_many_arguments)]
 fn spawn_create_highlight(
     uuid: String,
     cfi: String,
@@ -81,7 +96,8 @@ fn spawn_create_highlight(
     text: String,
     mut highlights: Signal<Vec<Highlight>>,
     mut note_target: Signal<Option<Highlight>>,
-    open_note: bool,
+    mut quote_target: Signal<Option<Highlight>>,
+    post: PostCreate,
 ) {
     #[cfg(feature = "web")]
     {
@@ -100,8 +116,10 @@ fn spawn_create_highlight(
         match data::create_highlight("", create).await {
             Ok(h) => {
                 highlights.write().push(h.clone());
-                if open_note {
-                    note_target.set(Some(h));
+                match post {
+                    PostCreate::Note => note_target.set(Some(h)),
+                    PostCreate::Quote => quote_target.set(Some(h)),
+                    PostCreate::None => {}
                 }
             }
             Err(_) => {
@@ -188,6 +206,10 @@ pub fn BookReadPage(uuid: String) -> Element {
     let show_toc = use_signal(|| false);
     let show_highlights = use_signal(|| false);
     let note_target: Signal<Option<Highlight>> = use_signal(|| None);
+    let quote_target: Signal<Option<Highlight>> = use_signal(|| None);
+    let show_search = use_signal(|| false);
+    let search_results: Signal<Vec<SearchResult>> = use_signal(Vec::new);
+    let show_bookmarks = use_signal(|| false);
     let loc = use_signal(RelocateData::default);
     let book_meta = use_book_metadata(uuid.clone());
 
@@ -201,6 +223,7 @@ pub fn BookReadPage(uuid: String) -> Element {
             selection,
             highlights,
             toc,
+            search_results,
         },
     );
 
@@ -209,19 +232,33 @@ pub fn BookReadPage(uuid: String) -> Element {
         chrome_handlers::OverlaySignals {
             show_aa,
             show_toc,
+            show_search,
             show_highlights,
+            show_bookmarks,
             note_target,
+            quote_target,
         },
     );
 
     let (page_str, chapter_str) = format_progress_labels(&loc.read());
     let pct = loc.read().pct;
     let chapter_title_display = loc.read().chapter_title.clone();
+    let current_cfi = loc.read().cfi.clone().unwrap_or_default();
     let book_title = book_meta
         .read()
         .as_ref()
         .and_then(|b| b.title.clone())
         .unwrap_or_default();
+    let book_author = book_meta
+        .read()
+        .as_ref()
+        .and_then(|b| b.creators.first().map(|c| c.name.clone()))
+        .unwrap_or_default();
+    let book_accent = book_meta
+        .read()
+        .as_ref()
+        .and_then(|b| b.accent.clone())
+        .unwrap_or_else(|| "#3a3027".to_string());
 
     // Suppress the `prefs` unused-variable warning on non-web targets:
     // `install_reader_web_interop` is web-only, so on SSR / mobile the
@@ -233,7 +270,10 @@ pub fn BookReadPage(uuid: String) -> Element {
         ReaderLayout {
             uuid: uuid.clone(),
             book_title,
+            book_author,
+            book_accent,
             chapter_title: chapter_title_display,
+            current_cfi,
             page_str,
             chapter_str,
             pct,
@@ -245,6 +285,10 @@ pub fn BookReadPage(uuid: String) -> Element {
             show_toc,
             show_highlights,
             note_target,
+            quote_target,
+            show_search,
+            search_results,
+            show_bookmarks,
             on_keydown,
             on_back,
             on_prev,
@@ -258,7 +302,10 @@ pub fn BookReadPage(uuid: String) -> Element {
 fn ReaderLayout(
     uuid: String,
     book_title: String,
+    book_author: String,
+    book_accent: String,
     chapter_title: String,
+    current_cfi: String,
     page_str: String,
     chapter_str: String,
     pct: u32,
@@ -270,12 +317,37 @@ fn ReaderLayout(
     show_toc: Signal<bool>,
     show_highlights: Signal<bool>,
     note_target: Signal<Option<Highlight>>,
+    quote_target: Signal<Option<Highlight>>,
+    show_search: Signal<bool>,
+    search_results: Signal<Vec<SearchResult>>,
+    show_bookmarks: Signal<bool>,
     on_keydown: EventHandler<KeyboardEvent>,
     on_back: EventHandler<MouseEvent>,
     on_prev: EventHandler<MouseEvent>,
     on_next: EventHandler<MouseEvent>,
 ) -> Element {
     let highlight_count = highlights.read().len();
+
+    // Close every overlay (panel, drawer, composer) — `Fn` + `Copy` so each
+    // toggle handler can call it before opening its own surface, keeping the
+    // chrome mutually exclusive.
+    let close_overlays = move || {
+        let mut a = show_aa;
+        a.set(false);
+        let mut b = show_toc;
+        b.set(false);
+        let mut c = show_search;
+        c.set(false);
+        let mut d = show_highlights;
+        d.set(false);
+        let mut e = show_bookmarks;
+        e.set(false);
+        let mut f = note_target;
+        f.set(None);
+        let mut g = quote_target;
+        g.set(None);
+    };
+
     rsx! {
         document::Script { src: JSZIP_JS }
         document::Script { src: EPUBJS_JS }
@@ -294,30 +366,40 @@ fn ReaderLayout(
                 chapter_title: chapter_title.clone(),
                 show_aa: show_aa(),
                 toc_active: show_toc(),
+                search_active: show_search(),
                 highlights_active: show_highlights(),
+                bookmarks_active: show_bookmarks(),
                 highlight_count,
                 on_back,
                 on_toggle_aa: move |_| {
-                    let mut show_aa = show_aa;
-                    show_aa.set(!show_aa());
+                    let cur = show_aa();
+                    close_overlays();
+                    let mut s = show_aa;
+                    s.set(!cur);
                 },
                 on_toggle_toc: move |_| {
-                    let mut show_toc = show_toc;
-                    let mut show_highlights = show_highlights;
-                    let next = !show_toc();
-                    show_toc.set(next);
-                    if next {
-                        show_highlights.set(false);
-                    }
+                    let cur = show_toc();
+                    close_overlays();
+                    let mut s = show_toc;
+                    s.set(!cur);
+                },
+                on_toggle_search: move |_| {
+                    let cur = show_search();
+                    close_overlays();
+                    let mut s = show_search;
+                    s.set(!cur);
                 },
                 on_toggle_highlights: move |_| {
-                    let mut show_toc = show_toc;
-                    let mut show_highlights = show_highlights;
-                    let next = !show_highlights();
-                    show_highlights.set(next);
-                    if next {
-                        show_toc.set(false);
-                    }
+                    let cur = show_highlights();
+                    close_overlays();
+                    let mut s = show_highlights;
+                    s.set(!cur);
+                },
+                on_toggle_bookmarks: move |_| {
+                    let cur = show_bookmarks();
+                    close_overlays();
+                    let mut s = show_bookmarks;
+                    s.set(!cur);
                 },
             }
 
@@ -363,7 +445,7 @@ fn ReaderLayout(
                                     selection.set(None);
                                     spawn_create_highlight(
                                         uuid_pop.clone(), cfi, color, text,
-                                        highlights, note_target, false,
+                                        highlights, note_target, quote_target, PostCreate::None,
                                     );
                                 }
                             },
@@ -374,7 +456,18 @@ fn ReaderLayout(
                                     selection.set(None);
                                     spawn_create_highlight(
                                         uuid_pop.clone(), cfi, HighlightColor::Amber, text,
-                                        highlights, note_target, true,
+                                        highlights, note_target, quote_target, PostCreate::Note,
+                                    );
+                                }
+                            },
+                            on_quote: {
+                                let uuid_pop = uuid_pop.clone();
+                                move |(cfi, text): (String, String)| {
+                                    let mut selection = selection;
+                                    selection.set(None);
+                                    spawn_create_highlight(
+                                        uuid_pop.clone(), cfi, HighlightColor::Amber, text,
+                                        highlights, note_target, quote_target, PostCreate::Quote,
                                     );
                                 }
                             },
@@ -429,9 +522,78 @@ fn ReaderLayout(
             if show_highlights() {
                 HighlightsDrawer {
                     highlights,
+                    on_quote: move |h: Highlight| {
+                        let mut quote_target = quote_target;
+                        let mut show_highlights = show_highlights;
+                        quote_target.set(Some(h));
+                        show_highlights.set(false);
+                    },
                     on_close: move |_| {
                         let mut show_highlights = show_highlights;
                         show_highlights.set(false);
+                    },
+                }
+            }
+
+            if show_search() {
+                SearchPanel {
+                    results: search_results,
+                    on_query: move |q: String| {
+                        #[cfg(feature = "web")]
+                        {
+                            let lit = serde_json::to_string(&q).unwrap_or_else(|_| "\"\"".into());
+                            reader_call("search", &lit);
+                        }
+                        let _ = &q;
+                    },
+                    on_navigate: move |cfi: String| {
+                        #[cfg(feature = "web")]
+                        {
+                            let lit = serde_json::to_string(&cfi).unwrap_or_else(|_| "\"\"".into());
+                            reader_call("display", &lit);
+                        }
+                        let _ = &cfi;
+                        let mut show_search = show_search;
+                        show_search.set(false);
+                    },
+                    on_close: move |_| {
+                        let mut show_search = show_search;
+                        show_search.set(false);
+                    },
+                }
+            }
+
+            if show_bookmarks() {
+                ReaderBookmarksDrawer {
+                    uuid: uuid.clone(),
+                    current_cfi: current_cfi.clone(),
+                    current_label: chapter_title.clone(),
+                    on_navigate: move |cfi: String| {
+                        #[cfg(feature = "web")]
+                        {
+                            let lit = serde_json::to_string(&cfi).unwrap_or_else(|_| "\"\"".into());
+                            reader_call("display", &lit);
+                        }
+                        let _ = &cfi;
+                        let mut show_bookmarks = show_bookmarks;
+                        show_bookmarks.set(false);
+                    },
+                    on_close: move |_| {
+                        let mut show_bookmarks = show_bookmarks;
+                        show_bookmarks.set(false);
+                    },
+                }
+            }
+
+            if let Some(h) = quote_target.read().clone() {
+                QuotePanel {
+                    quote_text: h.text.clone().unwrap_or_default(),
+                    author: book_author.clone(),
+                    subtitle: book_title.clone(),
+                    accent: book_accent.clone(),
+                    on_close: move |_| {
+                        let mut quote_target = quote_target;
+                        quote_target.set(None);
                     },
                 }
             }
@@ -463,12 +625,16 @@ fn ReaderTopChrome(
     chapter_title: String,
     show_aa: bool,
     toc_active: bool,
+    search_active: bool,
     highlights_active: bool,
+    bookmarks_active: bool,
     highlight_count: usize,
     on_back: EventHandler<MouseEvent>,
     on_toggle_aa: EventHandler<MouseEvent>,
     on_toggle_toc: EventHandler<MouseEvent>,
+    on_toggle_search: EventHandler<MouseEvent>,
     on_toggle_highlights: EventHandler<MouseEvent>,
+    on_toggle_bookmarks: EventHandler<MouseEvent>,
 ) -> Element {
     rsx! {
         div {
@@ -510,6 +676,20 @@ fn ReaderTopChrome(
                     }
                 }
                 button {
+                    class: if search_active { "rd-tool on" } else { "rd-tool" },
+                    r#type: "button",
+                    "data-testid": "reader-search",
+                    "aria-label": "Search in book",
+                    onclick: on_toggle_search,
+                    svg {
+                        width: "19", height: "19", view_box: "0 0 24 24",
+                        fill: "none", stroke: "currentColor",
+                        stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                        circle { cx: "11", cy: "11", r: "6.2" }
+                        path { d: "M20 20l-4.2-4.2" }
+                    }
+                }
+                button {
                     class: if show_aa { "rd-tool rd-aa on" } else { "rd-tool rd-aa" },
                     r#type: "button",
                     "data-testid": "reader-aa",
@@ -535,12 +715,11 @@ fn ReaderTopChrome(
                     }
                 }
                 button {
-                    class: "rd-tool",
+                    class: if bookmarks_active { "rd-tool on" } else { "rd-tool" },
                     r#type: "button",
                     "data-testid": "reader-bookmark",
-                    "aria-label": "Bookmark (coming soon)",
-                    title: "Bookmark — coming soon",
-                    disabled: true,
+                    "aria-label": "Bookmarks",
+                    onclick: on_toggle_bookmarks,
                     svg {
                         width: "19", height: "19", view_box: "0 0 24 24",
                         fill: "none", stroke: "currentColor",
