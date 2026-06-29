@@ -1,26 +1,14 @@
 name: Docker
 
-# Build the fullstack image and push it to Docker Hub (sesloan/omnibus).
-# Publishes on three triggers:
-#   • a published GitHub Release → versioned tags + `latest`
-#   • a daily schedule → `nightly` (rebuilds the default branch to pick up
-#     base-image security updates)
-#   • a manual dispatch → `nightly`
-# It deliberately does NOT build on every push to main, since the Rust + WASM
-# bundle is a ~10+ minute build.
-#
-# Required repository secrets (Settings → Secrets and variables → Actions):
-#   DOCKERHUB_USERNAME  — your Docker Hub account name (sesloan)
-#   DOCKERHUB_TOKEN     — a Docker Hub access token with Read/Write scope
-#                         (Docker Hub → Account settings → Personal access tokens)
+# Build + push the fullstack image to Docker Hub (sesloan/omnibus).
+# Triggers: release → version tags + latest; daily cron + manual → nightly.
+# Needs repo secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (Read/Write token).
 on:
   release:
     types: [published]
   schedule:
-    # 10:00 UTC = 6am US Eastern (EDT). GitHub cron is UTC-only and doesn't
-    # observe DST, so during EST (winter) this fires at 5am Eastern. Scheduled
-    # runs always build the default branch (main) HEAD.
-    - cron: "0 10 * * *"
+    # 15:00 UTC = 11am EDT (10am EST). Cron is UTC-only — no DST.
+    - cron: "0 15 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -49,10 +37,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Derive tags/labels from the trigger. A release tag `v1.2.3` fans out
-      # into `1.2.3`, `1.2`, `1`, and `latest` (latest=auto only stamps it for
-      # a valid semver ref); a scheduled or manual run tags `nightly`. OCI
-      # labels (source, revision, created) are stamped too.
+      # release → 1.2.3/1.2/1/latest (latest=auto, semver only); cron/manual → nightly.
       - name: Derive image metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -75,7 +60,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Reuse layers across runs via the GitHub Actions cache so unchanged
-          # Rust/WASM build stages don't recompile on every release.
+          # Cache layers across runs so unchanged build stages don't recompile.
           cache-from: type=gha
           cache-to: type=gha,mode=max
