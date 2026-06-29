@@ -17,6 +17,8 @@ concurrency:
 
 permissions:
   contents: read
+  # Buildx needs this to write the type=gha layer cache (matches e2e.yml).
+  actions: write
 
 env:
   IMAGE: sesloan/omnibus
@@ -58,6 +60,8 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
+          # Re-pull base images each run so the nightly picks up upstream fixes.
+          pull: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # Cache layers across runs so unchanged build stages don't recompile.
