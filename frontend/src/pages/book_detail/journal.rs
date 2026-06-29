@@ -159,12 +159,18 @@ fn BdJournalComposer(uuid: String, server_url: String, reload: Signal<u32>) -> E
                         move |_| {
                             let url = url.clone();
                             let md = body();
+                            // Clear any prior preview so a failed fetch can't leave stale HTML on screen.
+                            preview_html.set(String::new());
+                            show_preview.set(true);
                             spawn(async move {
-                                if let Ok(html) = data::preview_journal_markdown(&url, md).await {
-                                    preview_html.set(html);
+                                match data::preview_journal_markdown(&url, md).await {
+                                    Ok(html) => {
+                                        preview_html.set(html);
+                                        error.set(None);
+                                    }
+                                    Err(e) => error.set(Some(format!("Preview failed: {e}"))),
                                 }
                             });
-                            show_preview.set(true);
                         }
                     },
                     "Preview"
