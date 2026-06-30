@@ -281,7 +281,9 @@ fn decode_id3_text(encoding: u8, data: &[u8]) -> String {
                 (encoding == 2, 0)
             };
             let codepoints: Vec<u16> = data[skip..]
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|p| {
                     if is_be {
                         u16::from_be_bytes([p[0], p[1]])
