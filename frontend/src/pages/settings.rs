@@ -5,7 +5,7 @@
 //! counts via the scanner so changes can be eyeballed before saving.
 
 use dioxus::prelude::*;
-use omnibus_shared::{LibraryContents, LibrarySection, Settings};
+use omnibus_shared::{HardcoverKeyStatus, LibraryContents, LibrarySection, Settings};
 
 #[cfg(not(feature = "mobile"))]
 use crate::components::worker_status::WorkerStatusIndicator;
@@ -25,6 +25,20 @@ pub fn SettingsPage() -> Element {
     let backfill_in_flight = use_signal(|| false);
     // Bumped after a successful save to re-trigger the library-refresh effect.
     let library_refresh = use_signal(|| 0u32);
+
+    // Admin gating for the F3.3 Hardcover key card. Starts `false` so SSR and
+    // the first WASM paint agree (rule 07); the effect flips it for admins
+    // after mount. Declared unconditionally to keep hook order stable. The
+    // server-side `AdminUser` extractor on the key RPCs is the real boundary;
+    // this just keeps the card off non-admin screens.
+    let mut is_admin = use_signal(|| false);
+    use_effect(move || {
+        spawn(async move {
+            if let Ok(Some(user)) = data::current_user().await {
+                is_admin.set(user.is_admin);
+            }
+        });
+    });
 
     spawn_initial_settings_load(
         server_url.clone(),
@@ -78,6 +92,9 @@ pub fn SettingsPage() -> Element {
                 class: if status_is_error() { "settings-status error" } else { "settings-status success" },
                 if let Some(msg) = status() { "{msg}" }
             }
+        }
+        if is_admin() {
+            HardcoverKeyField {}
         }
     }
 }
@@ -273,6 +290,148 @@ fn MaintenanceActions(
                 });
             },
             "Extract Audiobook Chapters"
+        }
+    }
+}
+
+/// Admin field to set/clear the server-wide Hardcover API key (F3.3). Loads the
+/// masked status on mount; the raw key is never read back to the client.
+#[component]
+fn HardcoverKeyField() -> Element {
+    let server_url = use_server_url();
+    let mut status: Signal<Option<HardcoverKeyStatus>> = use_signal(|| None);
+    let mut key_input = use_signal(String::new);
+    let mut msg = use_signal(|| None::<String>);
+    let mut msg_is_error = use_signal(|| false);
+    let mut in_flight = use_signal(|| false);
+
+    let load_url = server_url.clone();
+    use_effect(move || {
+        let url = load_url.clone();
+        spawn(async move {
+            if let Ok(s) = data::get_hardcover_key(&url).await {
+                status.set(Some(s));
+            }
+        });
+    });
+
+    let save_url = server_url.clone();
+    let on_save = move |_| {
+        let value = key_input().trim().to_string();
+        // Empty Save is a no-op with a hint — clearing is the "Clear" button's
+        // job, so we never silently wipe the key and report "saved".
+        if value.is_empty() {
+            msg.set(Some("Enter a Hardcover key to save.".to_string()));
+            msg_is_error.set(true);
+            return;
+        }
+        let url = save_url.clone();
+        in_flight.set(true);
+        spawn(async move {
+            match data::set_hardcover_key(&url, Some(value)).await {
+                Ok(s) => {
+                    status.set(Some(s));
+                    key_input.set(String::new());
+                    msg.set(Some("Hardcover key saved.".to_string()));
+                    msg_is_error.set(false);
+                }
+                Err(_) => {
+                    msg.set(Some("Failed to save Hardcover key.".to_string()));
+                    msg_is_error.set(true);
+                }
+            }
+            in_flight.set(false);
+        });
+    };
+
+    let clear_url = server_url.clone();
+    let on_clear = move |_| {
+        let url = clear_url.clone();
+        in_flight.set(true);
+        spawn(async move {
+            match data::set_hardcover_key(&url, None).await {
+                Ok(s) => {
+                    status.set(Some(s));
+                    key_input.set(String::new());
+                    msg.set(Some("Hardcover key cleared.".to_string()));
+                    msg_is_error.set(false);
+                }
+                Err(_) => {
+                    msg.set(Some("Failed to clear Hardcover key.".to_string()));
+                    msg_is_error.set(true);
+                }
+            }
+            in_flight.set(false);
+        });
+    };
+
+    let st = status();
+    let configured = st.as_ref().map(|s| s.configured).unwrap_or(false);
+    let placeholder = st
+        .as_ref()
+        .and_then(|s| s.masked.clone())
+        .unwrap_or_else(|| "hc_live_\u{2026}".to_string());
+
+    rsx! {
+        section { class: "card", "data-testid": "hardcover-key-card",
+            h2 { "Suggestions" }
+            p { class: "subtitle", "Connect Hardcover to power \u{201c}Readers also enjoyed\u{201d}." }
+            div { class: "settings-field",
+                label { r#for: "hardcover-key", "Hardcover API Key" }
+                input {
+                    r#type: "password",
+                    id: "hardcover-key",
+                    name: "hardcover_api_key",
+                    // Server-wide secret: keep password managers / autofill /
+                    // spellcheck from storing or mangling it.
+                    autocomplete: "off",
+                    autocapitalize: "none",
+                    autocorrect: "off",
+                    spellcheck: "false",
+                    placeholder: "{placeholder}",
+                    value: "{key_input}",
+                    oninput: move |e| key_input.set(e.value()),
+                }
+            }
+            div { class: "settings-actions",
+                button {
+                    r#type: "button",
+                    class: "btn",
+                    disabled: in_flight(),
+                    "data-testid": "hardcover-save",
+                    onclick: on_save,
+                    "Save"
+                }
+                if configured {
+                    button {
+                        r#type: "button",
+                        class: "btn ghost",
+                        disabled: in_flight(),
+                        "data-testid": "hardcover-clear",
+                        onclick: on_clear,
+                        "Clear"
+                    }
+                }
+            }
+            div { class: "hardcover-status mono", "data-testid": "hardcover-status",
+                if configured {
+                    span { class: "hardcover-dot connected" }
+                    if let Some(s) = st.as_ref() {
+                        "Connected \u{00b7} {s.source} \u{00b7} {s.masked.clone().unwrap_or_default()}"
+                    }
+                } else {
+                    span { class: "hardcover-dot" }
+                    "Not connected"
+                }
+            }
+            if let Some(m) = msg() {
+                p {
+                    role: "status",
+                    "data-testid": "hardcover-key-status",
+                    class: if msg_is_error() { "settings-status error" } else { "settings-status success" },
+                    "{m}"
+                }
+            }
         }
     }
 }
