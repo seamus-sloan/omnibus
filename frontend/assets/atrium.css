@@ -4319,3 +4319,64 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .bd-merge-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
   z-index: 110; display: flex; align-items: center; gap: 12px; padding: 12px 16px;
   box-shadow: 0 6px 24px rgba(0,0,0,.35); }
+
+/* ── F3.3 "Readers also enjoyed" suggestions strip ─────────────────
+   The first 5 covers are a tight stack (each overlapping the previous by
+   ~80%); hovering the row eases them apart. "Show more" reveals the rest into
+   a plain static grid — no stacking, no hover motion. Ported from the Atrium
+   design's omnibus.css. */
+.bd-suggest-pending,
+.bd-suggest-connect { margin-top: 4px; }
+.bd-suggest-pending { padding: 16px 18px; }
+
+.bd-suggest-connect { display: flex; align-items: center; justify-content: space-between;
+  gap: 22px; padding: 22px 24px; border: 1px dashed var(--line-2); }
+.bd-suggest-connect-title { font-size: 18px; margin: 0; }
+.bd-suggest-connect-body { font-size: 13.5px; color: var(--ink-2); line-height: 1.5; margin: 6px 0 0; }
+
+.suggest-stack { display: flex; padding: 18px 0 10px; align-items: flex-start; }
+.suggest-stack > .cover-link { flex: 0 0 168px; margin-left: -134px;
+  transition: margin-left .45s cubic-bezier(.2,.7,.3,1); }
+.suggest-stack > .cover-link:first-child { margin-left: 0; }
+/* Earlier books paint on top so the strongest match leads the stack. */
+.suggest-stack > .cover-link:nth-child(1) { z-index: 5; }
+.suggest-stack > .cover-link:nth-child(2) { z-index: 4; }
+.suggest-stack > .cover-link:nth-child(3) { z-index: 3; }
+.suggest-stack > .cover-link:nth-child(4) { z-index: 2; }
+.suggest-stack > .cover-link:nth-child(5) { z-index: 1; }
+.suggest-stack:hover > .cover-link { margin-left: 18px; }
+.suggest-stack:hover > .cover-link:first-child { margin-left: 0; }
+.suggest-stack > .cover-link:hover { z-index: 10; }
+
+.suggest-static { display: flex; flex-wrap: wrap; gap: 18px; padding: 6px 0 10px; }
+.suggest-static > .cover-link { flex: 0 0 168px; }
+
+/* Per-cover caption (title/author): hidden until the stack spreads, always
+   shown in the static grid. */
+.sug-cap { opacity: 0; margin-top: 10px; transition: opacity .25s .05s; max-width: 168px; }
+.suggest-stack:hover .sug-cap,
+.suggest-stack > .cover-link:hover .sug-cap,
+.suggest-static .sug-cap { opacity: 1; }
+.sug-cap-title { font-size: 13.5px; color: var(--ink-0); font-weight: 500;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.sug-cap-author { font-size: 12px; color: var(--ink-2); margin-top: 2px;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* "on N lists" relevance badge, pinned top-right of each cover. */
+.fan-match { position: absolute; top: 8px; right: 8px; z-index: 2;
+  background: color-mix(in oklch, var(--bg-0) 70%, transparent);
+  backdrop-filter: blur(6px); padding: 2px 6px; border-radius: 999px;
+  font-size: 10px; color: var(--ink-1); }
+
+.bd-suggest-actions { display: flex; align-items: center; gap: 14px; margin-top: 8px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .suggest-stack > .cover-link { transition: none; }
+  .suggest-stack .sug-cap { opacity: 1; }
+}
+
+/* Settings → Hardcover key field status line. */
+.hardcover-status { display: flex; align-items: center; gap: 8px; margin-top: 10px;
+  font-size: 11.5px; color: var(--ink-2); }
+.hardcover-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3); flex: 0 0 8px; }
+.hardcover-dot.connected { background: oklch(0.7 0.15 150); }

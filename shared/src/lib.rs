@@ -20,6 +20,7 @@ pub mod merge;
 pub mod progress;
 pub mod ratings;
 pub mod settings;
+pub mod suggestion;
 pub mod view_prefs;
 pub mod worker;
 
@@ -38,5 +39,6 @@ pub use merge::*;
 pub use progress::*;
 pub use ratings::*;
 pub use settings::*;
+pub use suggestion::*;
 pub use view_prefs::*;
 pub use worker::*;
