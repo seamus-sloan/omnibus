@@ -18,10 +18,19 @@ test.beforeAll(async ({ request }) => {
 
 const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "alpha")!;
 
+type Page = import("@playwright/test").Page;
+
+// The Write surface is a live-formatting `contenteditable` (testid
+// `journal-editor`); its markdown is mirrored into a hidden textarea (testid
+// `journal-body`) that still carries the `body` signal. Tests type into the
+// editor and assert the markdown via the mirror's value.
+const editor = (page: Page) => page.getByTestId("journal-editor");
+const editorMarkdown = (page: Page) => page.getByTestId("journal-body");
+
 /** Open the inline composer and publish `body`, asserting the create POST. */
-async function publish(page: import("@playwright/test").Page, body: string) {
+async function publish(page: Page, body: string) {
   await page.getByTestId("journal-open-composer").click();
-  await page.getByTestId("journal-body").fill(body);
+  await editor(page).fill(body);
   await expectMutation(
     page,
     { method: "POST", url: "/api/rpc/journals/create", expectedStatus: 200 },
@@ -55,11 +64,79 @@ test("renders the journal section layout", async ({ page, request }) => {
   await expect(page.getByRole("heading", { name: "What readers have written" })).toBeVisible();
   await expect(page.getByTestId("journal-open-composer")).toBeVisible();
 
-  // Expanding the composer reveals the body field and the spoiler-syntax hint.
+  // Expanding the composer reveals the live editor, the spoiler-syntax hint,
+  // the formatting toolbar, and the insert-from-highlights control.
   await page.getByTestId("journal-open-composer").click();
   await expect(page.getByTestId("journal-composer")).toBeVisible();
-  await expect(page.getByTestId("journal-body")).toBeVisible();
+  await expect(editor(page)).toBeVisible();
   await expect(page.getByTestId("journal-spoiler-help")).toBeVisible();
+  await expect(page.getByTestId("journal-toolbar")).toBeVisible();
+  await expect(
+    page.getByTestId("journal-toolbar").getByRole("button", { name: "Bold" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("journal-insert-highlight")).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// Action — formatting toolbar wraps the selection (editor-only, no network)
+// ---------------------------------------------------------------------------
+
+test("wraps the selected text in markdown when a toolbar button is clicked", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  await page.getByTestId("journal-open-composer").click();
+  await editor(page).fill("hello world");
+
+  // Select the whole draft, then Bold → the markdown source is wrapped (read
+  // back from the hidden mirror), so the stored format stays plain markdown.
+  await editor(page).selectText();
+  await page.getByTestId("journal-toolbar").getByRole("button", { name: "Bold" }).click();
+  await expect(editorMarkdown(page)).toHaveValue("**hello world**");
+
+  // A line-prefix command (Quote) prefixes the line rather than wrapping.
+  await editor(page).fill("a thought");
+  await editor(page).selectText();
+  await page.getByTestId("journal-toolbar").getByRole("button", { name: "Quote" }).click();
+  await expect(editorMarkdown(page)).toHaveValue("> a thought");
+});
+
+// ---------------------------------------------------------------------------
+// Action — insert a saved highlight as a blockquote
+// ---------------------------------------------------------------------------
+
+test("inserts a saved highlight into the draft as a blockquote", async ({ page, request }) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+
+  // Seed a highlight via the REST API (bearer-authed request fixture); a unique
+  // passage keeps the assertion robust against the shared, persistent dev DB.
+  const quote = `quotable passage ${Date.now()}`;
+  const created = await request.post("/api/highlights", {
+    data: {
+      book_uuid: uuid,
+      epub_cfi_range: "epubcfi(/6/4!/4/2,/1:0,/1:40)",
+      color: "amber",
+      text: quote,
+    },
+  });
+  expect(created.status(), "seed highlight").toBe(200);
+
+  await gotoReady(page, `/books/${uuid}`);
+  await page.getByTestId("journal-open-composer").click();
+
+  // Open the inserter, pick the seeded passage → it lands as a `> ` blockquote
+  // with attribution, and the popover closes.
+  await page.getByTestId("journal-insert-highlight").click();
+  await expect(page.getByTestId("journal-highlights-pop")).toBeVisible();
+  await page.getByTestId("journal-highlight-item").filter({ hasText: quote }).click();
+
+  await expect(editorMarkdown(page)).toHaveValue(
+    new RegExp(`> ${quote}[\\s\\S]*saved from highlights`),
+  );
+  await expect(page.getByTestId("journal-highlights-pop")).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------
@@ -82,11 +159,11 @@ test("publishes an entry attributed to the current user, edits it, then deletes 
   await expect(card.getByText("you")).toBeVisible();
 
   // Owner edit → the body updates in place. Entering edit mode swaps the
-  // rendered body for a textarea, so the marker-filtered `card` stops matching
-  // (a textarea's value isn't DOM text) — target the single open editor at page
-  // level instead.
+  // rendered body for the live editor, so the marker-filtered `card` stops
+  // matching (the editor's text isn't the rendered body) — target the single
+  // open editor at page level instead.
   await card.getByTestId("journal-edit").click();
-  await page.getByTestId("journal-edit-body").fill(`Revised thoughts ${marker}`);
+  await page.getByTestId("journal-edit-editor").fill(`Revised thoughts ${marker}`);
   await expectMutation(
     page,
     { method: "POST", url: "/api/rpc/journals/update", expectedStatus: 200 },
@@ -109,7 +186,7 @@ test("renders a markdown preview and blurs spoilers until clicked", async ({ pag
 
   // Preview renders server-sanitized markdown for the draft.
   await page.getByTestId("journal-open-composer").click();
-  await page.getByTestId("journal-body").fill("**bold preview**");
+  await editor(page).fill("**bold preview**");
   await expectMutation(
     page,
     { method: "POST", url: "/api/rpc/journals/preview", expectedStatus: 200 },
@@ -119,9 +196,9 @@ test("renders a markdown preview and blurs spoilers until clicked", async ({ pag
 
   // Publish an entry containing a spoiler; it renders blurred until clicked.
   const marker = `e2e-spoiler-${Date.now()}`;
-  // Switch back to the Write tab (Preview hides the textarea) and compose.
+  // Switch back to the Write tab (Preview hides the editor) and compose.
   await page.getByText("Write", { exact: true }).click();
-  await page.getByTestId("journal-body").fill(`reveal ${marker}: ||the secret||`);
+  await editor(page).fill(`reveal ${marker}: ||the secret||`);
   await expectMutation(
     page,
     { method: "POST", url: "/api/rpc/journals/create", expectedStatus: 200 },
@@ -153,15 +230,16 @@ test("surfaces an error and keeps the draft when publishing fails", async ({ pag
   );
 
   await page.getByTestId("journal-open-composer").click();
-  await page.getByTestId("journal-body").fill("this will fail");
+  await editor(page).fill("this will fail");
   await expectMutation(
     page,
     { method: "POST", url: "/api/rpc/journals/create", expectedStatus: 500 },
     async () => page.getByTestId("journal-publish").click(),
   );
 
-  // The composer stays open with the draft intact and an inline error.
+  // The composer stays open with the draft intact (read back from the mirror)
+  // and an inline error.
   await expect(page.getByTestId("journal-composer")).toBeVisible();
-  await expect(page.getByTestId("journal-body")).toHaveValue("this will fail");
+  await expect(editorMarkdown(page)).toHaveValue("this will fail");
   await expect(page.getByTestId("journal-composer").getByRole("alert")).toBeVisible();
 });

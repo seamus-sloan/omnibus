@@ -12,6 +12,7 @@ use crate::{data, use_server_url, Route};
 mod body;
 mod hero;
 mod journal;
+mod journal_editor;
 mod merge;
 mod rating;
 
