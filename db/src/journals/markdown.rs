@@ -14,6 +14,10 @@ pub fn render(md: &str) -> String {
     let with_spoilers = wrap_spoilers(md);
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_STRIKETHROUGH);
+    // Task lists (`- [ ]` / `- [x]`) back the editor's checklist button. They
+    // render as a disabled `<input type="checkbox">` which the sanitizer keeps
+    // in a tightly constrained form (see `sanitize`).
+    opts.insert(Options::ENABLE_TASKLISTS);
     let parser = Parser::new_ext(&with_spoilers, opts);
     let mut raw_html = String::new();
     html::push_html(&mut raw_html, parser);
@@ -21,11 +25,19 @@ pub fn render(md: &str) -> String {
 }
 
 /// Sanitize rendered HTML, additionally permitting `<span class="spoiler">`
-/// (the only inline element the spoiler pass introduces).
+/// (the only inline element the spoiler pass introduces) and the read-only
+/// task-list checkbox pulldown-cmark emits for `- [ ]` items.
 fn sanitize(html: &str) -> String {
     ammonia::Builder::default()
-        .add_tags(["span"])
+        .add_tags(["span", "input"])
         .add_allowed_classes("span", ["spoiler"])
+        // Task-list checkboxes only — `disabled`/`checked` are valueless flags;
+        // `type` is pinned to `checkbox` via the value allowlist (kept out of
+        // the generic attribute set, which would otherwise permit any value),
+        // so no interactive or arbitrary `<input>` survives.
+        .add_tag_attributes("input", ["checked", "disabled"])
+        .add_tag_attribute_values("input", "type", ["checkbox"])
+        .add_allowed_classes("input", ["task-list-item-checkbox"])
         .clean(html)
         .to_string()
 }
@@ -106,6 +118,27 @@ mod tests {
         let html = render("a lone ||marker here");
         assert!(!html.contains("class=\"spoiler\""), "got: {html}");
         assert!(html.contains("||marker here"), "got: {html}");
+    }
+
+    #[test]
+    fn renders_task_list_checkboxes() {
+        let html = render("- [x] done\n- [ ] todo");
+        // A checked + an unchecked disabled checkbox survive sanitization.
+        assert!(html.contains("type=\"checkbox\""), "got: {html}");
+        assert!(html.contains("checked"), "checked box kept: {html}");
+        assert!(html.contains("disabled"), "boxes stay read-only: {html}");
+    }
+
+    #[test]
+    fn task_list_input_type_is_pinned_to_checkbox() {
+        // A hand-authored non-checkbox input must not survive even though the
+        // `input` tag is now allowlisted for task lists.
+        let html = render("<input type=\"text\" value=\"x\">");
+        assert!(
+            !html.contains("type=\"text\""),
+            "non-checkbox dropped: {html}"
+        );
+        assert!(!html.contains("value="), "input value dropped: {html}");
     }
 
     #[test]

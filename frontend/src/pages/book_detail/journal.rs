@@ -1,17 +1,20 @@
 //! Public reading-journal section for the book-detail page.
 //!
-//! Renders every reader's journal entries for a book (journals are public), an
-//! inline markdown composer with a server-rendered live preview, and owner-only
-//! edit/delete. Entries and the current user load post-mount so SSR and the
-//! first hydration paint match (rule 07). Markdown bodies are rendered +
-//! sanitized server-side; the click-to-reveal spoiler handler is wired by a
-//! post-mount effect, never in the rsx body.
+//! Renders every reader's journal entries for a book (journals are public), a
+//! composer with a live-formatting markdown editor (see `journal_editor.js`),
+//! and owner-only edit/delete. Entries and the current user load post-mount so
+//! SSR and the first hydration paint match (rule 07). Markdown bodies are
+//! rendered + sanitized server-side; the click-to-reveal spoiler handler is
+//! wired by a post-mount effect, never in the rsx body.
 
 use dioxus::prelude::*;
-use omnibus_shared::{CreateJournalEntry, JournalEntry, UpdateJournalEntry, UserSummary};
+use omnibus_shared::{
+    CreateJournalEntry, Highlight, JournalEntry, UpdateJournalEntry, UserSummary,
+};
 
 use crate::{data, use_server_url};
 
+use super::journal_editor::*;
 use super::BdSectionHead;
 
 /// Public reading-journal section: header, composer, and the entry feed.
@@ -127,6 +130,11 @@ fn BdJournalComposer(uuid: String, server_url: String, reload: Signal<u32>) -> E
     let mut progress = use_signal(|| 50i64);
     let mut saving = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
+    // Saved highlights for this book, loaded lazily the first time the
+    // insert-from-highlights popover is opened.
+    let mut highlights = use_signal(Vec::<Highlight>::new);
+    let mut highlights_open = use_signal(|| false);
+    let mut highlights_loaded = use_signal(|| false);
 
     if !open() {
         return rsx! {
@@ -183,6 +191,71 @@ fn BdJournalComposer(uuid: String, server_url: String, reload: Signal<u32>) -> E
                     "Spoilers? Wrap text in ||double pipes||"
                 }
             }
+            if !show_preview() {
+                div { class: "bd-journal-toolbar-row",
+                    BdJournalToolbar { target_id: "journal-composer-editor".to_string() }
+                    div { class: "bd-journal-hl-wrap",
+                        button {
+                            r#type: "button",
+                            class: if highlights_open() { "btn ghost sm bd-tab-active" } else { "btn ghost sm" },
+                            "data-testid": "journal-insert-highlight",
+                            onclick: {
+                                let url = server_url.clone();
+                                let uuid = uuid.clone();
+                                move |_| {
+                                    let opening = !highlights_open();
+                                    highlights_open.set(opening);
+                                    if opening && !highlights_loaded() {
+                                        highlights_loaded.set(true);
+                                        let url = url.clone();
+                                        let uuid = uuid.clone();
+                                        spawn(async move {
+                                            if let Ok(list) = data::list_highlights(&url, &uuid).await {
+                                                highlights.set(
+                                                    list.into_iter().filter(|h| h.text.is_some()).collect(),
+                                                );
+                                            }
+                                        });
+                                    }
+                                }
+                            },
+                            "From highlights"
+                        }
+                        if highlights_open() {
+                            div {
+                                class: "card bd-journal-hl-pop",
+                                "data-testid": "journal-highlights-pop",
+                                div { class: "label bd-journal-hl-head", "From your highlights" }
+                                if highlights().is_empty() {
+                                    p { class: "mono bd-journal-hl-empty",
+                                        "No saved highlights for this book yet."
+                                    }
+                                } else {
+                                    for h in highlights().iter() {
+                                        button {
+                                            r#type: "button",
+                                            class: "bd-journal-hl-item",
+                                            "data-testid": "journal-highlight-item",
+                                            onmousedown: move |e| e.prevent_default(),
+                                            onclick: {
+                                                let text = h.text.clone().unwrap_or_default();
+                                                move |_| {
+                                                    editor_insert(
+                                                        "journal-composer-editor",
+                                                        &highlight_blockquote(&text),
+                                                    );
+                                                    highlights_open.set(false);
+                                                }
+                                            },
+                                            "{h.text.clone().unwrap_or_default()}"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if show_preview() {
                 div {
                     class: "bd-journal-preview",
@@ -190,13 +263,54 @@ fn BdJournalComposer(uuid: String, server_url: String, reload: Signal<u32>) -> E
                     dangerous_inner_html: "{preview_html}",
                 }
             } else {
-                textarea {
-                    class: "me-textarea bd-journal-textarea",
-                    "data-testid": "journal-body",
-                    rows: "5",
-                    placeholder: "What are you thinking about this book? Markdown supported.",
-                    value: "{body}",
-                    oninput: move |e| body.set(e.value()),
+                {
+                    // Web: a live-formatting contenteditable whose markdown is
+                    // mirrored into the hidden textarea (which keeps the `body`
+                    // signal — and therefore publish/validate/preview —
+                    // unchanged). Non-web (SSR page tests / native mobile) has
+                    // no eval, so it falls back to the plain textarea.
+                    #[cfg(feature = "web")]
+                    {
+                        rsx! {
+                            textarea {
+                                id: "journal-composer-mirror",
+                                class: "bd-journal-mirror",
+                                "data-testid": "journal-body",
+                                "aria-hidden": "true",
+                                tabindex: "-1",
+                                value: "{body}",
+                                oninput: move |e| body.set(e.value()),
+                            }
+                            div {
+                                id: "journal-composer-editor",
+                                class: "me-textarea bd-journal-editor",
+                                "data-testid": "journal-editor",
+                                contenteditable: "true",
+                                role: "textbox",
+                                "aria-multiline": "true",
+                                "aria-label": "Journal entry",
+                                "data-placeholder": "What are you thinking about this book? Markdown supported.",
+                                onmounted: move |_| editor_attach(
+                                    "journal-composer-editor",
+                                    "journal-composer-mirror",
+                                ),
+                            }
+                        }
+                    }
+                    #[cfg(not(feature = "web"))]
+                    {
+                        rsx! {
+                            textarea {
+                                id: "journal-composer-body",
+                                class: "me-textarea bd-journal-textarea",
+                                "data-testid": "journal-body",
+                                rows: "5",
+                                placeholder: "What are you thinking about this book? Markdown supported.",
+                                value: "{body}",
+                                oninput: move |e| body.set(e.value()),
+                            }
+                        }
+                    }
                 }
             }
             div { class: "bd-journal-composer-foot",
@@ -365,12 +479,53 @@ fn BdJournalEntryCard(
                 }
             }
             if editing() {
-                textarea {
-                    class: "me-textarea bd-journal-textarea",
-                    "data-testid": "journal-edit-body",
-                    rows: "5",
-                    value: "{edit_body}",
-                    oninput: move |e| edit_body.set(e.value()),
+                div { class: "bd-journal-toolbar-row",
+                    BdJournalToolbar { target_id: format!("journal-edit-editor-{entry_id}") }
+                }
+                {
+                    // Same live-editor-on-web / textarea-on-non-web split as the
+                    // composer, keyed per entry id so multiple open editors
+                    // don't collide.
+                    #[cfg(feature = "web")]
+                    {
+                        rsx! {
+                            textarea {
+                                id: "journal-edit-mirror-{entry_id}",
+                                class: "bd-journal-mirror",
+                                "data-testid": "journal-edit-body",
+                                "aria-hidden": "true",
+                                tabindex: "-1",
+                                value: "{edit_body}",
+                                oninput: move |e| edit_body.set(e.value()),
+                            }
+                            div {
+                                id: "journal-edit-editor-{entry_id}",
+                                class: "me-textarea bd-journal-editor",
+                                "data-testid": "journal-edit-editor",
+                                contenteditable: "true",
+                                role: "textbox",
+                                "aria-multiline": "true",
+                                "aria-label": "Edit journal entry",
+                                onmounted: move |_| editor_attach(
+                                    &format!("journal-edit-editor-{entry_id}"),
+                                    &format!("journal-edit-mirror-{entry_id}"),
+                                ),
+                            }
+                        }
+                    }
+                    #[cfg(not(feature = "web"))]
+                    {
+                        rsx! {
+                            textarea {
+                                id: "journal-edit-body-{entry_id}",
+                                class: "me-textarea bd-journal-textarea",
+                                "data-testid": "journal-edit-body",
+                                rows: "5",
+                                value: "{edit_body}",
+                                oninput: move |e| edit_body.set(e.value()),
+                            }
+                        }
+                    }
                 }
                 div { class: "bd-journal-entry-foot",
                     if let Some(msg) = error() {
