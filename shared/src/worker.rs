@@ -20,6 +20,7 @@ pub enum TaskKind {
     ResolveAuthorPhoto,
     RefetchAuthorPhotos,
     BackfillChapters,
+    ResolveSuggestions,
 }
 
 /// Lifecycle state of a single worker task as exposed to the UI.

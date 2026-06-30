@@ -87,6 +87,9 @@ mod server {
 
         let pool = omnibus_db::init_db(&database_url).await?;
         omnibus_db::seed_settings_from_env(&pool).await?;
+        // Seed the F3.3 Hardcover key from HARDCOVER_API_KEY only when none is
+        // saved (settings wins; env is the out-of-the-box fallback).
+        omnibus_db::seed_hardcover_key_from_env(&pool).await?;
 
         // Recovery hook: promote the named user to admin if
         // OMNIBUS_INITIAL_ADMIN is set. No-op otherwise. Logs on
