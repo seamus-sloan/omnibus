@@ -10,7 +10,7 @@ Today the [`require_auth` gate](../../server/src/auth/gate.rs) middleware admits
 
 ## User / business value
 
-Closes a real privilege-escalation today: any non-admin who registers (or is added by an admin in F5.4) can `POST /api/settings` and rewrite the library root paths, or `POST /api/rpc/settings` and trigger an arbitrary reindex. Pre-requisite for shipping any feature that reads or writes per-user state — without enforcement, F2.1 progress sync, F3.2 ratings, F3.1 libraries all collapse into a single shared blob the moment more than one user exists.
+Closes a real privilege-escalation today: any non-admin who registers (or is added by an admin in F5.4) can `POST /api/settings` and rewrite the library root paths, or `POST /api/rpc/settings` and trigger an arbitrary reindex. Pre-requisite for shipping any feature that reads or writes per-user state — without enforcement, F2.1 progress sync, F3.2 ratings, F3.1 shelves all collapse into a single shared blob the moment more than one user exists.
 
 ## Technical considerations
 

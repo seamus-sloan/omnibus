@@ -39,7 +39,7 @@ The [Calibre-Web inspection](../calibre-inspection/0-overview.md) reveals three 
 |---|---|---|
 | G1 | **No search feature.** Browse-by-filter ≠ search. Calibre-Web users constantly hit this. | Core UX miss; users can't find a book they remember by title fragment. |
 | G2 | **No book/book_files split.** One work with epub + m4b + pdf cannot be modeled. | Blocks multi-format; blocks Kindle-sends-epub-when-user-reads-m4b flow. |
-| G3 | **No normalized authors/series/tags.** Current JSON blobs can't be filtered or FK'd. | Blocks Libraries, efficient browse, and reliable "books by X" queries. |
+| G3 | **No normalized authors/series/tags.** Current JSON blobs can't be filtered or FK'd. | Blocks smart shelves, efficient browse, and reliable "books by X" queries. |
 | G4 | **No migration framework.** Schema evolves by rewriting `initialize_schema`. | Blocks every shipping change after v1.0; risks data loss. |
 | G5 | **No thumbnail pipeline.** v1 says "store cover path"; current code stores BLOBs. | Covers are the single most-rendered asset; performance lives or dies here. |
 | G6 | **Auth is feature #7.** Six features come before it, implying single-user prototypes. | Every feature touching user data (ratings, progress, libraries) must be reworked post-auth. |
@@ -81,7 +81,7 @@ Phase 6  Mobile                   (feature parity on native)
 | 0 | Foundations | — | F0.1–F0.7 | short-term |
 | 1 | Browse & discovery | #4 Views, #5 Detail | F1.1 Search, F1.2 Thumbnails, F1.6 Auth UI, F1.7 Atrium design system | short-term |
 | 2 | Reading & listening | #8 Reader, #9 Audio | F2.1 Progress sync service | medium-term |
-| 3 | Personalization | #3 Libraries, #6 Ratings/journal, #12 Suggestions | — | medium-term |
+| 3 | Personalization | #3 Shelves, #6 Ratings/journal, #12 Suggestions | — | medium-term |
 | 4 | Device sync | #10 OPDS, #11 Kindle | F4.1 Native Kobo sync | medium-term |
 | 5 | Admin & hygiene | #2 Uploads, #13 Admin | F5.1 Metadata edit, F5.2 Observability, F5.5 Conversion | long-term |
 | 6 | Mobile | #14 Mobile | — | long-term |
@@ -123,12 +123,11 @@ Phase 6  Mobile                   (feature parity on native)
 
 ### Phase 3 — Personalization
 
-- [F3.1 Libraries with metadata filters](3-1-libraries.md)
+- [F3.1 Shelves](3-1-shelves.md)
 - [F3.2 Ratings & journaling](3-2-ratings-journaling.md)
 - [F3.2b Rich journal editor](3-2b-journal-rich-editor.md)
 - [F3.3 Suggestions](3-3-suggestions.md)
 - [F3.4 Reading stats](3-4-stats.md)
-- [F3.5 Shared shelves](3-5-shared-shelves.md)
 
 ### Phase 4 — Device sync
 

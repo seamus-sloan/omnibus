@@ -24,6 +24,7 @@ mod journals;
 mod progress;
 mod ratings;
 mod series;
+mod suggestions;
 mod tags;
 
 // auth exports exist under web, mobile, and server-only (the last only
@@ -39,6 +40,7 @@ pub use journals::*;
 pub use progress::*;
 pub use ratings::*;
 pub use series::*;
+pub use suggestions::*;
 pub use tags::*;
 
 /// Errors surfaced by the feature-gated data transport.

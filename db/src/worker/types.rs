@@ -85,6 +85,12 @@ pub enum Task {
     /// left by a failed post-commit FTS refresh. Keyed on a fixed resource
     /// so concurrent clicks serialize; does not consume the scan semaphore.
     RebuildFtsIndex,
+    /// Resolve and cache F3.3 "readers also enjoyed" suggestions for one book
+    /// via Hardcover list co-occurrence. Keyed on `suggestions:{book_uuid}` so
+    /// duplicate posts for one book (a burst of viewers) serialize and the
+    /// later ones no-op against the fresh cache; does not consume the scan
+    /// semaphore.
+    ResolveSuggestions { book_uuid: String },
     /// Test-only synthetic task: sleeps `latency_ms` and invokes the
     /// optional `on_run` / `on_done` hooks, with `resource` and
     /// `route_through_scan_sem` letting a test exercise the keyed mutex and
@@ -113,6 +119,7 @@ impl Task {
             Task::RefetchAuthorPhotos => Some("refetch-author-photos".into()),
             Task::BackfillChapters { library_path } => Some(format!("audiobooks:{library_path}")),
             Task::RebuildFtsIndex => Some("rebuild-fts".into()),
+            Task::ResolveSuggestions { book_uuid } => Some(format!("suggestions:{book_uuid}")),
             #[cfg(test)]
             Task::Test { resource, .. } => resource.clone(),
         }
@@ -128,6 +135,7 @@ impl Task {
             Task::RefetchAuthorPhotos => false,
             Task::BackfillChapters { .. } => false,
             Task::RebuildFtsIndex => false,
+            Task::ResolveSuggestions { .. } => false,
             #[cfg(test)]
             Task::Test {
                 route_through_scan_sem,
@@ -159,6 +167,7 @@ impl Task {
             // Reuse Scan kind for the FTS rebuild's progress display rather
             // than growing the wire-facing `TaskKind` enum for a rare admin job.
             Task::RebuildFtsIndex => TaskKind::Scan,
+            Task::ResolveSuggestions { .. } => TaskKind::ResolveSuggestions,
             #[cfg(test)]
             Task::Test { .. } => TaskKind::Scan,
         }

@@ -35,6 +35,7 @@ mod ratings;
 mod search;
 mod series;
 mod settings;
+mod suggestions;
 mod tags;
 
 /// Per-IP rate-limit budget for `/api/search/*` and the `/api/rpc/search-*`
@@ -291,6 +292,20 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
         .route("/api/series", get(series::get_series))
         .route("/api/series/{id}", get(series::get_series_by_id))
         .route("/api/tags", get(tags::get_tags))
+        // F3.3 suggestions — mobile-facing REST. Web hits the analogous
+        // `/api/rpc/ebook-suggestions` + `/api/rpc/hardcover-key` server fns.
+        .route(
+            "/api/ebooks/{uuid}/suggestions",
+            get(suggestions::get_suggestions),
+        )
+        .route(
+            "/api/suggestions/{uuid}/{rank}/cover",
+            get(suggestions::get_suggestion_cover),
+        )
+        .route(
+            "/api/hardcover-key",
+            get(suggestions::get_hardcover_key).post(suggestions::post_hardcover_key),
+        )
 }
 
 /// Sub-router for `/api/search/*` carrying its own per-IP rate-limit layer.

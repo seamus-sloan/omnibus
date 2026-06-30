@@ -41,8 +41,8 @@ Why it bites a named feature:
   states "Keyset pagination on `(sort, id)` — never `OFFSET`" as the long-term
   fix. The ceiling is a stopgap; above it the current path degrades from "slow
   first paint" to "unusable."
-- **F3.1 Libraries with metadata filters** wraps this exact projection in
-  additional `WHERE` predicates over normalized columns. Once a saved library
+- **F3.1 Shelves** (smart shelves) wraps this exact projection in
+  additional `WHERE` predicates over normalized columns. Once a smart shelf
   is "every unread sci-fi book," the query is `filter → temp-sort → cap`, and
   the absence of a `(library_id, sort, id)` index (only `idx_books_sort` on
   `books(sort)` global, and `idx_books_library_id`, exist today —
@@ -407,7 +407,7 @@ B follow-on touches E2E.
   keyset seek a range-scan; without it the cursor is correct but slow under a
   library filter. F5b's db primitive depends on F5a's index and on F5a's
   `BOOK_COLUMNS` subquery-collapse being settled (both touch the same SELECT).
-- **F3.1 (libraries-as-filters) is the downstream consumer that constrains the
+- **F3.1 (smart shelves) is the downstream consumer that constrains the
   design.** F3.1 wraps this projection in arbitrary normalized-column
   predicates. A single `(sort, id)` cursor composes cleanly with an added
   `WHERE` (the keyset predicate is just another conjunct); arbitrary

@@ -16,7 +16,7 @@ Covers every reading app that isn't Kobo or Kindle. OPDS is the portable, intero
 
 - Route layout mirrors Calibre-Web's for client compatibility (see [calibre-inspection §2](../calibre-inspection/2-feature-inventory.md), [§6](../calibre-inspection/6-api-surface.md)): `/opds`, `/opds/osd`, `/opds/search`, `/opds/new`, letter-indexed author/series/category browses, per-entity endpoints, download, cover.
 - OPDS 2.0 is trivial given the Kobo sync endpoint's JSON shape is adjacent — ship both.
-- Libraries visible to the authenticated user scope every feed (see [F3.1 open question](3-1-libraries.md#open-questions)).
+- Shelves visible to the authenticated user scope every feed (see [F3.1 open question](3-1-shelves.md#open-questions)).
 
 ## Dependencies
 
