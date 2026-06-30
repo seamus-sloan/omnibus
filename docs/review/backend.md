@@ -46,7 +46,7 @@ F0.3 added `is_admin` / `can_upload` / `can_edit` / `can_download` permission co
 
 Symmetrically, the upload/edit endpoints never consult `can_upload`: `post_ebook_cover` (`overrides.rs:110-115`) gates on `can_edit`, and the two author-photo PUTs the route comment frames as "binary-upload endpoints" (`backend.rs:48-58`) gate on `AdminUser` (admin-only; `author_photos.rs:65,249`) — so the column an admin would toggle to revoke upload rights does nothing.
 
-This blocks the multi-user roadmap (F3.1 libraries, F5.4 user management, F4.2 OPDS download). Fix: decide the semantics (likely `can_download` gates file/stream endpoints and OPDS download; `can_upload` gates cover/photo and future file uploads), add checks mirroring the existing `if !user.is_admin && !user.can_edit` pattern, add the missing fields to `rpc.rs` `AuthUser`, and add anon-401 + forbidden-403 sibling tests. If the product decision is that all authed users may download, delete the columns rather than advertising controls that do nothing.
+This blocks the multi-user roadmap (F3.1 shelves, F5.4 user management, F4.2 OPDS download). Fix: decide the semantics (likely `can_download` gates file/stream endpoints and OPDS download; `can_upload` gates cover/photo and future file uploads), add checks mirroring the existing `if !user.is_admin && !user.can_edit` pattern, add the missing fields to `rpc.rs` `AuthUser`, and add anon-401 + forbidden-403 sibling tests. If the product decision is that all authed users may download, delete the columns rather than advertising controls that do nothing.
 
 ---
 
@@ -84,7 +84,7 @@ The primary list/discovery endpoints return the entire result set in one JSON bl
 
 The REST ebook path at least surfaces truncation via `X-Total-Count`/`X-Total-Cap` headers (`backend.rs:384-406`), but the RPC side admits it can't even do that — the code comment flags "Dioxus server functions don't expose response headers, so this path can't currently surface a truncated hint... Cursor pagination is the next step" (`rpc.rs:216-223`) — so the web client silently gets a truncated set with no signal.
 
-Every landing-page load ships the whole library; a large install pays full serialization + transfer on each navigation. As F1.x browse/discovery and F3.1 multi-library land this becomes a latency and memory problem on both ends. Fix: add cursor pagination (keyset on a stable sort key) to the list endpoints and thread next-cursor/total through the JSON body — the RPC variant controls the body shape even without headers, exactly as `rpc_search` already threads `total` via `EbookLibrary::total` (`rpc.rs:304-310`). The authors/series indexes need the same treatment plus a cap.
+Every landing-page load ships the whole library; a large install pays full serialization + transfer on each navigation. As F1.x browse/discovery and F3.1 shelves land this becomes a latency and memory problem on both ends. Fix: add cursor pagination (keyset on a stable sort key) to the list endpoints and thread next-cursor/total through the JSON body — the RPC variant controls the body shape even without headers, exactly as `rpc_search` already threads `total` via `EbookLibrary::total` (`rpc.rs:304-310`). The authors/series indexes need the same treatment plus a cap.
 
 ---
 
