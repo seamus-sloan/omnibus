@@ -4,6 +4,35 @@
 
 A WYSIWYG editing experience layered on top of F3.2's plain-markdown journals.
 
+## Status
+
+**Partially shipped.** The composer's Write surface is now a **live editor** —
+a `contenteditable` whose `textContent` stays exactly equal to the markdown
+source: formatting is applied in place as you type (bold/italic/strikethrough,
+H1/H2, quote, bullet/numbered/checklist, inline code, link, spoiler), with the
+markdown markers kept but dimmed (Obsidian source-mode style). It is hand-rolled
+(no editor framework) in [`journal_editor.js`](../../frontend/src/pages/book_detail/journal_editor.js):
+on each input it re-renders decoration spans and restores the caret by character
+offset, mirrors the markdown into a hidden `<textarea>` (which keeps the `body`
+signal, so publish/validate/preview are unchanged), forces plain-text paste, and
+inserts literal `\n` on Enter. A **formatting toolbar** drives the same edits on
+the current selection, and an **insert-from-highlights** control drops a saved
+highlight in as a `> …` blockquote ("saved from highlights") via the F2.4b
+highlights API. Checklist rendering required enabling `pulldown-cmark` task
+lists in `db::journals::markdown::render` (sanitizer pinned to a read-only
+`<input type="checkbox">`).
+
+The editor is web-only (it rides the `dioxus::document::eval` channel); SSR and
+native mobile fall back to the plain markdown textarea. The composer is only
+mounted after a click, so it never participates in first-paint hydration
+(rule 07).
+
+Still deferred: **drafts + autosave** (the `status` column), **embedded images**
+(blocked on [F5.3 Uploads](5-3-uploads.md)), and the standalone **full-page
+editor** screen. A future polish pass could hide markers entirely when the caret
+leaves a span (full Obsidian/Slack live-preview), which a hand-rolled editor
+can't do without atomic ranges.
+
 ## Objective
 
 [F3.2](3-2-ratings-journaling.md) ships journals with a plain markdown textarea +
