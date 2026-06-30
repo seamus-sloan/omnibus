@@ -245,9 +245,15 @@ test("renders the detail contents for the selected book", async ({ page, request
   await expect(switcher.getByTestId("action-listen")).toHaveCount(0);
 
   // F3.2 ratings ship as the interactive hero rating card; F3.3 suggestions
-  // is still a hidden placeholder slot.
+  // renders the "Readers also enjoyed" strip below the metadata. (Its inner
+  // state — connect message / pending / results — depends on whether a
+  // Hardcover key is configured and on the external API, so we only assert the
+  // section + heading are present here, not the resolved contents.)
   await expect(page.getByTestId("rating-stars")).toBeVisible();
-  await expect(page.getByTestId("suggestions-slot")).toBeAttached();
+  await expect(page.getByTestId("suggestions-strip")).toBeAttached();
+  await expect(
+    page.getByRole("heading", { name: "Suggested for you" }),
+  ).toBeVisible();
 
   // Back link still navigates to landing
   const backLink = page.getByRole("link", { name: "Back to library" });
