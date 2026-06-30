@@ -32,6 +32,7 @@ pub mod ratings;
 pub mod scanner;
 pub mod settings;
 pub mod sort_keys;
+pub mod suggestions;
 pub mod sync;
 mod taxonomy;
 #[cfg(any(test, feature = "test-support"))]
@@ -67,5 +68,12 @@ pub use palette::*;
 pub use pool::*;
 pub use settings::*;
 pub use sort_keys::{backfill_series_sort, series_sort_value, SortKeysError};
+// Flatten the suggestions data layer (cache CRUD + the de-dup state machine).
+// `resolve`/`resolve_with` stay namespaced under `suggestions::` to avoid
+// colliding with `author_photos::resolve`.
+pub use suggestions::{
+    decide, get_suggestion_cover, get_suggestions, mark_pending, suggestion_state, CacheDecision,
+    CachedSuggestion, SuggestionState, SuggestionsDataError,
+};
 pub use sync::*;
 pub use thumbs::{thumb_path_for, thumbs_dir, ThumbError, ThumbSize};

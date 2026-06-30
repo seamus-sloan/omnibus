@@ -17,11 +17,11 @@ use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
     AuthorDetail, AuthorPhotoScanResult, AuthorSummary, Bookmark, CreateBookmark, CreateHighlight,
-    CreateJournalEntry, EbookLibrary, EbookMetadata, Highlight, HighlightColor, JournalEntry,
-    LibraryContents, LibraryPage, MergeBooksResult, MetadataOverrides, PaletteResults,
-    ProgressFormat, ProgressRecord, ProgressUpdate, RatingRecord, RatingUpdate, SeriesDetail,
-    SeriesSummary, SessionReport, Settings, SortDir, SortKey, TagWeight, UpdateBookmark,
-    UpdateHighlightNote, UpdateJournalEntry, ViewFilters, WorkerStatus,
+    CreateJournalEntry, EbookLibrary, EbookMetadata, HardcoverKeyStatus, Highlight, HighlightColor,
+    JournalEntry, LibraryContents, LibraryPage, MergeBooksResult, MetadataOverrides,
+    PaletteResults, ProgressFormat, ProgressRecord, ProgressUpdate, RatingRecord, RatingUpdate,
+    SeriesDetail, SeriesSummary, SessionReport, Settings, SortDir, SortKey, SuggestionsResponse,
+    TagWeight, UpdateBookmark, UpdateHighlightNote, UpdateJournalEntry, ViewFilters, WorkerStatus,
 };
 
 // Only `validate_author_photo_url` (server-gated) and its tests reference this
@@ -29,6 +29,11 @@ use omnibus_shared::{
 // in the `mobile`/`web` client builds.
 #[cfg(feature = "server")]
 use omnibus_shared::AUTHOR_PHOTO_URL_MAX_LEN;
+
+// `BookSuggestion` is only constructed in the server-side `rpc_get_suggestions`
+// body; gate it so the web/mobile client builds don't flag an unused import.
+#[cfg(feature = "server")]
+use omnibus_shared::BookSuggestion;
 
 #[cfg(feature = "server")]
 use omnibus_db::{self as db, scanner};
@@ -422,6 +427,107 @@ pub async fn rpc_get_author(id: i64) -> Result<Option<AuthorDetail>> {
 #[post("/api/rpc/series", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_get_series(id: i64) -> Result<Option<SeriesDetail>> {
     Ok(db::get_series(&pool.0, id).await?)
+}
+
+/// F3.3 "Readers also enjoyed" for one book. Drives the cache de-duplication
+/// state machine: returns `NotConfigured` when no Hardcover key is set, serves
+/// the fresh/sticky cache when present, and enqueues a single background
+/// resolution (marking `pending` *before* posting) so a refresh or a burst of
+/// concurrent viewers never re-hits Hardcover. POST because it carries `uuid`.
+#[post("/api/rpc/ebook-suggestions", pool: PoolExt, worker: WorkerExt, _user: AuthUser)]
+pub async fn rpc_get_suggestions(uuid: String) -> Result<SuggestionsResponse> {
+    if db::effective_hardcover_api_key(&pool.0).await?.is_none() {
+        return Ok(SuggestionsResponse::NotConfigured);
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let decision = db::decide(db::suggestion_state(&pool.0, &uuid).await?, now);
+    if decision.enqueue {
+        // Mark pending before posting so concurrent callers can't each enqueue.
+        db::mark_pending(&pool.0, &uuid).await?;
+        worker.0.post(db::worker::Task::ResolveSuggestions {
+            book_uuid: uuid.clone(),
+        });
+    }
+    if decision.serve {
+        let items = db::get_suggestions(&pool.0, &uuid)
+            .await?
+            .into_iter()
+            .map(|c| {
+                BookSuggestion::new(
+                    &uuid,
+                    c.rank,
+                    c.hardcover_id,
+                    c.hardcover_slug,
+                    c.title,
+                    c.author,
+                    c.list_count,
+                    c.has_cover,
+                )
+            })
+            .collect();
+        Ok(SuggestionsResponse::Ready { items })
+    } else {
+        Ok(SuggestionsResponse::Pending)
+    }
+}
+
+/// Admin-only: masked status of the server-wide Hardcover key for Settings.
+/// Never returns the raw key.
+#[get("/api/rpc/hardcover-key", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_get_hardcover_key() -> Result<HardcoverKeyStatus> {
+    read_hardcover_key_status(&pool.0).await
+}
+
+/// Admin-only: save (or clear, with `None`/blank) the Hardcover key in
+/// settings. Returns the new masked status — never echoes the raw key.
+#[post("/api/rpc/hardcover-key", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_set_hardcover_key(key: Option<String>) -> Result<HardcoverKeyStatus> {
+    db::set_hardcover_api_key(&pool.0, key.as_deref()).await?;
+    read_hardcover_key_status(&pool.0).await
+}
+
+/// Short masked preview of a secret — never the raw value. Long keys (Hardcover
+/// tokens are JWTs) collapse to `first4…last4`.
+#[cfg(feature = "server")]
+fn mask_key(key: &str) -> String {
+    let n = key.chars().count();
+    if n <= 8 {
+        return "\u{2022}\u{2022}\u{2022}\u{2022}".to_string();
+    }
+    let first: String = key.chars().take(4).collect();
+    let last: String = key.chars().skip(n - 4).collect();
+    format!("{first}\u{2026}{last}")
+}
+
+/// Build the masked key status: settings value wins (`source = "settings"`),
+/// else the `HARDCOVER_API_KEY` env var (`source = "env"`), else unset.
+#[cfg(feature = "server")]
+async fn read_hardcover_key_status(pool: &sqlx::SqlitePool) -> Result<HardcoverKeyStatus> {
+    if let Some(k) = db::get_hardcover_api_key(pool).await? {
+        return Ok(HardcoverKeyStatus {
+            configured: true,
+            masked: Some(mask_key(&k)),
+            source: "settings".to_string(),
+        });
+    }
+    if let Ok(env_key) = std::env::var("HARDCOVER_API_KEY") {
+        let env_key = env_key.trim();
+        if !env_key.is_empty() {
+            return Ok(HardcoverKeyStatus {
+                configured: true,
+                masked: Some(mask_key(env_key)),
+                source: "env".to_string(),
+            });
+        }
+    }
+    Ok(HardcoverKeyStatus {
+        configured: false,
+        masked: None,
+        source: "none".to_string(),
+    })
 }
 
 /// Admin-triggered "Scan for picture" for an author. Clears any sticky
