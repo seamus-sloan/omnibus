@@ -1,8 +1,10 @@
-# F4.1 — Native Kobo sync
+# F4.1 — Native Kobo sync (Omnibus → Kobo)
 
 **Phase 4 · Device sync** · **Priority:** P1
 
 Implement the `/kobo/v1/*` protocol natively, including EPUB → KEPUB conversion via kepubify.
+
+**Direction & scope.** This is the **Omnibus → Kobo** half: serving books to the device and round-tripping *reading state* (position, read status, statistics). It does **not** bring user annotations (highlights/notes/quotes) back from the device — the Kobo wireless protocol has no annotation channel (see [Technical considerations](#technical-considerations)). Pulling Kobo-side annotations into Omnibus is a separate USB-import initiative: [F4.4 Kobo annotation import](4-4-kobo-annotation-import.md).
 
 ## Objective
 
@@ -28,7 +30,7 @@ Kobo devices render plain EPUB but with measurably slower page turns than KEPUB;
 - **Stream the sync response** via `axum::body::StreamBody` — **do not** copy Calibre-Web's `SYNC_ITEM_LIMIT=100` cap. See [calibre-inspection §3](../calibre-inspection/3-performance-pain-points.md) and [recommendation #13](../calibre-inspection/7-recommendations.md).
 - `books.uuid` column needs an index — Kobo identifies books by uuid, not by integer id.
 - Sync tokens stored in a `kobo_sync_tokens` table keyed on user.
-- Reading state (bookmarks + statistics) flows through [F2.1](2-1-progress-sync.md) internally — Kobo endpoints translate.
+- Reading state flows through [F2.1](2-1-progress-sync.md) internally — Kobo endpoints translate. "Reading state" here is **position + read status + statistics** only: the `/kobo/v1/library/<uuid>/state` PUT carries `CurrentBookmark` (the *position anchor* + progress percent — **not** a user-created bookmark), `Statistics`, and `StatusInfo`. The protocol exposes **no endpoint for user annotations** (highlights/notes/quotes); those never sync. Verified against [Calibre-Web `cps/kobo.py`](https://github.com/janeczku/calibre-web/blob/master/cps/kobo.py) (`HandleStateRequest`).
 
 ## Dependencies
 
@@ -41,6 +43,7 @@ Kobo devices render plain EPUB but with measurably slower page turns than KEPUB;
 
 - Kobo protocol is undocumented. Calibre-Web's implementation is our reference; scope for v1.0 is "parity with Calibre-Web minus the 100-item cap."
 - kepubify absence degrades gracefully; not a blocker.
+- **⚠️ Annotation data-loss hazard.** A Kobo expects an annotation channel when syncing (it has one against Kobo's own cloud). Pointing the device at a self-hosted server that doesn't speak that channel can make the Kobo **delete its own local highlights/notes** ([#2610](https://github.com/janeczku/calibre-web/issues/2610), [#1783](https://github.com/janeczku/calibre-web/issues/1783)). Mitigations: warn the user that first sync may clear on-device annotations, and recommend running the [F4.4 USB import](4-4-kobo-annotation-import.md) **before** the device's first wireless sync. Never claim to preserve device annotations we don't store.
 
 ---
 

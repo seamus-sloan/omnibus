@@ -132,9 +132,10 @@ Phase 6  Mobile                   (feature parity on native)
 
 ### Phase 4 — Device sync
 
-- [F4.1 Native Kobo sync](4-1-kobo-sync.md)
+- [F4.1 Native Kobo sync](4-1-kobo-sync.md) — Omnibus → Kobo (books + reading state)
 - [F4.2 OPDS 1.2 feed](4-2-opds.md)
 - [F4.3 Kindle delivery](4-3-kindle.md)
+- [F4.4 Kobo annotation import](4-4-kobo-annotation-import.md) — Kobo → Omnibus (highlights via USB)
 
 ### Phase 5 — Admin & hygiene
 
