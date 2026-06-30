@@ -101,9 +101,10 @@ shared with the whole instance.
 - **Membership is uuid-soft-referenced.** Per [rule 06](../../.claude/rules/06-migrations.md),
   `shelf_books` references the durable `book_uuid` (no cascading `book_id` FK),
   resolved through `resolve_book_id_by_uuid` so a reindex / scan-root repoint /
-  format merge keeps a hand-picked shelf intact and a removed file only ghosts
-  its entry. A book on N shelves is N `shelf_books` rows. `position` backs
-  drag-to-reorder.
+  format merge keeps a hand-picked shelf intact. A book whose files go missing
+  stays on the shelf until [library cleanup (F5.9)](5-9-library-cleanup.md)
+  removes the book, which also drops its `shelf_books` rows. A book on N shelves
+  is N `shelf_books` rows. `position` backs drag-to-reorder.
 - **Naming sidesteps the `libraries` collision.** The physical scan-root
   registry keeps the `libraries` name; this user-facing concept is `shelves`,
   resolving the table-name clash flagged in the db review.
@@ -149,7 +150,8 @@ shared with the whole instance.
   visible to every user. Flipping visibility changes who sees it immediately.
 - An admin can view another user's Private shelf; a non-admin cannot.
 - A hand-picked shelf survives a reindex / scan-root repoint with its membership
-  intact (uuid soft-reference), and a removed book simply drops from the shelf.
+  intact (uuid soft-reference); a book with missing files stays on the shelf
+  until library cleanup removes the book, which also removes it from the shelf.
 - The home page shows the shelf rail and no filter row.
 
 ## Open questions

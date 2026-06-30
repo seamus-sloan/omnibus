@@ -34,7 +34,7 @@ But F3.1 ([`docs/roadmap/3-1-shelves.md`](../roadmap/3-1-shelves.md)) defines a 
 
 > **Update (F3.1 redesign):** the user-facing concept was renamed from "Libraries" to **Shelves** and now uses `shelves` / `shelf_rules` tables, so it no longer claims the `libraries` name — this collision is resolved by naming. The recommendation below to give the physical-roots table an unambiguous name (`scan_roots` / `library_sources`) still stands on its own merits.
 
-When F3.1 lands you'll need an awkward rename of the physical-roots table (touching `books.library_id` and every JOIN in `books/list.rs`, `browse.rs`, discovery, settings prune) or a confusingly-named second table, decided under pressure. Fix direction: rename the physical-roots table now (e.g. `scan_roots` / `library_sources`) while it has 1-2 rows and the blast radius is internal, freeing `libraries` for the F3.1 concept — or explicitly reconcile the two before either name is load-bearing in routes and the wire API.
+With F3.1 renamed to use `shelves` tables, the forced collision is gone — but `libraries` is still a confusing name for a degenerate scan-root registry. Fix direction (now a clarity cleanup, not urgent): rename the physical-roots table (e.g. `scan_roots` / `library_sources`) while it has 1-2 rows and the blast radius is internal — touching `books.library_id` and every JOIN in `books/list.rs`, `browse.rs`, discovery, and settings prune.
 
 ---
 
