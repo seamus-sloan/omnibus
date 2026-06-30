@@ -100,7 +100,7 @@ The avatar dropdown presents a rich account hub, but most of it is hardcoded fak
 
 Of the whole panel only Settings (223-229), Sign out (263-270), and the theme segment (297-336) actually work; Edit-profile, Now-reading, all four stats, Admin, Notifications, and Switch-user are inert `aria-disabled` `<a>`s. For a self-hosted app where the owner knows they have not written 412 highlights, fabricated personal metrics read as broken/fake and erode trust in every other number the app shows. The disabled rows are at least correctly inert (`aria-disabled`, `tabindex=-1`), but inventing concrete values is the wrong empty-state pattern.
 
-Fix: until the backing features (Journal F3.2, Highlights, Shelves F3.5, Goals, Notifications, Stats F3.4) ship, collapse the menu to the three working rows, or render neutral empty/coming-soon states (the `.sp-coming-soon` affix pattern already exists) with zero fabricated values — never invented user-specific data.
+Fix: until the backing features (Journal F3.2, Highlights, Shelves F3.1, Goals, Notifications, Stats F3.4) ship, collapse the menu to the three working rows, or render neutral empty/coming-soon states (the `.sp-coming-soon` affix pattern already exists) with zero fabricated values — never invented user-specific data.
 
 ---
 

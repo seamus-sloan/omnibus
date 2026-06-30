@@ -264,7 +264,7 @@ N/A — no metrics pipeline yet. Tracked under [F5.2 Observability](../roadmap/5
 | [F1.7 Atrium design system](../roadmap/1-7-atrium-design-system.md) | This delivery — tokens, primitives, Library reskin | In progress |
 | [F1.8 Discovery pages](../roadmap/1-8-discovery-pages.md) | Author / Series / Tag-cloud pages | Planned |
 | [F3.4 Stats](../roadmap/3-4-stats.md) | Year-in-review reading stats | Planned (depends on F2.1) |
-| [F3.5 Shared shelves](../roadmap/3-5-shared-shelves.md) | Multi-user shelves | Planned (depends on F3.1) |
+| [F3.1 Shelves](../roadmap/3-1-shelves.md) | Smart + hand-picked shelves, private/public | Planned |
 | [F5.6 Admin health](../roadmap/5-6-admin-health.md) | Server health dashboard | Planned (splits from F5.4) |
 | [F5.7 Journal & quote cards](../roadmap/5-7-journal-quote-cards.md) | Markdown journal + quote card composer | Planned (extends F3.2) |
 

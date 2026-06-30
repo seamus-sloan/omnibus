@@ -38,11 +38,10 @@ slice-and-dice that doesn't require typing a DSL.
 
 Unblocks:
 
-- **F3.1 Libraries with metadata filters**
-  ([F3.1](3-1-libraries.md)) — saved-filter "libraries" persist the same
-  rule shape this initiative defines for the URL/API contract. Building
-  the rule shape once, here, prevents [F3.1](3-1-libraries.md) from
-  reinventing it.
+- **F3.1 Shelves**
+  ([F3.1](3-1-shelves.md)) — smart shelves persist the same rule shape
+  this initiative defines for the URL/API contract. Building the rule
+  shape once, here, prevents [F3.1](3-1-shelves.md) from reinventing it.
 - **F4.2 OPDS 1.2 feed** ([F4.2](4-2-opds.md)) — OPDS faceted navigation
   reuses the same taxonomy queries that populate this modal.
 
@@ -76,7 +75,7 @@ Unblocks:
       pub cursor: Option<String>,           // keyset, matches F1.3
   }
   ```
-  This same shape is what [F3.1](3-1-libraries.md) will persist as a
+  This same shape is what [F3.1](3-1-shelves.md) will persist as a
   saved-filter row, so the rule format is shared from the start.
 - **Query layer.** New `search_books_advanced(pool, &query)` in
   [db/src/queries.rs](../../db/src/queries.rs). Implementation:
@@ -128,17 +127,17 @@ Unblocks:
   independently of the dropdown contents.
 - **URL length on heavy multi-selects.** Browsers cap at ~2 KB; 200+
   selected ids would exceed that. Accepted — at that selection count
-  the user wants a saved-filter library
-  ([F3.1](3-1-libraries.md)), not a one-off URL.
+  the user wants a smart shelf
+  ([F3.1](3-1-shelves.md)), not a one-off URL.
 - **FTS5 + facet predicate performance.** The combined query plan
   should use `books_fts` first when free-text is present (best
   selectivity), then filter by facet `EXISTS`. Verify with
   `EXPLAIN QUERY PLAN` in the unit tests; if the planner picks a bad
   order on real data, add `INDEXED BY` or rewrite as a CTE.
 - **6-month drift:** the structured query shape becomes the
-  [F3.1](3-1-libraries.md) saved-filter row format, so a sloppy
+  [F3.1](3-1-shelves.md) saved-filter row format, so a sloppy
   first-pass schema costs a migration later. Mitigated by reviewing the
-  `AdvancedSearchQuery` shape with [F3.1](3-1-libraries.md) in mind
+  `AdvancedSearchQuery` shape with [F3.1](3-1-shelves.md) in mind
   before merge.
 
 ## Open questions
@@ -168,7 +167,7 @@ Unblocks:
   Decision owner: **user**, before TODO 2 (query layer) starts.
 - **Saved-filter persistence** — should this initiative ship a "save
   this search" affordance, or is that strictly
-  [F3.1](3-1-libraries.md)'s job? Decision owner: **user**, can defer
+  [F3.1](3-1-shelves.md)'s job? Decision owner: **user**, can defer
   until UI work begins.
 - **Facet result counts** — show `(123)` next to each option? Cheap
   query (`GROUP BY` on link table) but adds visual noise. Decision
@@ -183,7 +182,7 @@ Unblocks:
 same types.
 
 **Why:** Locks the wire contract before any consumer is written. Keeps
-[F3.1](3-1-libraries.md) from inventing a parallel rule shape later.
+[F3.1](3-1-shelves.md) from inventing a parallel rule shape later.
 
 **Context:** Reserve a commented-out `narrators` slot for the deferred
 audiobook story. Derive `Serialize`, `Deserialize`, `Default`,
@@ -318,7 +317,7 @@ log line stable so a future Loki/Tempo query can parse it.
 
 ## Status
 
-In progress — the **search palette** (command-palette / Spotlight pattern) shipped as the first deliverable, replacing the inline nav search input with a floating ⌘K-triggered overlay showing grouped FTS5 results (books, authors, series, tags). This is a lighter, faster surface than the facet-picker modal originally described above. The facet modal's slice-and-dice use case (multi-select facet pickers, structured `AdvancedSearchQuery`, saved filters) moves to [F3.1](3-1-libraries.md).
+In progress — the **search palette** (command-palette / Spotlight pattern) shipped as the first deliverable, replacing the inline nav search input with a floating ⌘K-triggered overlay showing grouped FTS5 results (books, authors, series, tags). This is a lighter, faster surface than the facet-picker modal originally described above. The facet modal's slice-and-dice use case (multi-select facet pickers, structured `AdvancedSearchQuery`, saved filters) moves to [F3.1](3-1-shelves.md).
 
 The palette lives in `frontend/src/components/search_palette.rs` with backing query `db::search_palette` and both RPC (`/api/rpc/search-palette`) and REST (`/api/search/palette`) endpoints. Entity results (author/series/tag) currently navigate to the landing page with a filter; [F1.10](1-10-palette-discovery-link.md) will link them to F1.8 discovery pages once those ship.
 

@@ -58,9 +58,9 @@ So `LIMIT 1` always returns the single existing row and `series_index` is
 unambiguous **only as long as the one-series-per-book convention holds** — a
 convention enforced nowhere in the schema.
 
-**Why it bites a named roadmap feature.** F3.1 (Libraries with metadata filters,
-[docs/roadmap/3-1-libraries.md](../roadmap/3-1-libraries.md)) builds saved
-filter collections over the normalized columns, and series-by-detail / browse-
+**Why it bites a named roadmap feature.** F3.1 (Shelves,
+[docs/roadmap/3-1-shelves.md](../roadmap/3-1-shelves.md)) builds smart-shelf
+rules over the normalized columns, and series-by-detail / browse-
 by-series pages are the surfaces that will read `series_name` and order by
 `series_index`. Once those pages and any series filter rule
 (`series = ?`, `ORDER BY series_index`) ship, they harden around whichever model
