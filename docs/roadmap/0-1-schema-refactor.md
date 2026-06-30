@@ -12,7 +12,7 @@ Replace the current denormalized single-table schema (one row per file, JSON-blo
 
 Unblocks:
 
-- **Libraries** ([F3.1](3-1-libraries.md)) — metadata filter rules need real columns.
+- **Shelves** ([F3.1](3-1-shelves.md)) — smart-shelf rule conditions need real columns.
 - **Search** ([F1.1](1-1-search.md)) — FTS5 needs structured content to index.
 - **Browse-by-author/series/tag** — impossible to do efficiently from JSON blobs.
 - **Multi-format delivery** — read the epub on web, listen to m4b in the car, send epub to Kindle — all the same work.
