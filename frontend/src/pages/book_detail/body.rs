@@ -2,7 +2,7 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::{EbookMetadata, Identifier};
+use omnibus_shared::{BookSuggestion, Contributor, EbookMetadata, Identifier, SuggestionsResponse};
 
 use crate::components::atrium::Cover;
 use crate::components::FormatSwitcher;
@@ -11,13 +11,17 @@ use crate::Route;
 use super::journal::BdJournalSection;
 use super::{BdInsightCell, BdMetaRow, BdSectionHead};
 
-/// Main column: public journal feed, highlights stub, from-the-same-hand fan, suggestions stub.
+/// Main column: public journal feed, highlights stub, from-the-same-hand fan,
+/// and the F3.3 "Readers also enjoyed" suggestions strip.
 #[component]
 pub(super) fn BdBodyMain(
     uuid: String,
     title: String,
     primary_author: String,
     author_books: Vec<EbookMetadata>,
+    suggestions: Option<SuggestionsResponse>,
+    server_url: String,
+    is_admin: bool,
 ) -> Element {
     rsx! {
         div { class: "bd-body-main",
@@ -50,15 +54,161 @@ pub(super) fn BdBodyMain(
                     }
                 }
             }
-            div { class: "divider" }
-            BdSectionHead {
-                kicker: format!("If you liked {title}\u{2026}"),
-                title: "Suggested for you".to_string(),
-            }
-            div { class: "bd-stub-strip card", aria_hidden: "true",
-                p { class: "bd-stub-hint mono", "Suggestions land in F3.3." }
+            BdSuggestionsStrip {
+                book_title: title,
+                suggestions,
+                server_url,
+                is_admin,
             }
         }
+    }
+}
+
+/// "Readers also enjoyed" — Hardcover read-alikes below the metadata. Renders
+/// its own divider + section head, then one of: a connect message (no key), a
+/// quiet placeholder (resolving), the cover strip (results), or an empty note.
+/// The section is always present (stable `suggestions-strip` testid); only its
+/// inner content varies by state.
+#[component]
+pub(super) fn BdSuggestionsStrip(
+    book_title: String,
+    suggestions: Option<SuggestionsResponse>,
+    server_url: String,
+    is_admin: bool,
+) -> Element {
+    rsx! {
+        div { class: "divider" }
+        BdSectionHead {
+            kicker: format!("If you liked {book_title}\u{2026}"),
+            title: "Suggested for you".to_string(),
+        }
+        div { class: "bd-suggest", "data-testid": "suggestions-strip",
+            match suggestions {
+                Some(SuggestionsResponse::Ready { items }) if !items.is_empty() => rsx! {
+                    BdSuggestionsList { items, server_url }
+                },
+                Some(SuggestionsResponse::Ready { .. }) => rsx! {
+                    div { class: "bd-suggest-pending card", "data-testid": "suggestions-empty",
+                        p { class: "mono bd-stub-hint", "No read-alikes found for this book yet." }
+                    }
+                },
+                Some(SuggestionsResponse::NotConfigured) => rsx! {
+                    SuggestionsConnectCard { is_admin }
+                },
+                // None (first paint, pre-fetch) or Pending → quiet placeholder.
+                _ => rsx! {
+                    div { class: "bd-suggest-pending card", "data-testid": "suggestions-pending",
+                        p { class: "mono bd-stub-hint", "Looking for read-alikes via Hardcover\u{2026}" }
+                    }
+                },
+            }
+        }
+    }
+}
+
+/// The cover strip itself — 5 covers stacked (hover to spread); a "show more"
+/// reveals the rest into a flat grid. Each cover links out to Hardcover.
+#[component]
+fn BdSuggestionsList(items: Vec<BookSuggestion>, server_url: String) -> Element {
+    let mut expanded = use_signal(|| false);
+    let total = items.len();
+    let collapsed_len = total.min(5);
+    let show_more = total > collapsed_len;
+    let visible = if expanded() { total } else { collapsed_len };
+    let row_class = if expanded() {
+        "suggest-static"
+    } else {
+        "suggest-stack"
+    };
+
+    rsx! {
+        div { class: "{row_class}",
+            for s in items.iter().take(visible).cloned() {
+                a {
+                    key: "{s.hardcover_id}",
+                    class: "cover-link suggest-card",
+                    href: "{s.hardcover_url}",
+                    target: "_blank",
+                    rel: "noopener noreferrer",
+                    "data-testid": "suggestion-card",
+                    Cover {
+                        book: suggestion_cover_book(&s),
+                        src_override: cover_src(&server_url, &s),
+                    }
+                    div { class: "fan-match mono", "{list_count_label(s.list_count)}" }
+                    div { class: "sug-cap",
+                        div { class: "sug-cap-title", "{s.title}" }
+                        div { class: "sug-cap-author", "{s.author}" }
+                    }
+                }
+            }
+        }
+        if show_more && !expanded() {
+            div { class: "bd-suggest-actions",
+                button {
+                    class: "btn sm",
+                    "data-testid": "suggestions-show-more",
+                    onclick: move |_| expanded.set(true),
+                    "Show {total - collapsed_len} more"
+                }
+            }
+        }
+    }
+}
+
+/// "Connect Hardcover" message shown when no API key is configured. Admins get
+/// a link to Settings; everyone else is told to ask their server admin.
+#[component]
+fn SuggestionsConnectCard(is_admin: bool) -> Element {
+    rsx! {
+        div { class: "bd-suggest-connect card", "data-testid": "suggestions-not-configured",
+            div {
+                h4 { class: "bd-suggest-connect-title", "Suggestions are powered by Hardcover" }
+                p { class: "bd-suggest-connect-body",
+                    "Add a Hardcover API key to pull read-alikes for this book."
+                }
+            }
+            if is_admin {
+                Link {
+                    to: Route::Settings {},
+                    class: "btn primary sm",
+                    "data-testid": "suggestions-connect-link",
+                    "Add Hardcover API key \u{2192}"
+                }
+            } else {
+                span { class: "mono bd-stub-hint", "Ask your server admin to connect Hardcover." }
+            }
+        }
+    }
+}
+
+/// Build a minimal [`EbookMetadata`] so the shared [`Cover`] can render a
+/// suggestion's title/author plate when no cover image is available.
+fn suggestion_cover_book(s: &BookSuggestion) -> EbookMetadata {
+    EbookMetadata {
+        title: Some(s.title.clone()),
+        creators: vec![Contributor {
+            name: s.author.clone(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// Absolute cover URL (server base + relative path), or `None` when the
+/// suggestion has no cached cover (the plate fallback then applies).
+fn cover_src(server_url: &str, s: &BookSuggestion) -> Option<String> {
+    s.cover_url
+        .as_ref()
+        .map(|path| format!("{server_url}{path}"))
+}
+
+/// "on N lists" relevance label (singular-aware).
+fn list_count_label(n: i64) -> String {
+    if n == 1 {
+        "on 1 list".to_string()
+    } else {
+        format!("on {n} lists")
     }
 }
 

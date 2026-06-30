@@ -14,6 +14,10 @@ pub use omnibus_shared::Settings;
 /// indexer, settings handlers, and tests all reference the same identifier.
 const EBOOK_LIBRARY_PATH_KEY: &str = "ebook_library_path";
 const AUDIOBOOK_LIBRARY_PATH_KEY: &str = "audiobook_library_path";
+/// `settings` KV key for the F3.3 Hardcover API token. Stored directly (not via
+/// the [`Settings`] struct) so saving it never triggers the scan-root
+/// reconciliation `set_settings` runs.
+const HARDCOVER_API_KEY_KEY: &str = "hardcover_api_key";
 
 /// Errors returned by the settings data layer.
 #[derive(Debug, thiserror::Error)]
@@ -250,6 +254,69 @@ pub async fn seed_settings_from_env(pool: &SqlitePool) -> Result<(), SettingsErr
             },
         )
         .await?;
+    }
+    Ok(())
+}
+
+/// Read the Hardcover API key saved in `settings`, or `None` when unset/blank.
+/// This is the raw secret — callers serving it to a client MUST mask it.
+pub async fn get_hardcover_api_key(pool: &SqlitePool) -> Result<Option<String>, SettingsError> {
+    let v = sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
+        .bind(HARDCOVER_API_KEY_KEY)
+        .fetch_optional(pool)
+        .await?;
+    Ok(v.filter(|s| !s.trim().is_empty()))
+}
+
+/// Persist (or clear, when `None`/blank) the Hardcover API key in `settings`.
+pub async fn set_hardcover_api_key(
+    pool: &SqlitePool,
+    key: Option<&str>,
+) -> Result<(), SettingsError> {
+    match key.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(v) => {
+            sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+                .bind(HARDCOVER_API_KEY_KEY)
+                .bind(v)
+                .execute(pool)
+                .await?;
+        }
+        None => {
+            sqlx::query("DELETE FROM settings WHERE key = ?")
+                .bind(HARDCOVER_API_KEY_KEY)
+                .execute(pool)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+/// The effective Hardcover key: the saved settings value wins; the
+/// `HARDCOVER_API_KEY` env var is the fallback when no value is saved. Returns
+/// `None` (feature disabled) when neither is set.
+pub async fn effective_hardcover_api_key(
+    pool: &SqlitePool,
+) -> Result<Option<String>, SettingsError> {
+    if let Some(saved) = get_hardcover_api_key(pool).await? {
+        return Ok(Some(saved));
+    }
+    Ok(std::env::var("HARDCOVER_API_KEY")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty()))
+}
+
+/// Boot hook: seed the Hardcover key from `HARDCOVER_API_KEY` **only** when no
+/// value is already saved, so the env var works out of the box without
+/// clobbering a key set through Settings on every restart (settings wins).
+pub async fn seed_hardcover_key_from_env(pool: &SqlitePool) -> Result<(), SettingsError> {
+    if get_hardcover_api_key(pool).await?.is_some() {
+        return Ok(());
+    }
+    if let Ok(env_key) = std::env::var("HARDCOVER_API_KEY") {
+        if !env_key.trim().is_empty() {
+            set_hardcover_api_key(pool, Some(&env_key)).await?;
+        }
     }
     Ok(())
 }

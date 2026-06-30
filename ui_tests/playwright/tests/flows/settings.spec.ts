@@ -5,7 +5,11 @@ import { expectNavVisible, gotoReady } from "../utils/nav";
 
 const ebookInput = (page: Page) => page.getByLabel("Ebook Library Path");
 const audiobookInput = (page: Page) => page.getByLabel("Audiobook Library Path");
-const saveButton = (page: Page) => page.getByRole("button", { name: "Save" });
+// Scope the Save button to the library-paths form — the page now also has a
+// "Suggestions (Hardcover)" card with its own Save button (F3.3), so an
+// unscoped `name: "Save"` would match both and trip Playwright strict mode.
+const saveButton = (page: Page) =>
+  page.locator("#settings-form").getByRole("button", { name: "Save" });
 // The settings page now has two `role=status` regions — the inline form
 // status (this locator) and the worker-progress indicator above the Save
 // button (`data-testid="worker-status"`, issue #69). Target by testid so
@@ -22,6 +26,8 @@ test("renders the settings page layout", async ({ page }) => {
   await expect(settingsStatus(page)).toBeAttached();
   await expect(page.getByTestId("ebook-library-summary")).toBeAttached();
   await expect(page.getByTestId("audiobook-library-summary")).toBeAttached();
+  // F3.3 — the Hardcover suggestions key card renders on the settings page.
+  await expect(page.getByTestId("hardcover-key-card")).toBeVisible();
   await expectNavVisible(page);
 });
 

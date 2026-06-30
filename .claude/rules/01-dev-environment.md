@@ -56,6 +56,7 @@ Key vars (see `.env.example` for the full annotated list):
 - `OMNIBUS_DEV_SEED_USER=username:password` — creates a named admin user on server boot if absent. Dev convenience for `ui-validate` and parallel agents; never set in production. Password must satisfy `db::auth` validation (≥10 chars, not in `COMMON_PASSWORDS`).
 - `OMNIBUS_SECURE_COOKIES=0` — disables the `Secure` flag on session cookies. The default is `true` (secure-by-default). Browsers treat `http://localhost` as a secure context, so the Nix dev shell does not need this override; only set `0` when serving plain `http://` from a non-localhost origin (e.g. an IP-based dev server on a LAN). Never set in production.
 - `EBOOK_LIBRARY_PATH` / `AUDIOBOOK_LIBRARY_PATH` — pre-seed library paths via the `seed_settings_from_env` boot hook (runs every boot; overwrites the settings row with BOTH values, so set both together or neither). For CI / Docker / dev-up; leave unset in production.
+- `HARDCOVER_API_KEY` — account-level Hardcover Bearer token for F3.3 "Readers also enjoyed" suggestions. Unlike the library paths, the **Settings page is the source of truth**: the `seed_hardcover_key_from_env` boot hook seeds this value only when none is saved (settings wins thereafter), and `effective_hardcover_api_key` falls back to it when settings is empty. Server-wide, never per-user; leave unset to keep suggestions disabled.
 
 **Security-sensitive (never set casually in production):**
 

@@ -5,7 +5,7 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::{EbookMetadata, MergeBooksResult};
+use omnibus_shared::{EbookMetadata, MergeBooksResult, SuggestionsResponse};
 
 use crate::{data, use_server_url, Route};
 
@@ -24,6 +24,13 @@ pub fn BookDetailPage(uuid: String) -> Element {
     let server_url = use_server_url();
     let mut book: Signal<Option<EbookMetadata>> = use_signal(|| None);
     let mut author_books: Signal<Vec<EbookMetadata>> = use_signal(Vec::new);
+    // F3.3 suggestions. Starts `None` on both SSR and the first WASM paint so
+    // hydration markup matches (rule 07); the client effect below populates it.
+    let mut suggestions: Signal<Option<SuggestionsResponse>> = use_signal(|| None);
+    // Epoch guard so a poll loop left over from a previous book can't write its
+    // result onto the current book after navigation (mirrors landing's
+    // `fetch_epoch`).
+    let mut suggestions_epoch = use_signal(|| 0u64);
     let mut loading = use_signal(|| true);
     let mut error: Signal<Option<String>> = use_signal(|| None);
     // Bumped after a merge/undo so the effect below refetches the book
@@ -104,6 +111,68 @@ pub fn BookDetailPage(uuid: String) -> Element {
         });
     }));
 
+    // F3.3 suggestions: resolved off-request by the worker and cached. Fetch
+    // for the current book; while the result is `Pending`, poll a few times on
+    // web so it appears without a manual reload. A fetch failure degrades to
+    // "no suggestions" rather than an error row.
+    let sug_url = server_url.clone();
+    use_effect(use_reactive!(|uuid| {
+        let url = sug_url.clone();
+        let uuid = uuid.clone();
+        let epoch = {
+            suggestions_epoch.with_mut(|e| *e += 1);
+            *suggestions_epoch.peek()
+        };
+        // True only while this run is still the latest — a newer book's effect
+        // bumps the epoch, so a stale poll drops its result instead of writing
+        // it onto the now-current book.
+        let is_current = move || *suggestions_epoch.peek() == epoch;
+        spawn(async move {
+            suggestions.set(None);
+            match data::get_suggestions(&url, &uuid).await {
+                Ok(resp) => {
+                    if !is_current() {
+                        return;
+                    }
+                    let pending = matches!(resp, SuggestionsResponse::Pending);
+                    suggestions.set(Some(resp));
+                    #[cfg(feature = "web")]
+                    if pending {
+                        let mut tries = 0u32;
+                        while tries < 5 {
+                            gloo_timers::future::TimeoutFuture::new(2500).await;
+                            if !is_current() {
+                                return;
+                            }
+                            tries += 1;
+                            match data::get_suggestions(&url, &uuid).await {
+                                Ok(next) => {
+                                    if !is_current() {
+                                        return;
+                                    }
+                                    let still_pending =
+                                        matches!(next, SuggestionsResponse::Pending);
+                                    suggestions.set(Some(next));
+                                    if !still_pending {
+                                        break;
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                    #[cfg(not(feature = "web"))]
+                    let _ = pending;
+                }
+                Err(_) => {
+                    if is_current() {
+                        suggestions.set(Some(SuggestionsResponse::Ready { items: Vec::new() }));
+                    }
+                }
+            }
+        });
+    }));
+
     if loading() {
         return rsx! {
             p { class: "subtitle", "Loading\u{2026}" }
@@ -146,7 +215,14 @@ pub fn BookDetailPage(uuid: String) -> Element {
     #[cfg(feature = "mobile")]
     let merge_ui: Option<Element> = merge::build_merge_ui();
 
-    let body = render_loaded(b, author_books(), merge_button);
+    let body = render_loaded(
+        b,
+        author_books(),
+        merge_button,
+        suggestions(),
+        server_url.clone(),
+        is_admin_flag,
+    );
     rsx! {
         {body}
         {merge_ui}
@@ -277,6 +353,9 @@ fn render_loaded(
     b: EbookMetadata,
     author_books: Vec<EbookMetadata>,
     merge_button: Option<Element>,
+    suggestions: Option<SuggestionsResponse>,
+    server_url: String,
+    is_admin: bool,
 ) -> Element {
     let LoadedBookView {
         title,
@@ -307,6 +386,9 @@ fn render_loaded(
                     title: title.clone(),
                     primary_author,
                     author_books,
+                    suggestions,
+                    server_url,
+                    is_admin,
                 }
                 BdRailSection {
                     b,
@@ -319,23 +401,6 @@ fn render_loaded(
             div { class: "bd-footer",
                 Link { to: Route::Landing {}, class: "btn", "Back to library" }
             }
-            BdHiddenSlots {}
-        }
-    }
-}
-
-/// Reserved hidden slot for F3.3 suggestions — anything keying off the
-/// `suggestions-slot` testid still finds it. Ratings now ship as the
-/// interactive hero rating card (`rating-stars`), so the old `ratings-slot`
-/// placeholder is gone.
-#[component]
-fn BdHiddenSlots() -> Element {
-    rsx! {
-        div {
-            class: "suggestions-slot",
-            "data-testid": "suggestions-slot",
-            aria_label: "Suggestions \u{2014} coming soon",
-            hidden: true,
         }
     }
 }

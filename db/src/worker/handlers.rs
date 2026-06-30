@@ -101,6 +101,12 @@ impl Worker {
                 Ok(()) => TaskOutcome::Ok,
                 Err(e) => TaskOutcome::Err(e.to_string()),
             },
+            Task::ResolveSuggestions { book_uuid } => {
+                match crate::suggestions::resolve(&self.pool, &book_uuid).await {
+                    Ok(()) => TaskOutcome::Ok,
+                    Err(e) => TaskOutcome::Err(e.to_string()),
+                }
+            }
             Task::GenerateThumbs {
                 book_id,
                 last_modified_epoch,
