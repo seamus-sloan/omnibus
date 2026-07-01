@@ -3,7 +3,7 @@
 //! `use_effect` so the page body stays a small composition of named stages.
 
 use dioxus::prelude::*;
-use omnibus_shared::{EbookMetadata, FacetCounts as ServerFacetCounts, TagWeight, ViewPrefs};
+use omnibus_shared::{EbookMetadata, TagWeight, ViewPrefs};
 
 use crate::components::chip_editor::{collect_suggestions, SuggestionItem};
 use crate::data;
@@ -22,7 +22,6 @@ pub(super) struct SuggestionPools {
 pub(super) struct FetchSignals {
     pub(super) books: Signal<Vec<EbookMetadata>>,
     pub(super) next_cursor: Signal<Option<String>>,
-    pub(super) server_facets: Signal<Option<ServerFacetCounts>>,
     pub(super) total: Signal<Option<i64>>,
     pub(super) lib_path: Signal<Option<String>>,
     pub(super) lib_error: Signal<Option<String>>,
@@ -80,7 +79,6 @@ pub(super) fn spawn_page_fetch_effect(
     let FetchSignals {
         mut books,
         mut next_cursor,
-        mut server_facets,
         mut total,
         mut lib_path,
         mut lib_error,
@@ -114,16 +112,14 @@ pub(super) fn spawn_page_fetch_effect(
                         lib_error.set(None);
                         next_cursor.set(page.next_cursor);
                         total.set(page.total);
-                        server_facets.set(page.facets);
                         books.set(page.books);
                     }
                     Err(e) => {
                         error.set(Some(e.to_string()));
                         // Clear the derived signals so the error state doesn't
-                        // render a stale header count or facet sidebar.
+                        // render a stale header count.
                         books.set(Vec::new());
                         total.set(None);
-                        server_facets.set(None);
                         lib_error.set(None);
                     }
                 }
@@ -138,14 +134,12 @@ pub(super) fn spawn_page_fetch_effect(
                         lib_path.set(lib.path);
                         lib_error.set(lib.error);
                         total.set(lib.total);
-                        server_facets.set(None); // client computes search facets
                         books.set(lib.books);
                     }
                     Err(e) => {
                         error.set(Some(e.to_string()));
                         books.set(Vec::new());
                         total.set(None);
-                        server_facets.set(None);
                         lib_error.set(None);
                     }
                 }

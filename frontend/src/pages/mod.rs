@@ -16,6 +16,7 @@ mod search;
 mod series;
 mod series_index;
 mod settings;
+mod shelf_detail;
 mod tag_cloud;
 
 pub use auth::{LoginPage, RegisterPage};
@@ -34,4 +35,5 @@ pub use search::SearchPage;
 pub use series::SeriesPage;
 pub use series_index::SeriesIndexPage;
 pub use settings::SettingsPage;
+pub use shelf_detail::ShelfDetailPage;
 pub use tag_cloud::TagCloudPage;

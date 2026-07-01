@@ -24,6 +24,7 @@ mod journals;
 mod progress;
 mod ratings;
 mod series;
+mod shelves;
 mod suggestions;
 mod tags;
 
@@ -40,6 +41,7 @@ pub use journals::*;
 pub use progress::*;
 pub use ratings::*;
 pub use series::*;
+pub use shelves::*;
 pub use suggestions::*;
 pub use tags::*;
 

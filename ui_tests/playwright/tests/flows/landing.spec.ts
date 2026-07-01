@@ -24,13 +24,10 @@ test("renders the landing page layout", async ({ page }) => {
   await expect(page.getByRole("heading", { level: 1, name: "Your Library" })).toBeVisible();
   await expect(page.getByTestId("ebook-table")).toBeVisible();
   await expect(page.getByTestId("lib-toolbar")).toBeVisible();
-  // Sidebar is collapsed by default; opening it via the toolbar toggle
-  // exercises the new persisted preference and confirms the sidebar
-  // markup is wired up.
-  const filtersToggle = page.getByTestId("lib-filters-toggle");
-  await expect(filtersToggle).toHaveAttribute("aria-pressed", "false");
-  await filtersToggle.click();
-  await expect(page.getByTestId("lib-sidebar")).toBeVisible();
+  // F3.1: the shelves rail replaced the old filter sidebar. "All books" is the
+  // way back to the full library; shelf CRUD is covered by shelves.spec.ts.
+  await expect(page.getByTestId("rail-all-books")).toBeVisible();
+  await expect(page.getByTestId("new-shelf")).toBeVisible();
   await expectNavVisible(page);
 });
 
@@ -99,58 +96,6 @@ test("sorts by title descending when the Title header is clicked", async ({ page
   );
 });
 
-test("filters by format chip and clears via the All-formats chip", async ({ page }) => {
-  await gotoReady(page, "/");
-  const unfilteredCount = await page.getByTestId(/^ebook-row-/).count();
-  expect(unfilteredCount).toBeGreaterThanOrEqual(FIXTURE_BOOKS.length);
-
-  const chipRow = page.getByTestId("lib-format-chips");
-  await expect(chipRow).toBeVisible();
-
-  // Every fixture EPUB shows up under the "ePub" chip; clicking it keeps
-  // the same row count and toggles the chip's aria-pressed state.
-  const epubChip = chipRow.locator('button[data-format="epub"]');
-  await expect(epubChip).toContainText(`${FIXTURE_BOOKS.length}`);
-  await epubChip.click();
-
-  await expect(epubChip).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByTestId(/^ebook-row-/)).toHaveCount(FIXTURE_BOOKS.length);
-
-  // Every visible row exposes its formats in the new column.
-  const formatCells = page.getByTestId("ebook-cell-formats");
-  await expect(formatCells.first()).toContainText("EPUB");
-
-  // Clearing via the "All formats" chip returns to the unfiltered state.
-  await chipRow.locator('button[data-format="all"]').click();
-  await expect(epubChip).toHaveAttribute("aria-pressed", "false");
-  await expect(chipRow.locator('button[data-format="all"]')).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-});
-
-test("filters by author chip and clears via the clear-all button", async ({ page }) => {
-  await gotoReady(page, "/");
-  const unfilteredCount = await page.getByTestId(/^ebook-row-/).count();
-  expect(unfilteredCount).toBeGreaterThanOrEqual(FIXTURE_BOOKS.length);
-
-  // Sidebar starts collapsed; open it before reaching for the chip.
-  await page.getByTestId("lib-filters-toggle").click();
-
-  const authorsFacet = page.getByTestId("lib-facet-authors");
-  const lovelaceChip = authorsFacet.locator('button.lib-chip[data-value="Ada Lovelace"]');
-  await lovelaceChip.click();
-
-  await expect(lovelaceChip).toHaveAttribute("aria-pressed", "true");
-  // At least one fixture is by Ada Lovelace (audiobook may also match).
-  const lovelaceCount = await page.getByTestId(/^ebook-row-/).count();
-  expect(lovelaceCount).toBeGreaterThanOrEqual(1);
-  await expect(
-    page.getByTestId(/^ebook-row-/).first().getByTestId("ebook-cell-author"),
-  ).toHaveText("Ada Lovelace");
-
-  await page.getByTestId("lib-clear-filters").click();
-  await expect(lovelaceChip).toHaveAttribute("aria-pressed", "false");
-  const clearedCount = await page.getByTestId(/^ebook-row-/).count();
-  expect(clearedCount).toBeGreaterThanOrEqual(FIXTURE_BOOKS.length);
-});
+// F3.1 removed the home-page facet filters (format chips + author/series/tag
+// sidebar); their coverage retired with them. Slicing the library is now the
+// job of shelves — see shelves.spec.ts.
