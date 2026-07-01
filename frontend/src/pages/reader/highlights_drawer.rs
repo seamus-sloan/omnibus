@@ -1,6 +1,6 @@
 //! Highlights & notes drawer for the reader. Lists every highlight for the
 //! open book, filterable by palette color. Clicking a row navigates to the
-//! highlight's CFI; rows also expose copy and delete actions.
+//! highlight's CFI; rows also expose note, copy, and delete actions.
 
 use dioxus::prelude::*;
 
@@ -38,6 +38,7 @@ fn copy_text(text: &str) {
 pub(super) fn HighlightsDrawer(
     highlights: Signal<Vec<Highlight>>,
     on_quote: EventHandler<Highlight>,
+    on_edit_note: EventHandler<Highlight>,
     on_close: EventHandler<()>,
 ) -> Element {
     let mut filter = use_signal(|| None::<HighlightColor>);
@@ -89,7 +90,13 @@ pub(super) fn HighlightsDrawer(
                     div { class: "rd-drawer-empty", "No highlights yet." }
                 } else {
                     for h in shown.iter() {
-                        HighlightRow { key: "{h.id}", highlight: h.clone(), highlights, on_quote }
+                        HighlightRow {
+                            key: "{h.id}",
+                            highlight: h.clone(),
+                            highlights,
+                            on_quote,
+                            on_edit_note,
+                        }
                     }
                 }
             }
@@ -102,6 +109,7 @@ fn HighlightRow(
     highlight: Highlight,
     highlights: Signal<Vec<Highlight>>,
     on_quote: EventHandler<Highlight>,
+    on_edit_note: EventHandler<Highlight>,
 ) -> Element {
     let color = highlight.color.as_str();
     let quote = highlight
@@ -114,6 +122,13 @@ fn HighlightRow(
     // Legacy highlights created before the text column have nothing to copy;
     // disable the action rather than offer a silent no-op.
     let has_text = highlight.text.is_some();
+    // The note button both adds a first note and edits an existing one; its
+    // label reflects which so the affordance reads correctly either way.
+    let note_label = if highlight.note.is_some() {
+        "Edit note"
+    } else {
+        "Add note"
+    };
     let id = highlight.id;
 
     let on_delete = move |_| {
@@ -147,6 +162,16 @@ fn HighlightRow(
                 div { class: "rd-hl-note", "{n}" }
             }
             div { class: "rd-hl-actions",
+                button {
+                    class: "rd-act sm",
+                    r#type: "button",
+                    "data-testid": "highlight-note",
+                    onclick: {
+                        let h = highlight.clone();
+                        move |_| on_edit_note.call(h.clone())
+                    },
+                    "{note_label}"
+                }
                 button {
                     class: "rd-act sm",
                     r#type: "button",
