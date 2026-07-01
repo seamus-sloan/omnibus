@@ -1,42 +1,11 @@
-//! Client-side filter + facet-count helpers for the landing page.
+//! Client-side filter helpers for the landing page's search path.
 //!
-//! Applies the user's [`ViewFilters`] selections and tallies per-facet
-//! counts (authors / series / formats) for the sidebar. Consumed by
-//! [`super::LandingPage`] alongside the sort step.
-
-use std::collections::BTreeMap;
+//! Applies the user's [`ViewFilters`] selections over the (capped) search
+//! result set. Browse mode is filtered server-side, and the facet sidebar was
+//! retired when shelves became the library's lens (F3.1), so only the filter
+//! predicate + the table's format-badge label remain here.
 
 use omnibus_shared::{EbookMetadata, ViewFilters};
-
-#[derive(Clone, PartialEq)]
-pub(crate) struct FacetCounts {
-    pub(crate) authors: Vec<(String, usize)>,
-    pub(crate) series: Vec<(String, usize)>,
-    /// Normalized lowercase format keys (`"epub"`, `"m4b"`, …) paired with
-    /// counts. The display label is derived at render time via
-    /// [`format_display_label`] so the keys stay canonical.
-    pub(crate) formats: Vec<(String, usize)>,
-    pub(crate) tags: Vec<(String, usize)>,
-}
-
-impl FacetCounts {
-    /// Adapt the server-side `shared::FacetCounts` (F5b browse mode) into the
-    /// render shape the sidebar/chips consume. Search mode still tallies
-    /// facets client-side via [`facet_counts`] over the (capped) result list.
-    pub(crate) fn from_shared(s: omnibus_shared::FacetCounts) -> Self {
-        fn conv(v: Vec<omnibus_shared::FacetCount>) -> Vec<(String, usize)> {
-            v.into_iter()
-                .map(|f| (f.value, usize::try_from(f.count).unwrap_or(0)))
-                .collect()
-        }
-        FacetCounts {
-            authors: conv(s.authors),
-            series: conv(s.series),
-            formats: conv(s.formats),
-            tags: conv(s.tags),
-        }
-    }
-}
 
 fn matches_filters(book: &EbookMetadata, filters: &ViewFilters) -> bool {
     // Allocation-free membership checks: filter buckets are typically tiny
@@ -86,63 +55,10 @@ pub(crate) fn apply_filters(books: &[EbookMetadata], filters: &ViewFilters) -> V
         .collect()
 }
 
-pub(crate) fn facet_counts(books: &[EbookMetadata]) -> FacetCounts {
-    let mut authors: BTreeMap<String, usize> = BTreeMap::new();
-    let mut series: BTreeMap<String, usize> = BTreeMap::new();
-    let mut formats: BTreeMap<String, usize> = BTreeMap::new();
-    let mut tags: BTreeMap<String, usize> = BTreeMap::new();
-    for book in books {
-        for c in &book.creators {
-            *authors.entry(c.name.clone()).or_default() += 1;
-        }
-        if let Some(s) = book.series.as_deref() {
-            if !s.is_empty() {
-                *series.entry(s.to_string()).or_default() += 1;
-            }
-        }
-        for fmt in &book.formats {
-            let key = fmt.trim().to_ascii_lowercase();
-            if !key.is_empty() {
-                *formats.entry(key).or_default() += 1;
-            }
-        }
-        for tag in &book.subjects {
-            if !tag.is_empty() {
-                *tags.entry(tag.clone()).or_default() += 1;
-            }
-        }
-    }
-    FacetCounts {
-        authors: sorted_facet(authors),
-        series: sorted_facet(series),
-        formats: sorted_facet(formats),
-        tags: sorted_facet(tags),
-    }
-}
-
-/// User-facing label for a normalized format key. Recognized formats get a
-/// friendly name (`"epub"` → `"ePub"`, `"m4b"` → `"Audiobook"`); anything
-/// else passes through upper-cased.
-pub(crate) fn format_display_label(key: &str) -> String {
-    match key {
-        "epub" => "ePub".to_string(),
-        "m4b" => "Audiobook".to_string(),
-        "pdf" => "PDF".to_string(),
-        "mp3" => "Audiobook (MP3)".to_string(),
-        other => other.to_ascii_uppercase(),
-    }
-}
-
 /// Short badge text for the table's Formats column. Stays compact so a row
 /// with two formats doesn't overflow the cell.
 pub(crate) fn format_badge_label(raw: &str) -> String {
     raw.trim().to_ascii_uppercase()
-}
-
-fn sorted_facet(map: BTreeMap<String, usize>) -> Vec<(String, usize)> {
-    let mut v: Vec<(String, usize)> = map.into_iter().collect();
-    v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    v
 }
 
 #[cfg(test)]
@@ -224,8 +140,6 @@ mod tests {
         ]
     }
 
-    // --- apply_filters ---
-
     #[test]
     fn empty_filters_returns_all_books() {
         let s = sample();
@@ -270,44 +184,9 @@ mod tests {
         assert_eq!(ids(&out), vec![1, 2]);
     }
 
-    // --- facet_counts ---
-
-    #[test]
-    fn facet_counts_orders_by_count_desc_then_name() {
-        let s = sample();
-        let f = facet_counts(&s);
-        // Series: Foundation present once with count 2
-        assert_eq!(f.series, vec![("Foundation".into(), 2)]);
-        // Authors: each unique once
-        assert_eq!(f.authors.len(), 3);
-    }
-
-    #[test]
-    fn facet_counts_skips_empty_series_strings() {
-        let mut b = sample();
-        b[0].series = Some(String::new());
-        let f = facet_counts(&b);
-        assert!(f.series.iter().all(|(s, _)| !s.is_empty()));
-    }
-
-    // --- format filter ---
-
     fn with_formats(mut b: EbookMetadata, formats: &[&str]) -> EbookMetadata {
         b.formats = formats.iter().map(|s| (*s).to_string()).collect();
         b
-    }
-
-    #[test]
-    fn format_counts_normalize_case_insensitively() {
-        let books = vec![
-            with_formats(sample()[0].clone(), &["EPUB"]),
-            with_formats(sample()[1].clone(), &["epub", "m4b"]),
-            with_formats(sample()[2].clone(), &["M4B"]),
-        ];
-        let f = facet_counts(&books);
-        let formats: std::collections::HashMap<_, _> = f.formats.into_iter().collect();
-        assert_eq!(formats.get("epub").copied(), Some(2));
-        assert_eq!(formats.get("m4b").copied(), Some(2));
     }
 
     #[test]
@@ -366,17 +245,6 @@ mod tests {
     }
 
     #[test]
-    fn format_display_label_friendly_names() {
-        assert_eq!(format_display_label("epub"), "ePub");
-        assert_eq!(format_display_label("m4b"), "Audiobook");
-        assert_eq!(format_display_label("pdf"), "PDF");
-        // Unknown formats fall through upper-cased.
-        assert_eq!(format_display_label("azw3"), "AZW3");
-    }
-
-    // --- additional filter / facet / sort edge cases (#215) ---
-
-    #[test]
     fn tag_filter_is_or_within_bucket_not_and() {
         // tags is OR within the bucket: selecting two subjects must keep books
         // carrying *either* one, never require *both* (AND would wrongly drop
@@ -419,26 +287,18 @@ mod tests {
     }
 
     #[test]
-    fn format_facet_counts_tally_across_full_unfiltered_list() {
-        // facet_counts must accumulate over every book it is given (the full,
-        // unfiltered list) — duplicates across books increment the same key.
-        let books = vec![
-            with_formats(sample()[0].clone(), &["epub"]),
-            with_formats(sample()[1].clone(), &["epub", "m4b"]),
-            with_formats(sample()[2].clone(), &["m4b"]),
-        ];
-        let f = facet_counts(&books);
-        let formats: std::collections::HashMap<_, _> = f.formats.into_iter().collect();
-        assert_eq!(formats.get("epub").copied(), Some(2));
-        assert_eq!(formats.get("m4b").copied(), Some(2));
-        assert_eq!(formats.len(), 2);
+    fn empty_filters_returns_full_list_unchanged_in_original_order() {
+        // An empty ViewFilters yields the input list verbatim.
+        let s = sample();
+        assert_eq!(
+            ids(&apply_filters(&s, &ViewFilters::default())),
+            vec![1, 2, 3]
+        );
     }
 
     #[test]
-    fn empty_filters_returns_full_list_unchanged_in_original_order() {
-        // Acceptance (4): an empty ViewFilters yields the input list verbatim.
-        let s = sample();
-        let out = apply_filters(&s, &ViewFilters::default());
-        assert_eq!(ids(&out), ids(&s));
+    fn format_badge_label_uppercases() {
+        assert_eq!(format_badge_label(" epub "), "EPUB");
+        assert_eq!(format_badge_label("m4b"), "M4B");
     }
 }

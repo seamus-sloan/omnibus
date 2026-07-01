@@ -15,7 +15,6 @@ pub(super) fn Toolbar(prefs: ViewPrefs, on_change: EventHandler<ViewPrefs>) -> E
     let view_mode = prefs.view_mode;
     let sort_key = prefs.sort_key;
     let sort_dir = prefs.sort_dir;
-    let filters_open = prefs.filters_open;
 
     let apply = move |new_prefs: ViewPrefs| on_change.call(new_prefs);
     let set_view = {
@@ -23,14 +22,6 @@ pub(super) fn Toolbar(prefs: ViewPrefs, on_change: EventHandler<ViewPrefs>) -> E
         move |mode: ViewMode| {
             let mut next = prefs.clone();
             next.view_mode = mode;
-            apply(next);
-        }
-    };
-    let toggle_filters = {
-        let prefs = prefs.clone();
-        move |_| {
-            let mut next = prefs.clone();
-            next.filters_open = !next.filters_open;
             apply(next);
         }
     };
@@ -63,14 +54,6 @@ pub(super) fn Toolbar(prefs: ViewPrefs, on_change: EventHandler<ViewPrefs>) -> E
 
     rsx! {
         div { class: "lib-toolbar", role: "toolbar", "data-testid": "lib-toolbar",
-            button {
-                class: "lib-toggle-btn lib-filters-btn",
-                "aria-pressed": "{filters_open}",
-                "data-testid": "lib-filters-toggle",
-                aria_label: "Toggle filter sidebar",
-                onclick: toggle_filters,
-                "Filters"
-            }
             // Pressed-button toggle group, not an ARIA tablist — there are no
             // associated tab panels and no arrow-key tab navigation, so
             // `aria-pressed` on plain `<button>`s is the right shape.

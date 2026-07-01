@@ -35,6 +35,7 @@ mod ratings;
 mod search;
 mod series;
 mod settings;
+mod shelves;
 mod suggestions;
 mod tags;
 
@@ -250,6 +251,26 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
         .route(
             "/api/ratings/{uuid}",
             get(ratings::get_rating).delete(ratings::delete_rating),
+        )
+        // F3.1 shelves — mobile-facing REST. Web hits the analogous
+        // `/api/rpc/shelves*` server functions. `/preview` is registered before
+        // the `{id}` param route so it can't be shadowed.
+        .route(
+            "/api/shelves",
+            get(shelves::list_shelves).post(shelves::create_shelf),
+        )
+        .route("/api/shelves/preview", post(shelves::preview_rule))
+        .route(
+            "/api/shelves/{id}",
+            get(shelves::get_shelf)
+                .patch(shelves::update_shelf)
+                .delete(shelves::delete_shelf),
+        )
+        .route("/api/shelves/{id}/page", get(shelves::get_shelf_page))
+        .route("/api/shelves/{id}/books", post(shelves::add_shelf_books))
+        .route(
+            "/api/shelves/{id}/books/{uuid}",
+            delete(shelves::remove_shelf_book),
         )
         // F3.2 public journal entries — mobile-facing REST. Web hits the
         // analogous `/api/rpc/journals/*` server functions.

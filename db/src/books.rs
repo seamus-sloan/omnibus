@@ -68,5 +68,6 @@ impl From<crate::metadata_overrides::MetadataOverridesError> for BooksError {
 // `metadata_overrides`) that referenced these items at `crate::books::…`
 // before the split.
 pub(crate) use projection::{
-    backfill_creator_ids, parse_json_array, row_to_ebook, sanitize_description, BOOK_COLUMNS,
+    backfill_creator_ids, merge_overrides_into_books, parse_json_array, row_to_ebook,
+    sanitize_description, BOOK_COLUMNS,
 };

@@ -35,6 +35,8 @@ pub enum Route {
     SeriesDetail { id: i64 },
     #[route("/tags")]
     TagCloud {},
+    #[route("/shelves/:id")]
+    ShelfDetail { id: i64 },
     #[route("/search/:query")]
     Search { query: String },
     #[route("/login")]
@@ -146,6 +148,14 @@ pub fn SeriesIndex() -> Element {
 pub fn TagCloud() -> Element {
     rsx! {
         ScreenLayout { TagCloudPage {} }
+    }
+}
+
+/// Route target for `/shelves/:id` — one shelf's detail surface.
+#[component]
+pub fn ShelfDetail(id: i64) -> Element {
+    rsx! {
+        ScreenLayout { ShelfDetailPage { id } }
     }
 }
 

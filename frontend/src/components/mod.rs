@@ -70,3 +70,11 @@ mod user_menu;
 // recovery screens on every target. Stays platform-agnostic so the same
 // markup ships under web SSR, web WASM, and mobile native.
 pub mod auth;
+
+// F3.1 shelves: the left-rail shelf list (shared library chrome) and the
+// create-shelf modal it mounts. Platform-agnostic so the rail renders the
+// same under web SSR/WASM and mobile native.
+pub mod create_shelf_modal;
+pub mod shelves_rail;
+pub use create_shelf_modal::CreateShelfModal;
+pub use shelves_rail::{RailActive, ShelvesRail};

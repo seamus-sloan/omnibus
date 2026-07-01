@@ -10,11 +10,10 @@
 //! [`crate::view_prefs`].
 
 use dioxus::prelude::*;
-use omnibus_shared::{
-    EbookMetadata, FacetCounts as ServerFacetCounts, ViewFilters, ViewMode, ViewPrefs,
-};
+use omnibus_shared::{EbookMetadata, ViewFilters, ViewMode, ViewPrefs};
 
 use crate::components::chip_editor::SuggestionItem;
+use crate::components::{RailActive, ShelvesRail};
 use crate::{use_search_query, use_server_url, view_prefs};
 
 mod effects;
@@ -32,8 +31,7 @@ use effects::{
     spawn_load_more_effect, spawn_page_fetch_effect, spawn_suggestion_pools_effect, FetchSignals,
     SuggestionPools,
 };
-use filtering::{apply_filters, facet_counts, FacetCounts};
-use filters::FormatChips;
+use filtering::apply_filters;
 use sections::{LandingContent, LandingContentProps, LandingHeader};
 use sorting::sort_books;
 
@@ -49,7 +47,6 @@ pub(super) const PAGE_SIZE: i64 = 100;
 struct LandingSignals {
     books: Signal<Vec<EbookMetadata>>,
     next_cursor: Signal<Option<String>>,
-    server_facets: Signal<Option<ServerFacetCounts>>,
     total: Signal<Option<i64>>,
     lib_path: Signal<Option<String>>,
     lib_error: Signal<Option<String>>,
@@ -70,7 +67,6 @@ fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSign
     // result set. `next_cursor` is `Some` only while more browse pages remain.
     let books = use_signal(Vec::<EbookMetadata>::new);
     let next_cursor = use_signal(|| None::<String>);
-    let server_facets = use_signal(|| None::<ServerFacetCounts>);
     let total = use_signal(|| None::<i64>);
     let lib_path = use_signal(|| None::<String>);
     let lib_error = use_signal(|| None::<String>);
@@ -96,7 +92,6 @@ fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSign
     let fetch_sigs = FetchSignals {
         books,
         next_cursor,
-        server_facets,
         total,
         lib_path,
         lib_error,
@@ -111,7 +106,6 @@ fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSign
     LandingSignals {
         books,
         next_cursor,
-        server_facets,
         total,
         lib_path,
         lib_error,
@@ -199,13 +193,10 @@ struct LandingViewState {
     path_subtitle: String,
     path_missing: bool,
     book_count: usize,
-    visible_count: usize,
     visible_books: Vec<EbookMetadata>,
     visible_is_empty: bool,
     books_empty: bool,
     view_mode: ViewMode,
-    facet_counts_view: FacetCounts,
-    filters_for_chips: ViewFilters,
     has_more: bool,
     is_loading_more: bool,
 }
@@ -229,12 +220,6 @@ fn derive_view_state(sigs: &LandingSignals, query: Signal<String>) -> LandingVie
             // a `Vec` by value, so a clone is unavoidable on this branch.
             books_sig()
         }
-    });
-    // Facets come from the server on browse, client-tally on search.
-    let server_facets_sig = sigs.server_facets;
-    let facets = use_memo(move || match server_facets_sig() {
-        Some(s) => FacetCounts::from_shared(s),
-        None => facet_counts(&books_sig.read()),
     });
 
     let is_search = !query().trim().is_empty();
@@ -263,13 +248,10 @@ fn derive_view_state(sigs: &LandingSignals, query: Signal<String>) -> LandingVie
         path_subtitle,
         path_missing: path_value.is_none(),
         book_count,
-        visible_count: visible_books.len(),
         visible_books,
         visible_is_empty,
         books_empty: sigs.books.read().is_empty(),
         view_mode: prefs_snapshot.view_mode,
-        facet_counts_view: facets(),
-        filters_for_chips: prefs_snapshot.filters.clone(),
         has_more: (sigs.next_cursor)().is_some(),
         is_loading_more: (sigs.loading_more)(),
     }
@@ -281,7 +263,6 @@ fn derive_view_state(sigs: &LandingSignals, query: Signal<String>) -> LandingVie
 struct LandingHandlers {
     on_prefs_change_header: EventHandler<ViewPrefs>,
     on_prefs_change_content: EventHandler<ViewPrefs>,
-    on_formats_change: EventHandler<Vec<String>>,
     on_load_more: EventHandler<()>,
     on_clear_filters: EventHandler<()>,
 }
@@ -308,14 +289,6 @@ fn build_handlers(sigs: &LandingSignals) -> LandingHandlers {
         on_prefs_change_content: EventHandler::new({
             let mut save = save;
             move |next: ViewPrefs| save(next)
-        }),
-        on_formats_change: EventHandler::new({
-            let mut save = save;
-            move |formats: Vec<String>| {
-                let mut next = prefs.peek().clone();
-                next.filters.formats = formats;
-                save(next);
-            }
         }),
         on_load_more: EventHandler::new(move |_: ()| {
             want_more.with_mut(|n| *n += 1);
@@ -344,50 +317,45 @@ pub fn LandingPage() -> Element {
     let LandingHandlers {
         on_prefs_change_header,
         on_prefs_change_content,
-        on_formats_change,
         on_load_more,
         on_clear_filters,
     } = build_handlers(&sigs);
 
     rsx! {
-        LandingHeader {
-            path_subtitle: view.path_subtitle,
-            book_count: view.book_count,
-            prefs: prefs(),
-            on_prefs_change: on_prefs_change_header,
-            path_missing: view.path_missing,
-            page_error: view.page_error.clone(),
-            lib_err: view.lib_err.clone(),
-        }
+        div { class: "shelf-layout",
+            ShelvesRail { active: RailActive::All }
+            div { class: "shelf-main",
+                LandingHeader {
+                    path_subtitle: view.path_subtitle,
+                    book_count: view.book_count,
+                    prefs: prefs(),
+                    on_prefs_change: on_prefs_change_header,
+                    path_missing: view.path_missing,
+                    page_error: view.page_error.clone(),
+                    lib_err: view.lib_err.clone(),
+                }
 
-        FormatChips {
-            counts: view.facet_counts_view.formats.clone(),
-            visible_count: view.visible_count,
-            book_count: view.book_count,
-            selected: view.filters_for_chips.formats.clone(),
-            on_change: on_formats_change,
-        }
-
-        LandingContent {
-            ..LandingContentProps {
-                is_loading: view.is_loading,
-                visible_books: view.visible_books,
-                visible_is_empty: view.visible_is_empty,
-                books_empty: view.books_empty,
-                lib_err: view.lib_err,
-                page_error: view.page_error,
-                view_mode: view.view_mode,
-                prefs: prefs(),
-                facet_counts_view: view.facet_counts_view,
-                has_more: view.has_more,
-                is_loading_more: view.is_loading_more,
-                server_url,
-                is_admin: (sigs.is_admin)(),
-                author_suggestions: sigs.pools.authors.into(),
-                tag_suggestions: sigs.pools.tags.into(),
-                on_prefs_change: on_prefs_change_content,
-                on_load_more,
-                on_clear_filters,
+                LandingContent {
+                    ..LandingContentProps {
+                        is_loading: view.is_loading,
+                        visible_books: view.visible_books,
+                        visible_is_empty: view.visible_is_empty,
+                        books_empty: view.books_empty,
+                        lib_err: view.lib_err,
+                        page_error: view.page_error,
+                        view_mode: view.view_mode,
+                        prefs: prefs(),
+                        has_more: view.has_more,
+                        is_loading_more: view.is_loading_more,
+                        server_url,
+                        is_admin: (sigs.is_admin)(),
+                        author_suggestions: sigs.pools.authors.into(),
+                        tag_suggestions: sigs.pools.tags.into(),
+                        on_prefs_change: on_prefs_change_content,
+                        on_load_more,
+                        on_clear_filters,
+                    }
+                }
             }
         }
     }
