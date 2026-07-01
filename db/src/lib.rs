@@ -31,6 +31,7 @@ pub mod progress;
 pub mod ratings;
 pub mod scanner;
 pub mod settings;
+pub mod shelves;
 pub mod sort_keys;
 pub mod suggestions;
 pub mod sync;
@@ -67,6 +68,10 @@ pub use missing_files::{
 pub use palette::*;
 pub use pool::*;
 pub use settings::*;
+pub use shelves::{
+    add_books, can_edit, can_view, create_shelf, delete_shelf, get_shelf, list_visible_shelves,
+    preview_rule, remove_book, shelf_page, update_shelf, ShelfError,
+};
 pub use sort_keys::{backfill_series_sort, series_sort_value, SortKeysError};
 // Flatten the suggestions data layer (cache CRUD + the de-dup state machine).
 // `resolve`/`resolve_with` stay namespaced under `suggestions::` to avoid

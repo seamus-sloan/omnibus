@@ -4,12 +4,11 @@
 //! `prefs` signal and the data pipeline.
 
 use dioxus::prelude::*;
-use omnibus_shared::{EbookMetadata, SortKey, ViewFilters, ViewMode, ViewPrefs};
+use omnibus_shared::{EbookMetadata, SortKey, ViewMode, ViewPrefs};
 
 use crate::components::chip_editor::SuggestionItem;
 
-use super::filtering::FacetCounts;
-use super::filters::{EmptyFiltered, FilterSidebar};
+use super::filters::EmptyFiltered;
 use super::grid::BookGrid;
 use super::sorting::{default_dir_for, toggle_dir};
 use super::table::{BookTable, BookTableContext};
@@ -71,7 +70,6 @@ pub(super) struct LandingContentProps {
     pub page_error: Option<String>,
     pub view_mode: ViewMode,
     pub prefs: ViewPrefs,
-    pub facet_counts_view: FacetCounts,
     pub has_more: bool,
     pub is_loading_more: bool,
     pub server_url: String,
@@ -95,7 +93,6 @@ pub(super) fn LandingContent(props: LandingContentProps) -> Element {
         page_error,
         view_mode,
         prefs,
-        facet_counts_view,
         has_more,
         is_loading_more,
         server_url,
@@ -107,20 +104,6 @@ pub(super) fn LandingContent(props: LandingContentProps) -> Element {
         on_clear_filters,
     } = props;
 
-    let layout_class = if prefs.filters_open {
-        "lib-layout"
-    } else {
-        "lib-layout lib-layout--collapsed"
-    };
-    let prefs_for_sidebar = prefs.clone();
-    let on_filters_change = {
-        let prefs = prefs.clone();
-        move |filters: ViewFilters| {
-            let mut next = prefs.clone();
-            next.filters = filters;
-            on_prefs_change.call(next);
-        }
-    };
     let on_sort = {
         let prefs = prefs.clone();
         move |key: SortKey| {
@@ -136,13 +119,7 @@ pub(super) fn LandingContent(props: LandingContentProps) -> Element {
     };
 
     rsx! {
-        div { class: "{layout_class}",
-            FilterSidebar {
-                facets: facet_counts_view,
-                filters: prefs_for_sidebar.filters.clone(),
-                on_change: on_filters_change,
-            }
-
+        div { class: "lib-layout lib-layout--collapsed",
             div { class: "lib-main",
                 if is_loading {
                     p { class: "library-empty", "Loading..." }
