@@ -52,6 +52,8 @@ fn sanitize(html: &str) -> String {
 /// Runs on already-sanitized HTML, so the only attributes an `<input>` can
 /// carry are the allowlisted `checked`/`disabled`/`type="checkbox"`/`class`,
 /// none of which contain `>`; scanning to the next `>` therefore bounds the tag.
+/// Attribute presence is matched on real name boundaries (not raw substrings),
+/// so a lookalike like `aria-disabled` can't sneak an interactive input through.
 fn drop_non_checkbox_inputs(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut rest = html;
@@ -63,13 +65,42 @@ fn drop_non_checkbox_inputs(html: &str) -> String {
             return out;
         };
         let tag = &tag_rest[..end];
-        if tag.contains("type=\"checkbox\"") && tag.contains("disabled") {
+        if has_attr_value(tag, "type", "checkbox") && has_bool_attr(tag, "disabled") {
             out.push_str(tag);
         }
         rest = &tag_rest[end..];
     }
     out.push_str(rest);
     out
+}
+
+/// Whether `tag` carries a standalone boolean attribute `name` — matched on
+/// name boundaries so `aria-disabled` / `notdisabled` don't count, and tolerant
+/// of both the bare form and a serializer's `name=""` (ammonia emits the latter).
+fn has_bool_attr(tag: &str, name: &str) -> bool {
+    tag.match_indices(name).any(|(i, _)| {
+        let preceded_by_space = tag[..i]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_whitespace);
+        let boundary = tag[i + name.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| c.is_whitespace() || matches!(c, '=' | '>' | '/'));
+        preceded_by_space && boundary
+    })
+}
+
+/// Whether `tag` carries `name="value"` as a real attribute (name preceded by
+/// whitespace), not a substring of a longer name like `data-type="checkbox"`.
+fn has_attr_value(tag: &str, name: &str, value: &str) -> bool {
+    let needle = format!("{name}=\"{value}\"");
+    tag.match_indices(needle.as_str()).any(|(i, _)| {
+        tag[..i]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_whitespace)
+    })
 }
 
 /// Rewrite `||text||` spoiler markers in the markdown **source** into inline
@@ -172,11 +203,38 @@ mod tests {
 
     #[test]
     fn strips_button_and_bare_inputs_entirely() {
-        // Non-checkbox inputs of any flavour, including an attribute-less one,
-        // must not survive — each degrades to a bare `<input>` under ammonia.
-        for body in ["<input type=\"button\">", "<input>"] {
+        // Non-checkbox inputs of any flavour, including an attribute-less one and
+        // an *interactive* (non-disabled) checkbox, must not survive — each
+        // degrades to a bare/enabled `<input>` under ammonia. Only the disabled
+        // task-list checkbox is allowed through.
+        for body in [
+            "<input type=\"button\">",
+            "<input>",
+            "<input type=\"checkbox\">",
+        ] {
             let html = render(body);
             assert!(!html.contains("<input"), "no input from {body:?}: {html}");
+        }
+    }
+
+    #[test]
+    fn drop_non_checkbox_inputs_matches_real_attribute_tokens() {
+        // A genuine disabled task-list checkbox survives.
+        assert!(
+            drop_non_checkbox_inputs("<input disabled=\"\" type=\"checkbox\">").contains("<input"),
+            "real task-list checkbox kept"
+        );
+        // Lookalike attribute names must not satisfy the `disabled` check, so an
+        // interactive checkbox cannot slip through on a substring match.
+        for tag in [
+            "<input aria-disabled=\"true\" type=\"checkbox\">",
+            "<input data-disabled=\"\" type=\"checkbox\">",
+            "<input notdisabled=\"\" type=\"checkbox\">",
+        ] {
+            assert!(
+                !drop_non_checkbox_inputs(tag).contains("<input"),
+                "lookalike disabled attr rejected: {tag}"
+            );
         }
     }
 
