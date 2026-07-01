@@ -61,8 +61,24 @@ pub async fn update_shelf(
     id: i64,
     req: &UpdateShelfRequest,
 ) -> Result<Shelf, ShelfError> {
-    if get_shelf(pool, id).await?.is_none() {
+    let Some(existing) = get_shelf(pool, id).await? else {
         return Err(ShelfError::NotFound);
+    };
+    // Keep the kind invariant: a manual shelf can't take a match mode or rules,
+    // and a smart shelf can't be emptied to zero conditions. Without this an
+    // update could leave a manual shelf reporting `match_mode: Some(...)`.
+    match existing.kind {
+        ShelfKind::Manual if req.match_mode.is_some() || req.rules.is_some() => {
+            return Err(ShelfError::InvalidRule(
+                "manual shelves cannot have a match mode or rules".into(),
+            ));
+        }
+        ShelfKind::Smart if matches!(&req.rules, Some(r) if r.is_empty()) => {
+            return Err(ShelfError::InvalidRule(
+                "a smart shelf needs at least one condition".into(),
+            ));
+        }
+        _ => {}
     }
     sqlx::query(
         "UPDATE shelves SET

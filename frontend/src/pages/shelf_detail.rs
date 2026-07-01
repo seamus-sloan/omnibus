@@ -59,8 +59,11 @@ pub fn ShelfDetailPage(id: i64) -> Element {
         let _ = reload();
         spawn(async move {
             let dir = default_dir_for(key);
-            if let Ok(page) = data::shelf_page(&url, id, key, dir).await {
-                books.set(page.books);
+            // Clear on error so a failed refetch can't leave a stale list from a
+            // prior sort/id rendered.
+            match data::shelf_page(&url, id, key, dir).await {
+                Ok(page) => books.set(page.books),
+                Err(_) => books.set(Vec::new()),
             }
         });
     });

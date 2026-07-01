@@ -156,8 +156,9 @@ pub(super) async fn preview_rule(
 
 // --- helpers ---------------------------------------------------------------
 
-/// Load a shelf and enforce the view rule (owner, admin, or public); returns an
-/// error [`Response`] (404 if unknown, 403 if hidden) on failure.
+/// Load a shelf and enforce the view rule (owner, admin, or public). Both an
+/// unknown id and a shelf the caller can't see return **404** — existence is
+/// deliberately not leaked to non-viewers.
 async fn load_for_view(state: &AppState, id: i64, user: &AuthUser) -> Result<Shelf, Response> {
     let shelf = fetch(state, id).await?;
     if db::can_view(&shelf, user.id, user.is_admin) {

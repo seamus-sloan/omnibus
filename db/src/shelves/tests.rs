@@ -350,6 +350,64 @@ async fn update_shelf_changes_name_and_visibility() {
 }
 
 #[tokio::test]
+async fn update_manual_shelf_rejects_match_mode_and_rules() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let owner = make_user(&pool, "owner", false).await;
+    let shelf = create_shelf(&pool, owner, &manual_req("Picks", vec![]))
+        .await
+        .unwrap();
+
+    let with_mode = UpdateShelfRequest {
+        match_mode: Some(MatchMode::All),
+        ..Default::default()
+    };
+    assert!(matches!(
+        update_shelf(&pool, shelf.id, &with_mode).await.unwrap_err(),
+        ShelfError::InvalidRule(_)
+    ));
+
+    let with_rules = UpdateShelfRequest {
+        rules: Some(vec![tag_rule("Fantasy")]),
+        ..Default::default()
+    };
+    assert!(matches!(
+        update_shelf(&pool, shelf.id, &with_rules)
+            .await
+            .unwrap_err(),
+        ShelfError::InvalidRule(_)
+    ));
+    // The manual shelf stays rule-less.
+    assert!(get_shelf(&pool, shelf.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .match_mode
+        .is_none());
+}
+
+#[tokio::test]
+async fn update_smart_shelf_rejects_emptying_rules() {
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+    let shelf = create_shelf(
+        &pool,
+        owner,
+        &smart_req("Fiction", MatchMode::Any, vec![tag_rule("fiction")]),
+    )
+    .await
+    .unwrap();
+
+    let empty = UpdateShelfRequest {
+        rules: Some(vec![]),
+        ..Default::default()
+    };
+    assert!(matches!(
+        update_shelf(&pool, shelf.id, &empty).await.unwrap_err(),
+        ShelfError::InvalidRule(_)
+    ));
+}
+
+#[tokio::test]
 async fn update_and_delete_missing_shelf_return_not_found() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     assert!(matches!(
