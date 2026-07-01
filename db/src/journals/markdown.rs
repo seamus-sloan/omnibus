@@ -28,18 +28,48 @@ pub fn render(md: &str) -> String {
 /// (the only inline element the spoiler pass introduces) and the read-only
 /// task-list checkbox pulldown-cmark emits for `- [ ]` items.
 fn sanitize(html: &str) -> String {
-    ammonia::Builder::default()
+    let cleaned = ammonia::Builder::default()
         .add_tags(["span", "input"])
         .add_allowed_classes("span", ["spoiler"])
         // Task-list checkboxes only — `disabled`/`checked` are valueless flags;
         // `type` is pinned to `checkbox` via the value allowlist (kept out of
-        // the generic attribute set, which would otherwise permit any value),
-        // so no interactive or arbitrary `<input>` survives.
+        // the generic attribute set, which would otherwise permit any value).
         .add_tag_attributes("input", ["checked", "disabled"])
         .add_tag_attribute_values("input", "type", ["checkbox"])
         .add_allowed_classes("input", ["task-list-item-checkbox"])
         .clean(html)
-        .to_string()
+        .to_string();
+    drop_non_checkbox_inputs(&cleaned)
+}
+
+/// Remove every `<input>` that isn't a disabled task-list checkbox.
+///
+/// `ammonia` strips *disallowed attributes* but keeps an *allowed tag*, so a
+/// hand-authored `<input type="text">` degrades to a bare `<input>` — which the
+/// browser renders as a text field — and would otherwise survive. We only ever
+/// emit `<input>` for task-list checkboxes (`<input disabled type="checkbox">`),
+/// so any tag missing either marker is user-authored and dropped wholesale.
+/// Runs on already-sanitized HTML, so the only attributes an `<input>` can
+/// carry are the allowlisted `checked`/`disabled`/`type="checkbox"`/`class`,
+/// none of which contain `>`; scanning to the next `>` therefore bounds the tag.
+fn drop_non_checkbox_inputs(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(start) = rest.find("<input") {
+        out.push_str(&rest[..start]);
+        let tag_rest = &rest[start..];
+        let Some(end) = tag_rest.find('>').map(|i| i + 1) else {
+            // No closing `>` — malformed; drop the remainder rather than emit it.
+            return out;
+        };
+        let tag = &tag_rest[..end];
+        if tag.contains("type=\"checkbox\"") && tag.contains("disabled") {
+            out.push_str(tag);
+        }
+        rest = &tag_rest[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Rewrite `||text||` spoiler markers in the markdown **source** into inline
@@ -130,15 +160,24 @@ mod tests {
     }
 
     #[test]
-    fn task_list_input_type_is_pinned_to_checkbox() {
-        // A hand-authored non-checkbox input must not survive even though the
-        // `input` tag is now allowlisted for task lists.
+    fn strips_non_checkbox_input_element_entirely() {
+        // ammonia would keep the allowlisted `input` tag while stripping its
+        // disallowed attributes, leaving a bare `<input>` (a text field by
+        // default). The whole element — not just its attributes — must go.
         let html = render("<input type=\"text\" value=\"x\">");
-        assert!(
-            !html.contains("type=\"text\""),
-            "non-checkbox dropped: {html}"
-        );
-        assert!(!html.contains("value="), "input value dropped: {html}");
+        assert!(!html.contains("<input"), "input element removed: {html}");
+        assert!(!html.contains("type=\"text\""), "type dropped: {html}");
+        assert!(!html.contains("value="), "value dropped: {html}");
+    }
+
+    #[test]
+    fn strips_button_and_bare_inputs_entirely() {
+        // Non-checkbox inputs of any flavour, including an attribute-less one,
+        // must not survive — each degrades to a bare `<input>` under ammonia.
+        for body in ["<input type=\"button\">", "<input>"] {
+            let html = render(body);
+            assert!(!html.contains("<input"), "no input from {body:?}: {html}");
+        }
     }
 
     #[test]
