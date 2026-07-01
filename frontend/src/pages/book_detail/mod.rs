@@ -291,6 +291,7 @@ fn build_crumbs(
 struct LoadedBookView {
     title: String,
     primary_author: String,
+    author_id: Option<i64>,
     authors_line: String,
     kicker: String,
     series: Option<String>,
@@ -308,6 +309,7 @@ fn derive_loaded_view(b: &EbookMetadata) -> LoadedBookView {
         .first()
         .map(|c| c.name.clone())
         .unwrap_or_default();
+    let author_id = b.creators.first().and_then(|c| c.id);
     let authors_line = b
         .creators
         .iter()
@@ -339,6 +341,7 @@ fn derive_loaded_view(b: &EbookMetadata) -> LoadedBookView {
     LoadedBookView {
         title,
         primary_author,
+        author_id,
         authors_line,
         kicker,
         series,
@@ -361,6 +364,7 @@ fn render_loaded(
     let LoadedBookView {
         title,
         primary_author,
+        author_id,
         authors_line,
         kicker,
         series,
@@ -386,6 +390,7 @@ fn render_loaded(
                     uuid: uuid.clone(),
                     title: title.clone(),
                     primary_author,
+                    author_id,
                     author_books,
                     suggestions,
                     server_url,
@@ -447,10 +452,16 @@ pub(super) fn BdCrumb(items: Vec<BdCrumbItem>) -> Element {
     }
 }
 
-/// Body section heading row — kicker label + serif title. The kicker stacks
-/// above the title (mirrors `screens/_shared.jsx#SectionHead`).
+/// Body section heading row — kicker label + serif title, with an optional
+/// right-aligned `action` slot (mirrors `screens/_shared.jsx#SectionHead`). The
+/// kicker stacks above the title; the action floats opposite via the flex
+/// `space-between` on `.bd-section-head`.
 #[component]
-pub(super) fn BdSectionHead(kicker: String, title: String) -> Element {
+pub(super) fn BdSectionHead(
+    kicker: String,
+    title: String,
+    #[props(default)] action: Option<Element>,
+) -> Element {
     rsx! {
         div { class: "bd-section-head",
             div { class: "bd-section-head-text",
@@ -459,6 +470,7 @@ pub(super) fn BdSectionHead(kicker: String, title: String) -> Element {
                 }
                 h3 { class: "bd-section-title", "{title}" }
             }
+            {action}
         }
     }
 }
