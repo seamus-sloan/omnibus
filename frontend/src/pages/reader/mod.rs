@@ -528,6 +528,12 @@ fn ReaderLayout(
                         quote_target.set(Some(h));
                         show_highlights.set(false);
                     },
+                    on_edit_note: move |h: Highlight| {
+                        let mut note_target = note_target;
+                        let mut show_highlights = show_highlights;
+                        note_target.set(Some(h));
+                        show_highlights.set(false);
+                    },
                     on_close: move |_| {
                         let mut show_highlights = show_highlights;
                         show_highlights.set(false);
