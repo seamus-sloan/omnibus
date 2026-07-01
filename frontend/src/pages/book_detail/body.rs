@@ -64,11 +64,7 @@ pub(super) fn BdSameHand(
     } else {
         format!("More by {primary_author}")
     };
-    let last_name = primary_author
-        .split_whitespace()
-        .last()
-        .unwrap_or(&primary_author)
-        .to_string();
+    let author_label = same_hand_author_label(&primary_author);
     let author_route = author_id.map(|id| Route::AuthorDetail { id });
     let action = author_route.clone().map(|route| {
         rsx! {
@@ -82,7 +78,7 @@ pub(super) fn BdSameHand(
             div { class: "bd-same-hand-empty", "data-testid": "from-same-hand-empty",
                 AuthorLead { author: primary_author.clone(), owned, rest, author_route: author_route.clone() }
                 div { class: "bd-same-hand-note",
-                    "This is the only book by {last_name} in your library so far."
+                    "This is the only book by {author_label} in your library so far."
                 }
             }
         } else {
@@ -124,6 +120,13 @@ fn AuthorLead(author: String, owned: usize, rest: usize, author_route: Option<Ro
         .map(|c| c.to_uppercase().to_string())
         .unwrap_or_default();
     let books_word = if owned == 1 { "book" } else { "books" };
+    // Guard the tooltip against a missing author name so it never renders the
+    // malformed "Open 's author page".
+    let portrait_title = if author.trim().is_empty() {
+        "Open author page".to_string()
+    } else {
+        format!("Open {author}'s author page")
+    };
     rsx! {
         div { class: "cover-link author-lead",
             div { class: "author-lead-card",
@@ -131,7 +134,7 @@ fn AuthorLead(author: String, owned: usize, rest: usize, author_route: Option<Ro
                     Link {
                         to: route.clone(),
                         class: "author-portrait",
-                        title: "Open {author}'s author page",
+                        title: "{portrait_title}",
                         span { class: "glyph", "{initial}" }
                         span { class: "hint", "Author page \u{2192}" }
                     }
@@ -162,6 +165,15 @@ fn same_hand_title(b: &EbookMetadata) -> String {
     match b.title.as_deref() {
         Some(t) if !t.trim().is_empty() => t.to_string(),
         _ => b.filename.clone(),
+    }
+}
+
+/// Author surname for the empty-state note, falling back to a generic label
+/// when the author name is unknown so the sentence stays well-formed.
+fn same_hand_author_label(primary_author: &str) -> String {
+    match primary_author.split_whitespace().last() {
+        Some(last) => last.to_string(),
+        None => "this author".to_string(),
     }
 }
 
@@ -471,5 +483,62 @@ mod tests {
             bd_identifier_key(&split_scheme),
             bd_identifier_key(&split_value)
         );
+    }
+
+    #[test]
+    fn same_hand_title_prefers_title_over_filename() {
+        let b = EbookMetadata {
+            title: Some("Piranesi".into()),
+            filename: "piranesi.epub".into(),
+            ..Default::default()
+        };
+        assert_eq!(same_hand_title(&b), "Piranesi");
+    }
+
+    #[test]
+    fn same_hand_title_falls_back_to_filename_when_title_blank() {
+        // `None`, empty, and whitespace-only titles all fall back so a tile
+        // never renders a blank caption.
+        for title in [None, Some("".into()), Some("   ".into())] {
+            let b = EbookMetadata {
+                title,
+                filename: "dune.epub".into(),
+                ..Default::default()
+            };
+            assert_eq!(same_hand_title(&b), "dune.epub");
+        }
+    }
+
+    #[test]
+    fn same_hand_year_extracts_four_digit_prefix() {
+        let b = EbookMetadata {
+            published: Some("2020-09-15".into()),
+            ..Default::default()
+        };
+        assert_eq!(same_hand_year(&b), Some("2020".to_string()));
+    }
+
+    #[test]
+    fn same_hand_year_is_none_when_missing_or_too_short() {
+        let missing = EbookMetadata::default();
+        assert_eq!(same_hand_year(&missing), None);
+        let short = EbookMetadata {
+            published: Some("20".into()),
+            ..Default::default()
+        };
+        // `get(0..4)` returns `None` for a string shorter than four bytes.
+        assert_eq!(same_hand_year(&short), None);
+    }
+
+    #[test]
+    fn same_hand_author_label_uses_surname_when_present() {
+        assert_eq!(same_hand_author_label("Ada Lovelace"), "Lovelace");
+        assert_eq!(same_hand_author_label("Homer"), "Homer");
+    }
+
+    #[test]
+    fn same_hand_author_label_falls_back_when_author_blank() {
+        assert_eq!(same_hand_author_label(""), "this author");
+        assert_eq!(same_hand_author_label("   "), "this author");
     }
 }
