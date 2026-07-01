@@ -17,6 +17,9 @@ const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "alpha")!;
 // A separate book for the highlight action test so seeding/deleting highlights
 // doesn't pollute the empty-state assertions on TARGET (tests run in parallel).
 const HL_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "beta")!;
+// A third book for the note-editing test so its persisted highlight never
+// collides with the seed/delete cycle on HL_BOOK.
+const NOTE_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "gamma")!;
 
 test("renders the reader layout", async ({ page, request }) => {
   // Deep-link straight to the immersive reader by the book's stable uuid,
@@ -136,6 +139,65 @@ test("seeds a highlight and deletes it from the highlights drawer", async ({
     async () => row.getByTestId("highlight-delete").click(),
   );
   await expect(page.getByText(quote)).toHaveCount(0);
+});
+
+test("adds a note to an existing highlight from the drawer", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, NOTE_BOOK.title);
+
+  // Seed a note-less highlight so the drawer offers the "Add note" affordance.
+  const quote = `note passage ${Date.now()}`;
+  const created = await request.post("/api/highlights", {
+    data: {
+      book_uuid: uuid,
+      epub_cfi_range: "epubcfi(/6/4!/4/2,/1:0,/1:40)",
+      color: "green",
+      text: quote,
+    },
+  });
+  expect(created.status(), "seed highlight").toBe(200);
+
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  // Open the drawer; the seeded highlight shows an "Add note" button.
+  await page.getByTestId("reader-highlights").click();
+  await expect(page.getByTestId("reader-highlights-drawer")).toBeVisible();
+  const row = page
+    .getByTestId("reader-highlight-row")
+    .filter({ hasText: quote });
+  await expect(row).toHaveCount(1);
+  await expect(row.getByTestId("highlight-note")).toHaveText("Add note");
+
+  // The note button opens the shared composer over the drawer.
+  await row.getByTestId("highlight-note").click();
+  await expect(page.getByTestId("reader-note-composer")).toBeVisible();
+
+  const note = `a thought worth keeping ${Date.now()}`;
+  await page.getByTestId("reader-note-input").fill(note);
+
+  // Saving persists via the update-note RPC and closes the composer.
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: /\/api\/rpc\/highlights\/update-note(?:\?|$)/,
+      expectedStatus: 200,
+    },
+    async () => page.getByTestId("reader-note-save").click(),
+  );
+  await expect(page.getByTestId("reader-note-composer")).toHaveCount(0);
+
+  // Reopen the drawer: the note now renders on the row, and the button flips
+  // to "Edit note" to reflect the persisted note.
+  await page.getByTestId("reader-highlights").click();
+  const savedRow = page
+    .getByTestId("reader-highlight-row")
+    .filter({ hasText: quote });
+  await expect(savedRow.getByText(note)).toBeVisible();
+  await expect(savedRow.getByTestId("highlight-note")).toHaveText("Edit note");
 });
 
 test("opens the reader from the book detail Read action", async ({ page, request }) => {
