@@ -1461,6 +1461,88 @@ async fn sync_audiobooks_with_removed_above_bind_cap_succeeds() {
     );
 }
 
+/// F2 for audiobooks: removing a group makes its book fileless (hidden from the
+/// grid, `books` row + durable uuid retained); when the same group returns via
+/// the New bucket it re-attaches to that row, preserving the uuid. Exercises the
+/// batched scan_key pre-fetch map in `sync_audiobooks_new` driving the
+/// rewrite-in-place branch instead of a per-book `SELECT`.
+#[tokio::test]
+async fn sync_audiobooks_removed_group_goes_fileless_then_returning_group_relinks_same_uuid() {
+    let _covers = CoversTempDir::new("ab_fileless_relink");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            new_books: vec![indexed_audiobook("Author/Book.m4b", "Book", Some("Author"))],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let uuid1 = crate::test_support::uuid_by_scan_key(&pool, "Author/Book.m4b").await;
+
+    // Group gone → fileless: hidden from the grid, row + uuid survive.
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            removed_uuids: vec![uuid1.clone()],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        list_books(&pool, "/lib").await.unwrap().is_empty(),
+        "fileless audiobook is hidden from the library grid"
+    );
+    assert_eq!(
+        crate::test_support::uuid_by_scan_key(&pool, "Author/Book.m4b").await,
+        uuid1,
+        "fileless audiobook retains its scan_key and durable uuid"
+    );
+
+    // Group returns via New → the batched map resolves the same-scan_key row and
+    // rewrites in place, preserving the uuid.
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            new_books: vec![indexed_audiobook("Author/Book.m4b", "Book", Some("Author"))],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let after = list_books(&pool, "/lib").await.unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(
+        after[0].unique_identifier.as_deref(),
+        Some(uuid1.as_str()),
+        "returning group relinks to the same uuid via the batched New path"
+    );
+    // Exactly one books row + one book_files row — the batched pre-fetch must not
+    // mint a duplicate for the returning group.
+    let books_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let files_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM book_files")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        books_total, 1,
+        "no duplicate books row for the returning group"
+    );
+    assert_eq!(
+        files_total, 1,
+        "returning group re-creates exactly one file row"
+    );
+}
+
 // Audiobook parts + chapters: row contents and edge cases.
 
 #[tokio::test]
