@@ -11,18 +11,14 @@ use crate::Route;
 use super::journal::BdJournalSection;
 use super::{BdInsightCell, BdMetaRow, BdSectionHead};
 
-/// Ambient page-level context threaded through the body: the server base URL
-/// (for absolute cover links) and whether the viewer is an admin. Grouped so it
-/// travels as one prop instead of two ambient scalars.
+/// Ambient page-level context for the body: server base URL and admin flag.
 #[derive(Clone, PartialEq, Props)]
 pub(super) struct BdPageCtx {
     pub server_url: String,
     pub is_admin: bool,
 }
 
-/// The "from the same hand" author cluster: the primary author's name, its
-/// resolvable id, and the other books they wrote. Grouped so the same-hand data
-/// travels as one prop rather than three parallel scalars.
+/// The "from the same hand" author cluster: name, id, and other books.
 #[derive(Clone, PartialEq, Props)]
 pub(super) struct BdAuthorCluster {
     pub primary_author: String,
@@ -50,7 +46,7 @@ pub(super) fn BdBodyMain(
                 p { class: "bd-stub-hint", "Highlights land in F3.2." }
             }
             div { class: "divider" }
-            BdSameHand { cluster: author }
+            BdSameHand { author }
             BdSuggestionsStrip {
                 book_title: title,
                 suggestions,
@@ -66,12 +62,12 @@ pub(super) fn BdBodyMain(
 /// and the covers fan out from behind it on hover. When the author has no other
 /// books in the library, the lead card is paired with a short note instead.
 #[component]
-pub(super) fn BdSameHand(cluster: BdAuthorCluster) -> Element {
+pub(super) fn BdSameHand(author: BdAuthorCluster) -> Element {
     let BdAuthorCluster {
         primary_author,
         author_id,
         author_books,
-    } = cluster;
+    } = author;
     let owned = author_books.len() + 1;
     let shown = author_books.len().min(4);
     let rest = author_books.len() - shown;
