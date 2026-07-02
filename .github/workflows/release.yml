@@ -4,8 +4,11 @@ on:
   pull_request_target:
     types: [closed]
 
+# Serialize on the base branch so runs queue and compute tags sequentially.
+# A per-PR group would let two labeled PRs merging together read the same
+# latest release and race to the same tag; the loser would silently skip.
 concurrency:
-  group: release-${{ github.event.pull_request.number }}
+  group: release-${{ github.event.pull_request.base.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -23,10 +26,16 @@ jobs:
       )
     runs-on: ubuntu-latest
     steps:
-      - name: Determine next version
-        id: version
+      - name: Create GitHub release
         uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
         with:
+          # Compute the next tag and create the release in one retry loop.
+          # The base-branch concurrency group serializes runs, but a burst of
+          # merges can still make GitHub cancel intermediate pending runs; if a
+          # computed tag already exists we re-read the latest release and bump
+          # again rather than silently skipping, so no version is ever dropped.
           script: |
             const labels = context.payload.pull_request.labels.map(({ name }) => name);
             const hasPatch = labels.includes("patch version");
@@ -38,81 +47,82 @@ jobs:
               );
               return;
             }
-
-            let latestRelease;
-            try {
-              const response = await github.rest.repos.getLatestRelease({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-              });
-              latestRelease = response.data;
-            } catch (error) {
-              if (error.status === 404) {
-                core.setFailed(
-                  "No published release exists yet. Create the initial major release manually before using version labels.",
-                );
-                return;
-              }
-              throw error;
-            }
-
-            const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(latestRelease.tag_name);
-            if (!match) {
-              core.setFailed(
-                `Latest release tag '${latestRelease.tag_name}' is not in vMAJOR.MINOR.PATCH format.`,
-              );
-              return;
-            }
-
-            const major = Number(match[1]);
-            let minor = Number(match[2]);
-            let patch = Number(match[3]);
-
-            if (hasMinor) {
-              minor += 1;
-              patch = 0;
-            } else if (hasPatch) {
-              patch += 1;
-            } else {
+            if (!hasPatch && !hasMinor) {
               core.setFailed("No supported release label found on the merged PR.");
               return;
             }
 
-            const tag = `v${major}.${minor}.${patch}`;
-            core.setOutput("tag", tag);
-            core.setOutput("label", hasMinor ? "minor version" : "patch version");
-
-      - name: Create GitHub release
-        uses: actions/github-script@v7
-        env:
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-          RELEASE_LABEL: ${{ steps.version.outputs.label }}
-          TARGET_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
-        with:
-          script: |
-            const tag = process.env.RELEASE_TAG;
+            const label = hasMinor ? "minor version" : "patch version";
             const target = process.env.TARGET_SHA;
+            const maxAttempts = 5;
 
-            try {
-              await github.rest.repos.getReleaseByTag({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                tag,
-              });
-              core.info(`Release ${tag} already exists. Skipping creation.`);
-              return;
-            } catch (error) {
-              if (error.status !== 404) {
+            for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+              let latestRelease;
+              try {
+                const response = await github.rest.repos.getLatestRelease({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                });
+                latestRelease = response.data;
+              } catch (error) {
+                if (error.status === 404) {
+                  core.setFailed(
+                    "No published release exists yet. Create the initial major release manually before using version labels.",
+                  );
+                  return;
+                }
+                throw error;
+              }
+
+              const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(latestRelease.tag_name);
+              if (!match) {
+                core.setFailed(
+                  `Latest release tag '${latestRelease.tag_name}' is not in vMAJOR.MINOR.PATCH format.`,
+                );
+                return;
+              }
+
+              const major = Number(match[1]);
+              let minor = Number(match[2]);
+              let patch = Number(match[3]);
+
+              if (hasMinor) {
+                minor += 1;
+                patch = 0;
+              } else {
+                patch += 1;
+              }
+
+              const tag = `v${major}.${minor}.${patch}`;
+
+              try {
+                await github.rest.repos.createRelease({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  tag_name: tag,
+                  target_commitish: target,
+                  name: tag,
+                  generate_release_notes: true,
+                  body: `Automated ${label} release from #${context.payload.pull_request.number}.`,
+                });
+                core.info(`Created release ${tag}.`);
+                return;
+              } catch (error) {
+                // 422 = tag/release already exists: another run won the race.
+                // Re-read the latest release and bump again from it.
+                const alreadyExists =
+                  error.status === 422 &&
+                  (error.response?.data?.errors || []).some(
+                    (e) => e.code === "already_exists",
+                  );
+                if (alreadyExists && attempt < maxAttempts) {
+                  core.info(`Tag ${tag} already exists; recomputing (attempt ${attempt}).`);
+                  continue;
+                }
                 throw error;
               }
             }
 
-            await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: tag,
-              target_commitish: target,
-              name: tag,
-              generate_release_notes: true,
-              body: `Automated ${process.env.RELEASE_LABEL} release from #${context.payload.pull_request.number}.`,
-            });
+            core.setFailed(
+              `Could not create a release after ${maxAttempts} attempts due to repeated tag collisions.`,
+            );
