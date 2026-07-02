@@ -131,6 +131,25 @@ async fn api_search_rejects_missing_q_param() {
 }
 
 #[tokio::test]
+async fn api_search_rejects_over_length_q_with_400() {
+    // Issue #638: the handler caps raw `?q=` length at MAX_SEARCH_QUERY_LEN
+    // bytes and rejects longer input with 400 before any db call.
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let oversized = "a".repeat(MAX_SEARCH_QUERY_LEN + 1);
+    let response = app
+        .oneshot(get_with_bearer(
+            &format!("/api/search?q={oversized}"),
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn api_search_returns_401_when_anonymous() {
     let (app, _, _) = fixture().await;
     let res = app.oneshot(get_anon("/api/search?q=hello")).await.unwrap();
@@ -155,6 +174,25 @@ async fn api_search_palette_returns_empty_when_path_not_configured() {
     let results: omnibus_shared::PaletteResults = serde_json::from_slice(&bytes).unwrap();
     assert!(results.books.is_empty());
     assert!(results.authors.is_empty());
+}
+
+#[tokio::test]
+async fn api_search_palette_rejects_over_length_q_with_400() {
+    // Issue #638: the palette handler shares the same MAX_SEARCH_QUERY_LEN
+    // cap, rejecting over-length input with 400 before any db call.
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let oversized = "a".repeat(MAX_SEARCH_QUERY_LEN + 1);
+    let response = app
+        .oneshot(get_with_bearer(
+            &format!("/api/search/palette?q={oversized}"),
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
