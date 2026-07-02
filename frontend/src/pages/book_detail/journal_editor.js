@@ -11,7 +11,11 @@
 // `body` signal they always did — this is purely an editing-surface upgrade.
 //
 // Loaded once (idempotent guard) and driven from Dioxus via the eval channel:
-// the trailing `await dioxus.recv()` block dispatches attach / command / insert.
+// the trailing `await dioxus.recv()` block dispatches enhance / attach /
+// command / insert. `enhance` is the entry point called from the textarea's
+// `onmounted` — it flips the wrapper's `data-omnibus-enhanced` marker (CSS
+// hides the textarea, shows the contenteditable) and then delegates to
+// `attach` to wire the live editor.
 
 if (!window.OmnibusJournalEditor) {
   window.OmnibusJournalEditor = (function () {
@@ -133,6 +137,21 @@ if (!window.OmnibusJournalEditor) {
       sync(editor);
     }
 
+    // Progressive enhancement — flip the wrapper's visibility marker so CSS
+    // swaps the plain textarea (SSR + first-hydration paint) for the live
+    // contenteditable, then wire the editor. Called from the textarea's
+    // `onmounted`, which runs on every WASM mount (initial + remount after
+    // Cancel/Save). Idempotent per wrapper.
+    function enhance(editorId, mirrorId) {
+      const mirror = byId(mirrorId);
+      if (!mirror) return;
+      const wrap = mirror.parentElement;
+      if (wrap && wrap.getAttribute("data-omnibus-enhanced") !== "1") {
+        wrap.setAttribute("data-omnibus-enhanced", "1");
+      }
+      attach(editorId, mirrorId);
+    }
+
     function attach(editorId, mirrorId) {
       const editor = byId(editorId);
       if (!editor || editor.getAttribute(ATTR) === "1") return;
@@ -208,7 +227,7 @@ if (!window.OmnibusJournalEditor) {
 
     const insert = (editorId, text) => command(editorId, "insert", text, "");
 
-    return { attach, command, insert };
+    return { enhance, attach, command, insert };
   })();
 }
 
@@ -216,7 +235,8 @@ if (!window.OmnibusJournalEditor) {
 const __omn = await dioxus.recv();
 const __E = window.OmnibusJournalEditor;
 if (__E && __omn) {
-  if (__omn.action === "attach") __E.attach(__omn.editorId, __omn.mirrorId);
+  if (__omn.action === "enhance") __E.enhance(__omn.editorId, __omn.mirrorId);
+  else if (__omn.action === "attach") __E.attach(__omn.editorId, __omn.mirrorId);
   else if (__omn.action === "command") __E.command(__omn.editorId, __omn.op, __omn.a, __omn.b);
   else if (__omn.action === "insert") __E.insert(__omn.editorId, __omn.text);
 }
