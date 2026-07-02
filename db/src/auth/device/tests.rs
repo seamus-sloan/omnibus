@@ -5,8 +5,10 @@
 //! rejection tests share an in-memory pool via `auth::test_support::pool`.
 
 use super::*;
+use crate::auth::session::create_session;
 use crate::auth::test_support::pool;
 use crate::auth::users::create_user;
+use crate::auth::SessionKind;
 
 #[tokio::test]
 async fn device_register_and_list() {
@@ -107,27 +109,45 @@ async fn register_device_rejects_control_char_in_client_version() {
 }
 
 #[tokio::test]
-async fn register_device_inside_rolled_back_transaction_leaves_no_row() {
+async fn failed_session_insert_after_register_device_rolls_back_device_row() {
     // Regression for #627: `issue_session` wraps `register_device` +
     // `create_session` in a single transaction so a failed session insert
-    // can't leave an orphan device row. Simulate that failure by opening a
-    // transaction, inserting the device, then dropping the transaction —
-    // which rolls back — and asserting the `devices` table is empty.
+    // can't leave an orphan device row. Force `create_session` to fail
+    // inside the shared transaction by pointing it at a non-existent
+    // `device_id` (violates the `sessions.device_id -> devices.id` FK,
+    // enforced by the `PRAGMA foreign_keys = ON` in `init_db`), then drop
+    // the tx and assert the successfully-inserted device row is gone.
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
 
+    let bogus_device_id = 999_999_999;
     {
         let mut tx = p.begin().await.unwrap();
-        register_device(&mut *tx, u.id, "Phone", "ios", Some("1.0.0"))
+        let device = register_device(&mut *tx, u.id, "Phone", "ios", Some("1.0.0"))
             .await
-            .unwrap();
-        // Drop `tx` without committing — `sqlx::Transaction` rolls back on
-        // drop, mirroring the return-early path in `persist_session`.
+            .expect("device insert should succeed inside the transaction");
+        assert_ne!(device.id, bogus_device_id, "test sentinel collided with real id");
+
+        let session_err = create_session(
+            &mut *tx,
+            u.id,
+            Some(bogus_device_id),
+            SessionKind::Cookie,
+            3_600,
+        )
+        .await
+        .expect_err("create_session must reject the bogus device_id FK");
+        assert!(
+            matches!(session_err, AuthError::Internal(_)),
+            "expected FK violation surfaced as AuthError::Internal, got {session_err:?}",
+        );
+        // Drop `tx` without committing — mirrors `persist_session`'s
+        // early return on any error in the compound insert path.
     }
 
     let list = list_devices_for_user(&p, u.id).await.unwrap();
     assert!(
         list.is_empty(),
-        "device row must not persist when the enclosing transaction rolls back, got {list:?}",
+        "device row must not persist when the compound session insert fails, got {list:?}",
     );
 }
