@@ -118,6 +118,7 @@ pub(super) fn SpeedPanel(rate: Signal<f64>, uuid: String, on_close: EventHandler
                                 let h = if i % 5 == 0 { 12 } else { 7 };
                                 rsx! {
                                     div {
+                                        key: "{i}",
                                         class: "lp-speed-fine-tick",
                                         style: "height: {h}px;",
                                     }

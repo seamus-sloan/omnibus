@@ -233,6 +233,7 @@ fn BdJournalComposer(uuid: String, server_url: String, reload: Signal<u32>) -> E
                                 } else {
                                     for h in highlights().iter() {
                                         button {
+                                            key: "{h.id}",
                                             r#type: "button",
                                             class: "bd-journal-hl-item",
                                             "data-testid": "journal-highlight-item",
