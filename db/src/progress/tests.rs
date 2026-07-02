@@ -293,6 +293,82 @@ async fn record_session_tx_inserts_row_when_committed() {
 }
 
 #[tokio::test]
+async fn insert_session_tx_inserts_epub_row_against_pre_resolved_uuid() {
+    // Batch writers (`post_sessions`, issue #633) pre-resolve every uuid via
+    // `resolve_canonical_book_uuids_bulk_exec` and hand the canonical string
+    // to `insert_session_tx`. This test asserts that path — no per-row
+    // SELECT — still lands a row against the survivor uuid.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    let mut tx = pool.begin().await.unwrap();
+    insert_session_tx(
+        &mut tx,
+        user,
+        &SessionReport {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            started_at: 100,
+            ended_at: 460,
+            progress_units: 360,
+            device_id: None,
+        },
+        &uuid,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ? AND book_uuid = ?",
+    )
+    .bind(user)
+    .bind(&uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn insert_session_tx_inserts_audio_row_against_pre_resolved_uuid() {
+    // Per-format dispatch counterpart: audio reports must route into
+    // `listening_sessions` when the caller pre-resolves the uuid.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    let mut tx = pool.begin().await.unwrap();
+    insert_session_tx(
+        &mut tx,
+        user,
+        &SessionReport {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Audio,
+            started_at: 200,
+            ended_at: 800,
+            progress_units: 600,
+            device_id: None,
+        },
+        &uuid,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM listening_sessions WHERE user_id = ? AND book_uuid = ?",
+    )
+    .bind(user)
+    .bind(&uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
 async fn record_session_tx_rollback_leaves_no_rows() {
     // When the transaction is dropped without committing, no rows must
     // remain — this is the invariant post_sessions relies on when a

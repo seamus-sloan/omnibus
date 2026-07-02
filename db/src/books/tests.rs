@@ -1938,6 +1938,66 @@ async fn list_books_returns_no_series_when_book_has_none_after_collapse() {
     assert_eq!(books[0].series_id, None);
 }
 
+// ---------- bulk canonical-uuid resolve (issue #633) ----------
+
+/// Insert a `merged_uuids` row the way the merge tx does, so the bulk resolver
+/// has a merged-uuid to fall back through.
+async fn seed_merged_uuid_for_bulk(pool: &sqlx::SqlitePool, uuid: &str, book_id: i64) {
+    sqlx::query(
+        "INSERT OR REPLACE INTO merged_uuids (uuid, book_id, format, library_path)
+         VALUES (?, ?, 'epub', '/lib')",
+    )
+    .bind(uuid)
+    .bind(book_id)
+    .execute(pool)
+    .await
+    .expect("seed merged uuid");
+}
+
+#[tokio::test]
+async fn resolve_canonical_book_uuids_bulk_maps_direct_merged_and_omits_unknown() {
+    // Straddles all three cases in one call: a direct `books.uuid`, a merged
+    // uuid that resolves to a different canonical, and an unknown uuid that
+    // must be **absent** from the returned map (not present with `None`).
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 2).await;
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let direct_uuid = books[0].unique_identifier.clone().unwrap();
+    let survivor_id = books[1].id;
+    let survivor_uuid = books[1].unique_identifier.clone().unwrap();
+    seed_merged_uuid_for_bulk(&pool, "merged-uuid-x", survivor_id).await;
+
+    let batch = vec![
+        direct_uuid.clone(),
+        "merged-uuid-x".to_string(),
+        "no-such-uuid".to_string(),
+        direct_uuid.clone(), // dup — bulk resolver must dedup without error
+    ];
+    let mut tx = pool.begin().await.unwrap();
+    let map = resolve_canonical_book_uuids_bulk_exec(&mut tx, &batch)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    assert_eq!(map.get(&direct_uuid), Some(&direct_uuid));
+    assert_eq!(map.get("merged-uuid-x"), Some(&survivor_uuid));
+    assert!(
+        !map.contains_key("no-such-uuid"),
+        "unknown uuids must be absent from the map (not None)"
+    );
+    assert_eq!(map.len(), 2, "dedup + skip-unknown: exactly two entries");
+}
+
+#[tokio::test]
+async fn resolve_canonical_book_uuids_bulk_empty_input_returns_empty_map() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    let map = resolve_canonical_book_uuids_bulk_exec(&mut tx, &[])
+        .await
+        .unwrap();
+    assert!(map.is_empty());
+}
+
 // ---------- migration 0025: library-scoped landing-sort index (F5) ----------
 
 #[tokio::test]

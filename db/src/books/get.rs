@@ -2,7 +2,9 @@
 //! `resolve_book_id_by_uuid` helper that the covers/thumbs/mobile routes
 //! use to translate a stable uuid to the current id.
 
-use sqlx::{Row, SqlitePool};
+use std::collections::HashMap;
+
+use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
 use omnibus_shared::EbookMetadata;
 
@@ -189,6 +191,62 @@ pub async fn resolve_canonical_book_uuid(
     uuid: &str,
 ) -> Result<Option<String>, super::BooksError> {
     resolve_canonical_book_uuid_exec(pool, uuid).await
+}
+
+/// Bulk counterpart to [`resolve_canonical_book_uuid_exec`]: resolve every
+/// distinct uuid in `uuids` to its canonical `books.uuid` in one round-trip
+/// (chunked at 499 to stay under SQLite's 999 bind-parameter cap — each uuid
+/// is bound twice for the `books`/`merged_uuids` UNION). Returns a map from
+/// input uuid to canonical uuid; uuids unknown in **both** tables are absent
+/// from the map. Callers that would otherwise loop `resolve_canonical_book_uuid_exec`
+/// (e.g. the batched `post_sessions` write path) use this to collapse an N-report
+/// batch's 2N queries into `chunks + N` inserts.
+pub async fn resolve_canonical_book_uuids_bulk_exec(
+    tx: &mut Transaction<'_, Sqlite>,
+    uuids: &[String],
+) -> Result<HashMap<String, String>, super::BooksError> {
+    let mut out: HashMap<String, String> = HashMap::new();
+    if uuids.is_empty() {
+        return Ok(out);
+    }
+    // Dedup input to shrink chunks and skip repeat work when the same book
+    // appears in multiple reports.
+    let mut unique: Vec<&str> = uuids.iter().map(String::as_str).collect();
+    unique.sort_unstable();
+    unique.dedup();
+    // 499 uuids × 2 binds/uuid = 998 params, under SQLite's 999 cap. Mirrors
+    // the chunk pattern in `db/src/sync/audiobooks.rs`.
+    for chunk in unique.chunks(499) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT uuid AS input, uuid AS canonical
+               FROM books
+              WHERE uuid IN ({placeholders})
+             UNION ALL
+             SELECT m.uuid AS input, b.uuid AS canonical
+               FROM merged_uuids m
+               JOIN books b ON b.id = m.book_id
+              WHERE m.uuid IN ({placeholders})"
+        );
+        let mut q = sqlx::query_as::<_, (String, String)>(&sql);
+        // Bind twice — once for each `IN (...)` in the UNION.
+        for u in chunk {
+            q = q.bind(*u);
+        }
+        for u in chunk {
+            q = q.bind(*u);
+        }
+        for (input, canonical) in q.fetch_all(&mut **tx).await? {
+            // `books` wins over `merged_uuids` when both branches somehow
+            // return the same input (they shouldn't — a uuid is either live
+            // or merged, never both — but keep the direct row's identity if
+            // this invariant is ever loosened).
+            out.entry(input).or_insert(canonical);
+        }
+    }
+    Ok(out)
 }
 
 /// Resolve the on-disk path of a book's file for the given format
