@@ -501,6 +501,102 @@ async fn upsert_overrides_materializes_series_link_for_new_series() {
     );
 }
 
+/// The batch FTS rebuild resolves and rewrites more than one uuid in a
+/// single call — exercising the bulk uuid→id resolve + `IN (…)` book fetch
+/// that replaced the former two-query-per-uuid loop. Overrides written
+/// straight to the table leave `books_fts` stale (no per-save rebuild), so
+/// only the batch rebuild can make search reflect both overridden titles.
+#[tokio::test]
+async fn rebuild_fts_for_books_batch_rewrites_multiple_uuids() {
+    let _covers = CoversTempDir::new("fts_batch_multi");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    replace_books(
+        &pool,
+        "/lib",
+        vec![
+            indexed(
+                "one.epub",
+                Some("AlphaScanned"),
+                &["Author A"],
+                &[],
+                None,
+                None,
+            ),
+            indexed(
+                "two.epub",
+                Some("BetaScanned"),
+                &["Author B"],
+                &[],
+                None,
+                None,
+            ),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let uuid_of = |title: &str| {
+        books
+            .iter()
+            .find(|b| b.title.as_deref() == Some(title))
+            .and_then(|b| b.unique_identifier.clone())
+            .expect("seeded book should exist")
+    };
+    let uuid_a = uuid_of("AlphaScanned");
+    let uuid_b = uuid_of("BetaScanned");
+
+    // Write overrides straight to the table so `books_fts` stays stale; this
+    // isolates the batch rebuild's bulk resolve from the per-save rebuild
+    // that `upsert_metadata_overrides` would otherwise trigger.
+    for (uuid, title) in [(&uuid_a, "AlphaRenamed"), (&uuid_b, "BetaRenamed")] {
+        let json = serde_json::to_string(&MetadataOverrides {
+            title: Some(title.to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+        sqlx::query("INSERT INTO metadata_overrides (book_uuid, overrides) VALUES (?, ?)")
+            .bind(uuid)
+            .bind(&json)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    // Sanity: FTS still matches the scanned titles (no rebuild yet).
+    assert!(search_books(&pool, "/lib", "AlphaRenamed")
+        .await
+        .unwrap()
+        .is_empty());
+
+    rebuild_fts_for_books_batch(&pool, &[uuid_a, uuid_b])
+        .await
+        .unwrap();
+
+    // Both overridden titles are now searchable; neither scanned title is.
+    assert_eq!(
+        search_books(&pool, "/lib", "AlphaRenamed").await.unwrap()[0]
+            .title
+            .as_deref(),
+        Some("AlphaRenamed")
+    );
+    assert_eq!(
+        search_books(&pool, "/lib", "BetaRenamed").await.unwrap()[0]
+            .title
+            .as_deref(),
+        Some("BetaRenamed")
+    );
+    assert!(search_books(&pool, "/lib", "AlphaScanned")
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(search_books(&pool, "/lib", "BetaScanned")
+        .await
+        .unwrap()
+        .is_empty());
+}
+
 /// The override row and the `books_series_link` row must land
 /// atomically: after `upsert_metadata_overrides` commits, a direct
 /// SELECT on `books_series_link` must already reflect the new series.
