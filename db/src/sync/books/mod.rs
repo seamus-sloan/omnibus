@@ -17,9 +17,7 @@ mod new;
 mod removed;
 mod shared;
 
-pub(super) use shared::{
-    clear_missing_files_flag, materialize_new_covers,
-};
+pub(super) use shared::{clear_missing_files_flag, materialize_new_covers};
 
 use backfill::stamp_last_indexed;
 use changed::sync_changed;
