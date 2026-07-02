@@ -180,12 +180,18 @@ pub async fn get_metadata_overrides(
 /// Delete overrides for a book UUID (revert to scanned values).
 ///
 /// The row DELETE and the `books_fts` restore run inside one
-/// `BEGIN IMMEDIATE` transaction, so a failure in the FTS rebuild rolls
-/// back the DELETE instead of leaving the overrides gone while search
-/// still matches the deleted override text. With the override row removed,
-/// the canonical [`upsert_fts`] write inside the transaction *is* the
+/// `BEGIN IMMEDIATE` transaction. With the override row removed, the
+/// canonical [`upsert_fts`] write inside the transaction *is* the
 /// revert-to-scanned state — no override overlay is needed, and it reads
 /// the same canonical taxonomy the scan-time index writes.
+///
+/// Unlike [`upsert_metadata_overrides`] / [`merge_metadata_overrides`]
+/// (whose post-commit FTS rebuild is best-effort), the FTS restore here is
+/// **not** best-effort: a failure in the restore aborts the whole call and
+/// rolls the DELETE back, so the overrides can never be dropped while
+/// search still matches the deleted override text. Callers must treat this
+/// as fallible — the delete can fail (surfacing as a 500 at the handler)
+/// even when the row existed, leaving the override intact.
 pub async fn delete_metadata_overrides(
     pool: &SqlitePool,
     book_uuid: &str,

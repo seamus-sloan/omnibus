@@ -1,9 +1,8 @@
 //! Rebuild the `books_fts` row after an override write so search matches
-//! what the UI displays (merged canonical + override metadata). Thin
-//! wrappers over the [`crate::sync::upsert_fts`] choke-point: the door
-//! writes the canonical row, then [`overlay_overrides`] patches the
-//! overridable columns with the merged values. Called best-effort from
-//! the upsert/merge/delete paths.
+//! the UI (merged canonical + override metadata). Wraps the
+//! [`crate::sync::upsert_fts`] choke-point plus an [`overlay_overrides`]
+//! patch in one transaction. Called best-effort by the upsert/merge paths;
+//! the delete path restores canonical FTS in its own transaction instead.
 
 use sqlx::{Sqlite, SqliteConnection, SqlitePool, Transaction};
 
