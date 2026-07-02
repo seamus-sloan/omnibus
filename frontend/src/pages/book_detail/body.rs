@@ -11,18 +11,34 @@ use crate::Route;
 use super::journal::BdJournalSection;
 use super::{BdInsightCell, BdMetaRow, BdSectionHead};
 
+/// Ambient page-level context threaded through the body: the server base URL
+/// (for absolute cover links) and whether the viewer is an admin. Grouped so it
+/// travels as one prop instead of two ambient scalars.
+#[derive(Clone, PartialEq, Props)]
+pub(super) struct BdPageCtx {
+    pub server_url: String,
+    pub is_admin: bool,
+}
+
+/// The "from the same hand" author cluster: the primary author's name, its
+/// resolvable id, and the other books they wrote. Grouped so the same-hand data
+/// travels as one prop rather than three parallel scalars.
+#[derive(Clone, PartialEq, Props)]
+pub(super) struct BdAuthorCluster {
+    pub primary_author: String,
+    pub author_id: Option<i64>,
+    pub author_books: Vec<EbookMetadata>,
+}
+
 /// Main column: public journal feed, highlights stub, from-the-same-hand fan,
 /// and the F3.3 "Readers also enjoyed" suggestions strip.
 #[component]
 pub(super) fn BdBodyMain(
     uuid: String,
     title: String,
-    primary_author: String,
-    author_id: Option<i64>,
-    author_books: Vec<EbookMetadata>,
+    author: BdAuthorCluster,
     suggestions: Option<SuggestionsResponse>,
-    server_url: String,
-    is_admin: bool,
+    ctx: BdPageCtx,
 ) -> Element {
     rsx! {
         div { class: "bd-body-main",
@@ -34,12 +50,11 @@ pub(super) fn BdBodyMain(
                 p { class: "bd-stub-hint", "Highlights land in F3.2." }
             }
             div { class: "divider" }
-            BdSameHand { primary_author, author_id, author_books }
+            BdSameHand { cluster: author }
             BdSuggestionsStrip {
                 book_title: title,
                 suggestions,
-                server_url,
-                is_admin,
+                ctx,
             }
         }
     }
@@ -51,11 +66,12 @@ pub(super) fn BdBodyMain(
 /// and the covers fan out from behind it on hover. When the author has no other
 /// books in the library, the lead card is paired with a short note instead.
 #[component]
-pub(super) fn BdSameHand(
-    primary_author: String,
-    author_id: Option<i64>,
-    author_books: Vec<EbookMetadata>,
-) -> Element {
+pub(super) fn BdSameHand(cluster: BdAuthorCluster) -> Element {
+    let BdAuthorCluster {
+        primary_author,
+        author_id,
+        author_books,
+    } = cluster;
     let owned = author_books.len() + 1;
     let shown = author_books.len().min(4);
     let rest = author_books.len() - shown;
@@ -195,9 +211,12 @@ fn same_hand_year(b: &EbookMetadata) -> Option<String> {
 pub(super) fn BdSuggestionsStrip(
     book_title: String,
     suggestions: Option<SuggestionsResponse>,
-    server_url: String,
-    is_admin: bool,
+    ctx: BdPageCtx,
 ) -> Element {
+    let BdPageCtx {
+        server_url,
+        is_admin,
+    } = ctx;
     rsx! {
         div { class: "divider" }
         BdSectionHead {
