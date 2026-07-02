@@ -246,3 +246,90 @@ async fn delete_highlight_returns_not_found_for_other_user() {
     let err = delete_highlight(&pool, bob, h.id).await.unwrap_err();
     assert!(matches!(err, HighlightError::NotFound));
 }
+
+/// Bulk-insert `count` highlight rows for `(user_id, book_uuid)`
+/// bypassing `create_highlight` — the CRUD helper resolves the book
+/// uuid on every call, which is fine at 1–2 rows but too slow for a
+/// 1500-row response-cap fixture.
+async fn seed_highlights_raw(pool: &SqlitePool, user_id: i64, book_uuid: &str, count: i64) {
+    sqlx::query(
+        r#"
+        WITH RECURSIVE n(i) AS (
+            SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
+        )
+        INSERT INTO highlights (user_id, book_uuid, epub_cfi_range, color, created_at)
+        SELECT ?, ?, 'epubcfi(/' || i || ')', 'amber', i FROM n
+        "#,
+    )
+    .bind(count)
+    .bind(user_id)
+    .bind(book_uuid)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn list_highlights_caps_response_at_hard_limit() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let over_cap = LIST_HIGHLIGHTS_LIMIT + 500;
+    seed_highlights_raw(&pool, user, &uuid, over_cap).await;
+
+    let list = list_highlights(&pool, user, &uuid).await.unwrap();
+    assert_eq!(
+        list.len() as i64,
+        LIST_HIGHLIGHTS_LIMIT,
+        "list_highlights must not return more than LIST_HIGHLIGHTS_LIMIT rows",
+    );
+}
+
+/// Guard against a covering-index regression. Without
+/// `idx_highlights_user_book_created` the planner falls back to
+/// `idx_highlights_user_book` and sorts the matched rows in memory —
+/// SQLite calls this out as `USE TEMP B-TREE FOR ORDER BY` in the plan.
+/// We assert the plan mentions the covering index by name and does not
+/// mention the temp b-tree — a structural check that survives
+/// point-release plan-string wording changes.
+#[tokio::test]
+async fn list_highlights_query_plan_uses_covering_index() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    // Seed two users so the planner's stats reflect real selectivity —
+    // with a single user_id ANALYZE tells the planner the filter buys
+    // nothing and it may prefer a plain SCAN.
+    let alice = seed_user(&pool, "alice").await;
+    let bob = seed_user(&pool, "bob").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    seed_highlights_raw(&pool, alice, &uuid, 500).await;
+    seed_highlights_raw(&pool, bob, &uuid, 500).await;
+    sqlx::query("ANALYZE").execute(&pool).await.unwrap();
+
+    let plan_rows = sqlx::query(
+        "EXPLAIN QUERY PLAN
+         SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, h.text, h.created_at
+           FROM highlights h
+          WHERE h.user_id = ? AND h.book_uuid = ?
+          ORDER BY h.created_at ASC
+          LIMIT ?",
+    )
+    .bind(alice)
+    .bind(&uuid)
+    .bind(LIST_HIGHLIGHTS_LIMIT)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let plan: String = plan_rows
+        .iter()
+        .map(|r| r.get::<String, _>("detail"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        plan.contains("idx_highlights_user_book_created"),
+        "expected covering index in plan, got:\n{plan}",
+    );
+    assert!(
+        !plan.contains("USE TEMP B-TREE FOR ORDER BY"),
+        "expected index-only sort — plan still uses a temp b-tree:\n{plan}",
+    );
+}

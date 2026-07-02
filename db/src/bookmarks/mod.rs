@@ -7,6 +7,12 @@ use sqlx::{Row, SqlitePool};
 
 use crate::resolve_canonical_book_uuid;
 
+/// Hard cap on how many bookmarks `list_bookmarks` returns for a single
+/// `(user, book)` pair. Practical usage stays well under this; the cap
+/// exists so a pathological or automated annotation pipeline can't
+/// produce an unbounded REST response.
+pub const LIST_BOOKMARKS_LIMIT: i64 = 1_000;
+
 #[derive(Debug, thiserror::Error)]
 pub enum BookmarkError {
     #[error("book not found")]
@@ -64,10 +70,12 @@ pub async fn list_bookmarks(
         "SELECT id, book_uuid, position, title, created_at
          FROM bookmarks
          WHERE user_id = ? AND book_uuid = ?
-         ORDER BY created_at ASC",
+         ORDER BY created_at ASC
+         LIMIT ?",
     )
     .bind(user_id)
     .bind(&canonical)
+    .bind(LIST_BOOKMARKS_LIMIT)
     .fetch_all(pool)
     .await?;
 
