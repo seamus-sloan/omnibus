@@ -132,8 +132,9 @@ async fn api_search_rejects_missing_q_param() {
 
 #[tokio::test]
 async fn api_search_rejects_over_length_q_with_400() {
-    // Issue #638: the handler caps raw `?q=` length at MAX_SEARCH_QUERY_LEN
-    // bytes and rejects longer input with 400 before any db call.
+    // Issue #638: the handler caps the decoded `q` length at
+    // MAX_SEARCH_QUERY_LEN bytes and rejects longer input with 400 before any
+    // search db call.
     let (app, _state, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "alice").await;
     let token = auth_test_support::bearer_token(&pool, user.id).await;
@@ -179,7 +180,7 @@ async fn api_search_palette_returns_empty_when_path_not_configured() {
 #[tokio::test]
 async fn api_search_palette_rejects_over_length_q_with_400() {
     // Issue #638: the palette handler shares the same MAX_SEARCH_QUERY_LEN
-    // cap, rejecting over-length input with 400 before any db call.
+    // cap, rejecting over-length input with 400 before any search db call.
     let (app, _state, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "alice").await;
     let token = auth_test_support::bearer_token(&pool, user.id).await;
