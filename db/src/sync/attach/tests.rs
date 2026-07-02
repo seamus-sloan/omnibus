@@ -536,5 +536,8 @@ async fn find_attachment_by_scan_key_returns_expected_row_after_indexes() {
         .await
         .unwrap()
         .expect("attach ledger row for the seeded audiobook must exist");
-    assert_eq!(hit.2, "M4B", "format column should match the audiobook seed");
+    assert_eq!(
+        hit.2, "M4B",
+        "format column should match the audiobook seed"
+    );
 }
