@@ -96,13 +96,28 @@ pub(super) async fn post_sessions(
         Ok(tx) => tx,
         Err(e) => return internal("begin", e),
     };
+    // Pre-resolve every uuid in the batch in one round-trip (chunked at 499)
+    // so the insert loop below performs only INSERTs — no per-row
+    // `SELECT ... FROM books UNION merged_uuids` fires. Worst-case shrinks
+    // from 2N to `chunks + N` queries per request (issue #633).
+    let batch_uuids: Vec<String> = reports.iter().map(|r| r.book_uuid.clone()).collect();
+    let resolved = match db::resolve_canonical_book_uuids_bulk_exec(&mut tx, &batch_uuids).await {
+        Ok(m) => m,
+        Err(e) => return internal("resolve_bulk", e),
+    };
     let mut inserted = 0usize;
     for r in &reports {
-        match db::progress::record_session_tx(&mut tx, user.id, r).await {
-            Ok(true) => inserted += 1,
-            Ok(false) => {}
-            Err(e) => return internal("record_session", e),
+        // Missing entry = uuid unknown in both `books` and `merged_uuids`.
+        // Same best-effort skip semantics `record_session_tx` used to enforce
+        // with its per-row resolve — the row is silently dropped so the
+        // client's `recorded` count reflects what actually landed.
+        let Some(canonical) = resolved.get(&r.book_uuid) else {
+            continue;
+        };
+        if let Err(e) = db::progress::insert_session_tx(&mut tx, user.id, r, canonical).await {
+            return internal("insert_session", e);
         }
+        inserted += 1;
     }
     if let Err(e) = tx.commit().await {
         return internal("commit", e);

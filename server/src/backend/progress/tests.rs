@@ -348,6 +348,74 @@ async fn post_sessions_rejects_oversized_batch() {
 }
 
 #[tokio::test]
+async fn api_post_sessions_batch_resolves_direct_and_merged_uuids_in_one_prefetch() {
+    // Issue #633: the batch handler pre-resolves every uuid in one bulk query,
+    // then loops through INSERT-only work. This test seeds a mixed batch —
+    // a direct `books.uuid`, a `merged_uuids` alias, and an unknown uuid — and
+    // asserts each report lands against the *canonical* survivor uuid (the
+    // merged-uuid alias must collapse onto the surviving book) and that the
+    // unknown row is silently dropped from `recorded`.
+    let (app, _state, pool) = fixture().await;
+    let (book_id, survivor_uuid) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
+    sqlx::query(
+        "INSERT OR REPLACE INTO merged_uuids (uuid, book_id, format, library_path)
+         VALUES ('alias-uuid', ?, 'epub', '/lib')",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let body = serde_json::json!([
+        { "book_uuid": survivor_uuid, "format": "epub", "started_at": 100, "ended_at": 460, "progress_units": 360 },
+        { "book_uuid": "alias-uuid", "format": "epub", "started_at": 500, "ended_at": 800, "progress_units": 300 },
+        { "book_uuid": "no-such-uuid", "format": "epub", "started_at": 900, "ended_at": 950, "progress_units": 50 },
+    ]);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/progress/sessions")
+                .method("POST")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["recorded"], 2, "direct + merged land; unknown skipped");
+    // Both rows must key on the *canonical* survivor uuid — the merged alias
+    // resolves through the bulk map, not against its literal string.
+    let against_survivor: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ? AND book_uuid = ?",
+    )
+    .bind(user.id)
+    .bind(&survivor_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        against_survivor, 2,
+        "both reports land against canonical uuid"
+    );
+    let against_alias: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ? AND book_uuid = 'alias-uuid'",
+    )
+    .bind(user.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        against_alias, 0,
+        "no row must key on the merged alias string"
+    );
+}
+
+#[tokio::test]
 async fn api_post_sessions_rollback_on_second_insert_error() {
     // Drop the audio-session table so the 2nd insert fails deterministically.
     // This proves the batch-level transaction rolls back: the 1st (epub)
