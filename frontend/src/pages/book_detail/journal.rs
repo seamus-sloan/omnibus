@@ -47,9 +47,13 @@ pub(super) fn BdJournalSection(uuid: String) -> Element {
     }));
 
     // Click-to-reveal spoilers, delegated on `document` so it covers entries
-    // that render after mount and bound once via a window guard. Web-only: the
-    // eval is a no-op on SSR / native, and gating the body (not the hook) keeps
-    // the hook count identical across targets for hydration.
+    // that render after mount and bound once via a window guard. The sanitizer
+    // emits the spoiler as a real `<button>`, so Tab reaches it and Enter/Space
+    // fire a native click without a keydown listener; the handler just needs
+    // to keep `aria-expanded` in sync with the `.revealed` class so assistive
+    // tech reflects the toggled state. Web-only: the eval is a no-op on SSR /
+    // native, and gating the body (not the hook) keeps the hook count
+    // identical across targets for hydration.
     use_effect(move || {
         #[cfg(feature = "web")]
         {
@@ -59,7 +63,9 @@ pub(super) fn BdJournalSection(uuid: String) -> Element {
                     window.__omnibusSpoilerBound = true;
                     document.addEventListener('click', (e) => {
                         const s = e.target.closest && e.target.closest('.spoiler');
-                        if (s) s.classList.toggle('revealed');
+                        if (!s) return;
+                        const revealed = s.classList.toggle('revealed');
+                        s.setAttribute('aria-expanded', revealed ? 'true' : 'false');
                     });
                 }
                 "#,
