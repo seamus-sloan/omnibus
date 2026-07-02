@@ -1,11 +1,9 @@
 //! Live markdown editor glue for the journal composer.
 //!
-//! Bridges the Dioxus components to the hand-rolled `contenteditable` editor in
-//! the co-located `journal_editor.js`: it ships the JS module over the eval
-//! channel, exposes `attach` / `command` / `insert` actions, renders the
-//! formatting toolbar, and builds the insert-from-highlights blockquote. The
-//! editor itself is web-only — non-web targets fall back to a plain textarea, so
-//! the eval helpers are no-ops there.
+//! Ships the co-located `journal_editor.js` over Dioxus's eval channel and
+//! exposes `enhance` / `command` / `insert` actions plus the formatting
+//! toolbar. Web-only — non-web targets keep the plain SSR textarea (rule 07)
+//! and every eval helper is a no-op.
 
 use dioxus::prelude::*;
 
@@ -41,13 +39,27 @@ fn editor_dispatch(
 ) {
 }
 
-/// Attach the live editor to the contenteditable `editor_id`, mirroring its
-/// markdown into the hidden textarea `mirror_id`. Web-only: it's called from the
-/// contenteditable's `onmounted`, which only exists on the web write surface.
+/// Progressively enhance a plain `<textarea>` (rendered by SSR + the first
+/// hydration paint on every target) into the live contenteditable editor.
+/// The JS side flips a `data-omnibus-enhanced` marker on the wrapping element
+/// — which CSS uses to swap visibility from the textarea to the sibling
+/// contenteditable — and then wires the editor to mirror its markdown back
+/// into the textarea.
+///
+/// The `onmounted` handler in the composer / entry-card rsx calls this
+/// unconditionally so the rsx body is identical on every target (rule 07);
+/// the non-web stub below makes it a no-op on SSR / native.
 #[cfg(feature = "web")]
-pub(crate) fn editor_attach(editor_id: &str, mirror_id: &str) {
-    editor_dispatch("attach", editor_id, mirror_id, "", "", "");
+pub(crate) fn editor_enhance(source_id: &str, editor_id: &str) {
+    editor_dispatch("enhance", editor_id, source_id, "", "", "");
 }
+
+/// Non-web stub: SSR never runs the eval channel and native shells have no
+/// contenteditable to progressively enhance, so this is a no-op. Defined so
+/// the rsx `onmounted` can call `editor_enhance` unconditionally (rule 07:
+/// hydration parity — keep cfg gates out of rsx bodies).
+#[cfg(not(feature = "web"))]
+pub(crate) fn editor_enhance(_source_id: &str, _editor_id: &str) {}
 
 /// Run a toolbar formatting command (`wrap` / `prefix` / `link`) on the live
 /// editor's current selection.
@@ -160,7 +172,7 @@ pub(crate) fn BdJournalToolbar(target_id: String) -> Element {
         },
         ToolbarButton {
             label: "Spoiler",
-            title: "Spoiler — blurred until clicked",
+            title: "Spoiler \u{2014} blurred until clicked",
             op: "wrap",
             a: "||",
             b: "||",
