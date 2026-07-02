@@ -12,9 +12,14 @@ mod tests;
 
 /// Hard cap on `SessionReport`s per batch, enforced by both the REST
 /// `POST /api/progress/sessions` handler and the web
-/// `rpc_record_sessions` server function. The batch runs inside a
-/// single write transaction, so bounding it here keeps the SQLite WAL
-/// write lock from being held open by a client-side loop.
+/// `rpc_record_sessions` server function. The two paths differ in how
+/// they write: REST commits the whole batch inside one SQLite write
+/// transaction, so an unbounded batch would hold the WAL write lock
+/// for the entire loop; the RPC path calls
+/// `db::progress::record_session` sequentially — one transaction per
+/// report — so an unbounded batch instead lets a client drive an
+/// arbitrary-length write storm. Capping the batch here bounds both
+/// failure modes at the API boundary.
 pub const SESSION_BATCH_CAP: usize = 500;
 
 /// Discriminator for the format-specific payload variant in [`ProgressUpdate`]
