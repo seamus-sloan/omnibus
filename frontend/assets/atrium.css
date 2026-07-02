@@ -924,8 +924,14 @@ body.atrium,
 .bd-journal-hl-item:hover { background: var(--bg-3); }
 
 /* Live editor — contenteditable whose textContent stays equal to markdown.
-   The hidden mirror carries the markdown to the `body` signal. */
-.bd-journal-mirror {
+   Rendered as a sibling of the plain textarea (rule 07: identical rsx on
+   SSR + first hydration paint); post-mount JS flips the wrapper's
+   `data-omnibus-enhanced` marker to swap visibility from the textarea to
+   the contenteditable. Non-web / no-JS paths stay on the plain textarea. */
+.bd-journal-editor-wrap:not([data-omnibus-enhanced="1"]) .bd-journal-editor {
+  display: none;
+}
+.bd-journal-editor-wrap[data-omnibus-enhanced="1"] .bd-journal-textarea {
   display: none;
 }
 .bd-journal-editor {
