@@ -6,9 +6,11 @@
 
 ## Notes
 - 
-- Apply at most one release label when the PR is targeting `main`:
-  - `patch version` bumps `vX.Y.Z` to `vX.Y.(Z+1)`
-  - `minor version` bumps `vX.Y.Z` to `vX.(Y+1).0`
+- Every merge to `main` cuts a release. By default it's a patch bump
+  (`vX.Y.Z` → `vX.Y.(Z+1)`); add the `minor version` label for a minor bump
+  (`vX.Y.Z` → `vX.(Y+1).0`). If both labels are applied, `minor version` wins.
+- To skip the release, add the `no release` label. Unlabeled PRs that only
+  touch docs (`*.md`, `docs/`) or CI (`.github/`) skip automatically.
 
 <!--
 Use the following for callouts:
