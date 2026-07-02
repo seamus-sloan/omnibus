@@ -9,7 +9,7 @@ use sqlx::{SqliteConnection, SqlitePool};
 
 use omnibus_shared::EbookMetadata;
 
-use crate::books::resolve_book_id_by_uuid;
+use crate::books::{get_books_by_ids, resolve_book_id_by_uuid, resolve_book_ids_by_uuids};
 use crate::sync::upsert_fts;
 
 use super::upsert::MetadataOverridesError;
@@ -99,21 +99,38 @@ pub(crate) async fn rebuild_fts_for_books_batch(
 }
 
 /// Resolve UUIDs to `(book_id, merged metadata)`, skipping any uuid with
-/// no live book row. Uses [`resolve_book_id_by_uuid`] so merged/attached
+/// no live book row. Uses [`resolve_book_ids_by_uuids`] so merged/attached
 /// uuids resolve to the surviving book.
+///
+/// Two round-trips per chunk (chunked at 499 to respect SQLite's
+/// bind-parameter cap): one bulk uuid→id resolve, then one bulk book
+/// fetch. A per-uuid loop would issue 2N round-trips, which dominates
+/// the write phase for the large batches this path fires on
+/// (author-photo updates, multi-book override saves).
+///
+/// The two lookups are joined in memory; uuids that resolve to an id
+/// whose book row has since vanished are silently dropped (same
+/// tolerance the pre-batch [`rebuild_fts_for_book`] path applied).
 async fn resolve_fts_rows(
     pool: &SqlitePool,
     book_uuids: &[String],
 ) -> Result<Vec<(i64, EbookMetadata)>, MetadataOverridesError> {
-    let mut rows: Vec<(i64, EbookMetadata)> = Vec::with_capacity(book_uuids.len());
-    for uuid in book_uuids {
-        let Some(book_id) = resolve_book_id_by_uuid(pool, uuid).await? else {
-            continue;
-        };
-        let Some(merged) = crate::books::get_book(pool, book_id).await? else {
-            continue;
-        };
-        rows.push((book_id, merged));
+    let id_by_uuid = resolve_book_ids_by_uuids(pool, book_uuids).await?;
+    if id_by_uuid.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Deduplicate: two uuids can point at the same book (a merged/attached
+    // ledger key alongside its target's own uuid), and we only need to
+    // rebuild each FTS row once.
+    let mut ids: Vec<i64> = id_by_uuid.values().copied().collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let mut book_by_id = get_books_by_ids(pool, &ids).await?;
+    let mut rows: Vec<(i64, EbookMetadata)> = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(merged) = book_by_id.remove(&id) {
+            rows.push((id, merged));
+        }
     }
     Ok(rows)
 }

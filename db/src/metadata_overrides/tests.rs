@@ -564,3 +564,127 @@ async fn upsert_overrides_persists_books_series_link_row_for_new_series() {
         "books_series_link should reflect the new override series after upsert commits"
     );
 }
+
+/// `rebuild_fts_for_books_batch` mixes a direct `books.uuid`, a
+/// `merged_uuids` ledger-key uuid, and an unknown uuid in one call.
+/// After the batch commits, `books_fts` for each surviving book must
+/// carry the *merged* (override-overlaid) text, and the unknown uuid
+/// must be silently skipped. Guards the acceptance criteria of the
+/// batch-resolve refactor: at most two queries regardless of size,
+/// merged uuids still route to the surviving book, unknown uuids
+/// don't fail the whole batch.
+#[tokio::test]
+async fn rebuild_fts_for_books_batch_handles_direct_merged_and_unknown_uuids() {
+    let _covers = CoversTempDir::new("batch_fts_mixed");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    // Two books indexed the normal way — each gets a native
+    // `books.uuid`. The batch will use the first book by its direct
+    // uuid; for the second we attach a synthetic `merged_uuids` row so
+    // the batch resolves that key to the same book.
+    replace_books(
+        &pool,
+        "/lib",
+        vec![
+            indexed("a.epub", Some("Alpha"), &["A"], &[], None, None),
+            indexed("b.epub", Some("Beta"), &["B"], &[], None, None),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let (alpha_uuid, alpha_id) = books
+        .iter()
+        .find(|b| b.title.as_deref() == Some("Alpha"))
+        .map(|b| (b.unique_identifier.clone().unwrap(), b.id))
+        .unwrap();
+    let (beta_uuid, beta_id) = books
+        .iter()
+        .find(|b| b.title.as_deref() == Some("Beta"))
+        .map(|b| (b.unique_identifier.clone().unwrap(), b.id))
+        .unwrap();
+
+    // Register a merged-uuid ledger key pointing at Beta so the batch
+    // resolve path exercises the `merged_uuids` fallback. Skip the
+    // `books.uuid` lookup — the row hangs off a foreign format
+    // (M4B is not indexed here) so it wouldn't otherwise resolve.
+    sqlx::query(
+        "INSERT INTO merged_uuids (uuid, book_id, format, library_path)
+         VALUES ('attached-uuid', ?, 'M4B', '/lib')",
+    )
+    .bind(beta_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Persist overrides for both books so `overlay_overrides` has
+    // something to patch on top of the canonical row.
+    upsert_metadata_overrides(
+        &pool,
+        &alpha_uuid,
+        &MetadataOverrides {
+            title: Some("Alpha Edited".into()),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+    upsert_metadata_overrides(
+        &pool,
+        &beta_uuid,
+        &MetadataOverrides {
+            title: Some("Beta Edited".into()),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    // Corrupt the FTS rows so the batch rebuild is the only path that
+    // could produce the expected text.
+    sqlx::query("UPDATE books_fts SET title = 'STALE' WHERE rowid IN (?, ?)")
+        .bind(alpha_id)
+        .bind(beta_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    rebuild_fts_for_books_batch(
+        &pool,
+        &[
+            alpha_uuid,
+            "attached-uuid".to_string(),
+            "does-not-exist".to_string(),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let alpha_fts: String = sqlx::query_scalar("SELECT title FROM books_fts WHERE rowid = ?")
+        .bind(alpha_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let beta_fts: String = sqlx::query_scalar("SELECT title FROM books_fts WHERE rowid = ?")
+        .bind(beta_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        alpha_fts, "Alpha Edited",
+        "direct uuid routes through resolve + get_books_by_ids and overlays the override title"
+    );
+    assert_eq!(
+        beta_fts, "Beta Edited",
+        "the merged_uuids ledger key resolves to Beta and overlays its override title"
+    );
+}
