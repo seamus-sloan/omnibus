@@ -9,7 +9,7 @@ use sqlx::{SqliteConnection, SqlitePool};
 
 use omnibus_shared::EbookMetadata;
 
-use crate::books::resolve_book_id_by_uuid;
+use crate::books::{get_books_by_ids, resolve_book_id_by_uuid, resolve_book_ids_bulk};
 use crate::sync::upsert_fts;
 
 use super::upsert::MetadataOverridesError;
@@ -99,21 +99,21 @@ pub(crate) async fn rebuild_fts_for_books_batch(
 }
 
 /// Resolve UUIDs to `(book_id, merged metadata)`, skipping any uuid with
-/// no live book row. Uses [`resolve_book_id_by_uuid`] so merged/attached
-/// uuids resolve to the surviving book.
+/// no live book row. Two chunked bulk queries regardless of batch size —
+/// [`resolve_book_ids_bulk`] (uuid→id, with the merged/attached fallback)
+/// then [`get_books_by_ids`] — joined in memory, replacing the former
+/// two-query-per-uuid loop.
 async fn resolve_fts_rows(
     pool: &SqlitePool,
     book_uuids: &[String],
 ) -> Result<Vec<(i64, EbookMetadata)>, MetadataOverridesError> {
-    let mut rows: Vec<(i64, EbookMetadata)> = Vec::with_capacity(book_uuids.len());
-    for uuid in book_uuids {
-        let Some(book_id) = resolve_book_id_by_uuid(pool, uuid).await? else {
-            continue;
-        };
-        let Some(merged) = crate::books::get_book(pool, book_id).await? else {
-            continue;
-        };
-        rows.push((book_id, merged));
-    }
-    Ok(rows)
+    // De-dupe ids so a canonical uuid and one of its merged uuids appearing
+    // together in the batch write the same FTS row only once.
+    let id_map = resolve_book_ids_bulk(pool, book_uuids).await?;
+    let mut ids: Vec<i64> = id_map.into_values().collect();
+    ids.sort_unstable();
+    ids.dedup();
+
+    let books = get_books_by_ids(pool, &ids).await?;
+    Ok(books.into_iter().map(|b| (b.id, b)).collect())
 }
