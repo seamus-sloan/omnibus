@@ -28,6 +28,12 @@ pub mod worker;
 /// Maximum byte length of an author photo source URL.
 pub const AUTHOR_PHOTO_URL_MAX_LEN: usize = 2048;
 
+/// Maximum byte length of a stored Hardcover API key (Bearer token). Sized
+/// generously to accommodate a JWT-shaped token — matches the cap enforced on
+/// other admin-writable settings strings so no single write path can persist
+/// an unbounded blob into the `settings` KV table.
+pub const HARDCOVER_API_KEY_MAX_LEN: usize = 2048;
+
 pub use audiobook::*;
 pub use auth::*;
 pub use bookmark::*;

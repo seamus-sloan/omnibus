@@ -486,11 +486,16 @@ pub async fn rpc_get_hardcover_key() -> Result<HardcoverKeyStatus> {
 }
 
 /// Admin-only: save (or clear, with `None`/blank) the Hardcover key in
-/// settings. Returns the new masked status — never echoes the raw key.
+/// settings. Returns the new masked status — never echoes the raw key. Rejects
+/// tokens longer than `HARDCOVER_API_KEY_MAX_LEN` with a 4xx `ServerFnError`
+/// so the KV write stays bounded.
 #[post("/api/rpc/hardcover-key", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_set_hardcover_key(key: Option<String>) -> Result<HardcoverKeyStatus> {
-    db::set_hardcover_api_key(&pool.0, key.as_deref()).await?;
-    read_hardcover_key_status(&pool.0).await
+    match db::set_hardcover_api_key(&pool.0, key.as_deref()).await {
+        Ok(()) => read_hardcover_key_status(&pool.0).await,
+        Err(db::SettingsError::Validation(msg)) => Err(ServerFnError::new(msg).into()),
+        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+    }
 }
 
 /// Short masked preview of a secret — never the raw value. Long keys (Hardcover

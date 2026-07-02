@@ -37,6 +37,12 @@ impl From<crate::settings::SettingsError> for SyncError {
     fn from(e: crate::settings::SettingsError) -> Self {
         match e {
             crate::settings::SettingsError::Db(inner) => SyncError::Db(inner),
+            // `Validation` is only produced by `set_hardcover_api_key`, which
+            // no sync path calls — keep the arm exhaustive but do not widen
+            // `SyncError`'s surface for a case the caller graph can't reach.
+            crate::settings::SettingsError::Validation(msg) => SyncError::Db(
+                sqlx::Error::Protocol(format!("unexpected settings validation error: {msg}")),
+            ),
         }
     }
 }
