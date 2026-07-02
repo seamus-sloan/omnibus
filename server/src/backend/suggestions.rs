@@ -16,7 +16,7 @@ use axum::{
     Json,
 };
 use omnibus_db::{self as db, worker::Task};
-use omnibus_shared::{BookSuggestion, HardcoverKeyStatus, RawSuggestion, SuggestionsResponse};
+use omnibus_shared::{BookSuggestion, RawSuggestion, SuggestionsResponse};
 use serde::Deserialize;
 
 use super::{internal, AppState};
@@ -112,7 +112,7 @@ pub(super) async fn get_hardcover_key(
     _admin: AdminUser,
     State(state): State<AppState>,
 ) -> Response {
-    match read_status(&state.pool).await {
+    match db::hardcover_key_status(&state.pool).await {
         Ok(s) => Json(s).into_response(),
         Err(e) => internal("read hardcover key", e),
     }
@@ -140,47 +140,10 @@ pub(super) async fn post_hardcover_key(
         }
         Err(e) => return internal("save hardcover key", e),
     }
-    match read_status(&state.pool).await {
+    match db::hardcover_key_status(&state.pool).await {
         Ok(s) => Json(s).into_response(),
         Err(e) => internal("read hardcover key", e),
     }
-}
-
-/// Build the masked key status: settings wins, then env, else unset.
-async fn read_status(pool: &sqlx::SqlitePool) -> Result<HardcoverKeyStatus, db::SettingsError> {
-    if let Some(k) = db::get_hardcover_api_key(pool).await? {
-        return Ok(HardcoverKeyStatus {
-            configured: true,
-            masked: Some(mask_key(&k)),
-            source: "settings".to_string(),
-        });
-    }
-    if let Ok(env_key) = std::env::var("HARDCOVER_API_KEY") {
-        let env_key = env_key.trim();
-        if !env_key.is_empty() {
-            return Ok(HardcoverKeyStatus {
-                configured: true,
-                masked: Some(mask_key(env_key)),
-                source: "env".to_string(),
-            });
-        }
-    }
-    Ok(HardcoverKeyStatus {
-        configured: false,
-        masked: None,
-        source: "none".to_string(),
-    })
-}
-
-/// Short masked preview — never the raw key.
-fn mask_key(key: &str) -> String {
-    let n = key.chars().count();
-    if n <= 8 {
-        return "\u{2022}\u{2022}\u{2022}\u{2022}".to_string();
-    }
-    let first: String = key.chars().take(4).collect();
-    let last: String = key.chars().skip(n - 4).collect();
-    format!("{first}\u{2026}{last}")
 }
 
 #[cfg(test)]
