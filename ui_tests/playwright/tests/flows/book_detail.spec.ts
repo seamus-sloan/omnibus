@@ -138,7 +138,12 @@ test("From the same hand row renders other books by the same author", async ({
   ).toHaveCount(0);
 
   // Clicking any sibling tile must navigate to its /books/:uuid page —
-  // tiles are router Links that swap the route param in place.
+  // tiles are router Links that swap the route param in place. The Atrium
+  // stack overlaps the tiles behind the author-lead card and only spreads
+  // them apart on row hover, so hover first to settle the layout before
+  // clicking — otherwise the tile's centre sits under the lead card and the
+  // click is intercepted (matches the "Hover the row to spread" affordance).
+  await row.hover();
   await tiles.first().click();
   await expect(page).toHaveURL(/\/books\/[0-9a-fA-F-]{36}$/);
   await expect(page).not.toHaveURL(new RegExp(`/books/${uuid}$`));
