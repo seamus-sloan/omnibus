@@ -523,20 +523,18 @@ async fn list_merged_rows_for_formats_uses_library_format_index() {
 
 /// End-to-end confirmation that the new indexes are non-destructive: the
 /// attach ledger still returns the expected row after the index migration.
+/// Calls `super::find_attachment_by_scan_key` directly (rather than a raw
+/// `SELECT`) so any future query change in the helper is caught by the test.
 #[tokio::test]
 async fn find_attachment_by_scan_key_returns_expected_row_after_indexes() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_ebook(&pool, "Stoker/Dracula.epub", "Dracula", "Bram Stoker").await;
     seed_audiobook(&pool, "Stoker/Dracula.m4b", "Dracula", "Bram Stoker").await;
 
-    let row: (String, i64, String) = sqlx::query_as(
-        "SELECT uuid, book_id, format FROM merged_uuids
-          WHERE library_path = ? AND scan_key = ?",
-    )
-    .bind("/audio")
-    .bind("Stoker/Dracula.m4b")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(row.2, "M4B");
+    let mut tx = pool.begin().await.unwrap();
+    let hit = super::find_attachment_by_scan_key(&mut tx, "/audio", "Stoker/Dracula.m4b")
+        .await
+        .unwrap()
+        .expect("attach ledger row for the seeded audiobook must exist");
+    assert_eq!(hit.2, "M4B", "format column should match the audiobook seed");
 }
