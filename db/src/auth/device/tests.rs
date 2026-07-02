@@ -105,3 +105,29 @@ async fn register_device_rejects_control_char_in_client_version() {
         "expected Validation about client_version control chars, got {err:?}",
     );
 }
+
+#[tokio::test]
+async fn register_device_inside_rolled_back_transaction_leaves_no_row() {
+    // Regression for #627: `issue_session` wraps `register_device` +
+    // `create_session` in a single transaction so a failed session insert
+    // can't leave an orphan device row. Simulate that failure by opening a
+    // transaction, inserting the device, then dropping the transaction —
+    // which rolls back — and asserting the `devices` table is empty.
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+
+    {
+        let mut tx = p.begin().await.unwrap();
+        register_device(&mut *tx, u.id, "Phone", "ios", Some("1.0.0"))
+            .await
+            .unwrap();
+        // Drop `tx` without committing — `sqlx::Transaction` rolls back on
+        // drop, mirroring the return-early path in `persist_session`.
+    }
+
+    let list = list_devices_for_user(&p, u.id).await.unwrap();
+    assert!(
+        list.is_empty(),
+        "device row must not persist when the enclosing transaction rolls back, got {list:?}",
+    );
+}
