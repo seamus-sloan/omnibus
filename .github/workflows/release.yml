@@ -13,6 +13,8 @@ concurrency:
 
 permissions:
   contents: write
+  # Needed to dispatch the Docker workflow after the release is created.
+  actions: write
 
 jobs:
   create-release:
@@ -106,6 +108,26 @@ jobs:
                   body: `Automated ${label} release from #${context.payload.pull_request.number}.`,
                 });
                 core.info(`Created release ${tag}.`);
+
+                // A release created with GITHUB_TOKEN can't fire the Docker
+                // workflow's `release: published` trigger (GitHub blocks
+                // token-triggered workflow chaining), so dispatch it directly.
+                // workflow_dispatch is exempt from that block.
+                try {
+                  await github.rest.actions.createWorkflowDispatch({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    workflow_id: "docker.yml",
+                    ref: context.payload.pull_request.base.ref,
+                    inputs: { tag },
+                  });
+                  core.info(`Dispatched Docker build for ${tag}.`);
+                } catch (error) {
+                  core.setFailed(
+                    `Release ${tag} was created but dispatching the Docker build failed: ${error.message}. ` +
+                      `Re-run the Docker workflow manually with tag ${tag}.`,
+                  );
+                }
                 return;
               } catch (error) {
                 // 422 = tag/release already exists: another run won the race.
