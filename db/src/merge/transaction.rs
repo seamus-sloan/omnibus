@@ -252,18 +252,48 @@ async fn assign_ordinals_after_move(
         .fetch_all(&mut **tx)
         .await?;
 
-        for (i, file_id) in moved_ids.iter().enumerate() {
-            let new_ordinal = max_existing + 1 + i as i64;
-            sqlx::query(
-                "UPDATE book_files SET ordinal = ?, label = COALESCE(label, ?)
-                  WHERE id = ?",
-            )
-            .bind(new_ordinal)
-            .bind(source_title)
-            .bind(file_id)
-            .execute(&mut **tx)
-            .await?;
+        batch_assign_ordinals(tx, &moved_ids, max_existing, source_title).await?;
+    }
+    Ok(())
+}
+
+/// Rows per chunk in `batch_assign_ordinals`. Each row costs three binds
+/// (two in the `CASE`, one in the `IN` list) plus one shared label bind, so
+/// 200 keeps a chunk comfortably under SQLite's 999-parameter cap.
+const ORDINAL_CHUNK: usize = 200;
+
+/// Assign consecutive ordinals to `moved_ids` — in the given order, starting
+/// at `max_existing + 1` — via a single `CASE`-based UPDATE per chunk,
+/// stamping `source_title` as the label on any file that still has none.
+/// Chunked so a pathologically large move can't exceed SQLite's bind cap.
+async fn batch_assign_ordinals(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    moved_ids: &[i64],
+    max_existing: i64,
+    source_title: &str,
+) -> Result<(), sqlx::Error> {
+    for (chunk_idx, chunk) in moved_ids.chunks(ORDINAL_CHUNK).enumerate() {
+        let base = max_existing + 1 + (chunk_idx * ORDINAL_CHUNK) as i64;
+        let cases = std::iter::repeat_n("WHEN ? THEN ?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "UPDATE book_files SET ordinal = CASE id {cases} END,
+                    label = COALESCE(label, ?)
+              WHERE id IN ({placeholders})"
+        );
+        let mut q = sqlx::query(&sql);
+        for (i, file_id) in chunk.iter().enumerate() {
+            q = q.bind(file_id).bind(base + i as i64);
         }
+        q = q.bind(source_title);
+        for file_id in chunk {
+            q = q.bind(file_id);
+        }
+        q.execute(&mut **tx).await?;
     }
     Ok(())
 }

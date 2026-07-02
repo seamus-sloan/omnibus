@@ -109,6 +109,44 @@ async fn merge_books_allows_same_format_and_assigns_ordinals() {
 }
 
 #[tokio::test]
+async fn merge_books_assigns_consecutive_ordinals_for_multi_file_move() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    // Build a two-file source book by chaining a merge: a -> b leaves b
+    // holding two EPUB files (ordinals 0 and 1).
+    let a = seed_ebook(&pool, "A/One.epub", "One", "Bram Stoker").await;
+    let b = seed_ebook(&pool, "B/Two.epub", "Two", "Bram Stoker").await;
+    merge_books(&pool, &a, &b, None).await.unwrap();
+
+    // Now merge the two-file b into a single-file target c: both moved
+    // files must land at consecutive ordinals after c's own file, in one
+    // batched UPDATE per format.
+    let c = seed_ebook(&pool, "C/Three.epub", "Three", "Bram Stoker").await;
+    merge_books(&pool, &b, &c, None).await.unwrap();
+
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 1);
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM book_files").await, 3);
+    // c's original file keeps ordinal 0; the two moved files (ordered by
+    // their prior ordinal, then filename) take 1 and 2. The file that had
+    // no label gets the source book's title ("Two"); the one already
+    // labelled "One" (from the first merge) keeps it.
+    let rows: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT ordinal, filename, COALESCE(label, '') FROM book_files
+          WHERE book_id = (SELECT id FROM books) ORDER BY ordinal",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            (0, "Three".to_string(), String::new()),
+            (1, "Two".to_string(), "Two".to_string()),
+            (2, "One".to_string(), "One".to_string()),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn merge_books_moves_progress_with_latest_wins_on_collision() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool).await;
