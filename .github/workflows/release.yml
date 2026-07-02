@@ -19,13 +19,11 @@ permissions:
 jobs:
   create-release:
     name: create release
+    # Every merge to main cuts a release: unlabeled merges default to a patch
+    # bump; the 'minor version' label opts into a minor bump instead.
     if: >
       github.event.pull_request.merged == true &&
-      github.event.pull_request.base.ref == 'main' &&
-      (
-        contains(github.event.pull_request.labels.*.name, 'patch version') ||
-        contains(github.event.pull_request.labels.*.name, 'minor version')
-      )
+      github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     steps:
       - name: Create GitHub release
@@ -40,19 +38,10 @@ jobs:
           # again rather than silently skipping, so no version is ever dropped.
           script: |
             const labels = context.payload.pull_request.labels.map(({ name }) => name);
-            const hasPatch = labels.includes("patch version");
+            // 'minor version' opts into a minor bump and wins if both labels are
+            // present; every other case (patch label, or no label at all) is a
+            // patch bump.
             const hasMinor = labels.includes("minor version");
-
-            if (hasPatch && hasMinor) {
-              core.setFailed(
-                "PR has both 'patch version' and 'minor version' labels. Apply exactly one release label.",
-              );
-              return;
-            }
-            if (!hasPatch && !hasMinor) {
-              core.setFailed("No supported release label found on the merged PR.");
-              return;
-            }
 
             const label = hasMinor ? "minor version" : "patch version";
             const target = process.env.TARGET_SHA;
@@ -124,7 +113,7 @@ jobs:
                   core.info(`Dispatched Docker build for ${tag}.`);
                 } catch (error) {
                   core.setFailed(
-                    `Release ${tag} was created but dispatching the Docker build failed: ${error.message}. ` +
+                    `Release ${tag} was created but dispatching the Docker build failed: ${error.message || String(error)}. ` +
                       `Re-run the Docker workflow manually with tag ${tag}.`,
                   );
                 }
