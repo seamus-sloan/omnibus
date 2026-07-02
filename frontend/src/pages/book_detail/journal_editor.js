@@ -11,7 +11,10 @@
 // `body` signal they always did — this is purely an editing-surface upgrade.
 //
 // Loaded once (idempotent guard) and driven from Dioxus via the eval channel:
-// the trailing `await dioxus.recv()` block dispatches attach / command / insert.
+// the trailing `await dioxus.recv()` block dispatches enhance / command / insert.
+// `enhance` is the web progressive-enhancement entry point — rsx renders a plain
+// textarea on every target so SSR and the first hydration paint match (rule 07),
+// and this JS creates the contenteditable overlay after mount.
 
 if (!window.OmnibusJournalEditor) {
   window.OmnibusJournalEditor = (function () {
@@ -208,7 +211,36 @@ if (!window.OmnibusJournalEditor) {
 
     const insert = (editorId, text) => command(editorId, "insert", text, "");
 
-    return { attach, command, insert };
+    // Progressive-enhancement: called from the plain textarea's `onmounted` on
+    // every mount. On web, this drops a sibling contenteditable overlay next
+    // to the mirror textarea and hands off to `attach`. Any stale editor div
+    // left over from a previous mount (e.g. show_preview toggled the textarea
+    // out and back in) is removed first, so we always end up with a fresh
+    // overlay wired to the current mirror.
+    function enhance(mirrorId, editorId, editorTestId, ariaLabel, placeholder) {
+      const mirror = byId(mirrorId);
+      if (!mirror) return;
+      const stale = byId(editorId);
+      if (stale) stale.remove();
+      const editor = document.createElement("div");
+      editor.id = editorId;
+      editor.className = "me-textarea bd-journal-editor";
+      if (editorTestId) editor.setAttribute("data-testid", editorTestId);
+      editor.setAttribute("contenteditable", "true");
+      editor.setAttribute("role", "textbox");
+      editor.setAttribute("aria-multiline", "true");
+      if (ariaLabel) editor.setAttribute("aria-label", ariaLabel);
+      if (placeholder) editor.setAttribute("data-placeholder", placeholder);
+      mirror.parentNode.insertBefore(editor, mirror);
+      // Inline style, not a class swap — keeps Dioxus's class attribute
+      // reconciliation from ever un-hiding the mirror on re-render.
+      mirror.style.display = "none";
+      mirror.setAttribute("aria-hidden", "true");
+      mirror.setAttribute("tabindex", "-1");
+      attach(editorId, mirrorId);
+    }
+
+    return { attach, command, insert, enhance };
   })();
 }
 
@@ -216,7 +248,11 @@ if (!window.OmnibusJournalEditor) {
 const __omn = await dioxus.recv();
 const __E = window.OmnibusJournalEditor;
 if (__E && __omn) {
-  if (__omn.action === "attach") __E.attach(__omn.editorId, __omn.mirrorId);
-  else if (__omn.action === "command") __E.command(__omn.editorId, __omn.op, __omn.a, __omn.b);
-  else if (__omn.action === "insert") __E.insert(__omn.editorId, __omn.text);
+  if (__omn.action === "enhance") {
+    __E.enhance(__omn.mirrorId, __omn.editorId, __omn.op, __omn.a, __omn.b);
+  } else if (__omn.action === "command") {
+    __E.command(__omn.editorId, __omn.op, __omn.a, __omn.b);
+  } else if (__omn.action === "insert") {
+    __E.insert(__omn.editorId, __omn.text);
+  }
 }

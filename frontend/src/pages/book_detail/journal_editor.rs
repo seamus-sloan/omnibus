@@ -2,10 +2,11 @@
 //!
 //! Bridges the Dioxus components to the hand-rolled `contenteditable` editor in
 //! the co-located `journal_editor.js`: it ships the JS module over the eval
-//! channel, exposes `attach` / `command` / `insert` actions, renders the
+//! channel, exposes `enhance` / `command` / `insert` actions, renders the
 //! formatting toolbar, and builds the insert-from-highlights blockquote. The
-//! editor itself is web-only — non-web targets fall back to a plain textarea, so
-//! the eval helpers are no-ops there.
+//! rsx renders a plain textarea on every target (so SSR and the first WASM
+//! paint match, per rule 07); web progressively enhances it into a
+//! contenteditable overlay from a post-mount `editor_enhance` call.
 
 use dioxus::prelude::*;
 
@@ -18,9 +19,9 @@ const JOURNAL_EDITOR_JS: &str = include_str!("journal_editor.js");
 
 /// Send one action to the live editor over the eval channel. Web-only — the
 /// eval (and `serde_json`) are unavailable on SSR/native, so this is a no-op
-/// there. The contenteditable surface itself is also web-gated (see the write
-/// surface), so non-web targets fall back to a plain textarea and never reach
-/// the JS.
+/// there. The rsx renders a plain textarea on every target; non-web keeps that
+/// textarea (the enhance dispatch here is a no-op), so mobile / SSR never
+/// materialize the contenteditable overlay.
 #[cfg(feature = "web")]
 fn editor_dispatch(action: &str, editor_id: &str, mirror_id: &str, op: &str, a: &str, b: &str) {
     let eval = dioxus::document::eval(JOURNAL_EDITOR_JS);
@@ -41,12 +42,34 @@ fn editor_dispatch(
 ) {
 }
 
-/// Attach the live editor to the contenteditable `editor_id`, mirroring its
-/// markdown into the hidden textarea `mirror_id`. Web-only: it's called from the
-/// contenteditable's `onmounted`, which only exists on the web write surface.
-#[cfg(feature = "web")]
-pub(crate) fn editor_attach(editor_id: &str, mirror_id: &str) {
-    editor_dispatch("attach", editor_id, mirror_id, "", "", "");
+/// Progressively enhance a plain `<textarea id=mirror_id>` (rendered by rsx on
+/// every target) into a live-editor pair: JS creates the `<div id=editor_id
+/// contenteditable>` overlay, hides the textarea, and wires the pair together.
+/// Called from the textarea's `onmounted` on every target — a no-op on non-web
+/// where the eval channel is stubbed, so mobile falls back to the plain
+/// textarea automatically.
+///
+/// `editor_testid` becomes the overlay div's `data-testid` (Playwright targets
+/// it). `aria_label` / `placeholder` are copied onto the overlay so
+/// accessibility and empty-state hints match the composer/edit contexts.
+pub(crate) fn editor_enhance(
+    editor_id: &str,
+    mirror_id: &str,
+    editor_testid: &str,
+    aria_label: &str,
+    placeholder: &str,
+) {
+    // op/a/b slots on the shared dispatch payload carry the enhance-specific
+    // extras (testid / aria-label / placeholder) so the JS action can build the
+    // overlay without a bespoke channel.
+    editor_dispatch(
+        "enhance",
+        editor_id,
+        mirror_id,
+        editor_testid,
+        aria_label,
+        placeholder,
+    );
 }
 
 /// Run a toolbar formatting command (`wrap` / `prefix` / `link`) on the live
