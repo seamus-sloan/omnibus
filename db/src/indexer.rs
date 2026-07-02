@@ -26,6 +26,12 @@ impl From<crate::settings::SettingsError> for IndexerError {
     fn from(e: crate::settings::SettingsError) -> Self {
         match e {
             crate::settings::SettingsError::Db(inner) => IndexerError::Db(inner),
+            // `Validation` is only produced by `set_hardcover_api_key`, which
+            // no indexer path calls — keep the arm exhaustive but do not widen
+            // `IndexerError`'s surface for a case the caller graph can't reach.
+            crate::settings::SettingsError::Validation(msg) => IndexerError::Db(
+                sqlx::Error::Protocol(format!("unexpected settings validation error: {msg}")),
+            ),
         }
     }
 }

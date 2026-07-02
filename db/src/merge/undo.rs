@@ -112,10 +112,17 @@ async fn recreate_source_row(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     snap: &SourceSnapshot,
 ) -> Result<i64, MergeError> {
-    let library_id = upsert_library(tx, &snap.library_path).await.map_err(|e| {
-        let crate::settings::SettingsError::Db(inner) = e;
-        MergeError::Db(inner)
-    })?;
+    let library_id = upsert_library(tx, &snap.library_path)
+        .await
+        .map_err(|e| match e {
+            crate::settings::SettingsError::Db(inner) => MergeError::Db(inner),
+            // `upsert_library` never returns `Validation` — the arm exists only to
+            // keep the match exhaustive after `SettingsError` grew a validation
+            // variant for `set_hardcover_api_key`.
+            crate::settings::SettingsError::Validation(msg) => MergeError::Db(
+                sqlx::Error::Protocol(format!("unexpected settings validation error: {msg}")),
+            ),
+        })?;
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO books
             (uuid, library_id, path, title, sort, author_sort, series_sort, series_index, pubdate,
