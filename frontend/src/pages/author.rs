@@ -19,13 +19,17 @@ pub fn AuthorPage(id: i64) -> Element {
     let mut loading = use_signal(|| true);
     let mut error: Signal<Option<String>> = use_signal(|| None);
 
-    // F5.9-lite admin gating for the Delete button. Web-only — the
-    // mobile build never renders the Delete affordance per the plan's
-    // admin-web-only v1 scope. The server-side `AdminUser` extractor
-    // on `rpc_delete_author` is the actual security boundary.
-    #[cfg(feature = "web")]
+    // F5.9-lite admin gating for the Delete button. The signal and the
+    // effect are declared unconditionally so SSR and the hydrating WASM
+    // bundle agree on hook count and order — Dioxus tracks hooks
+    // positionally, and a cfg-gated declaration would diverge the two
+    // (rule 07). The effect itself only runs on the client (Dioxus skips
+    // `use_effect` during SSR), and `data::current_user()` resolves to
+    // an `Ok(None)`-returning stub under server-only and mobile builds,
+    // so no admin surface ever leaks into the prerendered markup or the
+    // mobile UI. The server-side `AdminUser` extractor on
+    // `rpc_delete_author` is the actual security boundary.
     let mut is_admin = use_signal(|| false);
-    #[cfg(feature = "web")]
     use_effect(move || {
         spawn(async move {
             if let Ok(Some(user)) = data::current_user().await {
@@ -69,10 +73,11 @@ pub fn AuthorPage(id: i64) -> Element {
         };
     };
 
-    #[cfg(feature = "web")]
+    // `is_admin` starts at `false` and only flips to `true` after the
+    // effect above resolves against the client-side session. That keeps
+    // the first-hydration paint identical to SSR (no Delete affordance)
+    // before the client reconciles with the real admin flag.
     let is_admin_flag = is_admin();
-    #[cfg(not(feature = "web"))]
-    let is_admin_flag = false;
     render_author(a, server_url, author, is_admin_flag)
 }
 
