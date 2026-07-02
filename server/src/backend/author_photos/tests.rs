@@ -303,6 +303,31 @@ async fn api_put_author_photo_url_rejects_empty_url() {
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
 
+#[tokio::test]
+async fn api_put_author_photo_url_rejects_overlong_url() {
+    let (app, _state, pool) = fixture().await;
+    let id = seed_author(&pool, "Ada Lovelace").await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    // 2049 chars — one over the 2048 cap. Rejected with 400 before any
+    // outbound fetch fires, so the (unreachable) host never matters.
+    let overlong = format!(
+        "http://example.com/{}",
+        "a".repeat(2049 - "http://example.com/".len())
+    );
+    assert_eq!(overlong.len(), 2049);
+    let res = app
+        .oneshot(put_photo_url(
+            &format!("/api/authors/{id}/photo/url"),
+            &token,
+            &overlong,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
 /// SSRF regression: the default `AppState` (built by `fixture()`) must
 /// reject IP-literal URLs that point at the loopback / cloud-metadata /
 /// RFC1918 address space *before* any TCP connect.

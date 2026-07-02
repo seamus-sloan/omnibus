@@ -262,6 +262,15 @@ pub(super) async fn put_author_photo_url(
     if url.is_empty() {
         return (axum::http::StatusCode::BAD_REQUEST, "url is required").into_response();
     }
+    // Cap before handing the string to the fetch pipeline so a multi-megabyte
+    // URL can't allocate/parse unbounded. 2048 matches the RPC path (#456).
+    if url.len() > 2048 {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "url must be 2048 characters or fewer",
+        )
+            .into_response();
+    }
 
     let (advertised_mime, bytes) =
         match db::author_photos::fetch_remote_image_with(url, state.remote_image_config()).await {
