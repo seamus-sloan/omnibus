@@ -487,8 +487,22 @@ pub async fn rpc_get_hardcover_key() -> Result<HardcoverKeyStatus> {
 
 /// Admin-only: save (or clear, with `None`/blank) the Hardcover key in
 /// settings. Returns the new masked status — never echoes the raw key.
+/// Rejects values whose trimmed length exceeds
+/// `HARDCOVER_API_KEY_MAX_LEN` at the API boundary so an admin can't
+/// persist an unbounded payload — mirrors the same guard `db::set_hardcover_api_key`
+/// enforces as defence in depth.
 #[post("/api/rpc/hardcover-key", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_set_hardcover_key(key: Option<String>) -> Result<HardcoverKeyStatus> {
+    if let Some(k) = key.as_deref() {
+        let trimmed = k.trim();
+        if trimmed.len() > omnibus_shared::HARDCOVER_API_KEY_MAX_LEN {
+            return Err(ServerFnError::new(format!(
+                "hardcover_api_key must be {} bytes or fewer",
+                omnibus_shared::HARDCOVER_API_KEY_MAX_LEN
+            ))
+            .into());
+        }
+    }
     db::set_hardcover_api_key(&pool.0, key.as_deref()).await?;
     read_hardcover_key_status(&pool.0).await
 }

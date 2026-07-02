@@ -143,6 +143,35 @@ async fn api_hardcover_key_post_requires_admin() {
 }
 
 #[tokio::test]
+async fn api_hardcover_key_post_returns_422_when_key_exceeds_max_len() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "boss").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let over_limit = "a".repeat(omnibus_shared::HARDCOVER_API_KEY_MAX_LEN + 1);
+    let res = app
+        .oneshot(post_json(
+            "/api/hardcover-key",
+            &token,
+            serde_json::json!({ "key": over_limit }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = body_string(res).await;
+    assert!(
+        body.contains(&omnibus_shared::HARDCOVER_API_KEY_MAX_LEN.to_string()),
+        "error body should name the cap: {body}"
+    );
+
+    // 422 must short-circuit before the write reaches the settings table.
+    assert_eq!(
+        omnibus_db::get_hardcover_api_key(&pool).await.unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
 async fn api_hardcover_key_set_then_get_returns_masked_never_raw() {
     let (app, _state, pool) = fixture().await;
     let admin = auth_test_support::create_admin(&pool, "boss").await;

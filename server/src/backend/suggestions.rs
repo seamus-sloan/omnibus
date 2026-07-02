@@ -16,7 +16,9 @@ use axum::{
     Json,
 };
 use omnibus_db::{self as db, worker::Task};
-use omnibus_shared::{BookSuggestion, HardcoverKeyStatus, SuggestionsResponse};
+use omnibus_shared::{
+    BookSuggestion, HardcoverKeyStatus, SuggestionsResponse, HARDCOVER_API_KEY_MAX_LEN,
+};
 use serde::Deserialize;
 
 use super::{internal, AppState};
@@ -124,11 +126,25 @@ pub(super) struct SetHardcoverKey {
 }
 
 /// Admin-only: save or clear the Hardcover key; returns the new masked status.
+/// Rejects values whose trimmed length exceeds `HARDCOVER_API_KEY_MAX_LEN`
+/// with 422 at the API boundary so an admin can't persist an unbounded
+/// payload — `db::set_hardcover_api_key` enforces the same cap as defence
+/// in depth.
 pub(super) async fn post_hardcover_key(
     _admin: AdminUser,
     State(state): State<AppState>,
     Json(body): Json<SetHardcoverKey>,
 ) -> Response {
+    if let Some(k) = body.key.as_deref() {
+        let trimmed = k.trim();
+        if trimmed.len() > HARDCOVER_API_KEY_MAX_LEN {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("hardcover_api_key must be {HARDCOVER_API_KEY_MAX_LEN} bytes or fewer"),
+            )
+                .into_response();
+        }
+    }
     if let Err(e) = db::set_hardcover_api_key(&state.pool, body.key.as_deref()).await {
         return internal("save hardcover key", e);
     }

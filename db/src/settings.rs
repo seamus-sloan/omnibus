@@ -8,7 +8,7 @@ use std::path::Path;
 
 use sqlx::{SqlitePool, Transaction};
 
-pub use omnibus_shared::Settings;
+pub use omnibus_shared::{Settings, HARDCOVER_API_KEY_MAX_LEN};
 
 /// `settings` KV keys consumed by the UI/RPC layer. Kept as constants so the
 /// indexer, settings handlers, and tests all reference the same identifier.
@@ -22,6 +22,12 @@ const HARDCOVER_API_KEY_KEY: &str = "hardcover_api_key";
 /// Errors returned by the settings data layer.
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsError {
+    /// A caller-supplied value failed a boundary check (length caps, format,
+    /// etc.). Grouped as a single variant with the detail in the message so
+    /// this stays consistent with the coarse-variant guidance in the error
+    /// rule — callers surface it as a 4xx, not a 500.
+    #[error("{0}")]
+    Validation(String),
     #[error(transparent)]
     Db(#[from] sqlx::Error),
 }
@@ -269,12 +275,20 @@ pub async fn get_hardcover_api_key(pool: &SqlitePool) -> Result<Option<String>, 
 }
 
 /// Persist (or clear, when `None`/blank) the Hardcover API key in `settings`.
+/// Rejects values whose trimmed length exceeds [`HARDCOVER_API_KEY_MAX_LEN`]
+/// with [`SettingsError::Validation`] before the write, so an admin can't
+/// paste an unbounded payload into the settings KV.
 pub async fn set_hardcover_api_key(
     pool: &SqlitePool,
     key: Option<&str>,
 ) -> Result<(), SettingsError> {
     match key.map(str::trim).filter(|s| !s.is_empty()) {
         Some(v) => {
+            if v.len() > HARDCOVER_API_KEY_MAX_LEN {
+                return Err(SettingsError::Validation(format!(
+                    "hardcover_api_key must be {HARDCOVER_API_KEY_MAX_LEN} bytes or fewer"
+                )));
+            }
             sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
                 .bind(HARDCOVER_API_KEY_KEY)
                 .bind(v)
