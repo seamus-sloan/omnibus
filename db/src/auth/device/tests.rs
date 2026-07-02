@@ -131,7 +131,9 @@ async fn failed_session_insert_after_register_device_rolls_back_device_row() {
             "test sentinel collided with real id"
         );
 
-        let session_err = create_session(
+        // `NewSession` doesn't implement `Debug`, so `.expect_err` won't
+        // compile — pattern-match the `Err` explicitly instead.
+        let Err(session_err) = create_session(
             &mut *tx,
             u.id,
             Some(bogus_device_id),
@@ -139,7 +141,9 @@ async fn failed_session_insert_after_register_device_rolls_back_device_row() {
             3_600,
         )
         .await
-        .expect_err("create_session must reject the bogus device_id FK");
+        else {
+            panic!("create_session must reject the bogus device_id FK");
+        };
         assert!(
             matches!(session_err, AuthError::Internal(_)),
             "expected FK violation surfaced as AuthError::Internal, got {session_err:?}",
