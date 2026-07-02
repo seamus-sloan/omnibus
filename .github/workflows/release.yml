@@ -15,6 +15,8 @@ permissions:
   contents: write
   # Needed to dispatch the Docker workflow after the release is created.
   actions: write
+  # Needed to list the merged PR's changed files for the docs/CI skip check.
+  pull-requests: read
 
 jobs:
   create-release:
@@ -38,11 +40,42 @@ jobs:
           # again rather than silently skipping, so no version is ever dropped.
           script: |
             const labels = context.payload.pull_request.labels.map(({ name }) => name);
+            const hasMinor = labels.includes("minor version");
+            const hasPatch = labels.includes("patch version");
+
+            // Explicit opt-out wins over everything.
+            if (labels.includes("no release")) {
+              core.info("PR is labeled 'no release'; skipping release.");
+              return;
+            }
+
+            // Unlabeled merges default to a release, but docs-only / CI-only
+            // changes don't warrant a version bump. An explicit version label
+            // overrides this (the author opted in).
+            if (!hasMinor && !hasPatch) {
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+              });
+              const onlyDocsOrCi =
+                files.length > 0 &&
+                files.every(({ filename }) =>
+                  filename.endsWith(".md") ||
+                  filename.startsWith("docs/") ||
+                  filename.startsWith(".github/"),
+                );
+              if (onlyDocsOrCi) {
+                core.info(
+                  "PR only touches docs/CI and has no version label; skipping release.",
+                );
+                return;
+              }
+            }
+
             // 'minor version' opts into a minor bump and wins if both labels are
             // present; every other case (patch label, or no label at all) is a
             // patch bump.
-            const hasMinor = labels.includes("minor version");
-
             const label = hasMinor ? "minor version" : "patch version";
             const target = process.env.TARGET_SHA;
             const maxAttempts = 5;
