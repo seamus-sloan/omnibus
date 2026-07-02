@@ -23,9 +23,7 @@ pub struct BookSuggestion {
     pub cover_url: Option<String>,
 }
 
-/// The Hardcover-sourced fields of one cached suggestion, grouped so
-/// [`BookSuggestion::new`] can derive the wire type from a single value rather
-/// than a long positional argument list.
+/// The Hardcover-sourced fields of one cached suggestion, grouped as the input to [`BookSuggestion::new`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RawSuggestion {
     pub hardcover_id: i64,

@@ -2,7 +2,8 @@
 
 use super::*;
 
-/// A `RawSuggestion` with a non-empty slug and the given id, other fields fixed.
+/// A `RawSuggestion` with the given id and slug (`None`/empty exercises the
+/// id-fallback branch); title, author, and list_count are fixed.
 fn raw(hardcover_id: i64, hardcover_slug: Option<String>) -> RawSuggestion {
     RawSuggestion {
         hardcover_id,
