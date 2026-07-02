@@ -84,6 +84,7 @@ pub(super) fn ChaptersDrawer(
 
                             rsx! {
                                 button {
+                                    key: "{i}",
                                     class: "{row_class}",
                                     "data-testid": "{row_testid}",
                                     r#type: "button",
