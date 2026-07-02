@@ -1,12 +1,9 @@
 //! Public reading-journal section for the book-detail page.
 //!
-//! Renders every reader's journal entries for a book (journals are public), a
-//! composer with a live-formatting markdown editor (see `journal_editor.js`),
-//! and owner-only edit/delete. Entries and the current user load post-mount so
-//! SSR and the first hydration paint match (rule 07). Markdown bodies are
-//! rendered + sanitized server-side; the click-to-reveal spoiler handler and
-//! the contenteditable write surface are wired by post-mount hooks, never in
-//! cfg-gated rsx bodies.
+//! Renders every reader's entries plus an owner-only composer with a live
+//! markdown editor (see `journal_editor.js`). Entries, the current user, and
+//! the write surface all attach post-mount so SSR and first-hydration paint
+//! stay identical (rule 07); bodies are sanitized server-side.
 
 use dioxus::prelude::*;
 use omnibus_shared::{

@@ -1,12 +1,9 @@
 //! Live markdown editor glue for the journal composer.
 //!
-//! Bridges the Dioxus components to the hand-rolled `contenteditable` editor in
-//! the co-located `journal_editor.js`: it ships the JS module over the eval
-//! channel, exposes `enhance` / `command` / `insert` actions, renders the
-//! formatting toolbar, and builds the insert-from-highlights blockquote. The
-//! editor itself is web-only — non-web targets keep the plain textarea that
-//! SSR + the first hydration paint always render, so the eval helpers are
-//! no-ops there.
+//! Ships the co-located `journal_editor.js` over Dioxus's eval channel and
+//! exposes `enhance` / `command` / `insert` actions plus the formatting
+//! toolbar. Web-only — non-web targets keep the plain SSR textarea (rule 07)
+//! and every eval helper is a no-op.
 
 use dioxus::prelude::*;
 
@@ -175,7 +172,7 @@ pub(crate) fn BdJournalToolbar(target_id: String) -> Element {
         },
         ToolbarButton {
             label: "Spoiler",
-            title: "Spoiler — blurred until clicked",
+            title: "Spoiler \u{2014} blurred until clicked",
             op: "wrap",
             a: "||",
             b: "||",
