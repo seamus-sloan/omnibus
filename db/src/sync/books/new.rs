@@ -9,7 +9,7 @@ use crate::helpers::scan_key_for;
 
 use super::super::fts::upsert_fts;
 use super::shared::{
-    existing_by_scan_key, insert_book_row, insert_metadata_links, rewrite_book_in_place,
+    existing_by_scan_keys, insert_book_row, insert_metadata_links, rewrite_book_in_place,
     try_attach_new_ebook,
 };
 
@@ -22,8 +22,23 @@ pub(super) async fn sync_new(
     new_books: &[crate::ebook::IndexedBook],
     mut on_book_written: impl FnMut(),
 ) -> Result<Vec<(String, String, Vec<u8>)>, sqlx::Error> {
+    if new_books.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Batch-resolve the "does a row with this exact scan_key already exist?"
+    // check in one query per chunk before the loop, mirroring the Changed
+    // bucket's `id_map`. The per-book loop then looks up in memory — no SELECT
+    // per new book — and only the cross-format attach heuristic (which needs
+    // the target's own state) stays inside the loop.
+    let all_scan_keys: Vec<String> = new_books
+        .iter()
+        .map(|b| scan_key_for(&b.metadata.filename))
+        .collect();
+    let existing = existing_by_scan_keys(tx, library_id, &all_scan_keys).await?;
+
     let mut new_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
-    for b in new_books {
+    for (b, scan_key) in new_books.iter().zip(all_scan_keys.iter()) {
         // A row with this exact scan_key (relative path) already exists — a
         // fileless book whose file returned, or the same file marked New by
         // `replace_books` after being marked missing in the same call. This is the
@@ -31,9 +46,8 @@ pub(super) async fn sync_new(
         // `books.uuid`) — checked before the cross-format attach heuristic,
         // which would otherwise mis-bind the returning file to the fileless row as
         // an attachment.
-        let scan_key = scan_key_for(&b.metadata.filename);
-        if let Some((book_id, uuid)) = existing_by_scan_key(tx, library_id, &scan_key).await? {
-            rewrite_book_in_place(tx, book_id, &uuid, b, &mut new_covers).await?;
+        if let Some((book_id, uuid)) = existing.get(scan_key) {
+            rewrite_book_in_place(tx, *book_id, uuid, b, &mut new_covers).await?;
             on_book_written();
             continue;
         }

@@ -4,6 +4,8 @@
 //! the rewrite-in-place and cross-format attach paths, and the
 //! post-commit cover materialization + missing-files marker helper.
 
+use std::collections::HashMap;
+
 use sqlx::Transaction;
 
 use omnibus_shared::EbookMetadata;
@@ -23,21 +25,32 @@ use super::super::authors::insert_author_links;
 use super::super::fts::upsert_fts;
 use super::wipe_per_book_link_rows;
 
-/// Resolve an existing `books` row (id + uuid) under `library_id` by its
-/// `scan_key`. Used by the New path to re-attach to a fileless / same-path row
-/// instead of inserting a colliding one.
-pub(super) async fn existing_by_scan_key(
+/// Batch-resolve existing `books` rows (id + uuid) under `library_id` for a
+/// set of `scan_key`s, returning a `scan_key -> (id, uuid)` map. Used by the
+/// New and Changed paths to re-attach to a fileless / same-path row instead of
+/// firing one SELECT per candidate. Chunked at 499 to stay under SQLite's
+/// 999-parameter cap (1 bind for `library_id` + up to 499 scan_key binds).
+pub(super) async fn existing_by_scan_keys(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_id: i64,
-    scan_key: &str,
-) -> Result<Option<(i64, String)>, sqlx::Error> {
-    sqlx::query_as::<_, (i64, String)>(
-        "SELECT id, uuid FROM books WHERE library_id = ? AND scan_key = ?",
-    )
-    .bind(library_id)
-    .bind(scan_key)
-    .fetch_optional(&mut **tx)
-    .await
+    scan_keys: &[String],
+) -> Result<HashMap<String, (i64, String)>, sqlx::Error> {
+    let mut map: HashMap<String, (i64, String)> = HashMap::new();
+    for chunk in scan_keys.chunks(499) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let id_sql = format!(
+            "SELECT scan_key, id, uuid FROM books
+              WHERE library_id = ? AND scan_key IN ({placeholders})"
+        );
+        let mut q = sqlx::query_as::<_, (String, i64, String)>(&id_sql).bind(library_id);
+        for sk in chunk {
+            q = q.bind(sk);
+        }
+        for (sk, id, uuid) in q.fetch_all(&mut **tx).await? {
+            map.insert(sk, (id, uuid));
+        }
+    }
+    Ok(map)
 }
 
 /// Rewrite an existing book in place from a freshly-parsed entry: refresh
@@ -205,6 +218,45 @@ pub(in crate::sync) async fn mark_book_files_missing(
     .bind(book_id)
     .execute(&mut **tx)
     .await?;
+    Ok(())
+}
+
+/// Batched [`mark_book_files_missing`] for the Removed bucket: drop the
+/// `book_files` rows (parts/chapters cascade) and flag the books missing in two
+/// chunked DML passes instead of two statements per book. The `IN (...)` lists
+/// are chunked at 999 to stay under SQLite's bound-parameter cap. The `UPDATE`
+/// keeps the same `is_missing_files = 0 AND is_missing_files_override = 0`
+/// guards as the per-book path — idempotent re-runs preserve the original
+/// `missing_files_since`, and intentionally-fileless (wishlist) rows stay
+/// un-flagged.
+pub(in crate::sync) async fn mark_book_files_missing_batch(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_ids: &[i64],
+) -> Result<(), sqlx::Error> {
+    for chunk in book_ids.chunks(999) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let delete_sql = format!("DELETE FROM book_files WHERE book_id IN ({placeholders})");
+        let mut delete_q = sqlx::query(&delete_sql);
+        for id in chunk {
+            delete_q = delete_q.bind(id);
+        }
+        delete_q.execute(&mut **tx).await?;
+
+        let update_sql = format!(
+            "UPDATE books
+                SET is_missing_files = 1, missing_files_since = unixepoch()
+              WHERE id IN ({placeholders})
+                AND is_missing_files = 0 AND is_missing_files_override = 0"
+        );
+        let mut update_q = sqlx::query(&update_sql);
+        for id in chunk {
+            update_q = update_q.bind(id);
+        }
+        update_q.execute(&mut **tx).await?;
+    }
     Ok(())
 }
 

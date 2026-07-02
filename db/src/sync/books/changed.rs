@@ -13,7 +13,8 @@ use crate::helpers::scan_key_for;
 use super::super::attach;
 use super::super::fts::upsert_fts;
 use super::shared::{
-    attach_ebook_file, insert_book_row, insert_metadata_links, rewrite_book_in_place,
+    attach_ebook_file, existing_by_scan_keys, insert_book_row, insert_metadata_links,
+    rewrite_book_in_place,
 };
 
 /// Apply Changed entries: wipe-and-rewrite the per-book link rows for each,
@@ -44,23 +45,10 @@ pub(super) async fn sync_changed(
         .map(|b| scan_key_for(&b.metadata.filename))
         .collect();
 
-    // One batch SELECT per chunk (chunked at 499 to stay under SQLite's
-    // 999-parameter cap: 1 bind for library_id + up to 499 scan_key binds).
-    let mut id_map: HashMap<String, (i64, String)> = HashMap::new();
-    for chunk in all_scan_keys.chunks(499) {
-        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-        let id_sql = format!(
-            "SELECT scan_key, id, uuid FROM books
-              WHERE library_id = ? AND scan_key IN ({placeholders})"
-        );
-        let mut q = sqlx::query_as::<_, (String, i64, String)>(&id_sql).bind(library_id);
-        for sk in chunk {
-            q = q.bind(sk);
-        }
-        for (sk, id, uuid) in q.fetch_all(&mut **tx).await? {
-            id_map.insert(sk, (id, uuid));
-        }
-    }
+    // One batch SELECT per chunk resolves every scan_key to its (id, uuid)
+    // before the loop — no SELECT per changed book.
+    let id_map: HashMap<String, (i64, String)> =
+        existing_by_scan_keys(tx, library_id, &all_scan_keys).await?;
 
     // Wipe-and-rewrite the per-book link rows for each Changed entry,
     // then UPDATE the `books` row and re-insert FTS. This preserves

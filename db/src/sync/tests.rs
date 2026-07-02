@@ -422,6 +422,229 @@ async fn removed_file_goes_fileless_then_returning_file_relinks_same_uuid() {
         "returning file relinks to the same uuid (no orphaned user data)"
     );
 }
+/// Removing a whole library in one plan exceeds SQLite's 999-bind cap, so
+/// `sync_removed` must chunk both the `uuid IN (...)` id resolution and the
+/// batched `DELETE`/`UPDATE` that replace the old per-book
+/// `mark_book_files_missing` loop. Seeding 1000 books via `replace_books` also
+/// drives `sync_new`'s batched `existing_by_scan_keys` lookup above the cap.
+#[tokio::test]
+async fn sync_removed_above_bind_cap_flags_every_book_missing_in_batched_dml() {
+    let _covers = CoversTempDir::new("ebook_remove_chunk");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    // 1000 > 999: one un-chunked IN(?, ?, ...) would bind library_id + 1000
+    // uuids and fail at runtime with "too many SQL variables".
+    const N: usize = 1000;
+    let books: Vec<_> = (0..N)
+        .map(|i| {
+            indexed(
+                &format!("book{i:04}.epub"),
+                Some(&format!("Book {i}")),
+                &[],
+                &[],
+                None,
+                None,
+            )
+        })
+        .collect();
+    replace_books(&pool, "/lib", books).await.unwrap();
+    assert_eq!(list_books(&pool, "/lib").await.unwrap().len(), N);
+
+    let all_uuids: Vec<String> = sqlx::query_scalar("SELECT uuid FROM books")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            removed_uuids: all_uuids,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("wholesale removal of >999 books must not exceed the bind cap");
+
+    assert!(
+        list_books(&pool, "/lib").await.unwrap().is_empty(),
+        "every book is fileless (hidden from the grid) after wholesale removal"
+    );
+    let books_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let files_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM book_files")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let flagged: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books WHERE is_missing_files = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        books_total as usize, N,
+        "every books row retained as fileless"
+    );
+    assert_eq!(
+        files_total, 0,
+        "batched DELETE dropped every book_files row"
+    );
+    assert_eq!(
+        flagged as usize, N,
+        "batched UPDATE flagged every book missing (F10)"
+    );
+}
+/// The batched Removed path is idempotent: a second removal of already-fileless
+/// rows deletes zero `book_files` and — via the `is_missing_files = 0` guard on
+/// the batched `UPDATE` — preserves each row's original `missing_files_since`.
+#[tokio::test]
+async fn sync_removed_batched_is_idempotent_and_preserves_missing_since() {
+    let _covers = CoversTempDir::new("ebook_remove_idempotent");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib",
+        vec![
+            indexed("a.epub", Some("A"), &[], &[], None, None),
+            indexed("b.epub", Some("B"), &[], &[], None, None),
+        ],
+    )
+    .await
+    .unwrap();
+    let uuids: Vec<String> = sqlx::query_scalar("SELECT uuid FROM books")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            removed_uuids: uuids.clone(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let since_first: Vec<i64> =
+        sqlx::query_scalar("SELECT missing_files_since FROM books ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        since_first.len(),
+        2,
+        "both rows flagged with a retention stamp"
+    );
+
+    // Re-run the same removal — the guarded UPDATE must not restamp.
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            removed_uuids: uuids,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let since_second: Vec<i64> =
+        sqlx::query_scalar("SELECT missing_files_since FROM books ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        since_first, since_second,
+        "idempotent re-run preserves the original missing_files_since"
+    );
+    let files_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM book_files")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(files_total, 0, "no file rows to drop on the second pass");
+}
+/// `sync_new` batch-resolves the same-scan_key check before the loop, so many
+/// returning files relink to their original `books.uuid` in one pass — the
+/// in-memory `existing_by_scan_keys` map, not a SELECT per book, drives the
+/// re-attach.
+#[tokio::test]
+async fn sync_new_batched_relink_preserves_uuids_for_many_fileless_rows() {
+    let _covers = CoversTempDir::new("ebook_new_relink");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    const N: usize = 6;
+    let seed: Vec<_> = (0..N)
+        .map(|i| {
+            indexed(
+                &format!("book{i}.epub"),
+                Some(&format!("Book {i}")),
+                &[],
+                &[],
+                None,
+                None,
+            )
+        })
+        .collect();
+    replace_books(&pool, "/lib", seed).await.unwrap();
+    // `scan_key` is the library-relative path; for these flat files it equals
+    // the `list_books` filename we compare against below.
+    let uuids_before: std::collections::HashMap<String, String> = list_indexed_rows(&pool, "/lib")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.scan_key.clone(), r.uuid.clone()))
+        .collect();
+
+    // All files vanish, then all return in a single New batch.
+    let all_uuids: Vec<String> = uuids_before.values().cloned().collect();
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            removed_uuids: all_uuids,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let returning: Vec<_> = (0..N)
+        .map(|i| {
+            indexed(
+                &format!("book{i}.epub"),
+                Some(&format!("Book {i}")),
+                &[],
+                &[],
+                None,
+                None,
+            )
+        })
+        .collect();
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            new_books: returning,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let after = list_books(&pool, "/lib").await.unwrap();
+    assert_eq!(
+        after.len(),
+        N,
+        "every returning file relinks (no duplicate rows)"
+    );
+    for b in &after {
+        assert_eq!(
+            b.unique_identifier.as_deref(),
+            uuids_before.get(&b.filename).map(String::as_str),
+            "returning file {} relinks to its original uuid",
+            b.filename
+        );
+    }
+}
 /// One sync covering all four mutating branches at once. Unchanged
 /// ids stay put; Changed id stays put; New gets a fresh id;
 /// Removed disappears.
