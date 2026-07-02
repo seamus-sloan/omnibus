@@ -1,14 +1,26 @@
 name: Docker
 
 # Build + push the fullstack image to Docker Hub (sesloan/omnibus).
-# Triggered only by published GitHub releases.
+# Dispatched by the Release workflow (workflow_dispatch with the release tag);
+# `release: published` is a fallback for releases created by a human/PAT — a
+# release made by the Release workflow's GITHUB_TOKEN can't fire that event.
 # Needs repo secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (Read/Write token).
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build (e.g. v1.2.3)"
+        required: true
+        type: string
 
 concurrency:
-  group: docker-${{ github.ref }}
+  # Key on the tag being built so parallel dispatches for distinct tags don't
+  # cancel each other, and a re-dispatch of the same tag coalesces. Use
+  # github.ref_name (the bare `vX.Y.Z`) so the dispatch and release-event paths
+  # produce the same key — github.ref would be `refs/tags/vX.Y.Z` on a release.
+  group: docker-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -24,7 +36,11 @@ jobs:
     name: build and push
     runs-on: ubuntu-latest
     steps:
+      # On dispatch, check out the release tag; on a release event, github.ref
+      # is already the tag ref.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -35,7 +51,9 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # release → 1.2.3/1.2/1/latest (latest=auto, semver only).
+      # → 1.2.3/1.2/1/latest (latest=auto, semver only). The semver source is
+      # the dispatch input tag, falling back to github.ref_name (the tag on a
+      # release event).
       - name: Derive image metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -44,9 +62,9 @@ jobs:
           flavor: |
             latest=auto
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{version}},value=${{ inputs.tag || github.ref_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.tag || github.ref_name }}
+            type=semver,pattern={{major}},value=${{ inputs.tag || github.ref_name }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
