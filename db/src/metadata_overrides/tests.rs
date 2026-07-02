@@ -300,6 +300,65 @@ async fn upsert_metadata_overrides_rebuilds_fts_for_palette() {
     let palette = search_palette(&pool, "/lib", "Edited").await.unwrap();
     assert_eq!(palette.books.len(), 1);
 }
+/// The single-book rebuild overlays *every* override-driven FTS column,
+/// not just the title. A tag (`subjects`) override must land in the
+/// `books_fts.tags` column via `overlay_overrides` — which now runs in the
+/// same transaction as the canonical `upsert_fts` write. Asserting the
+/// stored `books_fts.tags` value directly (rather than via `search_books`,
+/// which deliberately filters the `tags` column out of its MATCH) guards
+/// that the overlay half of the transactional rebuild committed: a partial
+/// rebuild that persisted only the canonical `upsert_fts` row would leave
+/// the scanned tag here instead of the overridden one.
+#[tokio::test]
+async fn upsert_metadata_overrides_rebuilds_fts_tags_column() {
+    let _covers = CoversTempDir::new("fts_override_tag");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed(
+            "t.epub",
+            Some("A Book"),
+            &["Author"],
+            &["scannedtag"],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let uuid = books[0].unique_identifier.clone().unwrap();
+    let book_id = books[0].id;
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            subjects: Some(vec!["overriddentag".into()]),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let tags: String = sqlx::query_scalar("SELECT tags FROM books_fts WHERE rowid = ?")
+        .bind(book_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        tags, "overriddentag",
+        "overlay_overrides must have committed the overridden tag into books_fts.tags"
+    );
+}
 /// Bug #1 follow-on: deleting the override should restore the FTS row
 /// to the canonical scanned values.
 #[tokio::test]
