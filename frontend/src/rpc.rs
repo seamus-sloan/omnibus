@@ -39,10 +39,11 @@ use omnibus_shared::AUTHOR_PHOTO_URL_MAX_LEN;
 #[cfg(feature = "server")]
 use omnibus_shared::SESSION_BATCH_CAP;
 
-// `BookSuggestion` is only constructed in the server-side `rpc_get_suggestions`
-// body; gate it so the web/mobile client builds don't flag an unused import.
+// `BookSuggestion` / `RawSuggestion` are only used in the server-side
+// `rpc_get_suggestions` body; gate them so the web/mobile client builds don't
+// flag an unused import.
 #[cfg(feature = "server")]
-use omnibus_shared::BookSuggestion;
+use omnibus_shared::{BookSuggestion, RawSuggestion};
 
 #[cfg(feature = "server")]
 use omnibus_db::{self as db, scanner};
@@ -468,11 +469,13 @@ pub async fn rpc_get_suggestions(uuid: String) -> Result<SuggestionsResponse> {
                 BookSuggestion::new(
                     &uuid,
                     c.rank,
-                    c.hardcover_id,
-                    c.hardcover_slug,
-                    c.title,
-                    c.author,
-                    c.list_count,
+                    RawSuggestion {
+                        hardcover_id: c.hardcover_id,
+                        hardcover_slug: c.hardcover_slug,
+                        title: c.title,
+                        author: c.author,
+                        list_count: c.list_count,
+                    },
                     c.has_cover,
                 )
             })
