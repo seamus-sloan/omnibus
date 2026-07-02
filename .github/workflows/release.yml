@@ -1,5 +1,10 @@
 name: Release
 
+# Name the run after the PR that triggered it so the Actions list shows which
+# merge each release run belongs to; the minted version is written to the run's
+# step summary (the tag is computed at runtime, so it can't be templated here).
+run-name: "Release for PR #${{ github.event.pull_request.number }}"
+
 on:
   pull_request_target:
     types: [closed]
@@ -46,6 +51,12 @@ jobs:
             // Explicit opt-out wins over everything.
             if (labels.includes("no release")) {
               core.info("PR is labeled 'no release'; skipping release.");
+              await core.summary
+                .addRaw(
+                  `⏭️ **No release cut** — PR #${context.payload.pull_request.number} is labeled \`no release\`.`,
+                  true,
+                )
+                .write();
               return;
             }
 
@@ -69,6 +80,12 @@ jobs:
                 core.info(
                   "PR only touches docs/CI and has no version label; skipping release.",
                 );
+                await core.summary
+                  .addRaw(
+                    `⏭️ **No release cut** — PR #${context.payload.pull_request.number} only touches docs/CI and carries no version label.`,
+                    true,
+                  )
+                  .write();
                 return;
               }
             }
@@ -120,7 +137,7 @@ jobs:
               const tag = `v${major}.${minor}.${patch}`;
 
               try {
-                await github.rest.repos.createRelease({
+                const { data: release } = await github.rest.repos.createRelease({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   tag_name: tag,
@@ -130,6 +147,13 @@ jobs:
                   body: `Automated ${label} release from #${context.payload.pull_request.number}.`,
                 });
                 core.info(`Created release ${tag}.`);
+                await core.summary
+                  .addHeading(`🚀 Released ${tag}`, 3)
+                  .addRaw(
+                    `**${label}** bump from #${context.payload.pull_request.number} → [${tag}](${release.html_url})`,
+                    true,
+                  )
+                  .write();
 
                 // A release created with GITHUB_TOKEN can't fire the Docker
                 // workflow's `release: published` trigger (GitHub blocks
