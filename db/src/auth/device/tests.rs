@@ -126,7 +126,10 @@ async fn failed_session_insert_after_register_device_rolls_back_device_row() {
         let device = register_device(&mut *tx, u.id, "Phone", "ios", Some("1.0.0"))
             .await
             .expect("device insert should succeed inside the transaction");
-        assert_ne!(device.id, bogus_device_id, "test sentinel collided with real id");
+        assert_ne!(
+            device.id, bogus_device_id,
+            "test sentinel collided with real id"
+        );
 
         let session_err = create_session(
             &mut *tx,
