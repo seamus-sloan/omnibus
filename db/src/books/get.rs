@@ -2,13 +2,17 @@
 //! `resolve_book_id_by_uuid` helper that the covers/thumbs/mobile routes
 //! use to translate a stable uuid to the current id.
 
+use std::collections::HashMap;
+
 use sqlx::{Row, SqlitePool};
 
 use omnibus_shared::EbookMetadata;
 
 use crate::metadata_overrides::{apply_overrides, get_metadata_overrides};
 
-use super::projection::{backfill_creator_ids, row_to_ebook, BOOK_COLUMNS};
+use super::projection::{
+    backfill_creator_ids, merge_overrides_into_books, row_to_ebook, BOOK_COLUMNS,
+};
 
 /// Fetch a single book by its stable `books.id`. Returns `None` if not found.
 ///
@@ -157,6 +161,70 @@ where
     .bind(uuid)
     .fetch_optional(executor)
     .await?)
+}
+
+/// Bulk counterpart to [`resolve_book_id_by_uuid`]: map each input uuid to
+/// its current `books.id`, replicating the `merged_uuids` fallback so a
+/// merged/attached uuid still resolves to the surviving book. UUIDs that
+/// match neither table are simply absent from the returned map.
+///
+/// Emits one `SELECT` per chunk, chunked at 499 uuids because each chunk
+/// binds its uuids twice (the `books` and `merged_uuids` legs of the
+/// `UNION ALL`), keeping the bound-parameter count under SQLite's 999 limit.
+pub(crate) async fn resolve_book_ids_bulk(
+    pool: &SqlitePool,
+    uuids: &[String],
+) -> Result<HashMap<String, i64>, super::BooksError> {
+    let mut map = HashMap::with_capacity(uuids.len());
+    for chunk in uuids.chunks(499) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT uuid, id FROM books WHERE uuid IN ({placeholders})
+             UNION ALL
+             SELECT uuid, book_id FROM merged_uuids WHERE uuid IN ({placeholders})"
+        );
+        let mut q = sqlx::query_as::<_, (String, i64)>(&sql);
+        // Bind the chunk twice — once for each `IN (...)` leg, in statement order.
+        for u in chunk.iter().chain(chunk.iter()) {
+            q = q.bind(u);
+        }
+        for (uuid, id) in q.fetch_all(pool).await? {
+            // A `books` row wins over a `merged_uuids` ledger key on the
+            // (practically impossible) collision, mirroring the `books`-first
+            // ordering of `resolve_book_id_by_uuid`'s `UNION ALL … LIMIT 1`.
+            map.entry(uuid).or_insert(id);
+        }
+    }
+    Ok(map)
+}
+
+/// Bulk-fetch merged metadata for a set of `books.id`s, applying overrides
+/// and the creator-id backfill exactly as `list_books_for_paths` does.
+/// Emits one `SELECT … WHERE b.id IN (…)` per 499-id chunk plus the two
+/// bulk override/creator passes. Return order is unspecified; callers pair
+/// rows via [`EbookMetadata::id`]. Unknown ids are simply absent.
+pub(crate) async fn get_books_by_ids(
+    pool: &SqlitePool,
+    ids: &[i64],
+) -> Result<Vec<EbookMetadata>, super::BooksError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::with_capacity(ids.len());
+    for chunk in ids.chunks(499) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT {BOOK_COLUMNS} FROM books b WHERE b.id IN ({placeholders})");
+        let mut q = sqlx::query(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        for r in q.fetch_all(pool).await? {
+            out.push(row_to_ebook(&r)?);
+        }
+    }
+    merge_overrides_into_books(pool, &mut out).await?;
+    backfill_creator_ids(pool, &mut out).await?;
+    Ok(out)
 }
 
 /// Resolve any book reference (its own durable `books.uuid` or a
