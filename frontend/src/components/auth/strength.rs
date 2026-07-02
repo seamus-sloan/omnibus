@@ -64,6 +64,7 @@ pub fn StrengthMeter(score: StrengthScore, #[props(default)] label: Option<Strin
                 aria_valuenow: "{filled}",
                 for i in 0..StrengthScore::MAX {
                     div {
+                        key: "{i}",
                         class: if i < filled { "auth-strength-segment auth-strength-segment-on" } else { "auth-strength-segment" },
                     }
                 }
