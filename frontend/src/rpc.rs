@@ -34,6 +34,11 @@ use omnibus_shared::{
 #[cfg(feature = "server")]
 use omnibus_shared::AUTHOR_PHOTO_URL_MAX_LEN;
 
+// Only `validate_session_batch` (server-gated) and its tests reference this
+// cap; same reason for the `server` gate as `AUTHOR_PHOTO_URL_MAX_LEN` above.
+#[cfg(feature = "server")]
+use omnibus_shared::SESSION_BATCH_CAP;
+
 // `BookSuggestion` is only constructed in the server-side `rpc_get_suggestions`
 // body; gate it so the web/mobile client builds don't flag an unused import.
 #[cfg(feature = "server")]
@@ -756,20 +761,43 @@ pub async fn rpc_get_progress(
     Ok(db::progress::get_progress(&pool.0, user.id, &uuid, format).await?)
 }
 
+/// Reject a batch that exceeds `SESSION_BATCH_CAP` with the same
+/// message shape the REST twin (`server::backend::progress::post_sessions`)
+/// uses. Extracted so it can be exercised directly from unit tests
+/// without spinning up the fullstack server-fn stack.
+///
+/// Only the server-side body of `rpc_record_sessions` calls this, so it
+/// is `server`-gated like `validate_author_photo_url` above — otherwise
+/// it is dead code in the `mobile`/`web` client builds (caught by clippy).
+#[cfg(feature = "server")]
+fn validate_session_batch(reports: &[SessionReport]) -> Result<(), ServerFnError> {
+    if reports.len() > SESSION_BATCH_CAP {
+        return Err(ServerFnError::new(format!(
+            "batch too large: {} records exceeds maximum of {}",
+            reports.len(),
+            SESSION_BATCH_CAP
+        )));
+    }
+    for r in reports {
+        if let Err(msg) = r.validate() {
+            return Err(ServerFnError::new(msg));
+        }
+    }
+    Ok(())
+}
+
 /// Persist a batch of reading- or listening-session reports and return the
 /// inserted count. Validates every report up-front before any insert; the
 /// inserts then run sequentially (not in a single transaction), so a DB
 /// error mid-batch commits the rows that already succeeded and propagates
 /// the error to the caller — the count of committed rows is then lost.
 /// Reports whose `book_uuid` is unknown are silently dropped (counted out)
-/// rather than failing the batch.
+/// rather than failing the batch. Batches larger than `SESSION_BATCH_CAP`
+/// (defined in `omnibus_shared`) are rejected before any DB work — twins
+/// the REST cap in `server::backend::progress::post_sessions`.
 #[post("/api/rpc/progress/sessions", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_record_sessions(reports: Vec<SessionReport>) -> Result<u64> {
-    for r in &reports {
-        if let Err(msg) = r.validate() {
-            return Err(ServerFnError::new(msg).into());
-        }
-    }
+    validate_session_batch(&reports)?;
     let mut inserted = 0u64;
     for r in &reports {
         if db::progress::record_session(&pool.0, user.id, r).await? {
@@ -1184,7 +1212,22 @@ pub async fn rpc_preview_shelf_rule(
 // suite as `cargo test -p omnibus-frontend --features server`.
 #[cfg(all(test, feature = "server"))]
 mod tests {
-    use super::{validate_author_photo_url, AUTHOR_PHOTO_URL_MAX_LEN};
+    use super::{
+        validate_author_photo_url, validate_session_batch, AUTHOR_PHOTO_URL_MAX_LEN,
+        SESSION_BATCH_CAP,
+    };
+    use omnibus_shared::{ProgressFormat, SessionReport};
+
+    fn session_report(book_uuid: &str) -> SessionReport {
+        SessionReport {
+            book_uuid: book_uuid.to_string(),
+            format: ProgressFormat::Epub,
+            started_at: 100,
+            ended_at: 460,
+            progress_units: 360,
+            device_id: None,
+        }
+    }
 
     // `rpc_save_settings`'s validation wiring is covered by the REST
     // boundary test `api_post_settings_returns_422_when_*_path_exceeds_max_len`
@@ -1218,6 +1261,49 @@ mod tests {
         assert!(
             err.to_string().contains("required"),
             "error message should say required: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_session_batch_rejects_batch_larger_than_cap() {
+        // Web-RPC twin of the REST cap enforced in
+        // `server::backend::progress::post_sessions`: an authenticated web
+        // caller must not be able to smuggle an unbounded batch into the
+        // sequential write loop just because the cap check only lived on
+        // the REST path.
+        let reports: Vec<_> = (0..=SESSION_BATCH_CAP)
+            .map(|_| session_report("book-uuid"))
+            .collect();
+        let err = validate_session_batch(&reports).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("batch too large") && msg.contains(&SESSION_BATCH_CAP.to_string()),
+            "error message should name the cap: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_session_batch_accepts_batch_at_cap() {
+        let reports: Vec<_> = (0..SESSION_BATCH_CAP)
+            .map(|_| session_report("book-uuid"))
+            .collect();
+        assert!(validate_session_batch(&reports).is_ok());
+    }
+
+    #[test]
+    fn validate_session_batch_propagates_per_item_validation_error() {
+        // Per-item validation must still fire when the batch is under the
+        // cap — regression guard for the pre-fix branch where the batch
+        // check accidentally replaced the item loop.
+        let mut reports = vec![session_report("book-uuid")];
+        reports.push(SessionReport {
+            book_uuid: String::new(),
+            ..session_report("book-uuid")
+        });
+        let err = validate_session_batch(&reports).unwrap_err();
+        assert!(
+            err.to_string().contains("book_uuid"),
+            "error message should surface the per-item validator: {err}"
         );
     }
 }

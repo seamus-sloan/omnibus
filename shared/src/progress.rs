@@ -10,6 +10,13 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 mod tests;
 
+/// Hard cap on `SessionReport`s per batch, enforced by both the REST
+/// `POST /api/progress/sessions` handler and the web
+/// `rpc_record_sessions` server function. The batch runs inside a
+/// single write transaction, so bounding it here keeps the SQLite WAL
+/// write lock from being held open by a client-side loop.
+pub const SESSION_BATCH_CAP: usize = 500;
+
 /// Discriminator for the format-specific payload variant in [`ProgressUpdate`]
 /// / [`ProgressRecord`] / [`SessionReport`]. Serializes as a plain
 /// lowercase string (`"epub"` / `"audio"`) so the wire shape stays compact.
