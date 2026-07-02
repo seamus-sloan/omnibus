@@ -310,13 +310,13 @@ async fn api_put_author_photo_url_rejects_overlong_url() {
     let admin = auth_test_support::create_admin(&pool, "admin").await;
     let token = auth_test_support::bearer_token(&pool, admin.id).await;
 
-    // 2049 chars — one over the 2048 cap. Rejected with 400 before any
-    // outbound fetch fires, so the (unreachable) host never matters.
-    let overlong = format!(
-        "http://example.com/{}",
-        "a".repeat(2049 - "http://example.com/".len())
-    );
-    assert_eq!(overlong.len(), 2049);
+    // One byte over the shared cap. The length guard rejects with 400
+    // before any outbound fetch fires; the loopback host keeps the test
+    // hermetic (and blocked by the SSRF guard) even if that guard regresses.
+    let cap = omnibus_shared::AUTHOR_PHOTO_URL_MAX_LEN;
+    let prefix = "http://127.0.0.1/";
+    let overlong = format!("{prefix}{}", "a".repeat(cap + 1 - prefix.len()));
+    assert_eq!(overlong.len(), cap + 1);
     let res = app
         .oneshot(put_photo_url(
             &format!("/api/authors/{id}/photo/url"),

@@ -263,11 +263,14 @@ pub(super) async fn put_author_photo_url(
         return (axum::http::StatusCode::BAD_REQUEST, "url is required").into_response();
     }
     // Cap before handing the string to the fetch pipeline so a multi-megabyte
-    // URL can't allocate/parse unbounded. 2048 matches the RPC path (#456).
-    if url.len() > 2048 {
+    // URL can't allocate/parse unbounded. Shares the RPC path's cap (#456).
+    if url.len() > omnibus_shared::AUTHOR_PHOTO_URL_MAX_LEN {
         return (
             axum::http::StatusCode::BAD_REQUEST,
-            "url must be 2048 characters or fewer",
+            format!(
+                "url must be {} bytes or fewer",
+                omnibus_shared::AUTHOR_PHOTO_URL_MAX_LEN
+            ),
         )
             .into_response();
     }
