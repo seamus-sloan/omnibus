@@ -119,6 +119,7 @@ async fn list_devices_for_user_query_plan_uses_covering_index() {
     let p = pool().await;
     // Seed two users so the planner's stats reflect real selectivity.
     let alice = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    crate::auth::users::set_registration_enabled(&p, true).await.unwrap();
     let bob = create_user(&p, "bob", "hunter2-real-long").await.unwrap();
     for uid in [alice.id, bob.id] {
         for i in 0..50 {
