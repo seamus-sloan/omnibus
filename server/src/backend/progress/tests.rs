@@ -3,7 +3,7 @@ use axum::{
     body::{to_bytes, Body},
     http::{header::AUTHORIZATION, Request, StatusCode},
 };
-use omnibus_shared::ProgressRecord;
+use omnibus_shared::{ProgressRecord, SESSION_BATCH_CAP};
 use tower::ServiceExt;
 
 use super::*;
@@ -300,7 +300,7 @@ async fn api_post_sessions_batch_of_two_records_both() {
 
 #[tokio::test]
 async fn post_sessions_rejects_oversized_batch() {
-    // Batches larger than MAX_SESSION_BATCH must be rejected with 422
+    // Batches larger than SESSION_BATCH_CAP must be rejected with 422
     // before any DB work — the global 1 MiB body limit permits thousands
     // of compact reports, so the per-batch cap is the real defense
     // against a client holding the WAL write lock open.
@@ -308,7 +308,7 @@ async fn post_sessions_rejects_oversized_batch() {
     let (_, uuid) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
     let user = auth_test_support::create_user(&pool, "alice").await;
     let token = auth_test_support::bearer_token(&pool, user.id).await;
-    let reports: Vec<_> = (0..=MAX_SESSION_BATCH)
+    let reports: Vec<_> = (0..=SESSION_BATCH_CAP)
         .map(|_| {
             serde_json::json!({
                 "book_uuid": uuid,

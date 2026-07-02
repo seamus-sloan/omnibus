@@ -34,6 +34,12 @@ use omnibus_shared::{
 #[cfg(feature = "server")]
 use omnibus_shared::AUTHOR_PHOTO_URL_MAX_LEN;
 
+// `check_session_batch_size` is server-gated (called only from the server-side
+// body of `rpc_record_sessions`), so keep the import `server`-gated too — the
+// client build would otherwise flag it unused.
+#[cfg(feature = "server")]
+use omnibus_shared::SESSION_BATCH_CAP;
+
 // `BookSuggestion` is only constructed in the server-side `rpc_get_suggestions`
 // body; gate it so the web/mobile client builds don't flag an unused import.
 #[cfg(feature = "server")]
@@ -756,15 +762,36 @@ pub async fn rpc_get_progress(
     Ok(db::progress::get_progress(&pool.0, user.id, &uuid, format).await?)
 }
 
+/// Reject batches larger than `SESSION_BATCH_CAP` before any per-record work.
+/// Mirrors the 422 the mobile REST route emits from
+/// `server::backend::progress::post_sessions`: an authenticated client should
+/// not be able to hold the write path open with an unbounded insert loop.
+///
+/// Kept as a small server-gated helper so a unit test can exercise the
+/// over-cap rejection without spinning up the dioxus server-fn router — the
+/// same pattern as `validate_author_photo_url` above.
+#[cfg(feature = "server")]
+fn check_session_batch_size(len: usize) -> std::result::Result<(), ServerFnError> {
+    if len > SESSION_BATCH_CAP {
+        return Err(ServerFnError::new(format!(
+            "batch too large: {} records exceeds maximum of {}",
+            len, SESSION_BATCH_CAP
+        )));
+    }
+    Ok(())
+}
+
 /// Persist a batch of reading- or listening-session reports and return the
-/// inserted count. Validates every report up-front before any insert; the
-/// inserts then run sequentially (not in a single transaction), so a DB
-/// error mid-batch commits the rows that already succeeded and propagates
-/// the error to the caller — the count of committed rows is then lost.
-/// Reports whose `book_uuid` is unknown are silently dropped (counted out)
-/// rather than failing the batch.
+/// inserted count. Rejects batches larger than `SESSION_BATCH_CAP` (matching
+/// the mobile REST cap) before any DB work. Validates every remaining report
+/// up-front before any insert; the inserts then run sequentially (not in a
+/// single transaction), so a DB error mid-batch commits the rows that already
+/// succeeded and propagates the error to the caller — the count of committed
+/// rows is then lost. Reports whose `book_uuid` is unknown are silently
+/// dropped (counted out) rather than failing the batch.
 #[post("/api/rpc/progress/sessions", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_record_sessions(reports: Vec<SessionReport>) -> Result<u64> {
+    check_session_batch_size(reports.len())?;
     for r in &reports {
         if let Err(msg) = r.validate() {
             return Err(ServerFnError::new(msg).into());
@@ -1184,7 +1211,10 @@ pub async fn rpc_preview_shelf_rule(
 // suite as `cargo test -p omnibus-frontend --features server`.
 #[cfg(all(test, feature = "server"))]
 mod tests {
-    use super::{validate_author_photo_url, AUTHOR_PHOTO_URL_MAX_LEN};
+    use super::{
+        check_session_batch_size, validate_author_photo_url, AUTHOR_PHOTO_URL_MAX_LEN,
+        SESSION_BATCH_CAP,
+    };
 
     // `rpc_save_settings`'s validation wiring is covered by the REST
     // boundary test `api_post_settings_returns_422_when_*_path_exceeds_max_len`
@@ -1218,6 +1248,29 @@ mod tests {
         assert!(
             err.to_string().contains("required"),
             "error message should say required: {err}"
+        );
+    }
+
+    #[test]
+    fn check_session_batch_size_accepts_at_cap() {
+        // At-cap batches must pass — the REST handler treats `> cap` (not
+        // `>= cap`) as the rejection condition, and the RPC path has to
+        // match so a client near the limit doesn't see divergent errors
+        // between web and mobile.
+        assert!(check_session_batch_size(SESSION_BATCH_CAP).is_ok());
+    }
+
+    #[test]
+    fn check_session_batch_size_rejects_over_cap_with_cap_in_message() {
+        let err = check_session_batch_size(SESSION_BATCH_CAP + 1).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&SESSION_BATCH_CAP.to_string()),
+            "error message should name the cap: {msg}"
+        );
+        assert!(
+            msg.contains(&(SESSION_BATCH_CAP + 1).to_string()),
+            "error message should name the offending length: {msg}"
         );
     }
 }

@@ -10,6 +10,15 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 mod tests;
 
+/// Hard cap on `SessionReport`s per batch, enforced identically by the mobile
+/// REST route (`POST /api/progress/sessions`) and the web RPC path
+/// (`rpc_record_sessions`). Both handlers reject over-cap batches before any
+/// DB work so an authenticated client cannot hold the write transaction open
+/// with an unbounded per-record insert loop. Kept as a compile-time constant
+/// rather than an env var: changing it needs a coordinated server + client
+/// bump, not a per-deploy tweak.
+pub const SESSION_BATCH_CAP: usize = 500;
+
 /// Discriminator for the format-specific payload variant in [`ProgressUpdate`]
 /// / [`ProgressRecord`] / [`SessionReport`]. Serializes as a plain
 /// lowercase string (`"epub"` / `"audio"`) so the wire shape stays compact.
