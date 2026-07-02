@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  pull_request_target:
+    types: [closed]
+
+concurrency:
+  group: release-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: create release
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      (
+        contains(github.event.pull_request.labels.*.name, 'patch version') ||
+        contains(github.event.pull_request.labels.*.name, 'minor version')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine next version
+        id: version
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = context.payload.pull_request.labels.map(({ name }) => name);
+            const hasPatch = labels.includes("patch version");
+            const hasMinor = labels.includes("minor version");
+
+            if (hasPatch && hasMinor) {
+              core.setFailed(
+                "PR has both 'patch version' and 'minor version' labels. Apply exactly one release label.",
+              );
+              return;
+            }
+
+            let latestRelease;
+            try {
+              const response = await github.rest.repos.getLatestRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+              });
+              latestRelease = response.data;
+            } catch (error) {
+              if (error.status === 404) {
+                core.setFailed(
+                  "No published release exists yet. Create the initial major release manually before using version labels.",
+                );
+                return;
+              }
+              throw error;
+            }
+
+            const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(latestRelease.tag_name);
+            if (!match) {
+              core.setFailed(
+                `Latest release tag '${latestRelease.tag_name}' is not in vMAJOR.MINOR.PATCH format.`,
+              );
+              return;
+            }
+
+            const major = Number(match[1]);
+            let minor = Number(match[2]);
+            let patch = Number(match[3]);
+
+            if (hasMinor) {
+              minor += 1;
+              patch = 0;
+            } else if (hasPatch) {
+              patch += 1;
+            } else {
+              core.setFailed("No supported release label found on the merged PR.");
+              return;
+            }
+
+            const tag = `v${major}.${minor}.${patch}`;
+            core.setOutput("tag", tag);
+            core.setOutput("label", hasMinor ? "minor version" : "patch version");
+
+      - name: Create GitHub release
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_LABEL: ${{ steps.version.outputs.label }}
+          TARGET_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+        with:
+          script: |
+            const tag = process.env.RELEASE_TAG;
+            const target = process.env.TARGET_SHA;
+
+            try {
+              await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+              core.info(`Release ${tag} already exists. Skipping creation.`);
+              return;
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+            }
+
+            await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              target_commitish: target,
+              name: tag,
+              generate_release_notes: true,
+              body: `Automated ${process.env.RELEASE_LABEL} release from #${context.payload.pull_request.number}.`,
+            });
