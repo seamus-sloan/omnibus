@@ -18,6 +18,7 @@ pub(super) fn BdBodyMain(
     uuid: String,
     title: String,
     primary_author: String,
+    author_id: Option<i64>,
     author_books: Vec<EbookMetadata>,
     suggestions: Option<SuggestionsResponse>,
     server_url: String,
@@ -33,27 +34,7 @@ pub(super) fn BdBodyMain(
                 p { class: "bd-stub-hint", "Highlights land in F3.2." }
             }
             div { class: "divider" }
-            BdSectionHead {
-                kicker: if primary_author.is_empty() { "More to read".to_string() } else { format!("More by {primary_author}") },
-                title: "From the same hand".to_string(),
-            }
-            if author_books.is_empty() {
-                div { class: "bd-author-books-empty card", "data-testid": "from-same-hand-empty",
-                    p { class: "mono", "No other books by this author in your library." }
-                }
-            } else {
-                div { class: "bd-author-books-row", "data-testid": "from-same-hand",
-                    for ab in author_books.iter() {
-                        Link {
-                            key: "{ab.id}",
-                            to: Route::BookDetail { uuid: ab.unique_identifier.clone().unwrap_or_default() },
-                            class: "bd-author-book-tile",
-                            "data-testid": "from-same-hand-tile",
-                            Cover { book: ab.clone() }
-                        }
-                    }
-                }
-            }
+            BdSameHand { primary_author, author_id, author_books }
             BdSuggestionsStrip {
                 book_title: title,
                 suggestions,
@@ -62,6 +43,147 @@ pub(super) fn BdBodyMain(
             }
         }
     }
+}
+
+/// "From the same hand" — an author-lead card heading a spreading cover stack
+/// of up to four other books by the same author (Atrium `SameHandSection`).
+/// Reuses the `.suggest-stack` / `.sug-cap` mechanics: the lead card sits first
+/// and the covers fan out from behind it on hover. When the author has no other
+/// books in the library, the lead card is paired with a short note instead.
+#[component]
+pub(super) fn BdSameHand(
+    primary_author: String,
+    author_id: Option<i64>,
+    author_books: Vec<EbookMetadata>,
+) -> Element {
+    let owned = author_books.len() + 1;
+    let shown = author_books.len().min(4);
+    let rest = author_books.len() - shown;
+    let kicker = if primary_author.is_empty() {
+        "More to read".to_string()
+    } else {
+        format!("More by {primary_author}")
+    };
+    let author_label = same_hand_author_label(&primary_author);
+    let author_route = author_id.map(|id| Route::AuthorDetail { id });
+    let action = author_route.clone().map(|route| {
+        rsx! {
+            Link { to: route, class: "btn ghost sm", "Author page \u{2192}" }
+        }
+    });
+
+    rsx! {
+        BdSectionHead { kicker, title: "From the same hand".to_string(), action }
+        if author_books.is_empty() {
+            div { class: "bd-same-hand-empty", "data-testid": "from-same-hand-empty",
+                AuthorLead { author: primary_author.clone(), owned, rest, author_route: author_route.clone() }
+                div { class: "bd-same-hand-note",
+                    "This is the only book by {author_label} in your library so far."
+                }
+            }
+        } else {
+            p { class: "mono bd-same-hand-hint",
+                "Hover the row to spread \u{00b7} click a cover to open the book, the portrait to open the author"
+            }
+            div { class: "suggest-stack", "data-testid": "from-same-hand",
+                AuthorLead { author: primary_author.clone(), owned, rest, author_route: author_route.clone() }
+                for ab in author_books.iter().take(4) {
+                    Link {
+                        key: "{ab.id}",
+                        to: Route::BookDetail { uuid: ab.unique_identifier.clone().unwrap_or_default() },
+                        class: "cover-link",
+                        "data-testid": "from-same-hand-tile",
+                        title: "Open {same_hand_title(ab)}",
+                        Cover { book: ab.clone() }
+                        div { class: "sug-cap",
+                            div { class: "sh-title", "{same_hand_title(ab)}" }
+                            if let Some(year) = same_hand_year(ab) {
+                                div { class: "sh-sub", "{year}" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Author "lead" card that heads the same-hand stack: portrait glyph, name, and
+/// owned-count, with an optional "+N more" footer. When `author_route` is
+/// `Some`, the portrait/name/footer are author-page links; otherwise they render
+/// as plain text (a book whose author carries no resolvable id).
+#[component]
+fn AuthorLead(author: String, owned: usize, rest: usize, author_route: Option<Route>) -> Element {
+    let initial = author
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_default();
+    let books_word = if owned == 1 { "book" } else { "books" };
+    // Guard the tooltip against a missing author name so it never renders the
+    // malformed "Open 's author page".
+    let portrait_title = if author.trim().is_empty() {
+        "Open author page".to_string()
+    } else {
+        format!("Open {author}'s author page")
+    };
+    rsx! {
+        div { class: "cover-link author-lead",
+            div { class: "author-lead-card",
+                if let Some(route) = author_route.clone() {
+                    Link {
+                        to: route.clone(),
+                        class: "author-portrait",
+                        title: "{portrait_title}",
+                        span { class: "glyph", "{initial}" }
+                        span { class: "hint", "Author page \u{2192}" }
+                    }
+                    div {
+                        Link { to: route.clone(), class: "author-lead-name", "{author}" }
+                        div { class: "author-lead-count", "{owned} {books_word} in your library" }
+                    }
+                    if rest > 0 {
+                        Link { to: route.clone(), class: "author-lead-more", "+{rest} more \u{2192}" }
+                    }
+                } else {
+                    div { class: "author-portrait",
+                        span { class: "glyph", "{initial}" }
+                    }
+                    div {
+                        div { class: "author-lead-name", "{author}" }
+                        div { class: "author-lead-count", "{owned} {books_word} in your library" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Display title for a same-hand tile — the book title, falling back to the
+/// on-disk filename (mirrors the shared `Cover` plate fallback).
+fn same_hand_title(b: &EbookMetadata) -> String {
+    match b.title.as_deref() {
+        Some(t) if !t.trim().is_empty() => t.to_string(),
+        _ => b.filename.clone(),
+    }
+}
+
+/// Author surname for the empty-state note, falling back to a generic label
+/// when the author name is unknown so the sentence stays well-formed.
+fn same_hand_author_label(primary_author: &str) -> String {
+    match primary_author.split_whitespace().last() {
+        Some(last) => last.to_string(),
+        None => "this author".to_string(),
+    }
+}
+
+/// Four-digit publication year for the tile subline, or `None` when absent.
+fn same_hand_year(b: &EbookMetadata) -> Option<String> {
+    b.published
+        .as_deref()
+        .and_then(|p| p.get(0..4))
+        .filter(|y| !y.is_empty())
+        .map(str::to_string)
 }
 
 /// "Readers also enjoyed" — Hardcover read-alikes below the metadata. Renders
@@ -361,5 +483,62 @@ mod tests {
             bd_identifier_key(&split_scheme),
             bd_identifier_key(&split_value)
         );
+    }
+
+    #[test]
+    fn same_hand_title_prefers_title_over_filename() {
+        let b = EbookMetadata {
+            title: Some("Piranesi".into()),
+            filename: "piranesi.epub".into(),
+            ..Default::default()
+        };
+        assert_eq!(same_hand_title(&b), "Piranesi");
+    }
+
+    #[test]
+    fn same_hand_title_falls_back_to_filename_when_title_blank() {
+        // `None`, empty, and whitespace-only titles all fall back so a tile
+        // never renders a blank caption.
+        for title in [None, Some("".into()), Some("   ".into())] {
+            let b = EbookMetadata {
+                title,
+                filename: "dune.epub".into(),
+                ..Default::default()
+            };
+            assert_eq!(same_hand_title(&b), "dune.epub");
+        }
+    }
+
+    #[test]
+    fn same_hand_year_extracts_four_digit_prefix() {
+        let b = EbookMetadata {
+            published: Some("2020-09-15".into()),
+            ..Default::default()
+        };
+        assert_eq!(same_hand_year(&b), Some("2020".to_string()));
+    }
+
+    #[test]
+    fn same_hand_year_is_none_when_missing_or_too_short() {
+        let missing = EbookMetadata::default();
+        assert_eq!(same_hand_year(&missing), None);
+        let short = EbookMetadata {
+            published: Some("20".into()),
+            ..Default::default()
+        };
+        // `get(0..4)` returns `None` for a string shorter than four bytes.
+        assert_eq!(same_hand_year(&short), None);
+    }
+
+    #[test]
+    fn same_hand_author_label_uses_surname_when_present() {
+        assert_eq!(same_hand_author_label("Ada Lovelace"), "Lovelace");
+        assert_eq!(same_hand_author_label("Homer"), "Homer");
+    }
+
+    #[test]
+    fn same_hand_author_label_falls_back_when_author_blank() {
+        assert_eq!(same_hand_author_label(""), "this author");
+        assert_eq!(same_hand_author_label("   "), "this author");
     }
 }
