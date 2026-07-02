@@ -23,23 +23,6 @@ use super::super::authors::insert_author_links;
 use super::super::fts::upsert_fts;
 use super::wipe_per_book_link_rows;
 
-/// Resolve an existing `books` row (id + uuid) under `library_id` by its
-/// `scan_key`. Used by the New path to re-attach to a fileless / same-path row
-/// instead of inserting a colliding one.
-pub(super) async fn existing_by_scan_key(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    library_id: i64,
-    scan_key: &str,
-) -> Result<Option<(i64, String)>, sqlx::Error> {
-    sqlx::query_as::<_, (i64, String)>(
-        "SELECT id, uuid FROM books WHERE library_id = ? AND scan_key = ?",
-    )
-    .bind(library_id)
-    .bind(scan_key)
-    .fetch_optional(&mut **tx)
-    .await
-}
-
 /// Rewrite an existing book in place from a freshly-parsed entry: refresh
 /// the `books` scalars, wipe + re-insert this format's `book_files` and the
 /// per-book links, and refresh FTS — preserving `books.id`/`books.uuid`.
