@@ -176,3 +176,52 @@ async fn delete_bookmark_returns_not_found_for_other_user() {
     let err = delete_bookmark(&pool, bob, b.id).await.unwrap_err();
     assert!(matches!(err, BookmarkError::NotFound));
 }
+
+/// `list_bookmarks` must satisfy its `ORDER BY created_at ASC` from
+/// `idx_bookmarks_user_book_created` (migration 0035) rather than a temp
+/// B-tree sort. Rows + ANALYZE are seeded first: the older
+/// `bookmarks_user_book_idx` shares the (user_id, book_uuid) prefix, so on
+/// an empty table costs tie and the planner may keep the sort — only with
+/// realistic per-key row counts does the covering index's saved sort win.
+/// Structural check; pins the index name and the absence of a temp B-tree,
+/// not SQLite's exact plan wording.
+#[tokio::test]
+async fn list_bookmarks_uses_covering_index_for_order_by() {
+    use sqlx::Row;
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    for i in 0..64 {
+        sqlx::query(
+            "INSERT INTO bookmarks (user_id, book_uuid, position, created_at) \
+             VALUES (?, 'uuid', ?, ?)",
+        )
+        .bind(user)
+        .bind(i.to_string())
+        .bind(i)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query("ANALYZE").execute(&pool).await.unwrap();
+    let plan: String = sqlx::query(
+        "EXPLAIN QUERY PLAN SELECT id, book_uuid, position, title, created_at \
+         FROM bookmarks WHERE user_id = ? AND book_uuid = ? ORDER BY created_at ASC",
+    )
+    .bind(user)
+    .bind("uuid")
+    .fetch_all(&pool)
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| r.get::<String, _>("detail"))
+    .collect::<Vec<_>>()
+    .join("\n");
+    assert!(
+        plan.contains("idx_bookmarks_user_book_created"),
+        "list_bookmarks should use idx_bookmarks_user_book_created, got plan:\n{plan}"
+    );
+    assert!(
+        !plan.contains("TEMP B-TREE"),
+        "list_bookmarks should sort from the index, not a temp B-tree, got plan:\n{plan}"
+    );
+}

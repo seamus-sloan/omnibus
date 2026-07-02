@@ -105,3 +105,50 @@ async fn register_device_rejects_control_char_in_client_version() {
         "expected Validation about client_version control chars, got {err:?}",
     );
 }
+
+/// `list_devices_for_user` must satisfy its `ORDER BY last_seen_at DESC`
+/// from `idx_devices_user_last_seen` (migration 0035) rather than a temp
+/// B-tree sort. Rows + ANALYZE are seeded first: the older
+/// `idx_devices_user (user_id)` shares the leading column, so on an empty
+/// table costs tie and the planner may keep the sort — only with realistic
+/// per-user row counts does the covering index's saved sort win. Structural
+/// check; pins the index name and the absence of a temp B-tree, not
+/// SQLite's exact plan wording.
+#[tokio::test]
+async fn list_devices_uses_covering_index_for_order_by() {
+    use sqlx::Row;
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    for i in 0..64 {
+        sqlx::query(
+            "INSERT INTO devices (user_id, name, client_kind, last_seen_at) VALUES (?, ?, 'ios', ?)",
+        )
+        .bind(u.id)
+        .bind(format!("Device {i}"))
+        .bind(i)
+        .execute(&p)
+        .await
+        .unwrap();
+    }
+    sqlx::query("ANALYZE").execute(&p).await.unwrap();
+    let plan: String = sqlx::query(
+        "EXPLAIN QUERY PLAN SELECT id, user_id, name, client_kind, client_version, \
+         created_at, last_seen_at FROM devices WHERE user_id = ? ORDER BY last_seen_at DESC",
+    )
+    .bind(u.id)
+    .fetch_all(&p)
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| r.get::<String, _>("detail"))
+    .collect::<Vec<_>>()
+    .join("\n");
+    assert!(
+        plan.contains("idx_devices_user_last_seen"),
+        "device listing should use idx_devices_user_last_seen, got plan:\n{plan}"
+    );
+    assert!(
+        !plan.contains("TEMP B-TREE"),
+        "device listing should sort from the index, not a temp B-tree, got plan:\n{plan}"
+    );
+}

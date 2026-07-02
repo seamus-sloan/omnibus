@@ -246,3 +246,53 @@ async fn delete_highlight_returns_not_found_for_other_user() {
     let err = delete_highlight(&pool, bob, h.id).await.unwrap_err();
     assert!(matches!(err, HighlightError::NotFound));
 }
+
+/// `list_highlights` must satisfy its `ORDER BY created_at ASC` from
+/// `idx_highlights_user_book_created` (migration 0035) rather than a temp
+/// B-tree sort. Rows + ANALYZE are seeded first: the older
+/// `idx_highlights_user_book` shares the (user_id, book_uuid) prefix, so on
+/// an empty table costs tie and the planner may keep the sort — only with
+/// realistic per-key row counts does the covering index's saved sort win.
+/// Structural check; pins the index name and the absence of a temp B-tree,
+/// not SQLite's exact plan wording.
+#[tokio::test]
+async fn list_highlights_uses_covering_index_for_order_by() {
+    use sqlx::Row;
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    for i in 0..64 {
+        sqlx::query(
+            "INSERT INTO highlights (user_id, book_uuid, epub_cfi_range, color, created_at) \
+             VALUES (?, 'uuid', ?, 'amber', ?)",
+        )
+        .bind(user)
+        .bind(format!("epubcfi(/6/{i})"))
+        .bind(i)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query("ANALYZE").execute(&pool).await.unwrap();
+    let plan: String = sqlx::query(
+        "EXPLAIN QUERY PLAN SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, \
+         h.text, h.created_at FROM highlights h \
+         WHERE h.user_id = ? AND h.book_uuid = ? ORDER BY h.created_at ASC",
+    )
+    .bind(user)
+    .bind("uuid")
+    .fetch_all(&pool)
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| r.get::<String, _>("detail"))
+    .collect::<Vec<_>>()
+    .join("\n");
+    assert!(
+        plan.contains("idx_highlights_user_book_created"),
+        "list_highlights should use idx_highlights_user_book_created, got plan:\n{plan}"
+    );
+    assert!(
+        !plan.contains("TEMP B-TREE"),
+        "list_highlights should sort from the index, not a temp B-tree, got plan:\n{plan}"
+    );
+}
