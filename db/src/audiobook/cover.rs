@@ -68,7 +68,8 @@ mod tests {
         assert_eq!(mime, "image/png");
         assert!(!bytes.is_empty());
         // Confirm the bytes are the actual PNG payload, not a stub.
-        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+        // `starts_with` can't panic on a short payload the way slicing would.
+        assert!(bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]));
     }
 
     #[test]
@@ -86,13 +87,15 @@ mod tests {
     fn extract_cover_errors_when_path_does_not_exist() {
         // A missing file can't be probed by lofty, so the read surfaces as
         // an `Err` (not `Ok(None)`); the caller in `parse.rs` logs a WARN
-        // and proceeds with no cover. lofty wraps the underlying
-        // `NotFound` in its own `LoftyError`, so the `#[from]` conversion
-        // lands on `AudiobookError::Tag` rather than the bare `Io` variant.
-        let err = extract_cover(std::path::Path::new(
-            "/definitely/does/not/exist/omnibus_cover_test.mp3",
-        ))
-        .expect_err("missing path should error");
-        assert!(matches!(err, AudiobookError::Tag(_)), "got {err:?}");
+        // and proceeds with no cover. lofty maps the missing file to either
+        // a bare `Io` or a `LoftyError`-wrapped `Tag` depending on platform,
+        // so accept either error variant rather than pinning one.
+        let dir = tempfile::tempdir().expect("should create tempdir");
+        let missing = dir.path().join("omnibus_cover_test_missing.mp3");
+        let err = extract_cover(&missing).expect_err("missing path should error");
+        assert!(
+            matches!(err, AudiobookError::Io(_) | AudiobookError::Tag(_)),
+            "got {err:?}"
+        );
     }
 }
