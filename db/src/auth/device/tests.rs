@@ -5,10 +5,10 @@
 //! rejection tests share an in-memory pool via `auth::test_support::pool`.
 
 use super::*;
-use crate::auth::SessionKind;
 use crate::auth::session::create_session;
 use crate::auth::test_support::pool;
 use crate::auth::users::create_user;
+use crate::auth::SessionKind;
 use sqlx::Row;
 
 #[tokio::test]
@@ -121,7 +121,9 @@ async fn list_devices_for_user_query_plan_uses_covering_index() {
     let p = pool().await;
     // Seed two users so the planner's stats reflect real selectivity.
     let alice = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
-    crate::auth::users::set_registration_enabled(&p, true).await.unwrap();
+    crate::auth::users::set_registration_enabled(&p, true)
+        .await
+        .unwrap();
     let bob = create_user(&p, "bob", "hunter2-real-long").await.unwrap();
     for uid in [alice.id, bob.id] {
         for i in 0..50 {
@@ -153,6 +155,9 @@ async fn list_devices_for_user_query_plan_uses_covering_index() {
     assert!(
         !plan.contains("USE TEMP B-TREE FOR ORDER BY"),
         "expected index-only sort — plan still uses a temp b-tree:\n{plan}",
+    );
+}
+
 #[tokio::test]
 async fn failed_session_insert_after_register_device_rolls_back_device_row() {
     // Regression for #627: `issue_session` wraps `register_device` +
