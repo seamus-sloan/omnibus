@@ -653,3 +653,39 @@ async fn gc_purges_orphan_author_when_its_last_book_is_deleted() {
         .unwrap();
     assert_eq!(after, 0, "the purged book's now-bookless author is GC'd");
 }
+
+/// The GC's five `NOT EXISTS ... WHERE book_uuid = b.uuid` subqueries need a
+/// `book_uuid`-first index on each table — the pre-existing
+/// `(user_id, book_uuid)` composites can't serve the probe because SQLite
+/// skips a multi-column index when the leading column isn't in the predicate.
+/// Assert every table's plan uses its `idx_<table>_book_uuid` covering index
+/// (a `SEARCH` — a `SCAN` would mean the migration was lost or the index name
+/// drifted). Same shape as the GC's per-table subquery.
+#[tokio::test]
+async fn user_data_book_uuid_probes_use_the_book_uuid_first_index() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let cases = [
+        ("reading_progress", "idx_reading_progress_book_uuid"),
+        ("bookmarks", "idx_bookmarks_book_uuid"),
+        ("reading_sessions", "idx_reading_sessions_book_uuid"),
+        ("listening_sessions", "idx_listening_sessions_book_uuid"),
+        ("highlights", "idx_highlights_book_uuid"),
+    ];
+    for (table, index) in cases {
+        let sql = format!("EXPLAIN QUERY PLAN SELECT 1 FROM {table} WHERE book_uuid = ?");
+        let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(&sql)
+            .bind("any-uuid")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        let text = plan
+            .iter()
+            .map(|(_, _, _, s)| s.as_str())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(
+            text.contains(&format!("SEARCH {table}")) && text.contains(index),
+            "expected {table} probe to SEARCH via {index}, got: {text}"
+        );
+    }
+}
