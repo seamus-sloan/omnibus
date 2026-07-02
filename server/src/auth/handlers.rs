@@ -212,14 +212,8 @@ async fn issue_session(
     let device_id = if let (Some(name), Some(kind_str)) =
         (device_name.as_deref(), client_kind.as_deref())
     {
-        match auth_db::register_device(
-            &mut *tx,
-            user.id,
-            name,
-            kind_str,
-            client_version.as_deref(),
-        )
-        .await
+        match auth_db::register_device(&mut *tx, user.id, name, kind_str, client_version.as_deref())
+            .await
         {
             Ok(d) => Some(d.id),
             Err(e) => return auth_error_to_response(e),

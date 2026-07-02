@@ -57,11 +57,12 @@ pub fn validate_client_version(version: Option<&str>) -> AuthResult<()> {
     validate_device_field(version, MAX_CLIENT_VERSION_CHARS, "client_version")
 }
 
-/// Register a new device for a user after validating the name and client version;
-/// returns the inserted device record. Executor-generic so callers issuing device
-/// + session inserts atomically (see `server::auth::handlers::issue_session`) can
-/// pass `&mut *tx` and roll back both writes on failure of the session insert.
-/// Standalone callers pass `&pool`.
+/// Register a new device for a user after validating name and client version.
+///
+/// Executor-generic so `server::auth::handlers::issue_session` can pair this
+/// with `create_session` inside one `sqlx::Transaction` — passing `&mut *tx`
+/// rolls back the device insert on failure of the session insert. Standalone
+/// callers pass `&pool`.
 pub async fn register_device<'e, E>(
     executor: E,
     user_id: i64,

@@ -15,10 +15,11 @@ const SESSION_TOUCH_THRESHOLD_SECS: i64 = 5 * 60;
 /// (cookie absolute TTL is 30 days; bearer is 90).
 pub(crate) const SESSION_IDLE_TIMEOUT_SECS: i64 = 7 * 24 * 60 * 60;
 
-/// Create a new session for `user_id`, returning the session record and the raw
-/// (unhashed) token. Executor-generic so `server::auth::handlers::issue_session`
-/// can pair this with `register_device` inside a single `sqlx::Transaction` — an
-/// error here rolls back the device INSERT and prevents an orphan `devices` row.
+/// Create a new session for `user_id`, returning the session record and the raw (unhashed) token.
+///
+/// Executor-generic so `server::auth::handlers::issue_session` can pair this
+/// with `register_device` inside a single `sqlx::Transaction` — an error here
+/// rolls back the device insert and prevents an orphan `devices` row.
 /// Standalone callers (e.g. cookie-only refresh paths) pass `&pool`.
 pub async fn create_session<'e, E>(
     executor: E,
