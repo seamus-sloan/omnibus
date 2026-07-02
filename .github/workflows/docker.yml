@@ -1,5 +1,9 @@
 name: Docker
 
+# The run title carries the release tag so the Actions list shows which
+# version each build is for (e.g. "Docker v1.2.3") without opening the run.
+run-name: "Docker ${{ inputs.tag || github.ref_name }}"
+
 # Build + push the fullstack image to Docker Hub (sesloan/omnibus).
 # Dispatched by the Release workflow (workflow_dispatch with the release tag);
 # `release: published` is a fallback for releases created by a human/PAT — a
@@ -78,3 +82,22 @@ jobs:
           # Cache layers across runs so unchanged build stages don't recompile.
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Advertise exactly what landed on Docker Hub on the run summary page so
+      # the pushed tags don't have to be dug out of the buildx logs. Values are
+      # passed via env (not inlined into the script) to avoid shell injection
+      # from the dispatch-supplied tag.
+      - name: Summarize published image
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          REF: ${{ inputs.tag || github.ref_name }}
+        run: |
+          {
+            echo "### 🐳 Published to Docker Hub"
+            echo
+            echo "Release: **$REF**"
+            echo
+            echo '```'
+            echo "$TAGS"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
