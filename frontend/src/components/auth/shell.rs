@@ -70,6 +70,7 @@ pub fn AuthShell(
                     div { class: "auth-shell-spines",
                         for (i, spine) in SPINES.iter().enumerate() {
                             div {
+                                key: "{i}",
                                 class: "auth-shell-spine auth-shell-spine-{i}",
                                 style: "background: {spine.accent};",
                                 span { class: "auth-shell-spine-dot" }

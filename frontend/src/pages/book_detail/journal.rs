@@ -1,11 +1,9 @@
 //! Public reading-journal section for the book-detail page.
 //!
-//! Renders every reader's journal entries for a book (journals are public), a
-//! composer with a live-formatting markdown editor (see `journal_editor.js`),
-//! and owner-only edit/delete. Entries and the current user load post-mount so
-//! SSR and the first hydration paint match (rule 07). Markdown bodies are
-//! rendered + sanitized server-side; the click-to-reveal spoiler handler is
-//! wired by a post-mount effect, never in the rsx body.
+//! Renders every reader's entries plus an owner-only composer with a live
+//! markdown editor (see `journal_editor.js`). Entries, the current user, and
+//! the write surface all attach post-mount so SSR and first-hydration paint
+//! stay identical (rule 07); bodies are sanitized server-side.
 
 use dioxus::prelude::*;
 use omnibus_shared::{
@@ -47,9 +45,13 @@ pub(super) fn BdJournalSection(uuid: String) -> Element {
     }));
 
     // Click-to-reveal spoilers, delegated on `document` so it covers entries
-    // that render after mount and bound once via a window guard. Web-only: the
-    // eval is a no-op on SSR / native, and gating the body (not the hook) keeps
-    // the hook count identical across targets for hydration.
+    // that render after mount and bound once via a window guard. The sanitizer
+    // emits the spoiler as a real `<button>`, so Tab reaches it and Enter/Space
+    // fire a native click without a keydown listener; the handler just needs
+    // to keep `aria-expanded` in sync with the `.revealed` class so assistive
+    // tech reflects the toggled state. Web-only: the eval is a no-op on SSR /
+    // native, and gating the body (not the hook) keeps the hook count
+    // identical across targets for hydration.
     use_effect(move || {
         #[cfg(feature = "web")]
         {
@@ -59,7 +61,9 @@ pub(super) fn BdJournalSection(uuid: String) -> Element {
                     window.__omnibusSpoilerBound = true;
                     document.addEventListener('click', (e) => {
                         const s = e.target.closest && e.target.closest('.spoiler');
-                        if (s) s.classList.toggle('revealed');
+                        if (!s) return;
+                        const revealed = s.classList.toggle('revealed');
+                        s.setAttribute('aria-expanded', revealed ? 'true' : 'false');
                     });
                 }
                 "#,
@@ -233,6 +237,7 @@ fn BdJournalComposer(uuid: String, server_url: String, reload: Signal<u32>) -> E
                                 } else {
                                     for h in highlights().iter() {
                                         button {
+                                            key: "{h.id}",
                                             r#type: "button",
                                             class: "bd-journal-hl-item",
                                             "data-testid": "journal-highlight-item",
@@ -263,53 +268,37 @@ fn BdJournalComposer(uuid: String, server_url: String, reload: Signal<u32>) -> E
                     dangerous_inner_html: "{preview_html}",
                 }
             } else {
-                {
-                    // Web: a live-formatting contenteditable whose markdown is
-                    // mirrored into the hidden textarea (which keeps the `body`
-                    // signal — and therefore publish/validate/preview —
-                    // unchanged). Non-web (SSR page tests / native mobile) has
-                    // no eval, so it falls back to the plain textarea.
-                    #[cfg(feature = "web")]
-                    {
-                        rsx! {
-                            textarea {
-                                id: "journal-composer-mirror",
-                                class: "bd-journal-mirror",
-                                "data-testid": "journal-body",
-                                "aria-hidden": "true",
-                                tabindex: "-1",
-                                value: "{body}",
-                                oninput: move |e| body.set(e.value()),
-                            }
-                            div {
-                                id: "journal-composer-editor",
-                                class: "me-textarea bd-journal-editor",
-                                "data-testid": "journal-editor",
-                                contenteditable: "true",
-                                role: "textbox",
-                                "aria-multiline": "true",
-                                "aria-label": "Journal entry",
-                                "data-placeholder": "What are you thinking about this book? Markdown supported.",
-                                onmounted: move |_| editor_attach(
-                                    "journal-composer-editor",
-                                    "journal-composer-mirror",
-                                ),
-                            }
-                        }
+                // Rule 07 (hydration parity): render one rsx body on every
+                // target. SSR + first-hydration paint show the plain textarea
+                // as the write surface; a sibling contenteditable div rides
+                // along, hidden by CSS until post-mount JS flips the wrapper's
+                // `data-omnibus-enhanced` marker (see `editor_enhance`). The
+                // textarea keeps carrying the `body` signal even after
+                // enhancement — the JS mirrors the editor's markdown back into
+                // its `value`, so publish/validate/preview are unchanged.
+                div { class: "bd-journal-editor-wrap",
+                    textarea {
+                        id: "journal-composer-body",
+                        class: "me-textarea bd-journal-textarea",
+                        "data-testid": "journal-body",
+                        rows: "5",
+                        placeholder: "What are you thinking about this book? Markdown supported.",
+                        value: "{body}",
+                        oninput: move |e| body.set(e.value()),
+                        onmounted: move |_| editor_enhance(
+                            "journal-composer-body",
+                            "journal-composer-editor",
+                        ),
                     }
-                    #[cfg(not(feature = "web"))]
-                    {
-                        rsx! {
-                            textarea {
-                                id: "journal-composer-body",
-                                class: "me-textarea bd-journal-textarea",
-                                "data-testid": "journal-body",
-                                rows: "5",
-                                placeholder: "What are you thinking about this book? Markdown supported.",
-                                value: "{body}",
-                                oninput: move |e| body.set(e.value()),
-                            }
-                        }
+                    div {
+                        id: "journal-composer-editor",
+                        class: "me-textarea bd-journal-editor",
+                        "data-testid": "journal-editor",
+                        contenteditable: "true",
+                        role: "textbox",
+                        "aria-multiline": "true",
+                        "aria-label": "Journal entry",
+                        "data-placeholder": "What are you thinking about this book? Markdown supported.",
                     }
                 }
             }
@@ -482,49 +471,30 @@ fn BdJournalEntryCard(
                 div { class: "bd-journal-toolbar-row",
                     BdJournalToolbar { target_id: format!("journal-edit-editor-{entry_id}") }
                 }
-                {
-                    // Same live-editor-on-web / textarea-on-non-web split as the
-                    // composer, keyed per entry id so multiple open editors
-                    // don't collide.
-                    #[cfg(feature = "web")]
-                    {
-                        rsx! {
-                            textarea {
-                                id: "journal-edit-mirror-{entry_id}",
-                                class: "bd-journal-mirror",
-                                "data-testid": "journal-edit-body",
-                                "aria-hidden": "true",
-                                tabindex: "-1",
-                                value: "{edit_body}",
-                                oninput: move |e| edit_body.set(e.value()),
-                            }
-                            div {
-                                id: "journal-edit-editor-{entry_id}",
-                                class: "me-textarea bd-journal-editor",
-                                "data-testid": "journal-edit-editor",
-                                contenteditable: "true",
-                                role: "textbox",
-                                "aria-multiline": "true",
-                                "aria-label": "Edit journal entry",
-                                onmounted: move |_| editor_attach(
-                                    &format!("journal-edit-editor-{entry_id}"),
-                                    &format!("journal-edit-mirror-{entry_id}"),
-                                ),
-                            }
-                        }
+                // Rule 07 (hydration parity): single rsx body on every target,
+                // keyed per entry id so multiple open editors don't collide.
+                // Same progressive-enhancement pattern as the composer.
+                div { class: "bd-journal-editor-wrap",
+                    textarea {
+                        id: "journal-edit-body-{entry_id}",
+                        class: "me-textarea bd-journal-textarea",
+                        "data-testid": "journal-edit-body",
+                        rows: "5",
+                        value: "{edit_body}",
+                        oninput: move |e| edit_body.set(e.value()),
+                        onmounted: move |_| editor_enhance(
+                            &format!("journal-edit-body-{entry_id}"),
+                            &format!("journal-edit-editor-{entry_id}"),
+                        ),
                     }
-                    #[cfg(not(feature = "web"))]
-                    {
-                        rsx! {
-                            textarea {
-                                id: "journal-edit-body-{entry_id}",
-                                class: "me-textarea bd-journal-textarea",
-                                "data-testid": "journal-edit-body",
-                                rows: "5",
-                                value: "{edit_body}",
-                                oninput: move |e| edit_body.set(e.value()),
-                            }
-                        }
+                    div {
+                        id: "journal-edit-editor-{entry_id}",
+                        class: "me-textarea bd-journal-editor",
+                        "data-testid": "journal-edit-editor",
+                        contenteditable: "true",
+                        role: "textbox",
+                        "aria-multiline": "true",
+                        "aria-label": "Edit journal entry",
                     }
                 }
                 div { class: "bd-journal-entry-foot",

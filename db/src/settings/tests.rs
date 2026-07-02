@@ -133,6 +133,37 @@ async fn hardcover_key_set_get_and_clear_roundtrips() {
 }
 
 #[tokio::test]
+async fn set_hardcover_api_key_accepts_value_at_max_len() {
+    let _env = EnvVarGuard::set("HARDCOVER_API_KEY", None);
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let at_limit = "a".repeat(HARDCOVER_API_KEY_MAX_LEN);
+    set_hardcover_api_key(&pool, Some(&at_limit)).await.unwrap();
+    assert_eq!(
+        get_hardcover_api_key(&pool).await.unwrap().as_deref(),
+        Some(at_limit.as_str())
+    );
+}
+
+#[tokio::test]
+async fn set_hardcover_api_key_rejects_value_over_max_len() {
+    let _env = EnvVarGuard::set("HARDCOVER_API_KEY", None);
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let over_limit = "a".repeat(HARDCOVER_API_KEY_MAX_LEN + 1);
+    let err = set_hardcover_api_key(&pool, Some(&over_limit))
+        .await
+        .expect_err("over-limit value should be rejected");
+    match &err {
+        SettingsError::Validation(msg) => assert!(
+            msg.contains(&HARDCOVER_API_KEY_MAX_LEN.to_string()),
+            "error message should name the cap: {msg}"
+        ),
+        other => panic!("expected SettingsError::Validation, got {other:?}"),
+    }
+    // Validation must short-circuit before the KV write.
+    assert_eq!(get_hardcover_api_key(&pool).await.unwrap(), None);
+}
+
+#[tokio::test]
 async fn effective_hardcover_key_prefers_saved_over_env() {
     let _env = EnvVarGuard::set("HARDCOVER_API_KEY", Some("env-key"));
     let pool = init_db("sqlite::memory:").await.unwrap();

@@ -211,8 +211,46 @@ test("renders a markdown preview and blurs spoilers until clicked", async ({ pag
     .locator(".spoiler");
   await expect(spoiler).toHaveText("the secret");
   await expect(spoiler).not.toHaveClass(/revealed/);
+  // The wrapper is a native `<button>` so `aria-expanded` reflects state.
+  await expect(spoiler).toHaveAttribute("aria-expanded", "false");
   await spoiler.click();
   await expect(spoiler).toHaveClass(/revealed/);
+  await expect(spoiler).toHaveAttribute("aria-expanded", "true");
+
+  await deleteEntry(page, marker);
+});
+
+// ---------------------------------------------------------------------------
+// Action — keyboard users can reveal a spoiler with Enter or Space
+// ---------------------------------------------------------------------------
+
+test("reveals a spoiler with Enter and toggles it back with Space", async ({ page, request }) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  // Publish an entry whose only interactive element on the card is the spoiler
+  // button, so `focus()` + Enter/Space unambiguously drive it (independent of
+  // any surrounding controls).
+  const marker = `e2e-spoiler-kb-${Date.now()}`;
+  await publish(page, `keyboard ${marker}: ||hidden reveal||`);
+
+  const spoiler = page
+    .getByTestId("journal-entry")
+    .filter({ hasText: marker })
+    .locator(".spoiler");
+  await expect(spoiler).toHaveAttribute("aria-expanded", "false");
+
+  // Native `<button>` semantics: Enter fires click → reveals + expands.
+  await spoiler.focus();
+  await page.keyboard.press("Enter");
+  await expect(spoiler).toHaveClass(/revealed/);
+  await expect(spoiler).toHaveAttribute("aria-expanded", "true");
+
+  // Space toggles it back to hidden without scrolling the page (the button
+  // handles Space natively, so no explicit preventDefault is required).
+  await page.keyboard.press("Space");
+  await expect(spoiler).not.toHaveClass(/revealed/);
+  await expect(spoiler).toHaveAttribute("aria-expanded", "false");
 
   await deleteEntry(page, marker);
 });

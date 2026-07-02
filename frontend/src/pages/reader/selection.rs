@@ -65,6 +65,7 @@ pub(crate) fn SelectionPopover(
                         let text = sel_text.clone();
                         rsx! {
                             button {
+                                key: "{name}",
                                 class: "rd-swatch",
                                 r#type: "button",
                                 "data-color": "{name}",

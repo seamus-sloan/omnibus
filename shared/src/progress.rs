@@ -10,6 +10,14 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 mod tests;
 
+/// Maximum number of `SessionReport`s accepted per session-batch upload.
+///
+/// Enforced at both API boundaries — the mobile REST route
+/// `POST /api/progress/sessions` and the web RPC `rpc_record_sessions` —
+/// to bound per-request DB work and SQLite write-lock hold time. Not
+/// runtime-configurable; change here to move the cap.
+pub const SESSION_BATCH_CAP: usize = 500;
+
 /// Discriminator for the format-specific payload variant in [`ProgressUpdate`]
 /// / [`ProgressRecord`] / [`SessionReport`]. Serializes as a plain
 /// lowercase string (`"epub"` / `"audio"`) so the wire shape stays compact.

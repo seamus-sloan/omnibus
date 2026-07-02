@@ -34,6 +34,11 @@ use omnibus_shared::{
 #[cfg(feature = "server")]
 use omnibus_shared::AUTHOR_PHOTO_URL_MAX_LEN;
 
+// Only the server-side body of `rpc_record_sessions` (and its test) reference
+// this cap. Gate the import to keep the `web`/`mobile` client builds clean.
+#[cfg(feature = "server")]
+use omnibus_shared::SESSION_BATCH_CAP;
+
 // `BookSuggestion` is only constructed in the server-side `rpc_get_suggestions`
 // body; gate it so the web/mobile client builds don't flag an unused import.
 #[cfg(feature = "server")]
@@ -487,10 +492,17 @@ pub async fn rpc_get_hardcover_key() -> Result<HardcoverKeyStatus> {
 
 /// Admin-only: save (or clear, with `None`/blank) the Hardcover key in
 /// settings. Returns the new masked status — never echoes the raw key.
+/// Rejects tokens longer than `HARDCOVER_API_KEY_MAX_LEN` before the KV
+/// write, surfacing the validation message via `ServerFnError` (same shape
+/// every other RPC uses today; upgrading the codebase-wide 500-vs-4xx shape
+/// is tracked in `docs/review/backend.md`).
 #[post("/api/rpc/hardcover-key", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_set_hardcover_key(key: Option<String>) -> Result<HardcoverKeyStatus> {
-    db::set_hardcover_api_key(&pool.0, key.as_deref()).await?;
-    read_hardcover_key_status(&pool.0).await
+    match db::set_hardcover_api_key(&pool.0, key.as_deref()).await {
+        Ok(()) => read_hardcover_key_status(&pool.0).await,
+        Err(db::SettingsError::Validation(msg)) => Err(ServerFnError::new(msg).into()),
+        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+    }
 }
 
 /// Short masked preview of a secret — never the raw value. Long keys (Hardcover
@@ -756,15 +768,38 @@ pub async fn rpc_get_progress(
     Ok(db::progress::get_progress(&pool.0, user.id, &uuid, format).await?)
 }
 
+/// Reject over-cap session batches at the RPC boundary, mirroring the mobile
+/// REST route's 422 rejection in `server::backend::progress::post_sessions`.
+/// Extracted so the length check can be covered by a unit test that doesn't
+/// spin up the fullstack server-function router.
+///
+/// Only the server-side body of `rpc_record_sessions` calls this, so it is
+/// `server`-gated like `validate_author_photo_url` — otherwise it is dead
+/// code in the `mobile`/`web` client builds (caught by clippy).
+#[cfg(feature = "server")]
+fn check_session_batch_cap(reports: &[SessionReport]) -> Result<(), ServerFnError> {
+    if reports.len() > SESSION_BATCH_CAP {
+        return Err(ServerFnError::new(format!(
+            "batch too large: {} records exceeds maximum of {}",
+            reports.len(),
+            SESSION_BATCH_CAP
+        )));
+    }
+    Ok(())
+}
+
 /// Persist a batch of reading- or listening-session reports and return the
-/// inserted count. Validates every report up-front before any insert; the
-/// inserts then run sequentially (not in a single transaction), so a DB
-/// error mid-batch commits the rows that already succeeded and propagates
-/// the error to the caller — the count of committed rows is then lost.
-/// Reports whose `book_uuid` is unknown are silently dropped (counted out)
-/// rather than failing the batch.
+/// inserted count. Batches larger than `SESSION_BATCH_CAP` are rejected up
+/// front (mirroring the mobile REST route in `server::backend::progress`).
+/// Validates every report before any insert; the inserts then run
+/// sequentially (not in a single transaction), so a DB error mid-batch
+/// commits the rows that already succeeded and propagates the error to the
+/// caller — the count of committed rows is then lost. Reports whose
+/// `book_uuid` is unknown are silently dropped (counted out) rather than
+/// failing the batch.
 #[post("/api/rpc/progress/sessions", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_record_sessions(reports: Vec<SessionReport>) -> Result<u64> {
+    check_session_batch_cap(&reports)?;
     for r in &reports {
         if let Err(msg) = r.validate() {
             return Err(ServerFnError::new(msg).into());
@@ -1184,7 +1219,22 @@ pub async fn rpc_preview_shelf_rule(
 // suite as `cargo test -p omnibus-frontend --features server`.
 #[cfg(all(test, feature = "server"))]
 mod tests {
-    use super::{validate_author_photo_url, AUTHOR_PHOTO_URL_MAX_LEN};
+    use super::{
+        check_session_batch_cap, validate_author_photo_url, AUTHOR_PHOTO_URL_MAX_LEN,
+        SESSION_BATCH_CAP,
+    };
+    use omnibus_shared::{ProgressFormat, SessionReport};
+
+    fn dummy_report() -> SessionReport {
+        SessionReport {
+            book_uuid: "uuid".into(),
+            format: ProgressFormat::Epub,
+            started_at: 0,
+            ended_at: 1,
+            progress_units: 1,
+            device_id: None,
+        }
+    }
 
     // `rpc_save_settings`'s validation wiring is covered by the REST
     // boundary test `api_post_settings_returns_422_when_*_path_exceeds_max_len`
@@ -1218,6 +1268,32 @@ mod tests {
         assert!(
             err.to_string().contains("required"),
             "error message should say required: {err}"
+        );
+    }
+
+    #[test]
+    fn check_session_batch_cap_accepts_batch_at_cap() {
+        // Boundary: exactly at the cap must be accepted so a client packing
+        // batches to the documented maximum isn't rejected off-by-one.
+        let reports = vec![dummy_report(); SESSION_BATCH_CAP];
+        assert!(check_session_batch_cap(&reports).is_ok());
+    }
+
+    #[test]
+    fn check_session_batch_cap_rejects_batch_over_cap() {
+        // Mirrors the mobile REST path's 422 rejection in
+        // `server::backend::progress::post_sessions` — the web RPC path
+        // must not permit an unbounded per-record write loop.
+        let reports = vec![dummy_report(); SESSION_BATCH_CAP + 1];
+        let err = check_session_batch_cap(&reports).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&SESSION_BATCH_CAP.to_string()),
+            "error message should name the cap: {msg}"
+        );
+        assert!(
+            msg.contains(&(SESSION_BATCH_CAP + 1).to_string()),
+            "error message should name the batch length: {msg}"
         );
     }
 }

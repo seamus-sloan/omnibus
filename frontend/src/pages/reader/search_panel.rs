@@ -65,6 +65,7 @@ pub(super) fn SearchPanel(
                             let cfi = hit.cfi.clone();
                             rsx! {
                                 button {
+                                    key: "{hit.cfi}",
                                     class: "rd-search-row",
                                     r#type: "button",
                                     "data-testid": "reader-search-row",
