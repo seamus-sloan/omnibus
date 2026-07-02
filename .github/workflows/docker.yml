@@ -1,15 +1,11 @@
 name: Docker
 
 # Build + push the fullstack image to Docker Hub (sesloan/omnibus).
-# Triggers: release → version tags + latest; daily cron + manual → nightly.
+# Triggered only by published GitHub releases.
 # Needs repo secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (Read/Write token).
 on:
   release:
     types: [published]
-  schedule:
-    # 15:00 UTC = 11am EDT (10am EST). Cron is UTC-only — no DST.
-    - cron: "0 15 * * *"
-  workflow_dispatch:
 
 concurrency:
   group: docker-${{ github.ref }}
@@ -39,7 +35,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # release → 1.2.3/1.2/1/latest (latest=auto, semver only); cron/manual → nightly.
+      # release → 1.2.3/1.2/1/latest (latest=auto, semver only).
       - name: Derive image metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -51,8 +47,6 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=schedule,pattern=nightly
-            type=raw,value=nightly,enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -60,7 +54,6 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
-          # Re-pull base images each run so the nightly picks up upstream fixes.
           pull: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
