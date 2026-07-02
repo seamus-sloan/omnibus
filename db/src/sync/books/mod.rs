@@ -17,6 +17,9 @@ mod new;
 mod removed;
 mod shared;
 
+#[cfg(test)]
+mod tests;
+
 pub(super) use shared::{clear_missing_files_flag, materialize_new_covers};
 
 use backfill::stamp_last_indexed;
