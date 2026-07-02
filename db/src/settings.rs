@@ -322,8 +322,8 @@ pub async fn effective_hardcover_api_key(
 /// Masked status of the server-wide Hardcover key: the saved settings value
 /// wins (`source = "settings"`), then the `HARDCOVER_API_KEY` env var
 /// (`source = "env"`), else unset (`source = "none"`). Never returns the raw
-/// key — only the short masked preview from [`mask_key`]. Shared by the REST
-/// handler and the RPC server function so the fallback + masking live once.
+/// key — only a short masked preview. Shared by the REST handler and the RPC
+/// server function so the fallback + masking live once.
 pub async fn hardcover_key_status(pool: &SqlitePool) -> Result<HardcoverKeyStatus, SettingsError> {
     if let Some(k) = get_hardcover_api_key(pool).await? {
         return Ok(HardcoverKeyStatus {
