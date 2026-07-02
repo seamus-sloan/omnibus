@@ -1041,30 +1041,8 @@ body.atrium,
 }
 .spoiler.revealed { filter: none; cursor: auto; background: transparent; }
 
-/* "From the same hand" horizontal cover scroll */
-.bd-author-books-row {
-  display: flex;
-  gap: 16px;
-  overflow-x: auto;
-  padding: 4px 0 12px;
-  scroll-snap-type: x proximity;
-  -webkit-overflow-scrolling: touch;
-}
-.bd-author-book-tile {
-  flex: 0 0 140px;
-  scroll-snap-align: start;
-  display: block;
-  text-decoration: none;
-  cursor: pointer;
-}
-.bd-author-book-tile:hover .cover-wrap {
-  transform: translateY(-4px) scale(1.01);
-  filter: drop-shadow(0 22px 26px color-mix(in oklch, black 55%, transparent))
-          drop-shadow(0 2px 0 color-mix(in oklch, black 30%, transparent));
-}
-.bd-author-books-empty {
-  padding: 22px 24px;
-}
+/* "From the same hand" — the author-lead card + spreading cover stack live in
+   the F3.3 suggestions block below (they reuse `.suggest-stack` / `.sug-cap`). */
 
 /* Body — rail */
 .bd-rail {
@@ -4466,6 +4444,65 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   .suggest-stack > .cover-link { transition: none; }
   .suggest-stack .sug-cap { opacity: 1; }
 }
+
+/* ── "From the same hand" — author-lead card + spreading cover stack ───
+   Reuses the `.suggest-stack` mechanics above: the first child is a solid
+   author card (portrait + name + count) instead of a cover, and up to four
+   sibling covers spread out from behind it on row hover. Ported from the
+   Atrium design's omnibus.css. */
+.bd-same-hand-hint { font-size: 11px; color: var(--ink-3); margin: -6px 0 10px; }
+.bd-same-hand-empty { display: flex; gap: 20px; align-items: stretch; }
+.bd-same-hand-note {
+  flex: 1; display: grid; place-items: center; padding: 20px 24px;
+  border-radius: 12px; border: 1px dashed var(--line-2);
+  color: var(--ink-3); font-size: 14px; text-align: center;
+}
+
+.author-lead { flex: 0 0 168px; }
+.author-lead-card {
+  height: 252px;                       /* = a 168px cover at 2/3 */
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  gap: 13px; padding: 22px 15px 16px;
+  background: linear-gradient(180deg, var(--bg-1), color-mix(in oklch, var(--bg-1) 88%, var(--bg-0)));
+  border: 1px solid var(--line-2); border-radius: 8px;
+  box-shadow: 0 18px 22px color-mix(in oklch, black 42%, transparent),
+              0 2px 0 color-mix(in oklch, black 22%, transparent);
+}
+.author-portrait {
+  position: relative; width: 94px; height: 94px; border-radius: 999px;
+  display: grid; place-items: center; cursor: pointer; overflow: hidden; flex: 0 0 auto;
+  background: radial-gradient(120% 120% at 32% 22%,
+    color-mix(in oklch, var(--accent) 30%, var(--bg-2)), var(--bg-2));
+  border: 1px solid color-mix(in oklch, var(--accent) 50%, var(--line-2));
+  color: var(--ink-0); transition: transform .25s cubic-bezier(.2,.7,.2,1), box-shadow .25s;
+}
+.author-portrait .glyph { font-family: var(--serif); font-style: italic; font-size: 46px; line-height: 1; }
+.author-portrait:hover { transform: translateY(-2px) scale(1.03);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 42%, transparent); }
+.author-portrait .hint {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 0 5px;
+  font-family: var(--mono); font-size: 8.5px; letter-spacing: .08em; text-transform: uppercase;
+  background: color-mix(in oklch, var(--accent) 85%, black 6%); color: #fff;
+  opacity: 0; transform: translateY(100%); transition: transform .22s, opacity .22s;
+}
+.author-portrait:hover .hint { opacity: 1; transform: translateY(0); }
+.author-lead-name {
+  display: inline-block; font-family: var(--serif); font-size: 17px; line-height: 1.14;
+  color: var(--ink-0); cursor: pointer; text-wrap: balance;
+}
+.author-lead-name:hover { color: var(--accent); }
+.author-lead-count {
+  margin-top: 5px; font-family: var(--mono); font-size: 10px; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.author-lead-more {
+  margin-top: auto; font-size: 11px; color: var(--ink-2); cursor: pointer;
+  border-top: 1px solid var(--line-2); padding-top: 10px; width: 100%;
+}
+.author-lead-more:hover { color: var(--accent); }
+.sh-title { font-size: 13.5px; color: var(--ink-0); font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sh-sub { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
 
 /* Settings → Hardcover key field status line. */
 .hardcover-status { display: flex; align-items: center; gap: 8px; margin-top: 10px;
