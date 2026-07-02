@@ -2,9 +2,11 @@
 //!
 //! User-authored markdown is rendered to HTML and then sanitized with a strict
 //! `ammonia` allowlist — never trust the raw output. A custom `||spoiler||`
-//! pass runs over the source first, wrapping spoiler regions in a
-//! `<span class="spoiler">` that the sanitizer is configured to keep (and the
-//! book-detail page blurs until clicked).
+//! pass runs over the source first, wrapping spoiler regions in a native
+//! `<button class="spoiler" type="button" aria-expanded="false">` — a real
+//! button is focusable and Enter/Space-actionable for free, so keyboard and
+//! screen-reader users get the same reveal affordance as mouse users. The
+//! book-detail page blurs it until clicked.
 
 use pulldown_cmark::{html, Options, Parser};
 
@@ -24,13 +26,18 @@ pub fn render(md: &str) -> String {
     sanitize(&raw_html)
 }
 
-/// Sanitize rendered HTML, additionally permitting `<span class="spoiler">`
-/// (the only inline element the spoiler pass introduces) and the read-only
-/// task-list checkbox pulldown-cmark emits for `- [ ]` items.
+/// Sanitize rendered HTML, additionally permitting the spoiler `<button>` the
+/// spoiler pass introduces and the read-only task-list checkbox pulldown-cmark
+/// emits for `- [ ]` items.
 fn sanitize(html: &str) -> String {
     let cleaned = ammonia::Builder::default()
-        .add_tags(["span", "input"])
-        .add_allowed_classes("span", ["spoiler"])
+        .add_tags(["input", "button"])
+        // Spoiler wrapper: only the `spoiler` class, `type="button"` (pinned via
+        // value allowlist so an arbitrary type like `submit` can't leak in),
+        // and `aria-expanded` (kept in sync by the client-side toggle handler).
+        .add_allowed_classes("button", ["spoiler"])
+        .add_tag_attribute_values("button", "type", ["button"])
+        .add_tag_attribute_values("button", "aria-expanded", ["false", "true"])
         // Task-list checkboxes only — `disabled`/`checked` are valueless flags;
         // `type` is pinned to `checkbox` via the value allowlist (kept out of
         // the generic attribute set, which would otherwise permit any value).
@@ -104,10 +111,12 @@ fn has_attr_value(tag: &str, name: &str, value: &str) -> bool {
 }
 
 /// Rewrite `||text||` spoiler markers in the markdown **source** into inline
-/// `<span class="spoiler">text</span>` HTML, which pulldown-cmark passes through
-/// (and whose inner text still gets markdown inline processing). Pairs are
-/// matched greedily left-to-right; an unterminated trailing `||` is left
-/// literal.
+/// `<button class="spoiler" type="button" aria-expanded="false">text</button>`
+/// HTML, which pulldown-cmark passes through (and whose inner text still gets
+/// markdown inline processing). Emitting a native button — rather than a
+/// `<span>` with click-only handling — means Tab reaches it, Enter/Space
+/// activate it, and screen readers announce it as a button. Pairs are matched
+/// greedily left-to-right; an unterminated trailing `||` is left literal.
 fn wrap_spoilers(md: &str) -> String {
     let mut out = String::with_capacity(md.len());
     let mut rest = md;
@@ -116,9 +125,9 @@ fn wrap_spoilers(md: &str) -> String {
         match after.find("||") {
             Some(close) => {
                 out.push_str(&rest[..open]);
-                out.push_str("<span class=\"spoiler\">");
+                out.push_str("<button class=\"spoiler\" type=\"button\" aria-expanded=\"false\">");
                 out.push_str(&after[..close]);
-                out.push_str("</span>");
+                out.push_str("</button>");
                 rest = &after[close + 2..];
             }
             None => break, // no closing marker — emit the remainder verbatim
@@ -159,18 +168,23 @@ mod tests {
     }
 
     #[test]
-    fn wraps_spoiler_markers_in_spans() {
+    fn wraps_spoiler_markers_in_keyboard_reachable_buttons() {
+        // The spoiler wrapper is a real button so keyboard/screen-reader users
+        // can reveal it. `type="button"` keeps it out of any surrounding form
+        // (composer submits happen via a distinct Publish button), and
+        // `aria-expanded="false"` seeds the collapsed state the client flips.
         let html = render("the killer is ||the butler||");
-        assert!(
-            html.contains("<span class=\"spoiler\">the butler</span>"),
-            "got: {html}"
-        );
+        assert!(html.contains("<button "), "spoiler is a button: {html}");
+        assert!(html.contains("class=\"spoiler\""), "got: {html}");
+        assert!(html.contains("type=\"button\""), "got: {html}");
+        assert!(html.contains("aria-expanded=\"false\""), "got: {html}");
+        assert!(html.contains(">the butler</button>"), "got: {html}");
     }
 
     #[test]
     fn spoiler_inner_text_is_markdown_processed() {
         let html = render("||the **butler** did it||");
-        assert!(html.contains("<span class=\"spoiler\">"), "got: {html}");
+        assert!(html.contains("class=\"spoiler\""), "got: {html}");
         assert!(html.contains("<strong>butler</strong>"), "got: {html}");
     }
 
@@ -178,6 +192,7 @@ mod tests {
     fn unterminated_spoiler_marker_is_left_literal() {
         let html = render("a lone ||marker here");
         assert!(!html.contains("class=\"spoiler\""), "got: {html}");
+        assert!(!html.contains("<button"), "no button emitted: {html}");
         assert!(html.contains("||marker here"), "got: {html}");
     }
 
@@ -240,8 +255,35 @@ mod tests {
 
     #[test]
     fn disallows_arbitrary_span_classes() {
-        // Only the `spoiler` class survives; a hand-authored class is dropped.
+        // Since spoilers no longer use `<span>`, the sanitizer no longer
+        // allowlists any class on it: `<span>` itself remains under ammonia's
+        // default tag list, but its `class` attribute (and thus a hand-authored
+        // `spoiler` or `evil` class) is stripped.
         let html = render("<span class=\"evil\">x</span>");
         assert!(!html.contains("evil"), "non-spoiler class dropped: {html}");
+        assert!(!html.contains("class="), "span class attr dropped: {html}");
+    }
+
+    #[test]
+    fn disallows_arbitrary_button_classes_and_attrs() {
+        // Only the spoiler wrapper's exact shape (`class="spoiler"`,
+        // `type="button"`, `aria-expanded` ∈ {true,false}) is allowlisted; any
+        // other class, an off-list `type`, or a spoofed `aria-expanded` value
+        // gets stripped so a hand-authored `<button>` can't impersonate site
+        // chrome or fire form submits.
+        let html = render(
+            "<button class=\"evil primary\" type=\"submit\" aria-expanded=\"maybe\" onclick=\"x()\">boom</button>",
+        );
+        assert!(!html.contains("evil"), "arbitrary class dropped: {html}");
+        assert!(!html.contains("primary"), "arbitrary class dropped: {html}");
+        assert!(
+            !html.contains("type=\"submit\""),
+            "off-list type dropped: {html}"
+        );
+        assert!(
+            !html.contains("aria-expanded=\"maybe\""),
+            "off-list aria value dropped: {html}"
+        );
+        assert!(!html.contains("onclick"), "handler dropped: {html}");
     }
 }
