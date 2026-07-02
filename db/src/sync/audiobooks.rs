@@ -125,13 +125,14 @@ async fn sync_audiobooks_removed(
     let mut missing = 0usize;
     // Chunk at 500 to stay under SQLite's 999-param cap when a whole library
     // (or any large diff) is removed — same convention as `sync_removed` in
-    // `books.rs`.
+    // `books/removed.rs`.
     for chunk in removed_uuids.chunks(500) {
         let placeholders = std::iter::repeat_n("?", chunk.len())
             .collect::<Vec<_>>()
             .join(", ");
-        // Resolve affected ids and drop their file rows — retaining each
-        // `books` row (and its links/FTS) as a fileless book (F2).
+        // Resolve affected ids once, then drop their file rows and flag them
+        // missing with a single batched DELETE + UPDATE keyed on the id list —
+        // retaining each `books` row (and its links/FTS) as a fileless book (F2).
         let id_sql =
             format!("SELECT id FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
         let mut q = sqlx::query_scalar::<_, i64>(&id_sql).bind(library_id);
@@ -139,10 +140,11 @@ async fn sync_audiobooks_removed(
             q = q.bind(uuid);
         }
         let ids = q.fetch_all(&mut **tx).await?;
-        missing += ids.len();
-        for id in ids {
-            super::books::mark_book_files_missing(tx, id).await?;
+        if ids.is_empty() {
+            continue;
         }
+        missing += ids.len();
+        mark_book_files_missing_batch(tx, &ids).await?;
     }
     if missing > 0 {
         tracing::info!(
@@ -156,6 +158,42 @@ async fn sync_audiobooks_removed(
     // entry instead (the target book survives, possibly fileless).
     // `remove_attached_files` already chunks internally.
     attach::remove_attached_files(tx, removed_uuids).await?;
+    Ok(())
+}
+
+/// Batched form of `books::mark_book_files_missing` for the Removed bucket: one
+/// IN-list DELETE of the `book_files` rows (parts/chapters cascade) and one
+/// guarded UPDATE flagging the now-fileless `books` rows missing (F2), instead
+/// of two statements per book. The UPDATE keeps `mark_book_files_missing`'s
+/// guards — `is_missing_files = 0` preserves the original `missing_files_since`
+/// on a re-run, and `is_missing_files_override = 0` leaves intentionally-fileless
+/// rows (wishlist) un-flagged. `ids` must be non-empty and within the SQLite
+/// 999-param cap (the caller chunks at 500).
+async fn mark_book_files_missing_batch(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    ids: &[i64],
+) -> Result<(), SyncError> {
+    let placeholders = std::iter::repeat_n("?", ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let del_sql = format!("DELETE FROM book_files WHERE book_id IN ({placeholders})");
+    let mut del_q = sqlx::query(&del_sql);
+    for id in ids {
+        del_q = del_q.bind(id);
+    }
+    del_q.execute(&mut **tx).await?;
+
+    let upd_sql = format!(
+        "UPDATE books
+            SET is_missing_files = 1, missing_files_since = unixepoch()
+          WHERE id IN ({placeholders}) AND is_missing_files = 0 AND is_missing_files_override = 0"
+    );
+    let mut upd_q = sqlx::query(&upd_sql);
+    for id in ids {
+        upd_q = upd_q.bind(id);
+    }
+    upd_q.execute(&mut **tx).await?;
     Ok(())
 }
 
@@ -269,17 +307,35 @@ async fn sync_audiobooks_new(
     mut on_book_written: impl FnMut(),
 ) -> Result<Vec<(String, String, Vec<u8>)>, SyncError> {
     let mut new_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
+    if new_books.is_empty() {
+        return Ok(new_covers);
+    }
+    // Pre-fetch every same-scan_key `books` row in one batch (chunked at 499 to
+    // stay under SQLite's 999-param cap), keyed on the F2 `scan_key` — mirrors
+    // `sync_audiobooks_changed`. New entries carry distinct scan_keys, so each
+    // maps at most one existing row and the map never goes stale mid-loop.
+    let all_scan_keys: Vec<String> = new_books.iter().map(|b| b.scan_key.clone()).collect();
+    let mut id_map: HashMap<String, (i64, String)> = HashMap::new();
+    for chunk in all_scan_keys.chunks(499) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let id_sql = format!(
+            "SELECT scan_key, id, uuid FROM books
+              WHERE library_id = ? AND scan_key IN ({placeholders})"
+        );
+        let mut q = sqlx::query_as::<_, (String, i64, String)>(&id_sql).bind(library_id);
+        for sk in chunk {
+            q = q.bind(sk);
+        }
+        for (sk, id, uuid) in q.fetch_all(&mut **tx).await? {
+            id_map.insert(sk, (id, uuid));
+        }
+    }
+
     for b in new_books {
         // Same-scan_key row (a fileless book whose group returned, or a
         // `replace_books` re-add) → rewrite in place, *before* the
         // cross-format attach heuristic, preserving `books.uuid`.
-        let existing: Option<(i64, String)> =
-            sqlx::query_as("SELECT id, uuid FROM books WHERE library_id = ? AND scan_key = ?")
-                .bind(library_id)
-                .bind(&b.scan_key)
-                .fetch_optional(&mut **tx)
-                .await?;
-        if let Some((book_id, uuid)) = existing {
+        if let Some((book_id, uuid)) = id_map.get(&b.scan_key).map(|(id, u)| (*id, u.clone())) {
             rewrite_audiobook_in_place(tx, book_id, &uuid, b, &mut new_covers).await?;
             on_book_written();
             continue;
