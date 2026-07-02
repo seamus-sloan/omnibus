@@ -1459,6 +1459,83 @@ async fn sync_audiobooks_with_removed_above_bind_cap_succeeds() {
         books_total, fts_count,
         "every fileless audiobook keeps its books + FTS row"
     );
+
+    // The Removed bucket must flag every affected row as
+    // `is_missing_files = 1` so `missing_files::gc_books_missing_files` can
+    // eventually purge long-missing, user-data-free books. Regression guard on
+    // the batched `DELETE ... IN (…)` / `UPDATE ... IN (…)` pair replacing
+    // the pre-batch per-book `mark_book_files_missing` loop.
+    let missing_flagged: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM books WHERE is_missing_files = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        missing_flagged, N as i64,
+        "the batched Removed pass must flag every audiobook `is_missing_files = 1`"
+    );
+}
+
+/// F2 acceptance for the audiobook path: removing a group makes its book
+/// fileless (grid hides it, but the row + durable `books.uuid` survive), and
+/// when the same group returns via the New bucket it re-attaches to that row.
+/// Regression guard on the batched `sync_audiobooks_new` scan_key pre-fetch —
+/// a fileless book whose group returns must still take the rewrite-in-place
+/// branch and preserve the uuid, not mint a fresh one.
+#[tokio::test]
+async fn sync_audiobooks_new_relinks_returning_group_to_same_uuid_after_fileless_gap() {
+    let _covers = CoversTempDir::new("ab_fileless_relink");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            new_books: vec![indexed_audiobook("Author/Book.m4b", "Book", Some("Author"))],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let uuid1 = crate::test_support::uuid_by_scan_key(&pool, "Author/Book.m4b").await;
+
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            removed_uuids: vec![uuid1.clone()],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        list_books(&pool, "/lib").await.unwrap().is_empty(),
+        "fileless audiobook is hidden from the library grid"
+    );
+    assert_eq!(
+        crate::test_support::uuid_by_scan_key(&pool, "Author/Book.m4b").await,
+        uuid1,
+        "fileless audiobook retains its scan_key and durable uuid"
+    );
+
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            new_books: vec![indexed_audiobook("Author/Book.m4b", "Book", Some("Author"))],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let after = list_books(&pool, "/lib").await.unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(
+        after[0].unique_identifier.as_deref(),
+        Some(uuid1.as_str()),
+        "returning audiobook group relinks to the same uuid (no orphaned user data)"
+    );
 }
 
 // Audiobook parts + chapters: row contents and edge cases.
