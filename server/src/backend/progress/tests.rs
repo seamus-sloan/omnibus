@@ -398,7 +398,10 @@ async fn api_post_sessions_batch_resolves_direct_and_merged_uuids_in_one_prefetc
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(against_survivor, 2, "both reports land against canonical uuid");
+    assert_eq!(
+        against_survivor, 2,
+        "both reports land against canonical uuid"
+    );
     let against_alias: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ? AND book_uuid = 'alias-uuid'",
     )
@@ -406,7 +409,10 @@ async fn api_post_sessions_batch_resolves_direct_and_merged_uuids_in_one_prefetc
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(against_alias, 0, "no row must key on the merged alias string");
+    assert_eq!(
+        against_alias, 0,
+        "no row must key on the merged alias string"
+    );
 }
 
 #[tokio::test]
