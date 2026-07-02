@@ -13,7 +13,7 @@ use axum::{
     Extension, Json, Router,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
-use omnibus_db::auth::{self as auth_db, AuthError, SessionKind};
+use omnibus_db::auth::{self as auth_db, AuthError, NewSession, SessionKind};
 use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};
 
 use super::extractor::{extract_token, AuthUser};
@@ -194,26 +194,23 @@ async fn issue_session(
 ) -> Response {
     let bearer = want_bearer(client_kind.as_deref());
 
-    let device_id = if let (Some(name), Some(kind)) =
-        (device_name.as_deref(), client_kind.as_deref())
-    {
-        match auth_db::register_device(state.pool(), user.id, name, kind, client_version.as_deref())
-            .await
-        {
-            Ok(d) => Some(d.id),
-            Err(e) => return auth_error_to_response(e),
-        }
-    } else {
-        None
-    };
-
     let (kind, ttl) = if bearer {
         (SessionKind::Bearer, BEARER_TTL_SECS)
     } else {
         (SessionKind::Cookie, COOKIE_TTL_SECS)
     };
 
-    let issued = match auth_db::create_session(state.pool(), user.id, device_id, kind, ttl).await {
+    let issued = match persist_session(
+        state,
+        user.id,
+        device_name.as_deref(),
+        client_kind.as_deref(),
+        client_version.as_deref(),
+        kind,
+        ttl,
+    )
+    .await
+    {
         Ok(s) => s,
         Err(e) => return auth_error_to_response(e),
     };
@@ -233,6 +230,34 @@ async fn issue_session(
         let jar = jar.add(session_cookie(issued.raw_token, ttl));
         (StatusCode::OK, jar, Json(body)).into_response()
     }
+}
+
+/// Atomically insert the (optional) device row and the session row inside a
+/// single `sqlx::Transaction`. If either write — or the commit — fails, the
+/// transaction rolls back on drop so a device row never lingers without its
+/// matching session (issue #627).
+async fn persist_session(
+    state: &AppState,
+    user_id: i64,
+    device_name: Option<&str>,
+    client_kind: Option<&str>,
+    client_version: Option<&str>,
+    kind: SessionKind,
+    ttl: i64,
+) -> Result<NewSession, AuthError> {
+    let mut tx = state.pool().begin().await?;
+
+    let device_id = if let (Some(name), Some(client_kind)) = (device_name, client_kind) {
+        let d =
+            auth_db::register_device(&mut *tx, user_id, name, client_kind, client_version).await?;
+        Some(d.id)
+    } else {
+        None
+    };
+
+    let issued = auth_db::create_session(&mut *tx, user_id, device_id, kind, ttl).await?;
+    tx.commit().await?;
+    Ok(issued)
 }
 
 async fn logout_handler(

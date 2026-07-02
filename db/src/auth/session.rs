@@ -1,6 +1,6 @@
 //! Sessions.
 
-use sqlx::{Row, SqlitePool};
+use sqlx::{Executor, Row, Sqlite, SqlitePool};
 
 use super::token::{generate_token, hash_token, parse_session_token};
 use super::{now_unix, AuthError, AuthResult, NewSession, Session, SessionKind, User};
@@ -16,13 +16,21 @@ const SESSION_TOUCH_THRESHOLD_SECS: i64 = 5 * 60;
 pub(crate) const SESSION_IDLE_TIMEOUT_SECS: i64 = 7 * 24 * 60 * 60;
 
 /// Create a new session for `user_id`, returning the session record and the raw (unhashed) token.
-pub async fn create_session(
-    pool: &SqlitePool,
+///
+/// Accepts any `sqlx::Executor` so callers can pass either a `&SqlitePool` for
+/// a standalone insert or `&mut *tx` from within a transaction — the login
+/// path in `server::auth::handlers::issue_session` uses the latter to keep the
+/// device + session inserts atomic (see #627).
+pub async fn create_session<'e, E>(
+    executor: E,
     user_id: i64,
     device_id: Option<i64>,
     kind: SessionKind,
     ttl_secs: i64,
-) -> AuthResult<NewSession> {
+) -> AuthResult<NewSession>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
     let raw = generate_token()?;
     let hash = hash_token(&raw);
     let now = now_unix();
@@ -38,7 +46,7 @@ pub async fn create_session(
     .bind(device_id)
     .bind(kind.as_str())
     .bind(expires)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
 
     let session = Session {
