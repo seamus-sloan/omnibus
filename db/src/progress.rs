@@ -144,7 +144,9 @@ pub async fn get_progress(
 /// resolves to the surviving book and is recorded.
 ///
 /// The caller is responsible for committing or rolling back the transaction.
-/// Use this variant when inserting a batch so the entire batch is atomic.
+/// Batch writers that already pre-resolved every uuid via
+/// [`crate::resolve_canonical_book_uuids_bulk_exec`] should skip this wrapper
+/// and call [`insert_session_tx`] directly to avoid the per-row SELECT.
 pub async fn record_session_tx(
     tx: &mut Transaction<'_, Sqlite>,
     user_id: i64,
@@ -159,6 +161,25 @@ pub async fn record_session_tx(
     else {
         return Ok(false);
     };
+    insert_session_tx(tx, user_id, report, &book_uuid).await?;
+    Ok(true)
+}
+
+/// Insert one session row into the correct per-format table using a
+/// **pre-resolved** canonical `books.uuid`. This is the INSERT-only half of
+/// [`record_session_tx`], exposed so batch writers (see `post_sessions`) can
+/// pre-resolve every uuid in the batch through
+/// [`crate::resolve_canonical_book_uuids_bulk_exec`] and then loop through
+/// pure inserts — collapsing an N-report batch's 2N queries into
+/// `chunks + N`. The caller is responsible for committing or rolling back
+/// the transaction; the caller also owns the "skip on unknown uuid" branch
+/// (an entry missing from the bulk map).
+pub async fn insert_session_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+    report: &SessionReport,
+    canonical_uuid: &str,
+) -> Result<(), ProgressError> {
     match report.format {
         ProgressFormat::Epub => {
             sqlx::query(
@@ -167,7 +188,7 @@ pub async fn record_session_tx(
                  VALUES (?, ?, ?, ?, ?, ?)",
             )
             .bind(user_id)
-            .bind(&book_uuid)
+            .bind(canonical_uuid)
             .bind(report.started_at)
             .bind(report.ended_at)
             .bind(report.progress_units)
@@ -182,7 +203,7 @@ pub async fn record_session_tx(
                  VALUES (?, ?, ?, ?, ?, ?)",
             )
             .bind(user_id)
-            .bind(&book_uuid)
+            .bind(canonical_uuid)
             .bind(report.started_at)
             .bind(report.ended_at)
             .bind(report.progress_units)
@@ -191,7 +212,7 @@ pub async fn record_session_tx(
             .await?;
         }
     }
-    Ok(true)
+    Ok(())
 }
 
 /// Append one session row to the per-format table. Returns `Ok(true)` when
@@ -199,8 +220,10 @@ pub async fn record_session_tx(
 /// the `book_uuid` is unknown. The handler surfaces the inserted count to
 /// the client so it can tell which queued reports actually persisted.
 ///
-/// For batch inserts, prefer [`record_session_tx`] inside a caller-managed
-/// transaction so the entire batch rolls back atomically on error.
+/// For batch inserts, prefer the pattern in `post_sessions`: pre-resolve
+/// every uuid via [`crate::resolve_canonical_book_uuids_bulk_exec`], then
+/// loop [`insert_session_tx`] inside a caller-managed transaction so the
+/// entire batch rolls back atomically on error and no per-row SELECT fires.
 pub async fn record_session(
     pool: &SqlitePool,
     user_id: i64,
