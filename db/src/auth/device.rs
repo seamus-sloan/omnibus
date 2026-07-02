@@ -1,6 +1,6 @@
 //! Devices.
 
-use sqlx::{Row, SqlitePool};
+use sqlx::{Executor, Row, Sqlite, SqlitePool};
 
 use super::{AuthError, AuthResult, Device};
 
@@ -57,14 +57,21 @@ pub fn validate_client_version(version: Option<&str>) -> AuthResult<()> {
     validate_device_field(version, MAX_CLIENT_VERSION_CHARS, "client_version")
 }
 
-/// Register a new device for a user after validating the name and client version; returns the inserted device record.
-pub async fn register_device(
-    pool: &SqlitePool,
+/// Register a new device for a user after validating the name and client version;
+/// returns the inserted device record. Executor-generic so callers issuing device
+/// + session inserts atomically (see `server::auth::handlers::issue_session`) can
+/// pass `&mut *tx` and roll back both writes on failure of the session insert.
+/// Standalone callers pass `&pool`.
+pub async fn register_device<'e, E>(
+    executor: E,
     user_id: i64,
     name: &str,
     client_kind: &str,
     client_version: Option<&str>,
-) -> AuthResult<Device> {
+) -> AuthResult<Device>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
     // Guards run *before* the INSERT so a rejected field never reaches
     // SQLite. Mirrors the placement of `validate_password` in `users`.
     validate_device_name(Some(name))?;
@@ -78,7 +85,7 @@ pub async fn register_device(
     .bind(name)
     .bind(client_kind)
     .bind(client_version)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
     Ok(Device {
         id: row.get("id"),

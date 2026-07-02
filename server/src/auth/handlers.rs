@@ -194,11 +194,32 @@ async fn issue_session(
 ) -> Response {
     let bearer = want_bearer(client_kind.as_deref());
 
-    let device_id = if let (Some(name), Some(kind)) =
+    let (kind, ttl) = if bearer {
+        (SessionKind::Bearer, BEARER_TTL_SECS)
+    } else {
+        (SessionKind::Cookie, COOKIE_TTL_SECS)
+    };
+
+    // Wrap `register_device` and `create_session` in one transaction so a
+    // failure of the session INSERT rolls back the device INSERT rather than
+    // leaving an orphan `devices` row (issue #627). Any `?`/early return
+    // below drops `tx` before `commit`; sqlx's Drop issues a ROLLBACK.
+    let mut tx = match state.pool().begin().await {
+        Ok(tx) => tx,
+        Err(e) => return internal(e),
+    };
+
+    let device_id = if let (Some(name), Some(kind_str)) =
         (device_name.as_deref(), client_kind.as_deref())
     {
-        match auth_db::register_device(state.pool(), user.id, name, kind, client_version.as_deref())
-            .await
+        match auth_db::register_device(
+            &mut *tx,
+            user.id,
+            name,
+            kind_str,
+            client_version.as_deref(),
+        )
+        .await
         {
             Ok(d) => Some(d.id),
             Err(e) => return auth_error_to_response(e),
@@ -207,16 +228,14 @@ async fn issue_session(
         None
     };
 
-    let (kind, ttl) = if bearer {
-        (SessionKind::Bearer, BEARER_TTL_SECS)
-    } else {
-        (SessionKind::Cookie, COOKIE_TTL_SECS)
-    };
-
-    let issued = match auth_db::create_session(state.pool(), user.id, device_id, kind, ttl).await {
+    let issued = match auth_db::create_session(&mut *tx, user.id, device_id, kind, ttl).await {
         Ok(s) => s,
         Err(e) => return auth_error_to_response(e),
     };
+
+    if let Err(e) = tx.commit().await {
+        return internal(e);
+    }
 
     let body = LoginResponse {
         user: user_summary(&user),
