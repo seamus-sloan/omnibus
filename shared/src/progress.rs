@@ -14,9 +14,8 @@ mod tests;
 ///
 /// Enforced at both API boundaries — the mobile REST route
 /// `POST /api/progress/sessions` and the web RPC `rpc_record_sessions` —
-/// so no authenticated client can drive an unbounded per-record write
-/// loop under a single transaction and hold the SQLite write lock longer
-/// than intended. Not runtime-configurable; change here to move the cap.
+/// to bound per-request DB work and SQLite write-lock hold time. Not
+/// runtime-configurable; change here to move the cap.
 pub const SESSION_BATCH_CAP: usize = 500;
 
 /// Discriminator for the format-specific payload variant in [`ProgressUpdate`]
