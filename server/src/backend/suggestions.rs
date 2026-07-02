@@ -124,13 +124,19 @@ pub(super) struct SetHardcoverKey {
 }
 
 /// Admin-only: save or clear the Hardcover key; returns the new masked status.
+/// A value over `HARDCOVER_API_KEY_MAX_LEN` returns 422 with the typed
+/// validation message so an admin sees a per-case error rather than a 500.
 pub(super) async fn post_hardcover_key(
     _admin: AdminUser,
     State(state): State<AppState>,
     Json(body): Json<SetHardcoverKey>,
 ) -> Response {
-    if let Err(e) = db::set_hardcover_api_key(&state.pool, body.key.as_deref()).await {
-        return internal("save hardcover key", e);
+    match db::set_hardcover_api_key(&state.pool, body.key.as_deref()).await {
+        Ok(()) => {}
+        Err(db::SettingsError::Validation(msg)) => {
+            return (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
+        }
+        Err(e) => return internal("save hardcover key", e),
     }
     match read_status(&state.pool).await {
         Ok(s) => Json(s).into_response(),

@@ -633,6 +633,154 @@ async fn sync_empty_plan_with_full_removed_clears_library() {
 
     assert!(list_books(&pool, "/lib").await.unwrap().is_empty());
 }
+
+/// A single Removed bucket exceeding SQLite's 999-bind cap must succeed after
+/// batching: `sync_removed` chunks the id-resolution SELECT *and* the batched
+/// DELETE + UPDATE that replaced the per-book `mark_book_files_missing` fan-out.
+/// 1000 uuids exercises both the chunk boundary (500 + 500) and the batched-DML
+/// path so a regression back to the per-book loop would still pass but the
+/// bind-cap failure below would surface immediately.
+#[tokio::test]
+async fn sync_books_with_removed_above_bind_cap_succeeds() {
+    let _covers = CoversTempDir::new("book_remove_chunk");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    // 1000 books forces the chunked path through two chunks (500 + 500) and
+    // pushes an un-chunked `IN (?, ?, ...)` past the 999-bind cap.
+    const N: usize = 1000;
+    let new_books: Vec<_> = (0..N)
+        .map(|i| indexed(&format!("book{i:04}.epub"), Some("t"), &[], &[], None, None))
+        .collect();
+    replace_books(&pool, "/lib", new_books).await.unwrap();
+    assert_eq!(list_books(&pool, "/lib").await.unwrap().len(), N);
+
+    let all_uuids: Vec<String> = sqlx::query_scalar("SELECT uuid FROM books")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+    // Wholesale remove all 1000 in a single plan.
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            removed_uuids: all_uuids,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("wholesale removal of >500 books must not exceed bind cap");
+
+    // Every row is retained as fileless (books row + FTS survive), grid hides
+    // them.
+    assert!(
+        list_books(&pool, "/lib").await.unwrap().is_empty(),
+        "every book is hidden from the grid (fileless) after wholesale removal"
+    );
+    let books_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let files_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM book_files")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let flagged: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books WHERE is_missing_files = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(books_total, N as i64, "books rows retained as fileless");
+    assert_eq!(files_total, 0, "every book_files row was dropped");
+    assert_eq!(
+        flagged, N as i64,
+        "every row was flagged missing by the batched UPDATE"
+    );
+}
+
+/// The batched New path pre-fetches a `HashMap` of `(scan_key -> (id, uuid))`
+/// before entering the per-book loop. When a mix of returning-file (fileless)
+/// entries and truly-new entries lands in one plan, the returning files must
+/// re-attach to their existing rows (preserving `books.uuid`) and the new files
+/// must mint fresh rows — all resolved off the in-memory map with no per-book
+/// SELECT.
+#[tokio::test]
+async fn sync_new_batch_pre_fetch_re_attaches_returning_and_inserts_fresh() {
+    let _covers = CoversTempDir::new("new_batch_prefetch");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    // Seed 3 books, then mark them all fileless so the next sync sees their
+    // scan_keys as candidates for re-attach.
+    replace_books(
+        &pool,
+        "/lib",
+        vec![
+            indexed("a.epub", Some("A"), &["X"], &[], None, None),
+            indexed("b.epub", Some("B"), &["Y"], &[], None, None),
+            indexed("c.epub", Some("C"), &["Z"], &[], None, None),
+        ],
+    )
+    .await
+    .unwrap();
+    let uuid_a = crate::test_support::uuid_by_scan_key(&pool, "a.epub").await;
+    let uuid_b = crate::test_support::uuid_by_scan_key(&pool, "b.epub").await;
+    let uuid_c = crate::test_support::uuid_by_scan_key(&pool, "c.epub").await;
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            removed_uuids: vec![uuid_a.clone(), uuid_b.clone(), uuid_c.clone()],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // One plan: 2 returning files (a.epub, c.epub) + 1 brand-new (d.epub). The
+    // batched scan_key SELECT resolves a.epub + c.epub to their existing rows;
+    // d.epub falls through the map lookup, tries the attach heuristic, then
+    // inserts.
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            new_books: vec![
+                indexed("a.epub", Some("A"), &["X"], &[], None, None),
+                indexed("c.epub", Some("C"), &["Z"], &[], None, None),
+                indexed("d.epub", Some("D"), &["W"], &[], None, None),
+            ],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let visible = list_books(&pool, "/lib").await.unwrap();
+    assert_eq!(
+        visible.len(),
+        3,
+        "two re-attached rows + one new row are visible; b.epub stays fileless"
+    );
+    assert_eq!(
+        crate::test_support::uuid_by_scan_key(&pool, "a.epub").await,
+        uuid_a,
+        "returning a.epub keeps its durable uuid (re-attached, not re-minted)"
+    );
+    assert_eq!(
+        crate::test_support::uuid_by_scan_key(&pool, "c.epub").await,
+        uuid_c,
+        "returning c.epub keeps its durable uuid (re-attached, not re-minted)"
+    );
+    // The fileless row (b.epub) survives with its uuid; the new row (d.epub)
+    // has a fresh uuid.
+    assert_eq!(
+        crate::test_support::uuid_by_scan_key(&pool, "b.epub").await,
+        uuid_b,
+        "fileless b.epub retains its scan_key + uuid across the sync"
+    );
+    let uuid_d = crate::test_support::uuid_by_scan_key(&pool, "d.epub").await;
+    assert!(![uuid_a, uuid_b, uuid_c].contains(&uuid_d));
+}
+
 #[tokio::test]
 async fn reindex_replaces_library_atomically() {
     let _covers = CoversTempDir::new("atomic");
@@ -1458,6 +1606,88 @@ async fn sync_audiobooks_with_removed_above_bind_cap_succeeds() {
     assert_eq!(
         books_total, fts_count,
         "every fileless audiobook keeps its books + FTS row"
+    );
+}
+
+/// F2 for audiobooks: removing a group makes its book fileless (hidden from the
+/// grid, `books` row + durable uuid retained); when the same group returns via
+/// the New bucket it re-attaches to that row, preserving the uuid. Exercises the
+/// batched scan_key pre-fetch map in `sync_audiobooks_new` driving the
+/// rewrite-in-place branch instead of a per-book `SELECT`.
+#[tokio::test]
+async fn sync_audiobooks_removed_group_goes_fileless_then_returning_group_relinks_same_uuid() {
+    let _covers = CoversTempDir::new("ab_fileless_relink");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            new_books: vec![indexed_audiobook("Author/Book.m4b", "Book", Some("Author"))],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let uuid1 = crate::test_support::uuid_by_scan_key(&pool, "Author/Book.m4b").await;
+
+    // Group gone → fileless: hidden from the grid, row + uuid survive.
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            removed_uuids: vec![uuid1.clone()],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        list_books(&pool, "/lib").await.unwrap().is_empty(),
+        "fileless audiobook is hidden from the library grid"
+    );
+    assert_eq!(
+        crate::test_support::uuid_by_scan_key(&pool, "Author/Book.m4b").await,
+        uuid1,
+        "fileless audiobook retains its scan_key and durable uuid"
+    );
+
+    // Group returns via New → the batched map resolves the same-scan_key row and
+    // rewrites in place, preserving the uuid.
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            new_books: vec![indexed_audiobook("Author/Book.m4b", "Book", Some("Author"))],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let after = list_books(&pool, "/lib").await.unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(
+        after[0].unique_identifier.as_deref(),
+        Some(uuid1.as_str()),
+        "returning group relinks to the same uuid via the batched New path"
+    );
+    // Exactly one books row + one book_files row — the batched pre-fetch must not
+    // mint a duplicate for the returning group.
+    let books_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let files_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM book_files")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        books_total, 1,
+        "no duplicate books row for the returning group"
+    );
+    assert_eq!(
+        files_total, 1,
+        "returning group re-creates exactly one file row"
     );
 }
 

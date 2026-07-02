@@ -17,9 +17,7 @@ mod new;
 mod removed;
 mod shared;
 
-pub(super) use shared::{
-    clear_missing_files_flag, mark_book_files_missing, materialize_new_covers,
-};
+pub(super) use shared::{clear_missing_files_flag, materialize_new_covers};
 
 use backfill::stamp_last_indexed;
 use changed::sync_changed;
@@ -37,6 +35,12 @@ impl From<crate::settings::SettingsError> for SyncError {
     fn from(e: crate::settings::SettingsError) -> Self {
         match e {
             crate::settings::SettingsError::Db(inner) => SyncError::Db(inner),
+            // `Validation` is only produced by `set_hardcover_api_key`, which
+            // no sync path calls — keep the arm exhaustive but do not widen
+            // `SyncError`'s surface for a case the caller graph can't reach.
+            crate::settings::SettingsError::Validation(msg) => SyncError::Db(
+                sqlx::Error::Protocol(format!("unexpected settings validation error: {msg}")),
+            ),
         }
     }
 }

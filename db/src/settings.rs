@@ -8,7 +8,7 @@ use std::path::Path;
 
 use sqlx::{SqlitePool, Transaction};
 
-pub use omnibus_shared::Settings;
+pub use omnibus_shared::{Settings, HARDCOVER_API_KEY_MAX_LEN};
 
 /// `settings` KV keys consumed by the UI/RPC layer. Kept as constants so the
 /// indexer, settings handlers, and tests all reference the same identifier.
@@ -24,6 +24,11 @@ const HARDCOVER_API_KEY_KEY: &str = "hardcover_api_key";
 pub enum SettingsError {
     #[error(transparent)]
     Db(#[from] sqlx::Error),
+    /// Caller-supplied value violates a byte-length / shape constraint enforced
+    /// before the write. Surfaced as 4xx by handlers so an admin sees a
+    /// per-case message rather than a generic 500.
+    #[error("{0}")]
+    Validation(String),
 }
 
 /// Read the ebook and audiobook library paths from the `settings` KV table.
@@ -269,11 +274,19 @@ pub async fn get_hardcover_api_key(pool: &SqlitePool) -> Result<Option<String>, 
 }
 
 /// Persist (or clear, when `None`/blank) the Hardcover API key in `settings`.
+/// Rejects tokens longer than [`HARDCOVER_API_KEY_MAX_LEN`] with
+/// [`SettingsError::Validation`] before the write so no admin write path can
+/// spill an unbounded blob into the `settings` KV table.
 pub async fn set_hardcover_api_key(
     pool: &SqlitePool,
     key: Option<&str>,
 ) -> Result<(), SettingsError> {
     match key.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(v) if v.len() > HARDCOVER_API_KEY_MAX_LEN => {
+            return Err(SettingsError::Validation(format!(
+                "hardcover api key exceeds {HARDCOVER_API_KEY_MAX_LEN} bytes"
+            )));
+        }
         Some(v) => {
             sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
                 .bind(HARDCOVER_API_KEY_KEY)

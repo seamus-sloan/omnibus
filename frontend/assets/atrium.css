@@ -924,8 +924,14 @@ body.atrium,
 .bd-journal-hl-item:hover { background: var(--bg-3); }
 
 /* Live editor — contenteditable whose textContent stays equal to markdown.
-   The hidden mirror carries the markdown to the `body` signal. */
-.bd-journal-mirror {
+   Rendered as a sibling of the plain textarea (rule 07: identical rsx on
+   SSR + first hydration paint); post-mount JS flips the wrapper's
+   `data-omnibus-enhanced` marker to swap visibility from the textarea to
+   the contenteditable. Non-web / no-JS paths stay on the plain textarea. */
+.bd-journal-editor-wrap:not([data-omnibus-enhanced="1"]) .bd-journal-editor {
+  display: none;
+}
+.bd-journal-editor-wrap[data-omnibus-enhanced="1"] .bd-journal-textarea {
   display: none;
 }
 .bd-journal-editor {
@@ -1031,13 +1037,24 @@ body.atrium,
 .bd-journal-entry-body :first-child { margin-top: 0; }
 .bd-journal-entry-body :last-child { margin-bottom: 0; }
 
-/* Spoiler — blurred until clicked (handler bound in journal.rs) */
+/* Spoiler — blurred until clicked (handler bound in journal.rs). The wrapper
+   is a native `<button>` so keyboard users can Tab to it and Enter/Space
+   reveal it; the reset strips UA button chrome (border/padding/font/color) so
+   it reads as inline prose, not a rendered control. */
 .spoiler {
   filter: blur(5px);
   cursor: pointer;
   border-radius: 3px;
   background: var(--bg-2);
   transition: filter 0.12s ease;
+}
+button.spoiler {
+  font: inherit;
+  color: inherit;
+  padding: 0;
+  border: 0;
+  appearance: none;
+  -webkit-appearance: none;
 }
 .spoiler.revealed { filter: none; cursor: auto; background: transparent; }
 

@@ -146,6 +146,7 @@ pub(super) fn QuotePanel(
                         }
                         for p in PRESETS.iter() {
                             button {
+                                key: "{p.bg}",
                                 class: "rd-quote-swatch",
                                 r#type: "button",
                                 style: "background:{p.bg};",
@@ -175,6 +176,7 @@ pub(super) fn QuotePanel(
                     div { class: "rd-quote-ratios",
                         for r in RATIOS {
                             button {
+                                key: "{r}",
                                 class: if cur_ratio == r { "rd-chip on" } else { "rd-chip" },
                                 r#type: "button",
                                 onclick: move |_| ratio.set(r.to_string()),
