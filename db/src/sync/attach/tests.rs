@@ -395,6 +395,62 @@ async fn known_uuid_reattaches_even_when_titles_no_longer_match() {
     );
 }
 
+/// The attach-ledger scan_key lookup (shared by `find_attachment_by_scan_key`
+/// and `record_attachment`, fired once per file per reindex) must ride
+/// `idx_merged_uuids_library_scan`, not scan. Guards against regressing to
+/// the un-indexed form the table shipped with in migration 0026.
+#[tokio::test]
+async fn merged_uuids_library_scan_lookup_uses_index() {
+    use sqlx::Row;
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let plan: String = sqlx::query(
+        "EXPLAIN QUERY PLAN
+         SELECT uuid, book_id, format FROM merged_uuids
+          WHERE library_path = ? AND scan_key = ?",
+    )
+    .bind("/audio")
+    .bind("Stoker/Dracula.m4b")
+    .fetch_all(&pool)
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| r.get::<String, _>("detail"))
+    .collect::<Vec<_>>()
+    .join("\n");
+    assert!(
+        plan.contains("idx_merged_uuids_library_scan"),
+        "scan_key lookup should use idx_merged_uuids_library_scan, got plan:\n{plan}"
+    );
+}
+
+/// The multiformat listing query in `list_merged_rows_for_formats` must
+/// ride `idx_merged_uuids_library_format`, not scan the whole ledger.
+#[tokio::test]
+async fn merged_uuids_library_format_listing_uses_index() {
+    use sqlx::Row;
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let plan: String = sqlx::query(
+        "EXPLAIN QUERY PLAN
+         SELECT mu.uuid FROM merged_uuids mu
+          WHERE mu.library_path = ? AND mu.format IN (?, ?, ?)",
+    )
+    .bind("/audio")
+    .bind("M4B")
+    .bind("M4A")
+    .bind("MP3")
+    .fetch_all(&pool)
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| r.get::<String, _>("detail"))
+    .collect::<Vec<_>>()
+    .join("\n");
+    assert!(
+        plan.contains("idx_merged_uuids_library_format"),
+        "format listing should use idx_merged_uuids_library_format, got plan:\n{plan}"
+    );
+}
+
 #[tokio::test]
 async fn attachment_survives_a_scan_root_repoint() {
     // F2: an attached file is matched by its repoint-stable
