@@ -157,40 +157,6 @@ pub(super) async fn attach_ebook_file(
     Ok(())
 }
 
-/// Record that a book's file is gone (F2): drop only its `book_files` row
-/// (parts and chapters cascade) and flag it missing, **retaining everything
-/// else** — the `books` row, its `uuid`/`scan_key`, scalar metadata, taxonomy
-/// links, FTS row, and every soft-ref user-data row. So a fileless book still
-/// appears under its authors/series/tags and in search; only the library grid
-/// and facets hide it, via their own `EXISTS book_files` filter. A returning
-/// file re-attaches via the Changed re-parse (clearing the flag); a book
-/// missing past the retention window with no user data is purged by
-/// `missing_files::gc_books_missing_files`, which then prunes any taxonomy the
-/// purge orphaned.
-pub(in crate::sync) async fn mark_book_files_missing(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    book_id: i64,
-) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM book_files WHERE book_id = ?")
-        .bind(book_id)
-        .execute(&mut **tx)
-        .await?;
-    // Flag the now-fileless row + start its retention clock. The
-    // `is_missing_files = 0` guard preserves the original `missing_files_since`
-    // if this somehow re-runs; the `is_missing_files_override = 0` guard leaves
-    // intentionally-fileless rows (wishlist) un-flagged so reads keep showing
-    // them.
-    sqlx::query(
-        "UPDATE books
-            SET is_missing_files = 1, missing_files_since = unixepoch()
-          WHERE id = ? AND is_missing_files = 0 AND is_missing_files_override = 0",
-    )
-    .bind(book_id)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
 /// Insert the `book_files` row for an existing `books.id`. Shared by the
 /// Changed re-insert path; the New path calls this indirectly via
 /// `insert_book_row`.

@@ -9,6 +9,7 @@ use crate::auth::session::create_session;
 use crate::auth::test_support::pool;
 use crate::auth::users::create_user;
 use crate::auth::SessionKind;
+use sqlx::Row;
 
 #[tokio::test]
 async fn device_register_and_list() {
@@ -105,6 +106,55 @@ async fn register_device_rejects_control_char_in_client_version() {
         matches!(&err, AuthError::Validation(m)
             if m.contains("invalid client_version") && m.contains("control characters")),
         "expected Validation about client_version control chars, got {err:?}",
+    );
+}
+
+/// Guard against a covering-index regression on `list_devices_for_user`.
+/// Without `idx_devices_user_last_seen` the planner filters via
+/// `idx_devices_user` and sorts the matched rows in memory — SQLite
+/// calls this out as `USE TEMP B-TREE FOR ORDER BY`. We assert the plan
+/// mentions the covering index by name and does not mention the temp
+/// b-tree — a structural check that survives point-release wording
+/// changes in the plan strings.
+#[tokio::test]
+async fn list_devices_for_user_query_plan_uses_covering_index() {
+    let p = pool().await;
+    // Seed two users so the planner's stats reflect real selectivity.
+    let alice = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    crate::auth::users::set_registration_enabled(&p, true)
+        .await
+        .unwrap();
+    let bob = create_user(&p, "bob", "hunter2-real-long").await.unwrap();
+    for uid in [alice.id, bob.id] {
+        for i in 0..50 {
+            register_device(&p, uid, &format!("d{i}"), "ios", None)
+                .await
+                .unwrap();
+        }
+    }
+    sqlx::query("ANALYZE").execute(&p).await.unwrap();
+
+    let rows = sqlx::query(
+        "EXPLAIN QUERY PLAN
+         SELECT id, user_id, name, client_kind, client_version, created_at, last_seen_at
+           FROM devices WHERE user_id = ? ORDER BY last_seen_at DESC",
+    )
+    .bind(alice.id)
+    .fetch_all(&p)
+    .await
+    .unwrap();
+    let plan: String = rows
+        .iter()
+        .map(|r| r.get::<String, _>("detail"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        plan.contains("idx_devices_user_last_seen"),
+        "expected covering index in plan, got:\n{plan}",
+    );
+    assert!(
+        !plan.contains("USE TEMP B-TREE FOR ORDER BY"),
+        "expected index-only sort — plan still uses a temp b-tree:\n{plan}",
     );
 }
 

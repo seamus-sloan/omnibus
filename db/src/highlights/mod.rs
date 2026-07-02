@@ -6,6 +6,12 @@ use sqlx::{Row, SqlitePool};
 
 use crate::resolve_canonical_book_uuid;
 
+/// Hard cap on how many highlights `list_highlights` returns for a single
+/// `(user, book)` pair. Practical usage stays well under this; the cap
+/// exists so a pathological or automated annotation pipeline can't
+/// produce an unbounded REST response.
+pub const LIST_HIGHLIGHTS_LIMIT: i64 = 1_000;
+
 #[derive(Debug, thiserror::Error)]
 pub enum HighlightError {
     #[error("book not found")]
@@ -64,10 +70,12 @@ pub async fn list_highlights(
         "SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, h.text, h.created_at
          FROM highlights h
          WHERE h.user_id = ? AND h.book_uuid = ?
-         ORDER BY h.created_at ASC",
+         ORDER BY h.created_at ASC
+         LIMIT ?",
     )
     .bind(user_id)
     .bind(&canonical)
+    .bind(LIST_HIGHLIGHTS_LIMIT)
     .fetch_all(pool)
     .await?;
 
