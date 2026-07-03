@@ -194,10 +194,52 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
     }
 }
 
+/// Read lofty tags + duration for a single audiobook part at `path`. A
+/// lofty failure logs a WARN and falls back to default metadata with a
+/// zero duration and a large sort_track sentinel (`999_999`, sorting last),
+/// so one corrupt file doesn't drop the whole group.
+fn read_part_tags(path: &Path) -> (AudiobookMetadata, u32) {
+    match lofty::read_from_path(path) {
+        Ok(tagged) => {
+            let dur = Some(tagged.properties().duration().as_secs_f64())
+                .filter(|d| d.is_finite() && *d > 0.0);
+            let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
+            let mut m = AudiobookMetadata {
+                duration_seconds: dur,
+                ..Default::default()
+            };
+            let track = if let Some(t) = tag {
+                m.title = t
+                    .title()
+                    .map(|c| c.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                m.artist = t
+                    .artist()
+                    .map(|c| c.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                m.album = t
+                    .album()
+                    .map(|c| c.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                t.track().unwrap_or(999_999)
+            } else {
+                999_999
+            };
+            (m, track)
+        }
+        Err(e) => {
+            tracing::warn!(
+                file = %path.display(),
+                error = %e,
+                "audiobook part: failed to read tags"
+            );
+            (AudiobookMetadata::default(), 999_999u32)
+        }
+    }
+}
+
 /// Read lofty tags + duration for every part of `group` and, in the
-/// same sweep, lift the first readable embedded cover. A per-part lofty
-/// failure logs a WARN and emits a [`PartWork`] with empty metadata and
-/// `duration = 0` so one corrupt file doesn't drop the whole group.
+/// same sweep, lift the first readable embedded cover.
 fn extract_tags_and_metadata(
     group: &super::AudiobookGroup,
     library_root: &Path,
@@ -209,44 +251,7 @@ fn extract_tags_and_metadata(
     for stat_entry in &group.parts {
         let absolute = library_root.join(&stat_entry.filename);
 
-        // Read track number separately via lofty for sort ordering.
-        let (meta_result, track_num) = match lofty::read_from_path(&absolute) {
-            Ok(tagged) => {
-                let dur = Some(tagged.properties().duration().as_secs_f64())
-                    .filter(|d| d.is_finite() && *d > 0.0);
-                let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
-                let mut m = AudiobookMetadata {
-                    duration_seconds: dur,
-                    ..Default::default()
-                };
-                let track = if let Some(t) = tag {
-                    m.title = t
-                        .title()
-                        .map(|c| c.trim().to_string())
-                        .filter(|s| !s.is_empty());
-                    m.artist = t
-                        .artist()
-                        .map(|c| c.trim().to_string())
-                        .filter(|s| !s.is_empty());
-                    m.album = t
-                        .album()
-                        .map(|c| c.trim().to_string())
-                        .filter(|s| !s.is_empty());
-                    t.track().unwrap_or(999_999)
-                } else {
-                    999_999
-                };
-                (Ok(m), track)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    file = %absolute.display(),
-                    error = %e,
-                    "audiobook part: failed to read tags"
-                );
-                (Err(e), 999_999u32)
-            }
-        };
+        let (meta, track_num) = read_part_tags(&absolute);
 
         // Fetch embedded cover from the very first readable part.
         if !first_cover_fetched {
@@ -264,13 +269,7 @@ fn extract_tags_and_metadata(
             }
         }
 
-        let (meta, duration) = match meta_result {
-            Ok(m) => {
-                let d = m.duration_seconds.unwrap_or(0.0);
-                (m, d)
-            }
-            Err(_) => (AudiobookMetadata::default(), 0.0),
-        };
+        let duration = meta.duration_seconds.unwrap_or(0.0);
 
         parts_work.push(PartWork {
             sort_track: track_num,

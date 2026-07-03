@@ -308,16 +308,12 @@ pub async fn reindex_audiobooks(pool: &SqlitePool, library_path: &str) -> anyhow
     reindex_audiobooks_with_progress(pool, library_path, |_, _| {}).await
 }
 
-/// [`reindex_audiobooks`] variant that calls `on_progress(processed,
-/// total)` after each per-book write inside `sync_audiobooks`. Used by
-/// [`crate::worker::Worker`] to report determinate `processed / total`
-/// counts to the UI indicator.
-pub async fn reindex_audiobooks_with_progress(
-    pool: &SqlitePool,
+/// Phase A of [`reindex_audiobooks_with_progress`]: stat every audio file
+/// under `library_path`, then group the per-file entries into one
+/// [`audiobook::AudiobookGroup`] per book (folder-based grouping).
+async fn stat_and_group_audiobooks(
     library_path: &str,
-    on_progress: impl FnMut(u32, u32),
-) -> anyhow::Result<()> {
-    // Phase A: stat every audio file.
+) -> anyhow::Result<Vec<audiobook::AudiobookGroup>> {
     let path_for_scan = library_path.to_owned();
     let library_key = library_path.to_owned();
     let stat = tokio::task::spawn_blocking(move || {
@@ -328,12 +324,41 @@ pub async fn reindex_audiobooks_with_progress(
         anyhow::bail!("audiobook scan of {library_path} failed: {msg}");
     }
 
-    // Phase A.5: group per-file entries into one AudiobookGroup per book.
     let entries = stat.entries;
     let library_key2 = library_path.to_owned();
     let groups =
         tokio::task::spawn_blocking(move || audiobook::group_into_books(entries, &library_key2))
             .await?;
+    Ok(groups)
+}
+
+/// Project audiobook groups to the ebook [`ebook::StatEntry`] shape so
+/// `diff_library` can be reused verbatim across both library kinds. Skips
+/// attachment-only groups (empty `scan_key`).
+fn project_groups_to_stat(groups: &[audiobook::AudiobookGroup]) -> Vec<ebook::StatEntry> {
+    groups
+        .iter()
+        .filter(|g| !g.scan_key.is_empty())
+        .map(|g| ebook::StatEntry {
+            filename: g.group_path.clone(),
+            scan_key: g.scan_key.clone(),
+            mtime_epoch: g.max_mtime_epoch,
+            size_bytes: g.total_size_bytes,
+            error: None,
+        })
+        .collect()
+}
+
+/// [`reindex_audiobooks`] variant that calls `on_progress(processed,
+/// total)` after each per-book write inside `sync_audiobooks`. Used by
+/// [`crate::worker::Worker`] to report determinate `processed / total`
+/// counts to the UI indicator.
+pub async fn reindex_audiobooks_with_progress(
+    pool: &SqlitePool,
+    library_path: &str,
+    on_progress: impl FnMut(u32, u32),
+) -> anyhow::Result<()> {
+    let groups = stat_and_group_audiobooks(library_path).await?;
 
     // Diff groups against DB rows (project groups to the ebook StatEntry shape
     // so diff_library can be reused verbatim). Scope to audiobook formats so a
@@ -349,17 +374,7 @@ pub async fn reindex_audiobooks_with_progress(
             .await?,
     );
     let library_root: PathBuf = PathBuf::from(library_path);
-    let groups_as_stat: Vec<ebook::StatEntry> = groups
-        .iter()
-        .filter(|g| !g.scan_key.is_empty())
-        .map(|g| ebook::StatEntry {
-            filename: g.group_path.clone(),
-            scan_key: g.scan_key.clone(),
-            mtime_epoch: g.max_mtime_epoch,
-            size_bytes: g.total_size_bytes,
-            error: None,
-        })
-        .collect();
+    let groups_as_stat = project_groups_to_stat(&groups);
     let diff = diff_library(&groups_as_stat, &db_rows, &library_root);
 
     // Phase B: parse only the New and Changed groups.
@@ -415,13 +430,13 @@ pub async fn reindex_audiobooks_with_progress(
 /// per book, and all chapter inserts are committed in batches of 250 books
 /// to avoid per-book WAL flushes (mirrors the sync/audiobooks.rs backfill
 /// pattern).
-pub(crate) async fn backfill_chapters(
+/// Query the first-part filename (ordinal=0) and format for every book
+/// under `library_path` that needs chapter backfill (no `file_chapters`
+/// rows yet).
+async fn fetch_backfill_candidates(
     pool: &SqlitePool,
     library_path: &str,
-    mut on_progress: impl FnMut(u32, u32),
-) -> anyhow::Result<()> {
-    // One query: the first-part filename (ordinal=0) and format for every
-    // book that needs chapters.
+) -> anyhow::Result<Vec<(i64, String, String)>> {
     let rows: Vec<(i64, String, String)> = sqlx::query_as(
         "SELECT bf.id, bfp.filename, bf.format \
          FROM book_files bf \
@@ -437,21 +452,16 @@ pub(crate) async fn backfill_chapters(
     .bind(library_path)
     .fetch_all(pool)
     .await?;
+    Ok(rows)
+}
 
-    if rows.is_empty() {
-        return Ok(());
-    }
-
-    let total = u32::try_from(rows.len()).unwrap_or(u32::MAX);
-    tracing::info!(
-        count = total,
-        "backfilling chapters for existing audiobooks"
-    );
-
-    // Bulk-fetch all parts for the backfill set, then group by book_file_id —
-    // avoids N per-book SELECT round-trips. Chunk at 500 to stay well under
-    // SQLite's 999 bind-parameter limit.
-    let book_file_ids: Vec<i64> = rows.iter().map(|(id, _, _)| *id).collect();
+/// Bulk-fetch all `book_file_parts` rows for `book_file_ids` and group them
+/// by `book_file_id` — avoids N per-book SELECT round-trips. Chunked at 500
+/// to stay well under SQLite's 999 bind-parameter limit.
+async fn bulk_fetch_parts(
+    pool: &SqlitePool,
+    book_file_ids: &[i64],
+) -> anyhow::Result<std::collections::HashMap<i64, Vec<crate::audiobook::AudiobookPart>>> {
     let mut all_parts_rows: Vec<(i64, i64, String, i64, i64, f64)> = Vec::new();
     for chunk in book_file_ids.chunks(500) {
         let placeholders = std::iter::repeat_n("?", chunk.len())
@@ -469,7 +479,6 @@ pub(crate) async fn backfill_chapters(
         all_parts_rows.extend(parts_query.fetch_all(pool).await?);
     }
 
-    // Group parts by book_file_id.
     let mut parts_by_id: std::collections::HashMap<i64, Vec<crate::audiobook::AudiobookPart>> =
         std::collections::HashMap::new();
     for (book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds) in
@@ -486,6 +495,27 @@ pub(crate) async fn backfill_chapters(
                 duration_seconds,
             });
     }
+    Ok(parts_by_id)
+}
+
+pub(crate) async fn backfill_chapters(
+    pool: &SqlitePool,
+    library_path: &str,
+    mut on_progress: impl FnMut(u32, u32),
+) -> anyhow::Result<()> {
+    let rows = fetch_backfill_candidates(pool, library_path).await?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let total = u32::try_from(rows.len()).unwrap_or(u32::MAX);
+    tracing::info!(
+        count = total,
+        "backfilling chapters for existing audiobooks"
+    );
+
+    let book_file_ids: Vec<i64> = rows.iter().map(|(id, _, _)| *id).collect();
+    let parts_by_id = bulk_fetch_parts(pool, &book_file_ids).await?;
 
     // Process books in batches of 250 to bound transaction size (mirrors the
     // sync/audiobooks.rs backfill pattern).

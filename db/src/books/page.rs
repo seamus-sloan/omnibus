@@ -127,6 +127,45 @@ pub async fn list_books_page(
     }
     let limit = limit.clamp(1, MAX_BOOKS_RETURNED);
 
+    let (sql, mut binds) = build_page_sql(sort, dir, library_paths, filters, cursor);
+    // Fetch one beyond the page so a full page can advertise a `next` cursor
+    // without a trailing empty round-trip.
+    binds.push(SqlVal::Int(limit + 1));
+
+    let mut q = sqlx::query(&sql);
+    for v in &binds {
+        q = match v {
+            SqlVal::Text(s) => q.bind(s.as_str()),
+            SqlVal::Real(r) => q.bind(*r),
+            SqlVal::Int(i) => q.bind(*i),
+        };
+    }
+    let rows = q.fetch_all(pool).await?;
+
+    let take = rows.len().min(limit as usize);
+    let next = (rows.len() as i64 > limit).then(|| cursor_from_row(&rows[take - 1]));
+
+    let mut books = Vec::with_capacity(take);
+    for r in &rows[..take] {
+        books.push(row_to_ebook(r)?);
+    }
+    merge_overrides_into_books(pool, &mut books).await?;
+    backfill_creator_ids(pool, &mut books).await?;
+
+    Ok(BookPage { books, next })
+}
+
+/// Build the paginated `SELECT` and its positional binds for `sort`/`dir`
+/// over `library_paths`, filtered by `filters` and seeked past `cursor`.
+/// Split out of [`list_books_page`] so the SQL-construction stage is
+/// independently testable from the fetch/decode stage.
+fn build_page_sql(
+    sort: SortKey,
+    dir: SortDir,
+    library_paths: &[&str],
+    filters: &ViewFilters,
+    cursor: Option<&PageCursor>,
+) -> (String, Vec<SqlVal>) {
     let (primary, secondary) = axis_sort_columns(sort);
     let dir_sql = match dir {
         SortDir::Asc => "ASC",
@@ -167,31 +206,7 @@ pub async fn list_books_page(
          LIMIT ?
         "
     );
-    // Fetch one beyond the page so a full page can advertise a `next` cursor
-    // without a trailing empty round-trip.
-    binds.push(SqlVal::Int(limit + 1));
-
-    let mut q = sqlx::query(&sql);
-    for v in &binds {
-        q = match v {
-            SqlVal::Text(s) => q.bind(s.as_str()),
-            SqlVal::Real(r) => q.bind(*r),
-            SqlVal::Int(i) => q.bind(*i),
-        };
-    }
-    let rows = q.fetch_all(pool).await?;
-
-    let take = rows.len().min(limit as usize);
-    let next = (rows.len() as i64 > limit).then(|| cursor_from_row(&rows[take - 1]));
-
-    let mut books = Vec::with_capacity(take);
-    for r in &rows[..take] {
-        books.push(row_to_ebook(r)?);
-    }
-    merge_overrides_into_books(pool, &mut books).await?;
-    backfill_creator_ids(pool, &mut books).await?;
-
-    Ok(BookPage { books, next })
+    (sql, binds)
 }
 
 /// The `(primary, secondary)` `books` sort columns for each axis. `primary`
