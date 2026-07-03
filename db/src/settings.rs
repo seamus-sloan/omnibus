@@ -8,7 +8,7 @@ use std::path::Path;
 
 use sqlx::{SqlitePool, Transaction};
 
-pub use omnibus_shared::{Settings, HARDCOVER_API_KEY_MAX_LEN};
+pub use omnibus_shared::{HardcoverKeyStatus, Settings, HARDCOVER_API_KEY_MAX_LEN};
 
 /// `settings` KV keys consumed by the UI/RPC layer. Kept as constants so the
 /// indexer, settings handlers, and tests all reference the same identifier.
@@ -317,6 +317,49 @@ pub async fn effective_hardcover_api_key(
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty()))
+}
+
+/// Masked status of the server-wide Hardcover key: the saved settings value
+/// wins (`source = "settings"`), then the `HARDCOVER_API_KEY` env var
+/// (`source = "env"`), else unset (`source = "none"`). Never returns the raw
+/// key — only a short masked preview. Shared by the REST handler and the RPC
+/// server function so the fallback + masking live once.
+pub async fn hardcover_key_status(pool: &SqlitePool) -> Result<HardcoverKeyStatus, SettingsError> {
+    if let Some(k) = get_hardcover_api_key(pool).await? {
+        return Ok(HardcoverKeyStatus {
+            configured: true,
+            masked: Some(mask_key(&k)),
+            source: "settings".to_string(),
+        });
+    }
+    if let Ok(env_key) = std::env::var("HARDCOVER_API_KEY") {
+        let env_key = env_key.trim();
+        if !env_key.is_empty() {
+            return Ok(HardcoverKeyStatus {
+                configured: true,
+                masked: Some(mask_key(env_key)),
+                source: "env".to_string(),
+            });
+        }
+    }
+    Ok(HardcoverKeyStatus {
+        configured: false,
+        masked: None,
+        source: "none".to_string(),
+    })
+}
+
+/// Short masked preview of a secret — never the raw value. Keys of 8 chars or
+/// fewer collapse to a fixed bullet run; longer keys (Hardcover tokens are
+/// JWTs) render as `first4…last4`.
+fn mask_key(key: &str) -> String {
+    let n = key.chars().count();
+    if n <= 8 {
+        return "\u{2022}\u{2022}\u{2022}\u{2022}".to_string();
+    }
+    let first: String = key.chars().take(4).collect();
+    let last: String = key.chars().skip(n - 4).collect();
+    format!("{first}\u{2026}{last}")
 }
 
 /// Boot hook: seed the Hardcover key from `HARDCOVER_API_KEY` **only** when no
