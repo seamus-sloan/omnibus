@@ -23,21 +23,28 @@ pub struct BookSuggestion {
     pub cover_url: Option<String>,
 }
 
+/// The Hardcover-sourced fields of one cached suggestion, grouped as the input to [`BookSuggestion::new`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RawSuggestion {
+    pub hardcover_id: i64,
+    pub hardcover_slug: Option<String>,
+    pub title: String,
+    pub author: String,
+    pub list_count: i64,
+}
+
 impl BookSuggestion {
-    /// Build a wire suggestion from the cached primitives, deriving the
+    /// Build a wire suggestion from a book's cached primitives, deriving the
     /// outbound Hardcover URL (slug-based, id fallback) and the relative cover
     /// URL (only when a cover was cached).
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        book_uuid: &str,
-        rank: i64,
-        hardcover_id: i64,
-        hardcover_slug: Option<String>,
-        title: String,
-        author: String,
-        list_count: i64,
-        has_cover: bool,
-    ) -> Self {
+    pub fn new(book_uuid: &str, rank: i64, raw: RawSuggestion, has_cover: bool) -> Self {
+        let RawSuggestion {
+            hardcover_id,
+            hardcover_slug,
+            title,
+            author,
+            list_count,
+        } = raw;
         let hardcover_url = match hardcover_slug {
             Some(slug) if !slug.is_empty() => format!("{HARDCOVER_BOOK_BASE}{slug}"),
             _ => format!("{HARDCOVER_BOOK_BASE}{hardcover_id}"),
@@ -77,3 +84,6 @@ pub struct HardcoverKeyStatus {
     /// Where the effective key comes from: `"settings"`, `"env"`, or `"none"`.
     pub source: String,
 }
+
+#[cfg(test)]
+mod tests;
