@@ -196,8 +196,8 @@ fn parse_one_group(group: super::AudiobookGroup, library_root: &Path) -> Indexed
 
 /// Read lofty tags + duration for a single audiobook part at `path`. A
 /// lofty failure logs a WARN and falls back to default metadata with a
-/// zero duration and a max sort_track, so one corrupt file doesn't drop
-/// the whole group.
+/// zero duration and a large sort_track sentinel (`999_999`, sorting last),
+/// so one corrupt file doesn't drop the whole group.
 fn read_part_tags(path: &Path) -> (AudiobookMetadata, u32) {
     match lofty::read_from_path(path) {
         Ok(tagged) => {
