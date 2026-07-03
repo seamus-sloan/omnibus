@@ -303,6 +303,31 @@ async fn api_put_author_photo_url_rejects_empty_url() {
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
 
+#[tokio::test]
+async fn api_put_author_photo_url_rejects_overlong_url() {
+    let (app, _state, pool) = fixture().await;
+    let id = seed_author(&pool, "Ada Lovelace").await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    // One byte over the shared cap. The length guard rejects with 400
+    // before any outbound fetch fires; the loopback host keeps the test
+    // hermetic (and blocked by the SSRF guard) even if that guard regresses.
+    let cap = omnibus_shared::AUTHOR_PHOTO_URL_MAX_LEN;
+    let prefix = "http://127.0.0.1/";
+    let overlong = format!("{prefix}{}", "a".repeat(cap + 1 - prefix.len()));
+    assert_eq!(overlong.len(), cap + 1);
+    let res = app
+        .oneshot(put_photo_url(
+            &format!("/api/authors/{id}/photo/url"),
+            &token,
+            &overlong,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
 /// SSRF regression: the default `AppState` (built by `fixture()`) must
 /// reject IP-literal URLs that point at the loopback / cloud-metadata /
 /// RFC1918 address space *before* any TCP connect.

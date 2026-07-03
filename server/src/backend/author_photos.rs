@@ -262,6 +262,18 @@ pub(super) async fn put_author_photo_url(
     if url.is_empty() {
         return (axum::http::StatusCode::BAD_REQUEST, "url is required").into_response();
     }
+    // Cap before handing the string to the fetch pipeline so a multi-megabyte
+    // URL can't allocate/parse unbounded. Shares the RPC path's cap (#456).
+    if url.len() > omnibus_shared::AUTHOR_PHOTO_URL_MAX_LEN {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            format!(
+                "url must be {} bytes or fewer",
+                omnibus_shared::AUTHOR_PHOTO_URL_MAX_LEN
+            ),
+        )
+            .into_response();
+    }
 
     let (advertised_mime, bytes) =
         match db::author_photos::fetch_remote_image_with(url, state.remote_image_config()).await {
