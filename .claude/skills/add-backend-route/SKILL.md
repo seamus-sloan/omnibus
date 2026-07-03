@@ -9,7 +9,7 @@ Omnibus is a Dioxus fullstack app with two parallel transport layers. Pick the r
 
 | Client | Transport | Path convention | Lives in |
 |---|---|---|---|
-| **Web (WASM)** | Dioxus server function — `#[get]` / `#[post]` macro | `/api/rpc/<name>` | [frontend/src/rpc.rs](../../../frontend/src/rpc.rs) |
+| **Web (WASM)** | Dioxus server function — `#[get]` / `#[post]` macro | `/api/rpc/<name>` | [frontend/src/rpc/](../../../frontend/src/rpc/) (per-domain submodule) |
 | **Mobile (Dioxus Native)** | Hand-written axum handler called via `reqwest` | `/api/<resource>` | [server/src/backend.rs](../../../server/src/backend.rs) |
 
 A new user-facing feature typically needs **both** (mobile+web parity), since the components in `frontend/src/pages/` drive both targets through `frontend/src/data.rs`.
@@ -31,7 +31,7 @@ Pick the right submodule under `shared/src/` ([lib.rs](../../../shared/src/lib.r
 
 ## 3. Add the server function (web transport)
 
-In [frontend/src/rpc.rs](../../../frontend/src/rpc.rs):
+In the matching per-domain submodule under [frontend/src/rpc/](../../../frontend/src/rpc/) (e.g. `rpc/settings.rs`, `rpc/books.rs`), or a new one added to `rpc/mod.rs`:
 
 ```rust
 #[post("/api/rpc/my_action", pool: PoolExt, _user: AuthUser)]
@@ -41,9 +41,9 @@ pub async fn rpc_my_action(input: MyInput) -> Result<MyOutput> {
 }
 ```
 
-- The server-only extractors are declared after the path in the macro. `pool: PoolExt` gives the SQLite pool. `_user: AuthUser` (or `_admin: AdminUser` for state-changing ops on shared config) enforces per-route authorization (F0.7) — both extractors live in `mod server_auth` at the top of `rpc.rs`. The leading `_` is intentional until the route actually consumes the user (per-user data lands with F2.1+).
+- The server-only extractors are declared after the path in the macro. `pool: PoolExt` gives the SQLite pool. `_user: AuthUser` (or `_admin: AdminUser` for state-changing ops on shared config) enforces per-route authorization (F0.7) — both extractors live in `mod server_auth` in `rpc/mod.rs` and are imported into each submodule via `use super::{AuthUser, AdminUser, PoolExt, WorkerExt};` (gated on `feature = "server"`). The leading `_` is intentional until the route actually consumes the user (per-user data lands with F2.1+).
 - `Result<T>` is the anyhow-backed alias from `dioxus::prelude::Result`. Domain errors use `thiserror` per [02-error-handling.md](../../rules/02-error-handling.md).
-- The function body is only compiled when `feature = "server"` is active — guard any other imports with `#[cfg(feature = "server")]`. At the top of `rpc.rs`, import the DB layer as `use omnibus_db::{self as db, scanner};` (gated on `feature = "server"`). Background reindex work goes through the shared `Worker` extension (`worker: WorkerExt` on the macro, then `worker.0.post(omnibus_db::worker::Task::Scan { library_path })`) — never `tokio::spawn(indexer::reindex(...))` from a handler.
+- The function body is only compiled when `feature = "server"` is active — guard any other imports with `#[cfg(feature = "server")]`. At the top of the submodule, import the DB layer as `use omnibus_db as db;` (gated on `feature = "server"`; add `scanner` when needed). Background reindex work goes through the shared `Worker` extension (`worker: WorkerExt` on the macro, then `worker.0.post(omnibus_db::worker::Task::Scan { library_path })`) — never `tokio::spawn(indexer::reindex(...))` from a handler.
 - Dioxus auto-registers the route via `dioxus::server::router(App)` in [server/src/main.rs](../../../server/src/main.rs) — no manual registration.
 
 ## 4. Add the hand-written REST handler (mobile transport)

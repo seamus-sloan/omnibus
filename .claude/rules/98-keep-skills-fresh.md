@@ -6,7 +6,7 @@ When touching any of the following areas, re-read the matching skill and update 
 
 | Code area | Skill to re-check |
 |---|---|
-| `server/src/backend.rs`, `server/src/main.rs`, `frontend/src/rpc.rs`, `frontend/src/data.rs`, `db/src/books/`, `db/src/settings.rs`, `db/src/scanner.rs`, `db/src/ebook.rs`, `db/src/indexer.rs`, `db/src/library_layout.rs`, `db/src/worker.rs`, `db/migrations/`, `shared/src/lib.rs` | [add-backend-route](../skills/add-backend-route/SKILL.md) |
+| `server/src/backend.rs`, `server/src/main.rs`, `frontend/src/rpc/`, `frontend/src/data.rs`, `db/src/books/`, `db/src/settings.rs`, `db/src/scanner.rs`, `db/src/ebook.rs`, `db/src/indexer.rs`, `db/src/library_layout.rs`, `db/src/worker.rs`, `db/migrations/`, `shared/src/lib.rs` | [add-backend-route](../skills/add-backend-route/SKILL.md) |
 | `ui_tests/playwright/tests/fixtures/`, `ui_tests/playwright/tests/utils/`, selector conventions | [add-playwright-flow](../skills/add-playwright-flow/SKILL.md) |
 | `server/src/backend.rs` (`_health`), `server/src/auth/{boot.rs,gate.rs,handlers.rs}`, `scripts/dev-server-up.sh`, `justfile` (`dev-up`), `.env.example`, `ui_tests/playwright/playwright.config.ts` (baseURL) | [ui-validate](../skills/ui-validate/SKILL.md) |
 
