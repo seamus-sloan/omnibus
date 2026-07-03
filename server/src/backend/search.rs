@@ -7,6 +7,7 @@
 
 use axum::{
     extract::{Query, State},
+    http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
@@ -16,9 +17,22 @@ use serde::Deserialize;
 use super::{internal, with_pagination_headers, AppState};
 use crate::auth::AuthUser;
 
+/// Handler-level cap on the decoded `q` parameter length, in bytes. Rejects
+/// abusive input before the search db calls; the db layer still applies its
+/// own finer char-count trim (`cap_query_len`) as a fallback.
+const MAX_SEARCH_QUERY_LEN: usize = 1024;
+
 #[derive(Deserialize)]
 pub(super) struct SearchQuery {
     q: String,
+}
+
+/// Reject an over-length query with 400 so oversized input is never forwarded
+/// into the search db calls. Returns `Some(response)` when `q` exceeds
+/// [`MAX_SEARCH_QUERY_LEN`].
+fn reject_if_over_length(q: &str) -> Option<Response> {
+    (q.len() > MAX_SEARCH_QUERY_LEN)
+        .then(|| (StatusCode::BAD_REQUEST, "query too long").into_response())
 }
 
 pub(super) async fn get_search(
@@ -26,6 +40,9 @@ pub(super) async fn get_search(
     State(state): State<AppState>,
     Query(params): Query<SearchQuery>,
 ) -> Response {
+    if let Some(rejection) = reject_if_over_length(&params.q) {
+        return rejection;
+    }
     let settings = match db::get_settings(&state.pool).await {
         Ok(s) => s,
         Err(error) => return internal("read settings", error),
@@ -63,6 +80,9 @@ pub(super) async fn get_search_palette(
     State(state): State<AppState>,
     Query(params): Query<SearchQuery>,
 ) -> Response {
+    if let Some(rejection) = reject_if_over_length(&params.q) {
+        return rejection;
+    }
     let settings = match db::get_settings(&state.pool).await {
         Ok(s) => s,
         Err(error) => return internal("read settings", error),
