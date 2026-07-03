@@ -1,9 +1,8 @@
-//! Live markdown editor glue for the journal composer.
-//!
-//! Ships the co-located `journal_editor.js` over Dioxus's eval channel and
-//! exposes `enhance` / `command` / `insert` actions plus the formatting
-//! toolbar. Web-only — non-web targets keep the plain SSR textarea (rule 07)
-//! and every eval helper is a no-op.
+//! Live markdown editor glue for the journal composer. Ships the co-located
+//! `journal_editor.js` over Dioxus's eval channel and exposes
+//! `enhance` / `command` / `insert` actions plus the formatting toolbar.
+//! Web-only — non-web targets keep the plain SSR textarea (rule 07) and every
+//! eval helper is a no-op.
 
 use dioxus::prelude::*;
 

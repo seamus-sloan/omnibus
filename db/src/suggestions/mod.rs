@@ -1,15 +1,8 @@
-//! F3.3 "Readers also enjoyed" — Hardcover community-list co-occurrence.
-//!
-//! [`hardcover`] talks to the Hardcover GraphQL API; [`filter`] holds the pure
-//! different-author / different-series / entry-point trimming; [`data`] is the
-//! cache CRUD + the [`data::decide`] de-duplication state machine; [`cascade`]
-//! orchestrates resolution and is driven by
+//! Hardcover community-list co-occurrence suggestions ("Readers also enjoyed").
+//! [`hardcover`] is the GraphQL client, [`filter`] the pure ranking/trim logic,
+//! [`data`] the cache CRUD + [`data::decide`] de-dup state machine, and
+//! [`cascade`] the resolution orchestrator driven by
 //! [`crate::worker::Task::ResolveSuggestions`].
-//!
-//! Caching guarantees a page refresh or a burst of concurrent viewers never
-//! re-hits Hardcover while a result is fresh: a 30-day TTL result cache, a
-//! `pending` debounce so concurrent first-viewers collapse to one posted task,
-//! and worker resource-key serialization with a cascade re-check on top.
 
 pub mod cascade;
 pub mod data;
