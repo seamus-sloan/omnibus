@@ -1,11 +1,8 @@
 //! F3.3 suggestions REST handlers (mobile-facing) plus the admin Hardcover-key
-//! API. Web hits the analogous `/api/rpc/*` server functions.
-//!
-//! `GET /api/ebooks/{uuid}/suggestions` drives the same cache de-duplication
-//! state machine as the RPC: `NotConfigured` when no key is set, the
-//! fresh/sticky cache when present, and a single enqueued resolution otherwise.
-//! `GET /api/suggestions/{uuid}/{rank}/cover` streams cached cover bytes.
-//! `GET`/`POST /api/hardcover-key` read/write the (masked) key, admin-only.
+//! API; web hits the analogous `/api/rpc/*` server functions. Serves the
+//! cache-backed "readers also enjoyed" strip (`GET .../suggestions`), streams
+//! cached cover bytes (`GET .../cover`), and reads/writes the masked
+//! account-level key (`GET`/`POST /api/hardcover-key`, admin-only).
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

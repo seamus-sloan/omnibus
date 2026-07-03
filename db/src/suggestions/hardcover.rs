@@ -1,13 +1,8 @@
-//! Hardcover GraphQL client for F3.3 suggestions. Composes a "readers also
-//! enjoyed" signal out of community-list co-occurrence — Hardcover has no
+//! Hardcover GraphQL client for F3.3 suggestions. Hardcover has no
 //! recommendations endpoint, so we resolve the library book to a Hardcover
 //! book, collect the curated lists it sits on, and rank every other book by
-//! how many of those lists it also appears on.
-//!
-//! All queries go through [`post_graphql`] against [`HardcoverConfig`]
-//! (base URL + Bearer key + timeout), which tests point at a `wiremock`
-//! server. Schema field names were verified live against
-//! `https://api.hardcover.app/v1/graphql`.
+//! how many of those lists it shares. All queries go through [`post_graphql`]
+//! against [`HardcoverConfig`] (base URL + Bearer key + timeout).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;

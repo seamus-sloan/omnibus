@@ -1,13 +1,7 @@
-//! Resolution orchestration for F3.3 suggestions. Mirrors
-//! `author_photos::cascade`: a single `resolve` entry point the worker drives,
-//! plus a `resolve_with` that takes injectable configs for tests.
-//!
-//! Flow: resolve the library book to a Hardcover book (ISBN-first, title
-//! fallback) → collect its curated lists → rank co-listed books → filter to
-//! different-author / different-series / entry-point survivors → fetch cover
-//! bytes → cache the top 10. A clean miss writes the sticky `empty` marker; a
-//! transient network error leaves the marker untouched so the debounce window
-//! re-posts later.
+//! Resolution orchestration for F3.3 suggestions, mirroring
+//! `author_photos::cascade`: a single [`resolve`] entry point the worker drives
+//! (via [`crate::worker::Task::ResolveSuggestions`]) plus a [`resolve_with`]
+//! that takes injectable Hardcover + image configs for tests.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -52,6 +46,13 @@ pub async fn resolve(pool: &SqlitePool, book_uuid: &str) -> anyhow::Result<()> {
 
 /// [`resolve`] with injectable Hardcover + remote-image configs (tests point
 /// these at a local `wiremock` server).
+///
+/// Flow: resolve the library book to a Hardcover book (ISBN-first, title
+/// fallback) → collect its curated lists → rank co-listed books → filter to
+/// different-author / different-series / entry-point survivors → fetch cover
+/// bytes → cache the top 10. A clean miss writes the sticky `empty` marker; a
+/// transient network error leaves the marker untouched so the debounce window
+/// re-posts later.
 pub async fn resolve_with(
     pool: &SqlitePool,
     book_uuid: &str,
