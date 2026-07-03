@@ -640,15 +640,39 @@ async fn poisoned_completions_lock_recovers_instead_of_panicking() {
         "completions mutex should be poisoned after the panic"
     );
 
+    // Gate the task inside `on_run` so it cannot finish — and therefore
+    // cannot prune its `completions` slot — until `await_completion` has
+    // taken the receiver out of the map. Otherwise the 0-latency task can
+    // complete and prune first, and `await_completion` documents that an
+    // already-pruned id returns `Err("unknown task id")`: a timing race that
+    // flakes under CI load.
+    let gate = Arc::new(std::sync::Barrier::new(2));
+    let gate_task = gate.clone();
     let id = w.post(Task::Test {
         tag: "after-poison",
         latency_ms: 0,
         resource: None,
         route_through_scan_sem: false,
-        on_run: None,
+        on_run: Some(Arc::new(move || {
+            gate_task.wait();
+        })),
         on_done: None,
     });
-    match w.await_completion(id).await {
+
+    // `await_completion` removes the receiver from the map on its first poll,
+    // before its first `.await`; releasing the gate only after that yield
+    // guarantees the awaiter is holding the receiver and observes the outcome
+    // the task then publishes, instead of racing the prune. The barrier wait
+    // runs on the blocking pool so it never pins a runtime worker thread.
+    let (outcome, ()) = tokio::join!(w.await_completion(id), async {
+        tokio::task::yield_now().await;
+        tokio::task::spawn_blocking(move || {
+            gate.wait();
+        })
+        .await
+        .unwrap();
+    });
+    match outcome {
         TaskOutcome::Ok => {}
         other => panic!("expected Ok after poison recovery, got {other:?}"),
     }
