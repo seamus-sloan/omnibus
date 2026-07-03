@@ -16,7 +16,7 @@ mod journal_editor;
 mod merge;
 mod rating;
 
-use body::{BdBodyMain, BdRailSection};
+use body::{BdAuthorCluster, BdBodyMain, BdPageCtx, BdRailSection};
 use hero::BdHeroSection;
 
 /// Book detail page shell: fetches metadata then hands off to `render_loaded`.
@@ -389,12 +389,9 @@ fn render_loaded(
                 BdBodyMain {
                     uuid: uuid.clone(),
                     title: title.clone(),
-                    primary_author,
-                    author_id,
-                    author_books,
+                    author: BdAuthorCluster { primary_author, author_id, author_books },
                     suggestions,
-                    server_url,
-                    is_admin,
+                    ctx: BdPageCtx { server_url, is_admin },
                 }
                 BdRailSection {
                     b,
