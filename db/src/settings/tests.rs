@@ -216,6 +216,59 @@ async fn seed_hardcover_key_seeds_only_when_unset() {
     );
 }
 
+#[tokio::test]
+async fn hardcover_key_status_reports_settings_source_masked() {
+    let _env = EnvVarGuard::set("HARDCOVER_API_KEY", Some("env-key"));
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    set_hardcover_api_key(&pool, Some("abcdefghijkl"))
+        .await
+        .unwrap();
+
+    let status = hardcover_key_status(&pool).await.unwrap();
+    assert!(status.configured);
+    assert_eq!(status.source, "settings");
+    // Long keys collapse to first4…last4 — never the raw value.
+    assert_eq!(status.masked.as_deref(), Some("abcd\u{2026}ijkl"));
+}
+
+#[tokio::test]
+async fn hardcover_key_status_falls_back_to_env_masked() {
+    let _env = EnvVarGuard::set("HARDCOVER_API_KEY", Some("abcdefghijkl"));
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    let status = hardcover_key_status(&pool).await.unwrap();
+    assert!(status.configured);
+    assert_eq!(status.source, "env");
+    assert_eq!(status.masked.as_deref(), Some("abcd\u{2026}ijkl"));
+}
+
+#[tokio::test]
+async fn hardcover_key_status_masks_short_keys_as_bullets() {
+    let _env = EnvVarGuard::set("HARDCOVER_API_KEY", None);
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    set_hardcover_api_key(&pool, Some("short")).await.unwrap();
+
+    let status = hardcover_key_status(&pool).await.unwrap();
+    assert!(status.configured);
+    assert_eq!(status.source, "settings");
+    // Keys of 8 chars or fewer never leak length beyond the fixed bullet run.
+    assert_eq!(
+        status.masked.as_deref(),
+        Some("\u{2022}\u{2022}\u{2022}\u{2022}")
+    );
+}
+
+#[tokio::test]
+async fn hardcover_key_status_is_unset_when_neither_set() {
+    let _env = EnvVarGuard::set("HARDCOVER_API_KEY", None);
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    let status = hardcover_key_status(&pool).await.unwrap();
+    assert!(!status.configured);
+    assert_eq!(status.source, "none");
+    assert_eq!(status.masked, None);
+}
+
 /// F2 repoint-in-place: changing the ebook path moves the existing
 /// `scan_roots` row (keeping its id) so every book — and its durable
 /// `books.uuid` — survives the move under the new path. Nothing is deleted.

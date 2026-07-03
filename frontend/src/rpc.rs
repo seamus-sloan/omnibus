@@ -490,7 +490,7 @@ pub async fn rpc_get_suggestions(uuid: String) -> Result<SuggestionsResponse> {
 /// Never returns the raw key.
 #[get("/api/rpc/hardcover-key", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_get_hardcover_key() -> Result<HardcoverKeyStatus> {
-    read_hardcover_key_status(&pool.0).await
+    Ok(db::hardcover_key_status(&pool.0).await?)
 }
 
 /// Admin-only: save (or clear, with `None`/blank) the Hardcover key in
@@ -502,51 +502,10 @@ pub async fn rpc_get_hardcover_key() -> Result<HardcoverKeyStatus> {
 #[post("/api/rpc/hardcover-key", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_set_hardcover_key(key: Option<String>) -> Result<HardcoverKeyStatus> {
     match db::set_hardcover_api_key(&pool.0, key.as_deref()).await {
-        Ok(()) => read_hardcover_key_status(&pool.0).await,
+        Ok(()) => Ok(db::hardcover_key_status(&pool.0).await?),
         Err(db::SettingsError::Validation(msg)) => Err(ServerFnError::new(msg).into()),
         Err(e) => Err(ServerFnError::new(e.to_string()).into()),
     }
-}
-
-/// Short masked preview of a secret — never the raw value. Long keys (Hardcover
-/// tokens are JWTs) collapse to `first4…last4`.
-#[cfg(feature = "server")]
-fn mask_key(key: &str) -> String {
-    let n = key.chars().count();
-    if n <= 8 {
-        return "\u{2022}\u{2022}\u{2022}\u{2022}".to_string();
-    }
-    let first: String = key.chars().take(4).collect();
-    let last: String = key.chars().skip(n - 4).collect();
-    format!("{first}\u{2026}{last}")
-}
-
-/// Build the masked key status: settings value wins (`source = "settings"`),
-/// else the `HARDCOVER_API_KEY` env var (`source = "env"`), else unset.
-#[cfg(feature = "server")]
-async fn read_hardcover_key_status(pool: &sqlx::SqlitePool) -> Result<HardcoverKeyStatus> {
-    if let Some(k) = db::get_hardcover_api_key(pool).await? {
-        return Ok(HardcoverKeyStatus {
-            configured: true,
-            masked: Some(mask_key(&k)),
-            source: "settings".to_string(),
-        });
-    }
-    if let Ok(env_key) = std::env::var("HARDCOVER_API_KEY") {
-        let env_key = env_key.trim();
-        if !env_key.is_empty() {
-            return Ok(HardcoverKeyStatus {
-                configured: true,
-                masked: Some(mask_key(env_key)),
-                source: "env".to_string(),
-            });
-        }
-    }
-    Ok(HardcoverKeyStatus {
-        configured: false,
-        masked: None,
-        source: "none".to_string(),
-    })
 }
 
 /// Admin-triggered "Scan for picture" for an author. Clears any sticky
