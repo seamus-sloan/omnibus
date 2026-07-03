@@ -26,6 +26,7 @@ pub(crate) fn initials_for(username: &str) -> String {
     trimmed.chars().take(2).collect::<String>().to_uppercase()
 }
 
+/// Renders the user menu component (web and server targets).
 #[cfg(any(feature = "web", feature = "server"))]
 #[component]
 pub fn UserMenu() -> Element {

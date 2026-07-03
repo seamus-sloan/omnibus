@@ -13,6 +13,8 @@ use omnibus_shared::BookFileInfo;
 #[cfg(not(feature = "mobile"))]
 use crate::Route;
 
+/// Renders the format switcher, letting the reader pick which available
+/// format of a book to open.
 #[component]
 pub fn FormatSwitcher(
     formats: Vec<String>,

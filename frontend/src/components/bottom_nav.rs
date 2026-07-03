@@ -9,6 +9,7 @@ use dioxus_router::Link;
 
 use crate::Route;
 
+/// Renders the bottom navigation bar component.
 #[component]
 pub fn BottomNav() -> Element {
     rsx! {
