@@ -8,6 +8,7 @@ use omnibus_shared::SeriesDetail;
 use crate::components::atrium::Cover;
 use crate::{data, use_server_url, Route};
 
+/// Renders the series discovery page.
 #[component]
 pub fn SeriesPage(id: i64) -> Element {
     let server_url = use_server_url();

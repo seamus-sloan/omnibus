@@ -31,6 +31,7 @@ impl SuggestionItem {
     }
 }
 
+/// Props for the [`ChipEditor`] component.
 #[derive(Props, PartialEq, Clone)]
 pub struct ChipEditorProps {
     /// The chip list. Shared with the consumer so the parent can read

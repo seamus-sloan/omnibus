@@ -68,6 +68,7 @@ pub(crate) use controls::AudioElement;
 #[cfg(not(feature = "mobile"))]
 pub(crate) use mini_dock::MiniDock;
 
+/// Renders the audiobook listen page for the book with the given uuid.
 #[component]
 pub fn BookListenPage(uuid: String) -> Element {
     #[cfg(feature = "mobile")]

@@ -12,6 +12,7 @@ use omnibus_shared::{
 
 use crate::{data, use_server_url, Route};
 
+/// Renders the full-page search results for the given query.
 #[component]
 pub fn SearchPage(query: String) -> Element {
     let server_url = use_server_url();
