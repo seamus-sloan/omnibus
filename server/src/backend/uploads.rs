@@ -232,8 +232,8 @@ pub(super) async fn post_inspect_ebook(
 /// 500.
 fn inspect_ebook_tempfile(tmp: &tempfile::NamedTempFile) -> Result<UploadInspection, UploadError> {
     let size_bytes = std::fs::metadata(tmp.path())
-        .map(|m| m.len() as i64)
-        .unwrap_or(0);
+        .map_err(|e| UploadError::internal("stat upload tempfile", e))?
+        .len() as i64;
     let targets = vec![db::ebook::ParseTarget {
         filename: "upload.epub".to_string(),
         absolute: tmp.path().to_path_buf(),
