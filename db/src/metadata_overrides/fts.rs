@@ -1,11 +1,10 @@
 //! Rebuild the `books_fts` row after an override write so search matches
-//! what the UI displays (merged canonical + override metadata). Thin
-//! wrappers over the [`crate::sync::upsert_fts`] choke-point: the door
-//! writes the canonical row, then [`overlay_overrides`] patches the
-//! overridable columns with the merged values. Called best-effort from
-//! the upsert/merge/delete paths.
+//! the UI (merged canonical + override metadata). Wraps the
+//! [`crate::sync::upsert_fts`] choke-point plus an [`overlay_overrides`]
+//! patch in one transaction. Called best-effort by the upsert/merge paths;
+//! the delete path restores canonical FTS in its own transaction instead.
 
-use sqlx::{SqliteConnection, SqlitePool};
+use sqlx::{Sqlite, SqliteConnection, SqlitePool, Transaction};
 
 use omnibus_shared::EbookMetadata;
 
@@ -24,6 +23,11 @@ use super::upsert::MetadataOverridesError;
 /// `Ok(())` if the uuid has no matching book — overrides for an unknown
 /// uuid would only happen if a book row was deleted out from under us,
 /// in which case there is no FTS row to maintain.
+///
+/// The canonical-write + override-overlay pair runs inside a single
+/// transaction via [`rebuild_fts_row_tx`], so a failure in the overlay
+/// rolls back the canonical write instead of leaving the FTS row with
+/// unmerged data — matching [`rebuild_fts_for_books_batch`].
 pub(crate) async fn rebuild_fts_for_book(
     pool: &SqlitePool,
     book_uuid: &str,
@@ -34,9 +38,24 @@ pub(crate) async fn rebuild_fts_for_book(
     let Some(merged) = crate::books::get_book(pool, book_id).await? else {
         return Ok(());
     };
-    let mut conn = pool.acquire().await?;
-    upsert_fts(&mut conn, book_id).await?;
-    overlay_overrides(&mut conn, book_id, &merged).await?;
+    let mut tx = pool.begin().await?;
+    rebuild_fts_row_tx(&mut tx, book_id, &merged).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Write the canonical `books_fts` row then overlay the override-merged
+/// columns, both against an open transaction so the pair commits (or rolls
+/// back) atomically. The single write implementation shared by the
+/// single-book ([`rebuild_fts_for_book`]) and batch
+/// ([`rebuild_fts_for_books_batch`]) paths.
+pub(crate) async fn rebuild_fts_row_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    book_id: i64,
+    merged: &EbookMetadata,
+) -> Result<(), sqlx::Error> {
+    upsert_fts(tx, book_id).await?;
+    overlay_overrides(tx, book_id, merged).await?;
     Ok(())
 }
 
@@ -91,8 +110,7 @@ pub(crate) async fn rebuild_fts_for_books_batch(
     }
     let mut tx = pool.begin().await?;
     for (book_id, merged) in &rows {
-        upsert_fts(&mut tx, *book_id).await?;
-        overlay_overrides(&mut tx, *book_id, merged).await?;
+        rebuild_fts_row_tx(&mut tx, *book_id, merged).await?;
     }
     tx.commit().await?;
     Ok(())
