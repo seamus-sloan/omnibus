@@ -7,6 +7,7 @@ use omnibus_shared::TagWeight;
 
 use crate::{data, use_server_url, Route};
 
+/// Renders the tag cloud page.
 #[component]
 pub fn TagCloudPage() -> Element {
     let server_url = use_server_url();

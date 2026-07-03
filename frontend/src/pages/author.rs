@@ -12,6 +12,7 @@ use crate::components::atrium::Cover;
 use crate::components::author_photo_edit::AuthorPhotoEditOverlay;
 use crate::{data, use_server_url, Route};
 
+/// Renders the author discovery page.
 #[component]
 pub fn AuthorPage(id: i64) -> Element {
     let server_url = use_server_url();

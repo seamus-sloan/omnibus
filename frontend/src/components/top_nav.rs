@@ -11,6 +11,7 @@ use crate::components::search_palette::SearchPaletteHost;
 use crate::components::user_menu::UserMenu;
 use crate::Route;
 
+/// Renders the top navigation bar component.
 #[component]
 pub fn TopNav() -> Element {
     let route = use_route::<Route>();

@@ -10,6 +10,7 @@ use dioxus_router::{use_navigator, Link};
 use crate::components::auth::{AuthShell, Banner, BannerKind, Field, StrengthMeter, StrengthScore};
 use crate::{use_server_url, Route};
 
+/// Renders the login page.
 #[component]
 pub fn LoginPage() -> Element {
     let mut username = use_signal(String::new);
@@ -143,6 +144,7 @@ pub fn LoginPage() -> Element {
     }
 }
 
+/// Renders the register page.
 #[component]
 pub fn RegisterPage() -> Element {
     let username = use_signal(String::new);
