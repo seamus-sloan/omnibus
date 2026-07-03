@@ -18,6 +18,7 @@ A new user-facing feature typically needs **both** (mobile+web parity), since th
 
 - **New page route:** extend the `Route` enum in [frontend/src/lib.rs](../../../frontend/src/lib.rs) and add a page component under `frontend/src/pages/`. Dioxus fullstack handles SSR + hydration automatically — no new handler required.
 - **Data-fetching endpoint:** see the two-transport table above. Add a server function **and** a REST handler, or one of them if the feature is platform-specific.
+- **Binary upload (file/multipart):** server functions JSON-serialize their args, so they can't carry a file. Use a hand-written `/api/*` REST handler with `axum::extract::Multipart` for **both** web and mobile, and have the web `data/` helper POST directly via `gloo-net` + `web_sys::FormData` (see `backend/uploads.rs` + `data/uploads.rs`, modeled on the author-photo upload). Large uploads need their own sub-router with a bigger `DefaultBodyLimit`; if the handler then triggers a reindex, `worker.post(Task::Scan{..})` + `await_completion` before reading the result back.
 
 ## 2. Add the shared request/response types
 

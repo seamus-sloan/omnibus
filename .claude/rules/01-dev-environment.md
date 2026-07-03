@@ -67,6 +67,7 @@ Optional storage overrides:
 - `OMNIBUS_COVERS_DIR` — where cover image files are stored (default `./covers`). Set to an absolute path on real deployments so covers don't land next to the binary and disappear on redeploy.
 - `OMNIBUS_THUMBS_DIR` — where WebP thumbnails are cached (default `./thumbs`)
 - `OMNIBUS_THUMBS_CAP_BYTES` — eviction cap in bytes (default 5 GiB)
+- `OMNIBUS_MAX_UPLOAD_BYTES` — max accepted size for an "add your own books" upload, as both the upload routes' body limit and a per-file check (default 1 GiB)
 
 HLS audiobook transcode cache (read by `db::hls`):
 - `OMNIBUS_DATA_DIR` — base data dir; HLS segments live under `$OMNIBUS_DATA_DIR/hls/` (default `./data`)

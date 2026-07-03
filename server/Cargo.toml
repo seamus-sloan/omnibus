@@ -29,6 +29,10 @@ time = { version = "0.3", optional = true }
 # native startup helpers in main.rs that previously lived inside an inline
 # closure (where `?` upgraded any error via type inference).
 anyhow = { version = "1.0", optional = true }
+# Staging temp files for the upload-inspect parse path in
+# `backend::uploads` (RAII cleanup on drop). Also a dev-dependency below for
+# the integration tests; listed here so the server lib can use it directly.
+tempfile = { workspace = true, optional = true }
 
 omnibus-shared = { path = "../shared" }
 # `features` here are forwarded via our own feature flags below. Leaving it
@@ -66,6 +70,7 @@ server = [
     "dep:tracing",
     "dep:time",
     "dep:anyhow",
+    "dep:tempfile",
     "dep:omnibus-db",
     "dioxus/server",
     "omnibus-frontend/server",

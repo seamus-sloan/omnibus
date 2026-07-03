@@ -17,6 +17,8 @@ pub enum Route {
     Landing {},
     #[route("/settings")]
     Settings {},
+    #[route("/add-books")]
+    AddBooks {},
     #[route("/books/:uuid")]
     BookDetail { uuid: String },
     #[route("/books/:uuid/edit")]
@@ -58,6 +60,14 @@ pub fn Landing() -> Element {
 pub fn Settings() -> Element {
     rsx! {
         ScreenLayout { SettingsPage {} }
+    }
+}
+
+/// Route target for `/add-books` — wraps [`AddBooksPage`] in the platform screen layout.
+#[component]
+pub fn AddBooks() -> Element {
+    rsx! {
+        ScreenLayout { AddBooksPage {} }
     }
 }
 
