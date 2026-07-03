@@ -1,11 +1,8 @@
-//! Cache CRUD + de-duplication state machine for F3.3 suggestions.
-//!
-//! Two tables back this (migration 0033): `book_suggestion_state` holds one
-//! marker per source book (the TTL clock + `pending`/`resolved`/`empty`
-//! state), and `book_suggestions` holds 0..N cached result rows. The pure
-//! [`decide`] function turns the marker into a "serve cached? enqueue a
-//! refetch?" verdict — the single place that guarantees a page refresh or a
-//! burst of concurrent viewers never re-hits Hardcover while a result is fresh.
+//! Cache CRUD + the pure [`decide`] de-duplication state machine for F3.3
+//! suggestions. Two tables back this (migration 0033): `book_suggestion_state`
+//! holds one TTL/`pending`/`resolved`/`empty` marker per source book, and
+//! `book_suggestions` holds its 0..N cached result rows. Read by [`cascade`]
+//! and the suggestions RPC/REST handlers.
 
 use sqlx::SqlitePool;
 
@@ -69,9 +66,13 @@ pub struct CacheDecision {
     pub enqueue: bool,
 }
 
-/// Pure cache state machine — see the table in
-/// [`crate::suggestions`]. `marker` is the `(state, fetched_at)` pair from
+/// Pure cache state machine. `marker` is the `(state, fetched_at)` pair from
 /// [`suggestion_state`] (`None` = no row yet); `now` is unix-seconds.
+///
+/// This is the single place that guarantees a page refresh or a burst of
+/// concurrent viewers never re-hits Hardcover while a result is fresh: a 30-day
+/// TTL result cache, plus a `pending` debounce so concurrent first-viewers
+/// collapse to one posted resolution task.
 pub fn decide(marker: Option<(SuggestionState, i64)>, now: i64) -> CacheDecision {
     match marker {
         // No marker: first viewer. Nothing to serve; kick off a resolution.

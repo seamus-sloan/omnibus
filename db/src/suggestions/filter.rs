@@ -1,9 +1,8 @@
 //! Pure candidate-filtering for F3.3 suggestions. Given the source book's
-//! authors/series and a list of Hardcover co-listed candidates (already ranked
-//! by co-listing count, descending), trim to the top read-alikes that are
-//! genuinely *new* discoveries: different author, different series, and an
-//! entry point (series-starter or standalone) so a reader is never dropped
-//! into the middle of a series. No I/O — exercised heavily in `tests.rs`.
+//! authors/series and Hardcover co-listed candidates (already ranked by
+//! co-listing count, descending), trim to the top read-alikes that are genuine
+//! *new* discoveries: different author, different series, and an entry point
+//! (series-starter or standalone). No I/O; called by [`crate::suggestions::cascade`].
 
 use std::collections::HashSet;
 
