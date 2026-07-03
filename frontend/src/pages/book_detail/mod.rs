@@ -382,8 +382,10 @@ fn render_loaded(
                 title: title.clone(),
                 kicker,
                 crumbs,
-                has_ebook,
-                has_audio,
+                avail: hero::Availability {
+                    has_ebook,
+                    has_audio,
+                },
             }
             section { class: "bd-body-grid",
                 BdBodyMain {

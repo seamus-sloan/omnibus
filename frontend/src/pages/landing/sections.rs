@@ -6,25 +6,36 @@
 use dioxus::prelude::*;
 use omnibus_shared::{EbookMetadata, SortKey, ViewMode, ViewPrefs};
 
-use crate::components::chip_editor::SuggestionItem;
-
 use super::filters::EmptyFiltered;
 use super::grid::BookGrid;
 use super::sorting::{default_dir_for, toggle_dir};
 use super::table::{BookTable, BookTableContext};
 use super::toolbar::Toolbar;
 
+/// Header banner fields sourced from the page's derived view state.
+#[derive(Clone, PartialEq)]
+pub(super) struct LandingHeaderView {
+    pub path_subtitle: String,
+    pub book_count: usize,
+    pub path_missing: bool,
+    pub page_error: Option<String>,
+    pub lib_err: Option<String>,
+}
+
 /// Sticky `data-testid="lib-header"` header; also renders page-level + library-path errors.
 #[component]
 pub(super) fn LandingHeader(
-    path_subtitle: String,
-    book_count: usize,
+    view: LandingHeaderView,
     prefs: ViewPrefs,
     on_prefs_change: EventHandler<ViewPrefs>,
-    path_missing: bool,
-    page_error: Option<String>,
-    lib_err: Option<String>,
 ) -> Element {
+    let LandingHeaderView {
+        path_subtitle,
+        book_count,
+        path_missing,
+        page_error,
+        lib_err,
+    } = view;
     rsx! {
         header { class: "lib-header", "data-testid": "lib-header",
             div { class: "lib-header-kicker",
@@ -59,50 +70,62 @@ pub(super) fn LandingHeader(
     }
 }
 
-/// Per-render snapshot of the data the table/grid + load-more sentinel need.
-#[derive(Clone, PartialEq, Props)]
-pub(super) struct LandingContentProps {
+/// Result of the book fetch/filter pipeline: what `lib-main` should render
+/// and whether the load-more sentinel should appear.
+#[derive(Clone, PartialEq)]
+pub(super) struct BooksView {
     pub is_loading: bool,
     pub visible_books: Vec<EbookMetadata>,
     pub visible_is_empty: bool,
     pub books_empty: bool,
     pub lib_err: Option<String>,
     pub page_error: Option<String>,
-    pub view_mode: ViewMode,
-    pub prefs: ViewPrefs,
     pub has_more: bool,
     pub is_loading_more: bool,
-    pub server_url: String,
-    pub is_admin: bool,
-    pub author_suggestions: ReadSignal<Vec<SuggestionItem>>,
-    pub tag_suggestions: ReadSignal<Vec<SuggestionItem>>,
+}
+
+/// Event handlers dispatched from the sidebar/grid/table/pagination row.
+#[derive(Clone, PartialEq)]
+pub(super) struct LandingContentHandlers {
     pub on_prefs_change: EventHandler<ViewPrefs>,
     pub on_load_more: EventHandler<()>,
     pub on_clear_filters: EventHandler<()>,
+}
+
+/// Per-render snapshot of the data the table/grid + load-more sentinel need.
+#[derive(Clone, PartialEq, Props)]
+pub(super) struct LandingContentProps {
+    pub books: BooksView,
+    pub prefs: ViewPrefs,
+    pub ctx: BookTableContext,
+    pub handlers: LandingContentHandlers,
 }
 
 /// Sidebar + grid/table column with load-more sentinel; stateless, mutations route through parent handlers.
 #[component]
 pub(super) fn LandingContent(props: LandingContentProps) -> Element {
     let LandingContentProps {
+        books,
+        prefs,
+        ctx,
+        handlers,
+    } = props;
+    let BooksView {
         is_loading,
         visible_books,
         visible_is_empty,
         books_empty,
         lib_err,
         page_error,
-        view_mode,
-        prefs,
         has_more,
         is_loading_more,
-        server_url,
-        is_admin,
-        author_suggestions,
-        tag_suggestions,
+    } = books;
+    let LandingContentHandlers {
         on_prefs_change,
         on_load_more,
         on_clear_filters,
-    } = props;
+    } = handlers;
+    let view_mode = prefs.view_mode;
 
     let on_sort = {
         let prefs = prefs.clone();
@@ -130,18 +153,13 @@ pub(super) fn LandingContent(props: LandingContentProps) -> Element {
                                 books: visible_books.clone(),
                                 prefs: prefs.clone(),
                                 on_sort,
-                                ctx: BookTableContext {
-                                    server_url: server_url.clone(),
-                                    is_admin,
-                                    author_suggestions,
-                                    tag_suggestions,
-                                },
+                                ctx: ctx.clone(),
                             }
                         },
                         ViewMode::Grid => rsx! {
                             BookGrid {
                                 books: visible_books.clone(),
-                                server_url: server_url.clone(),
+                                server_url: ctx.server_url.clone(),
                             }
                         },
                     }

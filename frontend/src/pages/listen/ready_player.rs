@@ -16,7 +16,9 @@ use super::overlays::{FailedOverlay, PreparingOverlay};
 use super::sleep::{end_of_chapter_seconds, sleep_toolbar_label, use_sleep_timer};
 use super::sleep_panel::SleepPanel;
 use super::speed_panel::SpeedPanel;
-use super::stage::{PlaybackPosition, PlayerCallbacks, PlayerStage, ToolbarState, TransportState};
+use super::stage::{
+    PlaybackPosition, PlayerCallbacks, PlayerContent, PlayerStage, ToolbarState, TransportState,
+};
 use crate::Nav;
 
 /// Derive the current chapter index from `elapsed` and a sorted chapter list.
@@ -279,14 +281,18 @@ pub(super) fn ReadyPlayer(
             }
 
             PlayerStage {
-                book: book.clone(),
-                title,
-                author,
+                content: PlayerContent {
+                    book: book.clone(),
+                    title,
+                    author,
+                    chapters: chs.clone(),
+                },
                 position: PlaybackPosition {
                     elapsed: elapsed_now,
                     duration: dur,
                     remaining,
                     scrub_max,
+                    current_chapter_index: ch_idx,
                 },
                 transport: TransportState {
                     play_label,
@@ -338,8 +344,6 @@ pub(super) fn ReadyPlayer(
                         }
                     }),
                 },
-                chapters: chs.clone(),
-                current_chapter_index: ch_idx,
             }
 
             if speed_panel_open() {

@@ -84,13 +84,24 @@ mod tests {
     }
 }
 
-/// Scrubber timing — elapsed plus the derived totals (duration, remaining, slider max).
+/// Scrubber timing — elapsed plus the derived totals (duration, remaining,
+/// slider max) — and the chapter index derived from `elapsed`.
 #[derive(Clone, PartialEq)]
 pub(super) struct PlaybackPosition {
     pub elapsed: f64,
     pub duration: f64,
     pub remaining: f64,
     pub scrub_max: f64,
+    pub current_chapter_index: usize,
+}
+
+/// Static per-book display content: title, author, and the full chapter list.
+#[derive(Clone, PartialEq)]
+pub(super) struct PlayerContent {
+    pub book: EbookMetadata,
+    pub title: String,
+    pub author: String,
+    pub chapters: Vec<ChapterInfo>,
 }
 
 /// Play/skip/rate button labels and on/off state shared by the transport row.
@@ -116,6 +127,17 @@ pub(super) struct PlayerCallbacks {
     pub on_chapter_seek: EventHandler<f64>,
 }
 
+/// The subset of [`PlayerCallbacks`] the transport row itself dispatches.
+#[derive(Clone, PartialEq)]
+pub(super) struct TransportCallbacks {
+    pub on_toggle: EventHandler<MouseEvent>,
+    pub on_skip_back: EventHandler<MouseEvent>,
+    pub on_skip_forward: EventHandler<MouseEvent>,
+    pub on_rate: EventHandler<MouseEvent>,
+    pub on_chapter_prev: EventHandler<MouseEvent>,
+    pub on_chapter_next: EventHandler<MouseEvent>,
+}
+
 /// Toolbar row (sleep/bookmark/chapters) — per-button highlight state plus toggle handlers.
 #[derive(Clone, PartialEq)]
 pub(super) struct ToolbarState {
@@ -130,19 +152,21 @@ pub(super) struct ToolbarState {
 
 #[component]
 pub(super) fn PlayerStage(
-    book: EbookMetadata,
-    title: String,
-    author: String,
+    content: PlayerContent,
     position: PlaybackPosition,
     transport: TransportState,
     callbacks: PlayerCallbacks,
     toolbar: ToolbarState,
-    chapters: Vec<ChapterInfo>,
-    current_chapter_index: usize,
 ) -> Element {
+    let PlayerContent {
+        book,
+        title,
+        author,
+        chapters,
+    } = content;
     let ch_count = chapters.len();
-    let kicker = kicker_text(ch_count, current_chapter_index);
-    let chapter_sub = chapter_sub_text(&chapters, current_chapter_index);
+    let kicker = kicker_text(ch_count, position.current_chapter_index);
+    let chapter_sub = chapter_sub_text(&chapters, position.current_chapter_index);
 
     rsx! {
         div { class: "lp-stage",
@@ -164,33 +188,23 @@ pub(super) fn PlayerStage(
                     elapsed: position.elapsed,
                     duration: position.duration,
                     remaining: position.remaining,
-                    current_chapter_index,
+                    current_chapter_index: position.current_chapter_index,
                     on_seek: callbacks.on_chapter_seek,
                 }
 
                 TransportButtons {
-                    play_label: transport.play_label,
-                    playing: transport.playing,
-                    rate_label: transport.rate_label,
-                    rate_active: transport.rate_active,
-                    has_chapters: transport.has_chapters,
-                    on_toggle: callbacks.on_toggle,
-                    on_skip_back: callbacks.on_skip_back,
-                    on_skip_forward: callbacks.on_skip_forward,
-                    on_rate: callbacks.on_rate,
-                    on_chapter_prev: callbacks.on_chapter_prev,
-                    on_chapter_next: callbacks.on_chapter_next,
+                    state: transport,
+                    callbacks: TransportCallbacks {
+                        on_toggle: callbacks.on_toggle,
+                        on_skip_back: callbacks.on_skip_back,
+                        on_skip_forward: callbacks.on_skip_forward,
+                        on_rate: callbacks.on_rate,
+                        on_chapter_prev: callbacks.on_chapter_prev,
+                        on_chapter_next: callbacks.on_chapter_next,
+                    },
                 }
 
-                Toolbar {
-                    sleep_active: toolbar.sleep_active,
-                    sleep_label: toolbar.sleep_label,
-                    bookmarks_active: toolbar.bookmarks_active,
-                    chapters_active: toolbar.chapters_active,
-                    on_sleep: toolbar.on_sleep,
-                    on_bookmark: toolbar.on_bookmark,
-                    on_chapters: toolbar.on_chapters,
-                }
+                Toolbar { state: toolbar }
             }
         }
     }
