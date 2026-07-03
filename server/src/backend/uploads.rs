@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 use axum::{
-    extract::{Multipart, State},
+    extract::{multipart::Field, Multipart, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -21,6 +21,7 @@ use omnibus_db::{
 use omnibus_shared::{
     detect_ebook_format, Contributor, MetadataOverrides, UploadCommitResult, UploadInspection,
 };
+use tokio::io::AsyncWriteExt as _;
 
 use super::AppState;
 use crate::auth::AuthUser;
@@ -126,7 +127,10 @@ fn require_upload(user: &AuthUser) -> Result<(), UploadError> {
     }
 }
 
-/// Magic-byte + size gate applied to every uploaded file field.
+/// Magic-byte + size gate for a fully-buffered upload. Kept as a unit-testable
+/// utility; the streaming path enforces both invariants incrementally inside
+/// [`stream_upload_to_tempfile`].
+#[allow(dead_code)]
 fn validate_file_bytes(bytes: &[u8], cap: usize) -> Result<(), UploadError> {
     if bytes.len() > cap {
         return Err(UploadError::TooLarge(cap));
@@ -146,40 +150,95 @@ fn norm(value: &Option<String>) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+// --- Streaming helper -------------------------------------------------------
+
+/// Stream a multipart `file` field to a newly-created tempfile, enforcing the
+/// byte cap incrementally and validating EPUB magic bytes on the first chunk.
+/// The payload is never fully buffered in RAM — only one chunk is held at a
+/// time while it is written to disk.
+async fn stream_upload_to_tempfile(
+    mut field: Field<'_>,
+    cap: usize,
+) -> Result<tempfile::NamedTempFile, UploadError> {
+    let tmp = tempfile::Builder::new()
+        .suffix(".epub")
+        .tempfile()
+        .map_err(|e| UploadError::internal("create upload tempfile", e))?;
+    let mut f = tokio::fs::OpenOptions::new()
+        .write(true)
+        .open(tmp.path())
+        .await
+        .map_err(|e| UploadError::internal("open upload tempfile", e))?;
+
+    let mut total = 0usize;
+    let mut format_validated = false;
+
+    loop {
+        let chunk = field
+            .chunk()
+            .await
+            .map_err(|e| UploadError::internal("read upload chunk", e))?;
+        let Some(chunk) = chunk else { break };
+        if !format_validated {
+            if detect_ebook_format(&chunk).is_none() {
+                return Err(UploadError::UnsupportedFormat);
+            }
+            format_validated = true;
+        }
+        total += chunk.len();
+        if total > cap {
+            return Err(UploadError::TooLarge(cap));
+        }
+        f.write_all(&chunk)
+            .await
+            .map_err(|e| UploadError::internal("write upload chunk", e))?;
+    }
+
+    if !format_validated {
+        return Err(UploadError::MissingFile);
+    }
+    Ok(tmp)
+}
+
 // --- Inspect ---------------------------------------------------------------
 
 /// Parse an uploaded EPUB and return its embedded metadata for the editable
-/// confirm step. Stateless: the file is parsed from a temp file and discarded.
+/// confirm step. Stateless: the field is streamed to a tempfile, parsed, then
+/// discarded.
 pub(super) async fn post_inspect_ebook(
     user: AuthUser,
     State(_state): State<AppState>,
-    multipart: Multipart,
+    mut multipart: Multipart,
 ) -> Result<Response, UploadError> {
     require_upload(&user)?;
-    let bytes = read_file_field(multipart, max_upload_bytes()).await?;
+    let field = loop {
+        match multipart.next_field().await {
+            Ok(Some(f)) if f.name().unwrap_or("") == "file" => break f,
+            Ok(Some(_)) => continue,
+            Ok(None) => return Err(UploadError::MissingFile),
+            Err(e) => return Err(UploadError::internal("parse multipart", e)),
+        }
+    };
+    let tmp = stream_upload_to_tempfile(field, max_upload_bytes()).await?;
     // Parsing opens a zip + reads the OPF — run it off the async runtime.
-    let inspection = tokio::task::spawn_blocking(move || inspect_ebook_bytes(&bytes))
+    let inspection = tokio::task::spawn_blocking(move || inspect_ebook_tempfile(&tmp))
         .await
         .map_err(|e| UploadError::internal("spawn_blocking(inspect ebook)", e))??;
     Ok(Json(inspection).into_response())
 }
 
-/// Stage `bytes` to a temp `.epub`, run the OPF parser, and project the result
-/// into an [`UploadInspection`]. Parse failures map to a 415; staging IO
-/// failures to a 500.
-fn inspect_ebook_bytes(bytes: &[u8]) -> Result<UploadInspection, UploadError> {
-    let tmp = tempfile::Builder::new()
-        .suffix(".epub")
-        .tempfile()
-        .map_err(|e| UploadError::internal("stage upload", e))?;
-    std::fs::write(tmp.path(), bytes)
-        .map_err(|e| UploadError::internal("write staged upload", e))?;
-
+/// Parse the already-written `tmp` file as an EPUB and project the result into
+/// an [`UploadInspection`]. Parse failures map to 415; staging IO failures to
+/// 500.
+fn inspect_ebook_tempfile(tmp: &tempfile::NamedTempFile) -> Result<UploadInspection, UploadError> {
+    let size_bytes = std::fs::metadata(tmp.path())
+        .map(|m| m.len() as i64)
+        .unwrap_or(0);
     let targets = vec![db::ebook::ParseTarget {
         filename: "upload.epub".to_string(),
         absolute: tmp.path().to_path_buf(),
         mtime_epoch: 0,
-        size_bytes: bytes.len() as i64,
+        size_bytes,
     }];
     let mut parsed = db::ebook::parse_ebook_targets(targets, db::ebook::ScanOptions::default());
     let book = parsed
@@ -201,11 +260,11 @@ fn inspect_ebook_bytes(bytes: &[u8]) -> Result<UploadInspection, UploadError> {
 
 // --- Commit ----------------------------------------------------------------
 
-/// The file bytes plus the user's (possibly edited) metadata, parsed from the
-/// commit multipart body.
+/// The user's (possibly edited) metadata parsed from the commit multipart body,
+/// plus a tempfile holding the already-streamed EPUB bytes.
 #[derive(Default)]
 struct CommitForm {
-    bytes: Option<Vec<u8>>,
+    tmp_file: Option<tempfile::NamedTempFile>,
     title: Option<String>,
     author: Option<String>,
     series: Option<String>,
@@ -221,8 +280,8 @@ pub(super) async fn post_upload_ebook(
     multipart: Multipart,
 ) -> Result<Response, UploadError> {
     require_upload(&user)?;
-    let form = parse_commit_multipart(multipart, max_upload_bytes()).await?;
-    let bytes = form.bytes.clone().ok_or(UploadError::MissingFile)?;
+    let mut form = parse_commit_multipart(multipart, max_upload_bytes()).await?;
+    let tmp = form.tmp_file.take().ok_or(UploadError::MissingFile)?;
     let (Some(title), Some(author)) = (norm(&form.title), norm(&form.author)) else {
         return Err(UploadError::MissingMetadata);
     };
@@ -236,24 +295,25 @@ pub(super) async fn post_upload_ebook(
         .filter(|p| !p.is_empty())
         .ok_or(UploadError::NotConfigured)?;
 
-    // Allocate a non-colliding canonical path and write the file (blocking IO).
+    // Allocate a non-colliding canonical path and copy the tempfile there.
     let root_path = PathBuf::from(&root);
     let dest = library_layout::allocate_canonical_path(&root_path, &author, &title, "epub")
         .map_err(|e| UploadError::internal("allocate_canonical_path", e))?;
-    let dest_for_write = dest.clone();
+    let dest_for_copy = dest.clone();
     tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-        if let Some(parent) = dest_for_write.parent() {
+        if let Some(parent) = dest_for_copy.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&dest_for_write, &bytes)
+        std::fs::copy(tmp.path(), &dest_for_copy).map(|_| ())?;
+        // tmp drops here, deleting the upload tempfile.
+        Ok(())
     })
     .await
-    .map_err(|e| UploadError::internal("spawn_blocking(write ebook)", e))?
-    .map_err(|e| UploadError::internal("write uploaded ebook", e))?;
+    .map_err(|e| UploadError::internal("spawn_blocking(file ebook)", e))?
+    .map_err(|e| UploadError::internal("file uploaded ebook", e))?;
 
     // Reindex so the indexer mints the uuid, extracts the cover, and updates
-    // FTS — the single source of truth for inserting books. The scan is keyed
-    // on the library path, so concurrent uploads to the same library serialize.
+    // FTS — the single source of truth for inserting books.
     let task_id = state.worker.post(Task::Scan {
         library_path: root.clone(),
     });
@@ -264,28 +324,37 @@ pub(super) async fn post_upload_ebook(
     }
 
     // Map the file we just placed back to its row via the durable scan_key.
+    // Clean up dest on any failure to avoid orphaning the file on disk.
     let scan_key = dest
         .strip_prefix(&root_path)
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
-    let uuid = db::get_book_uuid_by_scan_key(&state.pool, &root, &scan_key)
+    let uuid_result = db::get_book_uuid_by_scan_key(&state.pool, &root, &scan_key)
         .await
-        .map_err(|e| UploadError::internal("get_book_uuid_by_scan_key", e))?
-        .ok_or_else(|| {
-            UploadError::internal(
-                "resolve uploaded book",
-                "reindex did not surface the uploaded file",
-            )
-        })?;
+        .map_err(|e| UploadError::internal("get_book_uuid_by_scan_key", e))
+        .and_then(|opt| {
+            opt.ok_or_else(|| {
+                UploadError::internal(
+                    "resolve uploaded book",
+                    "reindex did not surface the uploaded file",
+                )
+            })
+        });
+    let uuid = match uuid_result {
+        Ok(uuid) => uuid,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&dest).await;
+            return Err(e);
+        }
+    };
 
-    // Make the displayed metadata match what the user confirmed. No-op when
-    // they accepted the auto-extracted values.
+    // Make the displayed metadata match what the user confirmed.
     apply_user_edits(&state, &uuid, &form, user.id).await?;
 
     Ok((StatusCode::CREATED, Json(UploadCommitResult { uuid })).into_response())
 }
 
-/// Collect the file bytes and the editable text fields from the commit body.
+/// Collect the user's text fields and stream the file field to a tempfile.
 async fn parse_commit_multipart(
     mut multipart: Multipart,
     cap: usize,
@@ -297,12 +366,7 @@ async fn parse_commit_multipart(
                 let name = field.name().unwrap_or("").to_string();
                 match name.as_str() {
                     "file" => {
-                        let bytes = field
-                            .bytes()
-                            .await
-                            .map_err(|e| UploadError::internal("read file field", e))?;
-                        validate_file_bytes(&bytes, cap)?;
-                        form.bytes = Some(bytes.to_vec());
+                        form.tmp_file = Some(stream_upload_to_tempfile(field, cap).await?);
                     }
                     "title" => form.title = field.text().await.ok(),
                     "author" => form.author = field.text().await.ok(),
@@ -372,30 +436,6 @@ async fn apply_user_edits(
         .await
         .map_err(|e| UploadError::internal("merge_metadata_overrides", e))?;
     Ok(())
-}
-
-// --- Shared multipart read -------------------------------------------------
-
-/// Read the single `file` field from a multipart body, enforcing the size +
-/// magic-byte gate. Used by the inspect endpoint (which ignores text fields).
-async fn read_file_field(mut multipart: Multipart, cap: usize) -> Result<Vec<u8>, UploadError> {
-    loop {
-        match multipart.next_field().await {
-            Ok(Some(field)) => {
-                if field.name().unwrap_or("") != "file" {
-                    continue;
-                }
-                let bytes = field
-                    .bytes()
-                    .await
-                    .map_err(|e| UploadError::internal("read file field", e))?;
-                validate_file_bytes(&bytes, cap)?;
-                return Ok(bytes.to_vec());
-            }
-            Ok(None) => return Err(UploadError::MissingFile),
-            Err(e) => return Err(UploadError::internal("parse multipart", e)),
-        }
-    }
 }
 
 // --- Audiobook stubs -------------------------------------------------------
