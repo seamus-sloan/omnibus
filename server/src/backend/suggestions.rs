@@ -16,7 +16,7 @@ use axum::{
     Json,
 };
 use omnibus_db::{self as db, worker::Task};
-use omnibus_shared::{BookSuggestion, HardcoverKeyStatus, SuggestionsResponse};
+use omnibus_shared::{BookSuggestion, HardcoverKeyStatus, RawSuggestion, SuggestionsResponse};
 use serde::Deserialize;
 
 use super::{internal, AppState};
@@ -67,11 +67,13 @@ pub(super) async fn get_suggestions(
                     BookSuggestion::new(
                         &uuid,
                         c.rank,
-                        c.hardcover_id,
-                        c.hardcover_slug,
-                        c.title,
-                        c.author,
-                        c.list_count,
+                        RawSuggestion {
+                            hardcover_id: c.hardcover_id,
+                            hardcover_slug: c.hardcover_slug,
+                            title: c.title,
+                            author: c.author,
+                            list_count: c.list_count,
+                        },
                         c.has_cover,
                     )
                 })
