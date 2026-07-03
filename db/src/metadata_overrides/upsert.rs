@@ -9,6 +9,9 @@ use sqlx::{Executor, SqlitePool};
 
 use omnibus_shared::{EbookMetadata, MetadataOverrides};
 
+use crate::books::resolve_book_id_by_uuid_exec;
+use crate::sync::upsert_fts;
+
 use super::fts::rebuild_fts_for_book;
 use super::links::materialize_series_link;
 
@@ -176,21 +179,34 @@ pub async fn get_metadata_overrides(
 
 /// Delete overrides for a book UUID (revert to scanned values).
 ///
-/// Also rebuilds the book's `books_fts` row so that search reverts to
-/// matching the canonical scanned metadata, mirroring
-/// [`upsert_metadata_overrides`].
+/// The row DELETE and the `books_fts` restore run inside one
+/// `BEGIN IMMEDIATE` transaction. With the override row removed, the
+/// canonical [`upsert_fts`] write inside the transaction *is* the
+/// revert-to-scanned state — no override overlay is needed, and it reads
+/// the same canonical taxonomy the scan-time index writes.
+///
+/// Unlike [`upsert_metadata_overrides`] / [`merge_metadata_overrides`]
+/// (whose post-commit FTS rebuild is best-effort), the FTS restore here is
+/// **not** best-effort: a failure in the restore aborts the whole call and
+/// rolls the DELETE back, so the overrides can never be dropped while
+/// search still matches the deleted override text. Callers must treat this
+/// as fallible — the delete can fail (surfacing as a 500 at the handler)
+/// even when the row existed, leaving the override intact.
 pub async fn delete_metadata_overrides(
     pool: &SqlitePool,
     book_uuid: &str,
 ) -> Result<(), MetadataOverridesError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     sqlx::query("DELETE FROM metadata_overrides WHERE book_uuid = ?")
         .bind(book_uuid)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
-    // Best-effort FTS rebuild — same rationale as `upsert_metadata_overrides`.
-    if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
-        tracing::warn!(book_uuid, error = %e, "books_fts rebuild after override delete failed");
+    // Resolve inside the transaction so the id read agrees with the DELETE.
+    // A uuid with no live book has no FTS row to restore.
+    if let Some(book_id) = resolve_book_id_by_uuid_exec(&mut *tx, book_uuid).await? {
+        upsert_fts(&mut tx, book_id).await?;
     }
+    tx.commit().await?;
     Ok(())
 }
 
