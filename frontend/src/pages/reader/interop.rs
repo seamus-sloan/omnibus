@@ -41,7 +41,6 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
     use wasm_bindgen::prelude::*;
 
     use super::bootstrap::{reader_bootstrap_js, BootstrapArgs};
-    use super::parse_file_id_from_url;
     use super::reader_call;
     use crate::data;
 
@@ -205,4 +204,13 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
             serde_json::to_string(theme.read().as_attr()).unwrap_or_else(|_| "\"dark\"".into());
         reader_call("setTheme", &attr_lit);
     });
+}
+
+/// Extract `file_id` from the current URL's query string (`?file_id=N`),
+/// targeting a specific `book_files` row for multi-file books.
+#[cfg(feature = "web")]
+fn parse_file_id_from_url() -> Option<i64> {
+    let search = web_sys::window()?.location().search().ok()?;
+    let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
+    params.get("file_id")?.parse().ok()
 }

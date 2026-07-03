@@ -7,6 +7,7 @@
 mod aa_panel;
 mod bootstrap;
 mod chrome_handlers;
+mod highlights;
 mod highlights_drawer;
 #[cfg(feature = "web")]
 mod interop;
@@ -16,18 +17,18 @@ mod quote_panel;
 mod reader_bookmarks;
 mod search_panel;
 mod selection;
+mod signals;
 mod toc_drawer;
 mod typography;
 
 use dioxus::prelude::*;
 
 use crate::components::atrium::Theme;
-use crate::contexts::use_server_url;
-use crate::data;
 
-use omnibus_shared::{EbookMetadata, Highlight, HighlightColor};
+use omnibus_shared::{Highlight, HighlightColor};
 
 use aa_panel::ReaderAaPanel;
+use highlights::{spawn_create_highlight, PostCreate};
 use highlights_drawer::HighlightsDrawer;
 #[cfg(feature = "web")]
 use interop::{install_reader_web_interop, InteropSignals};
@@ -37,150 +38,17 @@ use quote_panel::QuotePanel;
 use reader_bookmarks::ReaderBookmarksDrawer;
 use search_panel::{SearchPanel, SearchResult};
 use selection::{SelectionData, SelectionPopover};
+use signals::{format_progress_labels, use_book_metadata, ReaderStatus, RelocateData};
 use toc_drawer::{TocDrawer, TocEntry};
 
 const JSZIP_JS: Asset = asset!("/assets/vendor/jszip.min.js");
 const EPUBJS_JS: Asset = asset!("/assets/vendor/epub.min.js");
 const READER_GLUE_JS: Asset = asset!("/assets/vendor/epub-reader-glue.js");
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
-enum ReaderStatus {
-    // INVARIANT: `Loading` is the SSR/WASM-first-paint seed (see
-    // `BookReadPage`). Changing the default flips the rendered overlay and
-    // breaks hydration — see .claude/rules/07-hydration.md.
-    #[default]
-    Loading,
-    Ready,
-    Failed,
-}
-
-/// Relocated event data from epub.js glue (deserialized from JSON).
-#[derive(Clone, Default, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct RelocateData {
-    // Only the web-feature progress-save path reads `cfi`; the other fields are read unconditionally by the bottom-bar render.
-    #[cfg_attr(not(feature = "web"), allow(dead_code))]
-    cfi: Option<String>,
-    page: u32,
-    total_pages: u32,
-    pct: u32,
-    chapter: u32,
-    total_chapters: u32,
-    chapter_title: String,
-}
-
 #[cfg(feature = "web")]
 fn reader_call(method: &str, arg_js: &str) {
     let js = format!("window.OmnibusReader && window.OmnibusReader.{method}({arg_js});");
     let _ = dioxus::document::eval(&js);
-}
-
-/// What to open on the created highlight after the swatch/Note/Quote actions.
-#[derive(Clone, Copy)]
-enum PostCreate {
-    None,
-    Note,
-    Quote,
-}
-
-/// Optimistically annotate the selection, persist the highlight, and — per
-/// `post` — open the note composer or quote panel on the created row. Shared
-/// by the swatch (highlight), Note, and Quote popover actions. Rolls the
-/// optimistic annotation back if the write fails.
-#[allow(clippy::too_many_arguments)]
-fn spawn_create_highlight(
-    uuid: String,
-    cfi: String,
-    color: HighlightColor,
-    text: String,
-    mut highlights: Signal<Vec<Highlight>>,
-    mut note_target: Signal<Option<Highlight>>,
-    mut quote_target: Signal<Option<Highlight>>,
-    post: PostCreate,
-) {
-    #[cfg(feature = "web")]
-    {
-        let cfi_lit = serde_json::to_string(&cfi).unwrap_or_else(|_| "\"\"".into());
-        let color_lit =
-            serde_json::to_string(color.as_str()).unwrap_or_else(|_| "\"amber\"".into());
-        reader_call("addAnnotation", &format!("{cfi_lit}, {color_lit}"));
-    }
-    let create = omnibus_shared::CreateHighlight {
-        book_uuid: uuid,
-        epub_cfi_range: cfi.clone(),
-        color,
-        text: if text.is_empty() { None } else { Some(text) },
-    };
-    spawn(async move {
-        match data::create_highlight("", create).await {
-            Ok(h) => {
-                highlights.write().push(h.clone());
-                match post {
-                    PostCreate::Note => note_target.set(Some(h)),
-                    PostCreate::Quote => quote_target.set(Some(h)),
-                    PostCreate::None => {}
-                }
-            }
-            Err(_) => {
-                #[cfg(feature = "web")]
-                {
-                    let cfi_lit = serde_json::to_string(&cfi).unwrap_or_else(|_| "\"\"".into());
-                    reader_call("removeAnnotation", &cfi_lit);
-                }
-                let _ = &cfi;
-            }
-        }
-    });
-}
-
-/// Extract `file_id` from the current URL's query string (`?file_id=N`),
-/// targeting a specific `book_files` row for multi-file books.
-#[cfg(feature = "web")]
-fn parse_file_id_from_url() -> Option<i64> {
-    let search = web_sys::window()?.location().search().ok()?;
-    let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
-    params.get("file_id")?.parse().ok()
-}
-
-/// Format the bottom-bar `page` and `chapter` strings from a relocate
-/// event. Returns `("", "")` until epub.js has produced a relocation.
-fn format_progress_labels(loc: &RelocateData) -> (String, String) {
-    let page = if loc.total_pages > 0 {
-        format!(
-            "p.\u{a0}{} of {}\u{a0}\u{b7}\u{a0}{}%",
-            loc.page, loc.total_pages, loc.pct
-        )
-    } else if loc.pct > 0 {
-        format!("{}%", loc.pct)
-    } else {
-        String::new()
-    };
-    let chapter = if loc.total_chapters > 0 {
-        format!("Ch\u{a0}{} of {}", loc.chapter, loc.total_chapters)
-    } else {
-        String::new()
-    };
-    (page, chapter)
-}
-
-/// Drop the previous book's title and kick off a fresh `get_ebook` fetch
-/// whenever `uuid` changes. SPA navigations between books would otherwise
-/// flash the previous title while the request is in flight.
-fn use_book_metadata(uuid: String) -> Signal<Option<EbookMetadata>> {
-    let mut book_meta: Signal<Option<EbookMetadata>> = use_signal(|| None);
-    let server_url = use_server_url();
-    use_effect(use_reactive!(|uuid| {
-        book_meta.set(None);
-        let url = server_url.clone();
-        let uuid = uuid.clone();
-        spawn(async move {
-            if let Ok(Some(b)) = data::get_ebook(&url, &uuid).await {
-                book_meta.set(Some(b));
-            }
-        });
-    }));
-    book_meta
 }
 
 /// Full-screen EPUB reader page (web-feature interop, all-target chrome).
@@ -797,64 +665,5 @@ fn ReaderPageTurnButtons(
                 path { d: "M9.5 5l7 7-7 7" }
             }
         }
-    }
-}
-
-#[cfg(all(test, not(any(feature = "web", feature = "mobile"))))]
-mod ssr_tests {
-    use super::*;
-
-    // First-paint contract: `BookReadPage` seeds `status` from
-    // `ReaderStatus::default()` so SSR and the first WASM render produce
-    // identical markup (the `rd-overlay` loading node is present in both).
-    // Flipping this default would re-introduce the hydration mismatch
-    // described in .claude/rules/07-hydration.md.
-    #[test]
-    fn reader_status_default_is_loading_for_ssr_wasm_parity() {
-        assert_eq!(ReaderStatus::default(), ReaderStatus::Loading);
-    }
-
-    #[test]
-    fn format_progress_labels_returns_empty_strings_before_first_relocate() {
-        let (page, chapter) = format_progress_labels(&RelocateData::default());
-        assert_eq!(page, "");
-        assert_eq!(chapter, "");
-    }
-
-    #[test]
-    fn format_progress_labels_formats_page_and_chapter_strings() {
-        let data = RelocateData {
-            cfi: None,
-            page: 42,
-            total_pages: 300,
-            pct: 14,
-            chapter: 3,
-            total_chapters: 24,
-            chapter_title: String::new(),
-        };
-        let (page, chapter) = format_progress_labels(&data);
-        assert!(page.contains("p."));
-        assert!(page.contains("42"));
-        assert!(page.contains("300"));
-        assert!(page.contains("14%"));
-        assert!(chapter.contains("Ch"));
-        assert!(chapter.contains("3"));
-        assert!(chapter.contains("24"));
-    }
-
-    #[test]
-    fn format_progress_labels_falls_back_to_pct_only_when_total_pages_unknown() {
-        let data = RelocateData {
-            cfi: None,
-            page: 0,
-            total_pages: 0,
-            pct: 7,
-            chapter: 0,
-            total_chapters: 0,
-            chapter_title: String::new(),
-        };
-        let (page, chapter) = format_progress_labels(&data);
-        assert_eq!(page, "7%");
-        assert_eq!(chapter, "");
     }
 }
