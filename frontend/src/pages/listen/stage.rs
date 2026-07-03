@@ -85,7 +85,7 @@ mod tests {
 }
 
 /// Scrubber timing — elapsed plus the derived totals (duration, remaining,
-/// slider max) — and the chapter index derived from `elapsed`.
+/// slider max) — and the current chapter index.
 #[derive(Clone, PartialEq)]
 pub(super) struct PlaybackPosition {
     pub elapsed: f64,
@@ -95,7 +95,7 @@ pub(super) struct PlaybackPosition {
     pub current_chapter_index: usize,
 }
 
-/// Static per-book display content: title, author, and the full chapter list.
+/// Static per-book display content: the book itself, title, author, and the full chapter list.
 #[derive(Clone, PartialEq)]
 pub(super) struct PlayerContent {
     pub book: EbookMetadata,
