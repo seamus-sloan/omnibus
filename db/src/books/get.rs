@@ -407,3 +407,29 @@ pub async fn get_book_files(
         )
         .collect())
 }
+
+/// Resolve a library-relative `scan_key` under the library rooted at
+/// `library_path` to its book's durable `books.uuid`, or `None` if no book is
+/// indexed at that path yet.
+///
+/// `scan_key` is the indexer's durable diff key (the library-relative path),
+/// so the upload-commit handler can map a file it just filed back to the row a
+/// reindex inserted without depending on the absolute path. A `None` result
+/// means the triggered scan hasn't surfaced the file — the caller treats that
+/// as a transient failure, not a 404.
+pub async fn get_book_uuid_by_scan_key(
+    pool: &SqlitePool,
+    library_path: &str,
+    scan_key: &str,
+) -> Result<Option<String>, super::BooksError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT b.uuid FROM books b
+         JOIN scan_roots sr ON sr.id = b.library_id
+         WHERE sr.path = ?1 AND b.scan_key = ?2
+         LIMIT 1",
+    )
+    .bind(library_path)
+    .bind(scan_key)
+    .fetch_optional(pool)
+    .await?)
+}
