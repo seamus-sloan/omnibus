@@ -124,9 +124,7 @@ fn thumb_srcs(
     server_url: &str,
 ) -> (Option<String>, Option<String>) {
     if book.cover_url.is_some() {
-        // `thumb_url` server-prefixes and, on mobile, appends the `?token=`
-        // the WebView's `<img>` fetch needs — the native reqwest bearer path
-        // doesn't cover image loads (see `contexts::media_url`).
+        // `thumb_url` appends the mobile `?token=` an `<img>` fetch needs (see `contexts::media_url`).
         let sm = crate::thumb_url(server_url, uuid, "sm");
         let md = crate::thumb_url(server_url, uuid, "md");
         let lg = crate::thumb_url(server_url, uuid, "lg");
