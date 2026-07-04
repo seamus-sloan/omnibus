@@ -10,7 +10,7 @@
 //! [`crate::view_prefs`].
 
 use dioxus::prelude::*;
-use omnibus_shared::{EbookMetadata, ViewFilters, ViewMode, ViewPrefs};
+use omnibus_shared::{EbookMetadata, ViewFilters, ViewPrefs};
 
 use crate::components::chip_editor::SuggestionItem;
 use crate::components::{RailActive, ShelvesRail};
@@ -32,8 +32,12 @@ use effects::{
     SuggestionPools,
 };
 use filtering::apply_filters;
-use sections::{LandingContent, LandingContentProps, LandingHeader};
+use sections::{
+    BooksView, LandingContent, LandingContentHandlers, LandingContentProps, LandingHeader,
+    LandingHeaderView,
+};
 use sorting::sort_books;
+use table::BookTableContext;
 
 /// Keyset page size for the browse path (F5b open question #1). A grid renders
 /// ~30–60 cards above the fold and the table more; 100 covers both without an
@@ -196,7 +200,6 @@ struct LandingViewState {
     visible_books: Vec<EbookMetadata>,
     visible_is_empty: bool,
     books_empty: bool,
-    view_mode: ViewMode,
     has_more: bool,
     is_loading_more: bool,
 }
@@ -239,7 +242,6 @@ fn derive_view_state(sigs: &LandingSignals, query: Signal<String>) -> LandingVie
         .as_ref()
         .map(|p| short_path(p))
         .unwrap_or_default();
-    let prefs_snapshot = (sigs.prefs)();
 
     LandingViewState {
         is_loading: (sigs.loading)(),
@@ -251,7 +253,6 @@ fn derive_view_state(sigs: &LandingSignals, query: Signal<String>) -> LandingVie
         visible_books,
         visible_is_empty,
         books_empty: sigs.books.read().is_empty(),
-        view_mode: prefs_snapshot.view_mode,
         has_more: (sigs.next_cursor)().is_some(),
         is_loading_more: (sigs.loading_more)(),
     }
@@ -326,34 +327,41 @@ pub fn LandingPage() -> Element {
             ShelvesRail { active: RailActive::All }
             div { class: "shelf-main",
                 LandingHeader {
-                    path_subtitle: view.path_subtitle,
-                    book_count: view.book_count,
+                    view: LandingHeaderView {
+                        path_subtitle: view.path_subtitle,
+                        book_count: view.book_count,
+                        path_missing: view.path_missing,
+                        page_error: view.page_error.clone(),
+                        lib_err: view.lib_err.clone(),
+                    },
                     prefs: prefs(),
                     on_prefs_change: on_prefs_change_header,
-                    path_missing: view.path_missing,
-                    page_error: view.page_error.clone(),
-                    lib_err: view.lib_err.clone(),
                 }
 
                 LandingContent {
                     ..LandingContentProps {
-                        is_loading: view.is_loading,
-                        visible_books: view.visible_books,
-                        visible_is_empty: view.visible_is_empty,
-                        books_empty: view.books_empty,
-                        lib_err: view.lib_err,
-                        page_error: view.page_error,
-                        view_mode: view.view_mode,
+                        books: BooksView {
+                            is_loading: view.is_loading,
+                            visible_books: view.visible_books,
+                            visible_is_empty: view.visible_is_empty,
+                            books_empty: view.books_empty,
+                            lib_err: view.lib_err,
+                            page_error: view.page_error,
+                            has_more: view.has_more,
+                            is_loading_more: view.is_loading_more,
+                        },
                         prefs: prefs(),
-                        has_more: view.has_more,
-                        is_loading_more: view.is_loading_more,
-                        server_url,
-                        is_admin: (sigs.is_admin)(),
-                        author_suggestions: sigs.pools.authors.into(),
-                        tag_suggestions: sigs.pools.tags.into(),
-                        on_prefs_change: on_prefs_change_content,
-                        on_load_more,
-                        on_clear_filters,
+                        ctx: BookTableContext {
+                            server_url,
+                            is_admin: (sigs.is_admin)(),
+                            author_suggestions: sigs.pools.authors.into(),
+                            tag_suggestions: sigs.pools.tags.into(),
+                        },
+                        handlers: LandingContentHandlers {
+                            on_prefs_change: on_prefs_change_content,
+                            on_load_more,
+                            on_clear_filters,
+                        },
                     }
                 }
             }
