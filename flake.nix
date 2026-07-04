@@ -130,6 +130,11 @@
           # fixes and to leave room for future config keys.
           pkgs-unstable.process-compose
           pkgs.just
+          # Compiler cache shared across all worktrees. Paired with
+          # CARGO_INCREMENTAL=0 in commonShellHook so identical crate builds
+          # are fetched from one cache instead of each worktree's target/
+          # rebuilding (and incrementally re-caching) the same dependency tree.
+          pkgs.sccache
         ];
 
         # Web-build extras: dioxus-cli + matched wasm-bindgen + node + ffmpeg.
@@ -193,11 +198,35 @@
           # Resolve the repo root so `nix develop` from a subdir lands in the
           # same target dir; basename keeps it per-worktree so parallel
           # worktrees don't race.
-          # Skip if the caller already pinned CARGO_TARGET_DIR (CI sets it
-          # to ./target so workflow paths and rust-cache stay valid).
+          # Skip if the caller already pinned CARGO_TARGET_DIR (CI sets it to
+          # ./target so workflow paths and rust-cache stay valid). This branch
+          # therefore only runs for local dev shells, which is also where we
+          # want sccache — so the sccache wiring lives inside it.
           if [ -z "''${CARGO_TARGET_DIR:-}" ]; then
             _cargo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
             export CARGO_TARGET_DIR="$HOME/.cache/cargo-target/$(basename "$_cargo_root")"
+
+            # Route rustc through sccache so identical crate compilations are
+            # shared across every worktree (build once, reuse everywhere) via a
+            # single cache at $HOME/.cache/sccache, instead of each worktree's
+            # target/ independently rebuilding the same dependency tree.
+            # CARGO_INCREMENTAL=0 is required, not incidental: incremental
+            # codegen caches are what balloon each worktree's target/ to tens of
+            # GB, and sccache cannot cache incremental units — the two are
+            # mutually exclusive, so incremental-off is what makes sccache
+            # effective. Left OUT of the CI branch above on purpose: CI persists
+            # target/ via Swatinem/rust-cache, so a cold, unpersisted sccache
+            # would only add per-crate wrapper overhead with no cache benefit.
+            # Opt out (restore incremental rebuilds) with OMNIBUS_NO_SCCACHE=1.
+            if [ -z "''${RUSTC_WRAPPER:-}" ] && [ -z "''${OMNIBUS_NO_SCCACHE:-}" ]; then
+              export RUSTC_WRAPPER="sccache"
+              export CARGO_INCREMENTAL=0
+              # Pin the cache dir so every worktree shares one location and it's
+              # the same across platforms (sccache's default is ~/.cache/sccache
+              # on Linux but ~/Library/Caches/Mozilla.sccache on macOS).
+              export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/sccache}"
+              export SCCACHE_CACHE_SIZE="''${SCCACHE_CACHE_SIZE:-20G}"
+            fi
           fi
 
           # Per-workspace stable PORT — each known `jj workspace` gets its
@@ -332,6 +361,7 @@
               pkgs.zellij
               pkgs-unstable.process-compose
               pkgs.just
+              pkgs.sccache
             ] ++ mobileExtras;
             DATABASE_URL = "sqlite://omnibus.db?mode=rwc";
             shellHook = ''
