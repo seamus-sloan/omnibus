@@ -3674,6 +3674,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .settings-status.success, .success-msg { color: #34d399; }
 .settings-status.error, .error { color: #f87171; font-size: 0.85rem; }
 
+/* F4.3 Send-to-Kindle inline result label next to the format-row action. */
+.kindle-send-status { font-size: 0.8rem; margin-left: 0.5rem; align-self: center; }
+.kindle-send-status.success { color: #34d399; }
+.kindle-send-status.error { color: #f87171; }
+
 .library-card { margin-top: 1.25rem; }
 .library-card h2, .library-title {
   font-size: 1rem;

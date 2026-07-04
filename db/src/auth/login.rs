@@ -35,7 +35,7 @@ fn sentinel_hash() -> AuthResult<&'static str> {
 pub async fn verify_login(pool: &SqlitePool, username: &str, password: &str) -> AuthResult<User> {
     let row = sqlx::query(
         "SELECT id, username, password_hash, is_admin, can_upload, can_edit, can_download,
-                failed_login_count, locked_until
+                kindle_email, failed_login_count, locked_until
          FROM users WHERE username = ? COLLATE NOCASE",
     )
     .bind(username)

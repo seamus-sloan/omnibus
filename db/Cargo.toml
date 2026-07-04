@@ -91,6 +91,18 @@ uuid = { version = "1", features = ["v4", "v5"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 urlencoding = "2"
 
+# F4.3 Send-to-Kindle: SMTP delivery of the EPUB as an email attachment.
+# `rustls-tls` matches the async-TLS choice used by sqlx/reqwest so we never
+# pull in OpenSSL; `builder` provides the multipart `Message` API. Default
+# features are off to drop the sync `native-tls` transport and file/sendmail
+# transports we don't use.
+lettre = { version = "0.11", default-features = false, features = [
+    "builder",
+    "hostname",
+    "smtp-transport",
+    "tokio1-rustls-tls",
+] }
+
 [features]
 # Re-exports `test_support` helpers (in-memory pool seeders, `IndexedBook`
 # factories, `CoversTempDir`) so external test crates can depend on them

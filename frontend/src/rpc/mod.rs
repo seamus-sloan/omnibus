@@ -4,11 +4,13 @@
 //! callsites keep importing `crate::rpc::rpc_*`; this module owns only the
 //! shared `PoolExt` / `WorkerExt` / `AdminUser` / `AuthUser` pieces.
 
+mod account;
 mod authors;
 mod bookmarks;
 mod books;
 mod highlights;
 mod journals;
+mod kindle;
 mod overrides;
 mod palette;
 mod progress;
@@ -17,11 +19,13 @@ mod series;
 mod settings;
 mod shelves;
 
+pub use account::*;
 pub use authors::*;
 pub use bookmarks::*;
 pub use books::*;
 pub use highlights::*;
 pub use journals::*;
+pub use kindle::*;
 pub use overrides::*;
 pub use palette::*;
 pub use progress::*;

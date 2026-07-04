@@ -45,6 +45,92 @@ impl Settings {
     }
 }
 
+/// Loose email plausibility check: exactly one `@`, non-empty local part, a
+/// dotted domain, no whitespace, within [`crate::EMAIL_MAX_LEN`]. Not
+/// RFC-complete — just enough to reject obvious typos before handing an
+/// address to the SMTP layer. Shared by the SMTP `from` and Kindle-email
+/// validators.
+pub fn is_plausible_email(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() || s.len() > crate::EMAIL_MAX_LEN || s.contains(char::is_whitespace) {
+        return false;
+    }
+    let mut parts = s.split('@');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(local), Some(domain), None) => {
+            !local.is_empty()
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+        }
+        _ => false,
+    }
+}
+
+/// Transport security for the outbound SMTP connection (F4.3).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SmtpSecurity {
+    /// Upgrade a plaintext connection with STARTTLS (typical on port 587).
+    #[default]
+    Starttls,
+    /// Implicit TLS from the first byte (typical on port 465).
+    Tls,
+}
+
+impl SmtpSecurity {
+    /// Wire token used in the `settings` KV table and the REST/RPC payloads.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SmtpSecurity::Starttls => "starttls",
+            SmtpSecurity::Tls => "tls",
+        }
+    }
+
+    /// Parse the stored token back into the enum, defaulting to STARTTLS for
+    /// any unrecognized value so a hand-edited `settings` row can't panic.
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s {
+            "tls" => SmtpSecurity::Tls,
+            _ => SmtpSecurity::Starttls,
+        }
+    }
+}
+
+/// Admin request to save (or partially update) the server-wide SMTP config.
+///
+/// Deliberately does not derive `Debug`: it carries a plaintext SMTP password,
+/// and a stray `tracing::debug!(?req)` would write it to logs. `password` is
+/// `None` to leave the stored password unchanged (so an admin can edit the
+/// host without re-typing the secret); a `Some("")` clears it.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SmtpConfigUpdate {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub from_email: String,
+    #[serde(default)]
+    pub security: SmtpSecurity,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+/// Masked status of the server-wide SMTP config for the Settings UI. **Never
+/// carries the raw password** — only a short masked preview.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SmtpConfigStatus {
+    pub configured: bool,
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub username: Option<String>,
+    pub from_email: Option<String>,
+    pub security: SmtpSecurity,
+    /// Short masked preview of the password (e.g. `pa…rd`), or `None` when unset.
+    pub password_masked: Option<String>,
+    /// Where the effective config comes from: `"settings"`, `"env"`, or `"none"`.
+    pub source: String,
+}
+
 /// One half of the library listing (either ebooks or audiobooks).
 ///
 /// `counts_by_ext` is an ordered list of `(extension, count)` pairs for the

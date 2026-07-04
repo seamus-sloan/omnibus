@@ -21,6 +21,7 @@ pub mod identity;
 pub mod indexer;
 pub mod journals;
 pub mod kepub;
+pub mod kindle;
 pub mod library_layout;
 pub mod merge;
 pub mod metadata_overrides;

@@ -3,7 +3,9 @@
 
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
-use omnibus_shared::{HardcoverKeyStatus, LibraryContents, Settings, WorkerStatus};
+use omnibus_shared::{
+    HardcoverKeyStatus, LibraryContents, Settings, SmtpConfigStatus, SmtpConfigUpdate, WorkerStatus,
+};
 
 #[cfg(feature = "server")]
 use omnibus_db::{self as db, scanner};
@@ -101,6 +103,53 @@ pub async fn rpc_set_hardcover_key(key: Option<String>) -> Result<HardcoverKeySt
         Err(db::SettingsError::Validation(msg)) => Err(ServerFnError::new(msg).into()),
         Err(e) => Err(ServerFnError::new(e.to_string()).into()),
     }
+}
+
+/// Admin-only: masked status of the server-wide SMTP config (F4.3). Never
+/// returns the raw password.
+#[get("/api/rpc/smtp", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_get_smtp_config() -> Result<SmtpConfigStatus> {
+    Ok(db::smtp_status(&pool.0).await?)
+}
+
+/// Admin-only: save the server-wide SMTP config, returning the new masked
+/// status. A `None` password preserves the stored secret. Validation failures
+/// surface via `ServerFnError` (same shape every other RPC uses today).
+#[post("/api/rpc/smtp", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_set_smtp_config(update: SmtpConfigUpdate) -> Result<SmtpConfigStatus> {
+    match db::set_smtp_config(&pool.0, &update).await {
+        Ok(()) => Ok(db::smtp_status(&pool.0).await?),
+        Err(db::SettingsError::Validation(msg)) => Err(ServerFnError::new(msg).into()),
+        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+    }
+}
+
+/// Admin-only: clear the server-wide SMTP config. Returns the (now unset)
+/// masked status.
+#[post("/api/rpc/smtp/clear", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_clear_smtp_config() -> Result<SmtpConfigStatus> {
+    db::clear_smtp_config(&pool.0).await?;
+    Ok(db::smtp_status(&pool.0).await?)
+}
+
+/// Admin-only: send a test email to the admin's own configured Kindle address
+/// to verify the SMTP config works. Requires the admin to have set their Kindle
+/// email on their account page first.
+#[post("/api/rpc/smtp/test", pool: PoolExt, admin: AdminUser)]
+pub async fn rpc_send_smtp_test() -> Result<()> {
+    let email = db::auth::get_kindle_email(&pool.0, admin.0.id)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let Some(email) = email else {
+        return Err(ServerFnError::new(
+            "set your Kindle email on your account page first, then send a test",
+        )
+        .into());
+    };
+    db::kindle::send_test(&pool.0, &email)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(())
 }
 
 /// Admin: manually trigger chapter extraction for audiobooks missing

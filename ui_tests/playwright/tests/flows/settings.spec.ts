@@ -36,7 +36,49 @@ test("renders the settings page layout", async ({ page }) => {
   await expect(page.getByTestId("audiobook-library-summary")).toBeAttached();
   // F3.3 — the Hardcover suggestions key card renders on the settings page.
   await expect(page.getByTestId("hardcover-key-card")).toBeVisible();
+  // F4.3 — the admin SMTP (Send-to-Kindle) config card renders too.
+  await expect(page.getByTestId("smtp-card")).toBeVisible();
   await expectNavVisible(page);
+});
+
+test("saves the SMTP config and shows a configured status", async ({ page }) => {
+  await gotoReady(page, "/settings");
+
+  await page.getByLabel("SMTP Host").fill("smtp.example.com");
+  await page.getByLabel("From Email").fill("library@example.com");
+  await page.getByLabel("Password").fill("s3cret-pass");
+
+  // Mock the save so the test never depends on a real SMTP relay and never
+  // mutates shared server state; the UI renders from the returned masked
+  // status. The raw password must never come back — only `password_masked`.
+  await page.route("**/api/rpc/smtp", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          configured: true,
+          host: "smtp.example.com",
+          port: 587,
+          username: null,
+          from_email: "library@example.com",
+          security: "starttls",
+          password_masked: "s3…ss",
+          source: "settings",
+        }),
+      });
+    }
+    return route.continue();
+  });
+
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/smtp", expectedStatus: 200 },
+    async () => page.getByTestId("smtp-save").click(),
+  );
+
+  await expect(page.getByTestId("smtp-config-status")).toHaveText("SMTP settings saved.");
+  await expect(page.getByTestId("smtp-status")).toContainText("Configured");
 });
 
 test("saves library paths and shows a success status", async ({ page }) => {

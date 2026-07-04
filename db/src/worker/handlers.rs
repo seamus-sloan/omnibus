@@ -113,6 +113,17 @@ impl Worker {
                     Err(e) => TaskOutcome::Err(e.to_string()),
                 }
             }
+            Task::SendToKindle {
+                book_id,
+                book_file_id,
+                recipient_email,
+            } => {
+                match crate::kindle::send(&self.pool, book_id, book_file_id, &recipient_email).await
+                {
+                    Ok(()) => TaskOutcome::Ok,
+                    Err(e) => TaskOutcome::Err(e.to_string()),
+                }
+            }
             Task::GenerateThumbs {
                 book_id,
                 last_modified_epoch,

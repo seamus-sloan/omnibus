@@ -75,14 +75,8 @@ fn FormatRow(kind: FormatKind, uuid: String) -> Element {
                         // The cfg lives at the helper definition (rule 07:
                         // hydration parity — keep cfg gates out of rsx).
                         {read_book_action(&uuid)}
+                        {send_to_kindle_action(&uuid, None)}
                         {send_to_kobo_action(&uuid)}
-                        button {
-                            class: "btn",
-                            disabled: true,
-                            title: "Send-to-Kindle coming soon",
-                            "data-testid": "action-kindle",
-                            "Send to Kindle"
-                        }
                     },
                     FormatKind::M4b | FormatKind::Mp3 => rsx! {
                         // F2.3: web routes into the immersive player; mobile
@@ -142,6 +136,7 @@ fn MultiFileRow(kind: FormatKind, uuid: String, files: Vec<BookFileInfo>) -> Ele
                                 // cfg gates out of rsx bodies).
                                 FormatKind::Epub => rsx! {
                                     {read_file_action(&uuid, file_id)}
+                                    {send_to_kindle_action(&uuid, Some(file_id))}
                                 },
                                 FormatKind::M4b | FormatKind::Mp3 => rsx! {
                                     {listen_file_action(&uuid, file_id)}
@@ -223,6 +218,72 @@ fn send_to_kobo_action(_uuid: &str) -> Element {
             title: "Send-to-Kobo coming soon",
             "data-testid": "action-kobo",
             "Send to Kobo"
+        }
+    }
+}
+
+/// "Send to Kindle" CTA (F4.3). Web/SSR renders the interactive
+/// [`SendToKindleButton`]; mobile renders a disabled placeholder. The cfg gate
+/// lives at the helper definition (rule 07: keep cfg out of rsx bodies), and
+/// SSR + first WASM paint emit the same enabled button so hydration holds.
+#[cfg(not(feature = "mobile"))]
+fn send_to_kindle_action(uuid: &str, file_id: Option<i64>) -> Element {
+    rsx! {
+        SendToKindleButton { uuid: uuid.to_string(), file_id }
+    }
+}
+
+#[cfg(feature = "mobile")]
+fn send_to_kindle_action(_uuid: &str, _file_id: Option<i64>) -> Element {
+    rsx! {
+        button {
+            class: "btn",
+            disabled: true,
+            title: "Send-to-Kindle on mobile coming soon",
+            "data-testid": "action-kindle",
+            "Send to Kindle"
+        }
+    }
+}
+
+/// Interactive Send-to-Kindle button. On click it posts the job and awaits the
+/// result (the RPC blocks on the worker), then shows "Sending…" → sent /
+/// error inline. Disabled while in flight.
+#[cfg(not(feature = "mobile"))]
+#[component]
+fn SendToKindleButton(uuid: String, file_id: Option<i64>) -> Element {
+    let server_url = crate::use_server_url();
+    let mut in_flight = use_signal(|| false);
+    // (is_error, message) — None until the first send completes.
+    let mut result = use_signal(|| None::<(bool, String)>);
+
+    rsx! {
+        button {
+            class: "btn",
+            disabled: in_flight(),
+            "data-testid": "action-kindle",
+            onclick: move |_| {
+                let url = server_url.clone();
+                let uuid = uuid.clone();
+                in_flight.set(true);
+                result.set(None);
+                spawn(async move {
+                    match crate::data::send_to_kindle(&url, &uuid, file_id).await {
+                        Ok(()) => result.set(Some((false, "Sent to your Kindle.".to_string()))),
+                        Err(e) => result.set(Some((true, format!("Send failed: {e}")))),
+                    }
+                    in_flight.set(false);
+                });
+            },
+            if in_flight() { "Sending\u{2026}" } else { "Send to Kindle" }
+        }
+        if let Some((is_error, message)) = result() {
+            span {
+                role: "status",
+                "data-testid": "kindle-send-status",
+                class: if is_error { "kindle-send-status error" } else { "kindle-send-status success" },
+                "{message}"
+            }
         }
     }
 }

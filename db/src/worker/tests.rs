@@ -677,3 +677,21 @@ async fn poisoned_completions_lock_recovers_instead_of_panicking() {
         other => panic!("expected Ok after poison recovery, got {other:?}"),
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn send_to_kindle_task_fails_when_smtp_unconfigured() {
+    // Route through the real dispatch arm: with no SMTP config the handler
+    // returns a Failed outcome carrying the "not configured" message.
+    let _env =
+        crate::test_support::EnvVarGuard::set("SMTP_HOST", None).also_set("SMTP_FROM_EMAIL", None);
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::SendToKindle {
+        book_id: 1,
+        book_file_id: None,
+        recipient_email: "reader@kindle.com".into(),
+    });
+    match w.await_completion(id).await {
+        TaskOutcome::Err(msg) => assert!(msg.contains("not configured"), "got: {msg}"),
+        other => panic!("expected Err, got {other:?}"),
+    }
+}

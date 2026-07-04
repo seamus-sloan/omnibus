@@ -236,13 +236,14 @@ test("renders the detail contents for the selected book", async ({ page, request
   await expect(epubRow.getByTestId("format-badge")).toHaveText("EPUB");
 
   // Read now routes into the F2.2 immersive reader (an enabled link to
-  // /read/:uuid on web); Send-to-Kindle stays disabled until F4.x ships.
+  // /read/:uuid on web); F4.3 Send-to-Kindle is now an enabled action button
+  // (the send flow is exercised in its own action test below).
   const readBtn = epubRow.getByTestId("action-read");
   await expect(readBtn).toBeVisible();
   await expect(readBtn).toHaveAttribute("href", /\/read\//);
   const kindleBtn = epubRow.getByTestId("action-kindle");
   await expect(kindleBtn).toBeVisible();
-  await expect(kindleBtn).toBeDisabled();
+  await expect(kindleBtn).toBeEnabled();
 
   // No M4B fixture in the ebook seed — the per-format Listen CTA must NOT
   // render. (Scoped to the format switcher; the hero "Listen" secondary
@@ -268,7 +269,6 @@ test("renders the detail contents for the selected book", async ({ page, request
   await expect(page.getByTestId("ebook-table")).toBeVisible();
 });
 
-// ---------------------------------------------------------------------------
 // Action — Send to Kobo (F4.1 KEPUB download)
 // ---------------------------------------------------------------------------
 
@@ -292,6 +292,67 @@ test("Send to Kobo downloads the book with a uuid-named file", async ({ page, re
   expect(download.suggestedFilename()).toMatch(
     new RegExp(`^${uuid}\\.(kepub\\.)?epub$`),
   );
+});
+
+// ---------------------------------------------------------------------------
+// Action — Send to Kindle (F4.3)
+// ---------------------------------------------------------------------------
+
+test("sends the EPUB to Kindle and shows a sent status", async ({ page, request }) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  const kindleBtn = page
+    .getByTestId("format-row-epub")
+    .getByTestId("action-kindle");
+  await expect(kindleBtn).toBeEnabled();
+
+  // Mock the send so the test never depends on a real SMTP relay or a
+  // configured Kindle email; the button UI renders from the 200.
+  await page.route("**/api/rpc/kindle/send", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: "null" });
+    }
+    return route.continue();
+  });
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/kindle/send",
+      expectedBody: { book_uuid: uuid, file_id: null },
+      expectedStatus: 200,
+    },
+    async () => kindleBtn.click(),
+  );
+
+  await expect(page.getByTestId("kindle-send-status")).toHaveText("Sent to your Kindle.");
+  await expect(page.getByTestId("kindle-send-status")).toHaveClass(/success/);
+});
+
+test("shows an error when the Kindle send fails", async ({ page, request }) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  const kindleBtn = page
+    .getByTestId("format-row-epub")
+    .getByTestId("action-kindle");
+
+  await page.route("**/api/rpc/kindle/send", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
+    }
+    return route.continue();
+  });
+
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/kindle/send", expectedStatus: 500 },
+    async () => kindleBtn.click(),
+  );
+
+  await expect(page.getByTestId("kindle-send-status")).toHaveClass(/error/);
 });
 
 // ---------------------------------------------------------------------------

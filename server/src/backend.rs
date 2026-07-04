@@ -29,6 +29,7 @@ mod ebooks;
 mod health;
 mod highlights;
 mod journals;
+mod kindle;
 mod overrides;
 mod progress;
 mod ratings;
@@ -330,6 +331,14 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/hardcover-key",
             get(suggestions::get_hardcover_key).post(suggestions::post_hardcover_key),
         )
+        // F4.3 Send-to-Kindle — mobile-facing REST. Web hits the analogous
+        // `/api/rpc/kindle/send`, `/api/rpc/account/kindle-email`, and
+        // `/api/rpc/smtp*` server fns.
+        .route("/api/kindle/send", post(kindle::post_send))
+        .route("/api/account/kindle-email", post(kindle::post_kindle_email))
+        .route("/api/smtp", get(kindle::get_smtp).post(kindle::post_smtp))
+        .route("/api/smtp/clear", post(kindle::post_smtp_clear))
+        .route("/api/smtp/test", post(kindle::post_smtp_test))
 }
 
 /// Sub-router for `/api/search/*` carrying its own per-IP rate-limit layer.
