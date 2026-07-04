@@ -2,8 +2,10 @@
 //!
 //! Each [`ShelfRule`] becomes an `EXISTS`/comparison fragment over the `books b`
 //! alias; the rule set combines with `OR` (match any) or `AND` (match all).
-//! Owner-scoped fields (`rating`) bind the shelf owner's id. `status` is not
-//! supported yet (the schema records no read-completion signal).
+//! Text fields (tag/author/series/format) match by **name**, case-insensitively
+//! — equality via `COLLATE NOCASE`, substring/prefix via `LIKE` (`contains` /
+//! `starts with`). Owner-scoped fields (`rating`) bind the shelf owner's id.
+//! `status` is not supported yet (the schema records no read-completion signal).
 
 use omnibus_shared::{MatchMode, RuleField, RuleOp, ShelfRule};
 
@@ -55,47 +57,37 @@ pub(super) fn membership_predicate(
 
 /// Translate one condition into `(sql, binds)`.
 fn condition_sql(rule: &ShelfRule, owner_id: i64) -> Result<(String, Vec<Bind>), ShelfError> {
+    // Central op gate: the SQL arms below only handle ops the field accepts.
+    if !rule.field.accepts(rule.op) {
+        return Err(unsupported(rule));
+    }
     let v = rule.value.trim();
     match rule.field {
-        RuleField::Tag => {
-            let exists = "SELECT 1 FROM books_tags_link btl JOIN tags t ON t.id = btl.tag \
-                          WHERE btl.book = b.id AND t.name = ? COLLATE NOCASE";
-            let sql = match rule.op {
-                RuleOp::Is => format!("EXISTS ({exists})"),
-                RuleOp::IsNot => format!("NOT EXISTS ({exists})"),
-                _ => return Err(unsupported(rule)),
-            };
-            Ok((sql, vec![Bind::Text(v.to_string())]))
-        }
-        RuleField::Author => {
-            expect_op(rule, RuleOp::Is)?;
-            Ok((
-                "EXISTS (SELECT 1 FROM books_authors_link bal \
-                 WHERE bal.book = b.id AND bal.author = ?)"
-                    .into(),
-                vec![Bind::Int(parse_id(v)?)],
-            ))
-        }
-        RuleField::Series => {
-            expect_op(rule, RuleOp::Is)?;
-            Ok((
-                "EXISTS (SELECT 1 FROM books_series_link bsl \
-                 WHERE bsl.book = b.id AND bsl.series = ?)"
-                    .into(),
-                vec![Bind::Int(parse_id(v)?)],
-            ))
-        }
-        RuleField::Format => {
-            expect_op(rule, RuleOp::Includes)?;
-            // `book_files.format` is COLLATE NOCASE, so a lowercase chip
-            // (`"epub"`) matches the stored `"EPUB"`.
-            Ok((
-                "EXISTS (SELECT 1 FROM book_files bf \
-                 WHERE bf.book_id = b.id AND bf.format = ? COLLATE NOCASE)"
-                    .into(),
-                vec![Bind::Text(v.to_string())],
-            ))
-        }
+        // Text fields resolve against the normalized taxonomy `name` columns
+        // (all `COLLATE NOCASE`), so the user types a name, not an id.
+        RuleField::Tag => text_condition(
+            rule,
+            "SELECT 1 FROM books_tags_link btl JOIN tags t ON t.id = btl.tag \
+             WHERE btl.book = b.id AND ",
+            "t.name",
+        ),
+        RuleField::Author => text_condition(
+            rule,
+            "SELECT 1 FROM books_authors_link bal JOIN authors a ON a.id = bal.author \
+             WHERE bal.book = b.id AND ",
+            "a.name",
+        ),
+        RuleField::Series => text_condition(
+            rule,
+            "SELECT 1 FROM books_series_link bsl JOIN series s ON s.id = bsl.series \
+             WHERE bsl.book = b.id AND ",
+            "s.name",
+        ),
+        RuleField::Format => text_condition(
+            rule,
+            "SELECT 1 FROM book_files bf WHERE bf.book_id = b.id AND ",
+            "bf.format",
+        ),
         RuleField::Rating => {
             let cmp = match rule.op {
                 RuleOp::Is => "=",
@@ -164,13 +156,64 @@ fn date_condition(rule: &ShelfRule, v: &str) -> Result<(String, Vec<Bind>), Shel
     }
 }
 
-/// Error unless `rule.op` equals `want`.
-fn expect_op(rule: &ShelfRule, want: RuleOp) -> Result<(), ShelfError> {
-    if rule.op == want {
-        Ok(())
+/// Build a case-insensitive `EXISTS`/`NOT EXISTS` text predicate for a joined
+/// name column.
+///
+/// `inner` is the subquery up to (but not including) the column comparison, e.g.
+/// `"SELECT 1 FROM books_tags_link btl JOIN tags t ON t.id = btl.tag WHERE
+/// btl.book = b.id AND "`; `col` is the compared column (`"t.name"`). Equality
+/// (`is`/`is_not`/`includes`) uses `COLLATE NOCASE`; `contains`/`starts_with`
+/// use `LIKE` (case-insensitive for ASCII) with metacharacters escaped so user
+/// text matches literally.
+fn text_condition(
+    rule: &ShelfRule,
+    inner: &str,
+    col: &str,
+) -> Result<(String, Vec<Bind>), ShelfError> {
+    let v = rule.value.trim();
+    let (cmp, bind, negate) = match rule.op {
+        RuleOp::Is | RuleOp::Includes => (
+            format!("{col} = ? COLLATE NOCASE"),
+            Bind::Text(v.into()),
+            false,
+        ),
+        RuleOp::IsNot => (
+            format!("{col} = ? COLLATE NOCASE"),
+            Bind::Text(v.into()),
+            true,
+        ),
+        RuleOp::Contains => (
+            format!("{col} LIKE ? ESCAPE '\\'"),
+            Bind::Text(format!("%{}%", like_escape(v))),
+            false,
+        ),
+        RuleOp::StartsWith => (
+            format!("{col} LIKE ? ESCAPE '\\'"),
+            Bind::Text(format!("{}%", like_escape(v))),
+            false,
+        ),
+        _ => return Err(unsupported(rule)),
+    };
+    let exists = format!("EXISTS ({inner}{cmp})");
+    let sql = if negate {
+        format!("NOT {exists}")
     } else {
-        Err(unsupported(rule))
+        exists
+    };
+    Ok((sql, vec![bind]))
+}
+
+/// Escape `LIKE` metacharacters (`\`, `%`, `_`) so user text matches literally.
+/// Pairs with the `ESCAPE '\'` clause in [`text_condition`].
+fn like_escape(v: &str) -> String {
+    let mut out = String::with_capacity(v.len());
+    for c in v.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(c);
     }
+    out
 }
 
 fn parse_id(v: &str) -> Result<i64, ShelfError> {
@@ -337,11 +380,81 @@ mod rule_tests {
 
     #[test]
     fn bad_op_for_field_is_rejected() {
+        // `gte` is numeric-only; author is a text field, so it must be rejected.
         assert!(membership_predicate(
-            &[rule(RuleField::Author, RuleOp::IsNot, "3")],
+            &[rule(RuleField::Author, RuleOp::Gte, "3")],
             MatchMode::Any,
             1
         )
         .is_err());
+    }
+
+    #[test]
+    fn author_matches_by_name_not_id() {
+        // Regression: `is` on author/series used to bind a numeric id, so a
+        // typed name failed to parse. It now joins the taxonomy `name` column.
+        let p = membership_predicate(
+            &[rule(RuleField::Author, RuleOp::Is, "Ursula K. Le Guin")],
+            MatchMode::Any,
+            1,
+        )
+        .unwrap();
+        assert!(
+            p.sql.contains("a.name = ? COLLATE NOCASE"),
+            "sql was {}",
+            p.sql
+        );
+        assert_eq!(p.binds, vec![Bind::Text("Ursula K. Le Guin".into())]);
+    }
+
+    #[test]
+    fn series_is_not_negates_the_exists() {
+        let p = membership_predicate(
+            &[rule(RuleField::Series, RuleOp::IsNot, "Foundation")],
+            MatchMode::Any,
+            1,
+        )
+        .unwrap();
+        assert!(p.sql.starts_with("(NOT EXISTS"), "sql was {}", p.sql);
+        assert!(p.sql.contains("s.name = ? COLLATE NOCASE"));
+    }
+
+    #[test]
+    fn contains_and_starts_with_build_like_patterns() {
+        let c = membership_predicate(
+            &[rule(RuleField::Tag, RuleOp::Contains, "sci")],
+            MatchMode::Any,
+            1,
+        )
+        .unwrap();
+        assert!(
+            c.sql.contains("t.name LIKE ? ESCAPE '\\'"),
+            "sql was {}",
+            c.sql
+        );
+        assert_eq!(c.binds, vec![Bind::Text("%sci%".into())]);
+
+        let s = membership_predicate(
+            &[rule(RuleField::Author, RuleOp::StartsWith, "Le")],
+            MatchMode::Any,
+            1,
+        )
+        .unwrap();
+        assert!(s.sql.contains("a.name LIKE ? ESCAPE '\\'"));
+        assert_eq!(s.binds, vec![Bind::Text("Le%".into())]);
+    }
+
+    #[test]
+    fn like_escape_neutralizes_wildcards() {
+        // A user searching for a literal `%` or `_` must not get wildcard
+        // behavior; the escaped pattern is wrapped for `contains`.
+        assert_eq!(like_escape("100%_off\\x"), "100\\%\\_off\\\\x");
+        let p = membership_predicate(
+            &[rule(RuleField::Tag, RuleOp::Contains, "50%")],
+            MatchMode::Any,
+            1,
+        )
+        .unwrap();
+        assert_eq!(p.binds, vec![Bind::Text("%50\\%%".into())]);
     }
 }
