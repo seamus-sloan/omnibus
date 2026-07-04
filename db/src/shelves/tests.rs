@@ -85,6 +85,50 @@ async fn create_smart_shelf_membership_matches_tag_rule() {
 }
 
 #[tokio::test]
+async fn smart_shelf_matches_author_by_name_case_insensitively() {
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+
+    // "Ada Lovelace" authored 3 of the 4 fixture books. A lowercase value must
+    // still match — regression: `author is` used to demand a numeric id, so a
+    // typed name (any case) matched nothing.
+    let rule = ShelfRule {
+        field: RuleField::Author,
+        op: RuleOp::Is,
+        value: "ada lovelace".into(),
+    };
+    let shelf = create_shelf(
+        &pool,
+        owner,
+        &smart_req("By Ada", MatchMode::Any, vec![rule]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(shelf.book_count, 3);
+}
+
+#[tokio::test]
+async fn smart_shelf_matches_series_starts_with() {
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+
+    // Series "Saga" holds two books; a `starts with` prefix matches both.
+    let rule = ShelfRule {
+        field: RuleField::Series,
+        op: RuleOp::StartsWith,
+        value: "Sag".into(),
+    };
+    let shelf = create_shelf(
+        &pool,
+        owner,
+        &smart_req("Saga-ish", MatchMode::Any, vec![rule]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(shelf.book_count, 2);
+}
+
+#[tokio::test]
 async fn smart_shelf_updates_when_a_qualifying_book_appears() {
     let (pool, _covers) = seed_discovery_fixture().await;
     let owner = make_user(&pool, "owner", false).await;

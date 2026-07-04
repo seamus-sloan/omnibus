@@ -18,6 +18,8 @@ fn wire_tokens_round_trip_for_every_enum() {
     for op in [
         RuleOp::Is,
         RuleOp::IsNot,
+        RuleOp::Contains,
+        RuleOp::StartsWith,
         RuleOp::Gte,
         RuleOp::Includes,
         RuleOp::InLast,
@@ -38,7 +40,12 @@ fn accepts_gates_ops_per_field() {
     assert!(RuleField::Tag.accepts(RuleOp::IsNot));
     assert!(!RuleField::Tag.accepts(RuleOp::Gte));
     assert!(RuleField::Format.accepts(RuleOp::Includes));
-    assert!(!RuleField::Author.accepts(RuleOp::IsNot));
+    // Author/series are name-based text fields: they take the same text ops as
+    // tag (is / is not / contains / starts with) but not the numeric ones.
+    assert!(RuleField::Author.accepts(RuleOp::IsNot));
+    assert!(RuleField::Author.accepts(RuleOp::Contains));
+    assert!(RuleField::Series.accepts(RuleOp::StartsWith));
+    assert!(!RuleField::Author.accepts(RuleOp::Gte));
     assert!(RuleField::DateAdded.accepts(RuleOp::Between));
     assert!(!RuleField::DateAdded.accepts(RuleOp::Is));
 }
@@ -47,7 +54,7 @@ fn accepts_gates_ops_per_field() {
 fn rule_validate_rejects_bad_op_and_empty_value() {
     let bad_op = ShelfRule {
         field: RuleField::Author,
-        op: RuleOp::IsNot,
+        op: RuleOp::Gte,
         value: "5".into(),
     };
     assert!(bad_op.validate().is_err());
