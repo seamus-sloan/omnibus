@@ -1,9 +1,7 @@
-//! Mobile library layout for the landing page.
-//!
-//! The native shell renders a compact "Your shelf" surface — a slim header, a
-//! Shelves entry, and a three-column cover grid — instead of the web
-//! rail + toolbar. Shares [`super::LandingPage`]'s data pipeline; this module
-//! only owns the mobile presentation.
+//! Mobile library layout for the landing page — a compact "Your shelf" surface
+//! (slim header, Shelves entry, three-column cover grid) rendered by the native
+//! shell instead of the web rail + toolbar. Shares [`super::LandingPage`]'s data
+//! pipeline; this module owns only the mobile presentation.
 
 use dioxus::prelude::*;
 use dioxus_router::Link;

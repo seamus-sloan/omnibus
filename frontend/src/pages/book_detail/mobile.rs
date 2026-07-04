@@ -1,10 +1,7 @@
-//! Mobile layout for the book-detail page.
-//!
-//! Re-flows the same loaded-book data ([`super::LoadedBookView`]) into the
-//! native design's single-column surface — an accent-tinted hero with a
-//! centered cover, then About / rating / info / files / journal sections.
-//! Reading and listening remain stubbed on mobile, so those CTAs are disabled
-//! (matching the web hero's mobile behavior).
+//! Mobile layout for the book-detail page — re-flows the same loaded-book data
+//! ([`super::LoadedBookView`]) into the native design's single-column surface:
+//! an accent-tinted hero over About / rating / info / files / journal sections.
+//! Reading and listening stay stubbed on mobile, so those CTAs are disabled.
 
 use dioxus::prelude::*;
 use dioxus_router::Link;

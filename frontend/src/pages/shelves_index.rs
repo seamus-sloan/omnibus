@@ -1,9 +1,8 @@
-//! Shelves index page (`/shelves`).
-//!
-//! A full-screen list of the caller's shelves — the mobile design's primary
-//! shelf-navigation surface, reached from the library header. On web (which
-//! browses shelves via the left rail) it stands in as a plain list. Each row
-//! links to that shelf's detail page; the header hosts a "New shelf" action.
+//! Shelves index page (`/shelves`) — a full-screen list of the caller's
+//! shelves, the mobile design's primary shelf-navigation surface (reached from
+//! the library header). Each row links to that shelf's detail page; the header
+//! hosts a "New shelf" action. On web (which browses shelves via the rail) it
+//! stands in as a plain list.
 
 use dioxus::prelude::*;
 use dioxus_router::Link;

@@ -1,12 +1,8 @@
-//! Login and register pages for the web and mobile clients. The signals and
-//! submit handlers are shared; the presentation branches per target — web
-//! wraps the form in the split-pane [`AuthShell`], mobile renders a centered
-//! single-column layout ([`m_auth_shell`]). Submit transport also branches:
-//! `web` POSTs `/api/auth/{login,register}` and lets the `Set-Cookie` session
-//! carry through, `mobile` POSTs the same endpoints and stashes the returned
-//! bearer token in `data::token_store`. (Web SSR and the WASM client both
-//! compile the `not(mobile)` branch, so hydration parity is preserved —
-//! rule 07.)
+//! Login and register pages. Signals and submit handlers are shared; the
+//! presentation branches per target — web uses the split-pane [`AuthShell`],
+//! mobile a centered single-column shell ([`m_auth_shell`]). Submit transport
+//! also branches: web relies on the `Set-Cookie` session, mobile stashes the
+//! returned bearer token in `data::token_store`.
 
 use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};

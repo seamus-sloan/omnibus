@@ -163,9 +163,7 @@ pub fn TagCloud() -> Element {
     }
 }
 
-/// Route target for `/shelves` — the shelves index (a full screen on mobile,
-/// reached from the library header; web browses shelves via the left rail so
-/// this renders a plain list there).
+/// Route target for `/shelves` — the shelves index (mobile-first; web renders a plain list).
 #[component]
 pub fn Shelves() -> Element {
     rsx! {
