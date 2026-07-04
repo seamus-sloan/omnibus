@@ -23,17 +23,17 @@ use hero::BdHeroSection;
 #[component]
 pub fn BookDetailPage(uuid: String) -> Element {
     let server_url = use_server_url();
-    let mut book: Signal<Option<EbookMetadata>> = use_signal(|| None);
-    let mut author_books: Signal<Vec<EbookMetadata>> = use_signal(Vec::new);
+    let book: Signal<Option<EbookMetadata>> = use_signal(|| None);
+    let author_books: Signal<Vec<EbookMetadata>> = use_signal(Vec::new);
     // F3.3 suggestions. Starts `None` on both SSR and the first WASM paint so
     // hydration markup matches (rule 07); the client effect below populates it.
-    let mut suggestions: Signal<Option<SuggestionsResponse>> = use_signal(|| None);
+    let suggestions: Signal<Option<SuggestionsResponse>> = use_signal(|| None);
     // Epoch guard so a poll loop left over from a previous book can't write its
     // result onto the current book after navigation (mirrors landing's
     // `fetch_epoch`).
-    let mut suggestions_epoch = use_signal(|| 0u64);
-    let mut loading = use_signal(|| true);
-    let mut error: Signal<Option<String>> = use_signal(|| None);
+    let suggestions_epoch = use_signal(|| 0u64);
+    let loading = use_signal(|| true);
+    let error: Signal<Option<String>> = use_signal(|| None);
     // Bumped after a merge/undo so the effect below refetches the book
     // (signals read inside `use_effect` re-arm it).
     let refresh = use_signal(|| 0u32);
@@ -72,44 +72,14 @@ pub fn BookDetailPage(uuid: String) -> Element {
     let url = server_url.clone();
     use_effect(use_reactive!(|uuid| {
         let _ = refresh();
-        let url = url.clone();
-        let uuid = uuid.clone();
-        spawn(async move {
-            loading.set(true);
-            author_books.set(Vec::new());
-            match data::get_ebook(&url, &uuid).await {
-                Ok(b) => {
-                    let author_fetch = b.as_ref().map(|inner| {
-                        (
-                            inner.creators.first().and_then(|c| c.id),
-                            inner.unique_identifier.clone(),
-                        )
-                    });
-                    book.set(b);
-                    error.set(None);
-                    loading.set(false);
-                    if let Some((Some(aid), current_uuid)) = author_fetch {
-                        if let Ok(Some(ad)) = data::get_author(&url, aid).await {
-                            let still_current =
-                                book().as_ref().and_then(|b| b.unique_identifier.as_ref())
-                                    == current_uuid.as_ref();
-                            if still_current {
-                                let others: Vec<EbookMetadata> = ad
-                                    .books
-                                    .into_iter()
-                                    .filter(|ab| ab.unique_identifier != current_uuid)
-                                    .collect();
-                                author_books.set(others);
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    error.set(Some(e.to_string()));
-                    loading.set(false);
-                }
-            }
-        });
+        fetch_book_and_author_books(
+            url.clone(),
+            uuid.clone(),
+            book,
+            author_books,
+            loading,
+            error,
+        );
     }));
 
     // F3.3 suggestions: resolved off-request by the worker and cached. Fetch
@@ -118,60 +88,12 @@ pub fn BookDetailPage(uuid: String) -> Element {
     // "no suggestions" rather than an error row.
     let sug_url = server_url.clone();
     use_effect(use_reactive!(|uuid| {
-        let url = sug_url.clone();
-        let uuid = uuid.clone();
-        let epoch = {
-            suggestions_epoch.with_mut(|e| *e += 1);
-            *suggestions_epoch.peek()
-        };
-        // True only while this run is still the latest — a newer book's effect
-        // bumps the epoch, so a stale poll drops its result instead of writing
-        // it onto the now-current book.
-        let is_current = move || *suggestions_epoch.peek() == epoch;
-        spawn(async move {
-            suggestions.set(None);
-            match data::get_suggestions(&url, &uuid).await {
-                Ok(resp) => {
-                    if !is_current() {
-                        return;
-                    }
-                    let pending = matches!(resp, SuggestionsResponse::Pending);
-                    suggestions.set(Some(resp));
-                    #[cfg(feature = "web")]
-                    if pending {
-                        let mut tries = 0u32;
-                        while tries < 5 {
-                            gloo_timers::future::TimeoutFuture::new(2500).await;
-                            if !is_current() {
-                                return;
-                            }
-                            tries += 1;
-                            match data::get_suggestions(&url, &uuid).await {
-                                Ok(next) => {
-                                    if !is_current() {
-                                        return;
-                                    }
-                                    let still_pending =
-                                        matches!(next, SuggestionsResponse::Pending);
-                                    suggestions.set(Some(next));
-                                    if !still_pending {
-                                        break;
-                                    }
-                                }
-                                Err(_) => break,
-                            }
-                        }
-                    }
-                    #[cfg(not(feature = "web"))]
-                    let _ = pending;
-                }
-                Err(_) => {
-                    if is_current() {
-                        suggestions.set(Some(SuggestionsResponse::Ready { items: Vec::new() }));
-                    }
-                }
-            }
-        });
+        poll_suggestions_until_resolved(
+            sug_url.clone(),
+            uuid.clone(),
+            suggestions_epoch,
+            suggestions,
+        );
     }));
 
     if loading() {
@@ -232,6 +154,117 @@ pub fn BookDetailPage(uuid: String) -> Element {
 
 // View helpers — the loaded-book case is the only thing rendered, so the
 // data-fetch shell above stays small.
+
+/// Fetch the book, then (if it resolves and has a creator) the primary
+/// author's other books, filtering out the current book. `book` and
+/// `author_books` are written directly so a fast re-run (uuid change) is
+/// naturally superseded by the newer fetch's writes.
+fn fetch_book_and_author_books(
+    server_url: String,
+    uuid: String,
+    mut book: Signal<Option<EbookMetadata>>,
+    mut author_books: Signal<Vec<EbookMetadata>>,
+    mut loading: Signal<bool>,
+    mut error: Signal<Option<String>>,
+) {
+    spawn(async move {
+        loading.set(true);
+        author_books.set(Vec::new());
+        match data::get_ebook(&server_url, &uuid).await {
+            Ok(b) => {
+                let author_fetch = b.as_ref().map(|inner| {
+                    (
+                        inner.creators.first().and_then(|c| c.id),
+                        inner.unique_identifier.clone(),
+                    )
+                });
+                book.set(b);
+                error.set(None);
+                loading.set(false);
+                if let Some((Some(aid), current_uuid)) = author_fetch {
+                    if let Ok(Some(ad)) = data::get_author(&server_url, aid).await {
+                        let still_current =
+                            book().as_ref().and_then(|b| b.unique_identifier.as_ref())
+                                == current_uuid.as_ref();
+                        if still_current {
+                            let others: Vec<EbookMetadata> = ad
+                                .books
+                                .into_iter()
+                                .filter(|ab| ab.unique_identifier != current_uuid)
+                                .collect();
+                            author_books.set(others);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                error.set(Some(e.to_string()));
+                loading.set(false);
+            }
+        }
+    });
+}
+
+/// Fetch F3.3 suggestions for `uuid` and, on web, poll a few times while the
+/// result is `Pending`. `suggestions_epoch` is bumped once per call and
+/// captured as the run's identity, so a stale poll left over from a previous
+/// book (fast SPA navigation) drops its result instead of overwriting the
+/// now-current book's suggestions.
+fn poll_suggestions_until_resolved(
+    server_url: String,
+    uuid: String,
+    mut suggestions_epoch: Signal<u64>,
+    mut suggestions: Signal<Option<SuggestionsResponse>>,
+) {
+    let epoch = {
+        suggestions_epoch.with_mut(|e| *e += 1);
+        *suggestions_epoch.peek()
+    };
+    let is_current = move || *suggestions_epoch.peek() == epoch;
+    spawn(async move {
+        suggestions.set(None);
+        match data::get_suggestions(&server_url, &uuid).await {
+            Ok(resp) => {
+                if !is_current() {
+                    return;
+                }
+                let pending = matches!(resp, SuggestionsResponse::Pending);
+                suggestions.set(Some(resp));
+                #[cfg(feature = "web")]
+                if pending {
+                    let mut tries = 0u32;
+                    while tries < 5 {
+                        gloo_timers::future::TimeoutFuture::new(2500).await;
+                        if !is_current() {
+                            return;
+                        }
+                        tries += 1;
+                        match data::get_suggestions(&server_url, &uuid).await {
+                            Ok(next) => {
+                                if !is_current() {
+                                    return;
+                                }
+                                let still_pending = matches!(next, SuggestionsResponse::Pending);
+                                suggestions.set(Some(next));
+                                if !still_pending {
+                                    break;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+                #[cfg(not(feature = "web"))]
+                let _ = pending;
+            }
+            Err(_) => {
+                if is_current() {
+                    suggestions.set(Some(SuggestionsResponse::Ready { items: Vec::new() }));
+                }
+            }
+        }
+    });
+}
 
 fn kicker_label(year: &str) -> String {
     if year.is_empty() {
