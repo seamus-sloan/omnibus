@@ -38,3 +38,14 @@ pub fn is_stale(book_id: i64, last_modified_epoch: i64) -> bool {
         Ok(meta) => mtime_epoch(&meta) < last_modified_epoch,
     }
 }
+
+/// Async form of [`is_stale`] for callers on a tokio runtime — uses
+/// `tokio::fs::metadata` so it doesn't block a worker thread (mirrors
+/// `thumbs::is_stale_async`).
+pub async fn is_stale_async(book_id: i64, last_modified_epoch: i64) -> bool {
+    let path = kepub_path(book_id);
+    match tokio::fs::metadata(&path).await {
+        Err(_) => true,
+        Ok(meta) => mtime_epoch(&meta) < last_modified_epoch,
+    }
+}

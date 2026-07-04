@@ -20,18 +20,22 @@ pub fn kepubify_available() -> bool {
         .unwrap_or(false)
 }
 
-static MISSING_WARNED: OnceLock<()> = OnceLock::new();
+static PROBED: OnceLock<()> = OnceLock::new();
 
-/// Log a single WARN if kepubify is not runnable. Idempotent — safe to call
-/// at startup and again from the download fallback path without spamming.
+/// Log a single WARN if kepubify is not runnable. Runs the `kepubify --version`
+/// probe **at most once per process**, so a repeated caller (e.g. a download
+/// fallback path) never re-spawns the subprocess.
 pub fn warn_if_unavailable() {
+    // `set` succeeds exactly once; every later call short-circuits before the
+    // blocking availability probe.
+    if PROBED.set(()).is_err() {
+        return;
+    }
     if !kepubify_available() {
-        MISSING_WARNED.get_or_init(|| {
-            tracing::warn!(
-                target: "omnibus::kepub",
-                "kepubify not found (set OMNIBUS_KEPUBIFY_PATH or install it); \
-                 Kobo downloads fall back to plain EPUB with slower page turns"
-            );
-        });
+        tracing::warn!(
+            target: "omnibus::kepub",
+            "kepubify not found (set OMNIBUS_KEPUBIFY_PATH or install it); \
+             Kobo downloads fall back to plain EPUB with slower page turns"
+        );
     }
 }

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use sqlx::SqlitePool;
 
 use super::detect::kepubify_bin;
-use super::fs::{is_stale, kepub_dir, kepub_path};
+use super::fs::{is_stale_async, kepub_dir, kepub_path};
 use super::KepubError;
 
 /// Convert `book_id`'s EPUB to a cached KEPUB and return its path.
@@ -23,7 +23,7 @@ pub async fn convert_book(pool: &SqlitePool, book_id: i64) -> Result<PathBuf, Ke
         .ok_or(KepubError::BookNotFound(book_id))?;
 
     let out_path = kepub_path(book_id);
-    if !is_stale(book_id, last_modified) {
+    if !is_stale_async(book_id, last_modified).await {
         tracing::debug!(target: "omnibus::kepub", book_id, "kepub cache hit");
         return Ok(out_path);
     }
@@ -47,14 +47,17 @@ pub async fn convert_book(pool: &SqlitePool, book_id: i64) -> Result<PathBuf, Ke
     Ok(out_path)
 }
 
-/// Run `kepubify <src> -o <out>` and map a non-zero exit to `NonZero`.
+/// Run `kepubify -o <out> -- <src>` and map a non-zero exit to `NonZero`. The
+/// `--` terminates flag parsing so a source path beginning with `-` is always
+/// treated as the positional input, never a flag.
 async fn run_kepubify(src: &Path, out: &Path) -> Result<(), KepubError> {
     let bin = kepubify_bin();
     tracing::debug!(target: "omnibus::kepub", %bin, ?src, ?out, "spawning kepubify");
     let output = tokio::process::Command::new(&bin)
-        .arg(src)
         .arg("-o")
         .arg(out)
+        .arg("--")
+        .arg(src)
         .output()
         .await?;
     if !output.status.success() {

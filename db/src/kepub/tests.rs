@@ -18,14 +18,16 @@ fn data_dir_guard() -> (EnvVarGuard, tempfile::TempDir) {
     (guard, dir)
 }
 
-/// Write a fake `kepubify` at `path`: handles `--version`, otherwise copies
-/// `$1` → `$3` and appends a line to `counter` so callers can count runs.
+/// Write a fake `kepubify` at `path`: handles `--version`, otherwise mimics the
+/// real `kepubify -o <out> -- <src>` invocation (args `$1=-o $2=<out> $3=-- $4=<src>`)
+/// by copying `$4` → `$2`, and appends a line to `counter` so callers can count
+/// runs.
 fn write_fake_kepubify(path: &Path, counter: &Path) {
     let script = format!(
         "#!/bin/sh\n\
          if [ \"$1\" = \"--version\" ]; then echo 'kepubify 0-fake'; exit 0; fi\n\
          echo x >> '{counter}'\n\
-         cp \"$1\" \"$3\"\n",
+         cp \"$4\" \"$2\"\n",
         counter = counter.display(),
     );
     std::fs::write(path, script).unwrap();
