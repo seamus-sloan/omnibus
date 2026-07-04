@@ -135,6 +135,14 @@ fn BdJournalComposer(uuid: String, server_url: String, reload: Signal<u32>) -> E
     let progress = use_signal(|| 50i64);
     let saving = use_signal(|| false);
     let error = use_signal(|| None::<String>);
+    // Owned here (not inside `BdJournalHighlightsPopover`) because the
+    // popover's markup is conditionally skipped while `show_preview` is true —
+    // if the popover owned this state itself, toggling to Preview and back
+    // would unmount/remount it and drop the loaded-once cache, forcing a
+    // needless highlights refetch.
+    let highlights = use_signal(Vec::<Highlight>::new);
+    let highlights_open = use_signal(|| false);
+    let highlights_loaded = use_signal(|| false);
 
     if !open() {
         return rsx! {
@@ -161,7 +169,13 @@ fn BdJournalComposer(uuid: String, server_url: String, reload: Signal<u32>) -> E
             if !show_preview() {
                 div { class: "bd-journal-toolbar-row",
                     BdJournalToolbar { target_id: "journal-composer-editor".to_string() }
-                    BdJournalHighlightsPopover { uuid: uuid.clone(), server_url: server_url.clone() }
+                    BdJournalHighlightsPopover {
+                        uuid: uuid.clone(),
+                        server_url: server_url.clone(),
+                        highlights,
+                        highlights_open,
+                        highlights_loaded,
+                    }
                 }
             }
             BdJournalEditorBody { show_preview, preview_html, body }
@@ -238,13 +252,21 @@ fn BdJournalComposerTabs(
 
 /// "From highlights" toggle + popover, letting the composer insert a saved
 /// highlight as a blockquote at the caret. Highlights load lazily the first
-/// time the popover opens; this component owns that state fully since
-/// nothing outside it needs to observe it.
+/// time the popover opens. The loaded-once state is owned by
+/// `BdJournalComposer` (not here) because this component's markup is
+/// conditionally skipped while previewing — owning it locally would drop the
+/// cache and refetch every time the write/preview tabs are toggled.
 #[component]
-fn BdJournalHighlightsPopover(uuid: String, server_url: String) -> Element {
-    let mut highlights = use_signal(Vec::<Highlight>::new);
-    let mut highlights_open = use_signal(|| false);
-    let mut highlights_loaded = use_signal(|| false);
+fn BdJournalHighlightsPopover(
+    uuid: String,
+    server_url: String,
+    highlights: Signal<Vec<Highlight>>,
+    highlights_open: Signal<bool>,
+    highlights_loaded: Signal<bool>,
+) -> Element {
+    let mut highlights = highlights;
+    let mut highlights_open = highlights_open;
+    let mut highlights_loaded = highlights_loaded;
 
     rsx! {
         div { class: "bd-journal-hl-wrap",
@@ -527,11 +549,9 @@ fn BdJournalEntryHeader(
                             spawn(async move {
                                 match data::delete_journal_entry(&url, entry_id).await {
                                     Ok(()) => reload.set(reload() + 1),
-                                    Err(e) => {
-                                        error.set(Some(e.to_string()));
-                                        saving.set(false);
-                                    }
+                                    Err(e) => error.set(Some(e.to_string())),
                                 }
+                                saving.set(false);
                             });
                         },
                         "Delete"
