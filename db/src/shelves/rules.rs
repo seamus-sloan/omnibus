@@ -120,7 +120,10 @@ fn condition_sql(rule: &ShelfRule, owner_id: i64) -> Result<(String, Vec<Bind>),
     }
 }
 
-/// Date-field conditions over `books.timestamp` / `books.last_modified`.
+/// Date-field conditions over `books.timestamp` / `books.last_modified`, which
+/// are INTEGER unix-seconds (migration 0038): the relative-window comparison
+/// stays numeric via `strftime('%s', …)`, and the absolute-date comparisons
+/// render the column back to a calendar date with the `'unixepoch'` modifier.
 fn date_condition(rule: &ShelfRule, v: &str) -> Result<(String, Vec<Bind>), ShelfError> {
     let col = match rule.field {
         RuleField::DateAdded => "b.timestamp",
@@ -129,7 +132,7 @@ fn date_condition(rule: &ShelfRule, v: &str) -> Result<(String, Vec<Bind>), Shel
     };
     match rule.op {
         RuleOp::InLast => Ok((
-            format!("{col} >= datetime('now', ?)"),
+            format!("{col} >= CAST(strftime('%s', 'now', ?) AS INTEGER)"),
             vec![Bind::Text(parse_relative_window(v)?)],
         )),
         RuleOp::Between => {
@@ -137,7 +140,7 @@ fn date_condition(rule: &ShelfRule, v: &str) -> Result<(String, Vec<Bind>), Shel
                 ShelfError::InvalidRule(format!("range must be START..END, got {v:?}"))
             })?;
             Ok((
-                format!("date({col}) BETWEEN ? AND ?"),
+                format!("date({col}, 'unixepoch') BETWEEN ? AND ?"),
                 vec![
                     Bind::Text(validate_date(start)?),
                     Bind::Text(validate_date(end)?),
@@ -145,11 +148,11 @@ fn date_condition(rule: &ShelfRule, v: &str) -> Result<(String, Vec<Bind>), Shel
             ))
         }
         RuleOp::Before => Ok((
-            format!("date({col}) < ?"),
+            format!("date({col}, 'unixepoch') < ?"),
             vec![Bind::Text(validate_date(v)?)],
         )),
         RuleOp::After => Ok((
-            format!("date({col}) > ?"),
+            format!("date({col}, 'unixepoch') > ?"),
             vec![Bind::Text(validate_date(v)?)],
         )),
         _ => Err(unsupported(rule)),

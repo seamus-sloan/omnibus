@@ -53,12 +53,12 @@ where
 {
     sqlx::query(
         "INSERT INTO metadata_overrides (book_uuid, overrides, has_cover_override, updated_by, updated_at)
-         VALUES (?, ?, ?, ?, datetime('now'))
+         VALUES (?, ?, ?, ?, strftime('%s','now'))
          ON CONFLICT(book_uuid) DO UPDATE SET
            overrides = excluded.overrides,
            has_cover_override = excluded.has_cover_override,
            updated_by = excluded.updated_by,
-           updated_at = datetime('now')",
+           updated_at = strftime('%s','now')",
     )
     .bind(book_uuid)
     .bind(overrides_json)

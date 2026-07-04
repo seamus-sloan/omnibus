@@ -361,7 +361,7 @@ async fn undo_merge_restores_source_book_and_moves_file_back() {
     );
     // Guard cleared; log marked undone; FTS has both rows again.
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM merged_uuids").await, 0);
-    let undone: Option<String> = sqlx::query_scalar("SELECT undone_at FROM merge_log")
+    let undone: Option<i64> = sqlx::query_scalar("SELECT undone_at FROM merge_log")
         .fetch_one(&pool)
         .await
         .unwrap();

@@ -223,7 +223,7 @@ async fn update_book_row(
             path = ?, title = ?, sort = ?, author_sort = ?, series_sort = ?, series_index = ?,
             pubdate = ?, has_cover = ?, description = ?, accent_color = ?,
             title_norm = ?, author_norm = ?,
-            last_modified = datetime('now')
+            last_modified = strftime('%s','now')
          WHERE id = ?",
     )
     .bind(&book_path)
@@ -280,10 +280,15 @@ pub(super) async fn insert_book_row(
     let has_cover = i64::from(b.cover.is_some());
 
     let book_id = sqlx::query_scalar::<_, i64>(
+        // `timestamp`/`last_modified` are set explicitly: migration 0038
+        // converted them in place to INTEGER and (unlike a recreate) could not
+        // carry the old `DEFAULT (strftime('%s','now'))` forward.
         "INSERT INTO books
             (uuid, scan_key, library_id, path, title, sort, author_sort, series_sort, series_index,
-             pubdate, has_cover, description, accent_color, title_norm, author_norm)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             pubdate, has_cover, description, accent_color, title_norm, author_norm,
+             timestamp, last_modified)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                 strftime('%s','now'), strftime('%s','now'))
          RETURNING id",
     )
     .bind(&uuid)
