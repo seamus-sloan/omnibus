@@ -4,6 +4,10 @@
 //! result set. Browse mode is filtered server-side, and the facet sidebar was
 //! retired when shelves became the library's lens (F3.1), so only the filter
 //! predicate + the table's format-badge label remain here.
+//!
+//! `format_badge_label` feeds the web table only; it's dead on the mobile
+//! build, which renders no table.
+#![cfg_attr(feature = "mobile", allow(dead_code))]
 
 use omnibus_shared::{EbookMetadata, ViewFilters};
 

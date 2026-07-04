@@ -13,17 +13,29 @@ use dioxus::prelude::*;
 use omnibus_shared::{EbookMetadata, ViewFilters, ViewPrefs};
 
 use crate::components::chip_editor::SuggestionItem;
+#[cfg(not(feature = "mobile"))]
 use crate::components::{RailActive, ShelvesRail};
 use crate::{use_search_query, use_server_url, view_prefs};
 
 mod effects;
 mod filtering;
-mod filters;
-mod grid;
-mod sections;
 mod sorting;
+
+// Web-only presentation cluster (rail + toolbar + table/grid). The mobile
+// build renders `mobile::MobileLanding` instead and never pulls these in.
+#[cfg(not(feature = "mobile"))]
+mod filters;
+#[cfg(not(feature = "mobile"))]
+mod grid;
+#[cfg(not(feature = "mobile"))]
+mod sections;
+#[cfg(not(feature = "mobile"))]
 mod table;
+#[cfg(not(feature = "mobile"))]
 mod toolbar;
+
+#[cfg(feature = "mobile")]
+mod mobile;
 
 #[cfg(feature = "web")]
 use effects::spawn_load_more_observer;
@@ -32,11 +44,13 @@ use effects::{
     SuggestionPools,
 };
 use filtering::apply_filters;
+#[cfg(not(feature = "mobile"))]
 use sections::{
     BooksView, LandingContent, LandingContentHandlers, LandingContentProps, LandingHeader,
     LandingHeaderView,
 };
 use sorting::sort_books;
+#[cfg(not(feature = "mobile"))]
 use table::BookTableContext;
 
 /// Keyset page size for the browse path (F5b open question #1). A grid renders
@@ -48,6 +62,9 @@ pub(super) const PAGE_SIZE: i64 = 100;
 /// Returned by [`setup_landing_signals`] so [`LandingPage`] can stay a thin
 /// composition of named stages.
 #[derive(Copy, Clone)]
+// Mobile reads a subset of these (it renders a compact grid, no admin table or
+// suggestion pools); the rest feed the web rail/toolbar only.
+#[cfg_attr(feature = "mobile", allow(dead_code))]
 struct LandingSignals {
     books: Signal<Vec<EbookMetadata>>,
     next_cursor: Signal<Option<String>>,
@@ -190,6 +207,7 @@ fn wire_landing_effects(
 /// Per-render snapshot of the data the markup sub-components consume.
 /// Computed by [`derive_view_state`] so the [`LandingPage`] body is just
 /// composition.
+#[cfg_attr(feature = "mobile", allow(dead_code))]
 struct LandingViewState {
     is_loading: bool,
     page_error: Option<String>,
@@ -261,6 +279,7 @@ fn derive_view_state(sigs: &LandingSignals, query: Signal<String>) -> LandingVie
 /// `EventHandler` bundle dispatched into by the markup sub-components.
 /// Built by [`build_handlers`] from the owned signals so the
 /// [`LandingPage`] body stays a thin composition.
+#[cfg_attr(feature = "mobile", allow(dead_code))]
 struct LandingHandlers {
     on_prefs_change_header: EventHandler<ViewPrefs>,
     on_prefs_change_content: EventHandler<ViewPrefs>,
@@ -314,59 +333,82 @@ pub fn LandingPage() -> Element {
     let query = use_search_query().0;
     let sigs = setup_landing_signals(&server_url, query);
     let view = derive_view_state(&sigs, query);
-    let prefs = sigs.prefs;
-    let LandingHandlers {
-        on_prefs_change_header,
-        on_prefs_change_content,
-        on_load_more,
-        on_clear_filters,
-    } = build_handlers(&sigs);
+    let handlers = build_handlers(&sigs);
 
-    rsx! {
-        div { class: "shelf-layout",
-            ShelvesRail { active: RailActive::All }
-            div { class: "shelf-main",
-                LandingHeader {
-                    view: LandingHeaderView {
-                        path_subtitle: view.path_subtitle,
-                        book_count: view.book_count,
-                        path_missing: view.path_missing,
-                        page_error: view.page_error.clone(),
-                        lib_err: view.lib_err.clone(),
-                    },
-                    prefs: prefs(),
-                    on_prefs_change: on_prefs_change_header,
-                }
+    // Mobile renders a dedicated "Your shelf" surface; web keeps the
+    // rail + toolbar layout. Both consume the shared data pipeline above —
+    // only the presentation branches. (Mobile is a separate build, so this
+    // cfg split doesn't affect web SSR/WASM hydration parity — rule 07.)
+    #[cfg(feature = "mobile")]
+    let body = rsx! {
+        mobile::MobileLanding {
+            book_count: view.book_count,
+            books: view.visible_books,
+            is_loading: view.is_loading,
+            has_more: view.has_more,
+            is_loading_more: view.is_loading_more,
+            on_load_more: handlers.on_load_more,
+            server_url,
+        }
+    };
 
-                LandingContent {
-                    ..LandingContentProps {
-                        books: BooksView {
-                            is_loading: view.is_loading,
-                            visible_books: view.visible_books,
-                            visible_is_empty: view.visible_is_empty,
-                            books_empty: view.books_empty,
-                            lib_err: view.lib_err,
-                            page_error: view.page_error,
-                            has_more: view.has_more,
-                            is_loading_more: view.is_loading_more,
+    #[cfg(not(feature = "mobile"))]
+    let body = {
+        let prefs = sigs.prefs;
+        let LandingHandlers {
+            on_prefs_change_header,
+            on_prefs_change_content,
+            on_load_more,
+            on_clear_filters,
+        } = handlers;
+        rsx! {
+            div { class: "shelf-layout",
+                ShelvesRail { active: RailActive::All }
+                div { class: "shelf-main",
+                    LandingHeader {
+                        view: LandingHeaderView {
+                            path_subtitle: view.path_subtitle,
+                            book_count: view.book_count,
+                            path_missing: view.path_missing,
+                            page_error: view.page_error.clone(),
+                            lib_err: view.lib_err.clone(),
                         },
                         prefs: prefs(),
-                        ctx: BookTableContext {
-                            server_url,
-                            is_admin: (sigs.is_admin)(),
-                            author_suggestions: sigs.pools.authors.into(),
-                            tag_suggestions: sigs.pools.tags.into(),
-                        },
-                        handlers: LandingContentHandlers {
-                            on_prefs_change: on_prefs_change_content,
-                            on_load_more,
-                            on_clear_filters,
-                        },
+                        on_prefs_change: on_prefs_change_header,
+                    }
+
+                    LandingContent {
+                        ..LandingContentProps {
+                            books: BooksView {
+                                is_loading: view.is_loading,
+                                visible_books: view.visible_books,
+                                visible_is_empty: view.visible_is_empty,
+                                books_empty: view.books_empty,
+                                lib_err: view.lib_err,
+                                page_error: view.page_error,
+                                has_more: view.has_more,
+                                is_loading_more: view.is_loading_more,
+                            },
+                            prefs: prefs(),
+                            ctx: BookTableContext {
+                                server_url,
+                                is_admin: (sigs.is_admin)(),
+                                author_suggestions: sigs.pools.authors.into(),
+                                tag_suggestions: sigs.pools.tags.into(),
+                            },
+                            handlers: LandingContentHandlers {
+                                on_prefs_change: on_prefs_change_content,
+                                on_load_more,
+                                on_clear_filters,
+                            },
+                        }
                     }
                 }
             }
         }
-    }
+    };
+
+    body
 }
 
 /// Short, human-friendly tail of an absolute library path. We show only the

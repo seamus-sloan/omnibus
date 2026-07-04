@@ -1,14 +1,40 @@
-//! Login and register pages for the web and mobile clients. Markup is
-//! identical across targets so SSR/WASM hydration matches; submit handlers
-//! branch per feature — `web` POSTs `/api/auth/{login,register}` and lets
-//! the `Set-Cookie` session carry through, `mobile` POSTs the same endpoints
-//! and stashes the returned bearer token in `data::token_store`.
+//! Login and register pages for the web and mobile clients. The signals and
+//! submit handlers are shared; the presentation branches per target — web
+//! wraps the form in the split-pane [`AuthShell`], mobile renders a centered
+//! single-column layout ([`m_auth_shell`]). Submit transport also branches:
+//! `web` POSTs `/api/auth/{login,register}` and lets the `Set-Cookie` session
+//! carry through, `mobile` POSTs the same endpoints and stashes the returned
+//! bearer token in `data::token_store`. (Web SSR and the WASM client both
+//! compile the `not(mobile)` branch, so hydration parity is preserved —
+//! rule 07.)
 
 use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};
 
-use crate::components::auth::{AuthShell, Banner, BannerKind, Field, StrengthMeter, StrengthScore};
+#[cfg(not(feature = "mobile"))]
+use crate::components::auth::AuthShell;
+use crate::components::auth::{Banner, BannerKind, Field, StrengthMeter, StrengthScore};
 use crate::{use_server_url, Route};
+
+/// Centered single-column shell for the mobile auth screens: brand mark,
+/// tagline, a form slot, and a version footer over a soft accent glow.
+#[cfg(feature = "mobile")]
+fn m_auth_shell(tagline: &str, children: Element) -> Element {
+    rsx! {
+        div { class: "m-auth",
+            div { class: "m-auth-brand",
+                div { class: "auth-shell-brand-mark" }
+                div { class: "auth-shell-brand-word", "Omnibus" }
+                p { class: "m-auth-tagline", "{tagline}" }
+            }
+            div { class: "m-auth-body", {children} }
+            div { class: "m-auth-foot mono",
+                "omnibus · v"
+                {env!("CARGO_PKG_VERSION")}
+            }
+        }
+    }
+}
 
 /// Renders the login page.
 #[component]
@@ -17,6 +43,9 @@ pub fn LoginPage() -> Element {
     let mut password = use_signal(String::new);
     let mut error = use_signal(|| Option::<String>::None);
     let mut submitting = use_signal(|| false);
+    // Only the web split-pane mutates this (its "keep me signed in" checkbox);
+    // the mobile design has no such control, so `mut` is unused there.
+    #[cfg_attr(feature = "mobile", allow(unused_mut))]
     let mut keep_signed_in = use_signal(|| false);
     let nav = use_navigator();
 
@@ -65,7 +94,14 @@ pub fn LoginPage() -> Element {
         }
     };
 
-    rsx! {
+    // The "keep me signed in" control only exists on the web split-pane; the
+    // mobile design omits it. Read it on mobile so the signal isn't flagged
+    // unused under `-D warnings`.
+    #[cfg(feature = "mobile")]
+    let _ = keep_signed_in;
+
+    #[cfg(not(feature = "mobile"))]
+    let out = rsx! {
         AuthShell {
             kicker: "Sign in".to_string(),
             title: rsx! {
@@ -148,7 +184,66 @@ pub fn LoginPage() -> Element {
                 }
             }
         }
-    }
+    };
+
+    #[cfg(feature = "mobile")]
+    let out = m_auth_shell(
+        "Your library, wherever you are.",
+        rsx! {
+            form { class: "auth-form-inner",
+                onsubmit: on_submit,
+                "data-testid": "login-form",
+                if let Some(msg) = error() {
+                    Banner { kind: BannerKind::Err, title: msg, dismissible: false }
+                }
+                Field { label: "Email or username".to_string(), input_id: "login-username".to_string(),
+                    input {
+                        id: "login-username",
+                        name: "username",
+                        r#type: "text",
+                        autocomplete: "username",
+                        autocapitalize: "none",
+                        autocorrect: "off",
+                        spellcheck: "false",
+                        value: "{username}",
+                        oninput: move |e| username.set(e.value()),
+                        onkeydown: on_keydown,
+                    }
+                }
+                Field {
+                    label: "Password".to_string(),
+                    input_id: "login-password".to_string(),
+                    action: rsx! {
+                        Link { to: Route::Login {}, class: "auth-field-action-link", "Forgot?" }
+                    },
+                    input {
+                        id: "login-password",
+                        name: "password",
+                        r#type: "password",
+                        autocomplete: "current-password",
+                        autocapitalize: "none",
+                        autocorrect: "off",
+                        spellcheck: "false",
+                        value: "{password}",
+                        oninput: move |e| password.set(e.value()),
+                        onkeydown: on_keydown,
+                    }
+                }
+                button {
+                    class: "btn primary lg auth-submit",
+                    r#type: "submit",
+                    disabled: submitting(),
+                    if submitting() { "Signing in…" } else { "Sign in" }
+                }
+                p { class: "auth-footer",
+                    "New here? "
+                    Link { to: Route::Register {}, "Create an account" }
+                }
+            }
+        },
+    );
+
+    out
 }
 
 /// Renders the register page.
@@ -190,7 +285,21 @@ pub fn RegisterPage() -> Element {
         });
     });
 
-    rsx! {
+    // Same target split as `LoginPage`: the register form body is shared
+    // (`RegisterForm`), only the surrounding shell differs.
+    let form = rsx! {
+        RegisterForm {
+            username,
+            password,
+            error,
+            submitting,
+            terms_ack,
+            on_submit_now: move |_| submit_now.call(()),
+        }
+    };
+
+    #[cfg(not(feature = "mobile"))]
+    let out = rsx! {
         AuthShell {
             kicker: "Create account".to_string(),
             title: rsx! {
@@ -199,16 +308,14 @@ pub fn RegisterPage() -> Element {
                 " at home"
             },
             lede: Some("Set up your account to start using Omnibus.".to_string()),
-            RegisterForm {
-                username,
-                password,
-                error,
-                submitting,
-                terms_ack,
-                on_submit_now: move |_| submit_now.call(()),
-            }
+            {form}
         }
-    }
+    };
+
+    #[cfg(feature = "mobile")]
+    let out = m_auth_shell("Make yourself at home.", form);
+
+    out
 }
 
 /// Register form body — inputs write the parent's signals through, submission delegates via `on_submit_now`.

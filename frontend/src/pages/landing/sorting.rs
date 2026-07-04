@@ -3,6 +3,10 @@
 //! Pure functions over `Vec<EbookMetadata>` keyed on the user's selected
 //! [`SortKey`] / [`SortDir`]. Called from [`super::LandingPage`] before
 //! handing the list to the grid or table.
+//!
+//! The mobile build renders its own compact grid and doesn't use the sort
+//! toolbar, so several of these web-facing helpers are dead there by design.
+#![cfg_attr(feature = "mobile", allow(dead_code))]
 
 use std::cmp::Ordering;
 
