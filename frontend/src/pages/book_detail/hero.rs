@@ -10,6 +10,13 @@ use crate::Route;
 use super::rating::BdRatingWidget;
 use super::{BdCrumb, BdCrumbItem, BdFormatBadge};
 
+/// Which formats this book has, driving the hero's CTA buttons and format badges.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct Availability {
+    pub has_ebook: bool,
+    pub has_audio: bool,
+}
+
 /// Hero section: breadcrumb, cover + format badges, title + CTAs, rating card.
 #[component]
 pub(super) fn BdHeroSection(
@@ -17,8 +24,7 @@ pub(super) fn BdHeroSection(
     title: String,
     kicker: String,
     crumbs: Vec<BdCrumbItem>,
-    has_ebook: bool,
-    has_audio: bool,
+    avail: Availability,
 ) -> Element {
     let uuid = b.unique_identifier.clone().unwrap_or_default();
     rsx! {
@@ -40,8 +46,7 @@ pub(super) fn BdHeroSection(
                     title: title.clone(),
                     kicker: kicker.clone(),
                     uuid: uuid.clone(),
-                    has_ebook,
-                    has_audio,
+                    avail,
                 }
                 aside { class: "card bd-rating-card",
                     div { class: "label", "Your rating" }
@@ -85,9 +90,12 @@ fn BdTitleCol(
     title: String,
     kicker: String,
     uuid: String,
-    has_ebook: bool,
-    has_audio: bool,
+    avail: Availability,
 ) -> Element {
+    let Availability {
+        has_ebook,
+        has_audio,
+    } = avail;
     rsx! {
         div { class: "bd-title-col",
             div { class: "label", "{kicker}" }

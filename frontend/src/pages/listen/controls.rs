@@ -7,6 +7,8 @@
 
 use dioxus::prelude::*;
 
+use super::stage::{ToolbarState, TransportCallbacks, TransportState};
+
 // --- Pure helpers extracted so they can be unit-tested without a renderer.
 
 /// CSS class for the rate button — appends `" on"` when the speed panel is open.
@@ -52,19 +54,22 @@ pub(crate) fn AudioElement() -> Element {
 
 /// Transport row: chapter-skip, ±30s seek, play/pause, rate.
 #[component]
-pub(super) fn TransportButtons(
-    play_label: String,
-    playing: bool,
-    rate_label: String,
-    rate_active: bool,
-    has_chapters: bool,
-    on_toggle: EventHandler<MouseEvent>,
-    on_skip_back: EventHandler<MouseEvent>,
-    on_skip_forward: EventHandler<MouseEvent>,
-    on_rate: EventHandler<MouseEvent>,
-    on_chapter_prev: EventHandler<MouseEvent>,
-    on_chapter_next: EventHandler<MouseEvent>,
-) -> Element {
+pub(super) fn TransportButtons(state: TransportState, callbacks: TransportCallbacks) -> Element {
+    let TransportState {
+        play_label,
+        playing,
+        rate_label,
+        rate_active,
+        has_chapters,
+    } = state;
+    let TransportCallbacks {
+        on_toggle,
+        on_skip_back,
+        on_skip_forward,
+        on_rate,
+        on_chapter_prev,
+        on_chapter_next,
+    } = callbacks;
     let rate_class = rate_btn_class(rate_active);
 
     rsx! {
@@ -179,15 +184,16 @@ mod tests {
 /// highlighted state. The panels themselves are visual shells until
 /// their backing infrastructure ships (PRs 3–5).
 #[component]
-pub(super) fn Toolbar(
-    sleep_active: bool,
-    sleep_label: String,
-    bookmarks_active: bool,
-    chapters_active: bool,
-    on_sleep: EventHandler<MouseEvent>,
-    on_bookmark: EventHandler<MouseEvent>,
-    on_chapters: EventHandler<MouseEvent>,
-) -> Element {
+pub(super) fn Toolbar(state: ToolbarState) -> Element {
+    let ToolbarState {
+        sleep_active,
+        sleep_label,
+        bookmarks_active,
+        chapters_active,
+        on_sleep,
+        on_bookmark,
+        on_chapters,
+    } = state;
     let sleep_cls = toolbar_btn_class(sleep_active);
     let bm_class = toolbar_btn_class(bookmarks_active);
     let ch_class = toolbar_btn_class(chapters_active);
