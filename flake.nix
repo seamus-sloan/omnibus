@@ -164,6 +164,11 @@
         # glib/cairo/pango/gdk-pixbuf/atk into PKG_CONFIG_PATH transitively.
         mobileExtras = [
           pkgs.jdk21
+          # `dx` for native iOS/Android serve. Mobile is Dioxus Native (no
+          # wasm target), so unlike `webExtras` this needs the CLI but not a
+          # matched `wasm-bindgen` — `dx serve --platform ios/android` never
+          # invokes wasm-bindgen/binaryen.
+          pkgs-unstable.dioxus-cli
         ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
           pkgs.glib
           pkgs.gtk3
