@@ -1,27 +1,8 @@
-//! Atrium design-system primitives.
-//!
-//! The CSS lives in [`frontend/assets/atrium.css`](../../assets/atrium.css);
-//! this module exposes the Dioxus components that consume those classes.
-//! Keep the components markup-only — no business logic, no data fetching.
-//! Pages compose them.
-//!
-//! Components:
-//! - [`AtriumRoot`] — wraps the router output in a
-//!   `<div class="atrium" data-theme="dark|light|sepia">`. The Atrium token
-//!   block in `frontend/assets/atrium.css` keys off the `data-theme`
-//!   attribute on this wrapper (not on `<html>`) so the swap is declarative —
-//!   no DOM-attribute mutation from Rust.
-//! - [`Cover`] — book cover. Uses the real `/api/covers/:id` image when the
-//!   book has one and falls back to a stylized typographic template when it
-//!   doesn't. The per-book accent (from `EbookMetadata.accent`, populated
-//!   by [`omnibus_db::ebook::extract_accent`]) is wired as a `--accent`
-//!   custom property so cover-derived theming composes against the page.
-//!
-//! SSR/hydration: [`init_theme`] always seeds the context with `Theme::Dark`
-//! so the SSR-rendered markup is deterministic and matches the WASM
-//! client's first paint. A web-only [`use_effect`] reads the persisted value
-//! from `localStorage` after hydration and updates the signal, which
-//! re-renders [`AtriumRoot`] with the user's stored preference.
+//! Atrium design-system primitives: [`AtriumRoot`], [`Cover`], and the
+//! [`init_theme`] context provider. The CSS lives in
+//! [`frontend/assets/atrium.css`](../../assets/atrium.css); pages compose
+//! these markup-only components (no business logic, no data fetching)
+//! against those classes.
 
 use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;

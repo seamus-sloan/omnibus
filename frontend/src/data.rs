@@ -1,19 +1,8 @@
-//! Feature-gated data-fetching layer.
-//!
-//! - Mobile (`feature = "mobile"`) calls the server's hand-written REST
-//!   routes (`/api/*`) via `reqwest`, picking up the base URL from the
-//!   `ServerUrl` Dioxus context. `server_url` is required at the call site.
-//! - Web (`feature = "web"`) calls the `#[get]`/`#[post]` server functions
-//!   defined in [`crate::rpc`]. No base URL needed — the server-function
-//!   client stubs use the page origin automatically. `server_url` is
-//!   ignored on the web path.
-//! - Server-only compiles (`feature = "server"` without `"web"`) reuse the
-//!   web stubs so SSR-during-fullstack-render still returns sensible data.
-//!
-//! Per-domain wrappers live in the [`auth`], [`authors`], [`books`],
-//! [`highlights`], [`journals`], [`progress`], [`series`], and [`tags`]
-//! submodules and are re-exported here so callers keep importing through
-//! `omnibus_frontend::data::*`.
+//! Feature-gated data-fetching layer: mobile calls the server's
+//! hand-written `/api/*` REST routes via `reqwest`; web and server-only
+//! compiles call the `#[get]`/`#[post]` functions in [`crate::rpc`].
+//! Per-domain wrappers live in the [`auth`], [`authors`], [`books`], and
+//! sibling submodules, re-exported here.
 
 mod auth;
 mod authors;
@@ -108,32 +97,11 @@ pub struct ServerUrl(pub String);
 
 #[cfg(feature = "mobile")]
 pub mod token_store {
-    //! In-process bearer-token store for the mobile client.
-    //!
-    //! Threading model:
-    //!
-    //! * In-memory state lives in an `RwLock<Option<String>>`. Reads/writes
-    //!   recover from poisoned locks via [`unpoison`] so a panic in one
-    //!   thread can't brick the whole app.
-    //! * Disk persistence is funnelled through a single dedicated worker
-    //!   thread fed by an `mpsc` channel. This serializes `set` and
-    //!   `clear` operations — a delayed write can never overtake a later
-    //!   clear and resurrect the token on next launch. **Persistence
-    //!   only runs in debug builds** (gated by `persistence_enabled()`,
-    //!   which returns `cfg!(debug_assertions)`) so a release build can
-    //!   never accidentally drop a long-lived credential on the
-    //!   filesystem in plaintext. Release users re-login on every cold
-    //!   start until secure storage lands.
-    //! * `set` and `clear` update the in-memory cell synchronously and
-    //!   enqueue the disk op. Async callers (`mobile_login`,
-    //!   `mobile_register`, the 401 handler in `note_status`) never block
-    //!   on flash I/O.
-    //!
-    //! **TODO:** in debug builds the token is held in process memory and
-    //! persisted to a plaintext file under the user's home directory.
-    //! Release builds skip persistence entirely. Replace with iOS Keychain /
-    //! Android Keystore via a platform-specific abstraction before flipping
-    //! persistence on for release builds.
+    //! In-process bearer-token store for the mobile client. In-memory state
+    //! lives in an `RwLock<Option<String>>` (see [`unpoison`]); disk
+    //! persistence is funnelled through a single dedicated worker thread fed
+    //! by an `mpsc` channel (see [`persistence_tx`]) so `set` / `clear`
+    //! never block on flash I/O and can't race each other.
     use std::path::{Path, PathBuf};
     use std::sync::{mpsc, LockResult, Mutex, OnceLock, RwLock};
     use tokio::sync::watch;

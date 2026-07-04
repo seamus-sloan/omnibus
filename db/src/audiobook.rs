@@ -1,16 +1,8 @@
-//! Audiobook metadata extraction (server-only).
-//!
-//! Sibling to [`crate::ebook`]: walks the configured audiobook library,
-//! reads container tags (title / artist / album / duration / cover) via
-//! `lofty`, and emits rows for the DB. Multi-file audiobooks (a folder of
-//! per-chapter mp3s) are grouped by [`group::group_into_books`] into a
-//! single [`AudiobookGroup`] then fully parsed by
-//! [`parse::parse_groups`] into [`parse::IndexedAudiobook`] rows ready for
+//! Audiobook metadata extraction (server-only). Sibling to [`crate::ebook`]:
+//! walks the configured audiobook library, reads container tags via `lofty`,
+//! groups multi-file audiobooks via [`group::group_into_books`], and parses
+//! them via [`parse::parse_groups`] into rows ready for
 //! [`crate::sync::sync_audiobooks`].
-//!
-//! Covers title, primary author, album, duration in seconds, embedded
-//! artwork, per-part track ordering, and chapter extraction from Nero chpl
-//! atoms (M4B) and ID3v2 CHAP frames (MP3).
 
 use std::path::{Path, PathBuf};
 
