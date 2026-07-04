@@ -89,10 +89,6 @@ pub fn LoginPage() -> Element {
                         name: "username",
                         r#type: "text",
                         autocomplete: "username",
-                        // iOS soft keyboards default to autocapitalize=sentences
-                        // + autocorrect on; either mangles a typed credential
-                        // before `oninput` fires. Usernames are case-folded in
-                        // the DB, but keep parity with the password field.
                         autocapitalize: "none",
                         autocorrect: "off",
                         spellcheck: "false",
@@ -119,9 +115,7 @@ pub fn LoginPage() -> Element {
                         name: "password",
                         r#type: "password",
                         autocomplete: "current-password",
-                        // Without these, an iOS soft keyboard capitalizes the
-                        // first char (e.g. `omnibus-dev` → `Omnibus-dev`) and
-                        // the case-sensitive hash check 401s.
+                        // iOS soft keyboards capitalize the first char, 401ing a case-sensitive password.
                         autocapitalize: "none",
                         autocorrect: "off",
                         spellcheck: "false",

@@ -23,6 +23,11 @@ covered by [04-playwright.md](04-playwright.md).
   needs to be split (see below). Section-marker comments
   (`// --- Removed`) are tolerated *only* when a function can't be split
   further and still needs nav aids.
+- **Keep comments terse — one line wins.** State the *why* and stop;
+  don't restate what the code or attribute names already say, and don't
+  leave PR-narration (the play-by-play of what a change does, worked
+  examples, before/after) in the source — that belongs in the PR body,
+  not a multi-line block above a one-line tweak.
 
 ## Function shape
 
