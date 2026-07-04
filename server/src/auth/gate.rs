@@ -2,18 +2,33 @@
 //! that gates `/api/*` routes behind a live session. Everything under
 //! `/api/*` other than `/api/auth/*` and `/api/_health` requires a valid
 //! session or gets `401 Unauthorized`; everything else (SSR HTML, WASM
-//! bundle, static assets) passes through untouched.
+//! bundle, static assets) passes through untouched. Media read endpoints
+//! (covers, thumbs, author-photo / suggestion-cover GETs) additionally
+//! accept the session as a `?token=` query param — see [`is_media_read_path`].
 
 use axum::{
     extract::{Request, State},
-    http::StatusCode,
+    http::{Method, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
 use omnibus_db::auth as auth_db;
 
-use super::extractor::extract_token;
+use super::extractor::{extract_token, query_token};
 use crate::backend::AppState;
+
+/// Media read endpoints whose bytes are rendered into an `<img src>` and so
+/// may authenticate via a `?token=` query param — the only auth a WebView's
+/// `<img>` fetch can carry. Kept in lockstep with the handlers gated on
+/// [`MediaAuthUser`]; every other `/api/*` path stays header/cookie-only.
+///
+/// [`MediaAuthUser`]: super::MediaAuthUser
+fn is_media_read_path(path: &str) -> bool {
+    path.starts_with("/api/covers/")
+        || path.starts_with("/api/thumbs/")
+        || (path.starts_with("/api/authors/") && path.ends_with("/photo"))
+        || (path.starts_with("/api/suggestions/") && path.ends_with("/cover"))
+}
 
 /// Reject `/api/*` requests without a live session with `401 Unauthorized`, after exempting `/api/auth/*` and `/api/_health`.
 ///
@@ -34,7 +49,14 @@ pub async fn require_auth(State(state): State<AppState>, req: Request, next: Nex
     {
         return next.run(req).await;
     }
-    let Some((token, _kind)) = extract_token(req.headers()) else {
+    // Header/cookie is the norm; a GET on a media read path may instead carry
+    // the session as `?token=` so a mobile WebView `<img>` fetch authenticates.
+    let token = extract_token(req.headers()).map(|(t, _)| t).or_else(|| {
+        (req.method() == Method::GET && is_media_read_path(path))
+            .then(|| query_token(req.uri().query()))
+            .flatten()
+    });
+    let Some(token) = token else {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     };
     match auth_db::lookup_session(state.pool(), &token).await {

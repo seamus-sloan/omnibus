@@ -1,7 +1,9 @@
 //! `/api/covers/*` and `/api/thumbs/*` handlers.
 //!
-//! Cookie-gated reads that resolve a book uuid through the db layer and
+//! Session-gated reads that resolve a book uuid through the db layer and
 //! stream the cached cover or WebP thumbnail bytes back to the client.
+//! Authenticated via [`MediaAuthUser`] (cookie / bearer / `?token=` query),
+//! the last so the mobile WebView's `<img>` fetches can carry the session.
 //! Mounted on the mobile REST router in [`super::rest_router`].
 
 use axum::{
@@ -12,10 +14,10 @@ use axum::{
 use omnibus_db::{self as db};
 
 use super::{internal, AppState};
-use crate::auth::AuthUser;
+use crate::auth::MediaAuthUser;
 
 pub(super) async fn get_cover(
-    _user: AuthUser,
+    _user: MediaAuthUser,
     State(state): State<AppState>,
     Path(uuid): Path<String>,
 ) -> Response {
@@ -52,7 +54,7 @@ pub(super) async fn get_cover(
 }
 
 pub(super) async fn get_thumb(
-    _user: AuthUser,
+    _user: MediaAuthUser,
     State(state): State<AppState>,
     Path((uuid, size_str)): Path<(String, String)>,
 ) -> Response {

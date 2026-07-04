@@ -66,6 +66,65 @@ fn internal<E: std::fmt::Display>(e: E) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
 }
 
+/// Pull the session token out of a `?token=<value>` query parameter.
+/// Session tokens are URL-safe base64 (no padding), so no percent-decoding
+/// is needed. Used by [`MediaAuthUser`] and the `require_auth` gate for the
+/// media read paths — see [`MediaAuthUser`]'s docs for why.
+pub(super) fn query_token(query: Option<&str>) -> Option<String> {
+    query?.split('&').find_map(|pair| {
+        let (name, value) = pair.split_once('=')?;
+        (name == "token" && !value.is_empty()).then(|| value.to_string())
+    })
+}
+
+/// Resolve a live session from a request's cookie / bearer header. When
+/// `allow_query_token` is set and no `Authorization` header is present, a
+/// `?token=` query parameter is accepted as a bearer fallback.
+async fn resolve_auth_user(
+    parts: &mut Parts,
+    allow_query_token: bool,
+) -> Result<AuthUser, Response> {
+    let pool = parts
+        .extensions
+        .get::<SqlitePool>()
+        .cloned()
+        .ok_or_else(|| internal("missing SqlitePool extension"))?;
+    // The cookie/bearer → live-session contract (token precedence,
+    // SHA-256 hashing, absolute + idle expiry, revocation) lives in
+    // `auth_db::validate_session` so this extractor and the Dioxus
+    // server-function path in `omnibus_frontend::rpc` cannot drift.
+    let header_auth = parts
+        .headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    let cookie_header = parts
+        .headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok());
+    // The query token is a strict fallback: it fills in only when neither a
+    // bearer header nor a session cookie is present, so a URL `?token=` can
+    // never override an active cookie/bearer session.
+    let has_session_creds = auth_db::parse_session_token(header_auth, cookie_header).is_some();
+    let query_auth = (allow_query_token && !has_session_creds)
+        .then(|| query_token(parts.uri.query()).map(|t| format!("Bearer {t}")))
+        .flatten();
+    let authorization = header_auth.or(query_auth.as_deref());
+    match auth_db::validate_session(&pool, authorization, cookie_header).await {
+        Ok((user, session)) => Ok(AuthUser {
+            id: user.id,
+            username: user.username,
+            is_admin: user.is_admin,
+            can_upload: user.can_upload,
+            can_edit: user.can_edit,
+            can_download: user.can_download,
+            session_id: session.id,
+            session_kind: session.kind,
+        }),
+        Err(SessionAuthError::Unauthenticated) => Err(unauthorized()),
+        Err(SessionAuthError::Internal(e)) => Err(internal(e)),
+    }
+}
+
 impl<S> FromRequestParts<S> for AuthUser
 where
     S: Send + Sync,
@@ -79,37 +138,32 @@ where
     // private). The top-level fullstack router in `server/src/main.rs`
     // installs `Extension(pool)` on every request.
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let pool = parts
-            .extensions
-            .get::<SqlitePool>()
-            .cloned()
-            .ok_or_else(|| internal("missing SqlitePool extension"))?;
-        // The cookie/bearer → live-session contract (token precedence,
-        // SHA-256 hashing, absolute + idle expiry, revocation) lives in
-        // `auth_db::validate_session` so this extractor and the Dioxus
-        // server-function path in `omnibus_frontend::rpc` cannot drift.
-        let authorization = parts
-            .headers
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok());
-        let cookie_header = parts
-            .headers
-            .get(header::COOKIE)
-            .and_then(|v| v.to_str().ok());
-        match auth_db::validate_session(&pool, authorization, cookie_header).await {
-            Ok((user, session)) => Ok(AuthUser {
-                id: user.id,
-                username: user.username,
-                is_admin: user.is_admin,
-                can_upload: user.can_upload,
-                can_edit: user.can_edit,
-                can_download: user.can_download,
-                session_id: session.id,
-                session_kind: session.kind,
-            }),
-            Err(SessionAuthError::Unauthenticated) => Err(unauthorized()),
-            Err(SessionAuthError::Internal(e)) => Err(internal(e)),
-        }
+        resolve_auth_user(parts, false).await
+    }
+}
+
+/// Authenticated user for **media read endpoints** (`/api/covers`,
+/// `/api/thumbs`, `/api/authors/{id}/photo`). Identical to [`AuthUser`]
+/// except it also accepts the session token from a `?token=` query
+/// parameter.
+///
+/// These URLs are rendered into `<img src>` in the mobile WebView, which
+/// fetches them without the native `reqwest` client's `Authorization`
+/// header (and without a session cookie, since mobile auth is bearer-only)
+/// — so a header/cookie-only gate 401s every cover on mobile. The query
+/// token is the only auth an `<img>` fetch can carry. Confined to these
+/// image reads; the full API stays header/cookie-only.
+#[derive(Debug, Clone)]
+pub struct MediaAuthUser(pub AuthUser);
+
+impl<S> FromRequestParts<S> for MediaAuthUser
+where
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        resolve_auth_user(parts, true).await.map(MediaAuthUser)
     }
 }
 
