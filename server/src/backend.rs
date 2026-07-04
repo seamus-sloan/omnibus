@@ -183,6 +183,7 @@ fn content_routes() -> Router<AppState> {
         .route("/api/ebooks", get(ebooks::get_ebooks))
         .route("/api/ebooks/{uuid}", get(ebooks::get_ebook_by_uuid))
         .route("/api/ebooks/{uuid}/file", get(ebooks::get_ebook_file))
+        .route("/api/ebooks/{uuid}/kepub", get(ebooks::get_ebook_kepub))
         .route(
             "/api/audiobooks/{uuid}/manifest",
             get(audiobooks::get_audiobook_manifest),
