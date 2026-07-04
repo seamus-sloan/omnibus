@@ -1,12 +1,8 @@
-//! Unified Dioxus fullstack entrypoint.
-//!
-//! - When built for WASM (no `server` feature), `main` calls `dioxus::launch`
-//!   to hydrate the client in the browser.
-//! - When built natively (`server` feature), `main` calls `dioxus::serve` to
-//!   run an Axum backend that serves SSR'd HTML, the WASM bundle, the
-//!   auto-registered `#[get]`/`#[post]` server functions from
-//!   [`omnibus_frontend::rpc`], and the hand-written `/api/*` REST routes
-//!   from [`omnibus::backend`] (mobile-facing).
+//! Unified Dioxus fullstack entrypoint. Built for WASM, `main` calls
+//! `dioxus::launch` to hydrate the client; built natively (`server`
+//! feature), it calls `dioxus::serve` to run an Axum backend serving SSR'd
+//! HTML, the WASM bundle, [`omnibus_frontend::rpc`] server functions, and
+//! [`omnibus::backend`]'s mobile-facing REST routes.
 
 use omnibus_frontend::App;
 

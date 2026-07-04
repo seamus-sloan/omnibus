@@ -1,13 +1,6 @@
-//! Landing page (`/`) — the primary library surface.
-//!
-//! Browse (no search query) is keyset-paginated server-side (F5b): the first
-//! page carries the sidebar facets + the full-library count, and further pages
-//! are appended from a "Load more" sentinel (auto-triggered on web by an
-//! `IntersectionObserver`). Sort and filter are owned by the server — changing
-//! either refetches page 1. Search (non-empty query) keeps the pre-F5b path:
-//! the capped result set is sorted/filtered client-side (search keyset is a
-//! separate effort). View mode + sort + filters persist per library path via
-//! [`crate::view_prefs`].
+//! Landing page (`/`) — the primary library surface. See [`LandingPage`]
+//! for the browse-paginates / search-stays-client-side split. View mode +
+//! sort + filters persist per library path via [`crate::view_prefs`].
 
 use dioxus::prelude::*;
 use omnibus_shared::{EbookMetadata, ViewFilters, ViewPrefs};
@@ -305,8 +298,14 @@ fn build_handlers(sigs: &LandingSignals) -> LandingHandlers {
     }
 }
 
-/// Landing page — primary library surface. See the module doc for the
-/// browse-paginates / search-stays-client-side split.
+/// Landing page — primary library surface.
+///
+/// Browse (no search query) is keyset-paginated server-side: the first page
+/// carries the sidebar facets + the full-library count, and further pages
+/// are appended from a "Load more" sentinel (auto-triggered on web by an
+/// `IntersectionObserver`). Sort and filter are owned by the server —
+/// changing either refetches page 1. Search (non-empty query) keeps the
+/// legacy path: the capped result set is sorted/filtered client-side.
 #[component]
 pub fn LandingPage() -> Element {
     let server_url = use_server_url();

@@ -1,23 +1,8 @@
-//! Server functions callable from the web client.
-//!
-//! Each `#[get]`/`#[post]` function is compiled in two modes:
-//! - On the server (`feature = "server"`) the body executes, accessing the
-//!   SQLite pool via an `axum::Extension<SqlitePool>` layered onto the
-//!   Dioxus fullstack router in `server/src/main.rs`.
-//! - On the web client (`feature = "web"`) the macro generates a fetch-based
-//!   stub callable as a normal async function.
-//!
-//! Mobile does **not** use these. It talks to the hand-written `/api/*`
-//! REST routes (see `server/src/backend.rs`) via `reqwest`.
-//!
-//! These routes are distinct from the REST routes (`/api/rpc/*` vs `/api/*`)
-//! so the two clients cannot accidentally collide.
-//!
-//! The server functions themselves live in the per-domain submodules below and
-//! are re-exported here so every callsite keeps importing `crate::rpc::rpc_*`
-//! unchanged. This module owns only the cross-cutting pieces every submodule
-//! shares: the `PoolExt` / `WorkerExt` extractor aliases and the `AdminUser` /
-//! `AuthUser` authorization extractors.
+//! Server functions (`/api/rpc/*`) callable from the web client — mobile
+//! instead uses the hand-written `/api/*` REST routes (`server/src/backend.rs`).
+//! Per-domain submodules hold the functions and are re-exported here so
+//! callsites keep importing `crate::rpc::rpc_*`; this module owns only the
+//! shared `PoolExt` / `WorkerExt` / `AdminUser` / `AuthUser` pieces.
 
 mod authors;
 mod bookmarks;

@@ -1,19 +1,8 @@
-//! EPUB metadata extraction (server-only).
-//!
-//! Walks the configured library directory, parses the OPF for each `.epub`,
-//! and produces an [`IndexedBook`] per file — metadata plus the raw cover
-//! bytes. Parse failures surface as `IndexedBook { metadata: EbookMetadata {
-//! error: Some(_), .. }, cover: None }` so one bad file does not hide the
-//! rest of the library. This output is consumed by [`crate::indexer`],
-//! which writes it to the DB.
-//!
-//! Cover sourcing: a `cover.{jpg,jpeg,png}` (or per-stem
-//! `<basename>.{jpg,jpeg,png}`) sidecar next to the epub is preferred over
-//! the embedded cover. With [`ScanOptions::materialize_sidecars`] set, the
-//! scanner extracts the embedded cover into a `<basename>.jpg`/`.png`
-//! sidecar on first encounter so subsequent scans skip the zip altogether.
-//! Materialization is best-effort: a write failure falls back to the
-//! in-memory embedded bytes for the current scan and retries on the next.
+//! EPUB metadata extraction (server-only). Walks the configured library
+//! directory, parses the OPF for each `.epub`, and produces an
+//! [`IndexedBook`] per file — metadata plus the raw cover bytes. Parse
+//! failures surface as a per-book error rather than hiding the rest of the
+//! library. Consumed by [`crate::indexer`], which writes the output to the DB.
 
 use std::path::Path;
 
@@ -65,8 +54,11 @@ pub struct ScanResult {
 /// instead of re-opening the zip.
 #[derive(Debug, Clone, Default)]
 pub struct ScanOptions {
-    /// On a successful cover extraction with no existing sidecar, write the
-    /// embedded bytes to `<basename>.{jpg|png}` next to the epub. Best-effort:
+    /// A `cover.{jpg,jpeg,png}` (or per-stem `<basename>.{jpg,jpeg,png}`)
+    /// sidecar next to the epub is always preferred over the embedded cover.
+    /// With this set, on a successful cover extraction with no existing
+    /// sidecar, write the embedded bytes to `<basename>.{jpg|png}` next to
+    /// the epub so subsequent scans skip the zip entirely. Best-effort:
     /// errors are swallowed (logged via `tracing::warn!`) so a read-only
     /// filesystem doesn't kill the scan.
     pub materialize_sidecars: bool,

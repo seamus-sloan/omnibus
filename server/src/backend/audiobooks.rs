@@ -1,23 +1,8 @@
-//! Audiobook streaming routes: direct-play manifest + Range-served part
-//! files, with the legacy HLS pipeline retained as a fallback for
-//! non-natively-playable codecs.
-//!
-//! - `GET /api/audiobooks/{uuid}/manifest` — JSON describing how the
-//!   frontend should play this book: `direct` (per-part URLs the client
-//!   chains together) for m4b / m4a / mp3, or `hls` (playlist URL) for
-//!   anything else. See [`omnibus_db::audiobook::codec`] for the gate;
-//!   note that [`omnibus_db::hls::resolve_audiobook`] only admits books
-//!   whose top-level `book_files.format` is one of `M4B` / `M4A` / `MP3`,
-//!   so pure-AAC or pure-FLAC sources never reach this handler today.
-//! - `GET /api/audiobooks/{uuid}/parts/{ordinal}` — Range-served source
-//!   file for one part of a direct-play book.
-//! - `GET /api/audiobooks/{uuid}/playlist.m3u8` — fallback HLS manifest
-//!   built from `book_file_parts.duration_seconds`; only reachable when
-//!   the manifest endpoint returns `mode: hls`.
-//! - `GET /api/audiobooks/{uuid}/segments/{segment}` — fallback HLS
-//!   segment serve from the transcode cache.
-//! - `GET /api/audiobooks/{uuid}/status` — fallback transcode-readiness
-//!   poll (`{"ready":bool,"progress":f32}`) for the HLS path.
+//! Audiobook streaming routes: direct-play manifest (`/manifest`) + Range-
+//! served part files (`/parts/{ordinal}`), with the legacy HLS pipeline
+//! (`/playlist.m3u8`, `/segments/{segment}`, `/status`) retained as a
+//! fallback for non-natively-playable codecs. See
+//! [`get_audiobook_manifest`] for the direct-vs-HLS routing rule.
 
 use axum::{
     body::Body,
@@ -106,6 +91,11 @@ pub(super) async fn get_audiobook_playlist(
 /// `?file_id=N` to target a specific `book_files` row (for multi-file
 /// books after merge). Routes direct-playable books (m4b / m4a / mp3) to
 /// per-part HTTP Range URLs and everything else to the legacy HLS playlist.
+///
+/// See [`omnibus_db::audiobook::codec`] for the direct-vs-HLS gate; note
+/// that [`omnibus_db::hls::resolve_audiobook`] only admits books whose
+/// top-level `book_files.format` is one of `M4B` / `M4A` / `MP3`, so
+/// pure-AAC or pure-FLAC sources never reach direct mode today.
 pub(super) async fn get_audiobook_manifest(
     _user: AuthUser,
     State(state): State<AppState>,

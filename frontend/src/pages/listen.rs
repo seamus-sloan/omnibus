@@ -1,25 +1,8 @@
 //! Immersive audiobook player with direct-play and HLS fallback.
 //!
 //! Renders a full-screen "Now playing" surface: cover + title + author on the
-//! left, scrub bar + transport controls on the right.
-//!
-//! Startup sequence:
-//! 1. `GET /api/audiobooks/{uuid}/manifest` returns either
-//!    `{mode: "direct", parts}` (m4b/m4a/mp3/aac — instant) or
-//!    `{mode: "hls", playlist_url}` (everything else).
-//! 2. For direct mode, the JS shim chains per-part `<audio src>` URLs with
-//!    auto-advance on `ended`; the book's timeline is a cumulative sum of
-//!    per-part durations.
-//! 3. For HLS mode, fall back to the legacy `/status` poll + hls.js attach.
-//!    If `/status` reports `state: "failed"`, render an error overlay
-//!    instead of polling forever.
-//!
-//! Position lives in [`crate::audiobook_progress`] — localStorage on web,
-//! in-memory on mobile, no-op under SSR. Writes both there AND fire-and-
-//! forget POST `/api/rpc/progress` with `format: "audio"` +
-//! `audio_position_seconds`, so a position written on one device syncs
-//! forward on the next open. Across direct-mode parts the JS shim reports
-//! absolute (cross-part) seconds so the same shape works for both modes.
+//! left, scrub bar + transport controls on the right. See [`BookListenPage`]
+//! for the startup sequence and position-sync details.
 
 use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]
@@ -69,6 +52,21 @@ pub(crate) use controls::AudioElement;
 pub(crate) use mini_dock::MiniDock;
 
 /// Renders the audiobook listen page for the book with the given uuid.
+///
+/// Startup sequence: `GET /api/audiobooks/{uuid}/manifest` returns either
+/// `{mode: "direct", parts}` (m4b/m4a/mp3/aac — instant) or `{mode: "hls",
+/// playlist_url}` (everything else). Direct mode chains per-part
+/// `<audio src>` URLs with auto-advance on `ended` via the JS shim, using a
+/// cumulative sum of per-part durations as the timeline; HLS mode falls back
+/// to the legacy `/status` poll + hls.js attach, rendering an error overlay
+/// if `/status` reports `state: "failed"` instead of polling forever.
+///
+/// Position lives in [`crate::audiobook_progress`] — localStorage on web,
+/// in-memory on mobile, no-op under SSR. Writes both there AND
+/// fire-and-forget POST `/api/rpc/progress` with `format: "audio"` +
+/// `audio_position_seconds`, so a position written on one device syncs
+/// forward on the next open. Across direct-mode parts the JS shim reports
+/// absolute (cross-part) seconds so the same shape works for both modes.
 #[component]
 pub fn BookListenPage(uuid: String) -> Element {
     #[cfg(feature = "mobile")]

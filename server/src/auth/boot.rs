@@ -1,24 +1,7 @@
-//! Boot-time admin hooks.
-//!
-//! Two opt-in env-driven hooks run at server startup:
-//!
-//! * [`apply_initial_admin`] — `OMNIBUS_INITIAL_ADMIN=<username>` promotes
-//!   an existing user to admin. Recovery escape hatch ("I locked myself
-//!   out"); never creates a user.
-//! * [`seed_dev_user`] — `OMNIBUS_DEV_SEED_USER=<username>:<password>`
-//!   creates the named user (and promotes to admin) if it doesn't exist
-//!   yet. Strictly a dev convenience so Claude's `ui-validate` skill and
-//!   parallel agents can rely on a known login. **Gated on
-//!   `debug_assertions`** so release builds no-op even if the env var is
-//!   somehow set in production — relying on operational discipline alone
-//!   would be a footgun. The env var is sourced from a developer's `.env`
-//!   (gitignored, sourced by `flake.nix`). Idempotent: an existing user
-//!   is left untouched, so re-running boot won't reset a password the
-//!   developer has rotated.
-//!
-//! Successful promotions and seeds are logged at `warn` so they show up
-//! in the audit trail; misconfigurations also log at `warn` so they're
-//! visible.
+//! Boot-time admin hooks: two opt-in env-driven functions run at server
+//! startup. See [`apply_initial_admin`] (account-recovery promotion) and
+//! [`seed_dev_user`] (dev-only login seeding) for the env vars and gating
+//! each reads.
 
 use sqlx::SqlitePool;
 
