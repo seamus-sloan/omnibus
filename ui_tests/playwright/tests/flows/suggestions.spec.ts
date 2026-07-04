@@ -52,6 +52,30 @@ async function mockSuggestionsResponse(page: Page, body: unknown): Promise<void>
   );
 }
 
+/**
+ * Navigate to a book's detail page and wait for the suggestions strip's
+ * POST /api/rpc/ebook-suggestions to resolve (it's a POST per Dioxus server
+ * function convention, and the handler enqueues a cascade resolution as a
+ * side effect — not a side-effect-free read), so the page has settled into
+ * whichever mocked state before assertions run.
+ *
+ * This deliberately doesn't reuse `expectMutation`: that helper's request
+ * wait is tuned for a click-triggered mutation on an already-hydrated page,
+ * but this request fires from the page's own mount effect right after WASM
+ * hydration — which, on a fresh navigation, can take meaningfully longer
+ * than a warm in-page action.
+ */
+async function gotoBookAwaitingSuggestions(page: Page, uuid: string): Promise<void> {
+  const requestPromise = page.waitForRequest(
+    (r) => r.method() === "POST" && r.url().includes("/api/rpc/ebook-suggestions"),
+    { timeout: 30_000 },
+  );
+  await gotoReady(page, `/books/${uuid}`);
+  const request = await requestPromise;
+  const response = await request.response();
+  expect(response?.status()).toBe(200);
+}
+
 // ---------------------------------------------------------------------------
 // State — not configured (no Hardcover key)
 // ---------------------------------------------------------------------------
@@ -59,7 +83,7 @@ async function mockSuggestionsResponse(page: Page, body: unknown): Promise<void>
 test("shows a connect prompt when no Hardcover key is configured", async ({ page, request }) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await mockSuggestionsResponse(page, { status: "not_configured" });
-  await gotoReady(page, `/books/${uuid}`);
+  await gotoBookAwaitingSuggestions(page, uuid);
 
   const strip = page.getByTestId("suggestions-strip");
   await expect(strip).toBeVisible();
@@ -80,7 +104,7 @@ test("shows a connect prompt when no Hardcover key is configured", async ({ page
 test("shows a pending placeholder while a resolution is enqueued", async ({ page, request }) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await mockSuggestionsResponse(page, { status: "pending" });
-  await gotoReady(page, `/books/${uuid}`);
+  await gotoBookAwaitingSuggestions(page, uuid);
 
   await expect(page.getByTestId("suggestions-pending")).toBeVisible();
   await expect(page.getByText("Looking for read-alikes via Hardcover…")).toBeVisible();
@@ -93,7 +117,7 @@ test("shows a pending placeholder while a resolution is enqueued", async ({ page
 test("shows an empty note when the cache resolved with no matches", async ({ page, request }) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await mockSuggestionsResponse(page, { status: "ready", items: [] });
-  await gotoReady(page, `/books/${uuid}`);
+  await gotoBookAwaitingSuggestions(page, uuid);
 
   await expect(page.getByTestId("suggestions-empty")).toBeVisible();
   await expect(page.getByText("No read-alikes found for this book yet.")).toBeVisible();
@@ -110,7 +134,7 @@ test("renders cached suggestions and expands the collapsed stack via show more",
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   const items = Array.from({ length: 7 }, (_, i) => mockSuggestion(i));
   await mockSuggestionsResponse(page, { status: "ready", items });
-  await gotoReady(page, `/books/${uuid}`);
+  await gotoBookAwaitingSuggestions(page, uuid);
 
   const strip = page.getByTestId("suggestions-strip");
   const cards = strip.getByTestId("suggestion-card");
