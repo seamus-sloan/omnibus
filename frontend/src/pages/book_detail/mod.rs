@@ -27,7 +27,7 @@ pub fn BookDetailPage(uuid: String) -> Element {
     let mut author_books: Signal<Vec<EbookMetadata>> = use_signal(Vec::new);
     // F3.3 suggestions. Starts `None` on both SSR and the first WASM paint so
     // hydration markup matches (rule 07); the client effect below populates it.
-    let mut suggestions: Signal<Option<SuggestionsResponse>> = use_signal(|| None);
+    let suggestions: Signal<Option<SuggestionsResponse>> = use_signal(|| None);
     // Epoch guard so a poll loop left over from a previous book can't write its
     // result onto the current book after navigation (mirrors landing's
     // `fetch_epoch`).
@@ -113,9 +113,7 @@ pub fn BookDetailPage(uuid: String) -> Element {
     }));
 
     // F3.3 suggestions: resolved off-request by the worker and cached. Fetch
-    // for the current book; while the result is `Pending`, poll a few times on
-    // web so it appears without a manual reload. A fetch failure degrades to
-    // "no suggestions" rather than an error row.
+    // for the current book, polling while pending; see `fetch_and_poll_suggestions`.
     let sug_url = server_url.clone();
     use_effect(use_reactive!(|uuid| {
         let url = sug_url.clone();
@@ -124,54 +122,13 @@ pub fn BookDetailPage(uuid: String) -> Element {
             suggestions_epoch.with_mut(|e| *e += 1);
             *suggestions_epoch.peek()
         };
-        // True only while this run is still the latest — a newer book's effect
-        // bumps the epoch, so a stale poll drops its result instead of writing
-        // it onto the now-current book.
-        let is_current = move || *suggestions_epoch.peek() == epoch;
-        spawn(async move {
-            suggestions.set(None);
-            match data::get_suggestions(&url, &uuid).await {
-                Ok(resp) => {
-                    if !is_current() {
-                        return;
-                    }
-                    let pending = matches!(resp, SuggestionsResponse::Pending);
-                    suggestions.set(Some(resp));
-                    #[cfg(feature = "web")]
-                    if pending {
-                        let mut tries = 0u32;
-                        while tries < 5 {
-                            gloo_timers::future::TimeoutFuture::new(2500).await;
-                            if !is_current() {
-                                return;
-                            }
-                            tries += 1;
-                            match data::get_suggestions(&url, &uuid).await {
-                                Ok(next) => {
-                                    if !is_current() {
-                                        return;
-                                    }
-                                    let still_pending =
-                                        matches!(next, SuggestionsResponse::Pending);
-                                    suggestions.set(Some(next));
-                                    if !still_pending {
-                                        break;
-                                    }
-                                }
-                                Err(_) => break,
-                            }
-                        }
-                    }
-                    #[cfg(not(feature = "web"))]
-                    let _ = pending;
-                }
-                Err(_) => {
-                    if is_current() {
-                        suggestions.set(Some(SuggestionsResponse::Ready { items: Vec::new() }));
-                    }
-                }
-            }
-        });
+        spawn(fetch_and_poll_suggestions(
+            url,
+            uuid,
+            epoch,
+            suggestions_epoch,
+            suggestions,
+        ));
     }));
 
     if loading() {
@@ -227,6 +184,74 @@ pub fn BookDetailPage(uuid: String) -> Element {
     rsx! {
         {body}
         {merge_ui}
+    }
+}
+
+/// Fetch suggestions for `uuid` and, on web, poll while the result is
+/// `Pending`. A fetch failure degrades to "no suggestions" rather than an
+/// error row. `epoch`/`suggestions_epoch` guard against a stale poll (left
+/// over from a previously viewed book) writing onto the current book after
+/// navigation.
+async fn fetch_and_poll_suggestions(
+    url: String,
+    uuid: String,
+    epoch: u64,
+    suggestions_epoch: Signal<u64>,
+    mut suggestions: Signal<Option<SuggestionsResponse>>,
+) {
+    // True only while this run is still the latest.
+    let is_current = move || *suggestions_epoch.peek() == epoch;
+    suggestions.set(None);
+    match data::get_suggestions(&url, &uuid).await {
+        Ok(resp) => {
+            if !is_current() {
+                return;
+            }
+            #[cfg(feature = "web")]
+            let pending = matches!(resp, SuggestionsResponse::Pending);
+            suggestions.set(Some(resp));
+            #[cfg(feature = "web")]
+            if pending {
+                poll_suggestions_until_resolved(url, uuid, is_current, suggestions).await;
+            }
+        }
+        Err(_) => {
+            if is_current() {
+                suggestions.set(Some(SuggestionsResponse::Ready { items: Vec::new() }));
+            }
+        }
+    }
+}
+
+/// Re-poll `get_suggestions` a few times while it keeps returning `Pending`.
+/// Web-only — non-web targets never see a `Pending` state worth polling for.
+#[cfg(feature = "web")]
+async fn poll_suggestions_until_resolved(
+    url: String,
+    uuid: String,
+    is_current: impl Fn() -> bool,
+    mut suggestions: Signal<Option<SuggestionsResponse>>,
+) {
+    let mut tries = 0u32;
+    while tries < 5 {
+        gloo_timers::future::TimeoutFuture::new(2500).await;
+        if !is_current() {
+            return;
+        }
+        tries += 1;
+        match data::get_suggestions(&url, &uuid).await {
+            Ok(next) => {
+                if !is_current() {
+                    return;
+                }
+                let still_pending = matches!(next, SuggestionsResponse::Pending);
+                suggestions.set(Some(next));
+                if !still_pending {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
     }
 }
 
