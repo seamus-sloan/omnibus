@@ -93,10 +93,9 @@ pub fn MergeDialog(
     }
 }
 
-/// Debounced search: cancels the in-flight task before scheduling a new
-/// one so only one search is ever in flight (mirrors
-/// `search_palette/overlay.rs`, #126), then updates `results`/`error`
-/// only if the query hasn't changed since the request was sent.
+/// Debounced search: cancels the in-flight task before scheduling a new one
+/// (mirrors `search_palette/overlay.rs`), then updates `results`/`error` only
+/// if the query hasn't changed since the request was sent.
 fn build_run_search(
     server_url: String,
     exclude_uuid: String,

@@ -82,11 +82,7 @@ pub fn AuthorPage(id: i64) -> Element {
     render_author(a, server_url, author, is_admin_flag)
 }
 
-// allow: ~86 lines — the admin-delete signals and the admin_actions/modal
-// blocks they feed are `#[cfg(not(feature = "mobile"))]`-gated in place;
-// splitting them into helpers would mean threading mobile-only signals
-// across a function boundary that doesn't exist on mobile builds, which
-// is harder to follow than the small overage.
+// allow: ~86 lines — splitting further means threading the mobile-gated admin-delete signals across a function boundary that doesn't exist on mobile builds.
 fn render_author(
     a: AuthorDetail,
     server_url: String,
