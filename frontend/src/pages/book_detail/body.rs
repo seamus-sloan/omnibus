@@ -336,8 +336,8 @@ fn suggestion_cover_book(s: &BookSuggestion) -> EbookMetadata {
 /// suggestion has no cached cover (the plate fallback then applies).
 fn cover_src(server_url: &str, s: &BookSuggestion) -> Option<String> {
     s.cover_url
-        .as_ref()
-        .map(|path| format!("{server_url}{path}"))
+        .as_deref()
+        .map(|path| crate::media_url(server_url, path))
 }
 
 /// "on N lists" relevance label (singular-aware).

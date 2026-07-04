@@ -184,11 +184,10 @@ fn render_author(
                         if a.has_photo {
                             img {
                                 class: "disc-avatar disc-avatar--photo",
-                                // Prefix with `server_url` so mobile WebViews
-                                // hit the configured backend origin instead of
-                                // the in-app document origin. `server_url` is
-                                // empty on web, so this is a no-op there.
-                                src: "{server_url}/api/authors/{a.id}/photo",
+                                // `media_url` server-prefixes and (mobile)
+                                // appends the session token so the WebView's
+                                // `<img>` fetch authenticates; no-op on web.
+                                src: crate::media_url(&server_url, &format!("/api/authors/{}/photo", a.id)),
                                 alt: "{a.name}",
                             }
                         } else {

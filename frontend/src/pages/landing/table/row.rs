@@ -98,7 +98,8 @@ fn use_row_state(
 struct RowDisplay {
     book: EbookMetadata,
     row_testid: String,
-    thumb_base: String,
+    thumb_src: String,
+    thumb_srcset: String,
     has_cover: bool,
     title: String,
     series_line: String,
@@ -116,7 +117,13 @@ struct RowDisplay {
 /// scopes.
 fn derive_row_display(book: &EbookMetadata, server_url: &str, uuid: &str) -> RowDisplay {
     let row_testid = format!("ebook-row-{}", row_slug(&book.filename));
-    let thumb_base = format!("{server_url}/api/thumbs/{uuid}");
+    // Per-variant URLs (not a shared base) so mobile's `?token=` attaches to
+    // each `srcset` candidate; see `crate::thumb_url`.
+    let sm = crate::thumb_url(server_url, uuid, "sm");
+    let md = crate::thumb_url(server_url, uuid, "md");
+    let lg = crate::thumb_url(server_url, uuid, "lg");
+    let thumb_src = md.clone();
+    let thumb_srcset = format!("{sm} 160w, {md} 320w, {lg} 640w");
     let title = book.title.as_deref().unwrap_or(&book.filename).to_string();
     let series_line = match (book.series.as_deref(), book.series_index.as_deref()) {
         (Some(s), Some(i)) => format!("{s} #{i}"),
@@ -125,7 +132,8 @@ fn derive_row_display(book: &EbookMetadata, server_url: &str, uuid: &str) -> Row
     };
     RowDisplay {
         row_testid,
-        thumb_base,
+        thumb_src,
+        thumb_srcset,
         has_cover: book.cover_url.is_some(),
         title,
         series_line,
@@ -220,7 +228,8 @@ fn EbookRowCells(
     let RowDisplay {
         book,
         row_testid: _,
-        thumb_base,
+        thumb_src,
+        thumb_srcset,
         has_cover,
         title,
         series_line,
@@ -235,7 +244,7 @@ fn EbookRowCells(
     let cover_alt = title.clone();
 
     rsx! {
-        EbookRowCoverCell { thumb_base, has_cover, alt_title: cover_alt }
+        EbookRowCoverCell { thumb_src, thumb_srcset, has_cover, alt_title: cover_alt }
         RowTitleCell {
             title,
             error: book.error,

@@ -476,10 +476,12 @@ fn thumb_srcs(
     server_url: &str,
 ) -> (Option<String>, Option<String>) {
     if book.cover_url.is_some() {
-        let base = format!("{server_url}/api/thumbs/{uuid}");
+        let sm = crate::thumb_url(server_url, uuid, "sm");
+        let md = crate::thumb_url(server_url, uuid, "md");
+        let lg = crate::thumb_url(server_url, uuid, "lg");
         (
-            Some(format!("{base}/md")),
-            Some(format!("{base}/sm 160w, {base}/md 320w, {base}/lg 640w")),
+            Some(md.clone()),
+            Some(format!("{sm} 160w, {md} 320w, {lg} 640w")),
         )
     } else {
         (None, None)

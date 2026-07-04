@@ -433,7 +433,7 @@ fn on_this_page(order: &[Section], r: &PaletteResults, tag_match: bool, q: &str)
 /// initial plate when the book has no cover (mirrors the palette rows).
 fn book_cover(server_url: &str, book: &PaletteBookHit) -> Element {
     if book.cover_url.is_some() {
-        let url = format!("{server_url}/api/thumbs/{}/md", book.uuid);
+        let url = crate::thumb_url(server_url, &book.uuid, "md");
         rsx! {
             img { class: "search-cover-thumb", src: "{url}", alt: "", loading: "lazy" }
         }

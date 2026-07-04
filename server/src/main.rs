@@ -238,9 +238,22 @@ mod server {
         if let Some(layer) = security_headers::hsts_layer(secure_cookies) {
             router = router.layer(layer);
         }
-        // TraceLayer last so it is the outermost layer and observes
-        // every response — including 408/413 short-circuits from the
-        // timeout and body-limit guards above.
-        router.layer(tower_http::trace::TraceLayer::new_for_http())
+        // TraceLayer last so it is the outermost layer and observes every
+        // response — including 408/413 short-circuits from the timeout and
+        // body-limit guards above. Span logs only the path, never the query
+        // string: media reads carry the session as `?token=`, and the default
+        // span records the full URI — which would leak live tokens into logs.
+        router.layer(
+            tower_http::trace::TraceLayer::new_for_http().make_span_with(
+                |req: &axum::http::Request<_>| {
+                    tracing::debug_span!(
+                        "request",
+                        method = %req.method(),
+                        path = %req.uri().path(),
+                        version = ?req.version(),
+                    )
+                },
+            ),
+        )
     }
 }
