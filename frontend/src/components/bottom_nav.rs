@@ -30,6 +30,9 @@ fn is_active(current: &Route, tab: TabKind) -> bool {
                 | Route::Shelves {}
                 | Route::ShelfDetail { .. }
                 | Route::BookDetail { .. }
+                | Route::MetadataEdit { .. }
+                | Route::Search { .. }
+                | Route::AddBooks {}
         ),
         TabKind::Authors => matches!(current, Route::AuthorsIndex {} | Route::AuthorDetail { .. }),
         TabKind::Series => matches!(current, Route::SeriesIndex {} | Route::SeriesDetail { .. }),
@@ -126,6 +129,17 @@ mod tests {
             &Route::BookDetail { uuid: "x".into() },
             TabKind::Library
         ));
+        // Routes the mobile library/detail link into must keep the Library
+        // tab lit — otherwise no tab shows active on those pages.
+        assert!(is_active(
+            &Route::MetadataEdit { uuid: "x".into() },
+            TabKind::Library
+        ));
+        assert!(is_active(
+            &Route::Search { query: "x".into() },
+            TabKind::Library
+        ));
+        assert!(is_active(&Route::AddBooks {}, TabKind::Library));
     }
 
     #[test]

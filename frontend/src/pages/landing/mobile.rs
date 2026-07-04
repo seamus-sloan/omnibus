@@ -27,12 +27,9 @@ pub(super) fn MobileLanding(
             header { class: "m-lib-head",
                 div { class: "omn-brand-word m-lib-brand", "Omnibus" }
                 div { class: "m-lib-head-actions",
-                    Link {
-                        to: Route::Search { query: String::new() },
-                        class: "m-icon-btn",
-                        "aria-label": "Search",
-                        {search_glyph()}
-                    }
+                    // A dedicated mobile search screen is a follow-up; until it
+                    // exists there's no valid destination (`/search/:query`
+                    // needs a query), so the header carries only the avatar.
                     Link {
                         to: Route::Settings {},
                         class: "omn-avatar m-lib-avatar",
@@ -100,6 +97,7 @@ fn cover_cell(book: EbookMetadata, server_url: &str) -> Element {
 
     rsx! {
         Link {
+            key: "{uuid}",
             to: Route::BookDetail { uuid: uuid.clone() },
             class: "m-cover-cell",
             role: "listitem",
@@ -133,17 +131,6 @@ fn thumb_srcs(
         )
     } else {
         (None, None)
-    }
-}
-
-fn search_glyph() -> Element {
-    rsx! {
-        svg {
-            width: "18", height: "18", view_box: "0 0 24 24", fill: "none",
-            stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", stroke_linejoin: "round",
-            circle { cx: "11", cy: "11", r: "7" }
-            path { d: "M21 21l-4.3-4.3" }
-        }
     }
 }
 

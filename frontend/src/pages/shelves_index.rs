@@ -15,28 +15,34 @@ use crate::{data, use_server_url, Route};
 #[component]
 pub fn ShelvesIndexPage() -> Element {
     let mut shelves = use_signal(Vec::<ShelfSummary>::new);
+    let mut loading = use_signal(|| true);
+    let mut error = use_signal(|| None::<String>);
     let mut show_create = use_signal(|| false);
     let url = use_server_url();
 
-    let refetch_url = url.clone();
-    let refetch = move || {
-        let url = refetch_url.clone();
+    // Shared load path: surfaces failures instead of silently rendering an
+    // empty list (matches the Authors/Tags index pages). `Copy` because it
+    // captures only `Copy` signals, so both the mount effect and the
+    // post-create refetch can call it.
+    let load = move |url: String| {
         spawn(async move {
-            if let Ok(s) = data::list_shelves(&url).await {
-                shelves.set(s);
+            loading.set(true);
+            match data::list_shelves(&url).await {
+                Ok(s) => {
+                    shelves.set(s);
+                    error.set(None);
+                }
+                Err(e) => error.set(Some(e.to_string())),
             }
+            loading.set(false);
         });
     };
 
     let effect_url = url.clone();
-    use_effect(move || {
-        let url = effect_url.clone();
-        spawn(async move {
-            if let Ok(s) = data::list_shelves(&url).await {
-                shelves.set(s);
-            }
-        });
-    });
+    use_effect(move || load(effect_url.clone()));
+
+    let refetch_url = url.clone();
+    let refetch = move || load(refetch_url.clone());
 
     let count = shelves.read().len();
 
@@ -59,9 +65,20 @@ pub fn ShelvesIndexPage() -> Element {
                 }
             }
 
-            div { class: "m-shelf-list",
-                for s in shelves.read().iter() {
-                    {shelf_row(s)}
+            if let Some(msg) = error() {
+                p {
+                    role: "alert",
+                    class: "subtitle",
+                    "data-testid": "shelves-error",
+                    "Couldn't load shelves: {msg}"
+                }
+            } else if loading() && shelves.read().is_empty() {
+                p { class: "subtitle", "Loading\u{2026}" }
+            } else {
+                div { class: "m-shelf-list",
+                    for s in shelves.read().iter() {
+                        {shelf_row(s)}
+                    }
                 }
             }
         }

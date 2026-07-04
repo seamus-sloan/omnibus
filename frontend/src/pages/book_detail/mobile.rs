@@ -123,9 +123,9 @@ pub(super) fn render_loaded_mobile(b: EbookMetadata, server_url: String) -> Elem
                         if let Some(l) = b.language.clone() { BdMetaRow { k: "Language".to_string(), v: l } }
                         if let Some(a) = b.added_at.clone() { BdMetaRow { k: "Added".to_string(), v: a } }
                         if let Some(s) = series.clone() { BdMetaRow { k: "Series".to_string(), v: s } }
-                        for ident in b.identifiers.iter() {
+                        for (i, ident) in b.identifiers.iter().enumerate() {
                             BdMetaRow {
-                                key: "{ident.scheme:?}-{ident.value}",
+                                key: "{i}",
                                 k: ident.scheme.clone().unwrap_or_else(|| "ID".into()),
                                 v: ident.value.clone(),
                             }
