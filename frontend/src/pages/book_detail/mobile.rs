@@ -1,0 +1,198 @@
+//! Mobile layout for the book-detail page — re-flows the same loaded-book data
+//! ([`super::LoadedBookView`]) into the native design's single-column surface:
+//! an accent-tinted hero over About / rating / info / files / journal sections.
+//! Reading and listening stay stubbed on mobile, so those CTAs are disabled.
+
+use dioxus::prelude::*;
+use dioxus_router::Link;
+use omnibus_shared::EbookMetadata;
+
+use crate::components::atrium::Cover;
+use crate::Route;
+
+use super::journal::BdJournalSection;
+use super::rating::BdRatingWidget;
+use super::{derive_loaded_view, BdFormatBadge, BdMetaRow, LoadedBookView};
+
+/// Render the fully-loaded book detail for the mobile shell. A plain fn (no
+/// hooks) — [`super::render_loaded`] owns the page's hook sequence and calls
+/// this to produce the body.
+pub(super) fn render_loaded_mobile(b: EbookMetadata, server_url: String) -> Element {
+    let LoadedBookView {
+        title,
+        authors_line,
+        series,
+        accent_style,
+        has_audio,
+        has_ebook,
+        ..
+    } = derive_loaded_view(&b);
+
+    let uuid = b.unique_identifier.clone().unwrap_or_default();
+    let year = b
+        .published
+        .as_deref()
+        .and_then(|p| p.get(0..4))
+        .unwrap_or("")
+        .to_string();
+    let meta_line = match (authors_line.is_empty(), year.is_empty()) {
+        (false, false) => format!("{authors_line} · {year}"),
+        (false, true) => authors_line.clone(),
+        (true, false) => year.clone(),
+        (true, true) => String::new(),
+    };
+    let (cover_src, cover_srcset) = thumb_srcs(&b, &uuid, &server_url);
+
+    rsx! {
+        div { class: "m-bd", style: "{accent_style}", "data-testid": "mobile-book-detail",
+            // Hero — accent glow, top actions, centered cover.
+            div { class: "m-bd-hero",
+                div { class: "m-bd-hero-bar",
+                    Link { to: Route::Landing {}, class: "m-icon-btn", "aria-label": "Back", "\u{2190}" }
+                    Link {
+                        to: Route::MetadataEdit { uuid: uuid.clone() },
+                        class: "m-icon-btn",
+                        "aria-label": "Edit metadata",
+                        "\u{22EF}"
+                    }
+                }
+                div { class: "m-bd-cover",
+                    Cover {
+                        book: b.clone(),
+                        src_override: cover_src,
+                        srcset: cover_srcset,
+                        sizes: Some("150px".to_string()),
+                    }
+                }
+            }
+
+            div { class: "m-bd-titlecol",
+                h2 { class: "m-bd-title", span { class: "m-em", "{title}" } }
+                if !meta_line.is_empty() {
+                    div { class: "m-bd-meta", "{meta_line}" }
+                }
+                if !b.formats.is_empty() {
+                    div { class: "m-bd-badges",
+                        for f in b.formats.iter() {
+                            BdFormatBadge { key: "{f}", fmt: f.clone() }
+                        }
+                    }
+                }
+            }
+
+            // Primary CTAs — disabled while mobile reading/listening is stubbed.
+            div { class: "m-bd-cta",
+                if has_ebook {
+                    button { class: "btn primary lg", disabled: true, title: "Reading on mobile coming soon", "Read" }
+                }
+                if has_audio {
+                    button { class: "btn lg", disabled: true, title: "Listening on mobile coming soon", "Listen" }
+                }
+            }
+
+            // About
+            if b.description.as_deref().map(|d| !d.trim().is_empty()).unwrap_or(false) || !b.subjects.is_empty() {
+                section { class: "m-section",
+                    div { class: "label", "About" }
+                    if let Some(desc) = b.description.as_deref() {
+                        div { class: "m-bd-desc", dangerous_inner_html: "{desc}" }
+                    }
+                    if !b.subjects.is_empty() {
+                        div { class: "m-bd-tags",
+                            for tag in b.subjects.iter() {
+                                span { key: "{tag}", class: "chip", "{tag}" }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Rating
+            section { class: "m-section m-section-row",
+                div { class: "label", "Your rating" }
+                BdRatingWidget { uuid: uuid.clone() }
+            }
+
+            // Book info
+            section { class: "m-section",
+                div { class: "label", "Book info" }
+                table { class: "bd-meta-table mono m-bd-info",
+                    tbody {
+                        if let Some(p) = b.publisher.clone() { BdMetaRow { k: "Publisher".to_string(), v: p } }
+                        if let Some(d) = b.published.clone() { BdMetaRow { k: "Published".to_string(), v: d } }
+                        if let Some(l) = b.language.clone() { BdMetaRow { k: "Language".to_string(), v: l } }
+                        if let Some(a) = b.added_at.clone() { BdMetaRow { k: "Added".to_string(), v: a } }
+                        if let Some(s) = series.clone() { BdMetaRow { k: "Series".to_string(), v: s } }
+                        for (i, ident) in b.identifiers.iter().enumerate() {
+                            BdMetaRow {
+                                key: "{i}",
+                                k: ident.scheme.clone().unwrap_or_else(|| "ID".into()),
+                                v: ident.value.clone(),
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Files
+            section { class: "m-section",
+                div { class: "label", "Files" }
+                {files_list(&b)}
+            }
+
+            // Journal — reuse the shared reading-journal section.
+            section { class: "m-section",
+                BdJournalSection { uuid: uuid.clone() }
+            }
+
+            div { class: "m-bd-footer",
+                Link { to: Route::Landing {}, class: "btn", "Back to library" }
+            }
+        }
+    }
+}
+
+/// File rows: per-file detail when the book carries `book_files`, otherwise
+/// one row per format.
+fn files_list(b: &EbookMetadata) -> Element {
+    if !b.book_files.is_empty() {
+        rsx! {
+            div { class: "m-bd-files",
+                for f in b.book_files.iter() {
+                    div { key: "{f.id}", class: "m-bd-file",
+                        BdFormatBadge { fmt: f.format.clone() }
+                        div { class: "m-bd-file-body",
+                            div { class: "m-bd-file-name", "{f.label.clone().unwrap_or_else(|| f.filename.clone())}" }
+                            div { class: "mono m-bd-file-path", "{f.filename}" }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        rsx! {
+            div { class: "m-bd-badges",
+                for f in b.formats.iter() {
+                    BdFormatBadge { key: "{f}", fmt: f.clone() }
+                }
+            }
+        }
+    }
+}
+
+/// Responsive thumbnail `src`/`srcset` for the hero cover.
+fn thumb_srcs(
+    book: &EbookMetadata,
+    uuid: &str,
+    server_url: &str,
+) -> (Option<String>, Option<String>) {
+    if book.cover_url.is_some() {
+        let base = format!("{server_url}/api/thumbs/{uuid}");
+        (
+            Some(format!("{base}/md")),
+            Some(format!("{base}/sm 160w, {base}/md 320w, {base}/lg 640w")),
+        )
+    } else {
+        (None, None)
+    }
+}

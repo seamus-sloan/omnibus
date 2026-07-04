@@ -9,14 +9,24 @@ use omnibus_shared::{EbookMetadata, MergeBooksResult, SuggestionsResponse};
 
 use crate::{data, use_server_url, Route};
 
-mod body;
-mod hero;
 mod journal;
 mod journal_editor;
 mod merge;
 mod rating;
 
+// Web renders the split hero + body-grid; mobile re-flows the same loaded-book
+// data into a single-column surface. The web-only sections aren't compiled on
+// the native shell. (Separate build → no impact on web SSR/WASM parity, rule 07.)
+#[cfg(not(feature = "mobile"))]
+mod body;
+#[cfg(not(feature = "mobile"))]
+mod hero;
+#[cfg(feature = "mobile")]
+mod mobile;
+
+#[cfg(not(feature = "mobile"))]
 use body::{BdAuthorCluster, BdBodyMain, BdPageCtx, BdRailSection};
+#[cfg(not(feature = "mobile"))]
 use hero::BdHeroSection;
 
 /// Book detail page shell: fetches metadata then hands off to `render_loaded`.
@@ -320,7 +330,9 @@ fn build_crumbs(
 
 /// Pre-derived strings + flags ready to feed the loaded-book sections.
 /// Split out of [`render_loaded`] so the rsx body stays a thin composition
-/// of named sub-components.
+/// of named sub-components. Mobile reads a subset (no breadcrumb / author-id
+/// cluster), so some fields are unused there.
+#[cfg_attr(feature = "mobile", allow(dead_code))]
 struct LoadedBookView {
     title: String,
     primary_author: String,
@@ -394,53 +406,66 @@ fn render_loaded(
     server_url: String,
     is_admin: bool,
 ) -> Element {
-    let LoadedBookView {
-        title,
-        primary_author,
-        author_id,
-        authors_line,
-        kicker,
-        series,
-        accent_style,
-        has_audio,
-        has_ebook,
-        crumbs,
-    } = derive_loaded_view(&b);
+    // Mobile re-flows the same loaded data into a single column; the web body
+    // (hero + rail + suggestions + merge UI) isn't rendered there.
+    #[cfg(feature = "mobile")]
+    let out = {
+        let _ = (author_books, merge_button, suggestions, is_admin);
+        mobile::render_loaded_mobile(b, server_url)
+    };
 
-    let uuid = b.unique_identifier.clone().unwrap_or_default();
-    rsx! {
-        div { class: "bd-root", style: "{accent_style}",
-            BdHeroSection {
-                b: b.clone(),
-                title: title.clone(),
-                kicker,
-                crumbs,
-                avail: hero::Availability {
-                    has_ebook,
-                    has_audio,
-                },
-            }
-            section { class: "bd-body-grid",
-                BdBodyMain {
-                    uuid: uuid.clone(),
+    #[cfg(not(feature = "mobile"))]
+    let out = {
+        let LoadedBookView {
+            title,
+            primary_author,
+            author_id,
+            authors_line,
+            kicker,
+            series,
+            accent_style,
+            has_audio,
+            has_ebook,
+            crumbs,
+        } = derive_loaded_view(&b);
+
+        let uuid = b.unique_identifier.clone().unwrap_or_default();
+        rsx! {
+            div { class: "bd-root", style: "{accent_style}",
+                BdHeroSection {
+                    b: b.clone(),
                     title: title.clone(),
-                    author: BdAuthorCluster { primary_author, author_id, author_books },
-                    suggestions,
-                    ctx: BdPageCtx { server_url, is_admin },
+                    kicker,
+                    crumbs,
+                    avail: hero::Availability {
+                        has_ebook,
+                        has_audio,
+                    },
                 }
-                BdRailSection {
-                    b,
-                    title,
-                    authors_line,
-                    series,
-                    merge_button,
+                section { class: "bd-body-grid",
+                    BdBodyMain {
+                        uuid: uuid.clone(),
+                        title: title.clone(),
+                        author: BdAuthorCluster { primary_author, author_id, author_books },
+                        suggestions,
+                        ctx: BdPageCtx { server_url, is_admin },
+                    }
+                    BdRailSection {
+                        b,
+                        title,
+                        authors_line,
+                        series,
+                        merge_button,
+                    }
                 }
-            }
-            div { class: "bd-footer",
-                Link { to: Route::Landing {}, class: "btn", "Back to library" }
+                div { class: "bd-footer",
+                    Link { to: Route::Landing {}, class: "btn", "Back to library" }
+                }
             }
         }
-    }
+    };
+
+    out
 }
 
 // Page-local primitives. None of these introduce business logic — they're

@@ -7,6 +7,8 @@
 use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
 
+use crate::{media_url, use_server_url};
+
 // ── Theme state ────────────────────────────────────────────────────
 
 /// Atrium theme. Persisted under `omn.theme` in localStorage on web.
@@ -134,7 +136,16 @@ pub fn Cover(
         .next_back()
         .unwrap_or("")
         .to_uppercase();
-    let image_src = src_override.or_else(|| book.cover_url.clone());
+    // Callers that pass `src_override` (grid/table/rails) already built an
+    // authenticated URL via `thumb_url`. The `book.cover_url` fallback (detail
+    // hero, listen page) is a relative `/api/covers/:uuid` path, so route it
+    // through `media_url` to give it an origin + mobile token. No-op on web.
+    let server_url = use_server_url();
+    let image_src = src_override.or_else(|| {
+        book.cover_url
+            .as_deref()
+            .map(|path| media_url(&server_url, path))
+    });
     let srcset_attr = srcset.unwrap_or_default();
     let sizes_attr = sizes.unwrap_or_default();
 

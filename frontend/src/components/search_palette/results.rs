@@ -294,7 +294,7 @@ fn SpTagRow(tag: PaletteTagHit, selected: bool, on_click: EventHandler<MouseEven
 /// Extracted so the URL shape — `/api/thumbs/{uuid}/sm` — has a test that
 /// can't silently regress to the old `id`-based form.
 fn book_thumb_url(server_url: &str, book: &PaletteBookHit) -> String {
-    format!("{server_url}/api/thumbs/{}/sm", book.uuid)
+    crate::thumb_url(server_url, &book.uuid, "sm")
 }
 
 #[cfg(test)]
@@ -310,8 +310,10 @@ mod tests {
             title: "Test Book".to_string(),
             ..PaletteBookHit::default()
         };
+        // On the (non-mobile) test build the URL is relative — same-origin,
+        // cookie-authed. Mobile prefixes the server base + `?token=`.
         let url = book_thumb_url("http://localhost:3000", &book);
-        assert_eq!(url, "http://localhost:3000/api/thumbs/abc-def-uuid/sm");
+        assert_eq!(url, "/api/thumbs/abc-def-uuid/sm");
         // Guard: the integer id must never appear in the thumb URL.
         assert!(
             !url.contains("99"),

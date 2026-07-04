@@ -22,6 +22,42 @@ pub fn use_server_url() -> String {
     }
 }
 
+/// Build the URL for a media API path (`/api/covers/…`, `/api/thumbs/…`,
+/// `/api/authors/{id}/photo`) rendered into an `<img src>`.
+///
+/// Web/SSR: returns `path` unchanged — same-origin and cookie-authed, so
+/// the browser attaches the session automatically. Keeping it relative also
+/// preserves SSR/WASM hydration parity.
+///
+/// Mobile: the WebView fetches `<img src>` itself, bypassing the native
+/// `reqwest` client that carries the bearer token — and there's no session
+/// cookie, since mobile auth is bearer-only. So prefix the server base to
+/// give the relative path an origin and append the session token as a
+/// `?token=` query param, the one auth an `<img>` fetch can carry. The
+/// server accepts it via `MediaAuthUser` on the media read endpoints.
+pub fn media_url(server_url: &str, path: &str) -> String {
+    #[cfg(feature = "mobile")]
+    {
+        let base = format!("{server_url}{path}");
+        match data::token_store::get() {
+            Some(token) => format!("{base}?token={token}"),
+            None => base,
+        }
+    }
+    #[cfg(not(feature = "mobile"))]
+    {
+        let _ = server_url;
+        path.to_string()
+    }
+}
+
+/// Build the `/api/thumbs/{uuid}/{size}` responsive-thumbnail URL for one
+/// size variant (`sm` / `md` / `lg`). Thin wrapper over [`media_url`] — call
+/// it once per `srcset` entry so each candidate carries the mobile token.
+pub fn thumb_url(server_url: &str, uuid: &str, size: &str) -> String {
+    media_url(server_url, &format!("/api/thumbs/{uuid}/{size}"))
+}
+
 /// Cross-route search query. Owned by [`App`] via `use_context_provider`
 /// so the [`Nav`]-hosted search box and the [`LandingPage`] read/write the
 /// same signal — typing in the nav from any route updates the landing
