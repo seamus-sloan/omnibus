@@ -9,8 +9,8 @@ use dioxus_router::{use_route, Link};
 
 use crate::Route;
 
-/// The four bottom-tab destinations. `You` routes to Settings — the design's
-/// account tab, which the settings page currently stands in for.
+/// The four bottom-tab destinations. `You` routes to the Account screen; the
+/// Settings page is reachable from within it and keeps the You tab lit.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TabKind {
     Library,
@@ -32,11 +32,13 @@ fn is_active(current: &Route, tab: TabKind) -> bool {
                 | Route::BookDetail { .. }
                 | Route::MetadataEdit { .. }
                 | Route::Search { .. }
-                | Route::AddBooks {}
         ),
         TabKind::Authors => matches!(current, Route::AuthorsIndex {} | Route::AuthorDetail { .. }),
         TabKind::Series => matches!(current, Route::SeriesIndex {} | Route::SeriesDetail { .. }),
-        TabKind::You => matches!(current, Route::Settings {}),
+        TabKind::You => matches!(
+            current,
+            Route::Account {} | Route::Settings {} | Route::AddBooks {}
+        ),
     }
 }
 
@@ -49,7 +51,7 @@ pub fn BottomNav() -> Element {
             MTab { to: Route::Landing {}, label: "Library", on: is_active(&current, TabKind::Library), glyph: tab_glyph_library() }
             MTab { to: Route::AuthorsIndex {}, label: "Authors", on: is_active(&current, TabKind::Authors), glyph: tab_glyph_authors() }
             MTab { to: Route::SeriesIndex {}, label: "Series", on: is_active(&current, TabKind::Series), glyph: tab_glyph_series() }
-            MTab { to: Route::Settings {}, label: "You", on: is_active(&current, TabKind::You), glyph: tab_glyph_you() }
+            MTab { to: Route::Account {}, label: "You", on: is_active(&current, TabKind::You), glyph: tab_glyph_you() }
         }
     }
 }
@@ -139,7 +141,6 @@ mod tests {
             &Route::Search { query: "x".into() },
             TabKind::Library
         ));
-        assert!(is_active(&Route::AddBooks {}, TabKind::Library));
     }
 
     #[test]
@@ -151,8 +152,10 @@ mod tests {
     }
 
     #[test]
-    fn you_tab_only_on_settings() {
+    fn you_tab_lights_across_account_section() {
+        assert!(is_active(&Route::Account {}, TabKind::You));
         assert!(is_active(&Route::Settings {}, TabKind::You));
+        assert!(is_active(&Route::AddBooks {}, TabKind::You));
         assert!(!is_active(&Route::Landing {}, TabKind::You));
     }
 
@@ -163,5 +166,14 @@ mod tests {
         assert!(!is_active(&here, TabKind::Authors));
         assert!(!is_active(&here, TabKind::Series));
         assert!(!is_active(&here, TabKind::You));
+    }
+
+    #[test]
+    fn account_route_lights_only_the_you_tab() {
+        let here = Route::Account {};
+        assert!(!is_active(&here, TabKind::Library));
+        assert!(!is_active(&here, TabKind::Authors));
+        assert!(!is_active(&here, TabKind::Series));
+        assert!(is_active(&here, TabKind::You));
     }
 }
