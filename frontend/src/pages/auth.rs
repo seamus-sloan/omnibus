@@ -12,49 +12,34 @@ use crate::components::auth::AuthShell;
 use crate::components::auth::{Banner, BannerKind, Field, StrengthMeter, StrengthScore};
 use crate::{use_server_url, Route};
 
-/// Centered single-column shell for the mobile auth screens: brand mark,
-/// tagline, a form slot, and a version footer over a soft accent glow.
-#[cfg(feature = "mobile")]
-fn m_auth_shell(tagline: &str, children: Element) -> Element {
-    rsx! {
-        div { class: "m-auth",
-            div { class: "m-auth-brand",
-                div { class: "auth-shell-brand-mark" }
-                div { class: "auth-shell-brand-word", "Omnibus" }
-                p { class: "m-auth-tagline", "{tagline}" }
-            }
-            div { class: "m-auth-body", {children} }
-            div { class: "m-auth-foot mono",
-                "omnibus · v"
-                {env!("CARGO_PKG_VERSION")}
-            }
-        }
-    }
+/// Signals plus the submit/keydown handlers backing `LoginPage`'s form.
+struct LoginFormState {
+    username: Signal<String>,
+    password: Signal<String>,
+    error: Signal<Option<String>>,
+    submitting: Signal<bool>,
+    keep_signed_in: Signal<bool>,
+    on_submit: EventHandler<FormEvent>,
+    on_keydown: EventHandler<Event<KeyboardData>>,
 }
 
-/// Renders the login page.
-#[component]
-pub fn LoginPage() -> Element {
-    let mut username = use_signal(String::new);
-    let mut password = use_signal(String::new);
+/// Sets up the login form's signals and submission logic, decoupled from
+/// the event source so both the form's `onsubmit` (click) and each
+/// input's `onkeydown` (Enter) drive the same path — Dioxus 0.7's submit
+/// event doesn't reliably fire on implicit form submission from Enter, so
+/// we trigger it explicitly via a shared `use_callback` handle.
+fn use_login_form_state() -> LoginFormState {
+    let username = use_signal(String::new);
+    let password = use_signal(String::new);
     let mut error = use_signal(|| Option::<String>::None);
     let mut submitting = use_signal(|| false);
-    // Only the web split-pane mutates this (its "keep me signed in" checkbox);
-    // the mobile design has no such control, so `mut` is unused there.
-    #[cfg_attr(feature = "mobile", allow(unused_mut))]
-    let mut keep_signed_in = use_signal(|| false);
+    let keep_signed_in = use_signal(|| false);
     let nav = use_navigator();
 
     // `use_server_url()` is feature-aware: empty string on web/server (where
     // requests are same-origin) and the `ServerUrl` context value on mobile.
     let server_url = use_server_url();
 
-    // Submission logic, decoupled from the event source so both the form's
-    // `onsubmit` (click) and a per-input `onkeydown` Enter handler can drive
-    // it. Dioxus 0.7's submit event doesn't reliably fire on implicit form
-    // submission from Enter, so we trigger it explicitly. `use_callback`
-    // gives us a `Copy` handle so the closure can be installed on both
-    // listeners.
     let submit_now = use_callback(move |_: ()| {
         if submitting() {
             return;
@@ -79,16 +64,58 @@ pub fn LoginPage() -> Element {
             }
         });
     });
-    let on_submit = move |evt: FormEvent| {
-        evt.prevent_default();
-        submit_now.call(());
-    };
-    let on_keydown = move |evt: Event<KeyboardData>| {
-        if evt.key() == Key::Enter {
+
+    LoginFormState {
+        username,
+        password,
+        error,
+        submitting,
+        keep_signed_in,
+        on_submit: EventHandler::new(move |evt: FormEvent| {
             evt.prevent_default();
             submit_now.call(());
+        }),
+        on_keydown: EventHandler::new(move |evt: Event<KeyboardData>| {
+            if evt.key() == Key::Enter {
+                evt.prevent_default();
+                submit_now.call(());
+            }
+        }),
+    }
+}
+
+/// Centered single-column shell for the mobile auth screens: brand mark,
+/// tagline, a form slot, and a version footer over a soft accent glow.
+#[cfg(feature = "mobile")]
+fn m_auth_shell(tagline: &str, children: Element) -> Element {
+    rsx! {
+        div { class: "m-auth",
+            div { class: "m-auth-brand",
+                div { class: "auth-shell-brand-mark" }
+                div { class: "auth-shell-brand-word", "Omnibus" }
+                p { class: "m-auth-tagline", "{tagline}" }
+            }
+            div { class: "m-auth-body", {children} }
+            div { class: "m-auth-foot mono",
+                "omnibus · v"
+                {env!("CARGO_PKG_VERSION")}
+            }
         }
-    };
+    }
+}
+
+/// Renders the login page.
+#[component]
+pub fn LoginPage() -> Element {
+    let LoginFormState {
+        username,
+        password,
+        error,
+        submitting,
+        keep_signed_in,
+        on_submit,
+        on_keydown,
+    } = use_login_form_state();
 
     // The "keep me signed in" control only exists on the web split-pane; the
     // mobile design omits it. Read it on mobile so the signal isn't flagged
@@ -105,83 +132,22 @@ pub fn LoginPage() -> Element {
                 span { class: "auth-shell-headline-em", "back" }
             },
             lede: Some("Continue to your library.".to_string()),
-            form { class: "auth-form-inner",
-                onsubmit: on_submit,
-                "data-testid": "login-form",
-                if let Some(msg) = error() {
-                    Banner {
-                        kind: BannerKind::Err,
-                        title: msg,
-                        dismissible: false,
-                    }
-                }
-                Field { label: "Username".to_string(), input_id: "login-username".to_string(),
-                    input {
-                        id: "login-username",
-                        name: "username",
-                        r#type: "text",
-                        autocomplete: "username",
-                        autocapitalize: "none",
-                        autocorrect: "off",
-                        spellcheck: "false",
-                        value: "{username}",
-                        oninput: move |e| username.set(e.value()),
-                        onkeydown: on_keydown,
-                    }
-                }
-                Field {
-                    label: "Password".to_string(),
-                    input_id: "login-password".to_string(),
-                    // Stub: forgot-password page is P3-deferred (F5.4).
-                    // Routing it back to /login keeps the affordance
-                    // without dead routes.
-                    action: rsx! {
-                        Link {
-                            to: Route::Login {},
-                            class: "auth-field-action-link",
-                            "Forgot?"
-                        }
-                    },
-                    input {
-                        id: "login-password",
-                        name: "password",
-                        r#type: "password",
-                        autocomplete: "current-password",
-                        // iOS soft keyboards capitalize the first char, 401ing a case-sensitive password.
-                        autocapitalize: "none",
-                        autocorrect: "off",
-                        spellcheck: "false",
-                        value: "{password}",
-                        oninput: move |e| password.set(e.value()),
-                        onkeydown: on_keydown,
-                    }
-                }
-                label { class: "auth-checkbox",
-                    input {
-                        r#type: "checkbox",
-                        checked: keep_signed_in(),
-                        oninput: move |e| keep_signed_in.set(e.value() == "true"),
-                    }
-                    span { "Keep me signed in for 30 days" }
-                }
-                button {
-                    class: "btn primary lg auth-submit",
-                    r#type: "submit",
-                    disabled: submitting(),
-                    if submitting() { "Logging in…" } else { "Log in" }
-                }
-                p { class: "auth-footer",
-                    "No account? "
-                    Link { to: Route::Register {}, "Register" }
-                }
-                div { class: "auth-footer-note",
-                    "omnibus · v"
-                    {env!("CARGO_PKG_VERSION")}
-                }
+            LoginForm {
+                username,
+                password,
+                error,
+                submitting,
+                keep_signed_in,
+                on_submit,
+                on_keydown,
             }
         }
     };
 
+    #[cfg(feature = "mobile")]
+    let mut username = username;
+    #[cfg(feature = "mobile")]
+    let mut password = password;
     #[cfg(feature = "mobile")]
     let out = m_auth_shell(
         "Your library, wherever you are.",
@@ -240,6 +206,110 @@ pub fn LoginPage() -> Element {
     );
 
     out
+}
+
+/// Login form body — inputs write the parent's signals through,
+/// submission delegates via `on_submit`/`on_keydown`.
+#[component]
+fn LoginForm(
+    username: Signal<String>,
+    password: Signal<String>,
+    error: Signal<Option<String>>,
+    submitting: Signal<bool>,
+    mut keep_signed_in: Signal<bool>,
+    on_submit: EventHandler<FormEvent>,
+    on_keydown: EventHandler<Event<KeyboardData>>,
+) -> Element {
+    rsx! {
+        form { class: "auth-form-inner",
+            onsubmit: on_submit,
+            "data-testid": "login-form",
+            if let Some(msg) = error() {
+                Banner {
+                    kind: BannerKind::Err,
+                    title: msg,
+                    dismissible: false,
+                }
+            }
+            LoginCredentialFields { username, password, on_keydown }
+            label { class: "auth-checkbox",
+                input {
+                    r#type: "checkbox",
+                    checked: keep_signed_in(),
+                    oninput: move |e| keep_signed_in.set(e.value() == "true"),
+                }
+                span { "Keep me signed in for 30 days" }
+            }
+            button {
+                class: "btn primary lg auth-submit",
+                r#type: "submit",
+                disabled: submitting(),
+                if submitting() { "Logging in…" } else { "Log in" }
+            }
+            p { class: "auth-footer",
+                "No account? "
+                Link { to: Route::Register {}, "Register" }
+            }
+            div { class: "auth-footer-note",
+                "omnibus · v"
+                {env!("CARGO_PKG_VERSION")}
+            }
+        }
+    }
+}
+
+/// Username + password inputs, split out of `LoginForm` so it reads as a
+/// plain composition (the two fields always change together and share
+/// `on_keydown`'s Enter-to-submit wiring).
+#[component]
+fn LoginCredentialFields(
+    mut username: Signal<String>,
+    mut password: Signal<String>,
+    on_keydown: EventHandler<Event<KeyboardData>>,
+) -> Element {
+    rsx! {
+        Field { label: "Username".to_string(), input_id: "login-username".to_string(),
+            input {
+                id: "login-username",
+                name: "username",
+                r#type: "text",
+                autocomplete: "username",
+                autocapitalize: "none",
+                autocorrect: "off",
+                spellcheck: "false",
+                value: "{username}",
+                oninput: move |e| username.set(e.value()),
+                onkeydown: on_keydown,
+            }
+        }
+        Field {
+            label: "Password".to_string(),
+            input_id: "login-password".to_string(),
+            // Stub: forgot-password page is P3-deferred (F5.4).
+            // Routing it back to /login keeps the affordance
+            // without dead routes.
+            action: rsx! {
+                Link {
+                    to: Route::Login {},
+                    class: "auth-field-action-link",
+                    "Forgot?"
+                }
+            },
+            input {
+                id: "login-password",
+                name: "password",
+                r#type: "password",
+                autocomplete: "current-password",
+                // iOS soft keyboards capitalize the first char, 401ing a case-sensitive password.
+                autocapitalize: "none",
+                autocorrect: "off",
+                spellcheck: "false",
+                value: "{password}",
+                oninput: move |e| password.set(e.value()),
+                onkeydown: on_keydown,
+            }
+        }
+    }
 }
 
 /// Renders the register page.
@@ -314,40 +384,12 @@ pub fn RegisterPage() -> Element {
     out
 }
 
-/// Register form body — inputs write the parent's signals through, submission delegates via `on_submit_now`.
-#[component]
-fn RegisterForm(
-    mut username: Signal<String>,
-    mut password: Signal<String>,
-    mut error: Signal<Option<RegisterError>>,
-    submitting: Signal<bool>,
-    mut terms_ack: Signal<bool>,
-    on_submit_now: EventHandler<()>,
-) -> Element {
-    // Gate Enter/onsubmit on the same condition as the submit button's
-    // `disabled` prop, so neither path can bypass it and re-submit while a
-    // routed error is still showing. The event is still consumed (prevent
-    // the browser's default form submit) — we just skip calling through.
-    let on_submit = move |evt: FormEvent| {
-        evt.prevent_default();
-        if submitting() || error().is_some() {
-            return;
-        }
-        on_submit_now.call(());
-    };
-    let on_keydown = move |evt: Event<KeyboardData>| {
-        if evt.key() == Key::Enter {
-            evt.prevent_default();
-            if submitting() || error().is_some() {
-                return;
-            }
-            on_submit_now.call(());
-        }
-    };
-
-    let pw = password();
-    let (score, score_label, rules) = score_password(&pw);
-    let err = error();
+/// Splits an `Option<RegisterError>` into the three field-specific
+/// message slots the form renders: username, password, and the
+/// top-of-form banner ("other").
+fn classify_errors(
+    err: &Option<RegisterError>,
+) -> (Option<String>, Option<String>, Option<String>) {
     let username_err = err.as_ref().and_then(|e| match e {
         RegisterError::Username(m) => Some(m.clone()),
         _ => None,
@@ -360,9 +402,51 @@ fn RegisterForm(
         RegisterError::Other(m) => Some(m.clone()),
         _ => None,
     });
+    (username_err, password_err, other_err)
+}
+
+/// Builds the register form's submit gate, shared by the form's
+/// `onsubmit` (click) and each input's `onkeydown` (Enter): blocks
+/// re-submission while a routed error is still showing — the same guard
+/// as the submit button's `disabled` prop.
+fn register_submit_handlers(
+    submitting: Signal<bool>,
+    error: Signal<Option<RegisterError>>,
+    on_submit_now: EventHandler<()>,
+) -> (EventHandler<FormEvent>, EventHandler<Event<KeyboardData>>) {
+    let can_submit = move || !submitting() && error().is_none();
+    let on_submit = EventHandler::new(move |evt: FormEvent| {
+        evt.prevent_default();
+        if can_submit() {
+            on_submit_now.call(());
+        }
+    });
+    let on_keydown = EventHandler::new(move |evt: Event<KeyboardData>| {
+        if evt.key() == Key::Enter {
+            evt.prevent_default();
+            if can_submit() {
+                on_submit_now.call(());
+            }
+        }
+    });
+    (on_submit, on_keydown)
+}
+
+/// Register form body — inputs write the parent's signals through, submission delegates via `on_submit_now`.
+#[component]
+fn RegisterForm(
+    username: Signal<String>,
+    password: Signal<String>,
+    error: Signal<Option<RegisterError>>,
+    submitting: Signal<bool>,
+    mut terms_ack: Signal<bool>,
+    on_submit_now: EventHandler<()>,
+) -> Element {
+    let (on_submit, on_keydown) = register_submit_handlers(submitting, error, on_submit_now);
+
+    let err = error();
+    let (username_err, password_err, other_err) = classify_errors(&err);
     let has_error = err.is_some();
-    let username_invalid = username_err.is_some();
-    let password_invalid = password_err.is_some();
     let submit_label = if submitting() {
         "Creating…"
     } else if has_error {
@@ -382,58 +466,8 @@ fn RegisterForm(
                     dismissible: false,
                 }
             }
-            Field {
-                label: "Username".to_string(),
-                input_id: "register-username".to_string(),
-                error: username_err,
-                input {
-                    id: "register-username",
-                    name: "username",
-                    r#type: "text",
-                    autocomplete: "username",
-                    autocapitalize: "none",
-                    autocorrect: "off",
-                    spellcheck: "false",
-                    value: "{username}",
-                    aria_invalid: "{username_invalid}",
-                    oninput: move |e| {
-                        username.set(e.value());
-                        error.set(None);
-                    },
-                    onkeydown: on_keydown,
-                }
-            }
-            Field {
-                label: "Password".to_string(),
-                input_id: "register-password".to_string(),
-                error: password_err,
-                input {
-                    id: "register-password",
-                    name: "password",
-                    r#type: "password",
-                    autocomplete: "new-password",
-                    autocapitalize: "none",
-                    autocorrect: "off",
-                    spellcheck: "false",
-                    value: "{password}",
-                    aria_invalid: "{password_invalid}",
-                    onkeydown: on_keydown,
-                    oninput: move |e| {
-                        password.set(e.value());
-                        error.set(None);
-                    },
-                }
-            }
-            StrengthMeter {
-                score: score,
-                label: Some(score_label.to_string()),
-            }
-            div { class: "auth-requirements",
-                div { class: "auth-requirements-title", "Password needs" }
-                PasswordRequirementRow { ok: rules[0], text: "At least 10 characters" }
-                PasswordRequirementRow { ok: rules[1], text: "Mixed case" }
-                PasswordRequirementRow { ok: rules[2], text: "One number or symbol" }
-            }
+            UsernameField { username, error, username_err, on_keydown }
+            PasswordSection { password, error, password_err, on_keydown }
             label { class: "auth-checkbox auth-checkbox-block",
                 input {
                     r#type: "checkbox",
@@ -458,6 +492,91 @@ fn RegisterForm(
                 "Already have an account? "
                 Link { to: Route::Login {}, "Log in" }
             }
+        }
+    }
+}
+
+/// Username field — the register form's only non-password input, split
+/// out alongside `PasswordSection` so `RegisterForm` reads as a plain
+/// composition of its fields.
+#[component]
+fn UsernameField(
+    mut username: Signal<String>,
+    mut error: Signal<Option<RegisterError>>,
+    username_err: Option<String>,
+    on_keydown: EventHandler<Event<KeyboardData>>,
+) -> Element {
+    let username_invalid = username_err.is_some();
+    rsx! {
+        Field {
+            label: "Username".to_string(),
+            input_id: "register-username".to_string(),
+            error: username_err,
+            input {
+                id: "register-username",
+                name: "username",
+                r#type: "text",
+                autocomplete: "username",
+                autocapitalize: "none",
+                autocorrect: "off",
+                spellcheck: "false",
+                value: "{username}",
+                aria_invalid: "{username_invalid}",
+                oninput: move |e| {
+                    username.set(e.value());
+                    error.set(None);
+                },
+                onkeydown: on_keydown,
+            }
+        }
+    }
+}
+
+/// Password field + strength meter + the three-rule requirements
+/// checklist. Split out of `RegisterForm` since the meter/checklist pair
+/// always changes together with the password value.
+#[component]
+fn PasswordSection(
+    mut password: Signal<String>,
+    mut error: Signal<Option<RegisterError>>,
+    password_err: Option<String>,
+    on_keydown: EventHandler<Event<KeyboardData>>,
+) -> Element {
+    let password_invalid = password_err.is_some();
+    let pw = password();
+    let (score, score_label, rules) = score_password(&pw);
+
+    rsx! {
+        Field {
+            label: "Password".to_string(),
+            input_id: "register-password".to_string(),
+            error: password_err,
+            input {
+                id: "register-password",
+                name: "password",
+                r#type: "password",
+                autocomplete: "new-password",
+                autocapitalize: "none",
+                autocorrect: "off",
+                spellcheck: "false",
+                value: "{password}",
+                aria_invalid: "{password_invalid}",
+                onkeydown: on_keydown,
+                oninput: move |e| {
+                    password.set(e.value());
+                    error.set(None);
+                },
+            }
+        }
+        StrengthMeter {
+            score: score,
+            label: Some(score_label.to_string()),
+        }
+        div { class: "auth-requirements",
+            div { class: "auth-requirements-title", "Password needs" }
+            PasswordRequirementRow { ok: rules[0], text: "At least 10 characters" }
+            PasswordRequirementRow { ok: rules[1], text: "Mixed case" }
+            PasswordRequirementRow { ok: rules[2], text: "One number or symbol" }
         }
     }
 }

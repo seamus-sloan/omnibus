@@ -119,24 +119,7 @@ fn UserMenuPanel(user: UserSummary, open: Signal<bool>) -> Element {
     let mut open = open;
     let nav = use_navigator();
     let theme = use_context::<Signal<Theme>>();
-
-    let role = if user.is_admin { "Owner" } else { "Member" };
-    let handle = format!("{}@local", user.username);
-
-    let on_signout = move |_| {
-        // Spawn first; closing the menu unmounts the button mid-handler on
-        // web, which can swallow work queued after `open.set(false)`.
-        //
-        // Hydration parity (rule 07): the closure body must be identical
-        // across SSR/WASM. `data::logout` has a non-web `Ok(())` stub so
-        // this dispatches uniformly — SSR never fires click handlers, and
-        // WASM runs the real REST call.
-        spawn(async move {
-            let _ = crate::data::logout().await;
-            open.set(false);
-            nav.replace(Route::Login {});
-        });
-    };
+    let on_signout = build_on_signout(open, nav);
 
     let on_keydown = move |evt: Event<KeyboardData>| {
         if evt.key() == Key::Escape {
@@ -167,54 +150,9 @@ fn UserMenuPanel(user: UserSummary, open: Signal<bool>) -> Element {
                 focus_user_menu_panel(&evt);
             },
 
-            // ── Header ────────────────────────────────────────────
-            div { class: "um-header",
-                div { class: "um-avatar um-avatar-lg",
-                    span { class: "um-initials", "{initials_for(&user.username)}" }
-                }
-                div { class: "um-identity",
-                    div { class: "um-name", "{user.username}" }
-                    div { class: "um-handle",
-                        "{handle} · "
-                        span { class: "um-role", "{role}" }
-                    }
-                }
-                a {
-                    class: "um-edit",
-                    href: "#",
-                    "aria-disabled": "true",
-                    tabindex: "-1",
-                    onclick: move |evt| evt.prevent_default(),
-                    "Edit"
-                }
-            }
+            UmHeader { user }
+            UmNowReading {}
 
-            // ── Now reading (stub) ───────────────────────────────
-            div { class: "um-section",
-                div { class: "um-section-label", "NOW READING" }
-                a {
-                    class: "um-now-reading",
-                    href: "#",
-                    "aria-disabled": "true",
-                    tabindex: "-1",
-                    onclick: move |evt| evt.prevent_default(),
-                    div { class: "um-nr-cover" }
-                    div { class: "um-nr-meta",
-                        div { class: "um-nr-title", "Piranesi" }
-                        div { class: "um-nr-author", "Susanna Clarke" }
-                        div { class: "um-nr-progress",
-                            div { class: "um-nr-pbar", div { class: "um-nr-pbar-fill" } }
-                            div { class: "um-nr-stats",
-                                span { "68%" }
-                                span { "ch. 22" }
-                                span { "4h 12m left" }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ── Stat grid (stubs) ────────────────────────────────
             div { class: "um-stat-grid",
                 UmStat { label: "Journal", detail: "24 entries" }
                 UmStat { label: "Highlights", detail: "412 quotes" }
@@ -222,60 +160,159 @@ fn UserMenuPanel(user: UserSummary, open: Signal<bool>) -> Element {
                 UmStat { label: "Goals", detail: "12 / 24 books" }
             }
 
-            // ── Linear rows (account) ────────────────────────────
-            div { class: "um-rows",
-                Link {
-                    to: Route::Settings {},
-                    class: "um-row",
-                    onclick: move |_| open.set(false),
-                    span { class: "um-row-icon", "⚙" }
-                    span { class: "um-row-label", "Settings" }
-                }
-                a {
-                    class: "um-row",
-                    href: "#",
-                    "aria-disabled": "true",
-                    tabindex: "-1",
-                    onclick: move |evt| evt.prevent_default(),
-                    span { class: "um-row-icon", "▣" }
-                    span { class: "um-row-label", "Admin · server health" }
-                    span { class: "um-row-aside", "all ok" }
-                }
-                a {
-                    class: "um-row",
-                    href: "#",
-                    "aria-disabled": "true",
-                    tabindex: "-1",
-                    onclick: move |evt| evt.prevent_default(),
-                    span { class: "um-row-icon", "◔" }
-                    span { class: "um-row-label", "Notifications" }
-                    span { class: "um-row-badge", "2" }
-                }
-            }
+            UmAccountRows { open }
+            UmSessionRows { on_signout }
 
-            // ── Linear rows (session) ────────────────────────────
-            div { class: "um-rows",
-                a {
-                    class: "um-row",
-                    href: "#",
-                    "aria-disabled": "true",
-                    tabindex: "-1",
-                    onclick: move |evt| evt.prevent_default(),
-                    span { class: "um-row-icon", "⇄" }
-                    span { class: "um-row-label", "Switch user" }
-                }
-                button {
-                    class: "um-row destructive",
-                    "data-testid": "logout-button",
-                    r#type: "button",
-                    onclick: on_signout,
-                    span { class: "um-row-icon", "⏻" }
-                    span { class: "um-row-label", "Sign out" }
-                }
-            }
-
-            // ── Theme footer ─────────────────────────────────────
             UmThemeSeg { theme }
+        }
+    }
+}
+
+/// Sign-out action: logs out, closes the menu, then routes to the login
+/// page. Spawn-first ordering matters — closing the menu unmounts the
+/// button mid-handler on web, which can swallow work queued after
+/// `open.set(false)`.
+///
+/// Hydration parity (rule 07): the closure body must be identical across
+/// SSR/WASM. `data::logout` has a non-web `Ok(())` stub so this
+/// dispatches uniformly — SSR never fires click handlers, and WASM runs
+/// the real REST call.
+fn build_on_signout(mut open: Signal<bool>, nav: dioxus_router::Navigator) -> EventHandler<()> {
+    EventHandler::new(move |()| {
+        spawn(async move {
+            let _ = crate::data::logout().await;
+            open.set(false);
+            nav.replace(Route::Login {});
+        });
+    })
+}
+
+/// Avatar + username/handle/role identity block, plus the (stubbed)
+/// "Edit" affordance.
+#[cfg(any(feature = "web", feature = "server"))]
+#[component]
+fn UmHeader(user: UserSummary) -> Element {
+    let role = if user.is_admin { "Owner" } else { "Member" };
+    let handle = format!("{}@local", user.username);
+    rsx! {
+        div { class: "um-header",
+            div { class: "um-avatar um-avatar-lg",
+                span { class: "um-initials", "{initials_for(&user.username)}" }
+            }
+            div { class: "um-identity",
+                div { class: "um-name", "{user.username}" }
+                div { class: "um-handle",
+                    "{handle} · "
+                    span { class: "um-role", "{role}" }
+                }
+            }
+            a {
+                class: "um-edit",
+                href: "#",
+                "aria-disabled": "true",
+                tabindex: "-1",
+                onclick: move |evt| evt.prevent_default(),
+                "Edit"
+            }
+        }
+    }
+}
+
+/// "Now reading" stub card — static placeholder content pending the
+/// reading-progress integration.
+#[cfg(any(feature = "web", feature = "server"))]
+#[component]
+fn UmNowReading() -> Element {
+    rsx! {
+        div { class: "um-section",
+            div { class: "um-section-label", "NOW READING" }
+            a {
+                class: "um-now-reading",
+                href: "#",
+                "aria-disabled": "true",
+                tabindex: "-1",
+                onclick: move |evt| evt.prevent_default(),
+                div { class: "um-nr-cover" }
+                div { class: "um-nr-meta",
+                    div { class: "um-nr-title", "Piranesi" }
+                    div { class: "um-nr-author", "Susanna Clarke" }
+                    div { class: "um-nr-progress",
+                        div { class: "um-nr-pbar", div { class: "um-nr-pbar-fill" } }
+                        div { class: "um-nr-stats",
+                            span { "68%" }
+                            span { "ch. 22" }
+                            span { "4h 12m left" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Account-scoped linear rows: Settings (real link, closes the menu),
+/// plus the stubbed Admin/Notifications rows.
+#[cfg(any(feature = "web", feature = "server"))]
+#[component]
+fn UmAccountRows(open: Signal<bool>) -> Element {
+    let mut open = open;
+    rsx! {
+        div { class: "um-rows",
+            Link {
+                to: Route::Settings {},
+                class: "um-row",
+                onclick: move |_| open.set(false),
+                span { class: "um-row-icon", "⚙" }
+                span { class: "um-row-label", "Settings" }
+            }
+            a {
+                class: "um-row",
+                href: "#",
+                "aria-disabled": "true",
+                tabindex: "-1",
+                onclick: move |evt| evt.prevent_default(),
+                span { class: "um-row-icon", "▣" }
+                span { class: "um-row-label", "Admin · server health" }
+                span { class: "um-row-aside", "all ok" }
+            }
+            a {
+                class: "um-row",
+                href: "#",
+                "aria-disabled": "true",
+                tabindex: "-1",
+                onclick: move |evt| evt.prevent_default(),
+                span { class: "um-row-icon", "◔" }
+                span { class: "um-row-label", "Notifications" }
+                span { class: "um-row-badge", "2" }
+            }
+        }
+    }
+}
+
+/// Session-scoped linear rows: the stubbed "Switch user" row and the
+/// real Sign-out button.
+#[cfg(any(feature = "web", feature = "server"))]
+#[component]
+fn UmSessionRows(on_signout: EventHandler<()>) -> Element {
+    rsx! {
+        div { class: "um-rows",
+            a {
+                class: "um-row",
+                href: "#",
+                "aria-disabled": "true",
+                tabindex: "-1",
+                onclick: move |evt| evt.prevent_default(),
+                span { class: "um-row-icon", "⇄" }
+                span { class: "um-row-label", "Switch user" }
+            }
+            button {
+                class: "um-row destructive",
+                "data-testid": "logout-button",
+                r#type: "button",
+                onclick: move |_| on_signout.call(()),
+                span { class: "um-row-icon", "⏻" }
+                span { class: "um-row-label", "Sign out" }
+            }
         }
     }
 }
