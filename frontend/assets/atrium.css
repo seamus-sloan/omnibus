@@ -5064,6 +5064,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   cursor: pointer;
 }
 .m-account-row:hover { color: var(--ink-0); }
+.m-account-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  color: var(--ink-0);
+}
 .m-account-chevron {
   color: var(--ink-3);
   font-size: 18px;
@@ -5095,6 +5100,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   font-family: var(--sans);
   font-size: 12.5px;
   cursor: pointer;
+}
+.m-account-seg-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  color: var(--ink-0);
 }
 .m-account-seg-btn.on {
   background: var(--bg-0);

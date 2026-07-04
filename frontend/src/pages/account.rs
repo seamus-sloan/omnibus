@@ -1,10 +1,8 @@
 //! Account screen (`/account`) — the mobile "You" tab.
 //!
-//! Mobile-only. Surfaces the bearer-authenticated user (identity block),
-//! a "Now reading" card, a quick-links grid, account list rows (Settings,
-//! Admin, Add books, Sign out), and a Dark/Light/Sepia theme control wired
-//! to the app-wide [`Theme`] signal. Degrades gracefully before the user
-//! resolves — the identity block renders placeholders rather than blocking.
+//! Mobile-only. Surfaces the bearer-authenticated user, a "Now reading" card,
+//! a quick-links grid, account rows, and a theme control. Degrades gracefully
+//! before the user resolves, rendering placeholders rather than blocking.
 
 use dioxus::prelude::*;
 
@@ -210,9 +208,12 @@ fn NowReadingCard(book: Option<EbookMetadata>, server_url: String) -> Element {
         .filter(|t| !t.trim().is_empty())
         .unwrap_or_else(|| b.filename.clone());
     let uuid = b.unique_identifier.clone().unwrap_or_default();
+    // Only override with the thumb endpoint when we have a real uuid — an empty
+    // one builds `/api/thumbs//sm` and hides the valid `cover_url` fallback.
     let cover_src = b
         .cover_url
         .as_ref()
+        .filter(|_| !uuid.is_empty())
         .map(|_| thumb_url(&server_url, &uuid, "sm"));
 
     rsx! {
