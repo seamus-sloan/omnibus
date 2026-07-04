@@ -75,7 +75,6 @@ fn FormatRow(kind: FormatKind, uuid: String) -> Element {
                         // The cfg lives at the helper definition (rule 07:
                         // hydration parity — keep cfg gates out of rsx).
                         {read_book_action(&uuid)}
-                        // F4.1: download as KEPUB for USB sideload onto a Kobo.
                         {send_to_kobo_action(&uuid)}
                         button {
                             class: "btn",
@@ -115,6 +114,13 @@ fn MultiFileRow(kind: FormatKind, uuid: String, files: Vec<BookFileInfo>) -> Ele
             "data-testid": "{testid}",
             span { class: "format-badge", "data-testid": "format-badge",
                 "{label} ({count} files)"
+            }
+            // Per-file Read/Listen live in the sub-rows below, but "Send to
+            // Kobo" is book-level: the KEPUB endpoint converts the primary
+            // (lowest-ordinal) EPUB, so a multi-EPUB book still gets the CTA
+            // here. Per-file KEPUB is a deferred follow-up.
+            if kind == FormatKind::Epub {
+                div { class: "format-actions", {send_to_kobo_action(&uuid)} }
             }
         }
         for file in &files {
