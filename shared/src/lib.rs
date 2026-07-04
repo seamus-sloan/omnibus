@@ -1,12 +1,8 @@
-//! Shared API types between the `omnibus` server and `omnibus-mobile` client.
-//!
-//! Keep this crate free of Dioxus and transport-layer dependencies so both
-//! `#[server]` functions (web) and `reqwest` calls (mobile) can depend on it
-//! without dragging in platform-specific trees.
-//!
-//! Types are organized by domain into submodules and re-exported flat from
-//! the crate root, so downstream callers keep using `omnibus_shared::Foo`
-//! regardless of where `Foo` actually lives.
+//! Shared API types between the `omnibus` server and `omnibus-mobile`
+//! client. Kept free of Dioxus and transport-layer dependencies so both
+//! `#[server]` functions (web) and `reqwest` calls (mobile) can depend on
+//! it. Types are organized by domain into submodules and re-exported flat
+//! from the crate root as `omnibus_shared::Foo`.
 
 pub mod audiobook;
 pub mod auth;

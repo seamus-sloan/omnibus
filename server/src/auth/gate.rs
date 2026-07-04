@@ -1,29 +1,8 @@
-//! `require_auth` — top-level middleware that gates `/api/*` routes behind a
-//! live session.
-//!
-//! Applied in `server/src/main.rs`. The middleware fast-paths two classes of
-//! request so SSR, assets, and the auth endpoints themselves keep working:
-//!
-//! * Anything that isn't a `/api/*` path (SSR HTML, WASM bundle, static
-//!   assets, Dioxus client-side routes) — passes through untouched.
-//! * Anything under `/api/auth/*` — these handle their own authentication
-//!   (`/me` uses the [`AuthUser`] extractor; `/login`/`/register` deliberately
-//!   don't require auth).
-//! * `/api/_health` — unauthenticated liveness + fingerprint probe used by
-//!   `scripts/dev-server-up.sh` to decide whether to reuse an existing
-//!   omnibus server on the port. Cannot require auth or the probe couldn't
-//!   run before a session exists.
-//!
-//! Everything else under `/api/*` — the REST routes (`/api/settings`,
-//! `/api/library`, `/api/ebooks`, `/api/covers/{uuid}`) and the
-//! Dioxus server-function endpoints (`/api/rpc/*`) — requires a valid session
-//! or returns `401 Unauthorized`.
-//!
-//! This middleware does not set per-user request extensions: handlers that
-//! need `AuthUser` should still declare it as an extractor. The middleware
-//! only gates the *boundary*; the extractor provides the typed view.
-//!
-//! [`AuthUser`]: super::AuthUser
+//! `require_auth` — top-level middleware, applied in `server/src/main.rs`,
+//! that gates `/api/*` routes behind a live session. Everything under
+//! `/api/*` other than `/api/auth/*` and `/api/_health` requires a valid
+//! session or gets `401 Unauthorized`; everything else (SSR HTML, WASM
+//! bundle, static assets) passes through untouched.
 
 use axum::{
     extract::{Request, State},
@@ -37,6 +16,15 @@ use super::extractor::extract_token;
 use crate::backend::AppState;
 
 /// Reject `/api/*` requests without a live session with `401 Unauthorized`, after exempting `/api/auth/*` and `/api/_health`.
+///
+/// `/api/auth/*` handles its own authentication (`/me` uses the
+/// [`AuthUser`](super::AuthUser) extractor; `/login`/`/register` deliberately
+/// don't require auth). `/api/_health` is an unauthenticated liveness +
+/// fingerprint probe used by `scripts/dev-server-up.sh` to decide whether to
+/// reuse an existing omnibus server on the port — it cannot require auth or
+/// the probe couldn't run before a session exists. This middleware does not
+/// set per-user request extensions: handlers that need `AuthUser` should
+/// still declare it as an extractor; this only gates the *boundary*.
 pub async fn require_auth(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let path = req.uri().path();
     if !path.starts_with("/api/")

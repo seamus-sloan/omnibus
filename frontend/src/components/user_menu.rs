@@ -1,13 +1,7 @@
 //! User-menu dropdown mounted in the top nav. Real wiring: Settings,
-//! Sign out, Dark/Light theme. Everything else is a stubbed `<a>`.
-//!
-//! SSR/hydration: the trigger is always rendered (empty placeholder
-//! initials in the pre-hydration phase) so the topbar markup is stable
-//! and `expectNavVisible` finds it without racing the auth ping. The
-//! App-wide [`crate::CurrentUser`] context — populated once by the boot
-//! effect in [`crate::App`] — then either fills in real initials
-//! (auth'd) or swaps the trigger for a `Log in` link (unauth). The panel
-//! only opens once we have a real user.
+//! Sign out, Dark/Light theme. Everything else is a stubbed `<a>`. See
+//! [`UserMenu`] for the SSR/hydration handling of the pre-auth trigger
+//! state.
 
 use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};
@@ -27,6 +21,14 @@ pub(crate) fn initials_for(username: &str) -> String {
 }
 
 /// Renders the user menu component (web and server targets).
+///
+/// SSR/hydration: the trigger is always rendered (empty placeholder
+/// initials in the pre-hydration phase) so the topbar markup is stable and
+/// `expectNavVisible` finds it without racing the auth ping. The App-wide
+/// [`crate::CurrentUser`] context — populated once by the boot effect in
+/// [`crate::App`] — then either fills in real initials (auth'd) or swaps
+/// the trigger for a `Log in` link (unauth). The panel only opens once we
+/// have a real user.
 #[cfg(any(feature = "web", feature = "server"))]
 #[component]
 pub fn UserMenu() -> Element {

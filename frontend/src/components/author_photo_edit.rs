@@ -1,20 +1,8 @@
-//! Author photo edit affordance: a hover-revealed pencil button overlaid on
-//! the existing avatar that opens a modal with three actions —
-//!
-//! 1. **Paste image URL** — server fetches and validates the URL, persists
-//!    as a `manual` photo.
-//! 2. **Upload file** — multipart body to the same `PUT /api/authors/:id/photo`
-//!    endpoint used by the original admin upload path.
-//! 3. **Scan for picture** — re-runs the Open Library cascade.
-//!
-//! Used by `pages::author::AuthorPage` (hero avatar) and
-//! `pages::authors_index::AuthorsIndexPage` (per-card avatar). Both wrap
-//! their `<img>`/`<div>` inside `<AuthorPhotoEditOverlay>` so the same hover
-//! affordance shows up wherever the photo is rendered.
-//!
-//! The modal is web-only. SSR renders the wrapper but no overlay, and the
-//! mobile shell doesn't mount this component — mobile uses the discovery
-//! screens read-only for now.
+//! Author photo edit affordance: a hover-revealed pencil button
+//! ([`AuthorPhotoEditOverlay`]) that opens a modal
+//! ([`AuthorPhotoEditModal`]) offering three ways to change the photo. Used
+//! by the author hero and author-card avatars; web-only — SSR renders the
+//! wrapper with no overlay and mobile doesn't mount this component.
 
 use dioxus::prelude::*;
 
@@ -85,6 +73,11 @@ struct PhotoEditStatus {
     status: Signal<Option<String>>,
 }
 
+/// Modal offering three ways to change an author's photo: paste an image
+/// URL (server fetches and validates it, persists as a `manual` photo),
+/// upload a file (multipart body to the same `PUT /api/authors/:id/photo`
+/// endpoint used by the original admin upload path), or re-scan the Open
+/// Library cascade for a picture.
 #[component]
 fn AuthorPhotoEditModal(
     author_id: i64,
