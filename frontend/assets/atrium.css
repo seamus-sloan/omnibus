@@ -3488,24 +3488,154 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   color: var(--auth-ink-3);
 }
 
-/* ── Mobile bottom nav ─────────────────────────────────────────────── */
-.bottom-nav {
+/* ══ Mobile (native shell) ══════════════════════════════════════════
+   Classes prefixed `.m-` are rendered only by the mobile build (see the
+   feature-gated page branches in frontend/src/pages/). They compose the
+   Atrium tokens directly — no hardcoded colors. */
+
+/* Bottom tab bar */
+.m-tabbar {
   position: fixed;
-  bottom: 0; left: 0; right: 0;
+  bottom: 0; left: 0; right: 0; z-index: 20;
   display: flex;
-  background: rgba(15, 23, 42, 0.95);
-  border-top: 1px solid rgba(100, 116, 139, 0.3);
-  padding-bottom: env(safe-area-inset-bottom);
+  background: color-mix(in oklch, var(--bg-1) 92%, transparent);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border-top: 1px solid var(--line-2);
+  padding: 8px 6px calc(8px + env(safe-area-inset-bottom));
 }
-.bottom-nav a {
+.m-tabbar-item {
   flex: 1;
-  padding: 0.9rem;
-  text-align: center;
-  color: #94a3b8;
-  text-decoration: none;
-  font-size: 0.9rem;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 4px 0; text-decoration: none; color: var(--ink-3);
 }
-.bottom-nav a.active { color: #22d3ee; }
+.m-tabbar-item.on { color: var(--accent); }
+.m-tabbar-glyph { display: grid; place-items: center; height: 24px; }
+.m-tabbar-label { font-size: 10px; font-weight: 500; letter-spacing: 0.01em; color: var(--ink-2); }
+.m-tabbar-item.on .m-tabbar-label { color: var(--ink-0); font-weight: 600; }
+
+/* Shared mobile primitives */
+.m-em { font-style: italic; }
+.m-icon-btn {
+  width: 36px; height: 36px; flex: 0 0 36px; border-radius: 999px;
+  display: grid; place-items: center; cursor: pointer; text-decoration: none;
+  background: var(--bg-1); border: 1px solid var(--line-2); color: var(--ink-1);
+  font-size: 16px;
+}
+.m-icon-btn:hover { border-color: var(--accent); color: var(--ink-0); }
+.m-head { padding: 4px 2px 8px; }
+.m-head-top { display: flex; align-items: center; justify-content: space-between; min-height: 32px; }
+.m-head-title {
+  font-family: var(--serif); font-weight: 400; font-size: 30px; line-height: 1.02;
+  letter-spacing: -0.015em; margin-top: 4px;
+}
+
+/* Library */
+.m-lib { display: flex; flex-direction: column; }
+.m-lib-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.m-lib-brand { font-family: var(--serif); font-style: italic; font-size: 24px; letter-spacing: -0.02em; }
+.m-lib-head-actions { display: flex; align-items: center; gap: 8px; }
+.m-lib-avatar { text-decoration: none; }
+.m-lib-title { margin-bottom: 14px; }
+.m-shelves-entry {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 11px 13px; margin-bottom: 16px; text-decoration: none; color: inherit;
+  background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 12px;
+}
+.m-shelves-entry:active { background: var(--bg-2); }
+.m-shelves-entry-icon {
+  width: 30px; height: 30px; flex: 0 0 30px; border-radius: 8px;
+  display: grid; place-items: center; color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 20%, var(--bg-2));
+  border: 1px solid color-mix(in oklch, var(--accent) 40%, transparent);
+}
+.m-shelves-entry-body { flex: 1; min-width: 0; }
+.m-shelves-entry-name { display: block; font-size: 14px; font-weight: 500; color: var(--ink-0); }
+.m-shelves-entry-sub { display: block; font-size: 11.5px; color: var(--ink-2); }
+.m-shelves-entry-chevron { color: var(--ink-3); display: grid; place-items: center; }
+
+.m-cover-grid {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px 12px; align-content: start;
+}
+.m-cover-cell { display: block; min-width: 0; text-decoration: none; color: inherit; }
+.m-cover-cell-title {
+  margin-top: 6px; font-size: 11.5px; font-weight: 500; color: var(--ink-0);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.m-cover-cell-author {
+  font-size: 10.5px; color: var(--ink-3);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.m-load-more { margin: 20px auto 0; display: flex; }
+.m-lib-loading { margin-top: 24px; }
+
+/* Shelves index */
+.m-shelf-list { display: flex; flex-direction: column; }
+.m-shelf-row {
+  display: flex; align-items: center; gap: 13px; padding: 11px 4px;
+  border-bottom: 1px solid var(--line-2); text-decoration: none; color: inherit;
+}
+.m-shelf-icon {
+  width: 44px; height: 44px; flex: 0 0 44px; border-radius: 11px;
+  display: grid; place-items: center; color: var(--shelf-accent, var(--accent));
+  background: color-mix(in oklch, var(--shelf-accent, var(--accent)) 20%, var(--bg-2));
+  border: 1px solid color-mix(in oklch, var(--shelf-accent, var(--accent)) 42%, transparent);
+}
+.m-shelf-row-body { flex: 1; min-width: 0; }
+.m-shelf-row-name { display: flex; align-items: center; gap: 6px; font-size: 15px; font-weight: 500; color: var(--ink-0); }
+.m-shelf-smart-mark { display: inline-grid; place-items: center; }
+.m-shelf-row-sub { display: block; font-size: 12px; color: var(--ink-2); margin-top: 1px; }
+.m-shelf-row-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; color: var(--ink-3); }
+.m-shelf-row-count { font-size: 11px; color: var(--ink-1); }
+.m-shelf-row-vis, .m-shelf-row-chevron { display: grid; place-items: center; color: var(--ink-3); }
+
+/* Mobile auth */
+.m-auth {
+  min-height: 100%; display: flex; flex-direction: column; justify-content: center;
+  padding: 24px 26px; position: relative;
+  background-image: radial-gradient(90% 55% at 50% 0%, color-mix(in oklch, var(--accent) 16%, transparent), transparent 70%);
+}
+.m-auth-brand { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; margin-bottom: 22px; }
+.m-auth-tagline { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
+.m-auth-body { width: 100%; }
+.m-auth-foot { text-align: center; margin-top: 22px; font-size: 10px; letter-spacing: 0.1em; color: var(--ink-3); }
+
+/* Mobile book detail */
+.m-bd { display: flex; flex-direction: column; }
+.m-bd-hero {
+  position: relative; padding: 8px 0 6px; display: grid; place-items: center;
+  background-image: radial-gradient(80% 100% at 50% 0%, color-mix(in oklch, var(--accent) 30%, transparent), transparent 70%);
+}
+.m-bd-hero-bar { position: absolute; top: 4px; left: 0; right: 0; display: flex; justify-content: space-between; }
+.m-bd-cover { width: 150px; margin-top: 12px; }
+.m-bd-titlecol { text-align: center; padding: 14px 8px 4px; }
+.m-bd-title { font-family: var(--serif); font-weight: 400; font-size: 28px; line-height: 1.06; }
+.m-bd-meta { margin-top: 5px; font-size: 13px; color: var(--ink-2); }
+.m-bd-badges { margin-top: 12px; display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; }
+.m-bd-cta { display: flex; gap: 8px; padding: 16px 0 4px; }
+.m-bd-cta .btn { flex: 1; justify-content: center; }
+
+.m-section { padding: 18px 2px 4px; margin-top: 14px; border-top: 1px solid var(--line-2); }
+.m-section > .label { margin-bottom: 10px; }
+.m-section-row { display: flex; align-items: center; justify-content: space-between; }
+.m-section-row > .label { margin-bottom: 0; }
+.m-bd-desc { font-size: 14px; line-height: 1.6; color: var(--ink-1); }
+.m-bd-desc p { margin-bottom: 10px; }
+.m-bd-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.m-bd-info { width: 100%; }
+.m-bd-files { display: flex; flex-direction: column; }
+.m-bd-file { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line-2); }
+.m-bd-file:first-child { border-top: 0; }
+.m-bd-file-body { flex: 1; min-width: 0; }
+.m-bd-file-name { font-size: 13px; color: var(--ink-0); }
+.m-bd-file-path { font-size: 10px; color: var(--ink-3); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.m-bd-footer { padding: 22px 0 8px; }
+
+/* Shelf detail: at phone widths the shared markup (rail hidden) reads as a
+   mobile screen — tighten the grid to three columns to match the design. */
+@media (max-width: 560px) {
+  .lib-grid.shelf-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px 12px; }
+}
 
 /* ── Settings page ─────────────────────────────────────────────────── */
 .settings-form {
