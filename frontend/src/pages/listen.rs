@@ -1,7 +1,8 @@
 //! Immersive audiobook player with direct-play and HLS fallback.
 //!
-//! Renders a full-screen "Now playing" surface: cover + title + author on the
-//! left, scrub bar + transport controls on the right. See [`BookListenPage`]
+//! Web renders a full-screen two-column "Now playing" surface (cover + title
+//! + author left, scrub bar + transport right). Mobile renders the
+//! single-column [`mobile::MobilePlayer`] adaptation. See [`BookListenPage`]
 //! for the startup sequence and position-sync details.
 
 use dioxus::prelude::*;
@@ -26,6 +27,8 @@ mod controls;
 mod helpers;
 #[cfg(not(feature = "mobile"))]
 mod mini_dock;
+#[cfg(feature = "mobile")]
+mod mobile;
 #[cfg(not(feature = "mobile"))]
 mod overlays;
 #[cfg(not(feature = "mobile"))]
@@ -71,11 +74,8 @@ pub(crate) use mini_dock::MiniDock;
 pub fn BookListenPage(uuid: String) -> Element {
     #[cfg(feature = "mobile")]
     {
-        let _ = uuid;
         return rsx! {
-            div { class: "screen",
-                p { class: "subtitle", "Audiobook playback on mobile is coming soon." }
-            }
+            mobile::MobilePlayer { uuid }
         };
     }
 

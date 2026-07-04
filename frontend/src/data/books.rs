@@ -5,8 +5,8 @@
 //! functions resolve against the page origin.
 
 use omnibus_shared::{
-    EbookLibrary, EbookMetadata, LibraryContents, LibraryPage, MergeBooksResult, MetadataOverrides,
-    PaletteResults, Settings, SortDir, SortKey, ViewFilters, WorkerStatus,
+    AudiobookManifest, EbookLibrary, EbookMetadata, LibraryContents, LibraryPage, MergeBooksResult,
+    MetadataOverrides, PaletteResults, Settings, SortDir, SortKey, ViewFilters, WorkerStatus,
 };
 
 #[cfg(not(feature = "mobile"))]
@@ -173,6 +173,41 @@ pub async fn get_ebook(server_url: &str, uuid: &str) -> Result<Option<EbookMetad
         return Err(drain_error(response, status).await);
     }
     Ok(Some(response.json::<EbookMetadata>().await?))
+}
+
+/// GET `/api/audiobooks/{uuid}/manifest` — fetch the direct-play / HLS
+/// manifest driving the mobile player. `file_id` targets a specific
+/// `book_files` row for multi-file audiobooks.
+#[cfg(feature = "mobile")]
+pub async fn get_manifest(
+    server_url: &str,
+    uuid: &str,
+    file_id: Option<i64>,
+) -> Result<AudiobookManifest, DataError> {
+    let url = match file_id {
+        Some(fid) => format!("{server_url}/api/audiobooks/{uuid}/manifest?file_id={fid}"),
+        None => format!("{server_url}/api/audiobooks/{uuid}/manifest"),
+    };
+    let response = with_bearer(http_client().get(&url)).send().await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(response.json::<AudiobookManifest>().await?)
+}
+
+/// Web/SSR `get_manifest` — the web player fetches its manifest through the
+/// `bootstrap` JS shim, so this stub only exists to keep the signature
+/// parallel across the `#[cfg]` split; it is never called on web/SSR.
+#[cfg(not(feature = "mobile"))]
+pub async fn get_manifest(
+    _server_url: &str,
+    _uuid: &str,
+    _file_id: Option<i64>,
+) -> Result<AudiobookManifest, DataError> {
+    Err(DataError::Other(
+        "get_manifest is mobile-only; web uses the bootstrap shim".into(),
+    ))
 }
 
 /// POST `/api/ebooks/{uuid}/overrides` — persist user metadata overrides.
