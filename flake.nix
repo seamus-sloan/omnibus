@@ -198,8 +198,6 @@
           # Resolve the repo root so `nix develop` from a subdir lands in the
           # same target dir; basename keeps it per-worktree so parallel
           # worktrees don't race.
-          # Skip if the caller already pinned CARGO_TARGET_DIR (CI sets it
-          # to ./target so workflow paths and rust-cache stay valid).
           # Skip if the caller already pinned CARGO_TARGET_DIR (CI sets it to
           # ./target so workflow paths and rust-cache stay valid). This branch
           # therefore only runs for local dev shells, which is also where we
@@ -223,6 +221,10 @@
             if [ -z "''${RUSTC_WRAPPER:-}" ] && [ -z "''${OMNIBUS_NO_SCCACHE:-}" ]; then
               export RUSTC_WRAPPER="sccache"
               export CARGO_INCREMENTAL=0
+              # Pin the cache dir so every worktree shares one location and it's
+              # the same across platforms (sccache's default is ~/.cache/sccache
+              # on Linux but ~/Library/Caches/Mozilla.sccache on macOS).
+              export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/sccache}"
               export SCCACHE_CACHE_SIZE="''${SCCACHE_CACHE_SIZE:-20G}"
             fi
           fi
