@@ -23,8 +23,8 @@ use hero::BdHeroSection;
 #[component]
 pub fn BookDetailPage(uuid: String) -> Element {
     let server_url = use_server_url();
-    let mut book: Signal<Option<EbookMetadata>> = use_signal(|| None);
-    let mut author_books: Signal<Vec<EbookMetadata>> = use_signal(Vec::new);
+    let book: Signal<Option<EbookMetadata>> = use_signal(|| None);
+    let author_books: Signal<Vec<EbookMetadata>> = use_signal(Vec::new);
     // F3.3 suggestions. Starts `None` on both SSR and the first WASM paint so
     // hydration markup matches (rule 07); the client effect below populates it.
     let suggestions: Signal<Option<SuggestionsResponse>> = use_signal(|| None);
@@ -32,8 +32,8 @@ pub fn BookDetailPage(uuid: String) -> Element {
     // result onto the current book after navigation (mirrors landing's
     // `fetch_epoch`).
     let suggestions_epoch = use_signal(|| 0u64);
-    let mut loading = use_signal(|| true);
-    let mut error: Signal<Option<String>> = use_signal(|| None);
+    let loading = use_signal(|| true);
+    let error: Signal<Option<String>> = use_signal(|| None);
     // Bumped after a merge/undo so the effect below refetches the book
     // (signals read inside `use_effect` re-arm it).
     let refresh = use_signal(|| 0u32);
@@ -72,44 +72,14 @@ pub fn BookDetailPage(uuid: String) -> Element {
     let url = server_url.clone();
     use_effect(use_reactive!(|uuid| {
         let _ = refresh();
-        let url = url.clone();
-        let uuid = uuid.clone();
-        spawn(async move {
-            loading.set(true);
-            author_books.set(Vec::new());
-            match data::get_ebook(&url, &uuid).await {
-                Ok(b) => {
-                    let author_fetch = b.as_ref().map(|inner| {
-                        (
-                            inner.creators.first().and_then(|c| c.id),
-                            inner.unique_identifier.clone(),
-                        )
-                    });
-                    book.set(b);
-                    error.set(None);
-                    loading.set(false);
-                    if let Some((Some(aid), current_uuid)) = author_fetch {
-                        if let Ok(Some(ad)) = data::get_author(&url, aid).await {
-                            let still_current =
-                                book().as_ref().and_then(|b| b.unique_identifier.as_ref())
-                                    == current_uuid.as_ref();
-                            if still_current {
-                                let others: Vec<EbookMetadata> = ad
-                                    .books
-                                    .into_iter()
-                                    .filter(|ab| ab.unique_identifier != current_uuid)
-                                    .collect();
-                                author_books.set(others);
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    error.set(Some(e.to_string()));
-                    loading.set(false);
-                }
-            }
-        });
+        fetch_book_and_author_books(
+            url.clone(),
+            uuid.clone(),
+            book,
+            author_books,
+            loading,
+            error,
+        );
     }));
 
     // F3.3 suggestions: resolved off-request by the worker and cached. Fetch
@@ -184,6 +154,56 @@ pub fn BookDetailPage(uuid: String) -> Element {
 
 // View helpers — the loaded-book case is the only thing rendered, so the
 // data-fetch shell above stays small.
+
+/// Fetch the book, then (if it resolves and has a creator) the primary
+/// author's other books, filtering out the current book. `book` and
+/// `author_books` are written directly so a fast re-run (uuid change) is
+/// naturally superseded by the newer fetch's writes.
+fn fetch_book_and_author_books(
+    server_url: String,
+    uuid: String,
+    mut book: Signal<Option<EbookMetadata>>,
+    mut author_books: Signal<Vec<EbookMetadata>>,
+    mut loading: Signal<bool>,
+    mut error: Signal<Option<String>>,
+) {
+    spawn(async move {
+        loading.set(true);
+        author_books.set(Vec::new());
+        match data::get_ebook(&server_url, &uuid).await {
+            Ok(b) => {
+                let author_fetch = b.as_ref().map(|inner| {
+                    (
+                        inner.creators.first().and_then(|c| c.id),
+                        inner.unique_identifier.clone(),
+                    )
+                });
+                book.set(b);
+                error.set(None);
+                loading.set(false);
+                if let Some((Some(aid), current_uuid)) = author_fetch {
+                    if let Ok(Some(ad)) = data::get_author(&server_url, aid).await {
+                        let still_current =
+                            book().as_ref().and_then(|b| b.unique_identifier.as_ref())
+                                == current_uuid.as_ref();
+                        if still_current {
+                            let others: Vec<EbookMetadata> = ad
+                                .books
+                                .into_iter()
+                                .filter(|ab| ab.unique_identifier != current_uuid)
+                                .collect();
+                            author_books.set(others);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                error.set(Some(e.to_string()));
+                loading.set(false);
+            }
+        }
+    });
+}
 
 /// Fetch F3.3 suggestions for `uuid` and, on web, poll a few times while the
 /// result is `Pending`. `suggestions_epoch` is bumped once per call and

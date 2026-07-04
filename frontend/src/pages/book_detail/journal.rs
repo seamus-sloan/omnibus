@@ -358,6 +358,39 @@ fn BdJournalEditorBody(
     }
 }
 
+/// Reading-progress checkbox + slider shown in the composer footer while an
+/// entry is being written.
+#[component]
+fn BdJournalProgressToggle(track_progress: Signal<bool>, progress: Signal<i64>) -> Element {
+    let mut track_progress = track_progress;
+    let mut progress = progress;
+    rsx! {
+        label { class: "bd-journal-progress",
+            input {
+                r#type: "checkbox",
+                checked: track_progress(),
+                oninput: move |e| track_progress.set(e.value() == "true"),
+            }
+            span { class: "label", "Progress" }
+            if track_progress() {
+                input {
+                    r#type: "range",
+                    min: "0",
+                    max: "100",
+                    value: "{progress}",
+                    "data-testid": "journal-progress",
+                    oninput: move |e| {
+                        if let Ok(v) = e.value().parse::<i64>() {
+                            progress.set(v);
+                        }
+                    },
+                }
+                span { class: "mono bd-journal-progress-val", "{progress}%" }
+            }
+        }
+    }
+}
+
 /// Composer footer: reading-progress toggle/slider, inline error, cancel, and
 /// publish. Publishing posts the entry, then resets and closes the composer.
 #[component]
@@ -376,37 +409,13 @@ fn BdJournalComposerFoot(
     let mut reload = reload;
     let mut open = open;
     let mut body = body;
-    let mut track_progress = track_progress;
-    let mut progress = progress;
     let mut saving = saving;
     let mut error = error;
     let mut show_preview = show_preview;
 
     rsx! {
         div { class: "bd-journal-composer-foot",
-            label { class: "bd-journal-progress",
-                input {
-                    r#type: "checkbox",
-                    checked: track_progress(),
-                    oninput: move |e| track_progress.set(e.value() == "true"),
-                }
-                span { class: "label", "Progress" }
-                if track_progress() {
-                    input {
-                        r#type: "range",
-                        min: "0",
-                        max: "100",
-                        value: "{progress}",
-                        "data-testid": "journal-progress",
-                        oninput: move |e| {
-                            if let Ok(v) = e.value().parse::<i64>() {
-                                progress.set(v);
-                            }
-                        },
-                    }
-                    span { class: "mono bd-journal-progress-val", "{progress}%" }
-                }
-            }
+            BdJournalProgressToggle { track_progress, progress }
             span { class: "bd-journal-foot-spacer" }
             if let Some(msg) = error() {
                 span { class: "mono bd-journal-error", role: "alert", "{msg}" }
@@ -456,6 +465,83 @@ fn BdJournalComposerFoot(
     }
 }
 
+/// Entry card header: author monogram + byline (with a "you" chip for the
+/// owner) + date/progress meta, and — for the owner, while not already
+/// editing — the Edit/Delete action row. Delete removes the entry and
+/// reloads the feed; Edit seeds the edit-form body and opens it.
+#[component]
+fn BdJournalEntryHeader(
+    author_name: String,
+    initial: String,
+    is_owner: bool,
+    meta_line: String,
+    entry_id: i64,
+    body_for_edit: String,
+    server_url: String,
+    editing: Signal<bool>,
+    edit_body: Signal<String>,
+    saving: Signal<bool>,
+    error: Signal<Option<String>>,
+    reload: Signal<u32>,
+) -> Element {
+    let mut editing = editing;
+    let mut edit_body = edit_body;
+    let mut saving = saving;
+    let mut error = error;
+    let mut reload = reload;
+
+    rsx! {
+        div { class: "bd-journal-entry-head",
+            span { class: "bd-journal-avatar", aria_hidden: "true", "{initial}" }
+            div { class: "bd-journal-entry-meta",
+                div { class: "bd-journal-entry-byline",
+                    span { class: "bd-journal-author", "{author_name}" }
+                    if is_owner {
+                        span { class: "chip bd-journal-you", "you" }
+                    }
+                }
+                div { class: "mono bd-journal-entry-date", "{meta_line}" }
+            }
+            if is_owner && !editing() {
+                div { class: "bd-journal-entry-actions",
+                    button {
+                        r#type: "button",
+                        class: "btn ghost sm",
+                        "data-testid": "journal-edit",
+                        onclick: move |_| {
+                            edit_body.set(body_for_edit.clone());
+                            error.set(None);
+                            editing.set(true);
+                        },
+                        "Edit"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "btn ghost sm bd-journal-delete",
+                        "data-testid": "journal-delete",
+                        disabled: saving(),
+                        onclick: move |_| {
+                            let url = server_url.clone();
+                            saving.set(true);
+                            error.set(None);
+                            spawn(async move {
+                                match data::delete_journal_entry(&url, entry_id).await {
+                                    Ok(()) => reload.set(reload() + 1),
+                                    Err(e) => {
+                                        error.set(Some(e.to_string()));
+                                        saving.set(false);
+                                    }
+                                }
+                            });
+                        },
+                        "Delete"
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// One journal entry card: author monogram + byline + date/progress, rendered
 /// markdown body, and owner-only inline edit / delete.
 #[component]
@@ -465,11 +551,10 @@ fn BdJournalEntryCard(
     server_url: String,
     reload: Signal<u32>,
 ) -> Element {
-    let mut reload = reload;
-    let mut editing = use_signal(|| false);
-    let mut edit_body = use_signal(|| entry.body_md.clone());
-    let mut saving = use_signal(|| false);
-    let mut error = use_signal(|| None::<String>);
+    let editing = use_signal(|| false);
+    let edit_body = use_signal(|| entry.body_md.clone());
+    let saving = use_signal(|| false);
+    let error = use_signal(|| None::<String>);
 
     let is_owner = current_user
         .as_ref()
@@ -486,62 +571,24 @@ fn BdJournalEntryCard(
         Some(p) => format!("{date} \u{00b7} at {p}%"),
         None => date,
     };
-    let body_for_edit = entry.body_md.clone();
     let entry_id = entry.id;
     let entry_progress = entry.progress;
 
     rsx! {
         article { class: "card bd-journal-entry", "data-testid": "journal-entry",
-            div { class: "bd-journal-entry-head",
-                span { class: "bd-journal-avatar", aria_hidden: "true", "{initial}" }
-                div { class: "bd-journal-entry-meta",
-                    div { class: "bd-journal-entry-byline",
-                        span { class: "bd-journal-author", "{entry.author_name}" }
-                        if is_owner {
-                            span { class: "chip bd-journal-you", "you" }
-                        }
-                    }
-                    div { class: "mono bd-journal-entry-date", "{meta_line}" }
-                }
-                if is_owner && !editing() {
-                    div { class: "bd-journal-entry-actions",
-                        button {
-                            r#type: "button",
-                            class: "btn ghost sm",
-                            "data-testid": "journal-edit",
-                            onclick: move |_| {
-                                edit_body.set(body_for_edit.clone());
-                                error.set(None);
-                                editing.set(true);
-                            },
-                            "Edit"
-                        }
-                        button {
-                            r#type: "button",
-                            class: "btn ghost sm bd-journal-delete",
-                            "data-testid": "journal-delete",
-                            disabled: saving(),
-                            onclick: {
-                                let url = server_url.clone();
-                                move |_| {
-                                    let url = url.clone();
-                                    saving.set(true);
-                                    error.set(None);
-                                    spawn(async move {
-                                        match data::delete_journal_entry(&url, entry_id).await {
-                                            Ok(()) => reload.set(reload() + 1),
-                                            Err(e) => {
-                                                error.set(Some(e.to_string()));
-                                                saving.set(false);
-                                            }
-                                        }
-                                    });
-                                }
-                            },
-                            "Delete"
-                        }
-                    }
-                }
+            BdJournalEntryHeader {
+                author_name: entry.author_name.clone(),
+                initial,
+                is_owner,
+                meta_line,
+                entry_id,
+                body_for_edit: entry.body_md.clone(),
+                server_url: server_url.clone(),
+                editing,
+                edit_body,
+                saving,
+                error,
+                reload,
             }
             if editing() {
                 BdJournalEntryEditForm {
@@ -569,28 +616,13 @@ fn BdJournalEntryCard(
     }
 }
 
-/// Inline edit form for a journal entry: markdown toolbar + textarea/
-/// contenteditable pair (same progressive-enhancement pattern as the
-/// composer, keyed per entry id so multiple open editors don't collide) and
-/// a save/cancel foot. Save posts the update, then closes and reloads the
-/// feed.
+/// Markdown toolbar + textarea/contenteditable pair for editing an existing
+/// entry (same progressive-enhancement pattern as the composer — see
+/// `BdJournalEditorBody`), keyed per entry id so multiple open editors don't
+/// collide.
 #[component]
-fn BdJournalEntryEditForm(
-    entry_id: i64,
-    entry_progress: Option<u8>,
-    server_url: String,
-    edit_body: Signal<String>,
-    saving: Signal<bool>,
-    error: Signal<Option<String>>,
-    editing: Signal<bool>,
-    reload: Signal<u32>,
-) -> Element {
+fn BdJournalEntryEditor(entry_id: i64, edit_body: Signal<String>) -> Element {
     let mut edit_body = edit_body;
-    let mut saving = saving;
-    let mut error = error;
-    let mut editing = editing;
-    let mut reload = reload;
-
     rsx! {
         div { class: "bd-journal-toolbar-row",
             BdJournalToolbar { target_id: format!("journal-edit-editor-{entry_id}") }
@@ -618,6 +650,29 @@ fn BdJournalEntryEditForm(
                 "aria-label": "Edit journal entry",
             }
         }
+    }
+}
+
+/// Inline edit form for a journal entry: the toolbar/editor pair plus a
+/// save/cancel foot. Save posts the update, then closes and reloads the feed.
+#[component]
+fn BdJournalEntryEditForm(
+    entry_id: i64,
+    entry_progress: Option<u8>,
+    server_url: String,
+    edit_body: Signal<String>,
+    saving: Signal<bool>,
+    error: Signal<Option<String>>,
+    editing: Signal<bool>,
+    reload: Signal<u32>,
+) -> Element {
+    let mut saving = saving;
+    let mut error = error;
+    let mut editing = editing;
+    let mut reload = reload;
+
+    rsx! {
+        BdJournalEntryEditor { entry_id, edit_body }
         div { class: "bd-journal-entry-foot",
             if let Some(msg) = error() {
                 span { class: "mono bd-journal-error", role: "alert", "{msg}" }
