@@ -60,17 +60,28 @@ pub(crate) fn format_progress_labels(loc: &RelocateData) -> (String, String) {
 
 /// Drop the previous book's title and kick off a fresh `get_ebook` fetch
 /// whenever `uuid` changes. SPA navigations between books would otherwise
-/// flash the previous title while the request is in flight.
+/// flash the previous title while the request is in flight, and an epoch
+/// guard keeps a slower, superseded fetch from overwriting a newer one.
 pub(crate) fn use_book_metadata(uuid: String) -> Signal<Option<EbookMetadata>> {
     let mut book_meta: Signal<Option<EbookMetadata>> = use_signal(|| None);
     let server_url = use_server_url();
+    // Epoch guard so a fetch for a previously-viewed book can't overwrite
+    // `book_meta` after a newer navigation has already superseded it
+    // (mirrors book_detail's `suggestions_epoch`).
+    let mut fetch_epoch = use_signal(|| 0u64);
     use_effect(use_reactive!(|uuid| {
         book_meta.set(None);
         let url = server_url.clone();
         let uuid = uuid.clone();
+        let epoch = {
+            fetch_epoch.with_mut(|e| *e += 1);
+            *fetch_epoch.peek()
+        };
         spawn(async move {
             if let Ok(Some(b)) = data::get_ebook(&url, &uuid).await {
-                book_meta.set(Some(b));
+                if *fetch_epoch.peek() == epoch {
+                    book_meta.set(Some(b));
+                }
             }
         });
     }));
