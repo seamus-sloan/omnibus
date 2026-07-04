@@ -97,15 +97,18 @@ async fn resolve_auth_user(
         .headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
-    // Header wins; the query token only fills in when no header is present.
-    let query_auth = (allow_query_token && header_auth.is_none())
-        .then(|| query_token(parts.uri.query()).map(|t| format!("Bearer {t}")))
-        .flatten();
-    let authorization = header_auth.or(query_auth.as_deref());
     let cookie_header = parts
         .headers
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok());
+    // The query token is a strict fallback: it fills in only when neither a
+    // bearer header nor a session cookie is present, so a URL `?token=` can
+    // never override an active cookie/bearer session.
+    let has_session_creds = auth_db::parse_session_token(header_auth, cookie_header).is_some();
+    let query_auth = (allow_query_token && !has_session_creds)
+        .then(|| query_token(parts.uri.query()).map(|t| format!("Bearer {t}")))
+        .flatten();
+    let authorization = header_auth.or(query_auth.as_deref());
     match auth_db::validate_session(&pool, authorization, cookie_header).await {
         Ok((user, session)) => Ok(AuthUser {
             id: user.id,

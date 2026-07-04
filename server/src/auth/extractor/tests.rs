@@ -115,24 +115,38 @@ async fn media_app() -> (Router, sqlx::SqlitePool) {
     async fn probe(_user: MediaAuthUser) -> StatusCode {
         StatusCode::OK
     }
+    async fn whoami(user: MediaAuthUser) -> String {
+        user.0.username
+    }
     let router = Router::new()
         .route("/media", get(probe))
+        .route("/whoami", get(whoami))
         .layer(Extension(pool.clone()));
     (router, pool)
 }
 
-async fn seed_bearer_token(pool: &sqlx::SqlitePool) -> String {
-    db::auth::create_user(pool, "alice", "correct horse battery staple")
+/// Seed a user + live session of `kind`, returning the raw session token.
+/// Re-enables registration first — creating the first user disables it, so
+/// seeding a second user (e.g. two distinct sessions) would otherwise fail.
+async fn seed_session(pool: &sqlx::SqlitePool, username: &str, kind: SessionKind) -> String {
+    db::auth::set_registration_enabled(pool, true)
         .await
         .unwrap();
-    let user = db::auth::get_user_by_username(pool, "alice")
+    db::auth::create_user(pool, username, "correct horse battery staple")
+        .await
+        .unwrap();
+    let user = db::auth::get_user_by_username(pool, username)
         .await
         .unwrap()
         .unwrap();
-    db::auth::create_session(pool, user.id, None, SessionKind::Bearer, 3600)
+    db::auth::create_session(pool, user.id, None, kind, 3600)
         .await
         .unwrap()
         .raw_token
+}
+
+async fn seed_bearer_token(pool: &sqlx::SqlitePool) -> String {
+    seed_session(pool, "alice", SessionKind::Bearer).await
 }
 
 #[tokio::test]
@@ -166,6 +180,34 @@ async fn media_auth_still_accepts_a_bearer_header() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn media_auth_query_token_does_not_override_cookie_session() {
+    let (app, pool) = media_app().await;
+    // alice authenticates via cookie; bob holds a separate bearer token. A
+    // request carrying alice's cookie plus bob's `?token=` must resolve as
+    // alice — the query token is a fallback, never an override.
+    let alice_cookie = seed_session(&pool, "alice", SessionKind::Cookie).await;
+    let bob_token = seed_session(&pool, "bob", SessionKind::Bearer).await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/whoami?token={bob_token}"))
+                .header(
+                    header::COOKIE,
+                    format!("{}={}", crate::auth::SESSION_COOKIE, alice_cookie),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..], b"alice");
 }
 
 #[tokio::test]
