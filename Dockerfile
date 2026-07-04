@@ -40,9 +40,10 @@ RUN dx bundle --platform web --package omnibus --fullstack --release
 
 ###############################################################################
 # Runtime — slim image carrying just the bundle, ffmpeg (audiobook HLS
-# transcode), CA certs (remote cover/author-photo fetches), curl (health
-# probe), and gosu (privilege drop). Starts as root so the PUID/PGID
-# entrypoint can remap the app user, then drops to it before serving.
+# transcode), kepubify (EPUB→KEPUB for the "Send to Kobo" download), CA certs
+# (remote cover/author-photo fetches), curl (health probe), and gosu
+# (privilege drop). Starts as root so the PUID/PGID entrypoint can remap the
+# app user, then drops to it before serving.
 ###############################################################################
 # Must match the builder's glibc (trixie) — the server binary is linked against it.
 FROM debian:trixie-slim AS runtime
@@ -51,6 +52,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg ca-certificates curl gosu \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 1000 --user-group --create-home --shell /usr/sbin/nologin omnibus
+
+# kepubify is a single Go binary, not a Debian package — fetch the release
+# matching the image architecture. `db::kepub` invokes it on PATH (or via
+# OMNIBUS_KEPUBIFY_PATH). Absence is non-fatal (falls back to plain EPUB), but
+# ship it so the "Send to Kobo" download serves optimized KEPUB by default.
+ARG KEPUBIFY_VERSION=v4.0.4
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+        amd64) kbin=kepubify-linux-64bit ;; \
+        arm64) kbin=kepubify-linux-arm64 ;; \
+        *) echo "unsupported arch for kepubify: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -L --proto '=https' --tlsv1.2 -sSf \
+        "https://github.com/pgaskin/kepubify/releases/download/${KEPUBIFY_VERSION}/${kbin}" \
+        -o /usr/local/bin/kepubify; \
+    chmod +x /usr/local/bin/kepubify; \
+    kepubify --version
 
 WORKDIR /app
 # The server locates its `public/` assets relative to the binary, so keep the
