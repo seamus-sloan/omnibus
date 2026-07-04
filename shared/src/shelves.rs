@@ -61,6 +61,10 @@ pub enum RuleField {
 pub enum RuleOp {
     Is,
     IsNot,
+    /// case-insensitive substring match — text fields.
+    Contains,
+    /// case-insensitive prefix match — text fields.
+    StartsWith,
     /// "is at least" (≥) — rating / year.
     Gte,
     /// membership test — format.
@@ -110,6 +114,8 @@ wire_enum!(
     RuleOp,
     RuleOp::Is => "is",
     RuleOp::IsNot => "is_not",
+    RuleOp::Contains => "contains",
+    RuleOp::StartsWith => "starts_with",
     RuleOp::Gte => "gte",
     RuleOp::Includes => "includes",
     RuleOp::InLast => "in_last",
@@ -124,11 +130,10 @@ impl RuleField {
         use RuleField::*;
         use RuleOp::*;
         let ok: &[RuleOp] = match self {
-            Tag => &[Is, IsNot],
-            Author | Series => &[Is],
+            Tag | Author | Series => &[Is, IsNot, Contains, StartsWith],
             Rating => &[Is, Gte],
             Status => &[Is],
-            Format => &[Includes],
+            Format => &[Includes, Contains, StartsWith],
             Year => &[Is, Gte],
             DateAdded | DateUpdated => &[InLast, Between, Before, After],
         };
@@ -146,9 +151,11 @@ impl RuleField {
     }
 }
 
-/// One smart-shelf condition. `value` interpretation is per-field (see the
-/// migration comment): author/series → id; tag/status/format → string;
-/// year/rating → int; date fields → ISO date, `START..END`, or `30d`/`3m`/`1y`.
+/// One smart-shelf condition. `value` interpretation is per-field:
+/// tag/author/series/status/format → name (case-insensitive); year/rating → int;
+/// date fields → ISO date, `START..END`, or `30d`/`3m`/`1y`. (Migration `0034`'s
+/// comment predates the author/series id→name switch and is frozen once applied;
+/// this doc is the source of truth.)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShelfRule {
     pub field: RuleField,

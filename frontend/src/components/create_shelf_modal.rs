@@ -30,6 +30,8 @@ const FIELDS: &[(RuleField, &str)] = &[
 const OPS: &[(RuleOp, &str)] = &[
     (RuleOp::Is, "is"),
     (RuleOp::IsNot, "is not"),
+    (RuleOp::Contains, "contains"),
+    (RuleOp::StartsWith, "starts with"),
     (RuleOp::Gte, "is at least"),
     (RuleOp::Includes, "includes"),
     (RuleOp::InLast, "in the last"),
@@ -538,12 +540,13 @@ fn condition_value_input(
         };
     }
 
-    // Rating / Year are numeric; the rest are free text (author/series accept
-    // a numeric id in v1).
+    // Rating / Year are numeric; the rest are free text matched by name
+    // (case-insensitive), so author/series take the name the user sees.
     let (input_type, placeholder) = match draft.field {
         RuleField::Rating => ("number", "4"),
         RuleField::Year => ("number", "2024"),
-        RuleField::Author | RuleField::Series => ("number", "id"),
+        RuleField::Author => ("text", "author name"),
+        RuleField::Series => ("text", "series name"),
         _ => ("text", "value"),
     };
     let step = if matches!(draft.field, RuleField::Rating) {

@@ -527,6 +527,8 @@ fn op_label(op: RuleOp) -> &'static str {
     match op {
         RuleOp::Is => "is",
         RuleOp::IsNot => "is not",
+        RuleOp::Contains => "contains",
+        RuleOp::StartsWith => "starts with",
         RuleOp::Gte => "is at least",
         RuleOp::Includes => "includes",
         RuleOp::InLast => "in the last",
