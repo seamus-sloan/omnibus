@@ -15,6 +15,14 @@ const saveButton = (page: Page) =>
 // button (`data-testid="worker-status"`, issue #69). Target by testid so
 // the assertions stay specific to the form's "Settings saved." line.
 const settingsStatus = (page: Page) => page.getByTestId("settings-status");
+// F3.3 Hardcover-key card controls — testid-scoped since the card has its
+// own "Save"/"Clear" buttons that would otherwise collide with the
+// library-paths form's "Save" button (see `saveButton` above).
+const hardcoverKeyInput = (page: Page) => page.getByLabel("Hardcover API Key");
+const hardcoverSaveButton = (page: Page) => page.getByTestId("hardcover-save");
+const hardcoverClearButton = (page: Page) => page.getByTestId("hardcover-clear");
+const hardcoverStatus = (page: Page) => page.getByTestId("hardcover-status");
+const hardcoverMessage = (page: Page) => page.getByTestId("hardcover-key-status");
 
 test("renders the settings page layout", async ({ page }) => {
   await page.goto("/settings");
@@ -91,4 +99,81 @@ test("shows an error status when saving settings fails", async ({ page }) => {
 
   await expect(settingsStatus(page)).toHaveText("Failed to save settings.");
   await expect(settingsStatus(page)).toHaveClass(/error/);
+});
+
+// ---------------------------------------------------------------------------
+// Action — F3.3 Hardcover key save/clear
+// ---------------------------------------------------------------------------
+
+test("saves a Hardcover key, shows a connected status, then clears it", async ({ page }) => {
+  await gotoReady(page, "/settings");
+
+  const key = `hc_test_${Date.now()}`;
+
+  await hardcoverKeyInput(page).fill(key);
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/hardcover-key",
+      expectedBody: { key },
+      expectedStatus: 200,
+    },
+    async () => hardcoverSaveButton(page).click(),
+  );
+
+  await expect(hardcoverMessage(page)).toHaveText("Hardcover key saved.");
+  await expect(hardcoverMessage(page)).toHaveClass(/success/);
+  await expect(hardcoverStatus(page)).toContainText("Connected");
+  // The raw key is never echoed back to the client.
+  await expect(hardcoverKeyInput(page)).toHaveValue("");
+  await expect(hardcoverClearButton(page)).toBeVisible();
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/hardcover-key",
+      expectedBody: { key: null },
+      expectedStatus: 200,
+    },
+    async () => hardcoverClearButton(page).click(),
+  );
+
+  await expect(hardcoverMessage(page)).toHaveText("Hardcover key cleared.");
+  await expect(hardcoverMessage(page)).toHaveClass(/success/);
+  await expect(hardcoverStatus(page)).toContainText("Not connected");
+  await expect(hardcoverClearButton(page)).toHaveCount(0);
+});
+
+test("shows an error status when saving the Hardcover key fails", async ({ page }) => {
+  await gotoReady(page, "/settings");
+
+  // Only fail the write — the mount-time GET status fetch must still pass
+  // through, otherwise the card never renders the fields under test.
+  await page.route("**/api/rpc/hardcover-key", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
+    }
+    return route.continue();
+  });
+
+  const key = `hc_test_error_${Date.now()}`;
+  await hardcoverKeyInput(page).fill(key);
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/hardcover-key",
+      expectedBody: { key },
+      expectedStatus: 500,
+    },
+    async () => hardcoverSaveButton(page).click(),
+  );
+
+  await expect(hardcoverMessage(page)).toHaveText("Failed to save Hardcover key.");
+  await expect(hardcoverMessage(page)).toHaveClass(/error/);
+  // The failed save must not clear the admin's typed-in draft.
+  await expect(hardcoverKeyInput(page)).toHaveValue(key);
 });
