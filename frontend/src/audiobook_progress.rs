@@ -1,18 +1,8 @@
-//! Listening-position persistence — the saved `currentTime` (seconds, float)
-//! for each audiobook.
-//!
-//! Mirrors [`crate::reader_progress`] in shape: web persists to
-//! `localStorage` keyed by uuid; mobile keeps an in-memory map (resets on
-//! cold launch); server (SSR) is a no-op so the rendered markup never
-//! depends on a stored position.
-//!
-//! Also the offline / first-paint cache layer for the progress-sync endpoint
-//! (`POST /api/progress` with `format: "audio"` and
-//! `audio_position_seconds`): the listen page reads this synchronously
-//! for an instant local position, then reconciles against the server
-//! before mounting. Saves write here AND fire-and-forget POST to the
-//! server. The stored value is the raw second-offset (no JSON envelope).
-//! In-file `#[cfg]`-framing dividers retained per rule 05's nav-aid exception.
+//! Listening-position persistence — the saved `currentTime` (seconds,
+//! float) for each audiobook. Mirrors [`crate::reader_progress`] in shape
+//! (web `localStorage`, mobile in-memory map, server no-op); also the
+//! offline / first-paint cache layer the listen page reads before
+//! reconciling against the `POST /api/progress` sync endpoint.
 
 #[cfg(feature = "web")]
 const STORAGE_PREFIX: &str = "omn.listening::";

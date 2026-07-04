@@ -1,22 +1,8 @@
-//! CSRF origin-check middleware.
-//!
-//! Rejects state-changing cookie-authed requests whose `Origin`/`Referer`
-//! doesn't match either an allowed-origin allowlist or — when no allowlist
-//! is configured — the request's `Host`. Bearer-authed requests (mobile)
-//! are exempt because browsers don't auto-attach bearer headers cross-site.
-//! Safe methods (`GET`/`HEAD`/`OPTIONS`) always pass through.
-//!
-//! Set `OMNIBUS_PUBLIC_ORIGIN` to a comma-separated list of origins
-//! (e.g. `http://localhost:3000,https://omnibus.example.com`) when the
-//! server runs behind a reverse proxy that rewrites `Host` (the dioxus
-//! `dx serve --fullstack` dev proxy does exactly this). Without an
-//! allowlist, a proxied same-origin POST would 403 because the browser's
-//! `Origin` (`localhost:3000`) no longer matches the upstream `Host`
-//! (`127.0.0.1:<random-port>`).
-//!
-//! This is belt-and-braces on top of `SameSite=Lax`, which blocks classic
-//! cross-site form POSTs but is inconsistent across browsers and doesn't
-//! guard subdomain scenarios.
+//! CSRF origin-check middleware. Rejects state-changing cookie-authed
+//! requests whose `Origin`/`Referer` doesn't match either an allowed-origin
+//! allowlist or the request's `Host`; see [`origin_check`] for the exact
+//! rule and the `OMNIBUS_PUBLIC_ORIGIN` env var it reads. Belt-and-braces
+//! on top of `SameSite=Lax`, which is inconsistent across browsers.
 
 use axum::{
     extract::Request,
@@ -38,6 +24,17 @@ fn has_session_cookie(jar: &CookieJar) -> bool {
 }
 
 /// Reject state-changing cookie-authed requests whose `Origin`/`Referer` doesn't match the allowlist or `Host`.
+///
+/// Bearer-authed requests (mobile) are exempt because browsers don't
+/// auto-attach bearer headers cross-site; safe methods (`GET`/`HEAD`/
+/// `OPTIONS`) always pass through. Set `OMNIBUS_PUBLIC_ORIGIN` to a
+/// comma-separated list of origins (e.g.
+/// `http://localhost:3000,https://omnibus.example.com`) when the server
+/// runs behind a reverse proxy that rewrites `Host` (the dioxus
+/// `dx serve --fullstack` dev proxy does exactly this) — without an
+/// allowlist, a proxied same-origin POST would 403 because the browser's
+/// `Origin` (`localhost:3000`) no longer matches the upstream `Host`
+/// (`127.0.0.1:<random-port>`).
 pub async fn origin_check(req: Request, next: Next) -> Response {
     let method = req.method();
     if matches!(method, &Method::GET | &Method::HEAD | &Method::OPTIONS) {
