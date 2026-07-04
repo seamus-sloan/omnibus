@@ -52,6 +52,7 @@ In [server/src/backend.rs](../../../server/src/backend.rs):
 
 - Register on `rest_router()` with `.route(...)`.
 - **First argument is the auth extractor** (`_user: AuthUser` for read paths and per-user mutations, `_admin: AdminUser` for shared-config writes). Then `State<AppState>` for the pool, `Json<T>` / `Path<…>` / `Query<…>` for the rest. F0.7 makes this mandatory — without an extractor the route would default to "any logged-in user" which defeats the per-user permission columns.
+- **Image-serving GET whose bytes go into an `<img src>`** (covers/thumbs/photos): use `_user: MediaAuthUser` instead of `AuthUser`, and add the path prefix to `is_media_read_path` in `auth/gate.rs`. Both accept the session as a `?token=` query param — a mobile WebView's `<img>` fetch carries neither the bearer header nor a cookie. On the frontend build the URL via `crate::media_url` / `crate::thumb_url` (in `contexts.rs`) so the token is appended per URL, including each `srcset` candidate.
 - Pick a URL under `/api/<resource>` that does **not** collide with the `/api/rpc/*` namespace used by server functions.
 - Return `Response` with explicit status + error string on failure so mobile's error UI can surface it.
 

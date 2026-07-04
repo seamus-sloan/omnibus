@@ -17,7 +17,7 @@ use omnibus_shared::{BookSuggestion, RawSuggestion, SuggestionsResponse};
 use serde::Deserialize;
 
 use super::{internal, AppState};
-use crate::auth::{AdminUser, AuthUser};
+use crate::auth::{AdminUser, AuthUser, MediaAuthUser};
 
 fn now_secs() -> i64 {
     SystemTime::now()
@@ -84,7 +84,7 @@ pub(super) async fn get_suggestions(
 /// Stream a cached suggestion cover's bytes; 404 on miss. Same cache semantics
 /// as `/api/covers/{uuid}`.
 pub(super) async fn get_suggestion_cover(
-    _user: AuthUser,
+    _user: MediaAuthUser,
     State(state): State<AppState>,
     Path((uuid, rank)): Path<(String, i64)>,
 ) -> Response {

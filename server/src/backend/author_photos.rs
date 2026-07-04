@@ -17,7 +17,7 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 
 use super::{internal, AppState};
-use crate::auth::{AdminUser, AuthUser};
+use crate::auth::{AdminUser, MediaAuthUser};
 
 /// Returns `true` when an `authors` row with `id` exists. Extracted because
 /// the three admin-mutation handlers below all need an "author exists?"
@@ -36,7 +36,7 @@ async fn author_exists(pool: &SqlitePool, id: i64) -> Result<bool, sqlx::Error> 
 /// letter avatar in that case. On a miss, enqueues a background resolution
 /// task so a subsequent page view can render the resolved photo.
 pub(super) async fn get_author_photo(
-    _user: AuthUser,
+    _user: MediaAuthUser,
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Response {

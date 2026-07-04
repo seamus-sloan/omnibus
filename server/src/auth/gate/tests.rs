@@ -10,11 +10,27 @@ async fn app() -> (Router, sqlx::SqlitePool) {
     let state = AppState::new(pool.clone());
     let router = Router::new()
         .route("/api/value", get(|| async { "ok" }))
+        .route("/api/thumbs/{uuid}/{size}", get(|| async { "thumb ok" }))
         .route("/api/auth/login", get(|| async { "login ok" }))
         .route("/api/_health", get(|| async { "health ok" }))
         .route("/", get(|| async { "home" }))
         .layer(from_fn_with_state(state, require_auth));
     (router, pool)
+}
+
+/// Seed a user + live bearer session, returning the raw token.
+async fn seed_bearer_token(pool: &sqlx::SqlitePool) -> String {
+    db::auth::create_user(pool, "alice", "correct horse battery staple")
+        .await
+        .unwrap();
+    let user = db::auth::get_user_by_username(pool, "alice")
+        .await
+        .unwrap()
+        .unwrap();
+    db::auth::create_session(pool, user.id, None, SessionKind::Bearer, 3600)
+        .await
+        .unwrap()
+        .raw_token
 }
 
 #[tokio::test]
@@ -178,6 +194,56 @@ async fn gated_api_with_revoked_session_is_401() {
                     axum::http::header::AUTHORIZATION,
                     format!("Bearer {}", issued.raw_token),
                 )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn media_get_with_query_token_passes() {
+    let (app, pool) = app().await;
+    let token = seed_bearer_token(&pool).await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/thumbs/some-uuid/md?token={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn media_get_with_invalid_query_token_is_401() {
+    let (app, pool) = app().await;
+    seed_bearer_token(&pool).await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/thumbs/some-uuid/md?token=not-a-real-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn non_media_path_ignores_query_token() {
+    // The `?token=` fallback is confined to media read paths; a valid token
+    // in the query must NOT unlock a normal gated route.
+    let (app, pool) = app().await;
+    let token = seed_bearer_token(&pool).await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/value?token={token}"))
                 .body(Body::empty())
                 .unwrap(),
         )

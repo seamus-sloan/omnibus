@@ -385,15 +385,15 @@ fn render_author_card(a: &AuthorSummary, server_url: &str) -> Element {
             class: "idx-card idx-card-author",
             style: "--accent: {accent}",
             "data-testid": "author-card",
-            // F1.11: swap the letter glyph for the cached profile photo
-            // when one exists. `server_url` is empty on web (same-origin
-            // fetch) and the configured backend URL on mobile so the
-            // markup is portable. Editing the photo lives on the author
-            // detail page — the index is read-only.
+            // F1.11: swap the letter glyph for the cached profile photo when
+            // one exists. `media_url` keeps the markup portable — same-origin
+            // relative on web, server base + `?token=` on mobile so the
+            // WebView's `<img>` fetch authenticates. Editing the photo lives
+            // on the author detail page — the index is read-only.
             if a.has_photo {
                 img {
                     class: "idx-card-avatar idx-card-avatar--photo",
-                    src: "{server_url}/api/authors/{id}/photo",
+                    src: crate::media_url(server_url, &format!("/api/authors/{id}/photo")),
                     alt: "{name}",
                 }
             } else {

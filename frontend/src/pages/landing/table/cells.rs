@@ -172,14 +172,19 @@ pub(super) fn RowScalarCell(
 /// Cover-thumbnail `<td>` — image with srcset when a cover exists, em-dash
 /// fallback otherwise.
 #[component]
-pub(super) fn EbookRowCoverCell(thumb_base: String, has_cover: bool, alt_title: String) -> Element {
+pub(super) fn EbookRowCoverCell(
+    thumb_src: String,
+    thumb_srcset: String,
+    has_cover: bool,
+    alt_title: String,
+) -> Element {
     rsx! {
         td { class: "ebook-col-cover", "data-testid": "ebook-cell-cover",
             if has_cover {
                 img {
                     class: "ebook-thumb",
-                    src: "{thumb_base}/md",
-                    srcset: "{thumb_base}/sm 160w, {thumb_base}/md 320w, {thumb_base}/lg 640w",
+                    src: "{thumb_src}",
+                    srcset: "{thumb_srcset}",
                     sizes: "(max-width: 640px) 160px, (max-width: 1280px) 320px, 640px",
                     alt: "Cover of {alt_title}",
                     loading: "lazy",
