@@ -103,14 +103,16 @@ fn surface_js(parts_json: &str, resume_lit: &str, rate_lit: &str) -> String {
   var acc = 0;
   for (var i = 0; i < parts.length; i++) {{ offsets.push(acc); acc += (parts[i].duration || 0); }}
 
-  var el = document.getElementById('m-omnibus-audio');
-  if (!el) {{
-    el = document.createElement('audio');
-    el.id = 'm-omnibus-audio';
-    el.preload = 'auto';
-    el.style.display = 'none';
-    document.body.appendChild(el);
-  }}
+  // Drop any prior element before reinstalling: reusing it would stack a fresh
+  // set of timeupdate/play/pause/ended listeners (and orphan the old Eval
+  // channel's dioxus.send closures) on every SPA re-entry / book switch.
+  var old = document.getElementById('m-omnibus-audio');
+  if (old) {{ try {{ old.pause(); }} catch(_e) {{}} old.remove(); }}
+  var el = document.createElement('audio');
+  el.id = 'm-omnibus-audio';
+  el.preload = 'auto';
+  el.style.display = 'none';
+  document.body.appendChild(el);
   try {{ el.playbackRate = rate; }} catch(_e) {{}}
 
   function absTime() {{

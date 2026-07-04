@@ -61,14 +61,16 @@ pub fn MobilePlayer(uuid: String) -> Element {
     if let Some(msg) = error.read().clone() {
         return render_error(&msg);
     }
-    if unsupported() {
-        return render_unsupported();
-    }
+    // Read the derived view before branching on `unsupported` so the HLS path
+    // can still draw the cover hero + title behind the unsupported message.
     let Some(v) = view.read().clone() else {
         return rsx! {
             div { class: "m-player-loading", p { class: "subtitle", "Loading\u{2026}" } }
         };
     };
+    if unsupported() {
+        return render_unsupported(&v, &uuid, &server_url);
+    }
 
     let elapsed_now = elapsed();
     let dur = if duration() > 0.0 {
@@ -256,13 +258,38 @@ fn render_error(msg: &str) -> Element {
     }
 }
 
-fn render_unsupported() -> Element {
+/// Streaming (HLS) books can't play on mobile yet, but we still show the cover
+/// hero + title/author so the screen isn't a bare error — only the transport is
+/// withheld behind the unsupported message.
+fn render_unsupported(view: &PlayerView, uuid: &str, server_url: &str) -> Element {
+    let accent_style = view
+        .accent
+        .as_deref()
+        .map(|a| format!("--accent: {a};"))
+        .unwrap_or_default();
     rsx! {
-        div { class: "m-player-msg",
-            p { class: "subtitle",
-                "This audiobook uses a streaming format not yet supported on mobile."
+        div { class: "m-player", style: "{accent_style}",
+            div { class: "m-player-glow" }
+            div { class: "m-player-bar",
+                Link { to: Route::BookDetail { uuid: uuid.to_string() }, class: "m-icon-btn", "aria-label": "Back", "\u{2190}" }
             }
-            Link { to: Route::Landing {}, class: "btn", "Back to library" }
+            div { class: "m-player-cover",
+                Cover {
+                    book: view.book.clone(),
+                    src_override: cover_src(&view.book, uuid, server_url),
+                    sizes: Some("220px".to_string()),
+                }
+            }
+            div { class: "m-player-now",
+                h1 { class: "m-player-title", span { class: "m-em", "{view.title}" } }
+                div { class: "m-player-by", "by {view.author}" }
+            }
+            div { class: "m-player-msg",
+                p { class: "subtitle",
+                    "This audiobook uses a streaming format not yet supported on mobile."
+                }
+                Link { to: Route::Landing {}, class: "btn", "Back to library" }
+            }
         }
     }
 }
@@ -304,11 +331,17 @@ fn render_player(p: PlayerProps) -> Element {
     let has_chapters = !view.chapters.is_empty();
 
     // Transport handlers — all route through the JS control surface.
-    let uuid_seek = uuid.clone();
-    let su_seek = server_url.clone();
-    let on_seek = move |evt: Event<FormData>| {
+    // Seek live on every input, but only persist on release (`onchange`) so
+    // dragging the scrubber doesn't spam local writes + server POSTs.
+    let on_seek_input = move |evt: Event<FormData>| {
         if let Ok(secs) = evt.value().parse::<f64>() {
             interop::seek(secs);
+        }
+    };
+    let uuid_seek = uuid.clone();
+    let su_seek = server_url.clone();
+    let on_seek_commit = move |evt: Event<FormData>| {
+        if let Ok(secs) = evt.value().parse::<f64>() {
             persist_position(&uuid_seek, &su_seek, secs);
         }
     };
@@ -380,7 +413,8 @@ fn render_player(p: PlayerProps) -> Element {
                     max: "{scrub_max}",
                     step: "1",
                     value: "{elapsed}",
-                    oninput: on_seek,
+                    oninput: on_seek_input,
+                    onchange: on_seek_commit,
                 }
                 div { class: "m-player-times mono",
                     span { "{format_hms(elapsed)}" }
