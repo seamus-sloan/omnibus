@@ -145,6 +145,10 @@ pub fn LoginPage() -> Element {
     };
 
     #[cfg(feature = "mobile")]
+    let mut username = username;
+    #[cfg(feature = "mobile")]
+    let mut password = password;
+    #[cfg(feature = "mobile")]
     let out = m_auth_shell(
         "Your library, wherever you are.",
         rsx! {
