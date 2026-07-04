@@ -6,7 +6,7 @@ use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]
 use dioxus_router::use_navigator;
 use dioxus_router::Link;
-use omnibus_shared::AuthorDetail;
+use omnibus_shared::{AuthorDetail, EbookMetadata};
 
 use crate::components::atrium::Cover;
 use crate::components::author_photo_edit::AuthorPhotoEditOverlay;
@@ -82,10 +82,11 @@ pub fn AuthorPage(id: i64) -> Element {
     render_author(a, server_url, author, is_admin_flag)
 }
 
+// allow: ~86 lines — splitting further means threading the mobile-gated admin-delete signals across a function boundary that doesn't exist on mobile builds.
 fn render_author(
     a: AuthorDetail,
     server_url: String,
-    mut author: Signal<Option<AuthorDetail>>,
+    author: Signal<Option<AuthorDetail>>,
     #[cfg_attr(feature = "mobile", allow(unused_variables))] is_admin: bool,
 ) -> Element {
     // Derive accent from the first book that has one, or fall back to theme.
@@ -94,41 +95,9 @@ fn render_author(
         .iter()
         .find_map(|b| b.accent.as_deref())
         .unwrap_or("var(--accent)");
-
-    // Split first / last name for italic styling.
-    let parts: Vec<&str> = a.name.splitn(2, ' ').collect();
-    let first = parts.first().copied().unwrap_or("");
-    let last = if parts.len() > 1 { parts[1] } else { "" };
-
-    // Initial letter for the avatar.
-    let initial = a
-        .name
-        .chars()
-        .next()
-        .unwrap_or('?')
-        .to_uppercase()
-        .to_string();
-
-    // Group books by series — series books first, standalone after.
-    let mut series_groups: Vec<(String, i64, Vec<&omnibus_shared::EbookMetadata>)> = Vec::new();
-    let mut standalone: Vec<&omnibus_shared::EbookMetadata> = Vec::new();
-
-    for book in &a.books {
-        if let Some(ref series_name) = book.series {
-            if let Some(group) = series_groups
-                .iter_mut()
-                .find(|(name, _, _)| name == series_name)
-            {
-                group.2.push(book);
-            } else {
-                let sid = book.series_id.unwrap_or(0);
-                series_groups.push((series_name.clone(), sid, vec![book]));
-            }
-        } else {
-            standalone.push(book);
-        }
-    }
-
+    let (first, last) = split_name(&a.name);
+    let initial = author_initial(&a.name);
+    let (series_groups, standalone) = group_books_by_series(&a.books);
     let bg_style = format!(
         "radial-gradient(50% 80% at 80% 20%, color-mix(in oklch, {accent} 14%, transparent), transparent 70%)"
     );
@@ -145,170 +114,226 @@ fn render_author(
     #[cfg(not(feature = "mobile"))]
     let delete_error: Signal<Option<String>> = use_signal(|| None);
 
+    // F5.9-lite admin Delete affordance is web-only — the matching
+    // `data::delete_author` server fn is gated `not(feature = "mobile")`
+    // per the F5.9-lite plan's "admin-web only" v1 scope.
+    let admin_actions = {
+        #[cfg(not(feature = "mobile"))]
+        let admin_actions = is_admin.then(|| {
+            rsx! {
+                div { class: "author-admin-actions",
+                    button {
+                        class: "btn author-delete-btn",
+                        "data-testid": "author-delete-btn",
+                        onclick: {
+                            let mut show_confirm = show_confirm;
+                            let mut delete_error = delete_error;
+                            move |_| {
+                                delete_error.set(None);
+                                show_confirm.set(true);
+                            }
+                        },
+                        "Delete author"
+                    }
+                }
+            }
+        });
+        #[cfg(feature = "mobile")]
+        let admin_actions: Option<Element> = None;
+        admin_actions
+    };
+
+    let modal = {
+        #[cfg(not(feature = "mobile"))]
+        let modal = show_confirm().then(|| {
+            rsx! {
+                AuthorDeleteModal {
+                    author_id: a.id,
+                    author_name: a.name.clone(),
+                    book_count: a.book_count,
+                    server_url: server_url.clone(),
+                    state: AuthorDeleteState {
+                        show_confirm,
+                        deleting,
+                        delete_error,
+                    },
+                }
+            }
+        });
+        #[cfg(feature = "mobile")]
+        let modal: Option<Element> = None;
+        modal
+    };
+
+    let hero_text = AuthorHeroText {
+        first,
+        last,
+        initial: &initial,
+        bg_style: &bg_style,
+    };
     rsx! {
         div { class: "disc-page", style: "--accent: {accent}",
-            // Hero header
-            div { class: "disc-hero", style: "background: {bg_style}",
-                // Breadcrumb
-                nav { class: "breadcrumb",
-                    Link { to: Route::Landing {}, "Library" }
-                    span { class: "breadcrumb-sep", " › " }
-                    span { "{a.name}" }
+            {author_hero(&a, &server_url, author, hero_text, admin_actions)}
+            {modal}
+            {author_body(&series_groups, &standalone)}
+        }
+    }
+}
+
+/// Display strings the hero renders: first/last name split, avatar-letter
+/// fallback, and the accent background-gradient CSS. Bundled so
+/// `author_hero` stays within clippy's argument-count lint.
+struct AuthorHeroText<'a> {
+    first: &'a str,
+    last: &'a str,
+    initial: &'a str,
+    bg_style: &'a str,
+}
+
+/// Hero header: breadcrumb, avatar (with the hover-revealed photo-edit
+/// overlay), name + admin delete affordance, and the book-count stat.
+fn author_hero(
+    a: &AuthorDetail,
+    server_url: &str,
+    author: Signal<Option<AuthorDetail>>,
+    text: AuthorHeroText<'_>,
+    admin_actions: Option<Element>,
+) -> Element {
+    let AuthorHeroText {
+        first,
+        last,
+        initial,
+        bg_style,
+    } = text;
+    rsx! {
+        div { class: "disc-hero", style: "background: {bg_style}",
+            nav { class: "breadcrumb",
+                Link { to: Route::Landing {}, "Library" }
+                span { class: "breadcrumb-sep", " › " }
+                span { "{a.name}" }
+            }
+            div { class: "disc-hero-grid",
+                {author_avatar(a, server_url, author, initial)}
+                div { class: "disc-hero-info",
+                    h1 { class: "disc-hero-title",
+                        "{first} "
+                        if !last.is_empty() {
+                            em { "{last}" }
+                        }
+                    }
+                    {admin_actions}
                 }
-                div { class: "disc-hero-grid",
-                    // Avatar — letter fallback by default; F1.11 swaps in
-                    // the cached profile photo when `has_photo` is set.
-                    // Wrapped in `AuthorPhotoEditOverlay` so a hover-revealed
-                    // pencil opens the URL/upload/scan modal. The on_change
-                    // callback re-fetches the author payload so the new
-                    // photo (or restored letter, after a scan miss) replaces
-                    // the hero in place.
-                    AuthorPhotoEditOverlay {
-                        author_id: a.id,
-                        author_name: a.name.clone(),
-                        server_url: server_url.clone(),
-                        on_change: {
-                            let server_url = server_url.clone();
-                            let author_id = a.id;
-                            move |_| {
-                                let server_url = server_url.clone();
-                                spawn(async move {
-                                    if let Ok(a2) =
-                                        data::get_author(&server_url, author_id).await
-                                    {
-                                        author.set(a2);
-                                    }
-                                });
-                            }
-                        },
-                        if a.has_photo {
-                            img {
-                                class: "disc-avatar disc-avatar--photo",
-                                // `media_url` server-prefixes and (mobile)
-                                // appends the session token so the WebView's
-                                // `<img>` fetch authenticates; no-op on web.
-                                src: crate::media_url(&server_url, &format!("/api/authors/{}/photo", a.id)),
-                                alt: "{a.name}",
+                div { class: "disc-stat-block",
+                    span { class: "disc-stat-label label", "In your library" }
+                    span { class: "disc-stat", "{a.book_count}" }
+                }
+            }
+        }
+    }
+}
+
+/// Avatar — letter fallback by default; F1.11 swaps in the cached profile
+/// photo when `has_photo` is set. Wrapped in `AuthorPhotoEditOverlay` so a
+/// hover-revealed pencil opens the URL/upload/scan modal. The `on_change`
+/// callback re-fetches the author payload so the new photo (or restored
+/// letter, after a scan miss) replaces the hero in place.
+fn author_avatar(
+    a: &AuthorDetail,
+    server_url: &str,
+    mut author: Signal<Option<AuthorDetail>>,
+    initial: &str,
+) -> Element {
+    rsx! {
+        AuthorPhotoEditOverlay {
+            author_id: a.id,
+            author_name: a.name.clone(),
+            server_url: server_url.to_string(),
+            on_change: {
+                let server_url = server_url.to_string();
+                let author_id = a.id;
+                move |_| {
+                    let server_url = server_url.clone();
+                    spawn(async move {
+                        if let Ok(a2) = data::get_author(&server_url, author_id).await {
+                            author.set(a2);
+                        }
+                    });
+                }
+            },
+            if a.has_photo {
+                img {
+                    class: "disc-avatar disc-avatar--photo",
+                    // `media_url` server-prefixes and (mobile) appends the
+                    // session token so the WebView's `<img>` fetch
+                    // authenticates; no-op on web.
+                    src: crate::media_url(server_url, &format!("/api/authors/{}/photo", a.id)),
+                    alt: "{a.name}",
+                }
+            } else {
+                div { class: "disc-avatar", "{initial}" }
+            }
+        }
+    }
+}
+
+/// One (series name, series id, books-in-series) group per distinct
+/// series, in first-seen order.
+type SeriesGroups<'a> = Vec<(String, i64, Vec<&'a EbookMetadata>)>;
+
+/// Body: books grouped by series (each in its own section, linking to
+/// `SeriesDetail` when the series is a real row), then a trailing
+/// "Other works" section for standalone titles.
+fn author_body(series_groups: &SeriesGroups<'_>, standalone: &[&EbookMetadata]) -> Element {
+    rsx! {
+        div { class: "disc-body",
+            for (series_name, series_id, books) in series_groups.iter() {
+                div { class: "disc-section",
+                    div { class: "disc-section-head",
+                        span { class: "label", "Series" }
+                        if *series_id > 0 {
+                            Link {
+                                to: Route::SeriesDetail { id: *series_id },
+                                class: "disc-section-title",
+                                h2 { "{series_name}" }
                             }
                         } else {
-                            div { class: "disc-avatar", "{initial}" }
+                            h2 { class: "disc-section-title", "{series_name}" }
                         }
                     }
-                    // Name + metadata
-                    div { class: "disc-hero-info",
-                        h1 { class: "disc-hero-title",
-                            "{first} "
-                            if !last.is_empty() {
-                                em { "{last}" }
-                            }
-                        }
-                        // F5.9-lite admin Delete affordance is web-only —
-                        // the matching `data::delete_author` server fn
-                        // is gated `not(feature = "mobile")` per the
-                        // F5.9-lite plan's "admin-web only" v1 scope.
-                        {
-                            #[cfg(not(feature = "mobile"))]
-                            let admin_actions = is_admin.then(|| rsx! {
-                                div { class: "author-admin-actions",
-                                    button {
-                                        class: "btn author-delete-btn",
-                                        "data-testid": "author-delete-btn",
-                                        onclick: {
-                                            let mut show_confirm = show_confirm;
-                                            let mut delete_error = delete_error;
-                                            move |_| {
-                                                delete_error.set(None);
-                                                show_confirm.set(true);
-                                            }
-                                        },
-                                        "Delete author"
+                    div { class: "disc-grid",
+                        for book in books.iter() {
+                            Link {
+                                key: "{book.id}",
+                                to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
+                                class: "lib-tile",
+                                Cover { book: (*book).clone() }
+                                div { class: "lib-tile-title",
+                                    if let Some(ref idx) = book.series_index {
+                                        "#{idx} · "
                                     }
-                                }
-                            });
-                            #[cfg(feature = "mobile")]
-                            let admin_actions: Option<Element> = None;
-                            admin_actions
-                        }
-                    }
-                    // Book count stat
-                    div { class: "disc-stat-block",
-                        span { class: "disc-stat-label label", "In your library" }
-                        span { class: "disc-stat", "{a.book_count}" }
-                    }
-                }
-            }
-
-            {
-                #[cfg(not(feature = "mobile"))]
-                let modal = show_confirm().then(|| rsx! {
-                    AuthorDeleteModal {
-                        author_id: a.id,
-                        author_name: a.name.clone(),
-                        book_count: a.book_count,
-                        server_url: server_url.clone(),
-                        state: AuthorDeleteState {
-                            show_confirm,
-                            deleting,
-                            delete_error,
-                        },
-                    }
-                });
-                #[cfg(feature = "mobile")]
-                let modal: Option<Element> = None;
-                modal
-            }
-
-            // Body: books grouped by series
-            div { class: "disc-body",
-                for (series_name, series_id, books) in series_groups.iter() {
-                    div { class: "disc-section",
-                        div { class: "disc-section-head",
-                            span { class: "label", "Series" }
-                            if *series_id > 0 {
-                                Link {
-                                    to: Route::SeriesDetail { id: *series_id },
-                                    class: "disc-section-title",
-                                    h2 { "{series_name}" }
-                                }
-                            } else {
-                                h2 { class: "disc-section-title", "{series_name}" }
-                            }
-                        }
-                        div { class: "disc-grid",
-                            for book in books.iter() {
-                                Link {
-                                    key: "{book.id}",
-                                    to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
-                                    class: "lib-tile",
-                                    Cover { book: (*book).clone() }
-                                    div { class: "lib-tile-title",
-                                        if let Some(ref idx) = book.series_index {
-                                            "#{idx} · "
-                                        }
-                                        "{book.title.as_deref().unwrap_or(&book.filename)}"
-                                    }
+                                    "{book.title.as_deref().unwrap_or(&book.filename)}"
                                 }
                             }
                         }
                     }
                 }
+            }
 
-                if !standalone.is_empty() {
-                    div { class: "disc-section",
-                        div { class: "disc-section-head",
-                            span { class: "label", "Other works" }
-                            h2 { class: "disc-section-title", "Standalone & novellas" }
-                        }
-                        div { class: "disc-grid",
-                            for book in standalone.iter() {
-                                Link {
-                                    key: "{book.id}",
-                                    to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
-                                    class: "lib-tile",
-                                    Cover { book: (*book).clone() }
-                                    div { class: "lib-tile-title",
-                                        "{book.title.as_deref().unwrap_or(&book.filename)}"
-                                    }
+            if !standalone.is_empty() {
+                div { class: "disc-section",
+                    div { class: "disc-section-head",
+                        span { class: "label", "Other works" }
+                        h2 { class: "disc-section-title", "Standalone & novellas" }
+                    }
+                    div { class: "disc-grid",
+                        for book in standalone.iter() {
+                            Link {
+                                key: "{book.id}",
+                                to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
+                                class: "lib-tile",
+                                Cover { book: (*book).clone() }
+                                div { class: "lib-tile-title",
+                                    "{book.title.as_deref().unwrap_or(&book.filename)}"
                                 }
                             }
                         }
@@ -317,6 +342,49 @@ fn render_author(
             }
         }
     }
+}
+
+/// Splits an author's display name into first-name / rest, for the
+/// hero title's `First ` + *Rest* italic styling.
+fn split_name(name: &str) -> (&str, &str) {
+    let parts: Vec<&str> = name.splitn(2, ' ').collect();
+    let first = parts.first().copied().unwrap_or("");
+    let last = if parts.len() > 1 { parts[1] } else { "" };
+    (first, last)
+}
+
+/// Uppercased first character of the name, for the letter-fallback avatar.
+fn author_initial(name: &str) -> String {
+    name.chars()
+        .next()
+        .unwrap_or('?')
+        .to_uppercase()
+        .to_string()
+}
+
+/// Groups an author's books by series (in first-seen order, each series'
+/// books in scan order), with non-series titles collected separately.
+fn group_books_by_series(books: &[EbookMetadata]) -> (SeriesGroups<'_>, Vec<&EbookMetadata>) {
+    let mut series_groups: SeriesGroups<'_> = Vec::new();
+    let mut standalone: Vec<&EbookMetadata> = Vec::new();
+
+    for book in books {
+        if let Some(ref series_name) = book.series {
+            if let Some(group) = series_groups
+                .iter_mut()
+                .find(|(name, _, _)| name == series_name)
+            {
+                group.2.push(book);
+            } else {
+                let sid = book.series_id.unwrap_or(0);
+                series_groups.push((series_name.clone(), sid, vec![book]));
+            }
+        } else {
+            standalone.push(book);
+        }
+    }
+
+    (series_groups, standalone)
 }
 
 /// Transient state for the delete-author modal: whether the confirm
