@@ -89,6 +89,13 @@ pub fn LoginPage() -> Element {
                         name: "username",
                         r#type: "text",
                         autocomplete: "username",
+                        // iOS soft keyboards default to autocapitalize=sentences
+                        // + autocorrect on; either mangles a typed credential
+                        // before `oninput` fires. Usernames are case-folded in
+                        // the DB, but keep parity with the password field.
+                        autocapitalize: "none",
+                        autocorrect: "off",
+                        spellcheck: "false",
                         value: "{username}",
                         oninput: move |e| username.set(e.value()),
                         onkeydown: on_keydown,
@@ -112,6 +119,12 @@ pub fn LoginPage() -> Element {
                         name: "password",
                         r#type: "password",
                         autocomplete: "current-password",
+                        // Without these, an iOS soft keyboard capitalizes the
+                        // first char (e.g. `omnibus-dev` → `Omnibus-dev`) and
+                        // the case-sensitive hash check 401s.
+                        autocapitalize: "none",
+                        autocorrect: "off",
+                        spellcheck: "false",
                         value: "{password}",
                         oninput: move |e| password.set(e.value()),
                         onkeydown: on_keydown,
@@ -281,6 +294,9 @@ fn RegisterForm(
                     name: "username",
                     r#type: "text",
                     autocomplete: "username",
+                    autocapitalize: "none",
+                    autocorrect: "off",
+                    spellcheck: "false",
                     value: "{username}",
                     aria_invalid: "{username_invalid}",
                     oninput: move |e| {
@@ -299,6 +315,9 @@ fn RegisterForm(
                     name: "password",
                     r#type: "password",
                     autocomplete: "new-password",
+                    autocapitalize: "none",
+                    autocorrect: "off",
+                    spellcheck: "false",
                     value: "{password}",
                     aria_invalid: "{password_invalid}",
                     onkeydown: on_keydown,
