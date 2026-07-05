@@ -47,6 +47,16 @@ CREATE INDEX idx_books_timestamp     ON books(timestamp);
 CREATE INDEX idx_books_library_last_modified ON books (library_id, last_modified, id);
 CREATE INDEX idx_books_library_timestamp     ON books (library_id, timestamp, id);
 
+-- The recreate `INSERT ... SELECT`s below re-validate every foreign key with
+-- enforcement ON, which the live tables never did for rows that predate a
+-- parent's deletion (FK actions only fire when enforcement is continuous). Real
+-- databases carry such orphans — e.g. `author_photos` rows whose author was
+-- garbage-collected — so each copy repairs them the way an enforced FK would:
+-- rows under a NOT NULL CASCADE reference are dropped if the parent is gone
+-- (`WHERE EXISTS`), and SET NULL references are coerced to NULL via a
+-- `(SELECT id FROM parent WHERE id = child.ref)` lookup. Without this the
+-- migration aborts with `FOREIGN KEY constraint failed` on the first orphan.
+
 -- metadata_overrides.updated_at: TEXT -> INTEGER (recreate; nothing FK-refs it).
 CREATE TABLE metadata_overrides_new (
     book_uuid          TEXT    NOT NULL PRIMARY KEY,
@@ -56,9 +66,10 @@ CREATE TABLE metadata_overrides_new (
     updated_at         INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
 INSERT INTO metadata_overrides_new
-    SELECT book_uuid, overrides, has_cover_override, updated_by,
+    SELECT book_uuid, overrides, has_cover_override,
+           (SELECT u.id FROM users u WHERE u.id = mo.updated_by),
            CAST(strftime('%s', updated_at) AS INTEGER)
-      FROM metadata_overrides;
+      FROM metadata_overrides mo;
 DROP TABLE metadata_overrides;
 ALTER TABLE metadata_overrides_new RENAME TO metadata_overrides;
 CREATE INDEX idx_metadata_overrides_updated ON metadata_overrides(updated_at);
@@ -79,7 +90,8 @@ CREATE TABLE author_photos_new (
 INSERT INTO author_photos_new
     SELECT author_id, source, url, bytes, mime,
            CAST(strftime('%s', fetched_at) AS INTEGER)
-      FROM author_photos;
+      FROM author_photos ap
+     WHERE EXISTS (SELECT 1 FROM authors a WHERE a.id = ap.author_id);
 DROP TABLE author_photos;
 ALTER TABLE author_photos_new RENAME TO author_photos;
 
@@ -94,11 +106,13 @@ CREATE TABLE merge_log_new (
     undone_at       INTEGER
 );
 INSERT INTO merge_log_new
-    SELECT id, target_book_id, source_uuid, source_metadata, merged_by,
+    SELECT id, target_book_id, source_uuid, source_metadata,
+           (SELECT u.id FROM users u WHERE u.id = ml.merged_by),
            CAST(strftime('%s', merged_at) AS INTEGER),
            CASE WHEN undone_at IS NULL THEN NULL
                 ELSE CAST(strftime('%s', undone_at) AS INTEGER) END
-      FROM merge_log;
+      FROM merge_log ml
+     WHERE EXISTS (SELECT 1 FROM books b WHERE b.id = ml.target_book_id);
 DROP TABLE merge_log;
 ALTER TABLE merge_log_new RENAME TO merge_log;
 CREATE INDEX idx_merge_log_target ON merge_log(target_book_id);

@@ -244,6 +244,60 @@ async fn migration_0038_text_datetime_converts_to_exact_unix_seconds() {
 }
 
 #[tokio::test]
+async fn migration_0038_recreate_drops_orphan_author_photos() {
+    // Real databases carry rows that violate a declared FK because the parent
+    // was removed while enforcement was off — e.g. GC'd authors leaving orphan
+    // `author_photos`. 0038's table recreates re-validate every FK under
+    // enforcement, so the copy must repair such orphans (drop the dead
+    // CASCADE rows) instead of aborting with `FOREIGN KEY constraint failed`.
+    // `init_db` runs 0038 atomically on an empty DB and can't hold a
+    // pre-migration orphan, so this reconstructs the minimal shape and drives
+    // the same orphan-filtering recreate pattern 0038 uses.
+    //
+    // A pool over `sqlite::memory:` hands each connection its own DB, so every
+    // statement must run on one acquired connection.
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    for setup in [
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)",
+        "CREATE TABLE author_photos (author_id INTEGER PRIMARY KEY REFERENCES authors(id) ON DELETE CASCADE, \
+         source TEXT NOT NULL, url TEXT, bytes BLOB, mime TEXT, fetched_at TEXT NOT NULL DEFAULT (datetime('now')))",
+        "INSERT INTO authors (id, name) VALUES (1, 'Ada')",
+        "INSERT INTO author_photos (author_id, source) VALUES (1, 'letter')",
+        // Orphan: author 99 doesn't exist. Insert under FK-off, mimicking a
+        // parent deletion that ran without cascade enforcement.
+        "PRAGMA foreign_keys=OFF",
+        "INSERT INTO author_photos (author_id, source) VALUES (99, 'letter')",
+        "PRAGMA foreign_keys=ON",
+    ] {
+        sqlx::query(setup).execute(&mut *conn).await.unwrap();
+    }
+
+    for stmt in [
+        "CREATE TABLE author_photos_new (author_id INTEGER PRIMARY KEY REFERENCES authors(id) ON DELETE CASCADE, \
+         source TEXT NOT NULL, url TEXT, bytes BLOB, mime TEXT, fetched_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))",
+        "INSERT INTO author_photos_new \
+           SELECT author_id, source, url, bytes, mime, CAST(strftime('%s', fetched_at) AS INTEGER) \
+             FROM author_photos ap WHERE EXISTS (SELECT 1 FROM authors a WHERE a.id = ap.author_id)",
+        "DROP TABLE author_photos",
+        "ALTER TABLE author_photos_new RENAME TO author_photos",
+    ] {
+        sqlx::query(stmt)
+            .execute(&mut *conn)
+            .await
+            .expect("orphan-filtering recreate must not hit a FK violation");
+    }
+
+    let ids: Vec<i64> =
+        sqlx::query_scalar("SELECT author_id FROM author_photos ORDER BY author_id")
+            .fetch_all(&mut *conn)
+            .await
+            .unwrap();
+    assert_eq!(ids, vec![1], "orphan row dropped, valid row kept");
+}
+
+#[tokio::test]
 async fn migrator_is_idempotent_on_rerun() {
     let tmp = std::env::temp_dir().join(format!(
         "omnibus-migrate-{}-{}.db",
