@@ -651,6 +651,53 @@ async fn api_get_audiobook_download_serves_first_part_as_attachment() {
 }
 
 #[tokio::test]
+async fn api_get_audiobook_part_serves_with_query_token_no_header() {
+    // Mobile plays audio through a WebView `<audio src>`, whose fetch carries
+    // neither the native bearer header nor a session cookie — only `?token=`.
+    // The part handler must authenticate on that query param alone (via
+    // `MediaAuthUser`), matching how covers/thumbs already behave.
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let library_path = dir.path().to_string_lossy().to_string();
+    std::fs::create_dir_all(dir.path().join("Author/Book")).unwrap();
+    let file_path = dir.path().join("Author/Book/01.mp3");
+    let payload: Vec<u8> = (0u8..100).collect();
+    std::fs::File::create(&file_path)
+        .unwrap()
+        .write_all(&payload)
+        .unwrap();
+
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let uuid = seed_audiobook_with_parts(
+        &pool,
+        &library_path,
+        "MP3",
+        &[(0, "Author/Book/01.mp3", 60.0)],
+    )
+    .await;
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let req = axum::http::Request::builder()
+        .uri(format!("/api/audiobooks/{uuid}/parts/0?token={token}"))
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let ct = res
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert_eq!(ct, "audio/mpeg");
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(body.as_ref(), payload.as_slice());
+}
+
+#[tokio::test]
 async fn api_get_audiobook_segment_returns_401_when_anonymous() {
     let (app, _, _) = fixture().await;
     let res = app

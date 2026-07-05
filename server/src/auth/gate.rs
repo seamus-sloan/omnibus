@@ -3,8 +3,9 @@
 //! `/api/*` other than `/api/auth/*` and `/api/_health` requires a valid
 //! session or gets `401 Unauthorized`; everything else (SSR HTML, WASM
 //! bundle, static assets) passes through untouched. Media read endpoints
-//! (covers, thumbs, author-photo / suggestion-cover GETs) additionally
-//! accept the session as a `?token=` query param — see [`is_media_read_path`].
+//! (covers, thumbs, author-photo / suggestion-cover GETs, and direct-play
+//! audiobook part streams) additionally accept the session as a `?token=`
+//! query param — see [`is_media_read_path`].
 
 use axum::{
     extract::{Request, State},
@@ -17,9 +18,10 @@ use omnibus_db::auth as auth_db;
 use super::extractor::{extract_token, query_token};
 use crate::backend::AppState;
 
-/// Media read endpoints whose bytes are rendered into an `<img src>` and so
-/// may authenticate via a `?token=` query param — the only auth a WebView's
-/// `<img>` fetch can carry. Kept in lockstep with the handlers gated on
+/// Media read endpoints whose bytes are rendered into an `<img src>` (covers,
+/// thumbs, photos) or `<audio src>` (direct-play audiobook parts) and so may
+/// authenticate via a `?token=` query param — the only auth such a WebView
+/// media fetch can carry. Kept in lockstep with the handlers gated on
 /// [`MediaAuthUser`]; every other `/api/*` path stays header/cookie-only.
 ///
 /// [`MediaAuthUser`]: super::MediaAuthUser
@@ -28,6 +30,10 @@ fn is_media_read_path(path: &str) -> bool {
         || path.starts_with("/api/thumbs/")
         || (path.starts_with("/api/authors/") && path.ends_with("/photo"))
         || (path.starts_with("/api/suggestions/") && path.ends_with("/cover"))
+        // Direct-play audiobook part streams feed the mobile WebView's
+        // `<audio src>`, which can only carry the session as `?token=`. HLS
+        // segments are web-only (cookie-authed) so they stay off this list.
+        || (path.starts_with("/api/audiobooks/") && path.contains("/parts/"))
 }
 
 /// Reject `/api/*` requests without a live session with `401 Unauthorized`, after exempting `/api/auth/*` and `/api/_health`.
