@@ -135,6 +135,11 @@
           # are fetched from one cache instead of each worktree's target/
           # rebuilding (and incrementally re-caching) the same dependency tree.
           pkgs.sccache
+          # Structural CSS linter for `just lint-css` / the css-lint CI job.
+          # Lives in slim (not webExtras) because it's a lint tool that runs
+          # in the same `just lint` shell as fmt/clippy; the nixpkgs build is
+          # self-contained (bundles its own node), so this adds no npm project.
+          pkgs.stylelint
         ];
 
         # Web-build extras: dioxus-cli + matched wasm-bindgen + node + ffmpeg.
