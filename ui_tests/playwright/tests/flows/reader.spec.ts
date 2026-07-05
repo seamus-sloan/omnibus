@@ -20,6 +20,9 @@ const HL_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "beta")!;
 // A third book for the note-editing test so its persisted highlight never
 // collides with the seed/delete cycle on HL_BOOK.
 const NOTE_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "gamma")!;
+// A fourth book for the recolor test so its seeded highlight is isolated from
+// the other highlight specs running in parallel.
+const RECOLOR_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "pioneers-3")!;
 
 test("renders the reader layout", async ({ page, request }) => {
   // Deep-link straight to the immersive reader by the book's stable uuid,
@@ -198,6 +201,60 @@ test("adds a note to an existing highlight from the drawer", async ({
     .filter({ hasText: quote });
   await expect(savedRow.getByText(note)).toBeVisible();
   await expect(savedRow.getByTestId("highlight-note")).toHaveText("Edit note");
+});
+
+test("recolors an existing highlight from the drawer", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, RECOLOR_BOOK.title);
+
+  // Seed an amber highlight so the drawer offers its recolor swatches.
+  const quote = `recolor passage ${Date.now()}`;
+  const created = await request.post("/api/highlights", {
+    data: {
+      book_uuid: uuid,
+      epub_cfi_range: "epubcfi(/6/4!/4/2,/1:0,/1:40)",
+      color: "amber",
+      text: quote,
+    },
+  });
+  expect(created.status(), "seed highlight").toBe(200);
+
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  await page.getByTestId("reader-highlights").click();
+  await expect(page.getByTestId("reader-highlights-drawer")).toBeVisible();
+  const row = page
+    .getByTestId("reader-highlight-row")
+    .filter({ hasText: quote });
+  await expect(row).toHaveCount(1);
+
+  // Amber is the current color; green is not yet selected.
+  await expect(
+    row.getByTestId("reader-highlight-recolor-amber"),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    row.getByTestId("reader-highlight-recolor-green"),
+  ).toHaveAttribute("aria-pressed", "false");
+
+  // Picking green fires the update-color RPC and moves the selected swatch.
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: /\/api\/rpc\/highlights\/update-color(?:\?|$)/,
+      expectedStatus: 200,
+    },
+    async () => row.getByTestId("reader-highlight-recolor-green").click(),
+  );
+  await expect(
+    row.getByTestId("reader-highlight-recolor-green"),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    row.getByTestId("reader-highlight-recolor-amber"),
+  ).toHaveAttribute("aria-pressed", "false");
 });
 
 test("opens the reader from the book detail Read action", async ({ page, request }) => {

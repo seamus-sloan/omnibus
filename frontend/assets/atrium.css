@@ -4440,6 +4440,17 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   font-family: var(--serif); font-style: italic; font-size: 16px; line-height: 1.42; }
 .rd-hl-note { display: flex; gap: 7px; font-size: 12.5px; color: var(--ink-2);
   line-height: 1.45; }
+/* Per-row recolor: pick a new palette color for an existing highlight. */
+.rd-hl-swatches { display: flex; gap: 6px; margin-top: 2px; }
+.rd-hl-swatch { width: 16px; height: 16px; border-radius: 50%; cursor: pointer;
+  padding: 0; border: 2px solid transparent; transition: transform .12s; }
+.rd-hl-swatch:hover { transform: scale(1.15); }
+.rd-hl-swatch.on { border-color: var(--ink-0); }
+.rd-hl-swatch[data-color="amber"]  { background: var(--hl-amber); }
+.rd-hl-swatch[data-color="green"]  { background: var(--hl-green); }
+.rd-hl-swatch[data-color="blue"]   { background: var(--hl-blue); }
+.rd-hl-swatch[data-color="rose"]   { background: var(--hl-rose); }
+.rd-hl-swatch[data-color="violet"] { background: var(--hl-violet); }
 .rd-hl-actions { display: flex; gap: 2px; }
 
 /* Note composer (centered card over a scrim). */
