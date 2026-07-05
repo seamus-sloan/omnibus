@@ -114,9 +114,16 @@ body.atrium,
   font-size: 14px;
   line-height: 1.45;
   letter-spacing: -0.005em;
-  min-height: 100vh;
+  /* `dvh`, not `vh`: on iOS `100vh` is the *large* viewport (taller than the
+     visible area), which left the shell a few px taller than the screen and
+     let the page rubber-band/scroll behind the fixed player. */
+  min-height: 100dvh;
+  overscroll-behavior: none;
   margin: 0;
 }
+/* Kill rubber-band overscroll on the root scroller too, so the fixed player
+   can't bounce. */
+html, body { overscroll-behavior: none; }
 
 .atrium *,
 .atrium *::before,
@@ -5159,10 +5166,19 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 /* ── Mobile audiobook player ───────────────────────────────────────── */
+/* Full-screen player: pinned to the viewport with `position: fixed` so it can
+   never add to a parent's scroll height (the app shell is `min-height: 100vh`,
+   so a `100dvh`/`100%` height mismatched and left the page scrollable). A flex
+   column with the cover taking the flexible middle space (see
+   `.m-player-cover`) keeps every control on-screen regardless of phone height
+   or how many secondary pills wrap. Safe-area padding clears the notch / home
+   indicator. */
 .m-player {
-  position: relative;
-  padding: 8px 14px 28px;
-  min-height: 100%;
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: max(8px, env(safe-area-inset-top)) 14px max(20px, env(safe-area-inset-bottom));
   overflow: hidden;
 }
 /* Radial accent glow washing the top of the screen (tinted by --accent). */
@@ -5170,20 +5186,40 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   position: absolute; inset: 0; pointer-events: none; z-index: 0;
   background-image: radial-gradient(80% 46% at 50% 6%, color-mix(in oklch, var(--accent) 22%, transparent), transparent 70%);
 }
-.m-player > *:not(.m-player-glow) { position: relative; z-index: 1; }
+/* Lift player content above the glow — but NOT the chapters sheet, which is a
+   fixed-position overlay; this `> *` rule (0,2,0) would otherwise outrank
+   `.m-sheet-scrim`'s `position: fixed` and pin it inline at the bottom. */
+.m-player > *:not(.m-player-glow):not(.m-sheet-scrim) { position: relative; z-index: 1; }
 
 .m-player-bar { display: flex; align-items: center; height: 40px; }
 
+/* Flexible cover slot — absorbs the column's spare height so nothing below it
+   is pushed off-screen. The cover itself is height-driven inside this slot. */
 .m-player-cover {
-  width: 220px; max-width: 62%; margin: 6px auto 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 6px 0 2px;
   filter: drop-shadow(0 18px 40px color-mix(in oklch, var(--accent) 30%, transparent));
+}
+.m-player-cover .cover-wrap {
+  height: 100%;
+  width: auto;
+  max-width: 62%;
+  aspect-ratio: 2 / 3;
 }
 
 .m-player-now { text-align: center; padding: 20px 6px 6px; }
 .m-player-eyebrow { color: var(--accent); }
-.m-player-title {
-  font-family: var(--serif); font-weight: 400; font-size: 30px;
-  line-height: 1.02; margin-top: 10px;
+/* Scoped under `.atrium` so this outranks the design-system `.atrium h1`
+   (font-size: 64px). The player title is an <h1>; without the extra class
+   the 64px hero size wins on specificity (0,1,1 vs 0,1,0), overflows the
+   phone viewport, and collapses the whole centered layout. */
+.atrium .m-player-title {
+  font-family: var(--serif); font-weight: 400; font-size: 26px;
+  line-height: 1.05; margin-top: 10px;
 }
 .m-player-by { margin-top: 8px; color: var(--ink-1); font-size: 14px; }
 .m-player-chline {
@@ -5217,23 +5253,22 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   display: flex; align-items: center; justify-content: center;
   gap: 12px; padding: 18px 0 8px;
 }
-.m-tp-ghost, .m-tp-ch, .m-tp-skip, .m-tp-rate {
+.m-tp-ch, .m-tp-skip {
   display: inline-flex; align-items: center; justify-content: center;
   border: 1px solid var(--line); background: transparent; color: var(--ink-1);
   border-radius: 999px; cursor: pointer; font-family: var(--mono); font-size: 12px;
+  flex-shrink: 0;
 }
-.m-tp-ghost { width: 40px; height: 40px; font-size: 16px; }
 .m-tp-ch { width: 44px; height: 44px; }
 .m-tp-skip { width: 48px; height: 48px; }
-.m-tp-rate { min-width: 48px; height: 40px; padding: 0 10px; }
-.m-tp-ghost:hover, .m-tp-ch:hover, .m-tp-skip:hover, .m-tp-rate:hover {
+.m-tp-ch:hover, .m-tp-skip:hover {
   color: var(--ink-0); border-color: var(--accent);
 }
-.m-tp-ghost:disabled, .m-tp-ch:disabled { opacity: .4; cursor: not-allowed; }
+.m-tp-ch:disabled { opacity: .4; cursor: not-allowed; }
 
 .m-tp-play {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 72px; height: 72px; border-radius: 50%; border: none; cursor: pointer;
+  width: 72px; height: 72px; flex-shrink: 0; border-radius: 50%; border: none; cursor: pointer;
   background: var(--accent); color: var(--accent-ink);
   box-shadow: 0 10px 28px color-mix(in oklch, var(--accent) 40%, transparent);
 }

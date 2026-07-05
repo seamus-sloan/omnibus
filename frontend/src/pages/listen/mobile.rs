@@ -427,9 +427,10 @@ fn render_player(p: PlayerProps) -> Element {
                 }
             }
 
-            // Transport row
+            // Transport row — five primary controls. Keeping it to five (vs
+            // folding in favorite/speed) is what keeps the 72px play button
+            // circular on a phone; speed lives in the secondary row below.
             div { class: "m-player-transport",
-                button { class: "m-tp-ghost", r#type: "button", disabled: true, title: "Favorite (coming soon)", "aria-label": "Favorite", "\u{2661}" }
                 button {
                     class: "m-tp-ch", r#type: "button", disabled: !has_chapters,
                     "aria-label": "Previous chapter", onclick: on_prev, "\u{25C1}|"
@@ -449,11 +450,11 @@ fn render_player(p: PlayerProps) -> Element {
                     class: "m-tp-ch", r#type: "button", disabled: !has_chapters,
                     "aria-label": "Next chapter", onclick: on_next, "|\u{25B7}"
                 }
-                button { class: "m-tp-rate", r#type: "button", "data-testid": "mobile-rate", "aria-label": "Playback speed", onclick: on_speed, "{rate_label}" }
             }
 
-            // Secondary controls
+            // Secondary controls — speed sits here (per the design).
             div { class: "m-player-secondary",
+                button { class: "m-pill", r#type: "button", "data-testid": "mobile-rate", "aria-label": "Playback speed", onclick: on_speed, "{rate_label}" }
                 button { class: "m-pill", r#type: "button", disabled: true, title: "Sleep timer (coming soon)", "Sleep" }
                 button { class: "m-pill", r#type: "button", disabled: true, title: "Bookmark (coming soon)", "Bookmark" }
                 button {
