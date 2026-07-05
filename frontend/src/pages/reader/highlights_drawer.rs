@@ -1,6 +1,7 @@
 //! Highlights & notes drawer for the reader. Lists every highlight for the
 //! open book, filterable by palette color. Clicking a row navigates to the
-//! highlight's CFI; rows also expose note, copy, and delete actions.
+//! highlight's CFI; rows expose a recolor swatch strip plus note, quote,
+//! copy, and delete actions.
 
 use dioxus::prelude::*;
 
@@ -32,6 +33,67 @@ fn copy_text(text: &str) {
         let lit = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
         super::reader_call("copyText", &lit);
     }
+}
+
+/// Repaint a highlight's annotation in place: drop the old swatch and re-add
+/// it at the same CFI in `color` (web only). Used when recoloring so the
+/// viewer reflects the new color without a full reload.
+#[cfg_attr(not(feature = "web"), allow(unused_variables))]
+fn reannotate(cfi: &str, color: HighlightColor) {
+    #[cfg(feature = "web")]
+    {
+        let cfi_lit = serde_json::to_string(cfi).unwrap_or_else(|_| "\"\"".into());
+        super::reader_call("removeAnnotation", &cfi_lit);
+        let color_lit =
+            serde_json::to_string(color.as_str()).unwrap_or_else(|_| "\"amber\"".into());
+        super::reader_call("addAnnotation", &format!("{cfi_lit}, {color_lit}"));
+    }
+}
+
+/// Recolor a highlight to `next`: optimistically repaint the viewer + the row
+/// signal, persist via `update_highlight_color`, and roll both back to `prev`
+/// if the write fails. Mirrors the create/delete optimistic pattern.
+///
+/// A no-op when `next == prev` (clicking the already-selected swatch). The
+/// rollback is gated on the row still showing `next`, so a late failure from
+/// one request can't clobber a newer recolor that already succeeded.
+fn spawn_recolor(
+    mut highlights: Signal<Vec<Highlight>>,
+    id: i64,
+    cfi: String,
+    next: HighlightColor,
+    prev: HighlightColor,
+) {
+    if next == prev {
+        return;
+    }
+    reannotate(&cfi, next);
+    // Bind the index first so the read guard drops before `write()` — a live
+    // `read()` temporary across `write()` is a runtime borrow panic.
+    let idx = highlights.read().iter().position(|h| h.id == id);
+    if let Some(i) = idx {
+        highlights.write()[i].color = next;
+    }
+    spawn(async move {
+        if crate::data::update_highlight_color("", id, next)
+            .await
+            .is_err()
+        {
+            // Only revert if this request's optimistic color is still current;
+            // if a later recolor superseded it, leave that newer value alone.
+            let still_ours = highlights
+                .read()
+                .iter()
+                .any(|h| h.id == id && h.color == next);
+            if still_ours {
+                reannotate(&cfi, prev);
+                let idx = highlights.read().iter().position(|h| h.id == id);
+                if let Some(i) = idx {
+                    highlights.write()[i].color = prev;
+                }
+            }
+        }
+    });
 }
 
 #[component]
@@ -147,6 +209,9 @@ fn HighlightRow(
         });
     };
 
+    let cur_color = highlight.color;
+    let recolor_cfi = highlight.epub_cfi_range.clone();
+
     let nav_cfi = highlight.epub_cfi_range.clone();
 
     rsx! {
@@ -160,6 +225,23 @@ fn HighlightRow(
             }
             if let Some(n) = note {
                 div { class: "rd-hl-note", "{n}" }
+            }
+            div { class: "rd-hl-swatches", "data-testid": "reader-highlight-swatches",
+                for (swatch_color, swatch_name) in PALETTE {
+                    button {
+                        key: "{swatch_name}",
+                        class: if swatch_color == cur_color { "rd-hl-swatch on" } else { "rd-hl-swatch" },
+                        r#type: "button",
+                        "data-color": "{swatch_name}",
+                        "data-testid": "reader-highlight-recolor-{swatch_name}",
+                        "aria-label": "Recolor {swatch_name}",
+                        "aria-pressed": if swatch_color == cur_color { "true" } else { "false" },
+                        onclick: {
+                            let recolor_cfi = recolor_cfi.clone();
+                            move |_| spawn_recolor(highlights, id, recolor_cfi.clone(), swatch_color, cur_color)
+                        },
+                    }
+                }
             }
             div { class: "rd-hl-actions",
                 button {
