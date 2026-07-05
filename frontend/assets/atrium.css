@@ -4515,6 +4515,58 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-quote-ratios { display: flex; gap: 6px; }
 .rd-quote-actions { display: flex; gap: 8px; margin-top: 22px; }
 
+/* ── Reader on phone widths (F6.2 mobile ereader) ──────────────────
+ * The reader is one shared component; the native mobile shell renders the
+ * same tree in a WebView, so this breakpoint is what the phone app sees.
+ * Adapts the desktop chrome/overlays to the mobile handoff: slim bars, no
+ * gutter buttons, full-width drawers, a bottom-sheet selection popover, and
+ * a full-width quote card. The reader renders bare (no `.app-shell`, no tab
+ * bar), so these plain selectors only ever match its own chrome. This is the
+ * single reader-responsive block — keep new phone rules here rather than a
+ * second `@media` later in the file, whose equal specificity would win the
+ * cascade and silently override these. */
+@media (max-width: 480px) {
+  .rd-top, .rd-bottom { padding: 0 14px; gap: 8px; }
+  .rd-title-book { font-size: 15px; }
+  .rd-title-sep { margin: 0 6px; }
+  .rd-tool { min-width: 32px; padding: 0 6px; }
+  /* Page + progress on the left already carry the position; the centred
+     "Ch. N of M" only crowds a narrow bar (the handoff bottom row is just
+     position on the left, time-left on the right). */
+  .rd-bottom > div { display: none; }
+  /* Mobile turns pages by swipe/tap; the circular gutter buttons would sit
+     over the prose on a phone-width column. */
+  .rd-turn { display: none; }
+
+  /* Drawers (contents / search / highlights / bookmarks / quote card) span
+     the full width instead of a 380–432px side panel. */
+  .rd-drawer, .rd-quote-drawer { width: auto; left: 0; right: 0; }
+
+  /* The Aa display panel drops the tool-anchored caret and becomes a sheet
+     pinned below the top bar. */
+  .rd-aa-panel { left: 12px; right: 12px; width: auto; top: 64px; }
+  .rd-aa-panel::before { display: none; }
+
+  /* Note composer keeps a margin off the viewport edges. */
+  .rd-note-composer { width: min(360px, calc(100vw - 32px)); }
+
+  /* Selection popover → bottom sheet ("highlight a passage" handoff). The
+     caret rect drives inline top/left, so the sheet position needs
+     !important to win over them. */
+  .rd-selection-popover {
+    top: auto !important; bottom: 66px !important;
+    left: 16px !important; right: 16px !important;
+    padding: 14px 12px; border-radius: 16px;
+    background: color-mix(in oklch, var(--bg-1) 96%, transparent);
+    box-shadow: 0 24px 48px -16px rgba(0,0,0,.5); }
+  /* Swatches on one centred row, then a full-width rule, then the actions —
+     the divider's 100% width forces the wrap between the two groups. */
+  .rd-swatch-row { flex-wrap: wrap; justify-content: center; row-gap: 12px; }
+  .rd-swatch { width: 30px; height: 30px; }
+  .rd-pop-div { width: 100%; height: 1px; align-self: auto; margin: 2px 4px; }
+  .rd-act { height: 36px; }
+}
+
 /* ── F5.10 merge dialog (book detail) — "Merge duplicates" redesign ──
  * Wide modal: pinned keeper rail + search + result rows with covers.
  * Three-zone flex column (head / scrolling body / foot). Replaces the
@@ -5410,15 +5462,4 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 @media (max-width: 560px) {
   /* Metadata edit: single-column fields at phone width. */
   .me-field-grid { grid-template-columns: 1fr; }
-}
-
-/* ── Immersive reader: full-width drawers/panels on a phone ────────
-   The reader renders bare (no `.app-shell`, no tab bar), so these plain
-   selectors apply only to its own chrome. The 380–432px fixed panels
-   overflow a phone; cap them to the viewport. */
-@media (max-width: 480px) {
-  .rd-drawer { width: min(380px, 100vw); }
-  .rd-quote-drawer { width: 100vw; }
-  .rd-aa-panel { width: min(320px, calc(100vw - 24px)); right: 12px; }
-  .rd-note-composer { width: min(360px, calc(100vw - 24px)); }
 }

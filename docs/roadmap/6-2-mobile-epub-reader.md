@@ -6,7 +6,25 @@ Read epubs inside the native mobile app, reusing the F2.1 progress model and the
 
 ## Objective
 
-Let a user read any epub inside the native `mobile/` app. The crate is Dioxus Native (Blitz) — a Rust HTML/CSS renderer with **no** JavaScript engine — so the F2.2 web reader's `epub.js` cannot run there directly. We need a reader path that fits the Blitz runtime while keeping reading position canonical as an EPUB CFI so it round-trips through F2.1 across web and mobile.
+Let a user read any epub inside the native `mobile/` app, reusing the shared
+reader UI and keeping reading position canonical as an EPUB CFI so it
+round-trips through F2.1 across web and mobile.
+
+## Status
+
+- **Mobile reader chrome (shipped).** The reader is one shared Dioxus
+  component; the native shell renders the same tree in a WebView. A
+  phone-width breakpoint in `frontend/assets/atrium.css` (`@media
+  (max-width: 600px)`, the "Reader on phone widths" block) adapts the desktop
+  chrome to the mobile handoff: slim top/bottom bars, no gutter page-turn
+  buttons, full-width drawers (contents / search / highlights / bookmarks /
+  quote card), a bottom-sheet selection popover, and a top-sheet Aa panel.
+  Covered by the phone-viewport tests in
+  `ui_tests/playwright/tests/flows/reader.spec.ts`.
+- **Native epub streaming (remaining).** Wiring `epub.js` to actually stream
+  and paginate a book on-device — a `document::eval` bridge in place of the
+  web build's `wasm-bindgen` interop, plus a bearer-authed fetch of
+  `GET /api/ebooks/:uuid/file` — is the open work below.
 
 ## User / business value
 
