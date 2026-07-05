@@ -262,6 +262,11 @@ test("renders the detail contents for the selected book", async ({ page, request
   const heroKindleBtn = exportPanel.getByTestId("hero-send-kindle");
   await expect(heroKindleBtn).toBeVisible();
   await expect(heroKindleBtn).toBeEnabled();
+  // Send-to-Kobo is a KEPUB download link (same endpoint as the per-format
+  // action-kobo), enabled because the book has an EPUB.
+  const koboExport = exportPanel.getByTestId("export-send-kobo");
+  await expect(koboExport).toHaveAttribute("href", /\/api\/ebooks\/.+\/kepub$/);
+  await expect(koboExport).toHaveAttribute("download");
   // The audiobook download only appears for books with an audio file; the
   // ebook-only seed must not render it. Close the menu again via the scrim.
   // The scrim fills the viewport, so click a corner clear of the panel

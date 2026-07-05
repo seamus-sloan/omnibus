@@ -7,8 +7,12 @@ use std::time::UNIX_EPOCH;
 
 /// Root directory for the KEPUB cache.
 ///
-/// Reads `$OMNIBUS_DATA_DIR` (default `./data`).
+/// Override with `$OMNIBUS_KEPUB_DIR` (used verbatim); otherwise defaults to
+/// `<$OMNIBUS_DATA_DIR>/kepub` (data dir default `./data`).
 pub fn kepub_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("OMNIBUS_KEPUB_DIR") {
+        return PathBuf::from(dir);
+    }
     let base = std::env::var("OMNIBUS_DATA_DIR").unwrap_or_else(|_| "./data".into());
     PathBuf::from(base).join("kepub")
 }
