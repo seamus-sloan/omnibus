@@ -53,6 +53,10 @@ fn reannotate(cfi: &str, color: HighlightColor) {
 /// Recolor a highlight to `next`: optimistically repaint the viewer + the row
 /// signal, persist via `update_highlight_color`, and roll both back to `prev`
 /// if the write fails. Mirrors the create/delete optimistic pattern.
+///
+/// A no-op when `next == prev` (clicking the already-selected swatch). The
+/// rollback is gated on the row still showing `next`, so a late failure from
+/// one request can't clobber a newer recolor that already succeeded.
 fn spawn_recolor(
     mut highlights: Signal<Vec<Highlight>>,
     id: i64,
@@ -60,6 +64,9 @@ fn spawn_recolor(
     next: HighlightColor,
     prev: HighlightColor,
 ) {
+    if next == prev {
+        return;
+    }
     reannotate(&cfi, next);
     // Bind the index first so the read guard drops before `write()` — a live
     // `read()` temporary across `write()` is a runtime borrow panic.
@@ -72,10 +79,18 @@ fn spawn_recolor(
             .await
             .is_err()
         {
-            reannotate(&cfi, prev);
-            let idx = highlights.read().iter().position(|h| h.id == id);
-            if let Some(i) = idx {
-                highlights.write()[i].color = prev;
+            // Only revert if this request's optimistic color is still current;
+            // if a later recolor superseded it, leave that newer value alone.
+            let still_ours = highlights
+                .read()
+                .iter()
+                .any(|h| h.id == id && h.color == next);
+            if still_ours {
+                reannotate(&cfi, prev);
+                let idx = highlights.read().iter().position(|h| h.id == id);
+                if let Some(i) = idx {
+                    highlights.write()[i].color = prev;
+                }
             }
         }
     });
