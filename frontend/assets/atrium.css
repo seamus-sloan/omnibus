@@ -3083,8 +3083,16 @@ body {
 .screen {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-  padding: 1.5rem 1rem 5rem;
+  /* `dvh`, not `vh`: matches the `.atrium` root. On iOS `100vh` is the *large*
+     viewport, so a `100vh` wrapper here overflows the `100dvh` shell and makes
+     the whole page scrollable by the safe-area difference. */
+  min-height: 100dvh;
+  /* Extra top padding clears the notch / dynamic island (OS safe-area-inset-top,
+     ~59px on iOS) with a 20px floor for devices that report 0. Exposed as an
+     inherited var so full-bleed children (e.g. the book-detail hero glow) can
+     cancel it and reach the screen edge. */
+  --screen-pad-top: calc(1.5rem + max(20px, env(safe-area-inset-top)));
+  padding: var(--screen-pad-top) 1rem 5rem;
 }
 
 .sr-only {
@@ -3662,10 +3670,21 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 /* Mobile book detail */
 .m-bd { display: flex; flex-direction: column; }
 .m-bd-hero {
-  position: relative; padding: 8px 0 6px; display: grid; place-items: center;
+  position: relative; display: grid; place-items: center;
+  /* Bleed the accent glow out past the .screen padding (top + sides) so it
+     reaches behind the status bar / dynamic island like the player's glow,
+     then restore the same padding so the actions + cover stay put. */
+  margin: calc(-1 * var(--screen-pad-top, 1.5rem)) -1rem 6px;
+  padding: calc(var(--screen-pad-top, 1.5rem) + 8px) 1rem 6px;
   background-image: radial-gradient(80% 100% at 50% 0%, color-mix(in oklch, var(--accent) 30%, transparent), transparent 70%);
 }
-.m-bd-hero-bar { position: absolute; top: 4px; left: 0; right: 0; display: flex; justify-content: space-between; }
+.m-bd-hero-bar {
+  position: absolute; left: 1rem; right: 1rem;
+  /* Sits just inside the restored padding so the back/edit buttons clear the
+     island, matching where they sat before the glow was bled upward. */
+  top: calc(var(--screen-pad-top, 1.5rem) + 4px);
+  display: flex; justify-content: space-between;
+}
 .m-bd-cover { width: 150px; margin-top: 12px; }
 .m-bd-titlecol { text-align: center; padding: 14px 8px 4px; }
 .m-bd-title { font-family: var(--serif); font-weight: 400; font-size: 28px; line-height: 1.06; }
