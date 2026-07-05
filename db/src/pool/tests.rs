@@ -244,6 +244,169 @@ async fn migration_0038_text_datetime_converts_to_exact_unix_seconds() {
 }
 
 #[tokio::test]
+async fn migration_0038_recreate_drops_orphan_author_photos() {
+    // Real databases carry rows that violate a declared FK because the parent
+    // was removed while enforcement was off — e.g. GC'd authors leaving orphan
+    // `author_photos`. 0038's table recreates re-validate every FK under
+    // enforcement, so the copy must repair such orphans (drop the dead
+    // CASCADE rows) instead of aborting with `FOREIGN KEY constraint failed`.
+    // `init_db` runs 0038 atomically on an empty DB and can't hold a
+    // pre-migration orphan, so this reconstructs the minimal shape and drives
+    // the same orphan-filtering recreate pattern 0038 uses.
+    //
+    // A pool over `sqlite::memory:` hands each connection its own DB, so every
+    // statement must run on one acquired connection.
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    for setup in [
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)",
+        "CREATE TABLE author_photos (author_id INTEGER PRIMARY KEY REFERENCES authors(id) ON DELETE CASCADE, \
+         source TEXT NOT NULL, url TEXT, bytes BLOB, mime TEXT, fetched_at TEXT NOT NULL DEFAULT (datetime('now')))",
+        "INSERT INTO authors (id, name) VALUES (1, 'Ada')",
+        "INSERT INTO author_photos (author_id, source) VALUES (1, 'letter')",
+        // Orphan: author 99 doesn't exist. Insert under FK-off, mimicking a
+        // parent deletion that ran without cascade enforcement.
+        "PRAGMA foreign_keys=OFF",
+        "INSERT INTO author_photos (author_id, source) VALUES (99, 'letter')",
+        "PRAGMA foreign_keys=ON",
+    ] {
+        sqlx::query(setup).execute(&mut *conn).await.unwrap();
+    }
+
+    for stmt in [
+        "CREATE TABLE author_photos_new (author_id INTEGER PRIMARY KEY REFERENCES authors(id) ON DELETE CASCADE, \
+         source TEXT NOT NULL, url TEXT, bytes BLOB, mime TEXT, fetched_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))",
+        "INSERT INTO author_photos_new \
+           SELECT author_id, source, url, bytes, mime, CAST(strftime('%s', fetched_at) AS INTEGER) \
+             FROM author_photos ap WHERE EXISTS (SELECT 1 FROM authors a WHERE a.id = ap.author_id)",
+        "DROP TABLE author_photos",
+        "ALTER TABLE author_photos_new RENAME TO author_photos",
+    ] {
+        sqlx::query(stmt)
+            .execute(&mut *conn)
+            .await
+            .expect("orphan-filtering recreate must not hit a FK violation");
+    }
+
+    let ids: Vec<i64> =
+        sqlx::query_scalar("SELECT author_id FROM author_photos ORDER BY author_id")
+            .fetch_all(&mut *conn)
+            .await
+            .unwrap();
+    assert_eq!(ids, vec![1], "orphan row dropped, valid row kept");
+}
+
+#[tokio::test]
+async fn migration_0038_recreate_coerces_orphan_metadata_updated_by_to_null() {
+    // `metadata_overrides.updated_by` is `ON DELETE SET NULL`: a dangling
+    // reference (user deleted without enforcement) must become NULL on the
+    // recreate's `LEFT JOIN users`, keeping the row rather than aborting.
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    for setup in [
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT)",
+        "CREATE TABLE metadata_overrides (book_uuid TEXT NOT NULL PRIMARY KEY, overrides TEXT NOT NULL DEFAULT '{}', \
+         has_cover_override INTEGER NOT NULL DEFAULT 0, updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL, \
+         updated_at TEXT NOT NULL DEFAULT (datetime('now')))",
+        "INSERT INTO users (id, username) VALUES (1, 'admin')",
+        "INSERT INTO metadata_overrides (book_uuid, updated_by) VALUES ('valid', 1)",
+        "PRAGMA foreign_keys=OFF",
+        "INSERT INTO metadata_overrides (book_uuid, updated_by) VALUES ('orphan', 99)",
+        "PRAGMA foreign_keys=ON",
+    ] {
+        sqlx::query(setup).execute(&mut *conn).await.unwrap();
+    }
+
+    for stmt in [
+        "CREATE TABLE metadata_overrides_new (book_uuid TEXT NOT NULL PRIMARY KEY, overrides TEXT NOT NULL DEFAULT '{}', \
+         has_cover_override INTEGER NOT NULL DEFAULT 0, updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL, \
+         updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))",
+        "INSERT INTO metadata_overrides_new \
+           SELECT mo.book_uuid, mo.overrides, mo.has_cover_override, u.id, CAST(strftime('%s', mo.updated_at) AS INTEGER) \
+             FROM metadata_overrides mo LEFT JOIN users u ON u.id = mo.updated_by",
+        "DROP TABLE metadata_overrides",
+        "ALTER TABLE metadata_overrides_new RENAME TO metadata_overrides",
+    ] {
+        sqlx::query(stmt)
+            .execute(&mut *conn)
+            .await
+            .expect("orphan-coercing recreate must not hit a FK violation");
+    }
+
+    let rows: Vec<(String, Option<i64>)> =
+        sqlx::query_as("SELECT book_uuid, updated_by FROM metadata_overrides ORDER BY book_uuid")
+            .fetch_all(&mut *conn)
+            .await
+            .unwrap();
+    assert_eq!(
+        rows,
+        vec![("orphan".into(), None), ("valid".into(), Some(1))],
+        "both rows kept; the dangling updated_by is coerced to NULL"
+    );
+}
+
+#[tokio::test]
+async fn migration_0038_recreate_drops_orphan_merge_log_and_coerces_merged_by() {
+    // `merge_log.target_book_id` is NOT NULL CASCADE — an orphan (book gone)
+    // must be dropped by the inner `JOIN books`. `merged_by` is SET NULL — a
+    // dangling ref must survive as NULL via the `LEFT JOIN users`.
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    for setup in [
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT)",
+        "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT)",
+        "CREATE TABLE merge_log (id INTEGER PRIMARY KEY AUTOINCREMENT, \
+         target_book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE, source_uuid TEXT NOT NULL, \
+         source_metadata TEXT NOT NULL, merged_by INTEGER REFERENCES users(id) ON DELETE SET NULL, \
+         merged_at TEXT NOT NULL DEFAULT (datetime('now')), undone_at TEXT)",
+        "INSERT INTO users (id, username) VALUES (1, 'admin')",
+        "INSERT INTO books (id, title) VALUES (1, 'Book')",
+        // Valid row (target 1, merged_by 1).
+        "INSERT INTO merge_log (id, target_book_id, source_uuid, source_metadata, merged_by) VALUES (1, 1, 'a', '{}', 1)",
+        "PRAGMA foreign_keys=OFF",
+        // Orphan target (book 99 gone) -> dropped; dangling merged_by (user 99) -> coerced.
+        "INSERT INTO merge_log (id, target_book_id, source_uuid, source_metadata, merged_by) VALUES (2, 99, 'b', '{}', 1)",
+        "INSERT INTO merge_log (id, target_book_id, source_uuid, source_metadata, merged_by) VALUES (3, 1, 'c', '{}', 99)",
+        "PRAGMA foreign_keys=ON",
+    ] {
+        sqlx::query(setup).execute(&mut *conn).await.unwrap();
+    }
+
+    for stmt in [
+        "CREATE TABLE merge_log_new (id INTEGER PRIMARY KEY AUTOINCREMENT, \
+         target_book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE, source_uuid TEXT NOT NULL, \
+         source_metadata TEXT NOT NULL, merged_by INTEGER REFERENCES users(id) ON DELETE SET NULL, \
+         merged_at INTEGER NOT NULL DEFAULT (strftime('%s','now')), undone_at INTEGER)",
+        "INSERT INTO merge_log_new \
+           SELECT ml.id, ml.target_book_id, ml.source_uuid, ml.source_metadata, u.id, \
+                  CAST(strftime('%s', ml.merged_at) AS INTEGER), \
+                  CASE WHEN ml.undone_at IS NULL THEN NULL ELSE CAST(strftime('%s', ml.undone_at) AS INTEGER) END \
+             FROM merge_log ml JOIN books b ON b.id = ml.target_book_id LEFT JOIN users u ON u.id = ml.merged_by",
+        "DROP TABLE merge_log",
+        "ALTER TABLE merge_log_new RENAME TO merge_log",
+    ] {
+        sqlx::query(stmt)
+            .execute(&mut *conn)
+            .await
+            .expect("orphan-repairing recreate must not hit a FK violation");
+    }
+
+    let rows: Vec<(i64, Option<i64>)> =
+        sqlx::query_as("SELECT id, merged_by FROM merge_log ORDER BY id")
+            .fetch_all(&mut *conn)
+            .await
+            .unwrap();
+    assert_eq!(
+        rows,
+        vec![(1, Some(1)), (3, None)],
+        "orphan-target row 2 dropped; row 3's dangling merged_by coerced to NULL"
+    );
+}
+
+#[tokio::test]
 async fn migrator_is_idempotent_on_rerun() {
     let tmp = std::env::temp_dir().join(format!(
         "omnibus-migrate-{}-{}.db",
