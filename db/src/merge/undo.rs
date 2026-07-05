@@ -123,16 +123,18 @@ async fn recreate_source_row(
                 sqlx::Error::Protocol(format!("unexpected settings validation error: {msg}")),
             ),
         })?;
-    // `timestamp` is restored from the snapshot (epoch, migration 0038);
-    // `last_modified` is stamped now, set explicitly because the in-place
-    // 0038 conversion dropped the `books` column default. The `pubdate`
-    // COALESCE fallback is pre-existing and unrelated to F11.
+    // `timestamp` is restored from the snapshot, falling back to now when a
+    // pre-0038 snapshot's timestamp couldn't be parsed to an epoch
+    // (`de_epoch_flexible` -> None) — the `books` column is nullable since the
+    // in-place 0038 conversion dropped its default, so without the COALESCE the
+    // restored row would carry a NULL date-added. `last_modified` is stamped
+    // now for the same reason. The `pubdate` COALESCE is pre-existing.
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO books
             (uuid, library_id, path, title, sort, author_sort, series_sort, series_index, pubdate,
              timestamp, last_modified, has_cover, description, accent_color, title_norm, author_norm)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')),
-                 ?, strftime('%s','now'), ?, ?, ?, ?, ?)
+                 COALESCE(?, strftime('%s','now')), strftime('%s','now'), ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(&snap.uuid)
