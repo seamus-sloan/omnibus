@@ -22,10 +22,15 @@ mod top_nav;
 #[cfg(not(feature = "mobile"))]
 pub use top_nav::TopNav as Nav;
 
-#[cfg(feature = "mobile")]
+// The bottom tab bar is the mobile-native `Nav`, and also mounts on web
+// (hidden by CSS above the phone breakpoint) so phone-width web gets the
+// same thumb-reachable section switcher. Compiled on every target; the web
+// build renders it via `ScreenLayout` alongside `TopNav`.
 mod bottom_nav;
 #[cfg(feature = "mobile")]
 pub use bottom_nav::BottomNav as Nav;
+#[cfg(not(feature = "mobile"))]
+pub use bottom_nav::BottomNav;
 
 mod format_switcher;
 pub use format_switcher::FormatSwitcher;
