@@ -20,9 +20,9 @@ pub mod view_prefs;
 pub use components::Nav;
 pub use contexts::*;
 pub use pages::{
-    AuthorPage, AuthorsIndexPage, BookDetailPage, BookListenPage, BookReadPage, LandingPage,
-    LoginPage, MetadataEditPage, RegisterPage, SearchPage, SeriesIndexPage, SeriesPage,
-    SettingsPage, TagCloudPage,
+    AccountPage, AuthorPage, AuthorsIndexPage, BookDetailPage, BookListenPage, BookReadPage,
+    LandingPage, LoginPage, MetadataEditPage, RegisterPage, SearchPage, SeriesIndexPage,
+    SeriesPage, SettingsPage, TagCloudPage,
 };
 pub use routes::*;
 

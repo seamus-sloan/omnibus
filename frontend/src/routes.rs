@@ -17,6 +17,8 @@ pub enum Route {
     Landing {},
     #[route("/settings")]
     Settings {},
+    #[route("/account")]
+    Account {},
     #[route("/add-books")]
     AddBooks {},
     #[route("/books/:uuid")]
@@ -62,6 +64,16 @@ pub fn Landing() -> Element {
 pub fn Settings() -> Element {
     rsx! {
         ScreenLayout { SettingsPage {} }
+    }
+}
+
+/// Route target for `/account` — the mobile "You" tab. Wraps [`AccountPage`]
+/// in the platform screen layout; the page body is mobile-only and renders
+/// empty on other targets.
+#[component]
+pub fn Account() -> Element {
+    rsx! {
+        ScreenLayout { AccountPage {} }
     }
 }
 

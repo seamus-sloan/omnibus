@@ -4958,6 +4958,158 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .file-drop-input:disabled { cursor: not-allowed; }
 
+/* ── Account screen (mobile "You" tab) ─────────────────────────────── */
+/* Mobile-only surface rendered by pages::account::AccountPage. Content
+   scrolls above the fixed .m-tabbar; the enclosing .screen already pads
+   the bottom to clear it. */
+.m-account {
+  display: flex;
+  flex-direction: column;
+  padding: 14px 4px 8px;
+}
+
+/* Identity block */
+.m-account-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+.m-account-avatar {
+  flex: 0 0 54px;
+  width: 54px; height: 54px;
+  border-radius: 999px;
+  display: grid; place-items: center;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--serif);
+  font-size: 20px;
+  letter-spacing: 0.02em;
+}
+.m-account-idcol { min-width: 0; }
+.m-account-name {
+  font-family: var(--serif);
+  font-size: 24px;
+  color: var(--ink-0);
+  line-height: 1.15;
+}
+.m-account-sub {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  margin-top: 2px;
+}
+
+/* Now reading card */
+.m-account-nowreading {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 14px;
+  margin-bottom: 18px;
+}
+.m-account-nr-cover { flex: 0 0 46px; width: 46px; }
+.m-account-nr-body { flex: 1; min-width: 0; }
+.m-account-nr-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-0);
+  margin: 4px 0 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Quick grid */
+.m-account-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.m-account-tile {
+  padding: 14px 15px;
+  text-decoration: none;
+  display: block;
+}
+.m-account-tile-label {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink-0);
+}
+.m-account-tile-sub {
+  font-size: 12px;
+  color: var(--ink-2);
+  margin-top: 3px;
+}
+
+/* List rows */
+.m-account-rows {
+  border-top: 1px solid var(--line-2);
+  margin-bottom: 18px;
+}
+.m-account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 14px 2px;
+  border: 0;
+  border-bottom: 1px solid var(--line-2);
+  background: transparent;
+  color: var(--ink-1);
+  font-family: var(--sans);
+  font-size: 14px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.m-account-row:hover { color: var(--ink-0); }
+.m-account-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  color: var(--ink-0);
+}
+.m-account-chevron {
+  color: var(--ink-3);
+  font-size: 18px;
+  line-height: 1;
+}
+.m-account-row-danger { color: var(--bad); }
+.m-account-row-danger:hover { color: var(--bad); }
+
+/* Theme segmented control */
+.m-account-theme {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.m-account-seg {
+  display: flex;
+  gap: 3px;
+  background: var(--bg-2);
+  padding: 3px;
+  border-radius: 9px;
+}
+.m-account-seg-btn {
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.m-account-seg-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  color: var(--ink-0);
+}
+.m-account-seg-btn.on {
+  background: var(--bg-0);
+  color: var(--ink-0);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 /* ── Mobile audiobook player ───────────────────────────────────────── */
 .m-player {
   position: relative;
