@@ -521,6 +521,144 @@ async fn api_get_ebook_file_returns_500_when_book_file_path_fails() {
 }
 
 // -------------------------------------------------------------------
+// F4.1 — GET /api/ebooks/{uuid}/kepub (Send to Kobo download)
+// -------------------------------------------------------------------
+
+/// Seed one EPUB book with a real file on disk. Returns `(uuid, book_id, tmp)`;
+/// caller removes `tmp`. `last_modified` is backdated so a freshly-written
+/// KEPUB cache always reads as fresh.
+async fn seed_epub_on_disk(pool: &sqlx::SqlitePool) -> (String, i64, std::path::PathBuf) {
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("omnibus_kepub_test_{pid}_{nanos}"));
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::fs::write(tmp.join("alpha.epub"), b"PK\x03\x04 fake-epub").unwrap();
+
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(tmp.to_str().unwrap())
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let uuid = "33333333-3333-3333-3333-333333333333".to_string();
+    let book_id = sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title, last_modified) \
+         VALUES (?, ?, ?, 'Alpha', '2000-01-01 00:00:00')",
+    )
+    .bind(&uuid)
+    .bind(lib_id)
+    .bind(tmp.to_str().unwrap())
+    .execute(pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    sqlx::query("INSERT INTO book_files (book_id, format, filename, size_bytes) VALUES (?, 'EPUB', 'alpha', 0)")
+        .bind(book_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    (uuid, book_id, tmp)
+}
+
+fn content_disposition(res: &axum::response::Response) -> String {
+    res.headers()
+        .get(axum::http::header::CONTENT_DISPOSITION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string()
+}
+
+#[tokio::test]
+async fn api_get_ebook_kepub_returns_401_when_anonymous() {
+    let (app, _, _) = fixture().await;
+    let res = app
+        .oneshot(get_anon("/api/ebooks/some-uuid/kepub"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn api_get_ebook_kepub_returns_404_for_unknown_uuid() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let res = app
+        .oneshot(get_with_bearer("/api/ebooks/does-not-exist/kepub", &token))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+/// Cache hit: a fresh KEPUB already on disk is served verbatim with a
+/// `.kepub.epub` filename (no kepubify needed).
+#[tokio::test]
+async fn api_get_ebook_kepub_serves_cached_kepub_with_kepub_filename() {
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (uuid, book_id, tmp) = seed_epub_on_disk(&pool).await;
+
+    let data_dir = DataDirGuard::new("kepub_hit");
+    let cache = data_dir.path.join("kepub");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join(format!("{book_id}.kepub.epub")), b"KEPUB-CACHED").unwrap();
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/api/ebooks/{uuid}/kepub"),
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        content_disposition(&res),
+        format!("attachment; filename=\"{uuid}.kepub.epub\""),
+    );
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], b"KEPUB-CACHED");
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// Fallback: with no cache and an EPUB kepubify can't convert (invalid input
+/// or binary absent), the handler serves the plain EPUB with a `.epub`
+/// filename rather than erroring.
+#[tokio::test]
+async fn api_get_ebook_kepub_falls_back_to_plain_epub() {
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (uuid, _book_id, tmp) = seed_epub_on_disk(&pool).await;
+
+    // Empty cache dir → conversion is attempted and fails on the fake EPUB.
+    let _data_dir = DataDirGuard::new("kepub_fallback");
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/api/ebooks/{uuid}/kepub"),
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        content_disposition(&res),
+        format!("attachment; filename=\"{uuid}.epub\""),
+    );
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], b"PK\x03\x04 fake-epub");
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+// -------------------------------------------------------------------
 // F5b — keyset pagination on GET /api/ebooks
 // -------------------------------------------------------------------
 

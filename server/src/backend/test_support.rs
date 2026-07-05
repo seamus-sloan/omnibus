@@ -196,6 +196,54 @@ impl Drop for CoversDirGuard {
     }
 }
 
+/// Process-global `OMNIBUS_DATA_DIR` lock — the KEPUB-download tests point
+/// the cache root at a scratch dir via `set_var`, so they must serialize with
+/// each other. Mirrors [`COVER_DIR_ENV_LOCK`].
+pub(crate) static DATA_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// RAII guard that points `OMNIBUS_DATA_DIR` (the KEPUB cache root lives at
+/// `<data_dir>/kepub/`) at a fresh scratch dir for one test and restores the
+/// previous value on drop. `path` is public so a test can pre-populate the
+/// cache. Holds [`DATA_DIR_ENV_LOCK`] so parallel tests serialize their writes.
+pub(crate) struct DataDirGuard {
+    pub(crate) path: std::path::PathBuf,
+    prev: Option<String>,
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+impl DataDirGuard {
+    pub(crate) fn new(tag: &str) -> Self {
+        let guard = DATA_DIR_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("omnibus_rest_data_{tag}_{pid}_{nanos}"));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create data scratch dir");
+        let prev = std::env::var("OMNIBUS_DATA_DIR").ok();
+        std::env::set_var("OMNIBUS_DATA_DIR", &path);
+        Self {
+            path,
+            prev,
+            _guard: guard,
+        }
+    }
+}
+
+impl Drop for DataDirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+        match self.prev.take() {
+            Some(v) => std::env::set_var("OMNIBUS_DATA_DIR", v),
+            None => std::env::remove_var("OMNIBUS_DATA_DIR"),
+        }
+    }
+}
+
 pub(crate) async fn seed_author(pool: &sqlx::SqlitePool, name: &str) -> i64 {
     sqlx::query_scalar::<_, i64>("INSERT INTO authors (name, sort) VALUES (?, ?) RETURNING id")
         .bind(name)

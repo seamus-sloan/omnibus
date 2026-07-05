@@ -6,11 +6,14 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::header,
+    http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
-use omnibus_db::{self as db, scanner};
+use omnibus_db::{
+    self as db, scanner,
+    worker::{Task, TaskOutcome},
+};
 use omnibus_shared::{EbookLibrary, SortDir, SortKey, ViewFilters};
 use serde::Deserialize;
 
@@ -190,6 +193,107 @@ pub(super) async fn get_ebook_file(
             axum::http::StatusCode::NOT_FOUND.into_response()
         }
     }
+}
+
+/// Wall-clock budget for an inline KEPUB conversion before we give up and
+/// serve plain EPUB. Kept under the global 30 s request timeout so a slow
+/// book downloads *something* rather than 408-ing; the worker keeps running
+/// and warms the cache for next time.
+const KEPUB_CONVERT_BUDGET: std::time::Duration = std::time::Duration::from_secs(25);
+
+/// Convert `book_id`'s EPUB to KEPUB (via the worker, cached) and download it
+/// for USB sideload onto a Kobo. Falls back to the plain EPUB when kepubify is
+/// absent, conversion fails, or it exceeds [`KEPUB_CONVERT_BUDGET`] — a Kobo
+/// reads plain EPUB too, just with slower page turns. The download filename is
+/// the canonical `book_uuid` so a future USB annotation import can map the
+/// device's `ContentID` back to the book.
+pub(super) async fn get_ebook_kepub(
+    _user: AuthUser,
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+) -> Response {
+    let id = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return internal("resolve_book_id_by_uuid", e),
+    };
+    // Canonical uuid (merged-uuid aware) is the stable filename stem.
+    let canonical = match db::resolve_canonical_book_uuid(&state.pool, &uuid).await {
+        Ok(Some(u)) => u,
+        Ok(None) => uuid.clone(),
+        Err(e) => return internal("resolve_canonical_book_uuid", e),
+    };
+
+    if kepub_conversion_succeeded(&state, id).await {
+        let path = db::kepub_path(id);
+        match tokio::fs::read(&path).await {
+            Ok(bytes) => return download_response(bytes, &format!("{canonical}.kepub.epub")),
+            Err(e) => {
+                tracing::warn!(book_id = id, ?path, error = %e, "kepub cache read failed; serving plain epub");
+            }
+        }
+    }
+
+    // Fallback: the plain EPUB.
+    let path = match db::book_file_path(&state.pool, id, "EPUB").await {
+        Ok(Some(p)) => p,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return internal("book_file_path", e),
+    };
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => download_response(bytes, &format!("{canonical}.epub")),
+        Err(e) => {
+            tracing::warn!(book_id = id, ?path, error = %e, "epub file read failed");
+            StatusCode::NOT_FOUND.into_response()
+        }
+    }
+}
+
+/// Enqueue the (idempotent, cache-backed) KEPUB conversion and wait up to
+/// [`KEPUB_CONVERT_BUDGET`]. `true` when the cache is ready to serve.
+async fn kepub_conversion_succeeded(state: &AppState, book_id: i64) -> bool {
+    let task_id = state.worker.post(Task::KepubConvert { book_id });
+    match tokio::time::timeout(KEPUB_CONVERT_BUDGET, state.worker.await_completion(task_id)).await {
+        Ok(TaskOutcome::Ok) => true,
+        Ok(TaskOutcome::Err(msg)) => {
+            tracing::warn!(book_id, error = %msg, "kepub conversion failed; serving plain epub");
+            false
+        }
+        Err(_elapsed) => {
+            tracing::warn!(
+                book_id,
+                "kepub conversion exceeded budget; serving plain epub"
+            );
+            false
+        }
+    }
+}
+
+/// Build an `attachment` download response for EPUB/KEPUB bytes with the given
+/// filename. Both formats are `application/epub+zip`; the `.kepub.epub`
+/// extension is what tells a Kobo to render it as a KEPUB.
+fn download_response(bytes: Vec<u8>, filename: &str) -> Response {
+    let disposition = format!("attachment; filename=\"{filename}\"");
+    let mut resp = bytes.into_response();
+    let h = resp.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/epub+zip"),
+    );
+    h.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&disposition)
+            .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+    );
+    h.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=0"),
+    );
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    resp
 }
 
 pub(super) async fn get_library(_user: AuthUser, State(state): State<AppState>) -> Response {

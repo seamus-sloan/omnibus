@@ -269,6 +269,32 @@ test("renders the detail contents for the selected book", async ({ page, request
 });
 
 // ---------------------------------------------------------------------------
+// Action — Send to Kobo (F4.1 KEPUB download)
+// ---------------------------------------------------------------------------
+
+test("Send to Kobo downloads the book with a uuid-named file", async ({ page, request }) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  const epubRow = page.getByTestId("format-switcher").getByTestId("format-row-epub");
+  const koboBtn = epubRow.getByTestId("action-kobo");
+  await expect(koboBtn).toBeVisible();
+  await expect(koboBtn).toHaveAttribute("href", new RegExp(`/api/ebooks/${uuid}/kepub$`));
+
+  // Clicking downloads the file (the `download` attribute keeps the page put).
+  // The filename stem is the canonical book uuid; the extension is
+  // `.kepub.epub` when kepubify converts, or `.epub` on fallback — assert the
+  // uuid-embedded contract that F4.4's USB import relies on, tolerant of both.
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    koboBtn.click(),
+  ]);
+  expect(download.suggestedFilename()).toMatch(
+    new RegExp(`^${uuid}\\.(kepub\\.)?epub$`),
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Action — star rating (F3.2)
 // ---------------------------------------------------------------------------
 
