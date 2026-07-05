@@ -26,7 +26,7 @@ use super::MergeError;
 pub async fn undo_merge(pool: &SqlitePool, merge_log_id: i64) -> Result<String, MergeError> {
     let mut tx = pool.begin().await?;
 
-    let row: Option<(i64, String, String, Option<String>)> = sqlx::query_as(
+    let row: Option<(i64, String, String, Option<i64>)> = sqlx::query_as(
         "SELECT target_book_id, source_uuid, source_metadata, undone_at
            FROM merge_log WHERE id = ?",
     )
@@ -77,7 +77,7 @@ pub async fn undo_merge(pool: &SqlitePool, merge_log_id: i64) -> Result<String, 
     // now, so the door reconstructs the FTS row from them directly.
     upsert_fts(&mut tx, new_id).await?;
 
-    sqlx::query("UPDATE merge_log SET undone_at = datetime('now') WHERE id = ?")
+    sqlx::query("UPDATE merge_log SET undone_at = strftime('%s','now') WHERE id = ?")
         .bind(merge_log_id)
         .execute(&mut *tx)
         .await?;
@@ -123,11 +123,18 @@ async fn recreate_source_row(
                 sqlx::Error::Protocol(format!("unexpected settings validation error: {msg}")),
             ),
         })?;
+    // `timestamp` is restored from the snapshot, falling back to now when a
+    // pre-0038 snapshot's timestamp couldn't be parsed to an epoch
+    // (`de_epoch_flexible` -> None) — the `books` column is nullable since the
+    // in-place 0038 conversion dropped its default, so without the COALESCE the
+    // restored row would carry a NULL date-added. `last_modified` is stamped
+    // now for the same reason. The `pubdate` COALESCE is pre-existing.
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO books
             (uuid, library_id, path, title, sort, author_sort, series_sort, series_index, pubdate,
-             timestamp, has_cover, description, accent_color, title_norm, author_norm)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?, ?)
+             timestamp, last_modified, has_cover, description, accent_color, title_norm, author_norm)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')),
+                 COALESCE(?, strftime('%s','now')), strftime('%s','now'), ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(&snap.uuid)
@@ -139,7 +146,7 @@ async fn recreate_source_row(
     .bind(&snap.series_sort)
     .bind(snap.series_index)
     .bind(&snap.pubdate)
-    .bind(&snap.timestamp)
+    .bind(snap.timestamp)
     .bind(snap.has_cover)
     .bind(&snap.description)
     .bind(&snap.accent_color)

@@ -210,14 +210,27 @@ fn build_page_sql(
 }
 
 /// The `(primary, secondary)` `books` sort columns for each axis. `primary`
-/// is always a `TEXT` column; `secondary` (the in-series index) is `Some`
-/// only for [`SortKey::Series`].
+/// always yields `TEXT`; `secondary` (the in-series index) is `Some` only for
+/// [`SortKey::Series`].
+///
+/// The two time axes read INTEGER unix-seconds (migration 0038) but format
+/// them to fixed-width ISO here, for the same reason the projection does: the
+/// cursor round-trips the primary value as `Option<String>` and compares it
+/// lexicographically, which stays chronologically correct on ISO text. (The
+/// trade-off is that ordering by the expression can't use the raw-column
+/// keyset index — acceptable at a self-hosted library's scale.)
 fn axis_sort_columns(sort: SortKey) -> (&'static str, Option<&'static str>) {
     match sort {
         SortKey::Title => ("b.sort", None),
         SortKey::Author => ("b.author_sort", None),
-        SortKey::LastUpdated => ("b.last_modified", None),
-        SortKey::NewestAdded => ("b.timestamp", None),
+        SortKey::LastUpdated => (
+            "strftime('%Y-%m-%dT%H:%M:%SZ', b.last_modified, 'unixepoch')",
+            None,
+        ),
+        SortKey::NewestAdded => (
+            "strftime('%Y-%m-%dT%H:%M:%SZ', b.timestamp, 'unixepoch')",
+            None,
+        ),
         SortKey::Series => ("b.series_sort", Some("b.series_index")),
     }
 }

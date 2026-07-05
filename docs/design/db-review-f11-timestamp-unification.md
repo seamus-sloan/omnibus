@@ -1,6 +1,27 @@
 # Unify machine timestamps on INTEGER unix-seconds (F11)
 
-**Status: Proposed — deferred from db.md F11, awaiting decision.**
+**Status: Implemented** as `db/migrations/0038_unify_timestamps_to_unix_seconds.sql`
+(**Option A** — wire stays `String`).
+
+> **Implementation note — `books` converted in place, not recreated.** The D2
+> migration mechanism below (table-recreate of `books`) is **unsafe in this
+> repo**: `init_db` sets `PRAGMA foreign_keys=ON` per connection, sqlx runs each
+> migration inside a transaction where `foreign_keys` can't be toggled (and
+> sqlx-sqlite ignores `-- no-transaction`), so a recreate's implicit
+> `DROP TABLE books` fires `ON DELETE CASCADE` and wipes `book_files`, the link
+> tables, `book_identifiers`, and `merge_log`. `books` is therefore converted
+> **in place** (`ADD` nullable INTEGER cols → backfill `CAST(strftime('%s', …))`
+> → `DROP` old → `RENAME`), which — because SQLite rejects a non-constant
+> `ADD COLUMN` default on a populated table — leaves `books.timestamp` /
+> `last_modified` as nullable INTEGER **without** a column default. The two book
+> writers (`sync/books/shared.rs`, `sync/audiobooks.rs`) now set
+> `strftime('%s','now')` explicitly. The four other tables are child/standalone,
+> so they recreate cleanly and keep `INTEGER NOT NULL DEFAULT (strftime('%s','now'))`
+> as sketched. Two sites the doc predates were also updated: the keyset cursor
+> (`books/page.rs`) and the smart-shelf date rules (`shelves/rules.rs`) now read
+> the columns as epochs.
+
+**Original proposal (deferred from db.md F11) follows.**
 
 Source: `docs/review/db.md` → *"Three inconsistent time representations"*. This
 doc exists to make the one blocking decision tractable — the **wire/serde shape

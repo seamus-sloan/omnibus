@@ -85,6 +85,86 @@ async fn create_smart_shelf_membership_matches_tag_rule() {
 }
 
 #[tokio::test]
+async fn smart_shelf_date_added_rules_match_epoch_column() {
+    // `books.timestamp` is INTEGER unix-seconds (migration 0038); the date-rule
+    // SQL must compare it as an epoch (`date(col,'unixepoch')`, numeric
+    // `strftime('%s',…)`) rather than as a TEXT date, or every match silently
+    // returns nothing.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 2).await;
+    let owner = make_user(&pool, "owner", false).await;
+    sqlx::query(
+        "UPDATE books SET timestamp = strftime('%s','2024-06-15 00:00:00') \
+                 WHERE id = (SELECT MIN(id) FROM books)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE books SET timestamp = strftime('%s','2020-01-01 00:00:00') \
+                 WHERE id = (SELECT MAX(id) FROM books)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let date_rule = |op, value: &str| ShelfRule {
+        field: RuleField::DateAdded,
+        op,
+        value: value.into(),
+    };
+
+    // `After` an absolute date → only the 2024 book.
+    let after = create_shelf(
+        &pool,
+        owner,
+        &smart_req(
+            "After",
+            MatchMode::Any,
+            vec![date_rule(RuleOp::After, "2024-01-01")],
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        after.book_count, 1,
+        "only the 2024-added book is after 2024-01-01"
+    );
+
+    // `Between` a calendar window → the same single book.
+    let between = create_shelf(
+        &pool,
+        owner,
+        &smart_req(
+            "June",
+            MatchMode::Any,
+            vec![date_rule(RuleOp::Between, "2024-06-01..2024-06-30")],
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        between.book_count, 1,
+        "only the mid-June book is in the window"
+    );
+
+    // `InLast 1d` exercises the numeric epoch comparison — both books are years
+    // old, so it must match none (a TEXT/INTEGER mismatch here would misbehave).
+    let recent = create_shelf(
+        &pool,
+        owner,
+        &smart_req(
+            "Recent",
+            MatchMode::Any,
+            vec![date_rule(RuleOp::InLast, "1d")],
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(recent.book_count, 0, "no book was added in the last day");
+}
+
+#[tokio::test]
 async fn smart_shelf_matches_author_by_name_case_insensitively() {
     let (pool, _covers) = seed_discovery_fixture().await;
     let owner = make_user(&pool, "owner", false).await;

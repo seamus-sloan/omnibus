@@ -1,8 +1,31 @@
 //! The JSON snapshot of a merge's source book, stored in
 //! `merge_log.source_metadata` and replayed by `undo_merge`.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::Transaction;
+
+/// Deserialize `timestamp` from either the current INTEGER unix-seconds or the
+/// TEXT form persisted by pre-0038 snapshots. A numeric string parses to its
+/// epoch; a non-numeric ISO string (`'YYYY-MM-DD HH:MM:SS'`) can't be converted
+/// without a date library, so it degrades to `None` — `recreate_source_row`
+/// then falls back to now, an acceptable loss for a book merged before the
+/// migration and undone after it.
+fn de_epoch_flexible<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Flexible {
+        Int(i64),
+        Text(String),
+    }
+    Ok(match Option::<Flexible>::deserialize(deserializer)? {
+        Some(Flexible::Int(n)) => Some(n),
+        Some(Flexible::Text(s)) => s.trim().parse::<i64>().ok(),
+        None => None,
+    })
+}
 
 /// Everything needed to recreate the absorbed `books` row and its
 /// satellite rows on undo. Link rows are stored **by name** — the
@@ -20,7 +43,11 @@ pub(super) struct SourceSnapshot {
     pub series_sort: Option<String>,
     pub series_index: Option<f64>,
     pub pubdate: Option<String>,
-    pub timestamp: Option<String>,
+    /// `books.timestamp` (INTEGER unix-seconds since migration 0038). A
+    /// custom deserializer also accepts the string form that pre-0038
+    /// snapshots persisted, so old `merge_log` JSON still replays.
+    #[serde(default, deserialize_with = "de_epoch_flexible")]
+    pub timestamp: Option<i64>,
     pub has_cover: i64,
     pub description: Option<String>,
     pub accent_color: Option<String>,
@@ -67,7 +94,7 @@ struct BookSnapshot {
     series_sort: Option<String>,
     series_index: Option<f64>,
     pubdate: Option<String>,
-    timestamp: Option<String>,
+    timestamp: Option<i64>,
     has_cover: i64,
     description: Option<String>,
     accent_color: Option<String>,
@@ -183,4 +210,30 @@ pub(super) async fn build_snapshot(
         identifiers,
         merged_uuid_rows,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Deserialize)]
+    struct Wrap {
+        #[serde(default, deserialize_with = "de_epoch_flexible")]
+        timestamp: Option<i64>,
+    }
+
+    #[test]
+    fn de_epoch_flexible_accepts_int_numeric_string_and_degrades_iso() {
+        let ts = |json: &str| serde_json::from_str::<Wrap>(json).unwrap().timestamp;
+        // Current form: a JSON integer.
+        assert_eq!(ts(r#"{"timestamp":1704164645}"#), Some(1_704_164_645));
+        // Legacy numeric string (some serializers emitted epochs as strings).
+        assert_eq!(ts(r#"{"timestamp":"1704164645"}"#), Some(1_704_164_645));
+        // Legacy ISO string can't convert without a date lib -> None (undo
+        // then falls back to now).
+        assert_eq!(ts(r#"{"timestamp":"2024-01-02 03:04:05"}"#), None);
+        // Null / missing -> None.
+        assert_eq!(ts(r#"{"timestamp":null}"#), None);
+        assert_eq!(ts(r#"{}"#), None);
+    }
 }

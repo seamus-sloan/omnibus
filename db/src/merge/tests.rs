@@ -361,12 +361,50 @@ async fn undo_merge_restores_source_book_and_moves_file_back() {
     );
     // Guard cleared; log marked undone; FTS has both rows again.
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM merged_uuids").await, 0);
-    let undone: Option<String> = sqlx::query_scalar("SELECT undone_at FROM merge_log")
+    let undone: Option<i64> = sqlx::query_scalar("SELECT undone_at FROM merge_log")
         .fetch_one(&pool)
         .await
         .unwrap();
     assert!(undone.is_some());
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM books_fts").await, 2);
+}
+
+#[tokio::test]
+async fn undo_merge_stamps_now_when_snapshot_timestamp_is_unparseable() {
+    // A pre-0038 merge snapshot stored `timestamp` as an ISO string, which
+    // `de_epoch_flexible` can't convert to an epoch (-> None). The recreate must
+    // fall back to now rather than leaving the restored row's date-added NULL.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let target = seed_ebook(&pool, "A/Dracula.epub", "Dracula", "Bram Stoker").await;
+    let source = seed_audiobook(&pool, "B/Drakula.m4b", "Drakula", "Bram Stoker").await;
+    let out = merge_books(&pool, &source, &target, None).await.unwrap();
+
+    // Rewrite the persisted snapshot to the legacy string form.
+    let json: String = sqlx::query_scalar("SELECT source_metadata FROM merge_log WHERE id = ?")
+        .bind(out.merge_log_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let mut snap: serde_json::Value = serde_json::from_str(&json).unwrap();
+    snap["timestamp"] = serde_json::json!("2024-01-02 03:04:05");
+    sqlx::query("UPDATE merge_log SET source_metadata = ? WHERE id = ?")
+        .bind(snap.to_string())
+        .bind(out.merge_log_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    undo_merge(&pool, out.merge_log_id).await.unwrap();
+
+    let ts: Option<i64> = sqlx::query_scalar("SELECT timestamp FROM books WHERE uuid = ?")
+        .bind(&source)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        matches!(ts, Some(e) if e > 1_700_000_000),
+        "restored timestamp should fall back to now, got {ts:?}"
+    );
 }
 
 #[tokio::test]
