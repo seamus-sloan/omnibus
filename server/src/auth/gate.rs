@@ -18,9 +18,10 @@ use omnibus_db::auth as auth_db;
 use super::extractor::{extract_token, query_token};
 use crate::backend::AppState;
 
-/// Media read endpoints whose bytes are rendered into an `<img src>` and so
-/// may authenticate via a `?token=` query param — the only auth a WebView's
-/// `<img>` fetch can carry. Kept in lockstep with the handlers gated on
+/// Media read endpoints whose bytes are rendered into an `<img src>` (covers,
+/// thumbs, photos) or `<audio src>` (direct-play audiobook parts) and so may
+/// authenticate via a `?token=` query param — the only auth such a WebView
+/// media fetch can carry. Kept in lockstep with the handlers gated on
 /// [`MediaAuthUser`]; every other `/api/*` path stays header/cookie-only.
 ///
 /// [`MediaAuthUser`]: super::MediaAuthUser
