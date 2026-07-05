@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::highlight::CreateHighlight;
+
 #[cfg(test)]
 mod tests;
 
@@ -18,10 +20,10 @@ mod tests;
 /// runtime-configurable; change here to move the cap.
 pub const SESSION_BATCH_CAP: usize = 500;
 
-/// Maximum length (in chars) of `ProgressUpdate::epub_cfi`. Matches
-/// `CreateHighlight::EPUB_CFI_RANGE_MAX_LEN` — both store the same kind of
-/// value.
-pub const EPUB_CFI_MAX_LEN: usize = 4096;
+/// Maximum length (in chars) of `ProgressUpdate::epub_cfi`. Aliased to
+/// `CreateHighlight::EPUB_CFI_RANGE_MAX_LEN` so both write paths for the same
+/// kind of value can't drift apart.
+pub const EPUB_CFI_MAX_LEN: usize = CreateHighlight::EPUB_CFI_RANGE_MAX_LEN;
 
 /// Discriminator for the format-specific payload variant in [`ProgressUpdate`]
 /// / [`ProgressRecord`] / [`SessionReport`]. Serializes as a plain

@@ -189,3 +189,12 @@ fn update_validate_rejects_overlong_description() {
     };
     assert!(update.validate().is_err());
 }
+
+#[test]
+fn update_validate_accepts_description_at_max_len() {
+    let update = UpdateShelfRequest {
+        description: Some("x".repeat(SHELF_DESCRIPTION_MAX_LEN)),
+        ..Default::default()
+    };
+    assert!(update.validate().is_ok());
+}
