@@ -5110,4 +5110,151 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   background: var(--bg-0);
   color: var(--ink-0);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+/* ── Mobile audiobook player ───────────────────────────────────────── */
+.m-player {
+  position: relative;
+  padding: 8px 14px 28px;
+  min-height: 100%;
+  overflow: hidden;
+}
+/* Radial accent glow washing the top of the screen (tinted by --accent). */
+.m-player-glow {
+  position: absolute; inset: 0; pointer-events: none; z-index: 0;
+  background-image: radial-gradient(80% 46% at 50% 6%, color-mix(in oklch, var(--accent) 22%, transparent), transparent 70%);
+}
+.m-player > *:not(.m-player-glow) { position: relative; z-index: 1; }
+
+.m-player-bar { display: flex; align-items: center; height: 40px; }
+
+.m-player-cover {
+  width: 220px; max-width: 62%; margin: 6px auto 0;
+  filter: drop-shadow(0 18px 40px color-mix(in oklch, var(--accent) 30%, transparent));
+}
+
+.m-player-now { text-align: center; padding: 20px 6px 6px; }
+.m-player-eyebrow { color: var(--accent); }
+.m-player-title {
+  font-family: var(--serif); font-weight: 400; font-size: 30px;
+  line-height: 1.02; margin-top: 10px;
+}
+.m-player-by { margin-top: 8px; color: var(--ink-1); font-size: 14px; }
+.m-player-chline {
+  margin-top: 6px; font-family: var(--serif); font-style: italic;
+  font-size: 16px; color: var(--ink-1);
+}
+
+/* Chapter scrubber. */
+.m-player-scrub { padding: 18px 2px 4px; }
+.m-player-range {
+  -webkit-appearance: none; appearance: none; width: 100%; height: 6px;
+  border-radius: 999px; background: var(--bg-3); cursor: pointer; outline: none;
+}
+.m-player-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 18px; height: 18px;
+  border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--accent) 26%, transparent);
+}
+.m-player-range::-moz-range-thumb {
+  width: 18px; height: 18px; border: none; border-radius: 50%; background: var(--accent);
+}
+.m-player-range::-moz-range-progress { background: var(--accent); height: 6px; border-radius: 999px; }
+.m-player-times {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 8px; margin-top: 10px; font-size: 12px; color: var(--ink-2);
+}
+.m-player-chtime { color: var(--ink-3); font-size: 11px; text-align: center; flex: 1; }
+
+/* Transport row. */
+.m-player-transport {
+  display: flex; align-items: center; justify-content: center;
+  gap: 12px; padding: 18px 0 8px;
+}
+.m-tp-ghost, .m-tp-ch, .m-tp-skip, .m-tp-rate {
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); background: transparent; color: var(--ink-1);
+  border-radius: 999px; cursor: pointer; font-family: var(--mono); font-size: 12px;
+}
+.m-tp-ghost { width: 40px; height: 40px; font-size: 16px; }
+.m-tp-ch { width: 44px; height: 44px; }
+.m-tp-skip { width: 48px; height: 48px; }
+.m-tp-rate { min-width: 48px; height: 40px; padding: 0 10px; }
+.m-tp-ghost:hover, .m-tp-ch:hover, .m-tp-skip:hover, .m-tp-rate:hover {
+  color: var(--ink-0); border-color: var(--accent);
+}
+.m-tp-ghost:disabled, .m-tp-ch:disabled { opacity: .4; cursor: not-allowed; }
+
+.m-tp-play {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 72px; height: 72px; border-radius: 50%; border: none; cursor: pointer;
+  background: var(--accent); color: var(--accent-ink);
+  box-shadow: 0 10px 28px color-mix(in oklch, var(--accent) 40%, transparent);
+}
+.m-tp-play:active { transform: scale(0.97); }
+.m-tp-tri {
+  width: 0; height: 0; margin-left: 4px;
+  border-left: 20px solid var(--accent-ink);
+  border-top: 12px solid transparent; border-bottom: 12px solid transparent;
+}
+.m-tp-pause { display: flex; gap: 6px; }
+.m-tp-pause span { width: 6px; height: 24px; border-radius: 2px; background: var(--accent-ink); }
+
+/* Secondary control pills. */
+.m-player-secondary {
+  display: flex; align-items: center; justify-content: center;
+  flex-wrap: wrap; gap: 8px; padding: 6px 0 2px;
+}
+.m-pill {
+  height: 32px; padding: 0 14px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg-1); color: var(--ink-1);
+  font-size: 12px; cursor: pointer;
+}
+.m-pill:hover:not(:disabled) { color: var(--ink-0); border-color: var(--line-2); }
+.m-pill.on { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.m-pill:disabled { opacity: .4; cursor: not-allowed; }
+
+/* Chapters bottom-sheet. */
+.m-sheet-scrim {
+  position: fixed; inset: 0; z-index: 50;
+  background: color-mix(in oklch, var(--bg-0) 55%, transparent);
+  display: flex; align-items: flex-end;
+}
+.m-sheet {
+  width: 100%; max-height: 72vh; display: flex; flex-direction: column;
+  background: var(--bg-1); border-top: 1px solid var(--line-2);
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 -18px 48px color-mix(in oklch, var(--bg-0) 70%, transparent);
+  padding: 8px 14px 20px;
+}
+.m-sheet-grabber { width: 40px; height: 4px; border-radius: 999px; background: var(--bg-3); margin: 6px auto 10px; }
+.m-sheet-head { display: flex; align-items: baseline; justify-content: space-between; padding: 4px 2px 10px; }
+.m-sheet-head h4 { font-size: 15px; font-weight: 600; }
+.m-sheet-count { color: var(--ink-3); font-size: 12px; }
+.m-sheet-list { overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+
+.m-ch-row {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 10px 8px; border: none; border-radius: 10px;
+  background: transparent; color: var(--ink-1); text-align: left; cursor: pointer;
+}
+.m-ch-row:hover { background: var(--bg-2); }
+.m-ch-row.current {
+  background: var(--bg-2); border-left: 2px solid var(--accent); border-radius: 0 10px 10px 0;
+}
+.m-ch-num { width: 26px; flex-shrink: 0; color: var(--ink-3); font-size: 12px; }
+.m-ch-row.current .m-ch-num { color: var(--accent); }
+.m-ch-body { flex: 1; min-width: 0; }
+.m-ch-title {
+  font-family: var(--serif); font-size: 15px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.m-ch-pbar { margin-top: 6px; }
+.m-ch-trail { flex-shrink: 0; font-size: 12px; }
+.m-ch-done { color: var(--ink-3); }
+.m-ch-dur { color: var(--ink-3); }
+.m-ch-playing { color: var(--accent); }
+
+/* Player status / error messages. */
+.m-player-msg, .m-player-loading {
+  padding: 40px 20px; display: flex; flex-direction: column;
+  align-items: center; gap: 16px; text-align: center;
 }
