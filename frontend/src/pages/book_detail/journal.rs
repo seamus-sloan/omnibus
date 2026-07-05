@@ -19,17 +19,12 @@ use super::BdSectionHead;
 pub(super) fn BdJournalSection(uuid: String) -> Element {
     let server_url = use_server_url();
     let mut entries = use_signal(Vec::<JournalEntry>::new);
-    let mut current_user = use_signal(|| None::<UserSummary>);
+    // Derived from the app-wide `CurrentUser` context (`crate::use_current_user_summary`)
+    // instead of an independent per-mount `/api/auth/me` fetch. Mobile/SSR
+    // stay at the `None` default since the context is web-only.
+    let current_user = crate::use_current_user_summary();
     // Bumped after any mutation to refetch the server-authoritative feed.
     let reload = use_signal(|| 0u32);
-
-    use_effect(move || {
-        spawn(async move {
-            if let Ok(u) = data::current_user().await {
-                current_user.set(u);
-            }
-        });
-    });
 
     let load_url = server_url.clone();
     use_effect(use_reactive!(|uuid| {
