@@ -50,24 +50,13 @@ pub fn BookDetailPage(uuid: String) -> Element {
     // (signals read inside `use_effect` re-arm it).
     let refresh = use_signal(|| 0u32);
 
-    // Admin gating for the "Merge with…" affordance. The signal and the
-    // effect are declared unconditionally so SSR and the hydrating WASM
-    // bundle agree on hook count and order — Dioxus tracks hooks
-    // positionally, and a cfg-gated declaration would diverge the two.
-    // The effect itself only runs on the client (Dioxus skips `use_effect`
-    // during SSR), and `data::current_user()` resolves to an
-    // `Ok(None)`-returning stub under server-only builds, so no admin
-    // surface ever leaks into the prerendered markup. Mobile renders no
-    // admin surfaces; the server-side `AdminUser` extractor on
-    // `rpc_merge_books` is the actual security boundary.
-    let mut is_admin = use_signal(|| false);
-    use_effect(move || {
-        spawn(async move {
-            if let Ok(Some(user)) = data::current_user().await {
-                is_admin.set(user.is_admin);
-            }
-        });
-    });
+    // Admin gating for the "Merge with…" affordance — derived from the
+    // app-wide `CurrentUser` context (`crate::use_is_admin`) instead of an
+    // independent per-mount `/api/auth/me` fetch. Mobile/SSR stay at the
+    // `false` default since the context is web-only; the server-side
+    // `AdminUser` extractor on `rpc_merge_books` is the actual security
+    // boundary.
+    let is_admin = crate::use_is_admin();
 
     // Merge dialog state. Declared unconditionally per rule 07 so the hook
     // count is identical on every target — mobile compiles the signals but

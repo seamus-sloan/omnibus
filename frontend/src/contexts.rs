@@ -97,6 +97,43 @@ pub fn use_current_user() -> CurrentUser {
     use_context::<CurrentUser>()
 }
 
+/// Derive `is_admin` from the app-wide [`CurrentUser`] context instead of an
+/// independent per-mount `/api/auth/me` fetch. Starts `false` so SSR and the
+/// first WASM paint agree (rule 07); only the web build wires the effect
+/// that flips it once the context resolves an admin user. Mobile stays at
+/// the default since `CurrentUser` isn't provided there; SSR has the context
+/// but it stays unresolved until the web client's boot effect runs post-mount.
+#[cfg_attr(not(feature = "web"), allow(unused_mut))]
+pub fn use_is_admin() -> Signal<bool> {
+    let mut is_admin = use_signal(|| false);
+    #[cfg(feature = "web")]
+    {
+        let user_ctx = use_current_user().0;
+        use_effect(move || {
+            is_admin.set(matches!(user_ctx(), Some(Some(ref u)) if u.is_admin));
+        });
+    }
+    is_admin
+}
+
+/// Derive the resolved current user from the app-wide [`CurrentUser`]
+/// context instead of an independent per-mount `/api/auth/me` fetch,
+/// flattening "not yet resolved" and "unauthenticated" alike to `None`.
+/// Starts `None` so SSR and the first WASM paint agree (rule 07); only the
+/// web build wires the effect that fills it in once the context resolves.
+#[cfg_attr(not(feature = "web"), allow(unused_mut))]
+pub fn use_current_user_summary() -> Signal<Option<omnibus_shared::UserSummary>> {
+    let mut current = use_signal(|| None);
+    #[cfg(feature = "web")]
+    {
+        let user_ctx = use_current_user().0;
+        use_effect(move || {
+            current.set(user_ctx().flatten());
+        });
+    }
+    current
+}
+
 /// App-wide audiobook playback state. Owned by [`crate::App`] via
 /// `use_context_provider` so the full listen player and the persistent
 /// mini-dock share one set of signals. Playback survives route changes

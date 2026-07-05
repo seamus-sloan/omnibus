@@ -29,19 +29,12 @@ pub fn SettingsPage() -> Element {
     // Bumped after a successful save to re-trigger the library-refresh effect.
     let library_refresh = use_signal(|| 0u32);
 
-    // Admin gating for the F3.3 Hardcover key card. Starts `false` so SSR and
-    // the first WASM paint agree (rule 07); the effect flips it for admins
-    // after mount. Declared unconditionally to keep hook order stable. The
-    // server-side `AdminUser` extractor on the key RPCs is the real boundary;
-    // this just keeps the card off non-admin screens.
-    let mut is_admin = use_signal(|| false);
-    use_effect(move || {
-        spawn(async move {
-            if let Ok(Some(user)) = data::current_user().await {
-                is_admin.set(user.is_admin);
-            }
-        });
-    });
+    // Admin gating for the F3.3 Hardcover key card — derived from the
+    // app-wide `CurrentUser` context (`crate::use_is_admin`) instead of an
+    // independent per-mount `/api/auth/me` fetch. The server-side `AdminUser`
+    // extractor on the key RPCs is the real boundary; this just keeps the
+    // card off non-admin screens.
+    let is_admin = crate::use_is_admin();
 
     spawn_initial_settings_load(
         server_url.clone(),

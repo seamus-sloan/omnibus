@@ -20,24 +20,13 @@ pub fn AuthorPage(id: i64) -> Element {
     let mut loading = use_signal(|| true);
     let mut error: Signal<Option<String>> = use_signal(|| None);
 
-    // F5.9-lite admin gating for the Delete button. The signal and the
-    // effect are declared unconditionally so SSR and the hydrating WASM
-    // bundle agree on hook count and order — Dioxus tracks hooks
-    // positionally, and a cfg-gated declaration would diverge the two
-    // (rule 07). The effect itself only runs on the client (Dioxus skips
-    // `use_effect` during SSR), and `data::current_user()` resolves to
-    // an `Ok(None)`-returning stub under server-only and mobile builds,
-    // so no admin surface ever leaks into the prerendered markup or the
-    // mobile UI. The server-side `AdminUser` extractor on
-    // `rpc_delete_author` is the actual security boundary.
-    let mut is_admin = use_signal(|| false);
-    use_effect(move || {
-        spawn(async move {
-            if let Ok(Some(user)) = data::current_user().await {
-                is_admin.set(user.is_admin);
-            }
-        });
-    });
+    // F5.9-lite admin gating for the Delete button — derived from the
+    // app-wide `CurrentUser` context (`crate::use_is_admin`) instead of an
+    // independent per-mount `/api/auth/me` fetch. Mobile/SSR stay at the
+    // `false` default since the context is web-only; the server-side
+    // `AdminUser` extractor on `rpc_delete_author` is the actual security
+    // boundary.
+    let is_admin = crate::use_is_admin();
 
     // See `BookDetailPage` for why `id` needs `use_reactive!`.
     let url = server_url.clone();

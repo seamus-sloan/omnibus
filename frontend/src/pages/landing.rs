@@ -96,7 +96,7 @@ fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSign
     // if a newer fetch (sort/dir/filter/query change) superseded it mid-flight
     // — otherwise it would splice an old result stream onto the new list.
     let fetch_epoch = use_signal(|| 0u64);
-    let is_admin = setup_admin_signal();
+    let is_admin = crate::use_is_admin();
     // Suggestion pools for the inline Authors chip editor and the
     // (future-reserved) Tags pool, each carrying the dropdown book-count.
     let pools = SuggestionPools {
@@ -131,23 +131,6 @@ fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSign
         is_admin,
         pools,
     }
-}
-
-/// Wire `is_admin` to the current-user context on web; SSR/mobile leave it
-/// at its `false` default so the first paint matches.
-fn setup_admin_signal() -> Signal<bool> {
-    // F5.9-lite: admin-only inline-edit affordances on the power-user table.
-    // Reads from the App-wide `CurrentUser` context — no per-mount round-trip.
-    #[cfg_attr(not(feature = "web"), allow(unused_mut))]
-    let mut is_admin = use_signal(|| false);
-    #[cfg(feature = "web")]
-    {
-        let user_ctx = crate::use_current_user().0;
-        use_effect(move || {
-            is_admin.set(matches!(user_ctx(), Some(Some(ref u)) if u.is_admin));
-        });
-    }
-    is_admin
 }
 
 /// Arm every reactive side-effect the landing page needs: admin-gated
