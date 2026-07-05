@@ -1,6 +1,8 @@
 //! Shelf read paths: visibility-scoped listing, single-shelf detail, the
 //! member book page, and the create-modal rule preview.
 
+use std::collections::HashMap;
+
 use sqlx::{Row, SqlitePool};
 
 use omnibus_shared::{
@@ -22,8 +24,19 @@ const FILE_EXISTS: &str = "EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id 
 /// Cover count in the create-modal live preview.
 const PREVIEW_SAMPLE: i64 = 12;
 
+/// Hard cap on how many shelves `list_visible_shelves` returns for a single
+/// viewer. Matches `LIST_BOOKMARKS_LIMIT`/`LIST_HIGHLIGHTS_LIMIT` — a
+/// defensive ceiling so a user with a pathological shelf count can't produce
+/// an unbounded REST response.
+pub const LIST_SHELVES_LIMIT: i64 = 500;
+
 /// Every shelf `viewer_id` can see: own + public, or all when `is_admin`.
-/// Each row carries its live book count (smart = rule match, manual = row count).
+/// Each row carries its live book count (smart = rule match, manual = row
+/// count). Rule loads and manual counts are batched across the whole visible
+/// set (one `WHERE id IN (...)` / `GROUP BY` query each) rather than issued
+/// per row; smart-shelf counts still run one query per shelf since each
+/// shelf's membership predicate is unique and can't be folded into a single
+/// `GROUP BY`.
 pub async fn list_visible_shelves(
     pool: &SqlitePool,
     viewer_id: i64,
@@ -33,33 +46,65 @@ pub async fn list_visible_shelves(
         "SELECT id, owner_user_id, kind, name, visibility, accent, match_mode
            FROM shelves
           WHERE owner_user_id = ? OR visibility = 'public' OR ?
-          ORDER BY position, id",
+          ORDER BY position, id
+          LIMIT ?",
     )
     .bind(viewer_id)
     .bind(is_admin)
+    .bind(LIST_SHELVES_LIMIT)
     .fetch_all(pool)
     .await?;
 
-    let mut out = Vec::with_capacity(rows.len());
+    struct VisibleShelfRow {
+        id: i64,
+        owner_user_id: i64,
+        kind: ShelfKind,
+        name: String,
+        visibility: Visibility,
+        accent: Option<String>,
+        match_mode: Option<String>,
+    }
+    let mut parsed = Vec::with_capacity(rows.len());
+    let mut smart_ids = Vec::new();
+    let mut manual_ids = Vec::new();
     for r in &rows {
         let id: i64 = r.try_get("id")?;
-        let owner_user_id: i64 = r.try_get("owner_user_id")?;
         let kind = parse_kind(r.try_get("kind")?)?;
-        let book_count = match kind {
-            ShelfKind::Smart => {
-                let mode = parse_mode(r.try_get("match_mode")?);
-                let rules = load_rules(pool, id).await?;
-                count_smart(pool, owner_user_id, mode, &rules).await?
-            }
-            ShelfKind::Manual => count_manual(pool, id).await?,
-        };
-        out.push(ShelfSummary {
+        match kind {
+            ShelfKind::Smart => smart_ids.push(id),
+            ShelfKind::Manual => manual_ids.push(id),
+        }
+        parsed.push(VisibleShelfRow {
             id,
-            owner_user_id,
+            owner_user_id: r.try_get("owner_user_id")?,
             kind,
             name: r.try_get("name")?,
             visibility: parse_visibility(r.try_get("visibility")?)?,
             accent: r.try_get("accent")?,
+            match_mode: r.try_get("match_mode")?,
+        });
+    }
+
+    let mut rules_by_shelf = load_rules_batch(pool, &smart_ids).await?;
+    let manual_counts = count_manual_batch(pool, &manual_ids).await?;
+
+    let mut out = Vec::with_capacity(parsed.len());
+    for row in parsed {
+        let book_count = match row.kind {
+            ShelfKind::Smart => {
+                let mode = parse_mode(row.match_mode);
+                let rules = rules_by_shelf.remove(&row.id).unwrap_or_default();
+                count_smart(pool, row.owner_user_id, mode, &rules).await?
+            }
+            ShelfKind::Manual => manual_counts.get(&row.id).copied().unwrap_or(0),
+        };
+        out.push(ShelfSummary {
+            id: row.id,
+            owner_user_id: row.owner_user_id,
+            kind: row.kind,
+            name: row.name,
+            visibility: row.visibility,
+            accent: row.accent,
             book_count,
         });
     }
@@ -181,19 +226,78 @@ async fn load_rules(pool: &SqlitePool, shelf_id: i64) -> Result<Vec<ShelfRule>, 
     .bind(shelf_id)
     .fetch_all(pool)
     .await?;
-    let mut out = Vec::with_capacity(rows.len());
+    rows.iter().map(row_to_rule).collect()
+}
+
+/// Load rules for every shelf id in `shelf_ids` in one query, grouped by
+/// shelf id in stored order — avoids the per-row `load_rules` call
+/// `list_visible_shelves` used to make for each smart shelf.
+async fn load_rules_batch(
+    pool: &SqlitePool,
+    shelf_ids: &[i64],
+) -> Result<HashMap<i64, Vec<ShelfRule>>, ShelfError> {
+    let mut out: HashMap<i64, Vec<ShelfRule>> = HashMap::new();
+    if shelf_ids.is_empty() {
+        return Ok(out);
+    }
+    let placeholders = shelf_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT shelf_id, field, op, value FROM shelf_rules \
+         WHERE shelf_id IN ({placeholders}) ORDER BY shelf_id, position, id"
+    );
+    let mut q = sqlx::query(&sql);
+    for id in shelf_ids {
+        q = q.bind(id);
+    }
+    let rows = q.fetch_all(pool).await?;
     for r in &rows {
-        let field: String = r.try_get("field")?;
-        let op: String = r.try_get("op")?;
-        out.push(ShelfRule {
-            field: RuleField::from_str(&field)
-                .ok_or_else(|| ShelfError::InvalidRule(format!("unknown field {field:?}")))?,
-            op: RuleOp::from_str(&op)
-                .ok_or_else(|| ShelfError::InvalidRule(format!("unknown op {op:?}")))?,
-            value: r.try_get("value")?,
-        });
+        let shelf_id: i64 = r.try_get("shelf_id")?;
+        out.entry(shelf_id).or_default().push(row_to_rule(r)?);
     }
     Ok(out)
+}
+
+/// Count manual-shelf membership for every shelf id in `shelf_ids` in one
+/// `GROUP BY` query — avoids the per-row `count_manual` call
+/// `list_visible_shelves` used to make for each manual shelf. A shelf with
+/// zero books has no row in `shelf_books` and so is absent from the map;
+/// callers default missing ids to 0.
+async fn count_manual_batch(
+    pool: &SqlitePool,
+    shelf_ids: &[i64],
+) -> Result<HashMap<i64, i64>, ShelfError> {
+    let mut out = HashMap::new();
+    if shelf_ids.is_empty() {
+        return Ok(out);
+    }
+    let placeholders = shelf_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT shelf_id, COUNT(*) AS cnt FROM shelf_books \
+         WHERE shelf_id IN ({placeholders}) GROUP BY shelf_id"
+    );
+    let mut q = sqlx::query(&sql);
+    for id in shelf_ids {
+        q = q.bind(id);
+    }
+    let rows = q.fetch_all(pool).await?;
+    for r in &rows {
+        out.insert(r.try_get("shelf_id")?, r.try_get("cnt")?);
+    }
+    Ok(out)
+}
+
+/// Parse one `shelf_rules` row (`field`, `op`, `value` columns) into a
+/// [`ShelfRule`]. Shared by [`load_rules`] and [`load_rules_batch`].
+fn row_to_rule(r: &sqlx::sqlite::SqliteRow) -> Result<ShelfRule, ShelfError> {
+    let field: String = r.try_get("field")?;
+    let op: String = r.try_get("op")?;
+    Ok(ShelfRule {
+        field: RuleField::from_str(&field)
+            .ok_or_else(|| ShelfError::InvalidRule(format!("unknown field {field:?}")))?,
+        op: RuleOp::from_str(&op)
+            .ok_or_else(|| ShelfError::InvalidRule(format!("unknown op {op:?}")))?,
+        value: r.try_get("value")?,
+    })
 }
 
 async fn count_smart(
