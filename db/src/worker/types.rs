@@ -290,6 +290,11 @@ pub struct Worker {
 pub(super) struct ProgressEntry {
     pub(super) progress: TaskProgress,
     pub(super) terminal_at: Option<Instant>,
+    /// User who owns this task, for user-initiated pollable jobs (F4.3
+    /// Send-to-Kindle). `None` for system tasks (scans, transcodes). Gates
+    /// [`Worker::owned_task_state`] so the monotonic, guessable task-id space
+    /// can't be probed across users. Evicted with the entry.
+    pub(super) owner: Option<i64>,
 }
 
 /// Recover from a poisoned `std::sync::Mutex` instead of panicking.

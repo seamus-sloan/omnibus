@@ -5,6 +5,8 @@ use dioxus_router::Link;
 use omnibus_shared::EbookMetadata;
 
 use crate::components::atrium::Cover;
+#[cfg(not(feature = "mobile"))]
+use crate::components::SendToKindleButton;
 use crate::Route;
 
 use super::rating::BdRatingWidget;
@@ -198,7 +200,29 @@ fn BdCtaRow(uuid: String, has_ebook: bool, has_audio: bool) -> Element {
                     listen_btn
                 }
             }
-            button { class: "btn lg ghost", disabled: true, title: "Send-to-Kindle coming soon", "Send to Kindle" }
+            // Send-to-Kindle emails the EPUB, so it only makes sense when the
+            // book has an ebook file (the backend errors with `NoEpub`
+            // otherwise). Web renders the interactive button; mobile keeps a
+            // disabled stub like the other hero CTAs (rule 07: cfg gates the
+            // `let` binding, not the rsx body, so SSR/web markup stays identical).
+            if has_ebook {
+                {
+                    #[cfg(not(feature = "mobile"))]
+                    let send_kindle = rsx! {
+                        SendToKindleButton {
+                            uuid: uuid.clone(),
+                            file_id: None,
+                            class: "btn lg ghost".to_string(),
+                            testid: "hero-send-kindle".to_string(),
+                        }
+                    };
+                    #[cfg(feature = "mobile")]
+                    let send_kindle = rsx! {
+                        button { class: "btn lg ghost", disabled: true, title: "Send-to-Kindle on mobile coming soon", "Send to Kindle" }
+                    };
+                    send_kindle
+                }
+            }
             button { class: "btn lg ghost", disabled: true, title: "Send-to-Kobo coming soon", "Send to Kobo" }
         }
     }

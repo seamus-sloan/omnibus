@@ -236,3 +236,111 @@ async fn send_returns_401_when_anonymous() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn send_enqueues_and_returns_task_id_when_gates_pass() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "reader").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    db::auth::set_kindle_email(&pool, user.id, Some("reader@kindle.com"))
+        .await
+        .unwrap();
+    configure_smtp(&pool).await;
+    let (_id, uuid) = seed_book_with_uuid(&pool, "/lib", "Sendable").await;
+
+    let response = app
+        .oneshot(post_json(
+            "/api/kindle/send",
+            &token,
+            serde_json::json!({ "book_uuid": uuid }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        body["task_id"].as_u64().is_some(),
+        "expected a numeric task_id, got {body}"
+    );
+}
+
+#[tokio::test]
+async fn send_status_is_not_readable_by_another_user() {
+    // A user enqueues a send; a *different* authenticated user must not be
+    // able to read that task's status by guessing the id (the id space is a
+    // monotonic AtomicU64). The owner still sees it.
+    let (app, _state, pool) = fixture().await;
+    let owner = auth_test_support::create_user(&pool, "owner").await;
+    let owner_token = auth_test_support::bearer_token(&pool, owner.id).await;
+    db::auth::set_kindle_email(&pool, owner.id, Some("owner@kindle.com"))
+        .await
+        .unwrap();
+    configure_smtp(&pool).await;
+    let (_id, uuid) = seed_book_with_uuid(&pool, "/lib", "Sendable").await;
+
+    let response = app
+        .clone()
+        .oneshot(post_json(
+            "/api/kindle/send",
+            &owner_token,
+            serde_json::json!({ "book_uuid": uuid }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let task_id = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["task_id"]
+        .as_u64()
+        .expect("task_id");
+
+    // A second user probing the same id gets 404, not the owner's outcome.
+    let other = auth_test_support::create_user(&pool, "snoop").await;
+    let other_token = auth_test_support::bearer_token(&pool, other.id).await;
+    let probed = app
+        .clone()
+        .oneshot(get_with_bearer(
+            &format!("/api/kindle/send/status?task_id={task_id}"),
+            &other_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(probed.status(), StatusCode::NOT_FOUND);
+
+    // The owner can still read their own send's status.
+    let owned = app
+        .oneshot(get_with_bearer(
+            &format!("/api/kindle/send/status?task_id={task_id}"),
+            &owner_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(owned.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn send_status_returns_404_for_unknown_task() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "reader").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let response = app
+        .oneshot(get_with_bearer(
+            "/api/kindle/send/status?task_id=999999",
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn send_status_returns_401_when_anonymous() {
+    let (app, _, _) = fixture().await;
+    let response = app
+        .oneshot(get_anon("/api/kindle/send/status?task_id=1"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}

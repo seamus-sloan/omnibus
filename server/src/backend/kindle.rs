@@ -4,16 +4,13 @@
 //! admin-only SMTP config (get / set / clear / test).
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
-use omnibus_db::{
-    self as db,
-    worker::{Task, TaskOutcome},
-};
-use omnibus_shared::SmtpConfigUpdate;
+use omnibus_db::{self as db, worker::Task};
+use omnibus_shared::{KindleSendStatus, ProgressState, SmtpConfigUpdate};
 use serde::Deserialize;
 
 use super::{internal, AppState};
@@ -27,8 +24,10 @@ pub(super) struct SendBody {
     file_id: Option<i64>,
 }
 
-/// Email the EPUB to the authenticated user's Kindle address, awaiting the
-/// worker so the response reflects the actual delivery result.
+/// Enqueue a send of the EPUB to the authenticated user's Kindle address and
+/// return the worker `task_id` to poll (`{"task_id": N}`). Fast pre-checks (no
+/// Kindle email, SMTP unconfigured, unknown book) still fail synchronously; the
+/// SMTP delivery runs on the worker, polled via `GET /api/kindle/send/status`.
 pub(super) async fn post_send(
     user: AuthUser,
     State(state): State<AppState>,
@@ -67,9 +66,35 @@ pub(super) async fn post_send(
         book_file_id: body.file_id,
         recipient_email: recipient,
     });
-    match state.worker.await_completion(task_id).await {
-        TaskOutcome::Ok => StatusCode::OK.into_response(),
-        TaskOutcome::Err(msg) => (StatusCode::BAD_GATEWAY, msg).into_response(),
+    // Scope the pollable status to this user so the guessable task-id space
+    // can't be probed for other users' send outcomes.
+    state.worker.set_task_owner(task_id, user.id);
+    Json(serde_json::json!({ "task_id": task_id })).into_response()
+}
+
+/// Query for `GET /api/kindle/send/status`.
+#[derive(Debug, Deserialize)]
+pub(super) struct SendStatusQuery {
+    task_id: u64,
+}
+
+/// Poll a send enqueued by [`post_send`]. Returns the [`KindleSendStatus`] for
+/// `task_id`, or 404 once it's unknown (never posted, evicted after the
+/// worker's terminal-retention window, or not owned by the caller). Scoped to
+/// the requesting user so the guessable task-id space can't be probed for
+/// other users' send outcomes.
+pub(super) async fn get_send_status(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Query(q): Query<SendStatusQuery>,
+) -> Response {
+    match state.worker.owned_task_state(q.task_id, user.id) {
+        Some(ProgressState::Running { .. }) => Json(KindleSendStatus::Pending).into_response(),
+        Some(ProgressState::Done { .. }) => Json(KindleSendStatus::Sent).into_response(),
+        Some(ProgressState::Failed { message }) => {
+            Json(KindleSendStatus::Failed { message }).into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 

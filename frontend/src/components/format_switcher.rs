@@ -9,6 +9,8 @@ use dioxus::prelude::*;
 use dioxus_router::Link;
 
 use omnibus_shared::BookFileInfo;
+#[cfg(not(feature = "mobile"))]
+use omnibus_shared::KindleSendStatus;
 
 #[cfg(not(feature = "mobile"))]
 use crate::Route;
@@ -246,46 +248,121 @@ fn send_to_kindle_action(_uuid: &str, _file_id: Option<i64>) -> Element {
     }
 }
 
-/// Interactive Send-to-Kindle button. On click it posts the job and awaits the
-/// result (the RPC blocks on the worker), then shows "Sending…" → sent /
-/// error inline. Disabled while in flight.
+/// Interactive Send-to-Kindle button. On click it enqueues the job (fast, so
+/// it never trips the server's 30s request-timeout guard) and then polls the
+/// worker for the delivery outcome, showing "Sending…" in-place meanwhile. On a
+/// terminal state it raises a bottom-center toast (matching the merge/bookmark
+/// toasts): a success toast auto-dismisses after a few seconds, an error toast
+/// stays until dismissed so the message stays readable. Disabled while in
+/// flight. `class` / `testid` default to the per-format-row styling; the hero
+/// CTA overrides them to render a large ghost button with its own testid.
 #[cfg(not(feature = "mobile"))]
 #[component]
-fn SendToKindleButton(uuid: String, file_id: Option<i64>) -> Element {
+pub fn SendToKindleButton(
+    uuid: String,
+    file_id: Option<i64>,
+    #[props(default = "btn".to_string())] class: String,
+    #[props(default = "action-kindle".to_string())] testid: String,
+) -> Element {
     let server_url = crate::use_server_url();
     let mut in_flight = use_signal(|| false);
-    // (is_error, message) — None until the first send completes.
+    // (is_error, message) — None until the first send completes / toast dismissed.
     let mut result = use_signal(|| None::<(bool, String)>);
 
     rsx! {
         button {
-            class: "btn",
+            class: "{class}",
             disabled: in_flight(),
-            "data-testid": "action-kindle",
+            "data-testid": "{testid}",
             onclick: move |_| {
                 let url = server_url.clone();
                 let uuid = uuid.clone();
                 in_flight.set(true);
                 result.set(None);
                 spawn(async move {
-                    match crate::data::send_to_kindle(&url, &uuid, file_id).await {
-                        Ok(()) => result.set(Some((false, "Sent to your Kindle.".to_string()))),
-                        Err(e) => result.set(Some((true, format!("Send failed: {e}")))),
-                    }
+                    // Enqueue; a fast pre-check failure (no Kindle email, SMTP
+                    // unconfigured, unknown book) comes back here immediately.
+                    let task_id = match crate::data::enqueue_send_to_kindle(&url, &uuid, file_id).await {
+                        Ok(id) => id,
+                        Err(e) => {
+                            result.set(Some((true, format!("Send failed: {e}"))));
+                            in_flight.set(false);
+                            return;
+                        }
+                    };
+                    let (is_error, message) = poll_send_result(&url, task_id).await;
+                    result.set(Some((is_error, message)));
                     in_flight.set(false);
+                    // Success is transient — auto-dismiss the toast. Errors stay
+                    // until the user dismisses them.
+                    if !is_error {
+                        async_sleep_ms(4000).await;
+                        result.set(None);
+                    }
                 });
             },
             if in_flight() { "Sending\u{2026}" } else { "Send to Kindle" }
         }
         if let Some((is_error, message)) = result() {
-            span {
-                role: "status",
-                "data-testid": "kindle-send-status",
-                class: if is_error { "kindle-send-status error" } else { "kindle-send-status success" },
-                "{message}"
+            div { class: "kindle-toast card", role: "status",
+                span {
+                    "data-testid": "kindle-send-status",
+                    class: if is_error { "kindle-toast-msg error" } else { "kindle-toast-msg success" },
+                    "{message}"
+                }
+                button {
+                    class: "btn ghost sm",
+                    "data-testid": "kindle-toast-dismiss",
+                    aria_label: "Dismiss",
+                    onclick: move |_| result.set(None),
+                    "\u{00d7}"
+                }
             }
         }
     }
+}
+
+/// Poll the worker until the enqueued send reaches a terminal state, mapping it
+/// to the toast's `(is_error, message)` pair. `Ok(None)` means the task id went
+/// unknown before we saw a terminal state (evicted past the worker's retention
+/// window) — rare under sub-second polling, surfaced as a soft error since we
+/// can't confirm delivery.
+#[cfg(not(feature = "mobile"))]
+async fn poll_send_result(url: &str, task_id: u64) -> (bool, String) {
+    const POLL_INTERVAL_MS: u32 = 700;
+    loop {
+        async_sleep_ms(POLL_INTERVAL_MS).await;
+        match crate::data::kindle_send_status(url, task_id).await {
+            Ok(Some(KindleSendStatus::Pending)) => continue,
+            Ok(Some(KindleSendStatus::Sent)) => return (false, "Sent to your Kindle.".to_string()),
+            Ok(Some(KindleSendStatus::Failed { message })) => {
+                return (true, format!("Send failed: {message}"))
+            }
+            Ok(None) => {
+                return (
+                    true,
+                    "Send failed: could not confirm the send completed.".to_string(),
+                )
+            }
+            Err(e) => return (true, format!("Send failed: {e}")),
+        }
+    }
+}
+
+// ── Platform-gated poll sleeper ──────────────────────────────────
+//
+// Mirrors `worker_status`'s helper: web uses `gloo_timers`; the SSR/server
+// build (where the click handler never actually runs — it only needs to
+// compile) falls back to `tokio::time::sleep`.
+
+#[cfg(all(not(feature = "mobile"), feature = "web"))]
+async fn async_sleep_ms(ms: u32) {
+    gloo_timers::future::TimeoutFuture::new(ms).await;
+}
+
+#[cfg(all(not(feature = "mobile"), not(feature = "web"), feature = "server"))]
+async fn async_sleep_ms(ms: u32) {
+    tokio::time::sleep(std::time::Duration::from_millis(ms as u64)).await;
 }
 
 /// "Listen" CTA for the book-level row.

@@ -245,6 +245,13 @@ test("renders the detail contents for the selected book", async ({ page, request
   await expect(kindleBtn).toBeVisible();
   await expect(kindleBtn).toBeEnabled();
 
+  // The hero CTA row also offers Send-to-Kindle (enabled because the book has
+  // an EPUB); it shares the send flow but carries its own testid so it doesn't
+  // collide with the per-format-row button above.
+  const heroKindleBtn = page.getByTestId("hero-send-kindle");
+  await expect(heroKindleBtn).toBeVisible();
+  await expect(heroKindleBtn).toBeEnabled();
+
   // No M4B fixture in the ebook seed — the per-format Listen CTA must NOT
   // render. (Scoped to the format switcher; the hero "Listen" secondary
   // button only renders when both formats are present.)
@@ -307,11 +314,22 @@ test("sends the EPUB to Kindle and shows a sent status", async ({ page, request 
     .getByTestId("action-kindle");
   await expect(kindleBtn).toBeEnabled();
 
-  // Mock the send so the test never depends on a real SMTP relay or a
-  // configured Kindle email; the button UI renders from the 200.
+  // Send is enqueue-and-poll: the POST returns a worker task id, then the button
+  // polls the status endpoint. Mock both so the test never touches a real SMTP
+  // relay or a configured Kindle email.
   await page.route("**/api/rpc/kindle/send", (route) => {
     if (route.request().method() === "POST") {
-      return route.fulfill({ status: 200, contentType: "application/json", body: "null" });
+      return route.fulfill({ status: 200, contentType: "application/json", body: "1" });
+    }
+    return route.continue();
+  });
+  await page.route("**/api/rpc/kindle/send/status", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "sent" }),
+      });
     }
     return route.continue();
   });
@@ -339,20 +357,43 @@ test("shows an error when the Kindle send fails", async ({ page, request }) => {
     .getByTestId("format-row-epub")
     .getByTestId("action-kindle");
 
+  // Enqueue succeeds (returns a task id); the worker delivery then fails,
+  // surfaced by the status poll. This is the path that previously hung the
+  // button on "Sending…" instead of ever raising an error.
   await page.route("**/api/rpc/kindle/send", (route) => {
     if (route.request().method() === "POST") {
-      return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
+      return route.fulfill({ status: 200, contentType: "application/json", body: "7" });
+    }
+    return route.continue();
+  });
+  await page.route("**/api/rpc/kindle/send/status", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "failed", message: "SMTP delivery failed" }),
+      });
     }
     return route.continue();
   });
 
   await expectMutation(
     page,
-    { method: "POST", url: "/api/rpc/kindle/send", expectedStatus: 500 },
+    {
+      method: "POST",
+      url: "/api/rpc/kindle/send",
+      expectedBody: { book_uuid: uuid, file_id: null },
+      expectedStatus: 200,
+    },
     async () => kindleBtn.click(),
   );
 
+  // The error surfaces as a persistent toast (it does not auto-dismiss like the
+  // success toast) and can be cleared via its dismiss button.
   await expect(page.getByTestId("kindle-send-status")).toHaveClass(/error/);
+  await expect(page.getByTestId("kindle-send-status")).toContainText("SMTP delivery failed");
+  await page.getByTestId("kindle-toast-dismiss").click();
+  await expect(page.getByTestId("kindle-send-status")).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------

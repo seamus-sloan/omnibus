@@ -3,7 +3,7 @@
 //! server-function wrapper and a mobile `reqwest` variant with identical
 //! signatures across the `#[cfg]` split.
 
-use omnibus_shared::{SmtpConfigStatus, SmtpConfigUpdate};
+use omnibus_shared::{KindleSendStatus, SmtpConfigStatus, SmtpConfigUpdate};
 
 #[cfg(not(feature = "mobile"))]
 use super::note_server_fn_err;
@@ -12,27 +12,34 @@ use super::DataError;
 use super::{drain_error, http_client, note_status, with_bearer};
 
 // ── Send to Kindle ───────────────────────────────────────────────
+//
+// Send is enqueue-and-poll: `enqueue_send_to_kindle` posts the job and returns
+// the worker `task_id` (fast, so it stays under the server's 30s request-timeout
+// guard), then the caller polls `kindle_send_status` until it flips off
+// `Pending`. Blocking the request on the SMTP delivery instead risked a hung
+// relay tripping that guard and stalling the UI on "Sending…".
 
-/// Web/SSR: email a book's EPUB to the user's Kindle address. Awaits the
-/// worker, so an `Ok` means delivery succeeded and an `Err` carries the reason.
+/// Web/SSR: enqueue a send of the book's EPUB and return the worker `task_id`
+/// to poll. An `Err` here is a fast pre-check failure (no Kindle email, SMTP
+/// unconfigured, unknown book), surfaced immediately.
 #[cfg(not(feature = "mobile"))]
-pub async fn send_to_kindle(
+pub async fn enqueue_send_to_kindle(
     _server_url: &str,
     uuid: &str,
     file_id: Option<i64>,
-) -> Result<(), DataError> {
+) -> Result<u64, DataError> {
     crate::rpc::rpc_send_to_kindle(uuid.to_string(), file_id)
         .await
         .map_err(note_server_fn_err)
 }
 
-/// Mobile: POST `/api/kindle/send`.
+/// Mobile: POST `/api/kindle/send`, returning the worker `task_id`.
 #[cfg(feature = "mobile")]
-pub async fn send_to_kindle(
+pub async fn enqueue_send_to_kindle(
     server_url: &str,
     uuid: &str,
     file_id: Option<i64>,
-) -> Result<(), DataError> {
+) -> Result<u64, DataError> {
     let url = format!("{server_url}/api/kindle/send");
     let response = with_bearer(http_client().post(&url))
         .json(&serde_json::json!({ "book_uuid": uuid, "file_id": file_id }))
@@ -42,7 +49,41 @@ pub async fn send_to_kindle(
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    Ok(())
+    #[derive(serde::Deserialize)]
+    struct EnqueueResp {
+        task_id: u64,
+    }
+    Ok(response.json::<EnqueueResp>().await?.task_id)
+}
+
+/// Web/SSR: poll a send's status. `None` means the `task_id` is unknown (never
+/// posted, or evicted after the worker's terminal-retention window).
+#[cfg(not(feature = "mobile"))]
+pub async fn kindle_send_status(
+    _server_url: &str,
+    task_id: u64,
+) -> Result<Option<KindleSendStatus>, DataError> {
+    crate::rpc::rpc_kindle_send_status(task_id)
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Mobile: GET `/api/kindle/send/status`. A 404 maps to `None` (unknown id).
+#[cfg(feature = "mobile")]
+pub async fn kindle_send_status(
+    server_url: &str,
+    task_id: u64,
+) -> Result<Option<KindleSendStatus>, DataError> {
+    let url = format!("{server_url}/api/kindle/send/status?task_id={task_id}");
+    let response = with_bearer(http_client().get(&url)).send().await?;
+    let status = note_status(response.status());
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(Some(response.json::<KindleSendStatus>().await?))
 }
 
 // ── Per-user Kindle email ────────────────────────────────────────

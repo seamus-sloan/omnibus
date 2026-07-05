@@ -335,6 +335,7 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
         // `/api/rpc/kindle/send`, `/api/rpc/account/kindle-email`, and
         // `/api/rpc/smtp*` server fns.
         .route("/api/kindle/send", post(kindle::post_send))
+        .route("/api/kindle/send/status", get(kindle::get_send_status))
         .route("/api/account/kindle-email", post(kindle::post_kindle_email))
         .route("/api/smtp", get(kindle::get_smtp).post(kindle::post_smtp))
         .route("/api/smtp/clear", post(kindle::post_smtp_clear))

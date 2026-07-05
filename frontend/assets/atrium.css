@@ -3653,11 +3653,14 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .settings-field input[type="text"],
 .settings-field input[type="password"],
 .settings-field input[type="email"],
+.settings-field input[type="number"],
+.settings-field select,
 .settings-input {
   background: var(--bg-1);
   border: 1px solid var(--line-2);
   border-radius: 8px;
   color: var(--ink-0);
+  font: inherit;
   font-size: 0.95rem;
   padding: 0.55rem 0.75rem;
   width: 100%;
@@ -3665,6 +3668,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .settings-field input[type="text"]:focus,
 .settings-field input[type="password"]:focus,
 .settings-field input[type="email"]:focus,
+.settings-field input[type="number"]:focus,
+.settings-field select:focus,
 .settings-input:focus {
   outline: none;
   border-color: var(--accent);
@@ -3674,10 +3679,16 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .settings-status.success, .success-msg { color: #34d399; }
 .settings-status.error, .error { color: #f87171; font-size: 0.85rem; }
 
-/* F4.3 Send-to-Kindle inline result label next to the format-row action. */
-.kindle-send-status { font-size: 0.8rem; margin-left: 0.5rem; align-self: center; }
-.kindle-send-status.success { color: #34d399; }
-.kindle-send-status.error { color: #f87171; }
+/* F4.3 Send-to-Kindle result toast — fixed bottom-center, mirrors
+   .bd-merge-toast so action feedback is consistent across the book page. */
+.kindle-toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  z-index: 110; display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.35);
+}
+.kindle-toast-msg { font-size: 0.9rem; }
+.kindle-toast-msg.success { color: #34d399; }
+.kindle-toast-msg.error { color: #f87171; }
 
 .library-card { margin-top: 1.25rem; }
 .library-card h2, .library-title {

@@ -6,13 +6,26 @@
 //! through the admin-configured SMTP relay. No format conversion — Amazon
 //! accepts `.epub` directly.
 
+use std::time::Duration;
+
 use lettre::message::header::ContentType;
 use lettre::message::{Attachment, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
+use lettre::transport::smtp::extension::ClientId;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use sqlx::SqlitePool;
 
 use crate::settings::{SmtpConfig, SmtpSecurity};
+
+/// lettre's built-in timeout is *per SMTP command*, so a slow or hung relay can
+/// blow far past it across connect → EHLO → AUTH → DATA. This caps the whole
+/// delivery so the worker task — and the UI awaiting it — can never hang
+/// indefinitely.
+const SEND_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Per-command network timeout handed to lettre, so a single stalled command
+/// fails fast well inside [`SEND_TIMEOUT`] instead of leaning on the overall cap.
+const PER_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Failure modes of the send path. Callers branch on these to surface a
 /// per-case message (`NotConfigured` / `NoEpub` render distinct UI hints),
@@ -31,6 +44,8 @@ pub enum KindleError {
     Build(#[from] lettre::error::Error),
     #[error("SMTP delivery failed: {0}")]
     Smtp(#[from] lettre::transport::smtp::Error),
+    #[error("SMTP delivery timed out after {}s", SEND_TIMEOUT.as_secs())]
+    Timeout,
     #[error(transparent)]
     Settings(#[from] crate::settings::SettingsError),
     #[error(transparent)]
@@ -65,8 +80,20 @@ pub async fn send(
         .to_string();
 
     let email = build_epub_email(&config.from_email, to_email, &filename, bytes)?;
-    build_transport(&config)?.send(email).await?;
-    Ok(())
+    deliver(&build_transport(&config)?, email).await
+}
+
+/// Send one already-built message under the overall [`SEND_TIMEOUT`] cap. Maps
+/// the elapsed case to [`KindleError::Timeout`] so a hung relay surfaces a
+/// clear, bounded failure instead of leaving the caller awaiting forever.
+async fn deliver(
+    transport: &AsyncSmtpTransport<Tokio1Executor>,
+    email: Message,
+) -> Result<(), KindleError> {
+    match tokio::time::timeout(SEND_TIMEOUT, transport.send(email)).await {
+        Ok(res) => res.map(|_| ()).map_err(KindleError::from),
+        Err(_elapsed) => Err(KindleError::Timeout),
+    }
 }
 
 /// Send a small no-attachment message to `to_email` so an admin can verify the
@@ -81,8 +108,7 @@ pub async fn send_test(pool: &SqlitePool, to_email: &str) -> Result<(), KindleEr
         .subject("Omnibus SMTP test")
         .header(ContentType::TEXT_PLAIN)
         .body("This is a test email from Omnibus. Your SMTP settings work.".to_string())?;
-    build_transport(&config)?.send(email).await?;
-    Ok(())
+    deliver(&build_transport(&config)?, email).await
 }
 
 /// Build the MIME message: a short plain-text body plus the EPUB attached as
@@ -121,7 +147,12 @@ fn build_transport(config: &SmtpConfig) -> Result<AsyncSmtpTransport<Tokio1Execu
             AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host)?
         }
     }
-    .port(config.port);
+    .port(config.port)
+    .timeout(Some(PER_COMMAND_TIMEOUT))
+    // lettre defaults the EHLO name to the OS hostname, which on some machines
+    // (e.g. a Mac named "Ethan Wilkes …") contains spaces and is rejected by
+    // strict relays like Gmail with a 501 syntax error. Pin a valid name.
+    .hello_name(ClientId::Domain("localhost".to_string()));
     let builder = if config.username.is_empty() {
         builder
     } else {

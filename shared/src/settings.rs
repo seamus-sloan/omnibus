@@ -131,6 +131,19 @@ pub struct SmtpConfigStatus {
     pub source: String,
 }
 
+/// Terminal-or-pending status of a Send-to-Kindle job, returned by the
+/// `kindle/send/status` poll endpoint keyed on the `task_id` that the enqueue
+/// call handed back. The send runs on the background worker; the client posts
+/// once, then polls this until it flips off `Pending`. `Failed.message` is the
+/// per-case reason surfaced to the button toast.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum KindleSendStatus {
+    Pending,
+    Sent,
+    Failed { message: String },
+}
+
 /// One half of the library listing (either ebooks or audiobooks).
 ///
 /// `counts_by_ext` is an ordered list of `(extension, count)` pairs for the
