@@ -14,7 +14,9 @@ use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};
 use omnibus_shared::UserSummary;
 
 #[cfg(feature = "mobile")]
-use super::{client_kind, drain_error, http_client, token_store, with_bearer, DataError};
+use super::{
+    client_kind, drain_error, http_client, note_status, token_store, with_bearer, DataError,
+};
 
 // Mobile cannot use cookies (Dioxus Native is not a webview), so login
 // requests carry `client_kind: "ios"|"android"|"bearer"`, which the server
@@ -72,6 +74,22 @@ fn finish_bearer_auth(resp: LoginResponse) -> Result<UserSummary, DataError> {
     };
     token_store::set(token);
     Ok(resp.user)
+}
+
+/// GET `/api/auth/me` (mobile) — resolve the bearer-authenticated user.
+///
+/// The mobile client discards the [`UserSummary`] returned at login, so the
+/// Account screen re-fetches it here. A 401 clears the stored token (via
+/// `note_status`) so `ScreenLayout` routes back to `/login`.
+#[cfg(feature = "mobile")]
+pub async fn get_me(server_url: &str) -> Result<UserSummary, DataError> {
+    let url = format!("{server_url}/api/auth/me");
+    let response = with_bearer(http_client().get(&url)).send().await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(response.json::<UserSummary>().await?)
 }
 
 /// POST `/api/auth/logout` (mobile) — best-effort revoke, then clear local token.
