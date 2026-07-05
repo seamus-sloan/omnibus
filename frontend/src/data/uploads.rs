@@ -53,14 +53,14 @@ async fn web_error(res: gloo_net::http::Response) -> DataError {
 pub async fn inspect_ebook(
     _server_url: &str,
     filename: String,
-    bytes: Vec<u8>,
+    bytes: &[u8],
 ) -> Result<UploadInspection, DataError> {
     use gloo_net::http::Request;
     use wasm_bindgen::JsCast;
 
     let form =
         web_sys::FormData::new().map_err(|e| DataError::Other(format!("FormData::new: {e:?}")))?;
-    let blob = ebook_blob(&bytes)?;
+    let blob = ebook_blob(bytes)?;
     form.append_with_blob_and_filename("file", &blob, &filename)
         .map_err(|e| DataError::Other(format!("FormData::append: {e:?}")))?;
 
@@ -126,10 +126,10 @@ pub async fn upload_ebook(
 pub async fn inspect_ebook(
     server_url: &str,
     filename: String,
-    bytes: Vec<u8>,
+    bytes: &[u8],
 ) -> Result<UploadInspection, DataError> {
     let endpoint = format!("{server_url}/api/uploads/ebooks/inspect");
-    let part = reqwest::multipart::Part::bytes(bytes)
+    let part = reqwest::multipart::Part::bytes(bytes.to_vec())
         .file_name(filename)
         .mime_str("application/epub+zip")?;
     let form = reqwest::multipart::Form::new().part("file", part);
@@ -182,7 +182,7 @@ pub async fn upload_ebook(
 pub async fn inspect_ebook(
     _server_url: &str,
     _filename: String,
-    _bytes: Vec<u8>,
+    _bytes: &[u8],
 ) -> Result<UploadInspection, DataError> {
     Err(DataError::Other(
         "upload not available in this build".into(),

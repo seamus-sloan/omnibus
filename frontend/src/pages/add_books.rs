@@ -46,7 +46,7 @@ pub fn AddBooksPage() -> Element {
                 match file.read_bytes().await {
                     Ok(bytes) => {
                         let bytes = bytes.to_vec();
-                        match data::inspect_ebook(&server_url, name.clone(), bytes.clone()).await {
+                        match data::inspect_ebook(&server_url, name.clone(), &bytes).await {
                             Ok(insp) => {
                                 title.set(insp.title.unwrap_or_default());
                                 author.set(insp.author.unwrap_or_default());
@@ -61,12 +61,20 @@ pub fn AddBooksPage() -> Element {
                                 status_is_error.set(false);
                             }
                             Err(e) => {
+                                // Clear any previously staged upload so stale bytes
+                                // can't be submitted after a new file fails inspect.
+                                inspected.set(false);
+                                file_bytes.set(None);
+                                filename.set(String::new());
                                 status.set(Some(format!("Could not read that EPUB: {e}")));
                                 status_is_error.set(true);
                             }
                         }
                     }
                     Err(e) => {
+                        inspected.set(false);
+                        file_bytes.set(None);
+                        filename.set(String::new());
                         status.set(Some(format!("Could not read that file: {e}")));
                         status_is_error.set(true);
                     }
