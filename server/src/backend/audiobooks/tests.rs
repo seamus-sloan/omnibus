@@ -562,6 +562,95 @@ async fn api_get_audiobook_part_serves_range_request_with_correct_mime() {
 }
 
 #[tokio::test]
+async fn api_get_audiobook_download_returns_401_when_anonymous() {
+    let (app, _, _) = fixture().await;
+    let res = app
+        .oneshot(get_anon("/api/audiobooks/some-uuid/download"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn api_get_audiobook_download_returns_404_for_unknown_uuid() {
+    let (app, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let res = app
+        .oneshot(get_with_bearer(
+            "/api/audiobooks/does-not-exist/download",
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn api_get_audiobook_download_serves_first_part_as_attachment() {
+    // Serves the lowest-ordinal part's real file, streamed via ServeFile,
+    // with a forced attachment disposition suggesting the on-disk basename.
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let library_path = dir.path().to_string_lossy().to_string();
+    std::fs::create_dir_all(dir.path().join("Author/Book")).unwrap();
+    let file_path = dir.path().join("Author/Book/01.mp3");
+    let payload: Vec<u8> = (0u8..40).collect();
+    std::fs::File::create(&file_path)
+        .unwrap()
+        .write_all(&payload)
+        .unwrap();
+
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let uuid = seed_audiobook_with_parts(
+        &pool,
+        &library_path,
+        "MP3",
+        &[
+            (1, "Author/Book/02.mp3", 60.0),
+            (0, "Author/Book/01.mp3", 60.0),
+        ],
+    )
+    .await;
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/api/audiobooks/{uuid}/download"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("audio/mpeg"),
+    );
+    let disposition = res
+        .headers()
+        .get(axum::http::header::CONTENT_DISPOSITION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    assert!(
+        disposition.starts_with("attachment;"),
+        "download must force an attachment disposition, got {disposition:?}"
+    );
+    // Lowest ordinal (0) wins even though it was inserted second.
+    assert!(
+        disposition.contains("01.mp3"),
+        "should serve the lowest-ordinal part, got {disposition:?}"
+    );
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(body.as_ref(), &payload[..]);
+}
+
+#[tokio::test]
 async fn api_get_audiobook_segment_returns_401_when_anonymous() {
     let (app, _, _) = fixture().await;
     let res = app
