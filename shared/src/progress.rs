@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::highlight::CreateHighlight;
+
 #[cfg(test)]
 mod tests;
 
@@ -17,6 +19,11 @@ mod tests;
 /// to bound per-request DB work and SQLite write-lock hold time. Not
 /// runtime-configurable; change here to move the cap.
 pub const SESSION_BATCH_CAP: usize = 500;
+
+/// Maximum length (in chars) of an `epub_cfi` position string. Defined in
+/// terms of `CreateHighlight::EPUB_CFI_RANGE_MAX_LEN` — both hold the same
+/// kind of value — so the two ceilings can't drift apart.
+pub const EPUB_CFI_MAX_LEN: usize = CreateHighlight::EPUB_CFI_RANGE_MAX_LEN;
 
 /// Discriminator for the format-specific payload variant in [`ProgressUpdate`]
 /// / [`ProgressRecord`] / [`SessionReport`]. Serializes as a plain
@@ -62,6 +69,11 @@ impl ProgressUpdate {
                     .unwrap_or(true)
                 {
                     return Err("epub_cfi is required for format=epub".into());
+                }
+                if let Some(cfi) = &self.epub_cfi {
+                    if cfi.chars().count() > EPUB_CFI_MAX_LEN {
+                        return Err(format!("epub_cfi exceeds {EPUB_CFI_MAX_LEN} characters"));
+                    }
                 }
                 if self.audio_position_seconds.is_some() {
                     return Err("audio_position_seconds must not be set for format=epub".into());

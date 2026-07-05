@@ -29,6 +29,33 @@ fn progress_update_rejects_cross_format_cfi_on_audio() {
 }
 
 #[test]
+fn progress_update_rejects_overlong_epub_cfi() {
+    let u = ProgressUpdate {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        epub_cfi: Some("a".repeat(EPUB_CFI_MAX_LEN + 1)),
+        audio_position_seconds: None,
+    };
+    let err = u
+        .validate()
+        .expect_err("over-cap epub_cfi must be rejected");
+    assert!(err.contains("epub_cfi"), "got: {err}");
+}
+
+#[test]
+fn progress_update_accepts_epub_cfi_at_cap() {
+    // Multibyte char: chars().count() == EPUB_CFI_MAX_LEN but len() (bytes)
+    // is double that, so a regression to a byte-length check would fail this.
+    let u = ProgressUpdate {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        epub_cfi: Some("é".repeat(EPUB_CFI_MAX_LEN)),
+        audio_position_seconds: None,
+    };
+    assert!(u.validate().is_ok());
+}
+
+#[test]
 fn session_report_rejects_inverted_time_range() {
     let r = SessionReport {
         book_uuid: "x".into(),

@@ -75,6 +75,69 @@ fn rule_validate_rejects_bad_op_and_empty_value() {
 }
 
 #[test]
+fn rule_validate_rejects_overlong_value_and_accepts_value_at_cap() {
+    let overlong = ShelfRule {
+        field: RuleField::Tag,
+        op: RuleOp::Is,
+        value: "a".repeat(SHELF_RULE_VALUE_MAX_LEN + 1),
+    };
+    assert!(overlong.validate().is_err());
+
+    // Multibyte char: chars().count() == cap but len() (bytes) is double
+    // that, so a regression to a byte-length check would fail this.
+    let at_cap = ShelfRule {
+        field: RuleField::Tag,
+        op: RuleOp::Is,
+        value: "é".repeat(SHELF_RULE_VALUE_MAX_LEN),
+    };
+    assert!(at_cap.validate().is_ok());
+}
+
+#[test]
+fn create_validate_rejects_overlong_description_and_accepts_description_at_cap() {
+    let base = CreateShelfRequest {
+        kind: ShelfKind::Manual,
+        name: "Best of 2026".into(),
+        description: None,
+        visibility: Visibility::Private,
+        match_mode: None,
+        rules: vec![],
+        book_uuids: vec![],
+    };
+
+    let overlong = CreateShelfRequest {
+        description: Some("a".repeat(SHELF_DESCRIPTION_MAX_LEN + 1)),
+        ..base.clone()
+    };
+    assert!(overlong.validate().is_err());
+
+    // Multibyte char: chars().count() == cap but len() (bytes) is double
+    // that, so a regression to a byte-length check would fail this.
+    let at_cap = CreateShelfRequest {
+        description: Some("é".repeat(SHELF_DESCRIPTION_MAX_LEN)),
+        ..base.clone()
+    };
+    assert!(at_cap.validate().is_ok());
+}
+
+#[test]
+fn update_validate_rejects_overlong_description() {
+    let overlong = UpdateShelfRequest {
+        description: Some("a".repeat(SHELF_DESCRIPTION_MAX_LEN + 1)),
+        ..Default::default()
+    };
+    assert!(overlong.validate().is_err());
+
+    // Multibyte char: chars().count() == cap but len() (bytes) is double
+    // that, so a regression to a byte-length check would fail this.
+    let at_cap = UpdateShelfRequest {
+        description: Some("é".repeat(SHELF_DESCRIPTION_MAX_LEN)),
+        ..Default::default()
+    };
+    assert!(at_cap.validate().is_ok());
+}
+
+#[test]
 fn create_validate_enforces_smart_invariants() {
     let smart = CreateShelfRequest {
         kind: ShelfKind::Smart,
