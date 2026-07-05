@@ -146,16 +146,17 @@ where
 }
 
 /// Authenticated user for **media read endpoints** (`/api/covers`,
-/// `/api/thumbs`, `/api/authors/{id}/photo`). Identical to [`AuthUser`]
-/// except it also accepts the session token from a `?token=` query
-/// parameter.
+/// `/api/thumbs`, `/api/authors/{id}/photo`, and direct-play audiobook
+/// `/api/audiobooks/{uuid}/parts/{ordinal}` streams). Identical to
+/// [`AuthUser`] except it also accepts the session token from a `?token=`
+/// query parameter.
 ///
-/// These URLs are rendered into `<img src>` in the mobile WebView, which
-/// fetches them without the native `reqwest` client's `Authorization`
-/// header (and without a session cookie, since mobile auth is bearer-only)
-/// — so a header/cookie-only gate 401s every cover on mobile. The query
-/// token is the only auth an `<img>` fetch can carry. Confined to these
-/// image reads; the full API stays header/cookie-only.
+/// These URLs are wired straight into an `<img src>` / `<audio src>` in the
+/// mobile WebView, which fetches them without the native `reqwest` client's
+/// `Authorization` header (and without a session cookie, since mobile auth is
+/// bearer-only) — so a header/cookie-only gate 401s every cover and audio
+/// stream on mobile. The query token is the only auth such a fetch can carry.
+/// Confined to these reads; the full API stays header/cookie-only.
 #[derive(Debug, Clone)]
 pub struct MediaAuthUser(pub AuthUser);
 

@@ -11,6 +11,10 @@ async fn app() -> (Router, sqlx::SqlitePool) {
     let router = Router::new()
         .route("/api/value", get(|| async { "ok" }))
         .route("/api/thumbs/{uuid}/{size}", get(|| async { "thumb ok" }))
+        .route(
+            "/api/audiobooks/{uuid}/parts/{ordinal}",
+            get(|| async { "part ok" }),
+        )
         .route("/api/auth/login", get(|| async { "login ok" }))
         .route("/api/_health", get(|| async { "health ok" }))
         .route("/", get(|| async { "home" }))
@@ -226,6 +230,40 @@ async fn media_get_with_invalid_query_token_is_401() {
         .oneshot(
             Request::builder()
                 .uri("/api/thumbs/some-uuid/md?token=not-a-real-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn audiobook_part_get_with_query_token_passes() {
+    // The mobile WebView's `<audio src>` can only carry the session as
+    // `?token=`; the direct-play part stream must accept it like covers do.
+    let (app, pool) = app().await;
+    let token = seed_bearer_token(&pool).await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/audiobooks/some-uuid/parts/0?token={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn audiobook_part_get_without_auth_is_401() {
+    let (app, pool) = app().await;
+    seed_bearer_token(&pool).await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/audiobooks/some-uuid/parts/0")
                 .body(Body::empty())
                 .unwrap(),
         )

@@ -267,6 +267,21 @@ pub fn App() -> Element {
 
     components::atrium::init_theme();
 
+    // Mobile (wry WKWebView): the Dioxus-generated viewport meta lacks
+    // `viewport-fit=cover`, so the WebView insets its scroll content by the
+    // safe areas (status bar + home indicator) — a phantom ~100px of scroll
+    // behind the fixed full-screen player, and `env(safe-area-inset-*)` reads 0.
+    // Patch the meta once at startup so content fills the screen edge-to-edge
+    // and the player's safe-area padding applies. Effect (not markup), so it's
+    // free to be target-gated.
+    #[cfg(feature = "mobile")]
+    use_effect(|| {
+        dioxus::document::eval(
+            "const m = document.querySelector('meta[name=viewport]');\
+             if (m) m.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover');",
+        );
+    });
+
     // The single `<audio>` element, mounted at the App root (sibling of the
     // Router) so it never unmounts on navigation — the persistence anchor for
     // cross-page playback. Rendered on not(mobile) for SSR/WASM hydration
