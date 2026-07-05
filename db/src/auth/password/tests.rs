@@ -9,6 +9,12 @@ fn password_roundtrips() {
 }
 
 #[test]
+fn verify_password_returns_crypto_error_for_malformed_phc_string() {
+    let err = verify_password("any-password", "not-a-valid-phc-string").unwrap_err();
+    assert!(matches!(err, AuthError::Crypto(_)));
+}
+
+#[test]
 fn password_policy_rejects_short() {
     let err = validate_password("short").unwrap_err();
     assert!(
