@@ -578,6 +578,102 @@ async fn preview_rule_reports_matched_and_total() {
 }
 
 #[tokio::test]
+async fn create_manual_shelf_batches_book_inserts_across_the_chunk_boundary() {
+    // 250 uuids forces `insert_books` through two chunks (200 + 50); this
+    // must not lose, duplicate, or misorder any row at the boundary.
+    const N: i64 = 250;
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, N).await;
+    let owner = make_user(&pool, "owner", false).await;
+
+    let uuids: Vec<String> = (1..=N).map(|i| format!("uuid-{i}")).collect();
+    let shelf = create_shelf(&pool, owner, &manual_req("Big", uuids.clone()))
+        .await
+        .unwrap();
+    assert_eq!(shelf.book_count, N);
+
+    let page = shelf_page(&pool, &shelf, SortKey::Title, SortDir::Asc)
+        .await
+        .unwrap();
+    let titles: Vec<_> = page.books.iter().filter_map(|b| b.title.clone()).collect();
+    let expected: Vec<_> = (1..=N).map(|i| format!("Title {i}")).collect();
+    assert_eq!(
+        titles, expected,
+        "insertion order (== position) survives the 200-row chunk boundary"
+    );
+}
+
+#[tokio::test]
+async fn create_smart_shelf_batches_rule_inserts_across_the_chunk_boundary() {
+    // 250 rules forces `insert_rules` through two chunks (199 + 51); this
+    // must not lose, duplicate, or misorder any rule at the boundary.
+    const N: usize = 250;
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let owner = make_user(&pool, "owner", false).await;
+
+    let rules: Vec<ShelfRule> = (0..N).map(|i| tag_rule(&format!("tag-{i}"))).collect();
+    let shelf = create_shelf(
+        &pool,
+        owner,
+        &smart_req("Many rules", MatchMode::Any, rules),
+    )
+    .await
+    .unwrap();
+
+    let values: Vec<String> =
+        sqlx::query_scalar("SELECT value FROM shelf_rules WHERE shelf_id = ? ORDER BY position")
+            .bind(shelf.id)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    let expected: Vec<_> = (0..N).map(|i| format!("tag-{i}")).collect();
+    assert_eq!(
+        values, expected,
+        "rule order (== position) survives the 199-row chunk boundary"
+    );
+}
+
+#[tokio::test]
+async fn update_shelf_rolls_back_rule_replacement_when_rename_collides() {
+    // The rule replacement and the shelf-row rename share one transaction:
+    // if the rename fails (name already taken), the just-inserted new rules
+    // must roll back too, leaving the shelf's original rules intact.
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+    create_shelf(&pool, owner, &manual_req("Existing", vec![]))
+        .await
+        .unwrap();
+    let target = create_shelf(
+        &pool,
+        owner,
+        &smart_req("Target", MatchMode::Any, vec![tag_rule("fiction")]),
+    )
+    .await
+    .unwrap();
+
+    let err = update_shelf(
+        &pool,
+        target.id,
+        &UpdateShelfRequest {
+            name: Some("Existing".into()),
+            rules: Some(vec![tag_rule("mystery")]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, ShelfError::NameTaken));
+
+    let reloaded = get_shelf(&pool, target.id).await.unwrap().unwrap();
+    assert_eq!(reloaded.name, "Target", "the rename did not apply");
+    assert_eq!(
+        reloaded.rules,
+        vec![tag_rule("fiction")],
+        "the rule replacement was rolled back along with the failed rename"
+    );
+}
+
+#[tokio::test]
 async fn can_view_and_can_edit_enforce_visibility() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let owner = make_user(&pool, "owner", false).await;
