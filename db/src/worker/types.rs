@@ -96,6 +96,16 @@ pub enum Task {
     /// book collapses onto a single kepubify run; does not consume the scan
     /// semaphore (light single-file work).
     KepubConvert { book_id: i64 },
+    /// F4.3: email a book's EPUB to a user's Kindle address over SMTP. Keyed on
+    /// a fixed `smtp` resource so every send serializes against the single
+    /// configured relay (one slow SMTP server can't fan out); does not consume
+    /// the scan semaphore. `book_file_id` targets a specific `book_files` row
+    /// for multi-EPUB books, else the book's default EPUB.
+    SendToKindle {
+        book_id: i64,
+        book_file_id: Option<i64>,
+        recipient_email: String,
+    },
     /// Test-only synthetic task: sleeps `latency_ms` and invokes the
     /// optional `on_run` / `on_done` hooks, with `resource` and
     /// `route_through_scan_sem` letting a test exercise the keyed mutex and
@@ -126,6 +136,7 @@ impl Task {
             Task::RebuildFtsIndex => Some("rebuild-fts".into()),
             Task::ResolveSuggestions { book_uuid } => Some(format!("suggestions:{book_uuid}")),
             Task::KepubConvert { book_id } => Some(format!("kepub:{book_id}")),
+            Task::SendToKindle { .. } => Some("smtp".into()),
             #[cfg(test)]
             Task::Test { resource, .. } => resource.clone(),
         }
@@ -143,6 +154,7 @@ impl Task {
             Task::RebuildFtsIndex => false,
             Task::ResolveSuggestions { .. } => false,
             Task::KepubConvert { .. } => false,
+            Task::SendToKindle { .. } => false,
             #[cfg(test)]
             Task::Test {
                 route_through_scan_sem,
@@ -178,6 +190,9 @@ impl Task {
             // Reuse Scan kind for the KEPUB conversion's progress display
             // rather than growing the wire-facing `TaskKind` enum.
             Task::KepubConvert { .. } => TaskKind::Scan,
+            // Reuse Scan kind for UI display — a send is a rare, short job with
+            // no dedicated progress widget (mirrors HLS/FTS).
+            Task::SendToKindle { .. } => TaskKind::Scan,
             #[cfg(test)]
             Task::Test { .. } => TaskKind::Scan,
         }
@@ -275,6 +290,11 @@ pub struct Worker {
 pub(super) struct ProgressEntry {
     pub(super) progress: TaskProgress,
     pub(super) terminal_at: Option<Instant>,
+    /// User who owns this task, for user-initiated pollable jobs (F4.3
+    /// Send-to-Kindle). `None` for system tasks (scans, transcodes). Gates
+    /// [`Worker::owned_task_state`] so the monotonic, guessable task-id space
+    /// can't be probed across users. Evicted with the entry.
+    pub(super) owner: Option<i64>,
 }
 
 /// Recover from a poisoned `std::sync::Mutex` instead of panicking.

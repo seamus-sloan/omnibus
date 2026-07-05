@@ -5,7 +5,10 @@
 //! counts via the scanner so changes can be eyeballed before saving.
 
 use dioxus::prelude::*;
-use omnibus_shared::{HardcoverKeyStatus, LibraryContents, LibrarySection, Settings};
+use omnibus_shared::{
+    HardcoverKeyStatus, LibraryContents, LibrarySection, Settings, SmtpConfigStatus,
+    SmtpConfigUpdate, SmtpSecurity,
+};
 
 #[cfg(not(feature = "mobile"))]
 use crate::components::worker_status::WorkerStatusIndicator;
@@ -95,6 +98,7 @@ pub fn SettingsPage() -> Element {
         }
         if is_admin() {
             HardcoverKeyField {}
+            SmtpConfigField {}
         }
     }
 }
@@ -428,6 +432,269 @@ fn HardcoverKeyField() -> Element {
                 p {
                     role: "status",
                     "data-testid": "hardcover-key-status",
+                    class: if msg_is_error() { "settings-status error" } else { "settings-status success" },
+                    "{m}"
+                }
+            }
+        }
+    }
+}
+
+/// Admin field to configure the server-wide SMTP relay (F4.3) used by
+/// Send-to-Kindle. Loads the masked status on mount; the password is never read
+/// back to the client. A blank password on Save preserves the stored secret.
+#[component]
+fn SmtpConfigField() -> Element {
+    let server_url = use_server_url();
+    let mut status: Signal<Option<SmtpConfigStatus>> = use_signal(|| None);
+    let mut host = use_signal(String::new);
+    let mut port = use_signal(|| "587".to_string());
+    let mut username = use_signal(String::new);
+    let mut from_email = use_signal(String::new);
+    let mut password = use_signal(String::new);
+    let mut security = use_signal(|| SmtpSecurity::Starttls);
+    let mut msg = use_signal(|| None::<String>);
+    let mut msg_is_error = use_signal(|| false);
+    let mut in_flight = use_signal(|| false);
+
+    let load_url = server_url.clone();
+    use_effect(move || {
+        let url = load_url.clone();
+        spawn(async move {
+            if let Ok(s) = data::get_smtp_config(&url).await {
+                if let Some(h) = s.host.clone() {
+                    host.set(h);
+                }
+                if let Some(p) = s.port {
+                    port.set(p.to_string());
+                }
+                if let Some(u) = s.username.clone() {
+                    username.set(u);
+                }
+                if let Some(f) = s.from_email.clone() {
+                    from_email.set(f);
+                }
+                security.set(s.security);
+                status.set(Some(s));
+            }
+        });
+    });
+
+    let save_url = server_url.clone();
+    let on_save = move |_| {
+        let host_val = host().trim().to_string();
+        // `parse::<u16>()` accepts 0, but 0 is not a usable port — reject it
+        // so the UI matches the "1 and 65535" message (and the DB validator).
+        let port_val = match port().trim().parse::<u16>() {
+            Ok(p) if p != 0 => p,
+            _ => {
+                msg.set(Some(
+                    "Port must be a number between 1 and 65535.".to_string(),
+                ));
+                msg_is_error.set(true);
+                return;
+            }
+        };
+        // A blank password field means "leave the stored secret unchanged".
+        let pw = password();
+        let password_val = if pw.is_empty() { None } else { Some(pw) };
+        let update = SmtpConfigUpdate {
+            host: host_val,
+            port: port_val,
+            username: username().trim().to_string(),
+            from_email: from_email().trim().to_string(),
+            security: security(),
+            password: password_val,
+        };
+        let url = save_url.clone();
+        in_flight.set(true);
+        spawn(async move {
+            match data::set_smtp_config(&url, update).await {
+                Ok(s) => {
+                    status.set(Some(s));
+                    password.set(String::new());
+                    msg.set(Some("SMTP settings saved.".to_string()));
+                    msg_is_error.set(false);
+                }
+                Err(_) => {
+                    msg.set(Some("Failed to save SMTP settings.".to_string()));
+                    msg_is_error.set(true);
+                }
+            }
+            in_flight.set(false);
+        });
+    };
+
+    let clear_url = server_url.clone();
+    let on_clear = move |_| {
+        let url = clear_url.clone();
+        in_flight.set(true);
+        spawn(async move {
+            match data::clear_smtp_config(&url).await {
+                Ok(s) => {
+                    host.set(String::new());
+                    port.set("587".to_string());
+                    username.set(String::new());
+                    from_email.set(String::new());
+                    password.set(String::new());
+                    security.set(SmtpSecurity::Starttls);
+                    status.set(Some(s));
+                    msg.set(Some("SMTP settings cleared.".to_string()));
+                    msg_is_error.set(false);
+                }
+                Err(_) => {
+                    msg.set(Some("Failed to clear SMTP settings.".to_string()));
+                    msg_is_error.set(true);
+                }
+            }
+            in_flight.set(false);
+        });
+    };
+
+    let test_url = server_url;
+    let on_test = move |_| {
+        let url = test_url.clone();
+        in_flight.set(true);
+        spawn(async move {
+            match data::send_smtp_test(&url).await {
+                Ok(()) => {
+                    msg.set(Some("Test email sent to your Kindle address.".to_string()));
+                    msg_is_error.set(false);
+                }
+                Err(_) => {
+                    msg.set(Some(
+                        "Test email failed — check the SMTP settings and your account's Kindle email."
+                            .to_string(),
+                    ));
+                    msg_is_error.set(true);
+                }
+            }
+            in_flight.set(false);
+        });
+    };
+
+    let st = status();
+    let configured = st.as_ref().map(|s| s.configured).unwrap_or(false);
+
+    rsx! {
+        section { class: "card", "data-testid": "smtp-card",
+            h2 { "Email delivery (SMTP)" }
+            p { class: "subtitle", "Configure the relay used by Send-to-Kindle." }
+            div { class: "settings-field",
+                label { r#for: "smtp-host", "SMTP Host" }
+                input {
+                    r#type: "text",
+                    id: "smtp-host",
+                    name: "smtp_host",
+                    autocomplete: "off",
+                    placeholder: "smtp.example.com",
+                    value: "{host}",
+                    oninput: move |e| host.set(e.value()),
+                }
+            }
+            div { class: "settings-field",
+                label { r#for: "smtp-port", "Port" }
+                input {
+                    r#type: "number",
+                    id: "smtp-port",
+                    name: "smtp_port",
+                    value: "{port}",
+                    oninput: move |e| port.set(e.value()),
+                }
+            }
+            div { class: "settings-field",
+                label { r#for: "smtp-security", "Security" }
+                select {
+                    id: "smtp-security",
+                    name: "smtp_security",
+                    "data-testid": "smtp-security",
+                    value: "{security().as_str()}",
+                    onchange: move |e| security.set(SmtpSecurity::from_str_or_default(&e.value())),
+                    option { value: "starttls", "STARTTLS (587)" }
+                    option { value: "tls", "TLS (465)" }
+                }
+            }
+            div { class: "settings-field",
+                label { r#for: "smtp-username", "Username" }
+                input {
+                    r#type: "text",
+                    id: "smtp-username",
+                    name: "smtp_username",
+                    autocomplete: "off",
+                    value: "{username}",
+                    oninput: move |e| username.set(e.value()),
+                }
+            }
+            div { class: "settings-field",
+                label { r#for: "smtp-password", "Password" }
+                input {
+                    r#type: "password",
+                    id: "smtp-password",
+                    name: "smtp_password",
+                    autocomplete: "off",
+                    autocapitalize: "none",
+                    autocorrect: "off",
+                    spellcheck: "false",
+                    placeholder: if configured { "\u{2022}\u{2022}\u{2022}\u{2022} (unchanged)" } else { "" },
+                    value: "{password}",
+                    oninput: move |e| password.set(e.value()),
+                }
+            }
+            div { class: "settings-field",
+                label { r#for: "smtp-from", "From Email" }
+                input {
+                    r#type: "email",
+                    id: "smtp-from",
+                    name: "smtp_from_email",
+                    autocomplete: "off",
+                    placeholder: "library@example.com",
+                    value: "{from_email}",
+                    oninput: move |e| from_email.set(e.value()),
+                }
+            }
+            div { class: "settings-actions",
+                button {
+                    r#type: "button",
+                    class: "btn",
+                    disabled: in_flight(),
+                    "data-testid": "smtp-save",
+                    onclick: on_save,
+                    "Save"
+                }
+                if configured {
+                    button {
+                        r#type: "button",
+                        class: "btn ghost",
+                        disabled: in_flight(),
+                        "data-testid": "smtp-test",
+                        onclick: on_test,
+                        "Send Test"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "btn ghost",
+                        disabled: in_flight(),
+                        "data-testid": "smtp-clear",
+                        onclick: on_clear,
+                        "Clear"
+                    }
+                }
+            }
+            div { class: "hardcover-status mono", "data-testid": "smtp-status",
+                if configured {
+                    span { class: "hardcover-dot connected" }
+                    if let Some(s) = st.as_ref() {
+                        "Configured \u{00b7} {s.source}"
+                    }
+                } else {
+                    span { class: "hardcover-dot" }
+                    "Not configured"
+                }
+            }
+            if let Some(m) = msg() {
+                p {
+                    role: "status",
+                    "data-testid": "smtp-config-status",
                     class: if msg_is_error() { "settings-status error" } else { "settings-status success" },
                     "{m}"
                 }

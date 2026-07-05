@@ -108,6 +108,7 @@ impl Worker {
                     last_update_ms: now_ms,
                 },
                 terminal_at: None,
+                owner: None,
             };
             lock_unpoison(&self.progress).insert(id, entry);
         }
@@ -179,6 +180,42 @@ impl Worker {
                 return TaskOutcome::Err("worker dropped task before completion".into());
             }
         }
+    }
+
+    /// Non-blocking peek at a task's current lifecycle state, read from the
+    /// progress map by id. Returns `None` once `id` was never posted or its
+    /// entry has been evicted (~[`super::types::TERMINAL_RETENTION`] after the
+    /// task reached a terminal state). Unlike [`await_completion`](Worker::await_completion)
+    /// this neither blocks nor consumes anything, so an enqueue-and-poll caller
+    /// can call it repeatedly: post once, then poll this until it observes a
+    /// terminal [`ProgressState`].
+    pub fn task_state(&self, id: TaskId) -> Option<ProgressState> {
+        lock_unpoison(&self.progress)
+            .get(&id)
+            .map(|e| e.progress.state.clone())
+    }
+
+    /// Record that `user_id` owns the task `id`. Call right after
+    /// [`post`](Worker::post) for user-initiated, pollable jobs (F4.3
+    /// Send-to-Kindle) so [`owned_task_state`](Worker::owned_task_state) can
+    /// scope status reads to the owner. A no-op if the entry was already
+    /// evicted (it won't have been this soon after `post`).
+    pub fn set_task_owner(&self, id: TaskId, user_id: i64) {
+        if let Some(entry) = lock_unpoison(&self.progress).get_mut(&id) {
+            entry.owner = Some(user_id);
+        }
+    }
+
+    /// Owner-scoped [`task_state`](Worker::task_state): returns the state only
+    /// when `user_id` matches the task's recorded owner. Returns `None` for
+    /// unknown, evicted, unowned, or other-user tasks — so an authenticated
+    /// caller can't probe the guessable, monotonic task-id space to read
+    /// another user's send outcome (which can carry an SMTP error message).
+    pub fn owned_task_state(&self, id: TaskId, user_id: i64) -> Option<ProgressState> {
+        lock_unpoison(&self.progress)
+            .get(&id)
+            .filter(|e| e.owner == Some(user_id))
+            .map(|e| e.progress.state.clone())
     }
 
     /// Reclaim a keyed resource mutex once no other task references it. Held

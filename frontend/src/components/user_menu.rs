@@ -259,6 +259,13 @@ fn UmAccountRows(open: Signal<bool>) -> Element {
     rsx! {
         div { class: "um-rows",
             Link {
+                to: Route::Account {},
+                class: "um-row",
+                onclick: move |_| open.set(false),
+                span { class: "um-row-icon", "◐" }
+                span { class: "um-row-label", "Account" }
+            }
+            Link {
                 to: Route::Settings {},
                 class: "um-row",
                 onclick: move |_| open.set(false),

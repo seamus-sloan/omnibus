@@ -23,6 +23,7 @@ pub struct AuthUser {
     pub can_upload: bool,
     pub can_edit: bool,
     pub can_download: bool,
+    pub kindle_email: Option<String>,
     pub session_id: i64,
     pub session_kind: SessionKind,
 }
@@ -37,6 +38,7 @@ impl AuthUser {
             can_upload: self.can_upload,
             can_edit: self.can_edit,
             can_download: self.can_download,
+            kindle_email: self.kindle_email.clone(),
         }
     }
 }
@@ -117,6 +119,7 @@ async fn resolve_auth_user(
             can_upload: user.can_upload,
             can_edit: user.can_edit,
             can_download: user.can_download,
+            kindle_email: user.kindle_email,
             session_id: session.id,
             session_kind: session.kind,
         }),

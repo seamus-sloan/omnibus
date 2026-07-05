@@ -209,6 +209,44 @@ pub(super) async fn get_audiobook_part(
     Response::from_parts(parts_resp, Body::new(body))
 }
 
+/// Query parameters for `GET /api/audiobooks/{uuid}/download`.
+#[derive(Deserialize)]
+pub(super) struct DownloadQuery {
+    file_id: Option<i64>,
+}
+
+/// Serves the audiobook's source file as a browser download
+/// (`Content-Disposition: attachment`), streaming via `ServeFile`.
+///
+/// Targets the lowest-ordinal part of the resolved `book_files` row
+/// (optionally selected via `?file_id=N`). For a single-file audiobook
+/// (the common m4b case) that is the whole book; multi-part sources only
+/// yield the first part today — there is no on-the-fly archiving yet, so
+/// per-part downloads go through the format switcher's file picker.
+pub(super) async fn get_audiobook_download(
+    _user: AuthUser,
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+    Query(query): Query<DownloadQuery>,
+    req: Request,
+) -> Response {
+    let resolved = match hls::resolve_audiobook_file(&state.pool, &uuid, query.file_id).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return internal("resolve_audiobook_file", e),
+    };
+    let parts = match hls::get_parts(&state.pool, resolved.book_file_id).await {
+        Ok(p) => p,
+        Err(e) => return internal("get_parts", e),
+    };
+    let Some(part) = parts.into_iter().min_by_key(|p| p.ordinal) else {
+        return axum::http::StatusCode::NOT_FOUND.into_response();
+    };
+    let abs_path = std::path::Path::new(&resolved.library_path).join(&part.filename);
+    let mime = audiobook::mime_for_filename(&part.filename);
+    super::serve_download(req, &abs_path, mime).await
+}
+
 /// Returns `{"ready": bool, "progress": f32}` for the AUDIO64 profile.
 /// If the transcode has not started yet, fires a `Task::HlsTranscode`
 /// fire-and-forget to the worker.

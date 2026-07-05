@@ -77,6 +77,10 @@ allow = [
     # license used by `webpki-roots` (Mozilla CA bundle data). Permissive;
     # any TLS-via-rustls project hits this.
     "CDLA-Permissive-2.0",
+    # BSD Zero Clause — public-domain-equivalent, OSI-approved (more permissive
+    # than MIT: no attribution required). Used by `quoted_printable` (transitive
+    # via `lettre`, the Send-to-Kindle SMTP client).
+    "0BSD",
 ]
 # With version = 2 the allow-list above is authoritative: any license not
 # listed is denied, and a crate whose license cannot be determined is an

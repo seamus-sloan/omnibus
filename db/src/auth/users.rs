@@ -93,13 +93,14 @@ pub async fn create_user(pool: &SqlitePool, username: &str, password: &str) -> A
         can_upload: can_upload != 0,
         can_edit: can_edit != 0,
         can_download: can_download != 0,
+        kindle_email: None,
     })
 }
 
 /// Look up a user record by username (case-insensitive); returns `None` if no match.
 pub async fn get_user_by_username(pool: &SqlitePool, username: &str) -> AuthResult<Option<User>> {
     let row = sqlx::query(
-        "SELECT id, username, is_admin, can_upload, can_edit, can_download
+        "SELECT id, username, is_admin, can_upload, can_edit, can_download, kindle_email
          FROM users WHERE username = ? COLLATE NOCASE",
     )
     .bind(username)
@@ -111,13 +112,48 @@ pub async fn get_user_by_username(pool: &SqlitePool, username: &str) -> AuthResu
 /// Look up a user record by primary key; returns `None` if no match.
 pub async fn get_user_by_id(pool: &SqlitePool, id: i64) -> AuthResult<Option<User>> {
     let row = sqlx::query(
-        "SELECT id, username, is_admin, can_upload, can_edit, can_download
+        "SELECT id, username, is_admin, can_upload, can_edit, can_download, kindle_email
          FROM users WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
     .await?;
     Ok(row.as_ref().map(row_to_user))
+}
+
+/// Set (or clear, when `None`/blank) a user's F4.3 Send-to-Kindle destination
+/// address. Rejects a malformed address with [`AuthError::Validation`] before
+/// the write so the book-detail action never targets a garbage recipient.
+pub async fn set_kindle_email(
+    pool: &SqlitePool,
+    user_id: i64,
+    email: Option<&str>,
+) -> AuthResult<()> {
+    let normalized = match email.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(e) if !omnibus_shared::is_plausible_email(e) => {
+            return Err(AuthError::Validation(
+                "not a valid email address".to_string(),
+            ));
+        }
+        Some(e) => Some(e.to_string()),
+        None => None,
+    };
+    sqlx::query("UPDATE users SET kindle_email = ? WHERE id = ?")
+        .bind(normalized)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Read a user's saved Send-to-Kindle address, or `None` when unset/blank.
+pub async fn get_kindle_email(pool: &SqlitePool, user_id: i64) -> AuthResult<Option<String>> {
+    let v: Option<String> = sqlx::query_scalar("SELECT kindle_email FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?
+        .flatten();
+    Ok(v.filter(|s| !s.trim().is_empty()))
 }
 
 /// `OMNIBUS_INITIAL_ADMIN` boot hook: if a user by this username exists,

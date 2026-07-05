@@ -1,10 +1,14 @@
-//! Account screen (`/account`) — the mobile "You" tab.
+//! Account screen (`/account`).
 //!
-//! Mobile-only. Surfaces the bearer-authenticated user, a "Now reading" card,
-//! a quick-links grid, account rows, and a theme control. Degrades gracefully
-//! before the user resolves, rendering placeholders rather than blocking.
+//! Web/SSR renders the F4.3 Send-to-Kindle destination form; the native
+//! shell renders the mobile "You" tab (identity, now-reading, quick links,
+//! account rows, theme). Signals start empty so SSR and the first WASM paint
+//! agree (rule 07); the load effects fill them after mount.
 
 use dioxus::prelude::*;
+
+#[cfg(not(feature = "mobile"))]
+use crate::{data, use_server_url};
 
 #[cfg(feature = "mobile")]
 use dioxus_router::{use_navigator, Link};
@@ -101,8 +105,8 @@ impl ThemeKind {
 
 // ── Page ───────────────────────────────────────────────────────────
 
-/// The mobile Account screen. On non-mobile targets this compiles to an
-/// empty element — the page is only routed on the native shell.
+/// The Account screen. Web/SSR renders the Send-to-Kindle destination form;
+/// the native shell renders the mobile "You" tab.
 #[component]
 pub fn AccountPage() -> Element {
     #[cfg(feature = "mobile")]
@@ -111,11 +115,162 @@ pub fn AccountPage() -> Element {
     }
     #[cfg(not(feature = "mobile"))]
     {
-        rsx! {}
+        kindle_account_body()
     }
 }
 
-/// Mobile page body — owns the signals, effects, and rsx for the screen.
+/// Web/SSR page body — the F4.3 Send-to-Kindle destination form. Hydrates the
+/// saved address from `/api/auth/me`; saving/clearing round-trips through
+/// `data::set_kindle_email`.
+#[cfg(not(feature = "mobile"))]
+fn kindle_account_body() -> Element {
+    let server_url = use_server_url();
+    let mut email_input = use_signal(String::new);
+    let mut saved_email = use_signal(|| None::<String>);
+    let mut msg = use_signal(|| None::<String>);
+    let mut msg_is_error = use_signal(|| false);
+    let mut in_flight = use_signal(|| false);
+
+    // Hydrate the saved Kindle email after mount. `current_user` is a no-op on
+    // SSR/mobile, so the first paint matches the empty-signal SSR markup.
+    use_effect(move || {
+        spawn(async move {
+            if let Ok(Some(user)) = data::current_user().await {
+                if let Some(email) = user.kindle_email.clone() {
+                    email_input.set(email.clone());
+                    saved_email.set(Some(email));
+                }
+            }
+        });
+    });
+
+    let save_url = server_url.clone();
+    let on_save = move |evt: Event<FormData>| {
+        evt.prevent_default();
+        let value = email_input().trim().to_string();
+        if value.is_empty() {
+            msg.set(Some("Enter a Kindle email to save.".to_string()));
+            msg_is_error.set(true);
+            return;
+        }
+        let url = save_url.clone();
+        in_flight.set(true);
+        spawn(async move {
+            match data::set_kindle_email(&url, Some(value.clone())).await {
+                Ok(()) => {
+                    saved_email.set(Some(value));
+                    msg.set(Some("Kindle email saved.".to_string()));
+                    msg_is_error.set(false);
+                }
+                Err(_) => {
+                    msg.set(Some(
+                        "Failed to save Kindle email — check the address.".to_string(),
+                    ));
+                    msg_is_error.set(true);
+                }
+            }
+            in_flight.set(false);
+        });
+    };
+
+    let clear_url = server_url;
+    let on_clear = move |_| {
+        let url = clear_url.clone();
+        in_flight.set(true);
+        spawn(async move {
+            match data::set_kindle_email(&url, None).await {
+                Ok(()) => {
+                    email_input.set(String::new());
+                    saved_email.set(None);
+                    msg.set(Some("Kindle email cleared.".to_string()));
+                    msg_is_error.set(false);
+                }
+                Err(_) => {
+                    msg.set(Some("Failed to clear Kindle email.".to_string()));
+                    msg_is_error.set(true);
+                }
+            }
+            in_flight.set(false);
+        });
+    };
+
+    let connected = saved_email().is_some();
+
+    rsx! {
+        section { class: "card", "data-testid": "account-kindle-card",
+            h1 { "Account" }
+            p { class: "subtitle", "Configure your Send-to-Kindle delivery address." }
+
+            form {
+                id: "kindle-email-form",
+                class: "settings-form",
+                onsubmit: on_save,
+                div { class: "settings-field",
+                    label { r#for: "kindle-email", "Kindle Email" }
+                    input {
+                        r#type: "email",
+                        id: "kindle-email",
+                        name: "kindle_email",
+                        "data-testid": "kindle-email-input",
+                        autocomplete: "off",
+                        autocapitalize: "none",
+                        autocorrect: "off",
+                        spellcheck: "false",
+                        placeholder: "you@kindle.com",
+                        value: "{email_input}",
+                        oninput: move |e| email_input.set(e.value()),
+                    }
+                }
+                p { class: "subtitle",
+                    "Add "
+                    b { "your library's sender address" }
+                    " to your Amazon "
+                    a {
+                        href: "https://www.amazon.com/sendtokindle/email",
+                        target: "_blank",
+                        rel: "noopener",
+                        "approved sender list"
+                    }
+                    " or Amazon will silently drop the delivery."
+                }
+                div { class: "settings-actions",
+                    button {
+                        r#type: "submit",
+                        class: "btn",
+                        disabled: in_flight(),
+                        "data-testid": "kindle-email-save",
+                        "Save"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "btn ghost",
+                        disabled: in_flight() || !connected,
+                        "data-testid": "kindle-email-clear",
+                        onclick: on_clear,
+                        "Clear"
+                    }
+                }
+            }
+
+            p {
+                class: if connected { "settings-status success" } else { "settings-status" },
+                "data-testid": "kindle-email-connected",
+                if connected { "A Kindle email is configured." } else { "No Kindle email configured yet." }
+            }
+
+            if let Some(m) = msg() {
+                p {
+                    role: "status",
+                    "data-testid": "kindle-email-status",
+                    class: if msg_is_error() { "settings-status error" } else { "settings-status success" },
+                    "{m}"
+                }
+            }
+        }
+    }
+}
+
+/// Mobile page body — owns the signals, effects, and rsx for the "You" tab.
 #[cfg(feature = "mobile")]
 fn account_body() -> Element {
     let server_url = use_server_url();

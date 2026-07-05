@@ -659,6 +659,112 @@ async fn api_get_ebook_kepub_falls_back_to_plain_epub() {
 }
 
 // -------------------------------------------------------------------
+// /api/ebooks/{uuid}/download — raw EPUB download (attachment)
+// -------------------------------------------------------------------
+
+#[tokio::test]
+async fn api_get_ebook_download_returns_401_when_anonymous() {
+    let (app, _, _) = fixture().await;
+    let res = app
+        .oneshot(get_anon("/api/ebooks/some-uuid/download"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn api_get_ebook_download_returns_404_for_unknown_uuid() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let res = app
+        .oneshot(get_with_bearer(
+            "/api/ebooks/does-not-exist/download",
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn api_get_ebook_download_returns_200_with_attachment_disposition() {
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("omnibus_ebook_download_test_{pid}_{nanos}"));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let stem = "alpha";
+    let file_path = tmp.join(format!("{stem}.epub"));
+    std::fs::write(&file_path, b"PK\x03\x04 fake-epub").unwrap();
+
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(tmp.to_str().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let uuid = "33333333-3333-3333-3333-333333333333";
+    let book_id =
+        sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, ?, 'Alpha')")
+            .bind(uuid)
+            .bind(lib_id)
+            .bind(tmp.to_str().unwrap())
+            .execute(&pool)
+            .await
+            .unwrap()
+            .last_insert_rowid();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'EPUB', ?, 0)",
+    )
+    .bind(book_id)
+    .bind(stem)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/api/ebooks/{uuid}/download"),
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("application/epub+zip"),
+    );
+    let disposition = res
+        .headers()
+        .get(axum::http::header::CONTENT_DISPOSITION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    assert!(
+        disposition.starts_with("attachment;"),
+        "download must force an attachment disposition, got {disposition:?}"
+    );
+    assert!(
+        disposition.contains("alpha.epub"),
+        "disposition should suggest the on-disk filename, got {disposition:?}"
+    );
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], b"PK\x03\x04 fake-epub");
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+// -------------------------------------------------------------------
 // F5b — keyset pagination on GET /api/ebooks
 // -------------------------------------------------------------------
 

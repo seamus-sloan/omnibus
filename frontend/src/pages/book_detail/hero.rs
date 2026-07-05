@@ -7,6 +7,7 @@ use omnibus_shared::EbookMetadata;
 use crate::components::atrium::Cover;
 use crate::Route;
 
+use super::export_menu::BdExportMenu;
 use super::rating::BdRatingWidget;
 use super::{BdCrumb, BdCrumbItem, BdFormatBadge};
 
@@ -155,7 +156,8 @@ fn BdTitleCol(
     }
 }
 
-/// CTA button row: primary read/listen action, secondary listen, send-to-device stubs.
+/// CTA button row: primary read/listen action, secondary listen, and the
+/// "Export" dropdown that collects the per-device send/download actions.
 #[component]
 fn BdCtaRow(uuid: String, has_ebook: bool, has_audio: bool) -> Element {
     rsx! {
@@ -198,8 +200,9 @@ fn BdCtaRow(uuid: String, has_ebook: bool, has_audio: bool) -> Element {
                     listen_btn
                 }
             }
-            button { class: "btn lg ghost", disabled: true, title: "Send-to-Kindle coming soon", "Send to Kindle" }
-            button { class: "btn lg ghost", disabled: true, title: "Send-to-Kobo coming soon", "Send to Kobo" }
+            // Download + Send-to-Kindle/Kobo live behind one "Export" menu so
+            // the CTA row stays a single primary action plus this dropdown.
+            BdExportMenu { uuid: uuid.clone(), has_ebook, has_audio }
         }
     }
 }
