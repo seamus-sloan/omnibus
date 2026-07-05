@@ -235,6 +235,42 @@ async fn create_resolves_merged_uuid_to_surviving_book() {
     );
 }
 
+/// Bulk-insert `count` entry rows for `book_uuid` without going through
+/// `create_journal_entry` — too slow at over-cap row counts.
+async fn seed_entries_raw(pool: &SqlitePool, user_id: i64, book_uuid: &str, count: i64) {
+    sqlx::query(
+        r#"
+        WITH RECURSIVE n(i) AS (
+            SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
+        )
+        INSERT INTO journal_entries (user_id, book_uuid, body_md, created_at)
+        SELECT ?, ?, 'entry ' || i, i FROM n
+        "#,
+    )
+    .bind(count)
+    .bind(user_id)
+    .bind(book_uuid)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn list_journal_entries_caps_response_at_hard_limit() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let uuid = seed(&pool, "/lib", "Book A").await;
+    let over_cap = LIST_JOURNAL_ENTRIES_LIMIT + 500;
+    seed_entries_raw(&pool, user, &uuid, over_cap).await;
+
+    let list = list_journal_entries(&pool, &uuid).await.unwrap();
+    assert_eq!(
+        list.len() as i64,
+        LIST_JOURNAL_ENTRIES_LIMIT,
+        "list_journal_entries must not return more than LIST_JOURNAL_ENTRIES_LIMIT rows",
+    );
+}
+
 #[tokio::test]
 async fn create_propagates_db_error_when_pool_is_closed() {
     let pool = init_db("sqlite::memory:").await.unwrap();
