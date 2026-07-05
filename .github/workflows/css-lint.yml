@@ -11,7 +11,7 @@ name: CSS Lint
 on:
   pull_request:
     paths:
-      - "frontend/assets/**.css"
+      - "frontend/assets/**/*.css"
       - ".stylelintrc.json"
       - ".github/workflows/css-lint.yml"
       - "flake.nix"
