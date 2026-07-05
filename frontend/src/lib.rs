@@ -86,6 +86,10 @@ fn ScreenLayout(children: Element) -> Element {
             // absent on the full player. Renders an empty host until a book
             // is playing — see `pages::MiniDock`.
             pages::MiniDock {}
+            // Phone-width section switcher. Always rendered on web (SSR +
+            // WASM, so hydration markup matches); CSS hides it above the
+            // phone breakpoint so the desktop chrome is unchanged.
+            components::BottomNav {}
         }
     }
 }

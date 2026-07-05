@@ -1,8 +1,10 @@
 //! Mobile bottom tab bar.
 //!
-//! Pinned to the bottom of the viewport on the native shell — a row of icon
-//! tabs (Library, Authors, Series, You) matching the imported Atrium mobile
-//! design. Mounted by [`crate::ScreenLayout`] on the mobile target only.
+//! Pinned to the bottom of the viewport — a row of icon tabs (Library,
+//! Authors, Series, You) matching the imported Atrium mobile design. It is
+//! the native shell's primary `Nav`, and also mounts on web via
+//! [`crate::ScreenLayout`], where CSS reveals it only below the phone
+//! breakpoint so desktop keeps its top-bar section links.
 
 use dioxus::prelude::*;
 use dioxus_router::{use_route, Link};

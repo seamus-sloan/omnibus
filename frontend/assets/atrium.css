@@ -5157,6 +5157,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   background: var(--bg-0);
   color: var(--ink-0);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
 /* ── Mobile audiobook player ───────────────────────────────────────── */
 .m-player {
   position: relative;
@@ -5304,4 +5305,85 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .m-player-msg, .m-player-loading {
   padding: 40px 20px; display: flex; flex-direction: column;
   align-items: center; gap: 16px; text-align: center;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Web mobile (phone-width browser)
+
+   Everything below is gated on a phone-width `max-width` and, for the
+   nav chrome, scoped to `.app-shell` — the web page shell — so the
+   desktop web layout and the native mobile shell (`.screen`) stay
+   exactly as they were. The bottom tab bar (`.m-tabbar`) is rendered on
+   every web page but hidden here by default; it only appears below the
+   phone breakpoint, where the top-bar section links step aside for it.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Desktop web: the tab bar is present in the DOM (for SSR/WASM hydration
+   parity) but never shown — the top bar carries navigation. */
+.app-shell .m-tabbar { display: none; }
+
+@media (max-width: 720px) {
+  /* ── Navigation: bottom tab bar takes over section switching ─── */
+  .app-shell .m-tabbar { display: flex; }
+  /* Reserve room so page content and fixed-bottom chrome clear the bar. */
+  .app-shell > main {
+    padding-bottom: calc(62px + env(safe-area-inset-bottom) + 12px);
+  }
+
+  /* Slim the top bar to brand + search + actions. The Library/Authors/
+     Series links move into the tab bar, so hide them here. */
+  .atrium-topbar { padding: 12px 16px; gap: 10px; }
+  .atrium-nav { display: none; }
+
+  /* Search trigger collapses to an icon-only circle to save width. */
+  .atrium-topbar .sp-trigger {
+    padding: 0; width: 36px; gap: 0; justify-content: center; flex: none;
+  }
+  .atrium-topbar .sp-trigger > span,
+  .atrium-topbar .sp-trigger .sp-trigger-kbd { display: none; }
+
+  .atrium-actions { gap: 8px; }
+  /* Keep the "Add books" CTA from crowding the avatar. */
+  .atrium-actions .btn.primary.sm { padding: 0 12px; }
+
+  /* User menu panel: never wider than the viewport. */
+  .um-panel { width: min(360px, calc(100vw - 24px)); }
+
+  /* Raise the persistent mini-dock above the tab bar. */
+  .mini-dock { bottom: calc(62px + env(safe-area-inset-bottom) + 8px); }
+
+  /* ── Headings ─────────────────────────────────────────────────── */
+  /* The 64px display h1 overflows a phone column (e.g. the account card
+     title). Purpose-built title classes already clamp themselves; this
+     only tames the raw heading elements. */
+  .atrium h1 { font-size: clamp(30px, 10vw, 42px); }
+  .atrium h2 { font-size: clamp(24px, 8vw, 32px); }
+
+  /* ── Landing table: keep it inside the viewport ───────────────── */
+  /* added/updated columns are already dropped above 1100px; here we
+     tighten the remaining columns so cover + title + author fit without
+     a sideways scroll on a narrow phone. */
+  .ebook-table { font-size: 12px; }
+  .ebook-col-title { min-width: 120px; }
+  .ebook-table thead th,
+  .ebook-table tbody td { padding: 0.4rem 0.45rem; }
+  /* Let long (multi-)author names wrap instead of forcing a sideways
+     scroll — the base rule keeps cells `nowrap`. */
+  .ebook-table .ebook-col-author { white-space: normal; }
+}
+
+@media (max-width: 560px) {
+  /* Metadata edit: single-column fields at phone width. */
+  .me-field-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Immersive reader: full-width drawers/panels on a phone ────────
+   The reader renders bare (no `.app-shell`, no tab bar), so these plain
+   selectors apply only to its own chrome. The 380–432px fixed panels
+   overflow a phone; cap them to the viewport. */
+@media (max-width: 480px) {
+  .rd-drawer { width: min(380px, 100vw); }
+  .rd-quote-drawer { width: 100vw; }
+  .rd-aa-panel { width: min(320px, calc(100vw - 24px)); right: 12px; }
+  .rd-note-composer { width: min(360px, calc(100vw - 24px)); }
 }
