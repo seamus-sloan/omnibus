@@ -43,6 +43,31 @@ fn session_report_rejects_inverted_time_range() {
 }
 
 #[test]
+fn progress_update_rejects_epub_cfi_over_max_len() {
+    let u = ProgressUpdate {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        epub_cfi: Some("a".repeat(EPUB_CFI_MAX_LEN + 1)),
+        audio_position_seconds: None,
+    };
+    let err = u
+        .validate()
+        .expect_err("over-max epub_cfi must be rejected");
+    assert!(err.contains("epub_cfi"), "got: {err}");
+}
+
+#[test]
+fn progress_update_accepts_epub_cfi_at_max_len() {
+    let u = ProgressUpdate {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        epub_cfi: Some("a".repeat(EPUB_CFI_MAX_LEN)),
+        audio_position_seconds: None,
+    };
+    assert!(u.validate().is_ok());
+}
+
+#[test]
 fn session_report_rejects_negative_progress_units() {
     let r = SessionReport {
         book_uuid: "x".into(),

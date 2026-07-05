@@ -12,6 +12,13 @@ use crate::EbookMetadata;
 /// Max length of a shelf name (matches the create-modal input expectation).
 pub const SHELF_NAME_MAX_LEN: usize = 120;
 
+/// Max length of a shelf description.
+pub const SHELF_DESCRIPTION_MAX_LEN: usize = 2048;
+
+/// Max length of a smart-shelf rule's `value` (a tag/author/year/date token,
+/// never a long free-text field).
+pub const SHELF_RULE_VALUE_MAX_LEN: usize = 512;
+
 /// Kind of shelf, fixed at creation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -177,6 +184,11 @@ impl ShelfRule {
         if self.value.trim().is_empty() {
             return Err("condition value is required".into());
         }
+        if self.value.chars().count() > SHELF_RULE_VALUE_MAX_LEN {
+            return Err(format!(
+                "condition value must be ≤ {SHELF_RULE_VALUE_MAX_LEN} characters"
+            ));
+        }
         Ok(())
     }
 }
@@ -232,6 +244,7 @@ impl CreateShelfRequest {
     /// into a 400/422.
     pub fn validate(&self) -> Result<(), String> {
         validate_name(&self.name)?;
+        validate_description(&self.description)?;
         match self.kind {
             ShelfKind::Smart => {
                 if self.match_mode.is_none() {
@@ -279,6 +292,7 @@ impl UpdateShelfRequest {
         if let Some(name) = &self.name {
             validate_name(name)?;
         }
+        validate_description(&self.description)?;
         if let Some(rules) = &self.rules {
             for r in rules {
                 r.validate()?;
@@ -319,6 +333,18 @@ fn validate_name(name: &str) -> Result<(), String> {
         return Err(format!(
             "shelf name must be ≤ {SHELF_NAME_MAX_LEN} characters"
         ));
+    }
+    Ok(())
+}
+
+/// Reject an over-long shelf description. `None` is always permitted.
+fn validate_description(description: &Option<String>) -> Result<(), String> {
+    if let Some(description) = description {
+        if description.chars().count() > SHELF_DESCRIPTION_MAX_LEN {
+            return Err(format!(
+                "shelf description must be ≤ {SHELF_DESCRIPTION_MAX_LEN} characters"
+            ));
+        }
     }
     Ok(())
 }

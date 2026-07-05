@@ -75,6 +75,23 @@ fn rule_validate_rejects_bad_op_and_empty_value() {
 }
 
 #[test]
+fn rule_validate_rejects_overlong_value_and_accepts_at_max() {
+    let too_long = ShelfRule {
+        field: RuleField::Tag,
+        op: RuleOp::Is,
+        value: "x".repeat(SHELF_RULE_VALUE_MAX_LEN + 1),
+    };
+    assert!(too_long.validate().is_err());
+
+    let at_max = ShelfRule {
+        field: RuleField::Tag,
+        op: RuleOp::Is,
+        value: "x".repeat(SHELF_RULE_VALUE_MAX_LEN),
+    };
+    assert!(at_max.validate().is_ok());
+}
+
+#[test]
 fn create_validate_enforces_smart_invariants() {
     let smart = CreateShelfRequest {
         kind: ShelfKind::Smart,
@@ -142,4 +159,33 @@ fn create_validate_rejects_blank_and_overlong_names() {
         ..base.clone()
     };
     assert!(long.validate().is_err());
+}
+
+#[test]
+fn create_validate_rejects_overlong_description_and_accepts_at_max() {
+    let base = CreateShelfRequest {
+        kind: ShelfKind::Manual,
+        name: "Best of 2026".into(),
+        description: Some("x".repeat(SHELF_DESCRIPTION_MAX_LEN + 1)),
+        visibility: Visibility::Private,
+        match_mode: None,
+        rules: vec![],
+        book_uuids: vec![],
+    };
+    assert!(base.validate().is_err());
+
+    let at_max = CreateShelfRequest {
+        description: Some("x".repeat(SHELF_DESCRIPTION_MAX_LEN)),
+        ..base.clone()
+    };
+    assert!(at_max.validate().is_ok());
+}
+
+#[test]
+fn update_validate_rejects_overlong_description() {
+    let update = UpdateShelfRequest {
+        description: Some("x".repeat(SHELF_DESCRIPTION_MAX_LEN + 1)),
+        ..Default::default()
+    };
+    assert!(update.validate().is_err());
 }

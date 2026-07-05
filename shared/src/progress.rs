@@ -18,6 +18,11 @@ mod tests;
 /// runtime-configurable; change here to move the cap.
 pub const SESSION_BATCH_CAP: usize = 500;
 
+/// Maximum length (in chars) of `ProgressUpdate::epub_cfi`. Matches
+/// `CreateHighlight::EPUB_CFI_RANGE_MAX_LEN` — both store the same kind of
+/// value.
+pub const EPUB_CFI_MAX_LEN: usize = 4096;
+
 /// Discriminator for the format-specific payload variant in [`ProgressUpdate`]
 /// / [`ProgressRecord`] / [`SessionReport`]. Serializes as a plain
 /// lowercase string (`"epub"` / `"audio"`) so the wire shape stays compact.
@@ -62,6 +67,11 @@ impl ProgressUpdate {
                     .unwrap_or(true)
                 {
                     return Err("epub_cfi is required for format=epub".into());
+                }
+                if let Some(cfi) = &self.epub_cfi {
+                    if cfi.chars().count() > EPUB_CFI_MAX_LEN {
+                        return Err(format!("epub_cfi exceeds {EPUB_CFI_MAX_LEN} characters"));
+                    }
                 }
                 if self.audio_position_seconds.is_some() {
                     return Err("audio_position_seconds must not be set for format=epub".into());
