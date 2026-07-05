@@ -140,7 +140,8 @@ pub async fn delete_shelf(pool: &SqlitePool, id: i64) -> Result<(), ShelfError> 
 
 /// Append books to a hand-picked shelf. Each uuid is resolved to canonical
 /// first; an unknown uuid fails the whole call. Already-present books are
-/// silently kept (INSERT OR IGNORE). The whole batch lands in one transaction.
+/// silently kept (INSERT OR IGNORE). The batch insert itself lands in one
+/// transaction, so a mid-batch failure can't leave a partial set of rows.
 pub async fn add_books(
     pool: &SqlitePool,
     shelf_id: i64,
@@ -194,7 +195,8 @@ async fn insert_books(
     added_by: i64,
     start_pos: i64,
 ) -> Result<(), ShelfError> {
-    for (chunk_idx, chunk) in uuids.chunks(200).enumerate() {
+    const CHUNK_SIZE: usize = 200;
+    for (chunk_idx, chunk) in uuids.chunks(CHUNK_SIZE).enumerate() {
         let rows = std::iter::repeat_n("(?, ?, ?, ?)", chunk.len())
             .collect::<Vec<_>>()
             .join(", ");
@@ -202,7 +204,7 @@ async fn insert_books(
             "INSERT OR IGNORE INTO shelf_books (shelf_id, book_uuid, position, added_by_user_id)
              VALUES {rows}"
         );
-        let base = start_pos + (chunk_idx * 200) as i64;
+        let base = start_pos + (chunk_idx * CHUNK_SIZE) as i64;
         let mut q = sqlx::query(&sql);
         for (i, uuid) in chunk.iter().enumerate() {
             q = q
@@ -224,13 +226,14 @@ async fn insert_rules(
     shelf_id: i64,
     rules: &[ShelfRule],
 ) -> Result<(), ShelfError> {
-    for (chunk_idx, chunk) in rules.chunks(199).enumerate() {
+    const CHUNK_SIZE: usize = 199;
+    for (chunk_idx, chunk) in rules.chunks(CHUNK_SIZE).enumerate() {
         let rows = std::iter::repeat_n("(?, ?, ?, ?, ?)", chunk.len())
             .collect::<Vec<_>>()
             .join(", ");
         let sql =
             format!("INSERT INTO shelf_rules (shelf_id, field, op, value, position) VALUES {rows}");
-        let base = (chunk_idx * 199) as i64;
+        let base = (chunk_idx * CHUNK_SIZE) as i64;
         let mut q = sqlx::query(&sql);
         for (i, rule) in chunk.iter().enumerate() {
             q = q
