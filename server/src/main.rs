@@ -65,7 +65,9 @@ mod server {
     }
 
     /// Log a WARN if `OMNIBUS_TRUST_FORWARDED_FOR` is enabled — required only
-    /// behind a trusted reverse proxy, dangerous otherwise.
+    /// behind a trusted reverse proxy, dangerous otherwise — and a one-time
+    /// WARN if kepubify is missing (Kobo downloads then fall back to plain
+    /// EPUB).
     fn log_startup_warnings() {
         if rate_limit::trust_forwarded_for() {
             tracing::warn!(
@@ -73,6 +75,7 @@ mod server {
                 "OMNIBUS_TRUST_FORWARDED_FOR is enabled \u{2014} ensure a trusted reverse proxy is in front."
             );
         }
+        omnibus_db::kepub::warn_if_unavailable();
     }
 
     /// Open the SQLite pool, run migrations, seed env-driven settings, then

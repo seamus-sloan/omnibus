@@ -91,6 +91,11 @@ pub enum Task {
     /// later ones no-op against the fresh cache; does not consume the scan
     /// semaphore.
     ResolveSuggestions { book_uuid: String },
+    /// Convert one book's EPUB to a cached KEPUB (Kobo sideload download).
+    /// Keyed on `kepub:{book_id}` so a burst of first-time downloads for one
+    /// book collapses onto a single kepubify run; does not consume the scan
+    /// semaphore (light single-file work).
+    KepubConvert { book_id: i64 },
     /// Test-only synthetic task: sleeps `latency_ms` and invokes the
     /// optional `on_run` / `on_done` hooks, with `resource` and
     /// `route_through_scan_sem` letting a test exercise the keyed mutex and
@@ -120,6 +125,7 @@ impl Task {
             Task::BackfillChapters { library_path } => Some(format!("audiobooks:{library_path}")),
             Task::RebuildFtsIndex => Some("rebuild-fts".into()),
             Task::ResolveSuggestions { book_uuid } => Some(format!("suggestions:{book_uuid}")),
+            Task::KepubConvert { book_id } => Some(format!("kepub:{book_id}")),
             #[cfg(test)]
             Task::Test { resource, .. } => resource.clone(),
         }
@@ -136,6 +142,7 @@ impl Task {
             Task::BackfillChapters { .. } => false,
             Task::RebuildFtsIndex => false,
             Task::ResolveSuggestions { .. } => false,
+            Task::KepubConvert { .. } => false,
             #[cfg(test)]
             Task::Test {
                 route_through_scan_sem,
@@ -168,6 +175,9 @@ impl Task {
             // than growing the wire-facing `TaskKind` enum for a rare admin job.
             Task::RebuildFtsIndex => TaskKind::Scan,
             Task::ResolveSuggestions { .. } => TaskKind::ResolveSuggestions,
+            // Reuse Scan kind for the KEPUB conversion's progress display
+            // rather than growing the wire-facing `TaskKind` enum.
+            Task::KepubConvert { .. } => TaskKind::Scan,
             #[cfg(test)]
             Task::Test { .. } => TaskKind::Scan,
         }
