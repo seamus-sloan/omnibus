@@ -264,8 +264,10 @@ test("renders the detail contents for the selected book", async ({ page, request
   await expect(heroKindleBtn).toBeEnabled();
   // The audiobook download only appears for books with an audio file; the
   // ebook-only seed must not render it. Close the menu again via the scrim.
+  // The scrim fills the viewport, so click a corner clear of the panel
+  // (a center click lands on the panel and is intercepted).
   await expect(exportPanel.getByTestId("export-download-audio")).toHaveCount(0);
-  await page.getByTestId("hero-export-scrim").click();
+  await page.getByTestId("hero-export-scrim").click({ position: { x: 10, y: 10 } });
   await expect(page.getByTestId("hero-export-panel")).toHaveCount(0);
 
   // No M4B fixture in the ebook seed — the per-format Listen CTA must NOT
