@@ -12,7 +12,7 @@ use crate::Route;
 #[cfg(feature = "mobile")]
 use crate::{
     components::auth::{Banner, BannerKind, Field},
-    use_server_url, use_server_url_signal,
+    use_server_url_signal,
 };
 
 /// Renders the connect-to-server page. Body branches per target (mobile owns
@@ -43,12 +43,14 @@ pub fn ServerConnectPage() -> Element {
 #[cfg(feature = "mobile")]
 fn server_connect_mobile() -> Element {
     let nav = use_navigator();
+    let url_signal = use_server_url_signal();
     // Prefill with the current URL (empty on first run) so the Back button
-    // from Login returns here with the value already in the field.
-    let mut url_input = use_signal(use_server_url);
+    // from Login returns here with the value already in the field. Seed from
+    // a `peek` (not `use_server_url`, which calls `use_context`) — a hook run
+    // inside `use_signal`'s initializer panics with a hook-borrow error.
+    let mut url_input = use_signal(move || url_signal.peek().clone());
     let mut error = use_signal(|| Option::<String>::None);
     let mut checking = use_signal(|| false);
-    let url_signal = use_server_url_signal();
 
     let connect = use_callback(move |_: ()| {
         if checking() {
