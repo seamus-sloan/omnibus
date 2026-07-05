@@ -5,6 +5,10 @@
 
 use dioxus::prelude::*;
 
+/// Stoat brand mark shown above the sign-in art panel. Same asset the top
+/// nav uses; bundled + content-hashed by manganis for SSR/WASM parity.
+const BRAND_MARK: Asset = asset!("/assets/omnibus-stoat.png");
+
 /// One decorative book rendered on the shelf above the tagline. Pre-login
 /// pages can't query book metadata (the user isn't authenticated), so the
 /// shelf uses a static curated palette of accent colors. Heights / widths
@@ -63,7 +67,7 @@ pub fn AuthShell(
         div { class: "auth-shell-grid",
             aside { class: "auth-shell-art",
                 div { class: "auth-shell-brand",
-                    div { class: "auth-shell-brand-mark" }
+                    img { class: "auth-shell-brand-mark", src: BRAND_MARK, alt: "" }
                     div { class: "auth-shell-brand-word", "Omnibus" }
                 }
                 div { class: "auth-shell-shelf", aria_hidden: "true",
