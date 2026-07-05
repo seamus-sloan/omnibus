@@ -22,7 +22,7 @@ use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
 use super::{internal, AppState};
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, MediaAuthUser};
 
 /// Content-Type for MPEG-TS audio segments served by the HLS fallback.
 /// Defined at module scope so the per-request `HeaderValue` insert is a
@@ -165,8 +165,14 @@ pub(super) struct PartsQuery {
 
 /// Range-served raw file for one part of a direct-play audiobook.
 /// Accepts optional `?file_id=N` to target a specific `book_files` row.
+///
+/// Authenticated via [`MediaAuthUser`] (not [`AuthUser`]) because this URL is
+/// wired straight into the mobile WebView's `<audio src>`, whose fetch can
+/// carry neither the native `reqwest` bearer header nor a session cookie — the
+/// `?token=` query param is the only auth it has. Kept in lockstep with
+/// `is_media_read_path` in `auth::gate`.
 pub(super) async fn get_audiobook_part(
-    _user: AuthUser,
+    _user: MediaAuthUser,
     State(state): State<AppState>,
     Path((uuid, ordinal)): Path<(String, i64)>,
     Query(query): Query<PartsQuery>,

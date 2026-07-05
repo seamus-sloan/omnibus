@@ -3,8 +3,9 @@
 //! `/api/*` other than `/api/auth/*` and `/api/_health` requires a valid
 //! session or gets `401 Unauthorized`; everything else (SSR HTML, WASM
 //! bundle, static assets) passes through untouched. Media read endpoints
-//! (covers, thumbs, author-photo / suggestion-cover GETs) additionally
-//! accept the session as a `?token=` query param — see [`is_media_read_path`].
+//! (covers, thumbs, author-photo / suggestion-cover GETs, and direct-play
+//! audiobook part streams) additionally accept the session as a `?token=`
+//! query param — see [`is_media_read_path`].
 
 use axum::{
     extract::{Request, State},
@@ -28,6 +29,10 @@ fn is_media_read_path(path: &str) -> bool {
         || path.starts_with("/api/thumbs/")
         || (path.starts_with("/api/authors/") && path.ends_with("/photo"))
         || (path.starts_with("/api/suggestions/") && path.ends_with("/cover"))
+        // Direct-play audiobook part streams feed the mobile WebView's
+        // `<audio src>`, which can only carry the session as `?token=`. HLS
+        // segments are web-only (cookie-authed) so they stay off this list.
+        || (path.starts_with("/api/audiobooks/") && path.contains("/parts/"))
 }
 
 /// Reject `/api/*` requests without a live session with `401 Unauthorized`, after exempting `/api/auth/*` and `/api/_health`.
