@@ -5,9 +5,9 @@
 //! still points at the surviving book. Name collisions per owner surface as
 //! [`ShelfError::NameTaken`].
 
-use sqlx::SqlitePool;
+use sqlx::{Sqlite, SqlitePool, Transaction};
 
-use omnibus_shared::{CreateShelfRequest, Shelf, ShelfKind, UpdateShelfRequest};
+use omnibus_shared::{CreateShelfRequest, Shelf, ShelfKind, ShelfRule, UpdateShelfRequest};
 
 use super::read::get_shelf;
 use super::ShelfError;
@@ -20,6 +20,9 @@ const ACCENTS: [&str; 6] = [
 
 /// Create a shelf owned by `owner_id` and return its full detail. Manual book
 /// uuids are resolved up front so a bad uuid fails before the shelf row exists.
+/// The shelf row, its rule set, and its membership all land in one
+/// transaction so a mid-write failure can't leave a shelf with a partial rule
+/// set or partial membership.
 pub async fn create_shelf(
     pool: &SqlitePool,
     owner_id: i64,
@@ -28,6 +31,8 @@ pub async fn create_shelf(
     let resolved = resolve_all(pool, &req.book_uuids).await?;
     let accent = pick_accent(pool, owner_id).await?;
     let position = next_shelf_position(pool, owner_id).await?;
+
+    let mut tx = pool.begin().await?;
 
     let id: i64 = sqlx::query_scalar::<_, i64>(
         "INSERT INTO shelves
@@ -42,20 +47,27 @@ pub async fn create_shelf(
     .bind(req.match_mode.map(|m| m.as_str()))
     .bind(&accent)
     .bind(position)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(map_unique)?;
 
     if req.kind == ShelfKind::Smart {
-        replace_rules(pool, id, req).await?;
+        insert_rules(&mut tx, id, &req.rules).await?;
     }
-    insert_books(pool, id, &resolved, owner_id, 0).await?;
+    insert_books(&mut tx, id, &resolved, owner_id, 0).await?;
+
+    tx.commit().await?;
 
     get_shelf(pool, id).await?.ok_or(ShelfError::NotFound)
 }
 
 /// Apply a partial update. `None` fields are untouched; `rules` (when present)
 /// replaces the whole rule set. Returns the updated shelf.
+///
+/// The rule replacement runs *before* the shelf-row `UPDATE` within the same
+/// transaction: both share one commit, so a rename that collides with an
+/// existing name (`ShelfError::NameTaken`) rolls the rule replacement back
+/// too, instead of leaving the new rules committed under the old name.
 pub async fn update_shelf(
     pool: &SqlitePool,
     id: i64,
@@ -80,6 +92,17 @@ pub async fn update_shelf(
         }
         _ => {}
     }
+
+    let mut tx = pool.begin().await?;
+
+    if let Some(rules) = &req.rules {
+        sqlx::query("DELETE FROM shelf_rules WHERE shelf_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        insert_rules(&mut tx, id, rules).await?;
+    }
+
     sqlx::query(
         "UPDATE shelves SET
             name        = COALESCE(?, name),
@@ -94,19 +117,11 @@ pub async fn update_shelf(
     .bind(req.visibility.map(|v| v.as_str()))
     .bind(req.match_mode.map(|m| m.as_str()))
     .bind(id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(map_unique)?;
 
-    if let Some(rules) = &req.rules {
-        sqlx::query("DELETE FROM shelf_rules WHERE shelf_id = ?")
-            .bind(id)
-            .execute(pool)
-            .await?;
-        for (i, rule) in rules.iter().enumerate() {
-            insert_rule(pool, id, rule, i as i64).await?;
-        }
-    }
+    tx.commit().await?;
 
     get_shelf(pool, id).await?.ok_or(ShelfError::NotFound)
 }
@@ -125,7 +140,8 @@ pub async fn delete_shelf(pool: &SqlitePool, id: i64) -> Result<(), ShelfError> 
 
 /// Append books to a hand-picked shelf. Each uuid is resolved to canonical
 /// first; an unknown uuid fails the whole call. Already-present books are
-/// silently kept (INSERT OR IGNORE).
+/// silently kept (INSERT OR IGNORE). The batch insert itself lands in one
+/// transaction, so a mid-batch failure can't leave a partial set of rows.
 pub async fn add_books(
     pool: &SqlitePool,
     shelf_id: i64,
@@ -134,7 +150,11 @@ pub async fn add_books(
 ) -> Result<(), ShelfError> {
     let resolved = resolve_all(pool, uuids).await?;
     let start = next_book_position(pool, shelf_id).await?;
-    insert_books(pool, shelf_id, &resolved, added_by, start).await
+
+    let mut tx = pool.begin().await?;
+    insert_books(&mut tx, shelf_id, &resolved, added_by, start).await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Remove a book from a hand-picked shelf. A no-op when it isn't on the shelf.
@@ -165,55 +185,66 @@ async fn resolve_all(pool: &SqlitePool, uuids: &[String]) -> Result<Vec<String>,
     Ok(out)
 }
 
+/// Batch-insert `shelf_books` rows in a single transaction. Chunked at 200
+/// rows (4 binds/row keeps each statement under SQLite's 999 bind-parameter
+/// cap) instead of one round-trip per book.
 async fn insert_books(
-    pool: &SqlitePool,
+    tx: &mut Transaction<'_, Sqlite>,
     shelf_id: i64,
     uuids: &[String],
     added_by: i64,
     start_pos: i64,
 ) -> Result<(), ShelfError> {
-    for (i, uuid) in uuids.iter().enumerate() {
-        sqlx::query(
+    const CHUNK_SIZE: usize = 200;
+    for (chunk_idx, chunk) in uuids.chunks(CHUNK_SIZE).enumerate() {
+        let rows = std::iter::repeat_n("(?, ?, ?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
             "INSERT OR IGNORE INTO shelf_books (shelf_id, book_uuid, position, added_by_user_id)
-             VALUES (?, ?, ?, ?)",
-        )
-        .bind(shelf_id)
-        .bind(uuid)
-        .bind(start_pos + i as i64)
-        .bind(added_by)
-        .execute(pool)
-        .await?;
+             VALUES {rows}"
+        );
+        let base = start_pos + (chunk_idx * CHUNK_SIZE) as i64;
+        let mut q = sqlx::query(&sql);
+        for (i, uuid) in chunk.iter().enumerate() {
+            q = q
+                .bind(shelf_id)
+                .bind(uuid)
+                .bind(base + i as i64)
+                .bind(added_by);
+        }
+        q.execute(&mut **tx).await?;
     }
     Ok(())
 }
 
-async fn replace_rules(
-    pool: &SqlitePool,
+/// Batch-insert `shelf_rules` rows in rule order, in a single transaction.
+/// Chunked at 199 rows (5 binds/row keeps each statement under SQLite's 999
+/// bind-parameter cap) instead of one round-trip per rule.
+async fn insert_rules(
+    tx: &mut Transaction<'_, Sqlite>,
     shelf_id: i64,
-    req: &CreateShelfRequest,
+    rules: &[ShelfRule],
 ) -> Result<(), ShelfError> {
-    for (i, rule) in req.rules.iter().enumerate() {
-        insert_rule(pool, shelf_id, rule, i as i64).await?;
+    const CHUNK_SIZE: usize = 199;
+    for (chunk_idx, chunk) in rules.chunks(CHUNK_SIZE).enumerate() {
+        let rows = std::iter::repeat_n("(?, ?, ?, ?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql =
+            format!("INSERT INTO shelf_rules (shelf_id, field, op, value, position) VALUES {rows}");
+        let base = (chunk_idx * CHUNK_SIZE) as i64;
+        let mut q = sqlx::query(&sql);
+        for (i, rule) in chunk.iter().enumerate() {
+            q = q
+                .bind(shelf_id)
+                .bind(rule.field.as_str())
+                .bind(rule.op.as_str())
+                .bind(&rule.value)
+                .bind(base + i as i64);
+        }
+        q.execute(&mut **tx).await?;
     }
-    Ok(())
-}
-
-async fn insert_rule(
-    pool: &SqlitePool,
-    shelf_id: i64,
-    rule: &omnibus_shared::ShelfRule,
-    position: i64,
-) -> Result<(), ShelfError> {
-    sqlx::query(
-        "INSERT INTO shelf_rules (shelf_id, field, op, value, position) VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(shelf_id)
-    .bind(rule.field.as_str())
-    .bind(rule.op.as_str())
-    .bind(&rule.value)
-    .bind(position)
-    .execute(pool)
-    .await?;
     Ok(())
 }
 
