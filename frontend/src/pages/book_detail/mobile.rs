@@ -1,7 +1,7 @@
 //! Mobile layout for the book-detail page — re-flows the same loaded-book data
 //! ([`super::LoadedBookView`]) into the native design's single-column surface:
 //! an accent-tinted hero over About / rating / info / files / journal sections.
-//! Reading and listening stay stubbed on mobile, so those CTAs are disabled.
+//! Reading stays stubbed on mobile (disabled CTA); listening opens the player.
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
@@ -80,13 +80,17 @@ pub(super) fn render_loaded_mobile(b: EbookMetadata, server_url: String) -> Elem
                 }
             }
 
-            // Primary CTAs — disabled while mobile reading/listening is stubbed.
+            // Primary CTAs — reading stays stubbed; listening opens the player.
             div { class: "m-bd-cta",
                 if has_ebook {
                     button { class: "btn primary lg", disabled: true, title: "Reading on mobile coming soon", "Read" }
                 }
                 if has_audio {
-                    button { class: "btn lg", disabled: true, title: "Listening on mobile coming soon", "Listen" }
+                    Link {
+                        to: Route::BookListen { uuid: uuid.clone() },
+                        class: "btn lg",
+                        "Listen"
+                    }
                 }
             }
 
