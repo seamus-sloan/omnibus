@@ -50,9 +50,17 @@ test:
         cargo test -p omnibus-frontend --features server && \
         cargo test -p omnibus-shared'
 
+# Structural CSS lint — stylelint over frontend/assets, scoped to parse /
+# structural errors only (unclosed rules, misplaced @import), not style.
+# An unclosed `}` silently reparents later rules under CSS nesting, so a
+# missing brace must fail the build. stylelint is Nix-pinned in slimPackages.
+lint-css:
+    nix develop --command stylelint 'frontend/assets/**/*.css'
+
 # Format check + clippy, including the crate/feature combos a bare
-# `cargo clippy` (default-members, default features) misses.
-lint:
+# `cargo clippy` (default-members, default features) misses. Depends on
+# `lint-css` so the CSS structural guard rides the same gate as fmt/clippy.
+lint: lint-css
     nix develop --command bash -ec '\
         cargo fmt --check && \
         cargo clippy --all-targets && \
