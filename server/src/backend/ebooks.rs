@@ -5,7 +5,7 @@
 //! Mounted on the mobile REST router in [`super::rest_router`].
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -151,6 +151,40 @@ pub(super) async fn get_ebook_by_uuid(
     }
 }
 
+/// Resolve the on-disk EPUB path for `uuid`, honouring an optional
+/// `?file_id=N` (multi-EPUB books). Returns the error `Response`
+/// (404 / 500) already formed on the failure paths so callers can `?`-style
+/// early-return with `Err`.
+async fn resolve_epub_path(
+    state: &AppState,
+    uuid: &str,
+    file_id: Option<i64>,
+) -> Result<std::path::PathBuf, Response> {
+    let id = match db::resolve_book_id_by_uuid(&state.pool, uuid).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return Err(axum::http::StatusCode::NOT_FOUND.into_response()),
+        Err(e) => return Err(internal("resolve_book_id_by_uuid", e)),
+    };
+    // Carry the context alongside the chosen query so a 500 points at the
+    // call that actually failed rather than always blaming `book_file_path`.
+    let (resolved, ctx) = if let Some(file_id) = file_id {
+        (
+            db::book_file_path_by_id(&state.pool, id, file_id, Some("EPUB")).await,
+            "book_file_path_by_id",
+        )
+    } else {
+        (
+            db::book_file_path(&state.pool, id, "EPUB").await,
+            "book_file_path",
+        )
+    };
+    match resolved {
+        Ok(Some(p)) => Ok(p),
+        Ok(None) => Err(axum::http::StatusCode::NOT_FOUND.into_response()),
+        Err(e) => Err(internal(ctx, e)),
+    }
+}
+
 /// Streams the raw EPUB bytes. Accepts optional `?file_id=N` to target
 /// a specific `book_files` row for multi-EPUB books.
 pub(super) async fn get_ebook_file(
@@ -159,23 +193,9 @@ pub(super) async fn get_ebook_file(
     Path(uuid): Path<String>,
     Query(query): Query<EbookFileQuery>,
 ) -> Response {
-    let id = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
-        Ok(Some(id)) => id,
-        Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return internal("resolve_book_id_by_uuid", e),
-    };
-    let path = if let Some(file_id) = query.file_id {
-        match db::book_file_path_by_id(&state.pool, id, file_id, Some("EPUB")).await {
-            Ok(Some(p)) => p,
-            Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
-            Err(e) => return internal("book_file_path_by_id", e),
-        }
-    } else {
-        match db::book_file_path(&state.pool, id, "EPUB").await {
-            Ok(Some(p)) => p,
-            Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
-            Err(e) => return internal("book_file_path", e),
-        }
+    let path = match resolve_epub_path(&state, &uuid, query.file_id).await {
+        Ok(p) => p,
+        Err(resp) => return resp,
     };
     match tokio::fs::read(&path).await {
         Ok(bytes) => (
@@ -294,6 +314,24 @@ fn download_response(bytes: Vec<u8>, filename: &str) -> Response {
         HeaderValue::from_static("nosniff"),
     );
     resp
+}
+
+/// Serves the raw EPUB as a browser download (`Content-Disposition:
+/// attachment`). Same path resolution as [`get_ebook_file`]; only the
+/// disposition differs, so the in-app reader keeps streaming inline via
+/// `/file` while the export menu drives a real save-to-disk via `/download`.
+pub(super) async fn get_ebook_download(
+    _user: AuthUser,
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+    Query(query): Query<EbookFileQuery>,
+    req: Request,
+) -> Response {
+    let path = match resolve_epub_path(&state, &uuid, query.file_id).await {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    super::serve_download(req, &path, "application/epub+zip").await
 }
 
 pub(super) async fn get_library(_user: AuthUser, State(state): State<AppState>) -> Response {

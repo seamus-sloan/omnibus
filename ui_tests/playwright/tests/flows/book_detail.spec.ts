@@ -245,12 +245,28 @@ test("renders the detail contents for the selected book", async ({ page, request
   await expect(kindleBtn).toBeVisible();
   await expect(kindleBtn).toBeEnabled();
 
-  // The hero CTA row also offers Send-to-Kindle (enabled because the book has
-  // an EPUB); it shares the send flow but carries its own testid so it doesn't
-  // collide with the per-format-row button above.
-  const heroKindleBtn = page.getByTestId("hero-send-kindle");
+  // The hero CTA row condenses the per-device actions behind an "Export"
+  // dropdown. It's closed by default; opening it reveals the EPUB download
+  // link and the Send-to-Kindle button (enabled because the book has an
+  // EPUB), which carries its own testid so it doesn't collide with the
+  // per-format-row button above.
+  const exportTrigger = page.getByTestId("hero-export");
+  await expect(exportTrigger).toBeVisible();
+  await expect(page.getByTestId("hero-export-panel")).toHaveCount(0);
+  await exportTrigger.click();
+  const exportPanel = page.getByTestId("hero-export-panel");
+  await expect(exportPanel).toBeVisible();
+  const downloadEpub = exportPanel.getByTestId("export-download-epub");
+  await expect(downloadEpub).toHaveAttribute("href", /\/api\/ebooks\/.+\/download$/);
+  await expect(downloadEpub).toHaveAttribute("download");
+  const heroKindleBtn = exportPanel.getByTestId("hero-send-kindle");
   await expect(heroKindleBtn).toBeVisible();
   await expect(heroKindleBtn).toBeEnabled();
+  // The audiobook download only appears for books with an audio file; the
+  // ebook-only seed must not render it. Close the menu again via the scrim.
+  await expect(exportPanel.getByTestId("export-download-audio")).toHaveCount(0);
+  await page.getByTestId("hero-export-scrim").click();
+  await expect(page.getByTestId("hero-export-panel")).toHaveCount(0);
 
   // No M4B fixture in the ebook seed — the per-format Listen CTA must NOT
   // render. (Scoped to the format switcher; the hero "Listen" secondary

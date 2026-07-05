@@ -5,10 +5,9 @@ use dioxus_router::Link;
 use omnibus_shared::EbookMetadata;
 
 use crate::components::atrium::Cover;
-#[cfg(not(feature = "mobile"))]
-use crate::components::SendToKindleButton;
 use crate::Route;
 
+use super::export_menu::BdExportMenu;
 use super::rating::BdRatingWidget;
 use super::{BdCrumb, BdCrumbItem, BdFormatBadge};
 
@@ -157,7 +156,8 @@ fn BdTitleCol(
     }
 }
 
-/// CTA button row: primary read/listen action, secondary listen, send-to-device stubs.
+/// CTA button row: primary read/listen action, secondary listen, and the
+/// "Export" dropdown that collects the per-device send/download actions.
 #[component]
 fn BdCtaRow(uuid: String, has_ebook: bool, has_audio: bool) -> Element {
     rsx! {
@@ -200,30 +200,9 @@ fn BdCtaRow(uuid: String, has_ebook: bool, has_audio: bool) -> Element {
                     listen_btn
                 }
             }
-            // Send-to-Kindle emails the EPUB, so it only makes sense when the
-            // book has an ebook file (the backend errors with `NoEpub`
-            // otherwise). Web renders the interactive button; mobile keeps a
-            // disabled stub like the other hero CTAs (rule 07: cfg gates the
-            // `let` binding, not the rsx body, so SSR/web markup stays identical).
-            if has_ebook {
-                {
-                    #[cfg(not(feature = "mobile"))]
-                    let send_kindle = rsx! {
-                        SendToKindleButton {
-                            uuid: uuid.clone(),
-                            file_id: None,
-                            class: "btn lg ghost".to_string(),
-                            testid: "hero-send-kindle".to_string(),
-                        }
-                    };
-                    #[cfg(feature = "mobile")]
-                    let send_kindle = rsx! {
-                        button { class: "btn lg ghost", disabled: true, title: "Send-to-Kindle on mobile coming soon", "Send to Kindle" }
-                    };
-                    send_kindle
-                }
-            }
-            button { class: "btn lg ghost", disabled: true, title: "Send-to-Kobo coming soon", "Send to Kobo" }
+            // Download + Send-to-Kindle/Kobo live behind one "Export" menu so
+            // the CTA row stays a single primary action plus this dropdown.
+            BdExportMenu { uuid: uuid.clone(), has_ebook, has_audio }
         }
     }
 }

@@ -746,6 +746,37 @@ body.atrium,
 }
 .bd-cta-row .btn[disabled] { opacity: 0.65; cursor: not-allowed; }
 
+/* Hero "Export" dropdown — trigger + anchored menu. Mirrors the user-menu
+   scrim/panel/row pattern (`.um-*`) so the two dropdowns read the same. */
+.bd-export { position: relative; display: inline-flex; }
+.bd-export-trigger { display: inline-flex; align-items: center; gap: 8px; }
+.bd-export-caret { font-size: 10px; line-height: 1; color: var(--ink-2); }
+.bd-export-scrim {
+  position: fixed; inset: 0; z-index: 60;
+  background: transparent; cursor: default;
+}
+.bd-export-panel {
+  position: absolute; top: calc(100% + 8px); left: 0;
+  min-width: 220px; z-index: 61;
+  background: var(--bg-1); border: 1px solid var(--line-2);
+  border-radius: 12px; padding: 6px;
+  display: flex; flex-direction: column; gap: 2px;
+  box-shadow:
+    0 18px 40px color-mix(in oklch, black 55%, transparent),
+    0 2px 0 color-mix(in oklch, black 25%, transparent);
+}
+.bd-export-item {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; height: auto; padding: 9px 10px;
+  border: none; border-radius: 8px;
+  background: transparent; color: var(--ink-1);
+  font: inherit; font-size: 13px; text-align: left; text-decoration: none;
+  cursor: pointer;
+}
+.bd-export-item:hover:not([disabled]) { background: var(--bg-2); color: var(--ink-0); }
+.bd-export-item[disabled] { opacity: .5; cursor: not-allowed; pointer-events: none; }
+.bd-export-item-label { flex: 1 1 auto; }
+
 .bd-progress-meta { margin-top: 22px; max-width: 460px; }
 .bd-progress-line {
   display: flex; justify-content: space-between;
