@@ -1,0 +1,59 @@
+name: CSS Lint
+
+# Structural guard for the design-system stylesheet. A single missing `}`
+# in frontend/assets/atrium.css silently reparents every following rule as
+# a CSS-nesting descendant of the unclosed selector, so those rules stop
+# matching — a class of bug the web build never exercises and Rust CI can't
+# see. stylelint's parser turns that into an "Unclosed block" error. The
+# ruleset is deliberately parse/structural-only (see .stylelintrc.json), so
+# this never nags about pre-existing stylistic choices.
+
+on:
+  pull_request:
+    paths:
+      - "frontend/assets/**/*.css"
+      - ".stylelintrc.json"
+      - ".github/workflows/css-lint.yml"
+      - "flake.nix"
+      - "flake.lock"
+  push:
+    branches: [main]
+
+concurrency:
+  group: css-lint-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  stylelint:
+    name: stylelint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # See rust.yml: id-token for the Nix installer's FlakeHub OIDC auth,
+      # actions:write for cache-nix-action's `purge: true` self-eviction.
+      id-token: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+
+      # Distinct nix cache prefix from rust.yml/e2e.yml so the workflows
+      # don't clobber each other. The slim shell realizes stylelint only.
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-css-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-prefixes-first-match: nix-css-${{ runner.os }}-
+          purge: true
+          purge-prefixes: nix-css-${{ runner.os }}-
+          purge-last-accessed: 604800
+          purge-primary-key: never
+          gc-max-store-size-linux: 2G
+
+      - name: stylelint (structural CSS lint)
+        run: nix develop --command stylelint 'frontend/assets/**/*.css'

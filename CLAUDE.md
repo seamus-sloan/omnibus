@@ -72,7 +72,8 @@ cargo run -p omnibus                                        # start at http://0.
 
 # Tests & lint — aggregate targets cover the full crate matrix in one go
 just test                                                   # db + server + frontend(--features server) + shared
-just lint                                                   # cargo fmt --check + clippy (incl. mobile + frontend-server)
+just lint                                                   # cargo fmt --check + clippy (incl. mobile + frontend-server) + stylelint
+just lint-css                                               # structural CSS lint only (stylelint; catches unclosed rules in frontend/assets)
 just check                                                  # lint then test
 # …or per-crate (note: `cargo test --workspace` SKIPS frontend rpc/page tests
 #  and mobile — the rpc/page tests need --features server to compile the
