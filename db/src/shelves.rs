@@ -15,7 +15,7 @@ mod write;
 #[cfg(test)]
 mod tests;
 
-pub use read::{get_shelf, list_visible_shelves, preview_rule, shelf_page};
+pub use read::{get_shelf, list_visible_shelves, preview_rule, shelf_page, LIST_SHELVES_LIMIT};
 pub use write::{add_books, create_shelf, delete_shelf, remove_book, update_shelf};
 
 /// Errors from the shelves data layer.

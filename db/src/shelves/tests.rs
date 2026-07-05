@@ -422,6 +422,85 @@ async fn list_visible_scopes_by_owner_public_and_admin() {
     );
 }
 
+/// Bulk-insert `count` manual shelf rows owned by `owner_id` without going
+/// through `create_shelf` — too slow at over-cap row counts.
+async fn seed_shelves_raw(pool: &sqlx::SqlitePool, owner_id: i64, count: i64) {
+    sqlx::query(
+        r#"
+        WITH RECURSIVE n(i) AS (
+            SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
+        )
+        INSERT INTO shelves (owner_user_id, kind, name, position)
+        SELECT ?, 'manual', 'Shelf ' || i, i FROM n
+        "#,
+    )
+    .bind(count)
+    .bind(owner_id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn list_visible_shelves_caps_response_at_hard_limit() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let owner = make_user(&pool, "owner", false).await;
+    let over_cap = LIST_SHELVES_LIMIT + 50;
+    seed_shelves_raw(&pool, owner, over_cap).await;
+
+    let list = list_visible_shelves(&pool, owner, false).await.unwrap();
+    assert_eq!(
+        list.len() as i64,
+        LIST_SHELVES_LIMIT,
+        "list_visible_shelves must not return more than LIST_SHELVES_LIMIT rows",
+    );
+}
+
+#[tokio::test]
+async fn list_visible_shelves_reports_correct_per_shelf_counts_when_batched() {
+    // Exercises the batched rule-load / manual-count path with more than one
+    // shelf of each kind, so a shelf_id mix-up in the batching would surface
+    // as a wrong count on the wrong shelf.
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+
+    let fiction = create_shelf(
+        &pool,
+        owner,
+        &smart_req("Fiction", MatchMode::Any, vec![tag_rule("fiction")]),
+    )
+    .await
+    .unwrap();
+    let empty_smart = create_shelf(
+        &pool,
+        owner,
+        &smart_req("No matches", MatchMode::Any, vec![tag_rule("no-such-tag")]),
+    )
+    .await
+    .unwrap();
+
+    let book_a = uuid_by_title(&pool, "Saga: Book One").await;
+    let manual_with_book =
+        create_shelf(&pool, owner, &manual_req("Manual with book", vec![book_a]))
+            .await
+            .unwrap();
+    let manual_empty = create_shelf(&pool, owner, &manual_req("Manual empty", vec![]))
+        .await
+        .unwrap();
+
+    let shelves = list_visible_shelves(&pool, owner, false).await.unwrap();
+    let count_for = |id: i64| shelves.iter().find(|s| s.id == id).unwrap().book_count;
+
+    assert_eq!(count_for(fiction.id), 2, "two books tagged fiction");
+    assert_eq!(count_for(empty_smart.id), 0, "no book matches the tag");
+    assert_eq!(count_for(manual_with_book.id), 1);
+    assert_eq!(
+        count_for(manual_empty.id),
+        0,
+        "an empty manual shelf has no shelf_books row and must default to 0"
+    );
+}
+
 #[tokio::test]
 async fn duplicate_name_for_same_owner_is_name_taken() {
     let pool = init_db("sqlite::memory:").await.unwrap();

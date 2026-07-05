@@ -24,6 +24,12 @@ const SELECT_ENTRY: &str = "SELECT je.id, je.book_uuid, je.user_id AS author_id,
    FROM journal_entries je
    JOIN users u ON u.id = je.user_id";
 
+/// Hard cap on how many entries `list_journal_entries` returns for a single
+/// book. Matches `LIST_BOOKMARKS_LIMIT`/`LIST_HIGHLIGHTS_LIMIT` — a
+/// defensive ceiling so a book with a pathological entry count can't produce
+/// an unbounded REST response.
+pub const LIST_JOURNAL_ENTRIES_LIMIT: i64 = 1_000;
+
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
     #[error("book not found")]
@@ -84,9 +90,10 @@ pub async fn list_journal_entries(
         return Ok(vec![]);
     };
     let rows = sqlx::query(&format!(
-        "{SELECT_ENTRY} WHERE je.book_uuid = ? ORDER BY je.created_at DESC, je.id DESC"
+        "{SELECT_ENTRY} WHERE je.book_uuid = ? ORDER BY je.created_at DESC, je.id DESC LIMIT ?"
     ))
     .bind(&canonical)
+    .bind(LIST_JOURNAL_ENTRIES_LIMIT)
     .fetch_all(pool)
     .await?;
     rows.iter().map(row_to_entry).collect()
