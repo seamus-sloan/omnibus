@@ -347,6 +347,34 @@ async fn login_unknown_user_returns_401() {
 }
 
 #[tokio::test]
+async fn login_corrupted_password_hash_returns_500() {
+    // Regression: `AuthError::Crypto` (raised when the stored
+    // `password_hash` isn't a valid PHC string) is mapped to a generic
+    // 500 by `auth_error_to_response`, same as `Internal`. Locks in that
+    // a corrupted row surfaces as a deliberate internal error rather than
+    // a panic or a silent auth bypass.
+    let (app, pool) = app().await;
+    let user = db::auth::create_user(&pool, "alice", "correct horse battery staple")
+        .await
+        .unwrap();
+    sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+        .bind("not-a-valid-phc-string")
+        .bind(user.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let res = app
+        .oneshot(json_req(
+            "/api/auth/login",
+            "POST",
+            json!({"username": "alice", "password": "correct horse battery staple"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
 async fn logout_revokes_session_and_next_me_is_401() {
     let (app, pool) = app().await;
     db::auth::create_user(&pool, "alice", "correct horse battery staple")
