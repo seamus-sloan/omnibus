@@ -9,17 +9,26 @@ use dioxus::prelude::*;
 #[cfg(feature = "mobile")]
 use crate::data;
 
-/// Return the base URL for API calls. Mobile reads it from the `ServerUrl`
-/// context; web co-locates with the server so the base is empty/relative.
+/// Return the base URL for API calls. Mobile reads it from the reactive
+/// `ServerUrl` context signal (subscribing the caller so a URL change
+/// re-renders it) and returns an owned snapshot; web co-locates with the
+/// server so the base is empty/relative.
 pub fn use_server_url() -> String {
     #[cfg(feature = "mobile")]
     {
-        use_context::<data::ServerUrl>().0
+        use_context::<data::ServerUrl>().0()
     }
     #[cfg(not(feature = "mobile"))]
     {
         String::new()
     }
+}
+
+/// The raw backend-URL signal, for the pre-login screens that *write* it
+/// (the Connect screen on success). Readers should use [`use_server_url`].
+#[cfg(feature = "mobile")]
+pub fn use_server_url_signal() -> Signal<String> {
+    use_context::<data::ServerUrl>().0
 }
 
 /// Build the URL for a media API path (`/api/covers/…`, `/api/thumbs/…`,

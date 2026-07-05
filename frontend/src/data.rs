@@ -93,9 +93,76 @@ impl DataError {
 }
 
 /// Dioxus context wrapper holding the backend base URL for mobile clients.
+///
+/// Reactive: the pre-login Connect screen rewrites this signal, and every
+/// `use_server_url()` reader re-renders against the new origin. Provided
+/// once by the native shell's `Root`, seeded from [`server_url_store::load`].
 #[cfg(feature = "mobile")]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ServerUrl(pub String);
+#[derive(Clone, Copy)]
+pub struct ServerUrl(pub dioxus::prelude::Signal<String>);
+
+#[cfg(feature = "mobile")]
+pub mod server_url_store {
+    //! On-disk persistence for the user-entered backend base URL. Far
+    //! simpler than [`super::token_store`]: the URL is not a secret, so it
+    //! persists in every build (no `debug_assertions` gate) with default
+    //! permissions, and there is no in-memory cache or change channel — the
+    //! reactive [`super::ServerUrl`] context signal is the in-memory source
+    //! of truth, while this module only reads it once at launch and writes
+    //! it back when the user connects.
+    use std::path::PathBuf;
+
+    /// On-disk path for the persisted server URL, or `None` when no home
+    /// directory is available (same `HOME`-based resolution as the token
+    /// store; iOS sandboxes set `HOME` to the app container).
+    pub fn server_path() -> Option<PathBuf> {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".omnibus-server"))
+    }
+
+    /// Trim persisted file contents into a usable URL, rejecting an
+    /// empty/whitespace-only file (treated as "nothing saved").
+    fn parse_loaded(raw: &str) -> Option<String> {
+        let trimmed = raw.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    }
+
+    /// Read the persisted server URL, if any. Errors (missing/unreadable
+    /// file) are swallowed to `None` — the user just re-enters the URL.
+    pub fn load() -> Option<String> {
+        let path = server_path()?;
+        let contents = std::fs::read_to_string(&path).ok()?;
+        parse_loaded(&contents)
+    }
+
+    /// Persist the server URL, best-effort. A write failure is logged and
+    /// ignored: the in-memory context signal still carries the value for
+    /// this session, so the only cost is re-entering it next launch.
+    pub fn set(url: &str) {
+        let Some(path) = server_path() else { return };
+        if let Err(e) = std::fs::write(&path, url) {
+            tracing::warn!(error = %e, path = %path.display(), "could not persist server URL");
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parse_loaded_trims_and_returns_some_for_a_url() {
+            assert_eq!(
+                parse_loaded("  https://omnibus.local:3000\n"),
+                Some("https://omnibus.local:3000".to_string())
+            );
+        }
+
+        #[test]
+        fn parse_loaded_returns_none_for_empty_or_whitespace() {
+            assert_eq!(parse_loaded(""), None);
+            assert_eq!(parse_loaded("   \n\t"), None);
+        }
+    }
+}
 
 #[cfg(feature = "mobile")]
 pub mod token_store {

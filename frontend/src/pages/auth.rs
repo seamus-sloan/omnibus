@@ -10,6 +10,8 @@ use dioxus_router::{use_navigator, Link};
 #[cfg(not(feature = "mobile"))]
 use crate::components::auth::AuthShell;
 use crate::components::auth::{Banner, BannerKind, Field, StrengthMeter, StrengthScore};
+#[cfg(feature = "mobile")]
+use crate::pages::server_connect::display_host;
 use crate::{use_server_url, Route};
 
 /// Signals plus the submit/keydown handlers backing `LoginPage`'s form.
@@ -87,7 +89,7 @@ fn use_login_form_state() -> LoginFormState {
 /// Centered single-column shell for the mobile auth screens: brand mark,
 /// tagline, a form slot, and a version footer over a soft accent glow.
 #[cfg(feature = "mobile")]
-fn m_auth_shell(tagline: &str, children: Element) -> Element {
+pub(crate) fn m_auth_shell(tagline: &str, children: Element) -> Element {
     rsx! {
         div { class: "m-auth",
             div { class: "m-auth-brand",
@@ -149,9 +151,31 @@ pub fn LoginPage() -> Element {
     #[cfg(feature = "mobile")]
     let mut password = password;
     #[cfg(feature = "mobile")]
+    let nav = use_navigator();
+    #[cfg(feature = "mobile")]
+    let host = display_host(&use_server_url());
+    #[cfg(feature = "mobile")]
     let out = m_auth_shell(
         "Your library, wherever you are.",
         rsx! {
+            // Connected-to bar: shows which server this login targets, with a
+            // Back affordance that returns to the Connect screen (which
+            // pre-fills the current URL) without clearing it.
+            div { class: "m-auth-connected",
+                button {
+                    class: "m-auth-back",
+                    r#type: "button",
+                    onclick: move |_| { nav.replace(Route::ServerConnect {}); },
+                    "← Back"
+                }
+                div { class: "m-auth-connected-to",
+                    span { class: "m-auth-connected-dot" }
+                    span { class: "m-auth-connected-label",
+                        "Logging into "
+                        span { class: "mono", "{host}" }
+                    }
+                }
+            }
             form { class: "auth-form-inner",
                 onsubmit: on_submit,
                 "data-testid": "login-form",

@@ -103,6 +103,32 @@ pub async fn mobile_logout(server_url: &str) -> Result<(), DataError> {
     Ok(())
 }
 
+/// GET `{server_url}/api/_health` — a simple server-reachability probe used
+/// by the pre-login Connect screen to confirm the entered URL points at a
+/// live server before advancing to login. Any 2xx counts as reachable; the
+/// body is ignored (the endpoint is a general unauthenticated liveness route,
+/// not a mobile-specific one). No bearer — `/api/_health` is whitelisted in
+/// the server's auth gate. A per-request timeout bounds the wait so a URL
+/// that connects but never answers can't hang the screen forever.
+///
+/// Kept transport-generic on purpose (a plain reachability check other flows
+/// could reuse); it currently compiles on the native/reqwest path where
+/// `http_client` lives — a web caller would add a `gloo_net` branch here.
+#[cfg(feature = "mobile")]
+pub async fn check_server(server_url: &str) -> Result<(), DataError> {
+    let url = format!("{server_url}/api/_health");
+    let response = http_client()
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(())
+}
+
 #[cfg(feature = "mobile")]
 async fn post_mobile_auth<T: serde::Serialize>(
     server_url: &str,
