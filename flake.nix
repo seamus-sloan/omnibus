@@ -142,12 +142,15 @@
         # out to `npm`/`npx` (e.g. tooling under `ui_tests/playwright/tools/`).
         # ffmpeg is the runtime backend for the F2.3 audiobook HLS pipeline
         # (`db::hls` shells out via OMNIBUS_FFMPEG_PATH); kept out of slim
-        # `default` since daily cargo work doesn't need it.
+        # `default` since daily cargo work doesn't need it. kepubify is the
+        # EPUB→KEPUB converter for the F4.1 "Send to Kobo" download
+        # (`db::kepub` shells out via OMNIBUS_KEPUBIFY_PATH).
         webExtras = [
           wasm-bindgen-cli-0_2_122
           pkgs-unstable.dioxus-cli
           pkgs-unstable.nodejs_22
           pkgs.ffmpeg-headless
+          pkgs.kepubify
           pkgs.binaryen
         ];
 

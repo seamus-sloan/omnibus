@@ -20,6 +20,7 @@ pub mod hls;
 pub mod identity;
 pub mod indexer;
 pub mod journals;
+pub mod kepub;
 pub mod library_layout;
 pub mod merge;
 pub mod metadata_overrides;
@@ -60,6 +61,7 @@ pub use browse::*;
 pub use covers::{covers_dir, get_cover, get_last_modified_epoch, CoversError};
 pub use discovery::*;
 pub use helpers::{build_fts_match, sanitize_fts_query};
+pub use kepub::{convert_book, kepub_path, kepubify_available, warn_if_unavailable, KepubError};
 pub use merge::{merge_books, undo_merge, MergeError, MergeOutcome};
 pub use metadata_overrides::*;
 pub use missing_files::{

@@ -76,6 +76,9 @@ HLS audiobook transcode cache (read by `db::hls`):
 - `OMNIBUS_HLS_TRANSCODE_TIMEOUT_SECS` — ffmpeg watchdog per book in seconds (default 1800)
 - `OMNIBUS_FFMPEG_PATH` — explicit ffmpeg path; otherwise ffmpeg must be on `$PATH`
 
+Kobo KEPUB conversion (read by `db::kepub`, for the "Send to Kobo" download):
+- `OMNIBUS_KEPUBIFY_PATH` — explicit kepubify path; otherwise kepubify must be on `$PATH`. Cache lives under `$OMNIBUS_DATA_DIR/kepub/`. Absent → download falls back to plain EPUB with a one-time startup warning. Bundled in the `.#web` shell and the release image.
+
 If `ANDROID_HOME` / `ANDROID_NDK_HOME` come back empty inside `nix develop .#mobile`, set them manually:
 
 ```bash

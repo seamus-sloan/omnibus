@@ -107,6 +107,12 @@ impl Worker {
                     Err(e) => TaskOutcome::Err(e.to_string()),
                 }
             }
+            Task::KepubConvert { book_id } => {
+                match crate::kepub::convert_book(&self.pool, book_id).await {
+                    Ok(_) => TaskOutcome::Ok,
+                    Err(e) => TaskOutcome::Err(e.to_string()),
+                }
+            }
             Task::GenerateThumbs {
                 book_id,
                 last_modified_epoch,
