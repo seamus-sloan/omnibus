@@ -66,9 +66,17 @@ fn server_connect_mobile() -> Element {
             checking.set(false);
             match res {
                 Ok(()) => {
-                    // Persist to disk and update the reactive context so every
-                    // downstream reader picks up the new origin, then advance.
-                    crate::data::server_url_store::set(&base);
+                    // Point at a *different* origin → drop any token from the
+                    // previous server so a stale bearer can't be sent to the
+                    // new host before a fresh login supersedes it.
+                    if *url_signal.peek() != base {
+                        crate::data::token_store::clear();
+                    }
+                    // Offload the blocking disk write off the async runtime
+                    // thread (mobile's tokio is sync-only, so no spawn_blocking);
+                    // the reactive context below is the in-memory source of truth.
+                    let to_persist = base.clone();
+                    std::thread::spawn(move || crate::data::server_url_store::set(&to_persist));
                     url_signal.set(base);
                     nav.replace(Route::Login {});
                 }
