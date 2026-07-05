@@ -20,6 +20,8 @@ mod rating;
 #[cfg(not(feature = "mobile"))]
 mod body;
 #[cfg(not(feature = "mobile"))]
+mod export_menu;
+#[cfg(not(feature = "mobile"))]
 mod hero;
 #[cfg(feature = "mobile")]
 mod mobile;

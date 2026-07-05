@@ -15,6 +15,10 @@ pub struct UserSummary {
     pub can_upload: bool,
     pub can_edit: bool,
     pub can_download: bool,
+    /// F4.3 Send-to-Kindle destination address, or `None` when the user hasn't
+    /// configured one. Non-secret — the user set it themselves.
+    #[serde(default)]
+    pub kindle_email: Option<String>,
 }
 
 /// Request body for `POST /api/auth/login`.

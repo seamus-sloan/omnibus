@@ -94,7 +94,8 @@ async fn fetch_session_row(pool: &SqlitePool, hash: &[u8]) -> AuthResult<sqlx::s
     let row = sqlx::query(
         "SELECT s.id AS s_id, s.user_id, s.device_id, s.kind, s.created_at,
                 s.last_used_at, s.expires_at, s.revoked_at,
-                u.id AS u_id, u.username, u.is_admin, u.can_upload, u.can_edit, u.can_download
+                u.id AS u_id, u.username, u.is_admin, u.can_upload, u.can_edit, u.can_download,
+                u.kindle_email
          FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = ?",
     )
@@ -137,6 +138,7 @@ fn build_user_from_row(row: &sqlx::sqlite::SqliteRow) -> User {
         can_upload: row.get::<i64, _>("can_upload") != 0,
         can_edit: row.get::<i64, _>("can_edit") != 0,
         can_download: row.get::<i64, _>("can_download") != 0,
+        kindle_email: row.get("kindle_email"),
     }
 }
 

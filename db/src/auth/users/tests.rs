@@ -154,3 +154,32 @@ async fn promote_to_admin_idempotent() {
     // No-op on unknown user.
     assert!(!promote_to_admin(&p, "eve").await.unwrap());
 }
+
+#[tokio::test]
+async fn set_kindle_email_roundtrips_and_clears() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    assert_eq!(u.kindle_email, None);
+
+    set_kindle_email(&p, u.id, Some("alice@kindle.com"))
+        .await
+        .unwrap();
+    assert_eq!(
+        get_kindle_email(&p, u.id).await.unwrap().as_deref(),
+        Some("alice@kindle.com")
+    );
+    let reloaded = get_user_by_id(&p, u.id).await.unwrap().unwrap();
+    assert_eq!(reloaded.kindle_email.as_deref(), Some("alice@kindle.com"));
+
+    // Clearing with None wipes it.
+    set_kindle_email(&p, u.id, None).await.unwrap();
+    assert_eq!(get_kindle_email(&p, u.id).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn set_kindle_email_rejects_malformed_address() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let err = set_kindle_email(&p, u.id, Some("nope")).await.unwrap_err();
+    assert!(matches!(err, AuthError::Validation(_)));
+}

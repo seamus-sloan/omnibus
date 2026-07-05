@@ -29,6 +29,8 @@ pub use bottom_nav::BottomNav as Nav;
 
 mod format_switcher;
 pub use format_switcher::FormatSwitcher;
+#[cfg(not(feature = "mobile"))]
+pub use format_switcher::SendToKindleButton;
 
 // Reusable add/remove chip editor with a substring-match suggestion
 // dropdown. See `chip_editor.rs` for the full API.

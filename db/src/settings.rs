@@ -8,7 +8,11 @@ use std::path::Path;
 
 use sqlx::{SqlitePool, Transaction};
 
-pub use omnibus_shared::{HardcoverKeyStatus, Settings, HARDCOVER_API_KEY_MAX_LEN};
+pub use omnibus_shared::{
+    is_plausible_email, HardcoverKeyStatus, Settings, SmtpConfigStatus, SmtpConfigUpdate,
+    SmtpSecurity, EMAIL_MAX_LEN, HARDCOVER_API_KEY_MAX_LEN, SMTP_FIELD_MAX_LEN,
+    SMTP_PASSWORD_MAX_LEN,
+};
 
 /// `settings` KV keys consumed by the UI/RPC layer. Kept as constants so the
 /// indexer, settings handlers, and tests all reference the same identifier.
@@ -18,6 +22,16 @@ const AUDIOBOOK_LIBRARY_PATH_KEY: &str = "audiobook_library_path";
 /// the [`Settings`] struct) so saving it never triggers the scan-root
 /// reconciliation `set_settings` runs.
 const HARDCOVER_API_KEY_KEY: &str = "hardcover_api_key";
+/// `settings` KV keys for the F4.3 server-wide SMTP config. Stored as discrete
+/// rows (not via the [`Settings`] struct) so saving them never triggers the
+/// scan-root reconciliation `set_settings` runs. The password is masked before
+/// it ever crosses the wire (see [`smtp_status`]).
+const SMTP_HOST_KEY: &str = "smtp_host";
+const SMTP_PORT_KEY: &str = "smtp_port";
+const SMTP_USERNAME_KEY: &str = "smtp_username";
+const SMTP_PASSWORD_KEY: &str = "smtp_password";
+const SMTP_FROM_EMAIL_KEY: &str = "smtp_from_email";
+const SMTP_SECURITY_KEY: &str = "smtp_security";
 
 /// Errors returned by the settings data layer.
 #[derive(Debug, thiserror::Error)]
@@ -373,6 +387,229 @@ pub async fn seed_hardcover_key_from_env(pool: &SqlitePool) -> Result<(), Settin
         if !env_key.trim().is_empty() {
             set_hardcover_api_key(pool, Some(&env_key)).await?;
         }
+    }
+    Ok(())
+}
+
+/// Fully-resolved SMTP config used by the F4.3 send path (`crate::kindle`).
+/// Server-only — carries the raw password, so it never crosses the wire; the
+/// UI sees the masked [`SmtpConfigStatus`] instead.
+#[derive(Clone)]
+pub struct SmtpConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub from_email: String,
+    pub security: SmtpSecurity,
+}
+
+/// Read one raw `settings` value, treating blank as absent.
+async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>, SettingsError> {
+    Ok(
+        sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
+            .bind(key)
+            .fetch_optional(pool)
+            .await?
+            .filter(|s| !s.trim().is_empty()),
+    )
+}
+
+/// Read the saved SMTP config from `settings`, or `None` when the required
+/// fields (host + from-email) aren't both present. Includes the raw password;
+/// callers serving status to a client MUST use [`smtp_status`] instead.
+pub async fn get_smtp_config(pool: &SqlitePool) -> Result<Option<SmtpConfig>, SettingsError> {
+    let (Some(host), Some(from_email)) = (
+        get_setting(pool, SMTP_HOST_KEY).await?,
+        get_setting(pool, SMTP_FROM_EMAIL_KEY).await?,
+    ) else {
+        return Ok(None);
+    };
+    Ok(Some(SmtpConfig {
+        host,
+        port: smtp_port_or_default(get_setting(pool, SMTP_PORT_KEY).await?.as_deref()),
+        username: get_setting(pool, SMTP_USERNAME_KEY)
+            .await?
+            .unwrap_or_default(),
+        password: get_setting(pool, SMTP_PASSWORD_KEY)
+            .await?
+            .unwrap_or_default(),
+        from_email,
+        security: SmtpSecurity::from_str_or_default(
+            &get_setting(pool, SMTP_SECURITY_KEY)
+                .await?
+                .unwrap_or_default(),
+        ),
+    }))
+}
+
+/// Parse a stored/env SMTP port, defaulting to 587 (STARTTLS submission) for a
+/// missing or unparseable value.
+fn smtp_port_or_default(raw: Option<&str>) -> u16 {
+    raw.and_then(|s| s.trim().parse().ok()).unwrap_or(587)
+}
+
+/// Persist the SMTP config from an admin request, validating each field before
+/// the write. A `password` of `None` preserves the stored secret (so an admin
+/// can edit the host without re-typing it); `Some("")` clears it. Host, port,
+/// username, from-email, and security are always overwritten with the request
+/// values.
+pub async fn set_smtp_config(
+    pool: &SqlitePool,
+    update: &SmtpConfigUpdate,
+) -> Result<(), SettingsError> {
+    let host = update.host.trim();
+    let from_email = update.from_email.trim();
+    let username = update.username.trim();
+    if host.is_empty() || host.len() > SMTP_FIELD_MAX_LEN {
+        return Err(SettingsError::Validation(format!(
+            "smtp host must be 1..={SMTP_FIELD_MAX_LEN} bytes"
+        )));
+    }
+    // `port` is a `u16`, so the upper bound is free; reject 0 explicitly so a
+    // never-connectable config can't be persisted (matches the UI's 1..=65535).
+    if update.port == 0 {
+        return Err(SettingsError::Validation(
+            "smtp port must be 1..=65535".to_string(),
+        ));
+    }
+    if username.len() > SMTP_FIELD_MAX_LEN {
+        return Err(SettingsError::Validation(format!(
+            "smtp username exceeds {SMTP_FIELD_MAX_LEN} bytes"
+        )));
+    }
+    if !is_plausible_email(from_email) {
+        return Err(SettingsError::Validation(
+            "smtp from-email is not a valid email address".to_string(),
+        ));
+    }
+    if let Some(pw) = &update.password {
+        if pw.len() > SMTP_PASSWORD_MAX_LEN {
+            return Err(SettingsError::Validation(format!(
+                "smtp password exceeds {SMTP_PASSWORD_MAX_LEN} bytes"
+            )));
+        }
+    }
+
+    let mut tx = pool.begin().await?;
+    upsert_or_clear(&mut tx, SMTP_HOST_KEY, Some(host)).await?;
+    upsert_or_clear(&mut tx, SMTP_PORT_KEY, Some(&update.port.to_string())).await?;
+    upsert_or_clear(&mut tx, SMTP_USERNAME_KEY, Some(username)).await?;
+    upsert_or_clear(&mut tx, SMTP_FROM_EMAIL_KEY, Some(from_email)).await?;
+    upsert_or_clear(&mut tx, SMTP_SECURITY_KEY, Some(update.security.as_str())).await?;
+    // `None` preserves the existing password row; `Some(v)` (incl. empty) sets
+    // or clears it.
+    if let Some(pw) = &update.password {
+        upsert_or_clear(&mut tx, SMTP_PASSWORD_KEY, Some(pw.as_str())).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Delete every SMTP `settings` row (admin "Clear" action).
+pub async fn clear_smtp_config(pool: &SqlitePool) -> Result<(), SettingsError> {
+    let mut tx = pool.begin().await?;
+    for key in [
+        SMTP_HOST_KEY,
+        SMTP_PORT_KEY,
+        SMTP_USERNAME_KEY,
+        SMTP_PASSWORD_KEY,
+        SMTP_FROM_EMAIL_KEY,
+        SMTP_SECURITY_KEY,
+    ] {
+        upsert_or_clear(&mut tx, key, None).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The effective SMTP config: the saved settings value wins; the `SMTP_*` env
+/// vars are the fallback when nothing is saved. Returns `None` (feature
+/// disabled) when neither source has the required host + from-email.
+pub async fn effective_smtp_config(pool: &SqlitePool) -> Result<Option<SmtpConfig>, SettingsError> {
+    if let Some(saved) = get_smtp_config(pool).await? {
+        return Ok(Some(saved));
+    }
+    Ok(smtp_config_from_env())
+}
+
+/// Assemble an [`SmtpConfig`] from `SMTP_*` env vars, or `None` when host /
+/// from-email aren't both set. Mirrors the settings-row precedence used by
+/// [`get_smtp_config`].
+fn smtp_config_from_env() -> Option<SmtpConfig> {
+    let host = non_empty_env("SMTP_HOST")?;
+    let from_email = non_empty_env("SMTP_FROM_EMAIL")?;
+    Some(SmtpConfig {
+        host,
+        port: smtp_port_or_default(non_empty_env("SMTP_PORT").as_deref()),
+        username: non_empty_env("SMTP_USERNAME").unwrap_or_default(),
+        password: non_empty_env("SMTP_PASSWORD").unwrap_or_default(),
+        from_email,
+        security: SmtpSecurity::from_str_or_default(
+            &non_empty_env("SMTP_SECURITY").unwrap_or_default(),
+        ),
+    })
+}
+
+/// Read a trimmed, non-empty env var, or `None`.
+fn non_empty_env(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Masked status of the server-wide SMTP config: saved settings win
+/// (`source = "settings"`), then `SMTP_*` env vars (`source = "env"`), else
+/// unset (`source = "none"`). The password is only ever returned masked.
+pub async fn smtp_status(pool: &SqlitePool) -> Result<SmtpConfigStatus, SettingsError> {
+    let (config, source) = match get_smtp_config(pool).await? {
+        Some(c) => (Some(c), "settings"),
+        None => match smtp_config_from_env() {
+            Some(c) => (Some(c), "env"),
+            None => (None, "none"),
+        },
+    };
+    let Some(c) = config else {
+        return Ok(SmtpConfigStatus {
+            source: "none".to_string(),
+            ..Default::default()
+        });
+    };
+    Ok(SmtpConfigStatus {
+        configured: true,
+        host: Some(c.host),
+        port: Some(c.port),
+        username: Some(c.username).filter(|s| !s.is_empty()),
+        from_email: Some(c.from_email),
+        security: c.security,
+        password_masked: Some(c.password)
+            .filter(|s| !s.is_empty())
+            .map(|p| mask_key(&p)),
+        source: source.to_string(),
+    })
+}
+
+/// Boot hook: seed the SMTP config from `SMTP_*` env vars **only** when no host
+/// is already saved, so the env vars work out of the box without clobbering a
+/// config set through Settings on every restart (settings wins).
+pub async fn seed_smtp_from_env(pool: &SqlitePool) -> Result<(), SettingsError> {
+    if get_setting(pool, SMTP_HOST_KEY).await?.is_some() {
+        return Ok(());
+    }
+    if let Some(config) = smtp_config_from_env() {
+        set_smtp_config(
+            pool,
+            &SmtpConfigUpdate {
+                host: config.host,
+                port: config.port,
+                username: config.username,
+                from_email: config.from_email,
+                security: config.security,
+                password: Some(config.password),
+            },
+        )
+        .await?;
     }
     Ok(())
 }

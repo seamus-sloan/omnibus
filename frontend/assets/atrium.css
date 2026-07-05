@@ -746,6 +746,37 @@ body.atrium,
 }
 .bd-cta-row .btn[disabled] { opacity: 0.65; cursor: not-allowed; }
 
+/* Hero "Export" dropdown — trigger + anchored menu. Mirrors the user-menu
+   scrim/panel/row pattern (`.um-*`) so the two dropdowns read the same. */
+.bd-export { position: relative; display: inline-flex; }
+.bd-export-trigger { display: inline-flex; align-items: center; gap: 8px; }
+.bd-export-caret { font-size: 10px; line-height: 1; color: var(--ink-2); }
+.bd-export-scrim {
+  position: fixed; inset: 0; z-index: 60;
+  background: transparent; cursor: default;
+}
+.bd-export-panel {
+  position: absolute; top: calc(100% + 8px); left: 0;
+  min-width: 220px; z-index: 61;
+  background: var(--bg-1); border: 1px solid var(--line-2);
+  border-radius: 12px; padding: 6px;
+  display: flex; flex-direction: column; gap: 2px;
+  box-shadow:
+    0 18px 40px color-mix(in oklch, black 55%, transparent),
+    0 2px 0 color-mix(in oklch, black 25%, transparent);
+}
+.bd-export-item {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; height: auto; padding: 9px 10px;
+  border: none; border-radius: 8px;
+  background: transparent; color: var(--ink-1);
+  font: inherit; font-size: 13px; text-align: left; text-decoration: none;
+  cursor: pointer;
+}
+.bd-export-item:hover:not([disabled]) { background: var(--bg-2); color: var(--ink-0); }
+.bd-export-item[disabled] { opacity: .5; cursor: not-allowed; pointer-events: none; }
+.bd-export-item-label { flex: 1 1 auto; }
+
 .bd-progress-meta { margin-top: 22px; max-width: 460px; }
 .bd-progress-line {
   display: flex; justify-content: space-between;
@@ -3653,11 +3684,14 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .settings-field input[type="text"],
 .settings-field input[type="password"],
 .settings-field input[type="email"],
+.settings-field input[type="number"],
+.settings-field select,
 .settings-input {
   background: var(--bg-1);
   border: 1px solid var(--line-2);
   border-radius: 8px;
   color: var(--ink-0);
+  font: inherit;
   font-size: 0.95rem;
   padding: 0.55rem 0.75rem;
   width: 100%;
@@ -3665,6 +3699,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .settings-field input[type="text"]:focus,
 .settings-field input[type="password"]:focus,
 .settings-field input[type="email"]:focus,
+.settings-field input[type="number"]:focus,
+.settings-field select:focus,
 .settings-input:focus {
   outline: none;
   border-color: var(--accent);
@@ -3673,6 +3709,17 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .settings-status { font-size: 0.875rem; margin-top: 0.5rem; min-height: 1.2em; }
 .settings-status.success, .success-msg { color: #34d399; }
 .settings-status.error, .error { color: #f87171; font-size: 0.85rem; }
+
+/* F4.3 Send-to-Kindle result toast — fixed bottom-center, mirrors
+   .bd-merge-toast so action feedback is consistent across the book page. */
+.kindle-toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  z-index: 110; display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.35);
+}
+.kindle-toast-msg { font-size: 0.9rem; }
+.kindle-toast-msg.success { color: #34d399; }
+.kindle-toast-msg.error { color: #f87171; }
 
 .library-card { margin-top: 1.25rem; }
 .library-card h2, .library-title {

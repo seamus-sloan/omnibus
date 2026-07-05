@@ -677,3 +677,81 @@ async fn poisoned_completions_lock_recovers_instead_of_panicking() {
         other => panic!("expected Ok after poison recovery, got {other:?}"),
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn send_to_kindle_task_fails_when_smtp_unconfigured() {
+    // Route through the real dispatch arm: with no SMTP config the handler
+    // returns a Failed outcome carrying the "not configured" message.
+    let _env =
+        crate::test_support::EnvVarGuard::set("SMTP_HOST", None).also_set("SMTP_FROM_EMAIL", None);
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::SendToKindle {
+        book_id: 1,
+        book_file_id: None,
+        recipient_email: "reader@kindle.com".into(),
+    });
+    match w.await_completion(id).await {
+        TaskOutcome::Err(msg) => assert!(msg.contains("not configured"), "got: {msg}"),
+        other => panic!("expected Err, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_state_reports_running_then_terminal() {
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::Test {
+        tag: "peek",
+        latency_ms: 60,
+        resource: None,
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+
+    // Seeded as Running the instant `post` returns, before the task finishes.
+    assert!(
+        matches!(w.task_state(id), Some(ProgressState::Running { .. })),
+        "expected Running immediately after post, got {:?}",
+        w.task_state(id)
+    );
+
+    match w.await_completion(id).await {
+        TaskOutcome::Ok => {}
+        other => panic!("expected Ok, got {other:?}"),
+    }
+    assert!(
+        matches!(w.task_state(id), Some(ProgressState::Done { .. })),
+        "expected Done after completion, got {:?}",
+        w.task_state(id)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_state_is_none_for_unknown_id() {
+    let w = make_worker_default(pool().await);
+    assert!(w.task_state(9999).is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn owned_task_state_scopes_reads_to_the_owner() {
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::Test {
+        tag: "owned",
+        latency_ms: 60,
+        resource: None,
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+    w.set_task_owner(id, 42);
+
+    // The owner sees the state; other users and unowned ids see nothing.
+    assert!(w.owned_task_state(id, 42).is_some());
+    assert!(
+        w.owned_task_state(id, 7).is_none(),
+        "a non-owner must not read another user's task state"
+    );
+    assert!(w.owned_task_state(9999, 42).is_none());
+
+    let _ = w.await_completion(id).await;
+}

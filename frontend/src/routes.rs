@@ -67,9 +67,9 @@ pub fn Settings() -> Element {
     }
 }
 
-/// Route target for `/account` — the mobile "You" tab. Wraps [`AccountPage`]
-/// in the platform screen layout; the page body is mobile-only and renders
-/// empty on other targets.
+/// Route target for `/account` — wraps [`AccountPage`] in the platform screen
+/// layout. Web renders the Send-to-Kindle destination form; the native shell
+/// renders the mobile "You" tab.
 #[component]
 pub fn Account() -> Element {
     rsx! {

@@ -29,6 +29,7 @@ mod ebooks;
 mod health;
 mod highlights;
 mod journals;
+mod kindle;
 mod overrides;
 mod progress;
 mod ratings;
@@ -73,6 +74,79 @@ fn internal<E: std::fmt::Display>(context: &'static str, e: E) -> Response {
         "internal server error",
     )
         .into_response()
+}
+
+/// Serve a file from disk as a browser download, streaming via `ServeFile`
+/// (so large audiobook files aren't buffered into memory) and forcing
+/// `Content-Disposition: attachment` with the on-disk basename as the
+/// suggested filename. `content_type` overrides the guessed MIME. The
+/// disposition/content-type headers are only attached to a real file
+/// response (200/206); a 404 from `ServeFile` passes through untouched.
+async fn serve_download(
+    req: axum::extract::Request,
+    path: &std::path::Path,
+    content_type: &str,
+) -> Response {
+    use tower::ServiceExt;
+
+    let serve = tower_http::services::ServeFile::new(path);
+    let res = match serve.oneshot(req).await {
+        Ok(r) => r,
+        Err(e) => return internal("serve download", e),
+    };
+    let (mut parts, body) = res.into_parts();
+    let ok = matches!(
+        parts.status,
+        axum::http::StatusCode::OK | axum::http::StatusCode::PARTIAL_CONTENT
+    );
+    if ok {
+        if let Ok(v) = axum::http::HeaderValue::from_str(content_type) {
+            parts.headers.insert(axum::http::header::CONTENT_TYPE, v);
+        }
+        let filename = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("download");
+        if let Ok(v) = axum::http::HeaderValue::from_str(&content_disposition_attachment(filename))
+        {
+            parts
+                .headers
+                .insert(axum::http::header::CONTENT_DISPOSITION, v);
+        }
+    }
+    Response::from_parts(parts, axum::body::Body::new(body))
+}
+
+/// Build a `Content-Disposition: attachment` value for `filename`.
+///
+/// Emits both a sanitized ASCII `filename="…"` fallback (control chars,
+/// quotes, backslashes, and path separators replaced with `_`) and an
+/// RFC 5987 `filename*=UTF-8''…` form so non-ASCII titles survive in
+/// browsers that honour it, without pulling in a percent-encoding crate.
+fn content_disposition_attachment(filename: &str) -> String {
+    let ascii: String = filename
+        .chars()
+        .map(|c| {
+            if c.is_ascii() && !c.is_ascii_control() && !matches!(c, '"' | '\\' | '/') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let mut encoded = String::new();
+    for b in filename.as_bytes() {
+        // Leave only RFC 3986 "unreserved" bytes (ALPHA / DIGIT / - . _ ~)
+        // unescaped — a strict subset of RFC 5987's `attr-char`, so
+        // %-encoding everything else is always valid (just more conservative).
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(*b as char);
+        } else {
+            encoded.push('%');
+            encoded.push_str(&format!("{b:02X}"));
+        }
+    }
+    format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{encoded}")
 }
 
 /// Shared axum router state — SQLite pool, worker handle, SSRF guard config.
@@ -184,6 +258,14 @@ fn content_routes() -> Router<AppState> {
         .route("/api/ebooks/{uuid}", get(ebooks::get_ebook_by_uuid))
         .route("/api/ebooks/{uuid}/file", get(ebooks::get_ebook_file))
         .route("/api/ebooks/{uuid}/kepub", get(ebooks::get_ebook_kepub))
+        .route(
+            "/api/ebooks/{uuid}/download",
+            get(ebooks::get_ebook_download),
+        )
+        .route(
+            "/api/audiobooks/{uuid}/download",
+            get(audiobooks::get_audiobook_download),
+        )
         .route(
             "/api/audiobooks/{uuid}/manifest",
             get(audiobooks::get_audiobook_manifest),
@@ -330,6 +412,15 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/hardcover-key",
             get(suggestions::get_hardcover_key).post(suggestions::post_hardcover_key),
         )
+        // F4.3 Send-to-Kindle — mobile-facing REST. Web hits the analogous
+        // `/api/rpc/kindle/send`, `/api/rpc/account/kindle-email`, and
+        // `/api/rpc/smtp*` server fns.
+        .route("/api/kindle/send", post(kindle::post_send))
+        .route("/api/kindle/send/status", get(kindle::get_send_status))
+        .route("/api/account/kindle-email", post(kindle::post_kindle_email))
+        .route("/api/smtp", get(kindle::get_smtp).post(kindle::post_smtp))
+        .route("/api/smtp/clear", post(kindle::post_smtp_clear))
+        .route("/api/smtp/test", post(kindle::post_smtp_test))
 }
 
 /// Sub-router for `/api/search/*` carrying its own per-IP rate-limit layer.

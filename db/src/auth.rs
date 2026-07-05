@@ -28,8 +28,8 @@ pub use token::{
     SESSION_COOKIE_NAME_HOST_PREFIXED,
 };
 pub use users::{
-    create_user, get_user_by_id, get_user_by_username, promote_to_admin, registration_enabled,
-    set_registration_enabled,
+    create_user, get_kindle_email, get_user_by_id, get_user_by_username, promote_to_admin,
+    registration_enabled, set_kindle_email, set_registration_enabled,
 };
 
 use sqlx::Row;
@@ -81,6 +81,8 @@ pub struct User {
     pub can_upload: bool,
     pub can_edit: bool,
     pub can_download: bool,
+    /// F4.3 Send-to-Kindle destination, or `None` when unconfigured.
+    pub kindle_email: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,6 +137,7 @@ pub(crate) fn row_to_user(row: &sqlx::sqlite::SqliteRow) -> User {
         can_upload: row.get::<i64, _>("can_upload") != 0,
         can_edit: row.get::<i64, _>("can_edit") != 0,
         can_download: row.get::<i64, _>("can_download") != 0,
+        kindle_email: row.get("kindle_email"),
     }
 }
 
