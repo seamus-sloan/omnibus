@@ -33,8 +33,8 @@ pub const LIST_SHELVES_LIMIT: i64 = 500;
 /// Every shelf `viewer_id` can see: own + public, or all when `is_admin`.
 /// Each row carries its live book count (smart = rule match, manual = row
 /// count). Rule loads and manual counts are batched across the whole visible
-/// set (one `WHERE id IN (...)` / `GROUP BY` query each) rather than issued
-/// per row; smart-shelf counts still run one query per shelf since each
+/// set (one `WHERE shelf_id IN (...)` / `GROUP BY` query each) rather than
+/// issued per row; smart-shelf counts still run one query per shelf since each
 /// shelf's membership predicate is unique and can't be folded into a single
 /// `GROUP BY`.
 pub async fn list_visible_shelves(
@@ -229,9 +229,11 @@ async fn load_rules(pool: &SqlitePool, shelf_id: i64) -> Result<Vec<ShelfRule>, 
     rows.iter().map(row_to_rule).collect()
 }
 
-/// Load rules for every shelf id in `shelf_ids` in one query, grouped by
-/// shelf id in stored order — avoids the per-row `load_rules` call
-/// `list_visible_shelves` used to make for each smart shelf.
+/// Load rules for every shelf id in `shelf_ids` in one query, keyed by shelf
+/// id in the returned map. Each shelf's own `Vec<ShelfRule>` preserves stored
+/// order (`ORDER BY ... position, id`); the map itself has no iteration
+/// order. Avoids the per-row `load_rules` call `list_visible_shelves` used to
+/// make for each smart shelf.
 async fn load_rules_batch(
     pool: &SqlitePool,
     shelf_ids: &[i64],
