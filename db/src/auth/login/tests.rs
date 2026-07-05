@@ -84,3 +84,22 @@ async fn login_unknown_user_returns_invalid_credentials() {
         .unwrap_err();
     assert!(matches!(err, AuthError::InvalidCredentials));
 }
+
+#[tokio::test]
+async fn login_corrupted_password_hash_returns_crypto_error() {
+    // Regression: a corrupted `password_hash` column (e.g. disk
+    // corruption, a bad migration) must surface as a deliberate
+    // `Crypto` error rather than panicking or silently granting access.
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+        .bind("not-a-valid-phc-string")
+        .bind(u.id)
+        .execute(&p)
+        .await
+        .unwrap();
+    let err = verify_login(&p, "alice", "hunter2-real-long")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::Crypto(_)));
+}
