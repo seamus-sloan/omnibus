@@ -4520,8 +4520,12 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
  * same tree in a WebView, so this breakpoint is what the phone app sees.
  * Adapts the desktop chrome/overlays to the mobile handoff: slim bars, no
  * gutter buttons, full-width drawers, a bottom-sheet selection popover, and
- * a full-width quote card. */
-@media (max-width: 600px) {
+ * a full-width quote card. The reader renders bare (no `.app-shell`, no tab
+ * bar), so these plain selectors only ever match its own chrome. This is the
+ * single reader-responsive block — keep new phone rules here rather than a
+ * second `@media` later in the file, whose equal specificity would win the
+ * cascade and silently override these. */
+@media (max-width: 480px) {
   .rd-top, .rd-bottom { padding: 0 14px; gap: 8px; }
   .rd-title-book { font-size: 15px; }
   .rd-title-sep { margin: 0 6px; }
@@ -5458,15 +5462,4 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 @media (max-width: 560px) {
   /* Metadata edit: single-column fields at phone width. */
   .me-field-grid { grid-template-columns: 1fr; }
-}
-
-/* ── Immersive reader: full-width drawers/panels on a phone ────────
-   The reader renders bare (no `.app-shell`, no tab bar), so these plain
-   selectors apply only to its own chrome. The 380–432px fixed panels
-   overflow a phone; cap them to the viewport. */
-@media (max-width: 480px) {
-  .rd-drawer { width: min(380px, 100vw); }
-  .rd-quote-drawer { width: 100vw; }
-  .rd-aa-panel { width: min(320px, calc(100vw - 24px)); right: 12px; }
-  .rd-note-composer { width: min(360px, calc(100vw - 24px)); }
 }
