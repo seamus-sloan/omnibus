@@ -3638,6 +3638,27 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .m-auth-body { width: 100%; }
 .m-auth-foot { text-align: center; margin-top: 22px; font-size: 10px; letter-spacing: 0.1em; color: var(--ink-3); }
 
+/* Connected-to bar on the login screen — which server this login targets,
+   plus a Back affordance returning to the Connect screen. */
+.m-auth-connected { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+.m-auth-back {
+  flex: 0 0 auto; height: 32px; padding: 0 12px; border-radius: 8px;
+  background: var(--bg-1); border: 1px solid var(--line-2); color: var(--ink-1);
+  font: inherit; font-size: 12px; cursor: pointer;
+}
+.m-auth-connected-to {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 32px;
+  padding: 0 12px; background: var(--bg-1); border: 1px solid var(--line-2);
+  border-radius: 999px; overflow: hidden;
+}
+.m-auth-connected-dot {
+  width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ok) 30%, transparent);
+}
+.m-auth-connected-label {
+  font-size: 11.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
 /* Mobile book detail */
 .m-bd { display: flex; flex-direction: column; }
 .m-bd-hero {

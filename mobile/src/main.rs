@@ -1,12 +1,16 @@
 //! Omnibus mobile — thin Dioxus Native shell.
 //!
 //! All UI lives in the `omnibus_frontend` crate under `features = ["mobile"]`.
-//! This binary only wires platform launch, provides the hardcoded server URL
-//! via context, hydrates the bearer-token store from disk on launch, and
+//! This binary only wires platform launch, seeds the reactive server-URL
+//! context from persisted state (empty on first run → the pre-login Connect
+//! screen), hydrates the bearer-token store from disk on launch, and
 //! delegates to the shared `App` component.
 
 use dioxus::prelude::*;
-use omnibus_frontend::{data::token_store, data::ServerUrl, App};
+use omnibus_frontend::{
+    data::{server_url_store, token_store, ServerUrl},
+    App,
+};
 
 fn main() {
     // Pull any persisted bearer token into the in-memory store before the
@@ -22,6 +26,8 @@ fn main() {
 
 #[component]
 fn Root() -> Element {
-    use_context_provider(|| ServerUrl("http://127.0.0.1:3000".to_string()));
+    // Seed the reactive server-URL signal from disk. Empty when nothing is
+    // saved, which routes the user to the Connect screen on first launch.
+    use_context_provider(|| ServerUrl(Signal::new(server_url_store::load().unwrap_or_default())));
     rsx! { App {} }
 }

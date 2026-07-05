@@ -133,13 +133,20 @@ fn ScreenLayout(children: Element) -> Element {
         }
     });
 
+    // Single prioritized redirect: an unconfigured server URL sends the user
+    // to the Connect screen first, then an absent token to Login. Reading
+    // `use_server_url()` inside the effect subscribes the effect to the
+    // context signal, so a URL set on the Connect screen re-runs this.
+    // `ServerConnect` / `Login` are unguarded, so neither redirect loops.
     use_effect(move || {
-        if !authed() {
+        if use_server_url().is_empty() {
+            nav.replace(Route::ServerConnect {});
+        } else if !authed() {
             nav.replace(Route::Login {});
         }
     });
 
-    if !authed() {
+    if use_server_url().is_empty() || !authed() {
         return rsx! { div { class: "screen" } };
     }
     rsx! {

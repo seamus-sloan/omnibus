@@ -45,6 +45,8 @@ pub enum Route {
     ShelfDetail { id: i64 },
     #[route("/search/:query")]
     Search { query: String },
+    #[route("/connect")]
+    ServerConnect {},
     #[route("/login")]
     Login {},
     #[route("/register")]
@@ -125,6 +127,14 @@ pub fn BookListen(uuid: String) -> Element {
     rsx! {
         BookListenPage { uuid }
     }
+}
+
+/// Route target for `/connect` — the mobile pre-login server-URL entry
+/// screen. Rendered without [`ScreenLayout`] (like [`Login`]) so it's
+/// reachable before authentication; on web it redirects to `/`.
+#[component]
+pub fn ServerConnect() -> Element {
+    rsx! { ServerConnectPage {} }
 }
 
 /// Route target for `/login` — credential entry form. Rendered without the
