@@ -75,6 +75,7 @@ fn FormatRow(kind: FormatKind, uuid: String) -> Element {
                         // The cfg lives at the helper definition (rule 07:
                         // hydration parity — keep cfg gates out of rsx).
                         {read_book_action(&uuid)}
+                        {send_to_kobo_action(&uuid)}
                         button {
                             class: "btn",
                             disabled: true,
@@ -113,6 +114,13 @@ fn MultiFileRow(kind: FormatKind, uuid: String, files: Vec<BookFileInfo>) -> Ele
             "data-testid": "{testid}",
             span { class: "format-badge", "data-testid": "format-badge",
                 "{label} ({count} files)"
+            }
+            // Per-file Read/Listen live in the sub-rows below, but "Send to
+            // Kobo" is book-level: the KEPUB endpoint converts the primary
+            // (lowest-ordinal) EPUB, so a multi-EPUB book still gets the CTA
+            // here. Per-file KEPUB is a deferred follow-up.
+            if kind == FormatKind::Epub {
+                div { class: "format-actions", {send_to_kobo_action(&uuid)} }
             }
         }
         for file in &files {
@@ -182,6 +190,39 @@ fn read_book_action(_uuid: &str) -> Element {
             title: "Reading on mobile coming soon",
             "data-testid": "action-read",
             "Read"
+        }
+    }
+}
+
+/// F4.1 "Send to Kobo" CTA: downloads the book as KEPUB (`GET
+/// /api/ebooks/:uuid/kepub`) for USB sideload onto a Kobo. Web/SSR renders a
+/// plain download `<a>` — a full-navigation download carries the session
+/// cookie, so it authenticates like the reader's file fetch. Mobile renders a
+/// disabled placeholder (the copy-over-USB flow is desktop-only).
+#[cfg(not(feature = "mobile"))]
+fn send_to_kobo_action(uuid: &str) -> Element {
+    let href = format!("/api/ebooks/{uuid}/kepub");
+    rsx! {
+        a {
+            href: "{href}",
+            download: "",
+            class: "btn",
+            title: "Download as KEPUB to copy onto a Kobo over USB",
+            "data-testid": "action-kobo",
+            "Send to Kobo"
+        }
+    }
+}
+
+#[cfg(feature = "mobile")]
+fn send_to_kobo_action(_uuid: &str) -> Element {
+    rsx! {
+        button {
+            class: "btn",
+            disabled: true,
+            title: "Send-to-Kobo coming soon",
+            "data-testid": "action-kobo",
+            "Send to Kobo"
         }
     }
 }

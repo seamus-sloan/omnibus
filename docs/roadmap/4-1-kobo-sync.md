@@ -4,6 +4,20 @@
 
 Implement the `/kobo/v1/*` protocol natively, including EPUB → KEPUB conversion via kepubify.
 
+> [!NOTE]
+> **Delivery: two stages.** This initiative ships in two parts to isolate the
+> wireless protocol's annotation-loss hazard (see [Risks](#risks)):
+>
+> - **Stage 1 — wired KEPUB sideload (shipped).** A **Send to Kobo** button on
+>   each book downloads the book as KEPUB (via kepubify) to copy onto the device
+>   over USB. No tokens, no protocol, no wireless sync — and **no data-loss
+>   risk**, since a USB file copy never touches the device's annotation channel.
+>   User guide: [docs/kobo.md](../kobo.md). This is the KEPUB **Sub-scope** below,
+>   promoted to ship first.
+> - **Stage 2 — wireless sync (deferred).** The `/kobo/v1/*` protocol described
+>   in the rest of this page. Deferred to a later initiative; settled design
+>   decisions are captured under [Deferred: wireless sync](#deferred-wireless-sync).
+
 **Direction & scope.** This is the **Omnibus → Kobo** half: serving books to the device and round-tripping *reading state* (position, read status, statistics). It does **not** bring user annotations (highlights/notes/quotes) back from the device — the Kobo wireless protocol has no annotation channel (see [Technical considerations](#technical-considerations)). Pulling Kobo-side annotations into Omnibus is a separate USB-import initiative: [F4.4 Kobo annotation import](4-4-kobo-annotation-import.md).
 
 ## Objective
@@ -44,6 +58,42 @@ Kobo devices render plain EPUB but with measurably slower page turns than KEPUB;
 - Kobo protocol is undocumented. Calibre-Web's implementation is our reference; scope for v1.0 is "parity with Calibre-Web minus the 100-item cap."
 - kepubify absence degrades gracefully; not a blocker.
 - **⚠️ Annotation data-loss hazard.** A Kobo expects an annotation channel when syncing (it has one against Kobo's own cloud). Pointing the device at a self-hosted server that doesn't speak that channel can make the Kobo **delete its own local highlights/notes** ([#2610](https://github.com/janeczku/calibre-web/issues/2610), [#1783](https://github.com/janeczku/calibre-web/issues/1783)). Mitigations: warn the user that first sync may clear on-device annotations, and recommend running the [F4.4 USB import](4-4-kobo-annotation-import.md) **before** the device's first wireless sync. Never claim to preserve device annotations we don't store.
+
+## Deferred: wireless sync
+
+Stage 1 (wired KEPUB sideload) shipped. The wireless `/kobo/v1/*` protocol above
+is deferred to a later initiative. These design decisions are settled and should
+be honored when it's picked up:
+
+- **Scope: per-shelf opt-in — never whole-library.** Mark specific
+  [F3.1 shelves](3-1-shelves.md) as "sync to Kobo"; only those books sync. A
+  single-book shelf covers the "just one book" case. This matches Calibre-Web's
+  sync-selected-shelves model.
+- **Device auth token: persistent, re-viewable URL.** A per-user token in the URL
+  path (`/kobo/<TOKEN>/v1/…`), which the user pastes as the Kobo's `api_endpoint`
+  in `.kobo/Kobo/Kobo eReader.conf`. Stored re-viewably (Calibre-Web style) with a
+  Regenerate action, scoped per-user and revocable. Table: `kobo_auth_tokens`.
+  Sync-cursor state (`x-kobo-synctoken`) in `kobo_sync_tokens`, keyed on user.
+- **Store endpoints: stub locally, never proxy** to `storeapi.kobo.com` — keeps
+  the server self-hosted and private. `v1/initialization` is the one load-bearing
+  non-stub (resources map pointing at this server).
+- **Read status: new `book_read_state(user_id, book_uuid, read_status, percent)`
+  sibling table** (there is no read-completion column today) to round-trip Kobo
+  `StatusInfo`; position routes to `reading_progress` via `upsert_progress`.
+- **Streaming sync, no 100-item cap** (`axum::body::Body::from_stream` over a
+  keyset cursor).
+- **⚠️ Data-loss warning UX is mandatory before exposing any device URL:** the
+  settings card that shows the URL must render the "first sync may erase your
+  Kobo's highlights" warning in the same component, and the docs must recommend
+  the [F4.4 USB import](4-4-kobo-annotation-import.md) *before* first wireless
+  sync.
+- **Endpoint contract tests** replay the device sequence (`initialization →
+  library/sync → download → PUT state`) at the HTTP layer (Playwright can't drive
+  a Kobo), seeded from a golden fixture captured from a real device; DTOs ported
+  field-for-field from a pinned Calibre-Web revision. A real-device smoke test
+  gates advertising the URL.
+- **Release labels:** the wireless PRs add migrations → tag each migration-bearing
+  PR `minor version`.
 
 ---
 
