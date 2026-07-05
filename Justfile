@@ -69,3 +69,14 @@ lint: lint-css
 
 # Lint then test — the pre-push gate referenced by rule 99.
 check: lint test
+
+# Inject the Omnibus launcher icon into a built iOS `.app`. dx 0.7 installs no
+# iOS app icon and `[bundle] icon` only feeds the desktop bundlers
+# (DioxusLabs/dioxus#3685), so run this after `dx build --platform ios` and
+# before `simctl install`. Defaults to the debug simulator build; pass a path
+# to target another. Re-runnable/idempotent — see scripts/apply-ios-icon.sh.
+ios-icon app="":
+    nix develop .#mobile --command bash -ec '\
+        app="{{app}}"; \
+        [ -n "$app" ] || app="$CARGO_TARGET_DIR/dx/omnibus-mobile/debug/ios/OmnibusMobile.app"; \
+        scripts/apply-ios-icon.sh "$app" iphonesimulator'
