@@ -211,3 +211,53 @@ test("opens the reader from the book detail Read action", async ({ page, request
   await expect(page).toHaveURL(new RegExp(`/read/${uuid}$`));
   await expect(page.getByTestId("reader-viewer")).toBeVisible();
 });
+
+// The reader is one shared component: the native mobile shell renders the
+// same tree in a WebView, so the phone-width layout (F6.2 mobile ereader) is
+// verified here at a phone viewport. Chrome is SSR markup, robust to the
+// epub.js render not painting headlessly.
+test.describe("mobile reader (phone viewport)", () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test("renders the mobile reader layout", async ({ page, request }) => {
+    const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+    await gotoReady(page, `/read/${uuid}`);
+
+    // Same chrome contract as desktop — the viewer and top tools stay present.
+    await expect(page.getByTestId("reader-viewer")).toBeVisible();
+    await expect(page.getByTestId("reader-back")).toBeVisible();
+    await expect(page.getByTestId("reader-toc")).toBeVisible();
+
+    // The circular page-turn gutters are suppressed on phone widths (mobile
+    // turns pages by swipe/tap; the buttons would sit over the prose).
+    await expect(page.getByTestId("reader-prev")).toBeHidden();
+    await expect(page.getByTestId("reader-next")).toBeHidden();
+  });
+
+  test("drawers and the display panel span the full width", async ({
+    page,
+    request,
+  }) => {
+    const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+    await gotoReady(page, `/read/${uuid}`);
+    await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+    // Contents drawer stretches edge to edge instead of a 380px side panel.
+    await page.getByTestId("reader-toc").click();
+    const drawer = page.getByTestId("reader-toc-drawer");
+    await expect(drawer).toBeVisible();
+    const drawerBox = await drawer.boundingBox();
+    expect(drawerBox, "toc drawer box").not.toBeNull();
+    expect(drawerBox!.width).toBeGreaterThan(370);
+    await page.keyboard.press("Escape");
+    await expect(drawer).toHaveCount(0);
+
+    // The Aa display panel becomes a sheet pinned under the top bar, not a
+    // 320px tool-anchored popover.
+    await page.getByTestId("reader-aa").click();
+    await expect(page.getByTestId("reader-font-increase")).toBeVisible();
+    const aaBox = await page.locator(".rd-aa-panel").boundingBox();
+    expect(aaBox, "aa panel box").not.toBeNull();
+    expect(aaBox!.width).toBeGreaterThan(340);
+  });
+});
