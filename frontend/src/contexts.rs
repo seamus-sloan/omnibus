@@ -100,8 +100,9 @@ pub fn use_current_user() -> CurrentUser {
 /// Derive `is_admin` from the app-wide [`CurrentUser`] context instead of an
 /// independent per-mount `/api/auth/me` fetch. Starts `false` so SSR and the
 /// first WASM paint agree (rule 07); only the web build wires the effect
-/// that flips it once the context resolves an admin user. Mobile/SSR stay at
-/// the default since `CurrentUser` isn't provided there.
+/// that flips it once the context resolves an admin user. Mobile stays at
+/// the default since `CurrentUser` isn't provided there; SSR has the context
+/// but it stays unresolved until the web client's boot effect runs post-mount.
 #[cfg_attr(not(feature = "web"), allow(unused_mut))]
 pub fn use_is_admin() -> Signal<bool> {
     let mut is_admin = use_signal(|| false);
