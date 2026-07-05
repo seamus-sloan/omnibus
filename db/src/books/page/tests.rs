@@ -167,6 +167,65 @@ async fn list_books_page_handles_null_sort_rows_at_first_page_boundary() {
 }
 
 #[tokio::test]
+async fn newest_added_orders_by_epoch_and_paginates_via_cursor() {
+    // `books.timestamp` is INTEGER unix-seconds (migration 0038); the axis
+    // formats it to fixed-width ISO so the keyset cursor round-trips it as text
+    // and still sorts chronologically. Distinct epochs + one-at-a-time paging
+    // exercise both the ordering and the cursor across page boundaries.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = insert_lib(&pool, "/lib").await;
+    let a = insert_book(&pool, lib, "A", Some("A"), None, None).await;
+    let b = insert_book(&pool, lib, "B", Some("B"), None, None).await;
+    let c = insert_book(&pool, lib, "C", Some("C"), None, None).await;
+    for (id, day) in [(a, "2020-01-01"), (b, "2022-06-15"), (c, "2024-12-31")] {
+        sqlx::query("UPDATE books SET timestamp = strftime('%s', ? || ' 00:00:00') WHERE id = ?")
+            .bind(day)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let f = ViewFilters::default();
+
+    // Newest first: c, b, a.
+    let page = list_books_page(
+        &pool,
+        &["/lib"],
+        SortKey::NewestAdded,
+        SortDir::Desc,
+        &f,
+        None,
+        50,
+    )
+    .await
+    .unwrap();
+    assert_eq!(ids(&page), vec![c, b, a]);
+
+    // Paging one at a time reproduces the same order with no gaps/dupes.
+    let mut seen = Vec::new();
+    let mut cursor: Option<PageCursor> = None;
+    loop {
+        let p = list_books_page(
+            &pool,
+            &["/lib"],
+            SortKey::NewestAdded,
+            SortDir::Desc,
+            &f,
+            cursor.as_ref(),
+            1,
+        )
+        .await
+        .unwrap();
+        seen.extend(ids(&p));
+        match p.next {
+            Some(n) => cursor = Some(n),
+            None => break,
+        }
+    }
+    assert_eq!(seen, vec![c, b, a]);
+}
+
+#[tokio::test]
 async fn list_books_page_breaks_sort_ties_by_id_deterministically() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let lib = insert_lib(&pool, "/lib").await;

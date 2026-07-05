@@ -236,14 +236,19 @@ pub async fn get_cover(
     Ok(result)
 }
 
-/// Return `strftime('%s', last_modified)` as epoch seconds for `book_id`,
-/// or `None` if the book does not exist.
+/// Return `books.last_modified` (INTEGER unix-seconds since migration 0038) for
+/// `book_id`, or `None` if the book does not exist. `last_modified` is nullable
+/// after the in-place 0038 conversion, so a row that somehow lacks one falls
+/// back to now — a bare `i64` decode of a NULL would error and 500 the thumbs
+/// endpoint; falling back keeps it serving and regenerates the stale thumbnail.
 pub async fn get_last_modified_epoch(
     pool: &SqlitePool,
     book_id: i64,
 ) -> Result<Option<i64>, CoversError> {
+    // `strftime` returns TEXT and a SELECT has no column affinity to coerce it,
+    // so CAST the fallback back to INTEGER for the `i64` decode.
     Ok(sqlx::query_scalar(
-        "SELECT CAST(strftime('%s', last_modified) AS INTEGER) FROM books WHERE id = ?",
+        "SELECT CAST(COALESCE(last_modified, strftime('%s','now')) AS INTEGER) FROM books WHERE id = ?",
     )
     .bind(book_id)
     .fetch_optional(pool)

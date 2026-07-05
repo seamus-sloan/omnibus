@@ -75,15 +75,15 @@ pub async fn get_author_photo(
     }
 }
 
-/// Look up just the cascade-state metadata (source + fetched_at) for an
-/// author. Used by the resolver to decide whether to skip resolution — a
+/// Look up just the cascade-state metadata (source + `fetched_at` unix-seconds)
+/// for an author. Used by the resolver to decide whether to skip resolution — a
 /// `'letter'` row prevents re-querying Open Library until an admin clears it
 /// via `delete_author_photo`.
 pub async fn author_photo_status(
     pool: &SqlitePool,
     author_id: i64,
-) -> Result<Option<(AuthorPhotoSource, String)>, AuthorPhotosDataError> {
-    let row: Option<(String, String)> =
+) -> Result<Option<(AuthorPhotoSource, i64)>, AuthorPhotosDataError> {
+    let row: Option<(String, i64)> =
         sqlx::query_as("SELECT source, fetched_at FROM author_photos WHERE author_id = ?")
             .bind(author_id)
             .fetch_optional(pool)
@@ -104,7 +104,7 @@ pub async fn upsert_author_photo(
 ) -> Result<(), AuthorPhotosDataError> {
     sqlx::query(
         "INSERT INTO author_photos (author_id, source, url, mime, bytes, fetched_at)
-              VALUES (?, ?, ?, ?, ?, datetime('now'))
+              VALUES (?, ?, ?, ?, ?, strftime('%s','now'))
          ON CONFLICT(author_id) DO UPDATE SET
               source     = excluded.source,
               url        = excluded.url,

@@ -7,6 +7,29 @@ use crate::test_support::{indexed, CoversTempDir};
 use omnibus_shared::MetadataOverrides;
 
 #[tokio::test]
+async fn get_last_modified_epoch_falls_back_to_now_when_column_null() {
+    // `books.last_modified` is nullable after 0038's in-place conversion; a bare
+    // `i64` decode of a NULL would error and 500 `/api/thumbs/*`. The COALESCE
+    // keeps it serving (and regenerates the stale thumb).
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sqlx::query("INSERT INTO scan_roots (id, path, display_name) VALUES (1, '/lib', 'Lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title, last_modified) \
+         VALUES ('bk', 'b', 1, '/lib/bk', 'Book', NULL) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let got = get_last_modified_epoch(&pool, id).await.unwrap();
+    assert!(matches!(got, Some(e) if e > 1_700_000_000), "got {got:?}");
+    // A missing book still yields None rather than a fabricated epoch.
+    assert_eq!(get_last_modified_epoch(&pool, 99_999).await.unwrap(), None);
+}
+
+#[tokio::test]
 async fn cover_returns_none_when_file_missing() {
     let _covers = CoversTempDir::new("missing");
     let pool = init_db("sqlite::memory:").await.unwrap();

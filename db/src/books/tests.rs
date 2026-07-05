@@ -22,6 +22,39 @@ use omnibus_shared::{Contributor, EbookMetadata, Identifier, MetadataOverrides};
 // companion count helper so callers can detect truncation.
 
 #[tokio::test]
+async fn get_book_formats_machine_timestamps_as_fixed_width_iso() {
+    // Migration 0038 stores `timestamp`/`last_modified` as INTEGER epochs; the
+    // projection formats them back to fixed-width ISO so the wire
+    // `added_at`/`modified` stay `Option<String>` and sort lexicographically.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sqlx::query("INSERT INTO scan_roots (id, path, display_name) VALUES (1, '/lib', 'Lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title, timestamp, last_modified) \
+         VALUES ('bk', 'b', 1, '/lib/bk', 'Book', \
+                 strftime('%s','2024-01-02 03:04:05'), strftime('%s','2020-06-15 12:00:00')) \
+         RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch) \
+         VALUES (?, 'EPUB', 'b', 1, 1)",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let book = get_book(&pool, id).await.unwrap().unwrap();
+    assert_eq!(book.added_at.as_deref(), Some("2024-01-02T03:04:05Z"));
+    assert_eq!(book.modified.as_deref(), Some("2020-06-15T12:00:00Z"));
+}
+
+#[tokio::test]
 async fn library_from_db_returns_empty_for_none_path() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let lib = library_from_db(&pool, None).await.unwrap();

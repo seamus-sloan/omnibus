@@ -531,10 +531,13 @@ async fn insert_audiobook_row(
     let uuid = mint_uuid();
 
     let book_id = sqlx::query_scalar::<_, i64>(
+        // `timestamp`/`last_modified` set explicitly — migration 0038 dropped
+        // their column default when converting `books` in place to INTEGER.
         "INSERT INTO books \
             (uuid, scan_key, library_id, path, title, sort, author_sort, has_cover, description, \
-             accent_color, title_norm, author_norm) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             accent_color, title_norm, author_norm, timestamp, last_modified) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+                 strftime('%s','now'), strftime('%s','now')) \
          RETURNING id",
     )
     .bind(&uuid)
@@ -758,7 +761,7 @@ async fn update_audiobook_row(
         "UPDATE books SET \
             path = ?, title = ?, sort = ?, author_sort = ?, has_cover = ?, \
             description = ?, accent_color = ?, title_norm = ?, author_norm = ?, \
-            last_modified = datetime('now') \
+            last_modified = strftime('%s','now') \
          WHERE id = ?",
     )
     .bind(&book_path)

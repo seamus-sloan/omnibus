@@ -140,6 +140,110 @@ async fn migration_0021_drops_redundant_and_dead_schema_objects() {
 }
 
 #[tokio::test]
+async fn migration_0038_stores_machine_timestamps_as_integer_unix_seconds() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    // Minimum FK graph, then one row per table 0038 migrated. All rely on the
+    // (now epoch) column defaults except `books`, whose in-place conversion
+    // dropped its default — so its two columns are set explicitly.
+    sqlx::query(
+        "INSERT INTO users (id, username, password_hash, is_admin) VALUES (1, 'u', 'h', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO scan_roots (id, path, display_name) VALUES (1, '/lib', 'Lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title, timestamp, last_modified) \
+         VALUES ('bk', 1, '/lib/bk', 'Book', strftime('%s','now'), strftime('%s','now'))",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO authors (id, name) VALUES (1, 'Ada')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO metadata_overrides (book_uuid, overrides, updated_by) VALUES ('bk', '{}', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO author_photos (author_id, source, url, bytes, mime) \
+         VALUES (1, 'openlibrary', 'http://x', X'00', 'image/png')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO merge_log (target_book_id, source_uuid, source_metadata) \
+         VALUES ((SELECT id FROM books WHERE uuid='bk'), 'src', '{}')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO ignored_authors (name) VALUES ('Bob')")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Every migrated machine-timestamp column is INTEGER-typed and a plausible
+    // "now" (> 2023-11-14). `typeof` proves the storage class, not just affinity.
+    for (sql, label) in [
+        (
+            "SELECT typeof(timestamp) || ':' || (timestamp > 1700000000) FROM books",
+            "books.timestamp",
+        ),
+        (
+            "SELECT typeof(last_modified) || ':' || (last_modified > 1700000000) FROM books",
+            "books.last_modified",
+        ),
+        (
+            "SELECT typeof(updated_at) || ':' || (updated_at > 1700000000) FROM metadata_overrides",
+            "metadata_overrides.updated_at",
+        ),
+        (
+            "SELECT typeof(fetched_at) || ':' || (fetched_at > 1700000000) FROM author_photos",
+            "author_photos.fetched_at",
+        ),
+        (
+            "SELECT typeof(merged_at) || ':' || (merged_at > 1700000000) FROM merge_log",
+            "merge_log.merged_at",
+        ),
+        (
+            "SELECT typeof(ignored_at) || ':' || (ignored_at > 1700000000) FROM ignored_authors",
+            "ignored_authors.ignored_at",
+        ),
+    ] {
+        let got: String = sqlx::query_scalar(sql).fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            got, "integer:1",
+            "{label} must be INTEGER unix-seconds, got {got}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn migration_0038_text_datetime_converts_to_exact_unix_seconds() {
+    // The in-DDL backfill relies on this exact conversion of the old
+    // `datetime('now')` / `CURRENT_TIMESTAMP` TEXT form. Locking it here is the
+    // parsing case rule 03 requires; it would fail on the pre-0038 schema where
+    // these columns stayed TEXT and sorted lexicographically.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let epoch: i64 =
+        sqlx::query_scalar("SELECT CAST(strftime('%s','2024-01-02 03:04:05') AS INTEGER)")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(epoch, 1_704_164_645);
+}
+
+#[tokio::test]
 async fn migrator_is_idempotent_on_rerun() {
     let tmp = std::env::temp_dir().join(format!(
         "omnibus-migrate-{}-{}.db",

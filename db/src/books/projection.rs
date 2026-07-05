@@ -37,7 +37,14 @@ pub const MAX_BOOKS_RETURNED: i64 = 50_000;
 pub(crate) const BOOK_COLUMNS: &str = r"
     b.id, b.uuid,
     b.title, b.description, b.series_index, b.has_cover,
-    b.pubdate, b.last_modified, b.timestamp, b.accent_color,
+    b.pubdate,
+    -- `last_modified`/`timestamp` are INTEGER unix-seconds (migration 0038);
+    -- format back to fixed-width ISO so the wire `EbookMetadata.modified` /
+    -- `added_at` stay `Option<String>` and the landing lexicographic sort
+    -- keeps working (ISO sorts identically to chronological).
+    strftime('%Y-%m-%dT%H:%M:%SZ', b.last_modified, 'unixepoch') AS last_modified,
+    strftime('%Y-%m-%dT%H:%M:%SZ', b.timestamp,     'unixepoch') AS timestamp,
+    b.accent_color,
 
     (SELECT json_object('filename', bf.filename, 'format', bf.format)
        FROM book_files bf
