@@ -165,18 +165,9 @@ html, body { overscroll-behavior: none; }
   text-decoration: none; color: inherit; cursor: pointer;
 }
 .atrium-brand-mark {
-  width: 24px; height: 24px; border-radius: 6px;
-  background: var(--ink-0); position: relative;
-  display: grid; place-items: center;
+  width: 26px; height: 26px;
+  object-fit: contain; display: block;
 }
-.atrium-brand-mark::before,
-.atrium-brand-mark::after {
-  content: ''; position: absolute;
-  inset: 5px 7px;
-  border: 1.5px solid var(--bg-0); border-radius: 1px;
-  border-top: 0; border-bottom: 0;
-}
-.atrium-brand-mark::after { inset: 5px 6px; transform: rotate(-6deg); opacity: 0.35; }
 .atrium-brand-word {
   font-family: var(--serif); font-size: 22px; letter-spacing: -0.02em;
   font-style: italic; line-height: 1; padding-top: 3px;
@@ -3169,10 +3160,10 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .auth-shell-brand { display: flex; align-items: center; gap: 0.6rem; }
 .auth-shell-brand-mark {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  background: linear-gradient(135deg, var(--auth-accent), #3b82f6);
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  display: block;
 }
 .auth-shell-brand-word {
   font-family: var(--auth-serif);
