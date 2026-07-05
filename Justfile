@@ -80,3 +80,12 @@ ios-icon app="":
         app="{{app}}"; \
         [ -n "$app" ] || app="$CARGO_TARGET_DIR/dx/omnibus-mobile/debug/ios/OmnibusMobile.app"; \
         scripts/apply-ios-icon.sh "$app" iphonesimulator'
+
+# Build, brand, sign, and install Omnibus on a connected iPhone. Requires an
+# Apple Developer membership + an "Apple Development" cert (Xcode ▸ Settings ▸
+# Accounts) + the phone plugged in and trusted. dx handles the device build +
+# provisioning + signing; the script injects the launcher icon and the App
+# Transport Security exception (for the plain-http LAN server), then re-signs
+# and installs. Pass a device name to disambiguate. See scripts/install-ios.sh.
+install-ios device="":
+    nix develop .#mobile --command scripts/install-ios.sh "{{device}}"
