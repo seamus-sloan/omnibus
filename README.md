@@ -98,7 +98,7 @@ just dev-bounce  # cleanly restart a wedged dev server (e.g. after a migration)
 ```
 
 `just serve` / `just serve-pc` multiplex every platform into one session using
-the shared [`justfile`](justfile). Prefer to drive the pieces yourself?
+the shared [`Justfile`](Justfile). Prefer to drive the pieces yourself?
 
 ```bash
 dx serve --platform web -p omnibus   # fullstack SSR + WASM at http://localhost:8080
