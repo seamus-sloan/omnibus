@@ -372,7 +372,7 @@ fn render_preview(preview: &Option<RulePreview>, server_url: &str) -> Element {
             div { class: "shelf-preview-grid",
                 for book in p.sample.iter().cloned() {
                     div {
-                        key: "{book.unique_identifier.clone().unwrap_or_default()}",
+                        key: "{book.id}",
                         {sample_cover(book, server_url)}
                     }
                 }
@@ -617,7 +617,7 @@ fn PickerBody(picked: Signal<Vec<String>>, server_url: String) -> Element {
             div { class: "shelf-picker-grid",
                 for book in filtered.iter().map(|b| (*b).clone()) {
                     div {
-                        key: "{book.unique_identifier.clone().unwrap_or_default()}",
+                        key: "{book.id}",
                         {picker_tile(book, &server_url, picked, &mut picked)}
                     }
                 }

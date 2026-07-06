@@ -160,7 +160,7 @@ fn member_grid(
         div { class: "lib-grid shelf-grid", "data-testid": "shelf-grid", role: "list",
             for book in books.iter().cloned() {
                 div {
-                    key: "{book.unique_identifier.clone().unwrap_or_default()}",
+                    key: "{book.id}",
                     {member_tile(book, server_url)}
                 }
             }
@@ -412,7 +412,7 @@ fn AddBooksModal(shelf_id: i64, on_close: EventHandler<()>, on_added: EventHandl
                     div { class: "shelf-picker-grid",
                         for book in filtered.iter().map(|b| (*b).clone()) {
                             div {
-                                key: "{book.unique_identifier.clone().unwrap_or_default()}",
+                                key: "{book.id}",
                                 {add_picker_tile(book, &server_url, picked)}
                             }
                         }
