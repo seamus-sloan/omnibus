@@ -133,47 +133,10 @@ fn SearchResults(results: PaletteResults, query: String) -> Element {
     let total = r.total_count();
 
     if total == 0 {
-        return rsx! {
-            div { class: "search-head",
-                div {
-                    div { class: "label", "Search results" }
-                    h1 { class: "search-title",
-                        "No results for \u{201c}"
-                        {highlight(&q, &q)}
-                        "\u{201d}"
-                    }
-                }
-            }
-            p { class: "subtitle", "data-testid": "search-result-count",
-                "0 results \u{00b7} fts5 \u{00b7} {r.duration_ms}ms"
-            }
-        };
+        return empty_results(&r, &q);
     }
 
-    // A query that lands inside tag names leads with the Tags group (the
-    // second design artboard); otherwise the canonical type order.
-    let q_lower = q.to_lowercase();
-    let tag_match = r
-        .tags
-        .iter()
-        .any(|t| t.name.to_lowercase().contains(&q_lower));
-    let canonical = [
-        Section::Books,
-        Section::Authors,
-        Section::Series,
-        Section::Tags,
-    ];
-    let tags_first = [
-        Section::Tags,
-        Section::Books,
-        Section::Authors,
-        Section::Series,
-    ];
-    let order: Vec<Section> = if tag_match { tags_first } else { canonical }
-        .into_iter()
-        .filter(|s| s.count(&r) > 0)
-        .collect();
-
+    let (order, tag_match) = section_order(&r, &q);
     let result_word = if total == 1 { "result" } else { "results" };
 
     rsx! {
@@ -213,6 +176,51 @@ fn SearchResults(results: PaletteResults, query: String) -> Element {
             {on_this_page(&order, &r, tag_match, &q)}
         }
     }
+}
+
+/// Empty-state header + zero-count summary for a query with no hits.
+fn empty_results(r: &PaletteResults, q: &str) -> Element {
+    rsx! {
+        div { class: "search-head",
+            div {
+                div { class: "label", "Search results" }
+                h1 { class: "search-title",
+                    "No results for \u{201c}"
+                    {highlight(q, q)}
+                    "\u{201d}"
+                }
+            }
+        }
+        p { class: "subtitle", "data-testid": "search-result-count",
+            "0 results \u{00b7} fts5 \u{00b7} {r.duration_ms}ms"
+        }
+    }
+}
+
+/// Non-empty section order (tags-first on a tag-name match) plus that match flag.
+fn section_order(r: &PaletteResults, q: &str) -> (Vec<Section>, bool) {
+    let q_lower = q.to_lowercase();
+    let tag_match = r
+        .tags
+        .iter()
+        .any(|t| t.name.to_lowercase().contains(&q_lower));
+    let canonical = [
+        Section::Books,
+        Section::Authors,
+        Section::Series,
+        Section::Tags,
+    ];
+    let tags_first = [
+        Section::Tags,
+        Section::Books,
+        Section::Authors,
+        Section::Series,
+    ];
+    let order: Vec<Section> = if tag_match { tags_first } else { canonical }
+        .into_iter()
+        .filter(|s| s.count(r) > 0)
+        .collect();
+    (order, tag_match)
 }
 
 // ── Section renderers ────────────────────────────────────────────────────

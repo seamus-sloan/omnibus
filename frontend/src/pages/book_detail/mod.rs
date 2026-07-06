@@ -60,42 +60,24 @@ pub fn BookDetailPage(uuid: String) -> Element {
 
     // Merge dialog state. Declared unconditionally per rule 07 so the hook
     // count is identical on every target — mobile compiles the signals but
-    // never reads them (the rsx that consumes them is still cfg-gated below
-    // and `build_merge_*` are stubbed to `None` on mobile).
+    // `render_book_shell` stubs the builders that read them.
     let merge_open = use_signal(|| false);
     let merge_result: Signal<Option<MergeBooksResult>> = use_signal(|| None);
     let undo_error: Signal<Option<String>> = use_signal(|| None);
-    // Mobile's merge builders are `None`-returning stubs that take no args,
-    // so the three signals above would otherwise be unused on that target.
-    #[cfg(feature = "mobile")]
-    let _ = (merge_open, merge_result, undo_error);
 
-    let url = server_url.clone();
-    use_effect(use_reactive!(|uuid| {
-        let _ = refresh();
-        fetch_book_and_author_books(
-            url.clone(),
-            uuid.clone(),
+    use_book_data_effects(
+        uuid.clone(),
+        server_url.clone(),
+        BookDataSignals {
             book,
             author_books,
             loading,
             error,
-        );
-    }));
-
-    // F3.3 suggestions: resolved off-request by the worker and cached. Fetch
-    // for the current book; while the result is `Pending`, poll a few times on
-    // web so it appears without a manual reload. A fetch failure degrades to
-    // "no suggestions" rather than an error row.
-    let sug_url = server_url.clone();
-    use_effect(use_reactive!(|uuid| {
-        poll_suggestions_until_resolved(
-            sug_url.clone(),
-            uuid.clone(),
+            refresh,
             suggestions_epoch,
             suggestions,
-        );
-    }));
+        },
+    );
 
     if loading() {
         return rsx! {
@@ -115,6 +97,92 @@ pub fn BookDetailPage(uuid: String) -> Element {
         };
     };
 
+    render_book_shell(
+        b,
+        MergeSignals {
+            open: merge_open,
+            result: merge_result,
+            undo_error,
+            refresh,
+        },
+        author_books(),
+        suggestions(),
+        is_admin,
+        server_url,
+    )
+}
+
+/// The book-page data signals written by the fetch effects. `Copy` (Dioxus
+/// signals), so the group is passed by value.
+#[derive(Clone, Copy)]
+struct BookDataSignals {
+    book: Signal<Option<EbookMetadata>>,
+    author_books: Signal<Vec<EbookMetadata>>,
+    loading: Signal<bool>,
+    error: Signal<Option<String>>,
+    refresh: Signal<u32>,
+    suggestions_epoch: Signal<u64>,
+    suggestions: Signal<Option<SuggestionsResponse>>,
+}
+
+/// Install the two `uuid`-reactive fetch effects: the book + author-books load
+/// (also re-armed by `refresh` after a merge/undo) and the F3.3 suggestions
+/// poll. Called unconditionally from [`BookDetailPage`] so the hook sequence
+/// stays fixed; both effects re-run when `uuid` changes.
+fn use_book_data_effects(uuid: String, server_url: String, sig: BookDataSignals) {
+    let url = server_url.clone();
+    let refresh = sig.refresh;
+    use_effect(use_reactive!(|uuid| {
+        // Read `refresh` so a merge/undo bump re-arms this effect.
+        let _ = refresh();
+        fetch_book_and_author_books(
+            url.clone(),
+            uuid.clone(),
+            sig.book,
+            sig.author_books,
+            sig.loading,
+            sig.error,
+        );
+    }));
+
+    // F3.3 suggestions: resolved off-request by the worker and cached. Fetch
+    // for the current book; while the result is `Pending`, poll a few times on
+    // web so it appears without a manual reload. A fetch failure degrades to
+    // "no suggestions" rather than an error row.
+    let sug_url = server_url.clone();
+    use_effect(use_reactive!(|uuid| {
+        poll_suggestions_until_resolved(
+            sug_url.clone(),
+            uuid.clone(),
+            sig.suggestions_epoch,
+            sig.suggestions,
+        );
+    }));
+}
+
+/// Merge-dialog signals threaded from [`BookDetailPage`] into the loaded-book
+/// renderer. `Copy` (Dioxus signals), so passing them by value is cheap and
+/// keeps the callee free of extra hook calls.
+#[derive(Clone, Copy)]
+struct MergeSignals {
+    open: Signal<bool>,
+    result: Signal<Option<MergeBooksResult>>,
+    undo_error: Signal<Option<String>>,
+    refresh: Signal<u32>,
+}
+
+/// Assemble the loaded-book view: derive the admin flag, build the (web-only)
+/// merge button + dialog, and compose them with [`render_loaded`]. Kept a plain
+/// fn so the platform `cfg` gates live here instead of the component body
+/// (rule 07 — no new gates inside `BookDetailPage`).
+fn render_book_shell(
+    b: EbookMetadata,
+    merge: MergeSignals,
+    author_books: Vec<EbookMetadata>,
+    suggestions: Option<SuggestionsResponse>,
+    is_admin: Signal<bool>,
+    server_url: String,
+) -> Element {
     // `is_admin` starts at `false` and only flips to `true` on the web
     // client after `current_user()` resolves an admin user, so this read
     // returns `false` during SSR and for non-admins on every platform.
@@ -123,28 +191,40 @@ pub fn BookDetailPage(uuid: String) -> Element {
     // Rail "Merge with…" button (admin, web only) — threaded down as a
     // prebuilt Element so the rail component stays platform-agnostic.
     #[cfg(not(feature = "mobile"))]
-    let merge_button: Option<Element> = merge::build_merge_button(is_admin_flag, merge_open);
+    let merge_button: Option<Element> = merge::build_merge_button(is_admin_flag, merge.open);
     #[cfg(feature = "mobile")]
     let merge_button: Option<Element> = merge::build_merge_button(is_admin_flag);
 
     #[cfg(not(feature = "mobile"))]
     let merge_ui: Option<Element> = merge::build_merge_ui(
-        merge_open,
-        merge_result,
-        undo_error,
-        refresh,
+        merge.open,
+        merge.result,
+        merge.undo_error,
+        merge.refresh,
         server_url.clone(),
         b.clone(),
     );
     #[cfg(feature = "mobile")]
-    let merge_ui: Option<Element> = merge::build_merge_ui();
+    let merge_ui: Option<Element> = {
+        // Mobile's builders take no args; read every field so the signals
+        // (declared unconditionally in `BookDetailPage` for hook parity)
+        // aren't flagged as never-read on this target.
+        let MergeSignals {
+            open,
+            result,
+            undo_error,
+            refresh,
+        } = merge;
+        let _ = (open, result, undo_error, refresh);
+        merge::build_merge_ui()
+    };
 
     let body = render_loaded(
         b,
-        author_books(),
+        author_books,
         merge_button,
-        suggestions(),
-        server_url.clone(),
+        suggestions,
+        server_url,
         is_admin_flag,
     );
     rsx! {
