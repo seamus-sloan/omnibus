@@ -11,7 +11,8 @@ use omnibus_shared::{
     ShelfRule, Visibility,
 };
 
-use crate::components::atrium::Cover;
+use crate::components::cover_tile::toggle_picked;
+use crate::components::{CoverTile, CoverTileKind};
 use crate::{data, use_server_url};
 
 /// Field/op/date-unit choices exposed in the smart-rule editor. `Status` is
@@ -373,42 +374,16 @@ fn render_preview(preview: &Option<RulePreview>, server_url: &str) -> Element {
                 for book in p.sample.iter().cloned() {
                     div {
                         key: "{book.id}",
-                        {sample_cover(book, server_url)}
+                        CoverTile {
+                            book,
+                            server_url: server_url.to_string(),
+                            sizes: "120px".to_string(),
+                            kind: CoverTileKind::ReadOnly,
+                        }
                     }
                 }
             }
         },
-    }
-}
-
-/// One preview / picker cover tile (read-only).
-fn sample_cover(book: EbookMetadata, server_url: &str) -> Element {
-    let uuid = book.unique_identifier.clone().unwrap_or_default();
-    let (src, srcset) = thumb_srcs(&book, &uuid, server_url);
-    rsx! {
-        div { class: "shelf-cover-tile",
-            Cover {
-                book,
-                src_override: src,
-                srcset,
-                sizes: Some("120px".to_string()),
-            }
-        }
-    }
-}
-
-/// Build the responsive thumbnail `src`/`srcset` for a book (mirrors GridTile).
-fn thumb_srcs(
-    book: &EbookMetadata,
-    uuid: &str,
-    server_url: &str,
-) -> (Option<String>, Option<String>) {
-    if book.cover_url.is_some() {
-        let sm = crate::thumb_url(server_url, uuid, "sm");
-        let md = crate::thumb_url(server_url, uuid, "md");
-        (Some(sm.clone()), Some(format!("{sm} 160w, {md} 320w")))
-    } else {
-        (None, None)
     }
 }
 
@@ -572,7 +547,6 @@ fn condition_value_input(
 /// Hand-picked picker: a searchable, selectable cover grid over the library.
 #[component]
 fn PickerBody(picked: Signal<Vec<String>>, server_url: String) -> Element {
-    let mut picked = picked;
     let mut library = use_signal(Vec::<EbookMetadata>::new);
     let mut query = use_signal(String::new);
 
@@ -616,54 +590,26 @@ fn PickerBody(picked: Signal<Vec<String>>, server_url: String) -> Element {
             }
             div { class: "shelf-picker-grid",
                 for book in filtered.iter().map(|b| (*b).clone()) {
-                    div {
-                        key: "{book.id}",
-                        {picker_tile(book, &server_url, picked, &mut picked)}
+                    {
+                        let uuid = book.unique_identifier.clone().unwrap_or_default();
+                        let selected = picked.read().contains(&uuid);
+                        let mut picked = picked;
+                        rsx! {
+                            div {
+                                key: "{book.id}",
+                                CoverTile {
+                                    book,
+                                    server_url: server_url.clone(),
+                                    sizes: "120px".to_string(),
+                                    kind: CoverTileKind::Selectable {
+                                        selected,
+                                        on_toggle: EventHandler::new(move |_| toggle_picked(&mut picked, &uuid)),
+                                    },
+                                }
+                            }
+                        }
                     }
                 }
-            }
-        }
-    }
-}
-
-/// One selectable picker tile; clicking toggles the book's uuid in `picked`.
-fn picker_tile(
-    book: EbookMetadata,
-    server_url: &str,
-    picked_read: Signal<Vec<String>>,
-    picked: &mut Signal<Vec<String>>,
-) -> Element {
-    let uuid = book.unique_identifier.clone().unwrap_or_default();
-    let selected = picked_read.read().contains(&uuid);
-    let (src, srcset) = thumb_srcs(&book, &uuid, server_url);
-    let mut picked = *picked;
-    let toggle_uuid = uuid.clone();
-    let class = if selected {
-        "shelf-cover-tile shelf-cover-tile--selectable shelf-cover-tile--picked"
-    } else {
-        "shelf-cover-tile shelf-cover-tile--selectable"
-    };
-
-    rsx! {
-        button {
-            r#type: "button",
-            class: "{class}",
-            "aria-pressed": if selected { "true" } else { "false" },
-            onclick: move |_| {
-                let u = toggle_uuid.clone();
-                picked.with_mut(|v| {
-                    if let Some(pos) = v.iter().position(|x| x == &u) {
-                        v.remove(pos);
-                    } else {
-                        v.push(u);
-                    }
-                });
-            },
-            Cover {
-                book,
-                src_override: src,
-                srcset,
-                sizes: Some("120px".to_string()),
             }
         }
     }
