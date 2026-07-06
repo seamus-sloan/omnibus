@@ -154,12 +154,17 @@ skip = [
     { name = "tokio-tungstenite", version = "0.28.0" },
 
     # --- thiserror v1 ---
-    # Pulled by cairo-rs, gio, glib, gloo-net, jni, ndk — all transitive
-    # through the Dioxus desktop/mobile native shell. Our first-party crates
-    # use v2. Every thiserror-1 path resolves under wry/tao, so it is already
-    # covered by the skip-tree below; no explicit skip needed here (an explicit
-    # one now trips cargo-deny's `unnecessary-skip` lint). Blocked until those
-    # upstream native-shell crates bump to thiserror 2.
+    # thiserror 1 reaches the tree by two independent routes: (1) `gloo-net`
+    # (→ dioxus-fullstack, a DIRECT dep of omnibus/omnibus-frontend, NOT under
+    # the native shell) in the default server build; (2) the desktop/mobile
+    # native shell (cairo-rs, gio, glib, jni, ndk) under wry/tao. Our first-
+    # party crates are on v2. No explicit skip is listed here: with the wry/tao
+    # skip-tree below in effect, `cargo deny check bans` already collapses
+    # thiserror to a single counted version, so an explicit skip trips its
+    # `unnecessary-skip` lint. If the native-shell (skip-tree) paths ever go
+    # away, re-add `{ name = "thiserror"/"thiserror-impl", version = "1.0.69" }`
+    # here to keep the gloo-net path triaged. Blocked until upstream bumps to
+    # thiserror 2.
 
     # --- const-serialize alpha ---
     # 0.7.2 from crates.io manganis; 0.8.0-alpha.0 bundled in Dioxus git tag.
@@ -170,15 +175,18 @@ skip = [
     # --- getrandom + rand_core (four-way getrandom split) ---
     # 0.1 from rand 0.7.3 (phf_generator, build-dep only).
     # 0.2 intentionally kept for argon2/rand_core 0.6 auth path in db.
-    # 0.3 from tungstenite/rand 0.9. 0.4 from tempfile/uuid (dev-dep only).
+    # 0.3 from tungstenite/rand 0.9. 0.4 runtime via uuid (see below).
     # rand_core 0.5/0.6/0.9 mirror those paths.
     # See docs/dependency-audit.md for upgrade trigger conditions.
     { name = "getrandom", version = "0.1.16" },
     { name = "getrandom", version = "0.2.17" },
     { name = "getrandom", version = "0.3.4" },
-    # getrandom 0.4 pulled in since the June triage — dev-dep only via
-    # tempfile 3 (test scratch dirs) and uuid (cfb/infer probe path). Never
-    # links into the shipped server binary. Accepted.
+    # getrandom 0.4 pulled in since the June triage via `uuid 1.x` — a RUNTIME
+    # dependency: db::helpers::mint_uuid calls Uuid::new_v4() in non-test code
+    # (uuid's `v4` feature → getrandom 0.4), so it DOES link into the shipped
+    # server binary; uuid also enters via cfb/infer under dioxus-asset-resolver.
+    # (tempfile 3 is the dev/test path.) Accepted — this is the modern getrandom
+    # line and cannot collapse onto the 0.2 auth pin without an argon2 upgrade.
     { name = "getrandom", version = "0.4.2" },
     { name = "rand_core", version = "0.5.1" },
     { name = "rand_core", version = "0.6.4" },
