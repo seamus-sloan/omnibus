@@ -6,6 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+mod tests;
+
 /// Which list view to render on the library page.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
