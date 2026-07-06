@@ -3750,14 +3750,14 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 
 /* F4.3 Send-to-Kindle result toast — fixed bottom-center, mirrors
    .bd-merge-toast so action feedback is consistent across the book page. */
-.kindle-toast {
+.kindle-toast, .kobo-toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
   z-index: 110; display: flex; align-items: center; gap: 12px; padding: 12px 16px;
   box-shadow: 0 6px 24px rgba(0,0,0,.35);
 }
-.kindle-toast-msg { font-size: 0.9rem; }
-.kindle-toast-msg.success { color: #34d399; }
-.kindle-toast-msg.error { color: #f87171; }
+.kindle-toast-msg, .kobo-toast-msg { font-size: 0.9rem; }
+.kindle-toast-msg.success, .kobo-toast-msg.success { color: #34d399; }
+.kindle-toast-msg.error, .kobo-toast-msg.error { color: #f87171; }
 
 .library-card { margin-top: 1.25rem; }
 .library-card h2, .library-title {

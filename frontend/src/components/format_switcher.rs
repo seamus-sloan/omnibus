@@ -191,23 +191,15 @@ fn read_book_action(_uuid: &str) -> Element {
     }
 }
 
-/// F4.1 "Send to Kobo" CTA: downloads the book as KEPUB (`GET
-/// /api/ebooks/:uuid/kepub`) for USB sideload onto a Kobo. Web/SSR renders a
-/// plain download `<a>` — a full-navigation download carries the session
-/// cookie, so it authenticates like the reader's file fetch. Mobile renders a
-/// disabled placeholder (the copy-over-USB flow is desktop-only).
+/// F4.1 "Send to Kobo" CTA. Web/SSR renders the interactive
+/// [`SendToKoboButton`]; mobile renders a disabled placeholder (the copy-over-
+/// USB flow is desktop-only). The cfg gate lives at the helper definition (rule
+/// 07: keep cfg out of rsx bodies), and SSR + first WASM paint emit the same
+/// enabled button so hydration holds.
 #[cfg(not(feature = "mobile"))]
 fn send_to_kobo_action(uuid: &str) -> Element {
-    let href = format!("/api/ebooks/{uuid}/kepub");
     rsx! {
-        a {
-            href: "{href}",
-            download: "",
-            class: "btn",
-            title: "Download as KEPUB to copy onto a Kobo over USB",
-            "data-testid": "action-kobo",
-            "Send to Kobo"
-        }
+        SendToKoboButton { uuid: uuid.to_string() }
     }
 }
 
@@ -223,6 +215,221 @@ fn send_to_kobo_action(_uuid: &str) -> Element {
         }
     }
 }
+
+/// Interactive "Send to Kobo" button. When the browser supports the File System
+/// Access API (Chrome/Edge), clicking writes the book's KEPUB straight onto a
+/// plugged-in Kobo: the device mounts as a USB drive on the *client* machine
+/// (never the server), so the write happens in the browser. The chosen
+/// directory handle is remembered in IndexedDB, so after the first pick a click
+/// writes silently. Browsers without the API fall back to a plain download.
+/// Shows "Sending…" in-place and raises a toast on the terminal outcome —
+/// success/download auto-dismisses, errors stay until dismissed. `class` /
+/// `testid` default to the per-format-row styling; the hero CTA overrides them.
+#[cfg(not(feature = "mobile"))]
+#[component]
+pub fn SendToKoboButton(
+    uuid: String,
+    #[props(default = "btn".to_string())] class: String,
+    #[props(default = "action-kobo".to_string())] testid: String,
+) -> Element {
+    let mut in_flight = use_signal(|| false);
+    // (is_error, message) — None until a send completes / the toast is dismissed.
+    let mut result = use_signal(|| None::<(bool, String)>);
+    // Monotonic id of the latest send. A superseded task must not touch shared
+    // state — otherwise an earlier send's auto-dismiss sleep can clear (or hide
+    // the error of) a newer send's toast.
+    let mut send_seq = use_signal(|| 0u64);
+
+    rsx! {
+        button {
+            class: "{class}",
+            r#type: "button",
+            disabled: in_flight(),
+            title: "Write the KEPUB onto a plugged-in Kobo (Chrome/Edge), or download it to copy over",
+            "data-testid": "{testid}",
+            onclick: move |_| {
+                let uuid = uuid.clone();
+                let seq = *send_seq.peek() + 1;
+                send_seq.set(seq);
+                in_flight.set(true);
+                result.set(None);
+                spawn(async move {
+                    let outcome = write_kepub_to_kobo(&uuid).await;
+                    // A newer send has superseded this one — leave all shared
+                    // state to it.
+                    if *send_seq.peek() != seq {
+                        return;
+                    }
+                    in_flight.set(false);
+                    // `None` = the user cancelled the directory picker; stay quiet.
+                    if let Some((is_error, message)) = outcome {
+                        result.set(Some((is_error, message)));
+                        if !is_error {
+                            async_sleep_ms(5000).await;
+                            // Only clear if we're still the latest send.
+                            if *send_seq.peek() == seq {
+                                result.set(None);
+                            }
+                        }
+                    }
+                });
+            },
+            if in_flight() { "Sending\u{2026}" } else { "Send to Kobo" }
+        }
+        if let Some((is_error, message)) = result() {
+            div { class: "kobo-toast card", role: "status",
+                span {
+                    "data-testid": "kobo-send-status",
+                    class: if is_error { "kobo-toast-msg error" } else { "kobo-toast-msg success" },
+                    "{message}"
+                }
+                button {
+                    class: "btn ghost sm",
+                    "data-testid": "kobo-toast-dismiss",
+                    aria_label: "Dismiss",
+                    onclick: move |_| result.set(None),
+                    "\u{00d7}"
+                }
+            }
+        }
+    }
+}
+
+/// Map the JS write flow's status string to the toast `(is_error, message)`
+/// pair, or `None` when the user cancelled the picker (no toast at all). Pure,
+/// so it's unit-tested without a browser. Only *called* on web (the SSR/native
+/// stub of `write_kepub_to_kobo` never runs it), so the non-web lib build sees
+/// it as dead outside its tests — allow that rather than gate it off `web` and
+/// lose the server-feature test coverage.
+#[cfg(not(feature = "mobile"))]
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
+fn kobo_outcome(status: &str, message: Option<String>) -> Option<(bool, String)> {
+    match status {
+        "ok" => Some((
+            false,
+            "Sent to your Kobo \u{2014} eject it safely before unplugging.".to_string(),
+        )),
+        "downloaded" => Some((
+            false,
+            "Your browser can\u{2019}t write to the device, so the KEPUB downloaded instead \u{2014} drag it onto your Kobo.".to_string(),
+        )),
+        "cancelled" => None,
+        _ => Some((
+            true,
+            format!(
+                "Send to Kobo failed: {}",
+                message.unwrap_or_else(|| "unknown error".to_string())
+            ),
+        )),
+    }
+}
+
+/// Outcome pushed back from [`KOBO_WRITE_JS`] over the eval channel.
+#[cfg(all(not(feature = "mobile"), feature = "web"))]
+#[derive(serde::Deserialize)]
+struct KoboWriteOutcome {
+    status: String,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+/// Run the File System Access write flow and map its result to a toast pair.
+/// Same-origin `fetch` carries the session cookie, so the KEPUB endpoint
+/// authenticates like any other in-page request. Web-only; the SSR stub below
+/// never runs (the click handler only fires in the browser) but must compile.
+#[cfg(all(not(feature = "mobile"), feature = "web"))]
+async fn write_kepub_to_kobo(uuid: &str) -> Option<(bool, String)> {
+    // Interpolate the uuid as a JS string literal so it can't break out of the
+    // script (it's a UUIDv4 in practice, but quote defensively).
+    let uuid_lit = serde_json::to_string(uuid).unwrap_or_else(|_| "\"\"".to_string());
+    let js = KOBO_WRITE_JS.replace("__UUID__", &uuid_lit);
+    let mut eval = dioxus::document::eval(&js);
+    match eval.recv::<KoboWriteOutcome>().await {
+        Ok(out) => kobo_outcome(&out.status, out.message),
+        Err(_) => Some((true, "Send to Kobo failed.".to_string())),
+    }
+}
+
+#[cfg(all(not(feature = "mobile"), not(feature = "web"), feature = "server"))]
+async fn write_kepub_to_kobo(_uuid: &str) -> Option<(bool, String)> {
+    None
+}
+
+/// Browser-side write flow. Reuses a remembered Kobo directory handle
+/// (persisted in IndexedDB) or prompts for one once, fetches the KEPUB, and
+/// writes it to the device's drive root — Kobo imports loose files there, so
+/// this never touches the device's `KoboReader.sqlite` master DB. Falls back to
+/// a plain download when the File System Access API is absent (Firefox/Safari).
+/// `__UUID__` is substituted with a quoted JS string literal before eval.
+#[cfg(all(not(feature = "mobile"), feature = "web"))]
+const KOBO_WRITE_JS: &str = r#"
+const uuid = __UUID__;
+const idb = () => new Promise((res, rej) => {
+  const r = indexedDB.open('omnibus-kobo', 1);
+  r.onupgradeneeded = () => r.result.createObjectStore('handles');
+  r.onsuccess = () => res(r.result);
+  r.onerror = () => rej(r.error);
+});
+const openDir = async () => {
+  try {
+    const db = await idb();
+    return await new Promise((res, rej) => {
+      const rq = db.transaction('handles', 'readonly').objectStore('handles').get('dir');
+      rq.onsuccess = () => res(rq.result || null);
+      rq.onerror = () => rej(rq.error);
+    });
+  } catch (_) { return null; }
+};
+const saveDir = async (h) => {
+  try {
+    const db = await idb();
+    await new Promise((res, rej) => {
+      const tx = db.transaction('handles', 'readwrite');
+      tx.objectStore('handles').put(h, 'dir');
+      tx.oncomplete = () => res();
+      tx.onerror = () => rej(tx.error);
+    });
+  } catch (_) {}
+};
+await (async () => {
+  try {
+    if (!window.showDirectoryPicker) {
+      const a = document.createElement('a');
+      a.href = `/api/ebooks/${uuid}/kepub`;
+      a.download = '';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      dioxus.send({ status: 'downloaded' });
+      return;
+    }
+    let dir = await openDir();
+    if (dir) {
+      let perm = await dir.queryPermission({ mode: 'readwrite' });
+      if (perm !== 'granted') perm = await dir.requestPermission({ mode: 'readwrite' });
+      if (perm !== 'granted') dir = null;
+    }
+    if (!dir) {
+      dir = await window.showDirectoryPicker({ id: 'omnibus-kobo', mode: 'readwrite', startIn: 'desktop' });
+      await saveDir(dir);
+    }
+    const resp = await fetch(`/api/ebooks/${uuid}/kepub`, { credentials: 'include' });
+    if (!resp.ok) { dioxus.send({ status: 'error', message: `download failed (${resp.status})` }); return; }
+    const cd = resp.headers.get('content-disposition') || '';
+    const m = /filename="?([^"]+)"?/.exec(cd);
+    const filename = (m && m[1]) || `${uuid}.kepub.epub`;
+    const blob = await resp.blob();
+    const fh = await dir.getFileHandle(filename, { create: true });
+    const w = await fh.createWritable();
+    await w.write(blob);
+    await w.close();
+    dioxus.send({ status: 'ok', filename: filename });
+  } catch (e) {
+    if (e && e.name === 'AbortError') { dioxus.send({ status: 'cancelled' }); return; }
+    dioxus.send({ status: 'error', message: (e && e.message) || String(e) });
+  }
+})();
+"#;
 
 /// "Send to Kindle" CTA (F4.3). Web/SSR renders the interactive
 /// [`SendToKindleButton`]; mobile renders a disabled placeholder. The cfg gate
@@ -540,6 +747,44 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label(), "CbZ");
         assert!(matches!(rows[0], FormatKind::Other(_)));
+    }
+
+    #[cfg(not(feature = "mobile"))]
+    #[test]
+    fn kobo_outcome_reports_success_for_device_write() {
+        let (is_error, msg) = super::kobo_outcome("ok", None).unwrap();
+        assert!(!is_error);
+        assert!(msg.contains("Sent to your Kobo"));
+    }
+
+    #[cfg(not(feature = "mobile"))]
+    #[test]
+    fn kobo_outcome_reports_download_fallback_for_unsupported_browser() {
+        let (is_error, msg) = super::kobo_outcome("downloaded", None).unwrap();
+        assert!(!is_error);
+        assert!(msg.contains("downloaded instead"));
+    }
+
+    #[cfg(not(feature = "mobile"))]
+    #[test]
+    fn kobo_outcome_stays_silent_when_picker_cancelled() {
+        assert!(super::kobo_outcome("cancelled", None).is_none());
+    }
+
+    #[cfg(not(feature = "mobile"))]
+    #[test]
+    fn kobo_outcome_surfaces_error_message_when_present() {
+        let (is_error, msg) = super::kobo_outcome("error", Some("disk full".into())).unwrap();
+        assert!(is_error);
+        assert_eq!(msg, "Send to Kobo failed: disk full");
+    }
+
+    #[cfg(not(feature = "mobile"))]
+    #[test]
+    fn kobo_outcome_falls_back_to_unknown_error_without_message() {
+        let (is_error, msg) = super::kobo_outcome("error", None).unwrap();
+        assert!(is_error);
+        assert_eq!(msg, "Send to Kobo failed: unknown error");
     }
 
     #[test]
