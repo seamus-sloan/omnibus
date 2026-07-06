@@ -55,7 +55,7 @@ pub async fn undo_merge(pool: &SqlitePool, merge_log_id: i64) -> Result<String, 
     restore_attach_ledger(&mut tx, new_id, &source_uuid, &snap.merged_uuid_rows).await?;
 
     // The restored `books` row + links + identifiers are all written by
-    // now, so the door reconstructs the FTS row from them directly.
+    // now, so the code reconstructs the FTS row from them directly.
     upsert_fts(&mut tx, new_id).await?;
 
     sqlx::query("UPDATE merge_log SET undone_at = strftime('%s','now') WHERE id = ?")
