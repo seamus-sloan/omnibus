@@ -140,7 +140,7 @@ impl Worker {
                 match tokio::task::spawn_blocking(move || {
                     crate::thumbs::ensure_thumbnails_sync(book_id, last_modified_epoch, cover)?;
                     crate::thumbs::evict_if_over_cap(cap)
-                        .map_err(|e| crate::thumbs::ThumbError::Io(e.to_string()))
+                        .map_err(|e| crate::thumbs::ThumbError::Failed(format!("I/O error: {e}")))
                 })
                 .await
                 {
