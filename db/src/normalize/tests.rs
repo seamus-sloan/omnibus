@@ -44,6 +44,90 @@ fn normalize_author_swaps_single_comma_last_first() {
     );
 }
 
+/// Varied-Unicode inputs that stress every branch of the folder: accents,
+/// mixed scripts, emoji, article prefixes, whitespace runs, empty/blank,
+/// comma forms (author swap), CJK, RTL, and a very long string. Shared by
+/// the idempotence and no-panic tests below.
+fn tricky_inputs() -> Vec<String> {
+    let mut v: Vec<String> = [
+        "",
+        "   ",
+        "\t\n  \r",
+        "---",
+        "!!! ??? ...",
+        "Dracula",
+        "  DRACULA!  ",
+        "The Hitch-Hiker's Guide",
+        "A Tale of Two Cities",
+        "An Anthology",
+        "The",
+        "Dune:  Messiah",
+        "multiple     internal     spaces",
+        "Çítåtelka",
+        "Mémoires d'outre-tombe",
+        "Ĳsselmeer œuvre æsthetic ﬁ ﬂ",
+        "Stoker, Bram",
+        "Smith, John, Jr.",
+        "café ☕ résumé 📚 naïve",
+        "🎉🎊✨",
+        "Война и мир",
+        "戦争と平和",
+        "مرحبا بالعالم",
+        "ᚠᚢᚦᚨᚱᚲ",
+        "ﬀ ﬁ ﬂ ﬃ ﬄ",                         // ligatures that deunicode expands
+        "①②③ ⅣⅤⅥ",                           // enclosed / roman numerals
+        "\u{200B}zero\u{200B}width\u{200B}", // zero-width spaces
+        "  ,  ",                             // comma with only blanks around it
+        ",leading comma",
+        "trailing comma,",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    // A very long input to exercise the capacity/allocation path.
+    v.push("Tomás Ërník ".repeat(5_000));
+    v
+}
+
+#[test]
+fn normalize_title_is_idempotent_over_varied_unicode() {
+    for input in tricky_inputs() {
+        let once = normalize_title(&input);
+        // Re-normalizing the output must be a fixed point: applying the
+        // folder a second time yields exactly the first result.
+        let twice = once.as_deref().and_then(normalize_title);
+        assert_eq!(twice, once, "title not idempotent for {input:?}");
+    }
+}
+
+#[test]
+fn normalize_author_is_idempotent_over_varied_unicode() {
+    for input in tricky_inputs() {
+        let once = normalize_author(&input);
+        let twice = once.as_deref().and_then(normalize_author);
+        assert_eq!(twice, once, "author not idempotent for {input:?}");
+    }
+}
+
+#[test]
+fn normalize_never_panics_over_varied_unicode() {
+    // The folder runs on arbitrary scanned metadata; a panic here would
+    // abort a library scan. Assert it always returns without panicking and
+    // that any surviving key is non-empty and free of leading/trailing/
+    // doubled ASCII spaces (the folder's invariant).
+    for input in tricky_inputs() {
+        for key in [normalize_title(&input), normalize_author(&input)]
+            .into_iter()
+            .flatten()
+        {
+            assert!(!key.is_empty(), "empty key survived for {input:?}");
+            assert!(!key.starts_with(' '), "leading space for {input:?}");
+            assert!(!key.ends_with(' '), "trailing space for {input:?}");
+            assert!(!key.contains("  "), "doubled space for {input:?}");
+        }
+    }
+}
+
 #[tokio::test]
 async fn backfill_norm_columns_propagates_db_error_when_pool_is_closed() {
     let pool = init_db("sqlite::memory:").await.unwrap();
