@@ -184,18 +184,9 @@ pub(super) fn ReadyPlayer(
         chapter_index_for_elapsed(&chs, elapsed_now)
     });
 
-    let on_toggle = move |_| {
-        #[cfg(feature = "web")]
-        super::helpers::audio_call("toggle", "");
-    };
-    let on_skip_back = move |_| {
-        #[cfg(feature = "web")]
-        super::helpers::audio_call("skip", "-30");
-    };
-    let on_skip_forward = move |_| {
-        #[cfg(feature = "web")]
-        super::helpers::audio_call("skip", "30");
-    };
+    let on_toggle = super::helpers::on_toggle_playback();
+    let on_skip_back = super::helpers::on_skip_back_30();
+    let on_skip_forward = super::helpers::on_skip_forward_30();
     let on_seek = move |evt: Event<FormData>| {
         if let Ok(_secs) = evt.value().parse::<f64>() {
             #[cfg(feature = "web")]
