@@ -86,6 +86,9 @@ async fn merge_books_moves_all_taxonomy_and_user_data_to_target() {
     let target = seed_audiobook(&pool, "A/Dracula.m4b", "Dracula", "Bram Stoker").await;
     let mut mp3 = indexed_audiobook("B/Drakula mp3", "Drakula", Some("Bram Stoker"));
     mp3.format = "MP3".into();
+    // Keep the part filename consistent with the MP3 format so the fixture
+    // reads as a real MP3 source (the helper hardcodes an `.m4b` part).
+    mp3.parts[0].filename = "B/Drakula mp3/part1.mp3".into();
     let source_scan_key = mp3.scan_key.clone();
     sync_audiobooks(
         &pool,
