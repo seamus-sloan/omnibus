@@ -174,12 +174,12 @@ async fn move_files_back(
         // Batch the format lookup, then assign per-format ordinals in Rust in
         // the original `file_ids` order (files that vanished since the merge
         // are absent from the map and skipped, leaving the book fileless).
-        let formats = fetch_file_formats(tx, target_id, file_ids).await?;
+        let formats_by_file = fetch_file_formats(tx, target_id, file_ids).await?;
         let mut per_format: std::collections::HashMap<String, i64> =
             std::collections::HashMap::new();
         let mut assignments: Vec<(i64, i64)> = Vec::with_capacity(file_ids.len());
         for &fid in file_ids {
-            let Some(fmt) = formats.get(&fid) else {
+            let Some(fmt) = formats_by_file.get(&fid) else {
                 continue;
             };
             let ordinal = per_format.entry(fmt.to_uppercase()).or_insert(0);

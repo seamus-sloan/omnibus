@@ -217,15 +217,15 @@ pub(crate) async fn prune_orphan_libraries(
         .map(|(id, _)| id)
         .collect();
 
-    if !orphan_ids.is_empty() {
-        // One batched conditional delete: an orphan row goes only if it has no
-        // books. A root that still owns books is left in place (never-prune)
-        // so the FK cascade on `books.library_id` is never triggered. The
-        // `NOT EXISTS` filter keeps that guard per-row inside the set delete,
-        // so a book-owning orphan in the id list survives untouched. Scan
-        // roots are bounded to a handful, so the id list never approaches
-        // SQLite's bind cap.
-        let placeholders = std::iter::repeat_n("?", orphan_ids.len())
+    // One batched conditional delete per chunk: an orphan row goes only if it
+    // has no books. A root that still owns books is left in place (never-prune)
+    // so the FK cascade on `books.library_id` is never triggered. The
+    // `NOT EXISTS` filter keeps that guard per-row inside the set delete, so a
+    // book-owning orphan in the id list survives untouched. Chunked at 499 ids
+    // so a pathologically large scan-root table can't exceed SQLite's
+    // 999-parameter cap.
+    for chunk in orphan_ids.chunks(499) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
@@ -234,7 +234,7 @@ pub(crate) async fn prune_orphan_libraries(
                 AND NOT EXISTS (SELECT 1 FROM books WHERE library_id = scan_roots.id)"
         );
         let mut q = sqlx::query(&sql);
-        for id in &orphan_ids {
+        for id in chunk {
             q = q.bind(id);
         }
         q.execute(&mut **tx).await?;
