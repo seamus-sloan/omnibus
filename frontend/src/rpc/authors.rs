@@ -20,7 +20,7 @@ use omnibus_shared::AUTHOR_PHOTO_URL_MAX_LEN;
 use omnibus_shared::detect_image_format;
 
 #[cfg(feature = "server")]
-use super::{AdminUser, AuthUser, PoolExt, WorkerExt};
+use super::{internal_rpc_error, AdminUser, AuthUser, PoolExt, WorkerExt};
 
 /// Fetch a single author and all their books. POST for the same reason as
 /// `rpc_get_ebook` — needs `id` in the body.
@@ -121,7 +121,7 @@ pub async fn rpc_set_author_photo_url(id: i64, url: String) -> Result<()> {
     }
     let (_mime_hint, bytes) = db::author_photos::fetch_remote_image(trimmed)
         .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+        .map_err(|e| internal_rpc_error("fetch remote author photo", e))?;
     let mime = detect_image_format(&bytes)
         .ok_or_else(|| ServerFnError::new("file at URL does not appear to be a valid image"))?;
     db::upsert_author_photo(
