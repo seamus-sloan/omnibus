@@ -41,7 +41,7 @@ cat > "$iconset/Contents.json" <<'JSON'
 }
 JSON
 
-actool "$work/AppIcon.xcassets" \
+xcrun actool "$work/AppIcon.xcassets" \
   --compile "$APP" \
   --platform "$SDK" \
   --minimum-deployment-target 15.0 \

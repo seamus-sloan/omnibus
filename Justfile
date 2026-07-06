@@ -78,7 +78,8 @@ check: lint test
 ios-icon app="":
     nix develop .#mobile --command bash -ec '\
         app="{{app}}"; \
-        [ -n "$app" ] || app="$CARGO_TARGET_DIR/dx/omnibus-mobile/debug/ios/OmnibusMobile.app"; \
+        : "${CARGO_TARGET_DIR:="$HOME/.cache/cargo-target/$(basename "$(pwd)")"}"; \
+        [ -n "$app" ] || app="$(find "$CARGO_TARGET_DIR/dx/omnibus-mobile" -type d -name "*.app" -path "*ios*" -print0 2>/dev/null | xargs -0 ls -dt 2>/dev/null | head -1)"; \
         scripts/apply-ios-icon.sh "$app" iphonesimulator'
 
 # Build, brand, sign, and install Omnibus on a connected iPhone. Requires an
