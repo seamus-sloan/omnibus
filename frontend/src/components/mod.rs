@@ -46,6 +46,12 @@ pub use chip_editor::ChipEditor;
 
 pub mod atrium;
 
+// Shared cover-tile chrome (`thumb_srcs` + the `CoverTile` wrapper) used by
+// the landing grid, shelf detail, and the shelf pickers. Platform-agnostic so
+// the same markup ships under web SSR/WASM and mobile native.
+pub mod cover_tile;
+pub use cover_tile::{CoverTile, CoverTileKind};
+
 // F1.11 follow-up: hover-overlay "edit photo" affordance + modal with
 // three actions (paste URL, upload file, scan Open Library). Mounted by
 // the author detail hero only — the `/authors` index renders cached

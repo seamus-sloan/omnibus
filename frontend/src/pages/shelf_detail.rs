@@ -13,8 +13,8 @@ use omnibus_shared::{
     UpdateShelfRequest, Visibility,
 };
 
-use crate::components::atrium::Cover;
-use crate::components::{RailActive, ShelvesRail};
+use crate::components::cover_tile::toggle_picked;
+use crate::components::{CoverTile, CoverTileKind, RailActive, ShelvesRail};
 use crate::{data, use_server_url, Route};
 
 /// Shelf detail page — see the module doc for the smart/manual split.
@@ -159,9 +159,19 @@ fn member_grid(
     rsx! {
         div { class: "lib-grid shelf-grid", "data-testid": "shelf-grid", role: "list",
             for book in books.iter().cloned() {
-                div {
-                    key: "{book.id}",
-                    {member_tile(book, server_url)}
+                {
+                    let title = book.title.as_deref().unwrap_or(&book.filename).to_string();
+                    rsx! {
+                        div {
+                            key: "{book.id}",
+                            CoverTile {
+                                book,
+                                server_url: server_url.to_string(),
+                                sizes: "(max-width: 640px) 160px, 200px".to_string(),
+                                kind: CoverTileKind::MemberLink { title },
+                            }
+                        }
+                    }
                 }
             }
             if !is_smart {
@@ -179,33 +189,6 @@ fn member_grid(
                     }
                 }
             }
-        }
-    }
-}
-
-/// One member-book cover tile linking to the detail page. Uses [`Link`] (which
-/// renders an `<a>` without a hook) rather than `use_navigator()` — this is a
-/// plain fn rendered once per book, so calling a hook here would vary the
-/// parent's hook count with the list length and break Dioxus's hook order.
-fn member_tile(book: EbookMetadata, server_url: &str) -> Element {
-    let uuid = book.unique_identifier.clone().unwrap_or_default();
-    let title = book.title.as_deref().unwrap_or(&book.filename).to_string();
-    let (src, srcset) = thumb_srcs(&book, &uuid, server_url);
-
-    rsx! {
-        Link {
-            to: Route::BookDetail { uuid: uuid.clone() },
-            class: "cover-link lib-tile",
-            role: "listitem",
-            "data-testid": "shelf-tile",
-            aria_label: "Open details for {title}",
-            Cover {
-                book,
-                src_override: src,
-                srcset,
-                sizes: Some("(max-width: 640px) 160px, 200px".to_string()),
-            }
-            div { class: "lib-tile-title", "{title}" }
         }
     }
 }
@@ -411,9 +394,24 @@ fn AddBooksModal(shelf_id: i64, on_close: EventHandler<()>, on_added: EventHandl
                     }
                     div { class: "shelf-picker-grid",
                         for book in filtered.iter().map(|b| (*b).clone()) {
-                            div {
-                                key: "{book.id}",
-                                {add_picker_tile(book, &server_url, picked)}
+                            {
+                                let uuid = book.unique_identifier.clone().unwrap_or_default();
+                                let selected = picked.read().contains(&uuid);
+                                let mut picked = picked;
+                                rsx! {
+                                    div {
+                                        key: "{book.id}",
+                                        CoverTile {
+                                            book,
+                                            server_url: server_url.to_string(),
+                                            sizes: "120px".to_string(),
+                                            kind: CoverTileKind::Selectable {
+                                                selected,
+                                                on_toggle: EventHandler::new(move |_| toggle_picked(&mut picked, &uuid)),
+                                            },
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -434,63 +432,6 @@ fn AddBooksModal(shelf_id: i64, on_close: EventHandler<()>, on_added: EventHandl
                 }
             }
         }
-    }
-}
-
-/// One selectable tile in the add-books picker.
-fn add_picker_tile(book: EbookMetadata, server_url: &str, picked: Signal<Vec<String>>) -> Element {
-    let mut picked = picked;
-    let uuid = book.unique_identifier.clone().unwrap_or_default();
-    let selected = picked.read().contains(&uuid);
-    let (src, srcset) = thumb_srcs(&book, &uuid, server_url);
-    let toggle_uuid = uuid.clone();
-    let class = if selected {
-        "shelf-cover-tile shelf-cover-tile--selectable shelf-cover-tile--picked"
-    } else {
-        "shelf-cover-tile shelf-cover-tile--selectable"
-    };
-
-    rsx! {
-        button {
-            r#type: "button",
-            class: "{class}",
-            "aria-pressed": if selected { "true" } else { "false" },
-            onclick: move |_| {
-                let u = toggle_uuid.clone();
-                picked.with_mut(|v| {
-                    if let Some(pos) = v.iter().position(|x| x == &u) {
-                        v.remove(pos);
-                    } else {
-                        v.push(u);
-                    }
-                });
-            },
-            Cover {
-                book,
-                src_override: src,
-                srcset,
-                sizes: Some("120px".to_string()),
-            }
-        }
-    }
-}
-
-/// Build the responsive thumbnail `src`/`srcset` for a book (mirrors GridTile).
-fn thumb_srcs(
-    book: &EbookMetadata,
-    uuid: &str,
-    server_url: &str,
-) -> (Option<String>, Option<String>) {
-    if book.cover_url.is_some() {
-        let sm = crate::thumb_url(server_url, uuid, "sm");
-        let md = crate::thumb_url(server_url, uuid, "md");
-        let lg = crate::thumb_url(server_url, uuid, "lg");
-        (
-            Some(md.clone()),
-            Some(format!("{sm} 160w, {md} 320w, {lg} 640w")),
-        )
-    } else {
-        (None, None)
     }
 }
 

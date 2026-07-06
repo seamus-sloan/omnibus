@@ -37,22 +37,11 @@ fn GridTile(book: EbookMetadata, server_url: String) -> Element {
     let book_for_cover = book.clone();
     let nav = use_navigator();
 
-    // Prefer the responsive `/api/thumbs/:uuid/{sm,md,lg}` endpoint over
-    // the raw `/api/covers/:uuid`: smaller payload (WebP, resized per
-    // slot). `thumb_url` server-prefixes and (mobile) appends the session
-    // token so each `srcset` candidate authenticates. Books with no cover
-    // fall back to the Atrium plate template.
-    let (thumb_src, thumb_srcset) = if book.cover_url.is_some() {
-        let sm = crate::thumb_url(&server_url, &uuid, "sm");
-        let md = crate::thumb_url(&server_url, &uuid, "md");
-        let lg = crate::thumb_url(&server_url, &uuid, "lg");
-        (
-            Some(md.clone()),
-            Some(format!("{sm} 160w, {md} 320w, {lg} 640w")),
-        )
-    } else {
-        (None, None)
-    };
+    // Prefer the responsive `/api/thumbs/:uuid/{sm,md,lg}` endpoint over the
+    // raw `/api/covers/:uuid`: smaller payload (WebP, resized per slot). Books
+    // with no cover fall back to the Atrium plate template.
+    let (thumb_src, thumb_srcset) =
+        crate::components::cover_tile::thumb_srcs(&book, &uuid, &server_url);
 
     let uuid_click = uuid.clone();
     let uuid_key = uuid.clone();

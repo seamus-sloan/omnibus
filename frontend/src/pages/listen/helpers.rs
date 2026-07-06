@@ -1,8 +1,8 @@
 //! Shared helpers for the listen page: timestamp formatting, the audio
-//! progress POST shim, and the audited `window.OmnibusAudio` poke.
+//! progress POST shim, the audited `window.OmnibusAudio` poke, and the
+//! transport click-handler builders shared by the mini-dock and full player.
 //! Consumed by `listen.rs`, `controls`, `speed_panel`, and `bootstrap`.
 
-#[cfg(feature = "web")]
 use dioxus::prelude::*;
 
 /// Vendored hls.js for the HLS fallback path.
@@ -14,6 +14,31 @@ pub(super) const HLS_JS: Asset = asset!("/assets/vendor/hls.min.js");
 pub(super) fn audio_call(method: &str, arg_js: &str) {
     let js = format!("window.OmnibusAudio && window.OmnibusAudio.{method}({arg_js});");
     let _ = dioxus::document::eval(&js);
+}
+
+/// Click handler that toggles play/pause via `window.OmnibusAudio`. No-op on
+/// non-web targets (SSR), where there is no audio element to poke.
+pub(super) fn on_toggle_playback() -> impl FnMut(MouseEvent) + 'static {
+    move |_: MouseEvent| {
+        #[cfg(feature = "web")]
+        audio_call("toggle", "");
+    }
+}
+
+/// Click handler that skips back 30 seconds. No-op on non-web targets.
+pub(super) fn on_skip_back_30() -> impl FnMut(MouseEvent) + 'static {
+    move |_: MouseEvent| {
+        #[cfg(feature = "web")]
+        audio_call("skip", "-30");
+    }
+}
+
+/// Click handler that skips forward 30 seconds. No-op on non-web targets.
+pub(super) fn on_skip_forward_30() -> impl FnMut(MouseEvent) + 'static {
+    move |_: MouseEvent| {
+        #[cfg(feature = "web")]
+        audio_call("skip", "30");
+    }
 }
 
 /// Format `seconds` as `H:MM:SS` (or `MM:SS` when under an hour).
