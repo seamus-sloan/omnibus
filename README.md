@@ -5,13 +5,13 @@
 # Omnibus
 
 **The Plex / Jellyfin for your books.**
-A self-hosted ebook & audiobook library — read in the browser, listen anywhere, and browse a collection that actually looks like one.
+A self-hosted ebook & audiobook library — read in the browser, listen anywhere, and browse a collection that belongs entirely to you.
 
 Built with Rust ([Axum](https://github.com/tokio-rs/axum) + [Dioxus](https://dioxuslabs.com/)), SQLite, and a native iOS / Android shell.
 
-[![Rust CI](https://github.com/seamus-sloan/omnibus/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/seamus-sloan/omnibus/actions/workflows/rust.yml)
-[![E2E](https://github.com/seamus-sloan/omnibus/actions/workflows/e2e.yml/badge.svg?branch=main)](https://github.com/seamus-sloan/omnibus/actions/workflows/e2e.yml)
-[![CSS Lint](https://github.com/seamus-sloan/omnibus/actions/workflows/css-lint.yml/badge.svg?branch=main)](https://github.com/seamus-sloan/omnibus/actions/workflows/css-lint.yml)
+[![Clippy & Tests](https://img.shields.io/github/actions/workflow/status/seamus-sloan/omnibus/rust.yml?branch=main&label=Clippy%20%26%20Tests&logo=rust&logoColor=white)](https://github.com/seamus-sloan/omnibus/actions/workflows/rust.yml)
+[![Playwright](https://img.shields.io/github/actions/workflow/status/seamus-sloan/omnibus/e2e.yml?branch=main&label=Playwright&logo=playwright&logoColor=white)](https://github.com/seamus-sloan/omnibus/actions/workflows/e2e.yml)
+[![CSS Lint](https://img.shields.io/github/actions/workflow/status/seamus-sloan/omnibus/css-lint.yml?branch=main&label=CSS%20Lint)](https://github.com/seamus-sloan/omnibus/actions/workflows/css-lint.yml)
 [![Docker Hub](https://img.shields.io/docker/v/sesloan/omnibus?sort=semver&logo=docker&logoColor=white&label=docker%20hub&color=2496ED)](https://hub.docker.com/r/sesloan/omnibus/tags)
 [![Image size](https://img.shields.io/docker/image-size/sesloan/omnibus?sort=semver&logo=docker&logoColor=white&label=image&color=2496ED)](https://hub.docker.com/r/sesloan/omnibus/tags)
 [![Docker pulls](https://img.shields.io/docker/pulls/sesloan/omnibus?logo=docker&logoColor=white&color=2496ED)](https://hub.docker.com/r/sesloan/omnibus)
@@ -34,11 +34,12 @@ Built with Rust ([Axum](https://github.com/tokio-rs/axum) + [Dioxus](https://dio
 - 📚 **A real library, not a file list** — cover-art grid or dense metadata table, plus smart & shared shelves that update themselves.
 - 📖 **In-browser EPUB reader** — pick up where you left off, progress synced server-side.
 - 🖍️ **Highlights & quote cards** — save passages and export a shareable quote card in a tap.
+- 📤 **Send to your device** — push any ebook straight to your Kobo or Kindle, no Calibre round-trip.
 - 🎧 **Audiobook player** — HLS-transcoded streaming with a chapter map, resumable across devices.
 - ⌘ **Command-palette search** — `⌘K` for full-text search across titles, authors, series, and tags.
-- 🧭 **Rich book pages** — ratings, a reading journal, series tracking, reading insights, and Send-to-Kindle / Kobo.
+- 🧭 **Rich book pages** — your own ratings, reading journals, series tracking, and reading insights on your own database.
 - 🔗 **Discovery** — browse by author, series, and tag; "readers also enjoyed" suggestions via Hardcover.
-- 📱 **Native mobile app** — a thin iOS / Android shell over the same backend.
+- 📱 **Native mobile app** — an iOS / Android shell over the same backend.
 - 🐳 **Self-hosted, Jellyfin-style** — bind-mount your library, one `docker compose up`.
 
 ## Screenshots
@@ -47,9 +48,9 @@ Built with Rust ([Axum](https://github.com/tokio-rs/axum) + [Dioxus](https://dio
 
 | Read & highlight | Listen |
 |:---:|:---:|
-| <img src="docs/screenshots/reader.png" alt="EPUB reader with quote-card composer" width="420" /> | <img src="docs/screenshots/player.png" alt="Audiobook player with chapter map" width="420" /> |
+| <img src="docs/screenshots/reader.png" alt="EPUB reader with quote-card composer" height="250" /> | <img src="docs/screenshots/player.png" alt="Audiobook player with chapter map" height="250" /> |
 | **Search everything** | **Every book, in depth** |
-| <img src="docs/screenshots/search.png" alt="Command-palette search" width="420" /> | <img src="docs/screenshots/discovery.png" alt="Book detail page" width="420" /> |
+| <img src="docs/screenshots/search.png" alt="Command-palette search" height="250" /> | <img src="docs/screenshots/discovery.png" alt="Book detail page" height="250" /> |
 
 </div>
 
@@ -86,9 +87,29 @@ nix develop --command zsh   # …keeping your shell
 direnv allow                # or auto-load via direnv (once)
 ```
 
+**The `just` recipes are the quickest way in.** They self-wrap in the right Nix
+shell, so they run straight from the slim `default` shell:
+
+```bash
+just serve       # full stack in Zellij — server + web + mobile + Playwright panes
+just serve-pc    # …the same stack via process-compose
+just dev-up      # just the web server: port-walks, seeds the admin user
+just dev-bounce  # cleanly restart a wedged dev server (e.g. after a migration)
+```
+
+`just serve` / `just serve-pc` multiplex every platform into one session using
+the shared [`justfile`](justfile). Prefer to drive the pieces yourself?
+
+```bash
+dx serve --platform web -p omnibus   # fullstack SSR + WASM at http://localhost:8080
+cargo run -p omnibus                 # server only (native backend) at http://0.0.0.0:3000
+```
+
+### Nix shells
+
 The flake exposes purpose-built shells so daily cargo work doesn't pull in
 Playwright + mobile + audit tooling. Opt into a heavier shell only when you need
-it:
+it (the `just` recipes above pick the right one for you):
 
 | Shell | When to use |
 |---|---|
@@ -97,27 +118,6 @@ it:
 | `.#e2e` | `npx playwright test` (the Chromium bundle lives here) |
 | `.#mobile` | Android / iOS builds (Rust cross-targets + JDK + Android NDK detect) |
 | `.#audit` | `cargo audit` / `cargo deny` |
-
-`just serve`, `just serve-pc`, `just dev-up`, and `just dev-bounce` self-wrap in
-the right shell, so they run straight from `default`.
-
-### Run the full stack
-
-`just serve` (Zellij) and `just serve-pc` (process-compose) multiplex every
-platform — frontend, server, mobile, and Playwright — into one session using the
-shared [`justfile`](justfile):
-
-```bash
-just serve       # Zellij
-just serve-pc    # process-compose
-```
-
-Or run pieces on their own:
-
-```bash
-dx serve --platform web -p omnibus   # fullstack SSR + WASM at http://localhost:8080
-cargo run -p omnibus                 # server only (native backend) at http://0.0.0.0:3000
-```
 
 | Variable | Default |
 |---|---|
@@ -176,7 +176,7 @@ npm install                 # first time only; do NOT run `npx playwright instal
 npx playwright test
 ```
 
-*Mobile UI tests will land later using [Maestro](https://github.com/mobile-dev-inc/maestro).*
+*Mobile UI tests will land later using [MobileWright](https://mobilewright.dev/).*
 
 ## Project layout
 
