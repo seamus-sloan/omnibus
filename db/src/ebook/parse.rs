@@ -311,18 +311,37 @@ mod tests {
         out
     }
 
+    // The OCF spec requires the archive to open with an uncompressed
+    // `mimetype` entry holding exactly `application/epub+zip` (no trailing
+    // newline). `build_zip` stores every entry, and `doc_from_opf` lists this
+    // first, so the fixtures are spec-complete rather than leaning on the
+    // `epub` crate's tolerance for a missing mimetype.
+    const MIMETYPE: &[u8] = b"application/epub+zip";
+
     const CONTAINER_XML: &[u8] = br##"<?xml version="1.0"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
   <rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles>
 </container>"##;
 
+    // Minimal EPUB3 navigation document the OPF manifest references. Included
+    // so the manifest points at a real resource instead of a dangling href.
+    const NAV_XHTML: &[u8] = br##"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <head><title>Contents</title></head>
+  <body>
+    <nav epub:type="toc"><ol><li><a href="content.opf">Start</a></li></ol></nav>
+  </body>
+</html>"##;
+
     /// Parse an in-memory EPUB whose sole OPF is `opf`. The manifest/spine are
     /// required by the parser, so every fixture below wraps its `<metadata>`
-    /// in [`opf_package`].
+    /// in [`opf_package`]. The `mimetype` entry comes first per the OCF spec.
     fn doc_from_opf(opf: &str) -> EpubDoc<Cursor<Vec<u8>>> {
         let zip = build_zip(&[
+            ("mimetype", MIMETYPE),
             ("META-INF/container.xml", CONTAINER_XML),
             ("content.opf", opf.as_bytes()),
+            ("nav.xhtml", NAV_XHTML),
         ]);
         EpubDoc::from_reader(Cursor::new(zip)).expect("parse in-memory epub")
     }
