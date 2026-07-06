@@ -253,7 +253,7 @@ fn render_search_pane(
             "Find the other copy of this book. Its files, tags, highlights and reading "
             "progress move onto the entry you\u{2019}re viewing \u{2014} and the duplicate disappears."
         }
-        {render_target_rail(target.clone(), target_title.clone())}
+        {render_target_rail(target.clone(), &target_title)}
         div { class: "mg-search",
             svg {
                 class: "mg-search-icon",
@@ -316,7 +316,7 @@ async fn async_sleep_ms(ms: u32) {
 
 /// Pinned "this is the keeper" context shown above the search field: the
 /// current book's cover + title + author/series, with a "stays" note.
-fn render_target_rail(target: EbookMetadata, title: String) -> Element {
+fn render_target_rail(target: EbookMetadata, title: &str) -> Element {
     let author = target
         .creators
         .first()

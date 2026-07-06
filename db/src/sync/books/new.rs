@@ -78,9 +78,7 @@ pub(super) async fn sync_new(
         let inserted = insert_book_row(tx, library_id, library_path, b).await?;
         insert_metadata_links(tx, inserted.book_id, &b.metadata).await?;
         upsert_fts(tx, inserted.book_id).await?;
-        if let Some((mime, bytes)) = &b.cover {
-            new_covers.push((inserted.uuid, mime.clone(), bytes.clone()));
-        }
+        super::super::push_cover(&mut new_covers, inserted.uuid, &b.cover);
         on_book_written();
     }
     Ok(new_covers)

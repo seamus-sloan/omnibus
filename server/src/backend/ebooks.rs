@@ -96,7 +96,7 @@ pub(super) async fn get_ebooks(
         },
         None => None,
     };
-    let path = ebook.clone().or_else(|| audiobook.clone());
+    let path = ebook.as_ref().or(audiobook.as_ref()).cloned();
     let paths = db::collect_paths(ebook.as_deref(), audiobook.as_deref());
     let page = match db::list_books_page(
         &state.pool,
