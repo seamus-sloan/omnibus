@@ -328,10 +328,22 @@ pub fn SendToKoboButton(
     }
 }
 
+/// True when `name`'s base (the part before any extension) is a Windows
+/// reserved device name (case-insensitive) — `CON`, `PRN`, `AUX`, `NUL`,
+/// `COM1`–`COM9`, `LPT1`–`LPT9`. Creating a folder or file with one of these
+/// names fails on Windows even though FAT itself allows it.
+#[cfg(not(feature = "mobile"))]
+fn is_windows_reserved_name(name: &str) -> bool {
+    let base = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+    matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || matches!(base.strip_prefix("COM").or_else(|| base.strip_prefix("LPT")), Some(d) if matches!(d, "1"|"2"|"3"|"4"|"5"|"6"|"7"|"8"|"9"))
+}
+
 /// Sanitize one path component for a Kobo's FAT/exFAT filesystem: replace the
 /// characters illegal on Windows/FAT (and control chars) with spaces, collapse
-/// whitespace, and strip stray leading/trailing dots and spaces. `None` when
-/// nothing usable survives. Pure — unit-tested without a browser.
+/// whitespace, strip stray leading/trailing dots and spaces, and defuse Windows
+/// reserved device names. `None` when nothing usable survives. Pure —
+/// unit-tested without a browser.
 #[cfg(not(feature = "mobile"))]
 fn kobo_path_segment(raw: &str) -> Option<String> {
     let cleaned: String = raw
@@ -347,7 +359,15 @@ fn kobo_path_segment(raw: &str) -> Option<String> {
     // boundary, then re-trim in case the cut left a trailing dot/space.
     let capped: String = collapsed.chars().take(120).collect();
     let trimmed = capped.trim_matches(|c| c == '.' || c == ' ');
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Underscore-prefix a reserved device name so the OS accepts it.
+    if is_windows_reserved_name(trimmed) {
+        Some(format!("_{trimmed}"))
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 /// Build the `<Author>/<Title>` subfolder a Kobo write nests the file under, or
@@ -495,9 +515,10 @@ await (async () => {
     const m = /filename="?([^"]+)"?/.exec(cd);
     const filename = (m && m[1]) || `${uuid}.kepub.epub`;
     const blob = await resp.blob();
-    // Nest under <Author>/<Title>/ (each segment pre-sanitized server-side),
-    // creating folders as needed, so the file lands in the same layout Calibre
-    // and the Kobo use instead of a bare uuid file at the drive root.
+    // Nest under <Author>/<Title>/ (each segment sanitized in the Rust caller
+    // before interpolation), creating folders as needed, so the file lands in
+    // the same layout Calibre and the Kobo use instead of a bare uuid file at
+    // the drive root.
     let target = dir;
     if (subdir) {
       for (const seg of subdir.split('/')) {
@@ -930,6 +951,32 @@ mod tests {
     #[test]
     fn kobo_subdir_is_none_when_both_segments_are_empty() {
         assert_eq!(super::kobo_subdir("  ", "").as_deref(), None);
+    }
+
+    #[cfg(not(feature = "mobile"))]
+    #[test]
+    fn kobo_path_segment_defuses_windows_reserved_names() {
+        // Case-insensitive, and ignoring an extension after a dot.
+        assert_eq!(super::kobo_path_segment("CON").as_deref(), Some("_CON"));
+        assert_eq!(super::kobo_path_segment("nul").as_deref(), Some("_nul"));
+        assert_eq!(super::kobo_path_segment("Aux").as_deref(), Some("_Aux"));
+        assert_eq!(super::kobo_path_segment("COM4").as_deref(), Some("_COM4"));
+        assert_eq!(
+            super::kobo_path_segment("lpt9.txt").as_deref(),
+            Some("_lpt9.txt")
+        );
+    }
+
+    #[cfg(not(feature = "mobile"))]
+    #[test]
+    fn kobo_path_segment_leaves_non_reserved_lookalikes_alone() {
+        // COM0/LPT0 aren't reserved; and a reserved word as a substring is fine.
+        assert_eq!(super::kobo_path_segment("COM0").as_deref(), Some("COM0"));
+        assert_eq!(
+            super::kobo_path_segment("Console").as_deref(),
+            Some("Console")
+        );
+        assert_eq!(super::kobo_path_segment("Conan").as_deref(), Some("Conan"));
     }
 
     #[test]
