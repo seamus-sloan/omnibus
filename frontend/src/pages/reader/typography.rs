@@ -2,7 +2,7 @@
 //! are cross-book, per-user reader prefs (typeface, line spacing, margins);
 //! the reader page reads them on mount and writes them on every change.
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Typeface {
     Editorial,
     Classic,
@@ -40,7 +40,7 @@ impl Typeface {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum LineSpacing {
     Tight,
     Cozy,
@@ -75,7 +75,7 @@ impl LineSpacing {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Margins {
     Narrow,
     Normal,
@@ -113,7 +113,7 @@ impl Margins {
 /// Single-page vs two-page spread. Maps to epub.js `rendition.spread(...)`:
 /// `"none"` forces a single column, `"auto"` lets epub.js pair pages when the
 /// viewport is wide enough.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Spread {
     Single,
     Double,
@@ -161,4 +161,55 @@ pub(crate) fn save_reader_pref(key: &str, value: &str) {
 #[cfg(feature = "web")]
 pub(crate) fn load_reader_pref(key: &str) -> Option<String> {
     local_storage().and_then(|s| s.get_item(key).ok().flatten())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The storage token is the persistence contract: a `to_storage` arm that
+    // drifts out of lockstep with its `from_storage` arm silently loses a
+    // saved preference on the next reader mount. These round-trips pin every
+    // variant of every enum so that drift fails here, not in a browser.
+
+    #[test]
+    fn typeface_round_trips_through_storage_for_every_variant() {
+        for variant in [Typeface::Editorial, Typeface::Classic, Typeface::Modern] {
+            assert_eq!(Typeface::from_storage(variant.to_storage()), Some(variant));
+        }
+    }
+
+    #[test]
+    fn line_spacing_round_trips_through_storage_for_every_variant() {
+        for variant in [LineSpacing::Tight, LineSpacing::Cozy, LineSpacing::Airy] {
+            assert_eq!(
+                LineSpacing::from_storage(variant.to_storage()),
+                Some(variant)
+            );
+        }
+    }
+
+    #[test]
+    fn margins_round_trips_through_storage_for_every_variant() {
+        for variant in [Margins::Narrow, Margins::Normal, Margins::Wide] {
+            assert_eq!(Margins::from_storage(variant.to_storage()), Some(variant));
+        }
+    }
+
+    #[test]
+    fn spread_round_trips_through_storage_for_every_variant() {
+        for variant in [Spread::Single, Spread::Double] {
+            assert_eq!(Spread::from_storage(variant.to_storage()), Some(variant));
+        }
+    }
+
+    #[test]
+    fn from_storage_returns_none_for_unrecognized_token() {
+        // One per enum: an unknown stored value must fall through to `None`
+        // so the caller can drop to its default rather than mis-restore.
+        assert_eq!(Typeface::from_storage("nonsense"), None);
+        assert_eq!(LineSpacing::from_storage(""), None);
+        assert_eq!(Margins::from_storage("NARROW"), None);
+        assert_eq!(Spread::from_storage("triple"), None);
+    }
 }
