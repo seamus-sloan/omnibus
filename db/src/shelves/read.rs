@@ -69,7 +69,7 @@ pub async fn list_visible_shelves(
     let mut manual_ids = Vec::new();
     for r in &rows {
         let id: i64 = r.try_get("id")?;
-        let kind = parse_kind(r.try_get("kind")?)?;
+        let kind = parse_kind(&r.try_get::<String, _>("kind")?)?;
         match kind {
             ShelfKind::Smart => smart_ids.push(id),
             ShelfKind::Manual => manual_ids.push(id),
@@ -79,7 +79,7 @@ pub async fn list_visible_shelves(
             owner_user_id: r.try_get("owner_user_id")?,
             kind,
             name: r.try_get("name")?,
-            visibility: parse_visibility(r.try_get("visibility")?)?,
+            visibility: parse_visibility(&r.try_get::<String, _>("visibility")?)?,
             accent: r.try_get("accent")?,
             match_mode: r.try_get("match_mode")?,
         });
@@ -125,7 +125,7 @@ pub async fn get_shelf(pool: &SqlitePool, id: i64) -> Result<Option<Shelf>, Shel
     };
 
     let owner_user_id: i64 = r.try_get("owner_user_id")?;
-    let kind = parse_kind(r.try_get("kind")?)?;
+    let kind = parse_kind(&r.try_get::<String, _>("kind")?)?;
     let match_mode = r
         .try_get::<Option<String>, _>("match_mode")?
         .as_deref()
@@ -153,7 +153,7 @@ pub async fn get_shelf(pool: &SqlitePool, id: i64) -> Result<Option<Shelf>, Shel
         kind,
         name: r.try_get("name")?,
         description: r.try_get("description")?,
-        visibility: parse_visibility(r.try_get("visibility")?)?,
+        visibility: parse_visibility(&r.try_get::<String, _>("visibility")?)?,
         accent: r.try_get("accent")?,
         match_mode,
         rules,
@@ -404,12 +404,12 @@ fn order_by_sql(sort: SortKey, dir: SortDir) -> String {
     }
 }
 
-fn parse_kind(s: String) -> Result<ShelfKind, ShelfError> {
-    ShelfKind::from_str(&s).ok_or_else(|| ShelfError::InvalidRule(format!("unknown kind {s:?}")))
+fn parse_kind(s: &str) -> Result<ShelfKind, ShelfError> {
+    ShelfKind::from_str(s).ok_or_else(|| ShelfError::InvalidRule(format!("unknown kind {s:?}")))
 }
 
-fn parse_visibility(s: String) -> Result<Visibility, ShelfError> {
-    Visibility::from_str(&s)
+fn parse_visibility(s: &str) -> Result<Visibility, ShelfError> {
+    Visibility::from_str(s)
         .ok_or_else(|| ShelfError::InvalidRule(format!("unknown visibility {s:?}")))
 }
 
