@@ -137,7 +137,13 @@ fn BdTitleCol(
             if let Some(desc) = b.description.as_deref() {
                 div { class: "bd-desc", "data-testid": "book-description", dangerous_inner_html: "{desc}" }
             }
-            BdCtaRow { uuid: uuid.clone(), has_ebook, has_audio }
+            BdCtaRow {
+                uuid: uuid.clone(),
+                has_ebook,
+                has_audio,
+                book_author: b.creators.first().map(|c| c.name.clone()).unwrap_or_default(),
+                book_title: title.clone(),
+            }
             div { class: "bd-progress-meta", aria_hidden: "true",
                 div { class: "bd-progress-line",
                     span { class: "mono", "Not started" }
@@ -159,7 +165,13 @@ fn BdTitleCol(
 /// CTA button row: primary read/listen action, secondary listen, and the
 /// "Export" dropdown that collects the per-device send/download actions.
 #[component]
-fn BdCtaRow(uuid: String, has_ebook: bool, has_audio: bool) -> Element {
+fn BdCtaRow(
+    uuid: String,
+    has_ebook: bool,
+    has_audio: bool,
+    #[props(default)] book_author: String,
+    #[props(default)] book_title: String,
+) -> Element {
     rsx! {
         div { class: "bd-cta-row",
             if has_ebook {
@@ -202,7 +214,14 @@ fn BdCtaRow(uuid: String, has_ebook: bool, has_audio: bool) -> Element {
             }
             // Download + Send-to-Kindle/Kobo live behind one "Export" menu so
             // the CTA row stays a single primary action plus this dropdown.
-            BdExportMenu { uuid: uuid.clone(), has_ebook, has_audio }
+            // Author + title feed the Send-to-Kobo `<Author>/<Title>/` layout.
+            BdExportMenu {
+                uuid: uuid.clone(),
+                has_ebook,
+                has_audio,
+                book_author: book_author.clone(),
+                book_title: book_title.clone(),
+            }
         }
     }
 }

@@ -28,6 +28,11 @@ and you copy it over yourself. Both are described below.
 4. When it reports success, **eject the Kobo safely**, then unplug it. The book
    appears in your library, titled from its own metadata (not the filename).
 
+On this one-click write path, Omnibus files each book under `<Author>/<Title>/`
+on the drive (the same tidy layout Calibre uses), so browsing the device over
+USB stays organized rather than a pile of files at the root. (The download-then-
+copy path below hands you a single file instead — drop it wherever you like.)
+
 ## Other browsers — download, then copy
 
 1. Open the book's page in Omnibus and click **Send to Kobo**. A file named
