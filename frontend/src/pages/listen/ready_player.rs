@@ -13,7 +13,7 @@ use super::bookmarks::use_bookmarks;
 use super::bookmarks_drawer::BookmarksDrawer;
 use super::chapters_drawer::ChaptersDrawer;
 use super::overlays::{FailedOverlay, PreparingOverlay};
-use super::sleep::{end_of_chapter_seconds, sleep_toolbar_label, use_sleep_timer};
+use super::sleep::{end_of_chapter_seconds, sleep_toolbar_label, use_sleep_timer, SleepChoice};
 use super::sleep_panel::SleepPanel;
 use super::speed_panel::SpeedPanel;
 use super::stage::{
@@ -161,15 +161,13 @@ pub(super) fn ReadyPlayer(
     playback_failed: Signal<bool>,
     chapters: Signal<Vec<ChapterInfo>>,
 ) -> Element {
-    let duration = signals.duration;
     let elapsed = signals.elapsed;
-    let playing = signals.playing;
     let rate = signals.rate;
     let hls_ready = signals.hls_ready;
-    let mut speed_panel_open = use_signal(|| false);
-    let mut sleep_panel_open = use_signal(|| false);
-    let mut bookmarks_open = use_signal(|| false);
-    let mut chapters_open = use_signal(|| false);
+    let speed_panel_open = use_signal(|| false);
+    let sleep_panel_open = use_signal(|| false);
+    let bookmarks_open = use_signal(|| false);
+    let chapters_open = use_signal(|| false);
 
     // Sleep timer + bookmark state. Both are custom hooks declared
     // unconditionally so SSR/WASM hook order matches (rule 07); their web
@@ -183,6 +181,135 @@ pub(super) fn ReadyPlayer(
         let elapsed_now = elapsed();
         chapter_index_for_elapsed(&chs, elapsed_now)
     });
+
+    let panes = OverlayPanes {
+        speed_panel_open,
+        sleep_panel_open,
+        bookmarks_open,
+        chapters_open,
+    };
+
+    // `seek` is shared by the stage's chapter list and the chapters/bookmarks
+    // drawers, so it's built once here and handed to both children.
+    let on_chapter_seek = move |_secs: f64| {
+        #[cfg(feature = "web")]
+        super::helpers::audio_call("seek", &_secs.to_string());
+    };
+
+    // Sleep + bookmark actions are lifted here so `PlayerOverlays` can stay a
+    // pure passthrough — `SleepController` isn't `PartialEq`, so it can't be a
+    // component prop, but these `EventHandler`s can.
+    let on_sleep_select = move |secs: i32| sleep.select_seconds(secs);
+    let on_sleep_end_of_chapter = move |_: ()| {
+        let chs_now = chapters.peek().clone();
+        let idx = current_chapter_index();
+        if let Some(secs) = end_of_chapter_seconds(&chs_now, idx, *elapsed.peek()) {
+            sleep.select_end_of_chapter(secs);
+        }
+    };
+    let on_sleep_toggle_fade = move |_: ()| sleep.toggle_fade();
+    let on_bookmark_add = move |_: ()| {
+        let chs_now = chapters.peek().clone();
+        bookmarks.create(*elapsed.peek(), &chs_now);
+    };
+
+    let title = book.title.clone().unwrap_or_else(|| book.filename.clone());
+    let author = book
+        .creators
+        .first()
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| "Unknown Author".to_string());
+    let ready = hls_ready();
+    let failed = playback_failed();
+
+    let accent_style = book
+        .accent
+        .as_deref()
+        .map(|a| format!("--accent: {a};"))
+        .unwrap_or_default();
+
+    let chs = chapters();
+    let ch_idx = current_chapter_index();
+
+    // Reactive sleep-timer reads — re-render the toolbar label + panel live.
+    let sleep_remaining = (sleep.remaining)();
+    let sleep_active = matches!(sleep_remaining, Some(s) if s > 0);
+    let sleep_display = SleepDisplay {
+        remaining: sleep_remaining,
+        choice: (sleep.choice)(),
+        fade: (sleep.fade)(),
+        has_chapters: !chs.is_empty(),
+    };
+    let bookmark_toast = (bookmarks.toast)();
+
+    rsx! {
+        div { class: "lp-root", style: "{accent_style}",
+            div { class: "lp-backdrop" }
+
+            Nav {}
+
+            if failed {
+                FailedOverlay {}
+            } else if !ready {
+                PreparingOverlay {}
+            }
+
+            PlayerStageBinding {
+                book: book.clone(),
+                title,
+                author,
+                signals,
+                panes,
+                chapters,
+                current_chapter_index,
+                sleep_active: sleep_active || sleep_panel_open(),
+                sleep_label: sleep_toolbar_label(sleep_remaining),
+                on_chapter_seek: EventHandler::new(on_chapter_seek),
+            }
+
+            PlayerOverlays {
+                panes,
+                uuid: uuid.clone(),
+                rate,
+                sleep_display,
+                bookmarks,
+                bookmark_toast,
+                chapters: chs.clone(),
+                current_chapter_index: ch_idx,
+                elapsed: elapsed(),
+                on_chapter_seek: EventHandler::new(on_chapter_seek),
+                on_sleep_select: EventHandler::new(on_sleep_select),
+                on_sleep_end_of_chapter: EventHandler::new(on_sleep_end_of_chapter),
+                on_sleep_toggle_fade: EventHandler::new(on_sleep_toggle_fade),
+                on_bookmark_add: EventHandler::new(on_bookmark_add),
+            }
+        }
+    }
+}
+
+/// Assemble the transport + toolbar handlers and derived display values, then
+/// render [`PlayerStage`]. Owns the play/skip/seek/rate/chapter callbacks and
+/// the mutually-exclusive toolbar toggles.
+#[component]
+pub(super) fn PlayerStageBinding(
+    book: EbookMetadata,
+    title: String,
+    author: String,
+    signals: PlaybackSignals,
+    panes: OverlayPanes,
+    chapters: Signal<Vec<ChapterInfo>>,
+    current_chapter_index: Memo<usize>,
+    sleep_active: bool,
+    sleep_label: String,
+    on_chapter_seek: EventHandler<f64>,
+) -> Element {
+    let duration = signals.duration;
+    let elapsed = signals.elapsed;
+    let playing = signals.playing;
+    let mut speed_panel_open = panes.speed_panel_open;
+    let mut sleep_panel_open = panes.sleep_panel_open;
+    let mut bookmarks_open = panes.bookmarks_open;
+    let mut chapters_open = panes.chapters_open;
 
     let on_toggle = super::helpers::on_toggle_playback();
     let on_skip_back = super::helpers::on_skip_back_30();
@@ -202,7 +329,6 @@ pub(super) fn ReadyPlayer(
             chapters_open.set(false);
         }
     };
-
     let on_chapter_prev = move |_: MouseEvent| {
         let chs = chapters();
         let idx = current_chapter_index();
@@ -211,7 +337,6 @@ pub(super) fn ReadyPlayer(
             super::helpers::audio_call("seek", &_target.to_string());
         }
     };
-
     let on_chapter_next = move |_: MouseEvent| {
         let chs = chapters();
         let idx = current_chapter_index();
@@ -221,175 +346,166 @@ pub(super) fn ReadyPlayer(
         }
     };
 
-    let on_chapter_seek = move |_secs: f64| {
-        #[cfg(feature = "web")]
-        super::helpers::audio_call("seek", &_secs.to_string());
-    };
-
-    let title = book.title.clone().unwrap_or_else(|| book.filename.clone());
-    let author = book
-        .creators
-        .first()
-        .map(|c| c.name.clone())
-        .unwrap_or_else(|| "Unknown Author".to_string());
     let dur = duration();
     let elapsed_now = elapsed();
-    let remaining = (dur - elapsed_now).max(0.0);
-    let scrub_max = scrub_max(dur);
-    let rate_label = format!("{:.2}\u{00d7}", rate());
-    let play_label = if playing() { "Pause" } else { "Play" }.to_string();
-    let ready = hls_ready();
-    let failed = playback_failed();
-
-    let accent_style = book
-        .accent
-        .as_deref()
-        .map(|a| format!("--accent: {a};"))
-        .unwrap_or_default();
-
     let chs = chapters();
-    let ch_idx = current_chapter_index();
-
-    // Reactive sleep-timer reads — re-render the toolbar label + panel live.
-    let sleep_remaining = (sleep.remaining)();
-    let sleep_choice = (sleep.choice)();
-    let sleep_fade = (sleep.fade)();
-    let sleep_active = matches!(sleep_remaining, Some(s) if s > 0);
-    let sleep_btn_label = sleep_toolbar_label(sleep_remaining);
-    let has_chapters = !chs.is_empty();
-    let bookmark_toast = (bookmarks.toast)();
 
     rsx! {
-        div { class: "lp-root", style: "{accent_style}",
-            div { class: "lp-backdrop" }
+        PlayerStage {
+            content: PlayerContent {
+                book: book.clone(),
+                title,
+                author,
+                chapters: chs.clone(),
+            },
+            position: PlaybackPosition {
+                elapsed: elapsed_now,
+                duration: dur,
+                remaining: (dur - elapsed_now).max(0.0),
+                scrub_max: scrub_max(dur),
+                current_chapter_index: current_chapter_index(),
+            },
+            transport: TransportState {
+                play_label: if playing() { "Pause" } else { "Play" }.to_string(),
+                playing: playing(),
+                rate_label: format!("{:.2}\u{00d7}", (signals.rate)()),
+                rate_active: speed_panel_open(),
+                has_chapters: !chs.is_empty(),
+            },
+            callbacks: PlayerCallbacks {
+                on_seek: EventHandler::new(on_seek),
+                on_toggle: EventHandler::new(on_toggle),
+                on_skip_back: EventHandler::new(on_skip_back),
+                on_skip_forward: EventHandler::new(on_skip_forward),
+                on_rate: EventHandler::new(on_rate),
+                on_chapter_prev: EventHandler::new(on_chapter_prev),
+                on_chapter_next: EventHandler::new(on_chapter_next),
+                on_chapter_seek,
+            },
+            toolbar: ToolbarState {
+                sleep_active,
+                sleep_label,
+                bookmarks_active: bookmarks_open(),
+                chapters_active: chapters_open(),
+                on_sleep: EventHandler::new(move |_| {
+                    let cur = *sleep_panel_open.peek();
+                    sleep_panel_open.set(!cur);
+                    if !cur {
+                        speed_panel_open.set(false);
+                        bookmarks_open.set(false);
+                        chapters_open.set(false);
+                    }
+                }),
+                on_bookmark: EventHandler::new(move |_| {
+                    let cur = *bookmarks_open.peek();
+                    bookmarks_open.set(!cur);
+                    if !cur {
+                        speed_panel_open.set(false);
+                        sleep_panel_open.set(false);
+                        chapters_open.set(false);
+                    }
+                }),
+                on_chapters: EventHandler::new(move |_| {
+                    let cur = *chapters_open.peek();
+                    chapters_open.set(!cur);
+                    if !cur {
+                        speed_panel_open.set(false);
+                        sleep_panel_open.set(false);
+                        bookmarks_open.set(false);
+                    }
+                }),
+            },
+        }
+    }
+}
 
-            Nav {}
+/// Open/closed state for the four toolbar-driven panes.
+#[derive(Copy, Clone, PartialEq)]
+pub(super) struct OverlayPanes {
+    pub speed_panel_open: Signal<bool>,
+    pub sleep_panel_open: Signal<bool>,
+    pub bookmarks_open: Signal<bool>,
+    pub chapters_open: Signal<bool>,
+}
 
-            if failed {
-                FailedOverlay {}
-            } else if !ready {
-                PreparingOverlay {}
-            }
+/// Reactive sleep-timer values rendered by the sleep panel.
+#[derive(Copy, Clone, PartialEq)]
+pub(super) struct SleepDisplay {
+    pub remaining: Option<i32>,
+    pub choice: SleepChoice,
+    pub fade: bool,
+    pub has_chapters: bool,
+}
 
-            PlayerStage {
-                content: PlayerContent {
-                    book: book.clone(),
-                    title,
-                    author,
-                    chapters: chs.clone(),
-                },
-                position: PlaybackPosition {
-                    elapsed: elapsed_now,
-                    duration: dur,
-                    remaining,
-                    scrub_max,
-                    current_chapter_index: ch_idx,
-                },
-                transport: TransportState {
-                    play_label,
-                    playing: playing(),
-                    rate_label,
-                    rate_active: speed_panel_open(),
-                    has_chapters: !chs.is_empty(),
-                },
-                callbacks: PlayerCallbacks {
-                    on_seek: EventHandler::new(on_seek),
-                    on_toggle: EventHandler::new(on_toggle),
-                    on_skip_back: EventHandler::new(on_skip_back),
-                    on_skip_forward: EventHandler::new(on_skip_forward),
-                    on_rate: EventHandler::new(on_rate),
-                    on_chapter_prev: EventHandler::new(on_chapter_prev),
-                    on_chapter_next: EventHandler::new(on_chapter_next),
-                    on_chapter_seek: EventHandler::new(on_chapter_seek),
-                },
-                toolbar: ToolbarState {
-                    sleep_active: sleep_active || sleep_panel_open(),
-                    sleep_label: sleep_btn_label,
-                    bookmarks_active: bookmarks_open(),
-                    chapters_active: chapters_open(),
-                    on_sleep: EventHandler::new(move |_| {
-                        let cur = *sleep_panel_open.peek();
-                        sleep_panel_open.set(!cur);
-                        if !cur {
-                            speed_panel_open.set(false);
-                            bookmarks_open.set(false);
-                            chapters_open.set(false);
-                        }
-                    }),
-                    on_bookmark: EventHandler::new(move |_| {
-                        let cur = *bookmarks_open.peek();
-                        bookmarks_open.set(!cur);
-                        if !cur {
-                            speed_panel_open.set(false);
-                            sleep_panel_open.set(false);
-                            chapters_open.set(false);
-                        }
-                    }),
-                    on_chapters: EventHandler::new(move |_| {
-                        let cur = *chapters_open.peek();
-                        chapters_open.set(!cur);
-                        if !cur {
-                            speed_panel_open.set(false);
-                            sleep_panel_open.set(false);
-                            bookmarks_open.set(false);
-                        }
-                    }),
-                },
+/// The four toolbar-toggled surfaces plus the bookmark-saved toast. Each
+/// renders only when its backing open-signal (or toast option) is set. Sleep
+/// mutations arrive as `EventHandler`s so the non-`PartialEq` `SleepController`
+/// stays out of props.
+#[component]
+pub(super) fn PlayerOverlays(
+    panes: OverlayPanes,
+    uuid: String,
+    rate: Signal<f64>,
+    sleep_display: SleepDisplay,
+    bookmarks: super::bookmarks::BookmarksController,
+    bookmark_toast: Option<super::bookmarks::BookmarkToast>,
+    chapters: Vec<ChapterInfo>,
+    current_chapter_index: usize,
+    elapsed: f64,
+    on_chapter_seek: EventHandler<f64>,
+    on_sleep_select: EventHandler<i32>,
+    on_sleep_end_of_chapter: EventHandler<()>,
+    on_sleep_toggle_fade: EventHandler<()>,
+    on_bookmark_add: EventHandler<()>,
+) -> Element {
+    let mut speed_panel_open = panes.speed_panel_open;
+    let mut sleep_panel_open = panes.sleep_panel_open;
+    let mut bookmarks_open = panes.bookmarks_open;
+    let mut chapters_open = panes.chapters_open;
+    rsx! {
+        if speed_panel_open() {
+            SpeedPanel {
+                rate,
+                uuid: uuid.clone(),
+                on_close: move |_| speed_panel_open.set(false),
             }
+        }
+        if sleep_panel_open() {
+            SleepPanel {
+                remaining: sleep_display.remaining,
+                choice: sleep_display.choice,
+                fade: sleep_display.fade,
+                has_chapters: sleep_display.has_chapters,
+                on_select: move |secs: i32| on_sleep_select.call(secs),
+                on_end_of_chapter: move |_| on_sleep_end_of_chapter.call(()),
+                on_toggle_fade: move |_| on_sleep_toggle_fade.call(()),
+                on_close: move |_| sleep_panel_open.set(false),
+            }
+        }
+        if bookmarks_open() {
+            BookmarksDrawer {
+                controller: bookmarks,
+                chapters: chapters.clone(),
+                on_seek: on_chapter_seek,
+                on_add: move |_| on_bookmark_add.call(()),
+                on_close: move |_| bookmarks_open.set(false),
+            }
+        }
 
-            if speed_panel_open() {
-                SpeedPanel {
-                    rate,
-                    uuid: uuid.clone(),
-                    on_close: move |_| speed_panel_open.set(false),
-                }
+        if let Some(toast) = bookmark_toast {
+            div { class: "lp-toast", "data-testid": "bookmark-toast",
+                span { class: "lp-toast-icon", "\u{2691}" }
+                span { class: "lp-toast-text", "Bookmark saved" }
+                span { class: "lp-toast-meta", "{toast.time_label} \u{00b7} {toast.chapter_label}" }
             }
-            if sleep_panel_open() {
-                SleepPanel {
-                    remaining: sleep_remaining,
-                    choice: sleep_choice,
-                    fade: sleep_fade,
-                    has_chapters,
-                    on_select: move |secs: i32| sleep.select_seconds(secs),
-                    on_end_of_chapter: move |_| {
-                        let chs_now = chapters.peek().clone();
-                        let idx = current_chapter_index();
-                        if let Some(secs) = end_of_chapter_seconds(&chs_now, idx, *elapsed.peek()) {
-                            sleep.select_end_of_chapter(secs);
-                        }
-                    },
-                    on_toggle_fade: move |_| sleep.toggle_fade(),
-                    on_close: move |_| sleep_panel_open.set(false),
-                }
-            }
-            if bookmarks_open() {
-                BookmarksDrawer {
-                    controller: bookmarks,
-                    chapters: chs.clone(),
-                    on_seek: EventHandler::new(on_chapter_seek),
-                    on_add: EventHandler::new(move |_| {
-                        let chs_now = chapters.peek().clone();
-                        bookmarks.create(*elapsed.peek(), &chs_now);
-                    }),
-                    on_close: move |_| bookmarks_open.set(false),
-                }
-            }
-
-            if let Some(toast) = bookmark_toast {
-                div { class: "lp-toast", "data-testid": "bookmark-toast",
-                    span { class: "lp-toast-icon", "\u{2691}" }
-                    span { class: "lp-toast-text", "Bookmark saved" }
-                    span { class: "lp-toast-meta", "{toast.time_label} \u{00b7} {toast.chapter_label}" }
-                }
-            }
-            if chapters_open() {
-                ChaptersDrawer {
-                    chapters: chs.clone(),
-                    current_chapter_index: ch_idx,
-                    elapsed: elapsed_now,
-                    on_seek: EventHandler::new(on_chapter_seek),
-                    on_close: move |_| chapters_open.set(false),
-                }
+        }
+        if chapters_open() {
+            ChaptersDrawer {
+                chapters: chapters.clone(),
+                current_chapter_index,
+                elapsed,
+                on_seek: on_chapter_seek,
+                on_close: move |_| chapters_open.set(false),
             }
         }
     }
