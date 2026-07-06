@@ -113,53 +113,17 @@ pub(super) fn SpOverlay(open: PaletteOpen) -> Element {
                 onclick: move |evt| evt.stop_propagation(),
                 onkeydown: on_keydown,
 
-                // Input row
-                div { class: "sp-input-wrap",
-                    svg {
-                        class: "sp-input-icon",
-                        width: "18",
-                        height: "18",
-                        view_box: "0 0 24 24",
-                        fill: "none",
-                        stroke: "currentColor",
-                        stroke_width: "2",
-                        stroke_linecap: "round",
-                        stroke_linejoin: "round",
-                        circle { cx: "11", cy: "11", r: "8" }
-                        line { x1: "21", y1: "21", x2: "16.65", y2: "16.65" }
-                    }
-                    input {
-                        class: "sp-input",
-                        "data-testid": "sp-input",
-                        r#type: "text",
-                        placeholder: "Search books, authors, series, tags…",
-                        autofocus: true,
-                        // `autofocus` only fires on initial page load.
-                        // `onmounted` programmatically focuses the input
-                        // when the overlay is dynamically rendered (⌘K).
-                        // Uses `requestAnimationFrame` so the browser has
-                        // finished layout before we `.focus()` — without
-                        // that delay the focus call lands on an element
-                        // that isn't yet painted and the caret never
-                        // appears (this is the timing reason prior
-                        // attempts with `set_focus(true)`/`spawn` failed).
-                        onmounted: move |evt: MountedEvent| {
-                            focus_palette_input(&evt);
-                        },
-                        value: "{query}",
-                        oninput: move |evt| {
-                            let v = evt.value();
-                            query.set(v.clone());
-                            spawn_search(v);
-                            // Typing reverts to "Enter goes to /search" until
-                            // the user re-engages arrow-key navigation.
-                            has_navigated.set(false);
-                            selected.set(0);
-                        },
-                    }
-                    if is_loading {
-                        span { class: "sp-spinner", "…" }
-                    }
+                SpInputRow {
+                    query,
+                    is_loading,
+                    on_input: move |v: String| {
+                        query.set(v.clone());
+                        spawn_search(v);
+                        // Typing reverts to "Enter goes to /search" until
+                        // the user re-engages arrow-key navigation.
+                        has_navigated.set(false);
+                        selected.set(0);
+                    },
                 }
 
                 // Meta line
@@ -179,6 +143,53 @@ pub(super) fn SpOverlay(open: PaletteOpen) -> Element {
 
                 // Footer
                 SpFooter {}
+            }
+        }
+    }
+}
+
+/// Search-icon + autofocused query input, with the debounce/RPC dispatch
+/// delegated to `on_input` and the loading spinner shown while a search runs.
+#[component]
+fn SpInputRow(query: Signal<String>, is_loading: bool, on_input: EventHandler<String>) -> Element {
+    rsx! {
+        div { class: "sp-input-wrap",
+            svg {
+                class: "sp-input-icon",
+                width: "18",
+                height: "18",
+                view_box: "0 0 24 24",
+                fill: "none",
+                stroke: "currentColor",
+                stroke_width: "2",
+                stroke_linecap: "round",
+                stroke_linejoin: "round",
+                circle { cx: "11", cy: "11", r: "8" }
+                line { x1: "21", y1: "21", x2: "16.65", y2: "16.65" }
+            }
+            input {
+                class: "sp-input",
+                "data-testid": "sp-input",
+                r#type: "text",
+                placeholder: "Search books, authors, series, tags…",
+                autofocus: true,
+                // `autofocus` only fires on initial page load.
+                // `onmounted` programmatically focuses the input
+                // when the overlay is dynamically rendered (⌘K).
+                // Uses `requestAnimationFrame` so the browser has
+                // finished layout before we `.focus()` — without
+                // that delay the focus call lands on an element
+                // that isn't yet painted and the caret never
+                // appears (this is the timing reason prior
+                // attempts with `set_focus(true)`/`spawn` failed).
+                onmounted: move |evt: MountedEvent| {
+                    focus_palette_input(&evt);
+                },
+                value: "{query}",
+                oninput: move |evt| on_input.call(evt.value()),
+            }
+            if is_loading {
+                span { class: "sp-spinner", "…" }
             }
         }
     }
