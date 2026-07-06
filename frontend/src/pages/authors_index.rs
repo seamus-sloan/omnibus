@@ -338,6 +338,7 @@ fn LetterNav(
                     if has {
                         rsx! {
                             a {
+                                key: "{l}",
                                 class: "idx-letter idx-letter-on",
                                 href: "#letter-{frag}",
                                 "data-testid": "authors-letter-{frag}",
@@ -346,7 +347,7 @@ fn LetterNav(
                         }
                     } else {
                         rsx! {
-                            span { class: "idx-letter", "{l}" }
+                            span { key: "{l}", class: "idx-letter", "{l}" }
                         }
                     }
                 }

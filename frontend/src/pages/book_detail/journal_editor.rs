@@ -182,6 +182,7 @@ pub(crate) fn BdJournalToolbar(target_id: String) -> Element {
         div { class: "bd-journal-toolbar", "data-testid": "journal-toolbar", role: "toolbar",
             for btn in BUTTONS.iter() {
                 button {
+                    key: "{btn.title}",
                     r#type: "button",
                     class: "btn ghost sm bd-journal-tool",
                     title: "{btn.title}",
