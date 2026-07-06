@@ -31,7 +31,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detects_jpeg() {
+    fn detect_image_format_recognizes_jpeg_magic_bytes() {
         assert_eq!(
             detect_image_format(&[0xFF, 0xD8, 0xFF, 0xE0]),
             Some("image/jpeg".into())
@@ -39,18 +39,18 @@ mod tests {
     }
 
     #[test]
-    fn detects_png() {
+    fn detect_image_format_recognizes_png_magic_bytes() {
         let png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
         assert_eq!(detect_image_format(&png), Some("image/png".into()));
     }
 
     #[test]
-    fn detects_gif() {
+    fn detect_image_format_recognizes_gif_magic_bytes() {
         assert_eq!(detect_image_format(b"GIF89a..."), Some("image/gif".into()));
     }
 
     #[test]
-    fn detects_webp() {
+    fn detect_image_format_recognizes_webp_magic_bytes() {
         // "RIFF" + 4-byte length + "WEBP".
         let webp = b"RIFF\x00\x00\x00\x00WEBPVP8 ";
         assert_eq!(detect_image_format(webp), Some("image/webp".into()));

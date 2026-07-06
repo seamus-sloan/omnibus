@@ -4,7 +4,7 @@ use crate::auth::token::SESSION_COOKIE_NAME;
 use crate::auth::users::create_user;
 
 #[tokio::test]
-async fn session_roundtrip() {
+async fn create_session_and_lookup_session_round_trip_a_cookie_session() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
     let ns = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
