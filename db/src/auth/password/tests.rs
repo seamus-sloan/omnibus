@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn password_roundtrips() {
+fn hash_password_and_verify_password_round_trips_a_matching_credential() {
     let phc = hash_password("correct horse battery staple").unwrap();
     assert!(phc.starts_with("$argon2id$"));
     assert!(verify_password("correct horse battery staple", &phc).unwrap());
