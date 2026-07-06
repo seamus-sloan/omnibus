@@ -225,7 +225,7 @@ struct LoginFormProps {
     submitting: Signal<bool>,
     /// "Keep me signed in" checkbox state.
     keep_signed_in: Signal<bool>,
-    /// Fired on form submit (click).
+    /// Fired on form submission (submit-button click or Enter).
     on_submit: EventHandler<FormEvent>,
     /// Fired on Enter keydown in either input.
     on_keydown: EventHandler<Event<KeyboardData>>,

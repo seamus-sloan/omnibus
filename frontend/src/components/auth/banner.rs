@@ -73,7 +73,7 @@ pub struct BannerProps {
     pub on_dismiss: Option<EventHandler<MouseEvent>>,
 }
 
-/// Top-of-form callout. See [`BannerProps`] for the field contract.
+/// Top-of-form callout. See [`BannerProps`] for the banner contract.
 #[component]
 pub fn Banner(props: BannerProps) -> Element {
     let BannerProps {
