@@ -54,6 +54,12 @@ tempfile = "3"
 # Exit condition: once Dioxus publishes the matching version to crates.io, replace
 # these git patches with plain `version = "..."` entries and delete this whole
 # note (the audited path is then restored automatically).
+#
+# DUPLICATE DEPS: this pin (plus Axum's newer transitive graph) forces several
+# duplicate dependency families in Cargo.lock (websocket stack, thiserror 1/2,
+# getrandom/rand, hashbrown, and the desktop/mobile native-shell tail). They are
+# triaged and accepted in the `[bans]` section of deny.toml and inventoried in
+# docs/dependency-audit.md — re-run `cargo tree -d` and refresh both on any bump.
 [patch.crates-io]
 dioxus = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
 dioxus-asset-resolver = { git = "https://github.com/DioxusLabs/dioxus", tag = "v0.7.9" }
