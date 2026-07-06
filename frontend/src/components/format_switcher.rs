@@ -297,8 +297,12 @@ pub fn SendToKoboButton(
 
 /// Map the JS write flow's status string to the toast `(is_error, message)`
 /// pair, or `None` when the user cancelled the picker (no toast at all). Pure,
-/// so it's unit-tested without a browser.
+/// so it's unit-tested without a browser. Only *called* on web (the SSR/native
+/// stub of `write_kepub_to_kobo` never runs it), so the non-web lib build sees
+/// it as dead outside its tests — allow that rather than gate it off `web` and
+/// lose the server-feature test coverage.
 #[cfg(not(feature = "mobile"))]
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
 fn kobo_outcome(status: &str, message: Option<String>) -> Option<(bool, String)> {
     match status {
         "ok" => Some((
