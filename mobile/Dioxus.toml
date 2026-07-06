@@ -1,5 +1,8 @@
 [application]
-name = "omnibus-mobile"
+name = "Omnibus"
+
+[background]
+audio = true
 
 [android]
 uses_cleartext_traffic = true
