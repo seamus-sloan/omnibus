@@ -47,6 +47,24 @@ ignore = [
     { id = "RUSTSEC-2024-0420", reason = "gtk-rs GTK3 binding unmaintained — Linux-only Dioxus desktop dep (wry/tao); awaiting upstream migration to GTK4" },
     { id = "RUSTSEC-2024-0436", reason = "paste unmaintained — transitive via Dioxus mobile/desktop crates; awaiting upstream migration" },
     { id = "RUSTSEC-2025-0057", reason = "fxhash unmaintained — transitive via Dioxus mobile/desktop crates; awaiting upstream migration" },
+
+    # ---- Unsound (informational) advisories in the Dioxus desktop/mobile
+    # GTK/WebKit tree. Like the unmaintained notices above these are NOT
+    # vulnerabilities (cargo-audit's --json gate counts 0 vulnerabilities);
+    # they flag `unsafe` blocks upstream can misuse. Both are confined to the
+    # mobile/desktop native shell and neither is reachable from the shipped
+    # `omnibus` server. Fixing them requires an upstream Dioxus bump we don't
+    # control (both crates are pinned deep under the git-pinned wry/gtk tree).
+    # Triaged 2026-07-06 (issue #773). Revisit when Dioxus upgrades wry/gtk.
+    #
+    # NB: RUSTSEC-2026-0186 (memmap2 unchecked pointer offset) is the third
+    # advisory from that triage. It was NOT ignored — it was the one path
+    # reachable from the default (non-mobile) build (memmap2 → subsecond →
+    # dioxus-core), so it was fixed for real by bumping memmap2 0.9.10 → 0.9.11
+    # (`cargo update -p memmap2`; patched in >= 0.9.11), which needs no change
+    # to the Dioxus pin. See Cargo.lock.
+    { id = "RUSTSEC-2024-0429", reason = "glib 0.18.5 VariantStrIter unsoundness — mobile/desktop only via wry→gtk→glib (patched in glib 0.20, forced by upstream gtk-rs 0.18 pin under wry); not reachable in the server build" },
+    { id = "RUSTSEC-2026-0097", reason = "rand 0.7.3 thread_rng unsoundness — build-dependency only via phf_generator 0.8 (ammonia/html5ever codegen under wry); never links into any runtime binary, unsound path (custom logger reseed) not exercised in a build script" },
 ]
 
 # ---------------------------------------------------------------------------
