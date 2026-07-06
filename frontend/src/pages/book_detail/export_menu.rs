@@ -11,7 +11,13 @@ use crate::components::{SendToKindleButton, SendToKoboButton};
 /// whichever formats the book has, the interactive Send-to-Kindle button,
 /// and the Send-to-Kobo KEPUB download.
 #[component]
-pub(super) fn BdExportMenu(uuid: String, has_ebook: bool, has_audio: bool) -> Element {
+pub(super) fn BdExportMenu(
+    uuid: String,
+    has_ebook: bool,
+    has_audio: bool,
+    #[props(default)] book_author: String,
+    #[props(default)] book_title: String,
+) -> Element {
     let mut open = use_signal(|| false);
     rsx! {
         div { class: "bd-export",
@@ -34,7 +40,7 @@ pub(super) fn BdExportMenu(uuid: String, has_ebook: bool, has_audio: bool) -> El
                     "data-testid": "hero-export-scrim",
                     onclick: move |_| open.set(false),
                 }
-                BdExportPanel { uuid, has_ebook, has_audio, open }
+                BdExportPanel { uuid, has_ebook, has_audio, book_author, book_title, open }
             }
         }
     }
@@ -47,7 +53,14 @@ pub(super) fn BdExportMenu(uuid: String, has_ebook: bool, has_audio: bool) -> El
 /// this is a scrim-dismissed popover with plain links/buttons, not an ARIA
 /// menu with roving-tabindex / arrow-key navigation.
 #[component]
-fn BdExportPanel(uuid: String, has_ebook: bool, has_audio: bool, open: Signal<bool>) -> Element {
+fn BdExportPanel(
+    uuid: String,
+    has_ebook: bool,
+    has_audio: bool,
+    book_author: String,
+    book_title: String,
+    open: Signal<bool>,
+) -> Element {
     let mut open = open;
     let on_keydown = move |evt: Event<KeyboardData>| {
         if evt.key() == Key::Escape {
@@ -108,6 +121,8 @@ fn BdExportPanel(uuid: String, has_ebook: bool, has_audio: bool, open: Signal<bo
             if has_ebook {
                 SendToKoboButton {
                     uuid: uuid.clone(),
+                    book_author: book_author.clone(),
+                    book_title: book_title.clone(),
                     class: "bd-export-item".to_string(),
                     testid: "hero-send-kobo".to_string(),
                 }

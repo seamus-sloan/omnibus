@@ -13,10 +13,13 @@ Implement the `/kobo/v1/*` protocol natively, including EPUB → KEPUB conversio
 >   the *client* machine. On Chromium (Chrome/Edge) it writes the file straight
 >   onto the mounted Kobo drive via the File System Access API (remembering the
 >   directory handle so repeat sends need no prompt); other browsers fall back to
->   a plain download the user copies over. No tokens, no protocol, no wireless
->   sync — and **no data-loss risk**, since dropping a loose file on the drive
->   root never touches `KoboReader.sqlite` or the annotation channel (the write
->   is the safe mirror of the [F4.4](4-4-kobo-annotation-import.md) USB *read*).
+>   a plain download the user copies over. The file lands under
+>   `<Author>/<Title>/<uuid>.kepub.epub` — author/title folders for a tidy
+>   Calibre-style layout, with the uuid kept as the filename so [F4.4](4-4-kobo-annotation-import.md)
+>   can still recover the book from the device's `ContentID` path. No tokens, no
+>   protocol, no wireless sync — and **no data-loss risk**, since adding a file
+>   never touches `KoboReader.sqlite` or the annotation channel (the write is the
+>   safe mirror of the [F4.4](4-4-kobo-annotation-import.md) USB *read*).
 >   User guide: [docs/kobo.md](../kobo.md). This is the KEPUB **Sub-scope** below,
 >   promoted to ship first.
 > - **Stage 2 — wireless sync (deferred).** The `/kobo/v1/*` protocol described
