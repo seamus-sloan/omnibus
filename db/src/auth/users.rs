@@ -1,6 +1,6 @@
 //! User CRUD.
 
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 
 use super::password::{hash_password, validate_password, validate_username};
 use super::{row_to_user, AuthError, AuthResult, User};
@@ -25,31 +25,9 @@ pub async fn create_user(pool: &SqlitePool, username: &str, password: &str) -> A
     // connection-drop implicit cleanup).
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
-    let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
-        .fetch_one(&mut *tx)
-        .await?;
-
-    let is_first = user_count == 0;
-
-    if !is_first {
-        let enabled: String =
-            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'registration_enabled'")
-                .fetch_optional(&mut *tx)
-                .await?
-                .unwrap_or_else(|| "0".to_string());
-        if enabled != "1" {
-            return Err(AuthError::RegistrationDisabled);
-        }
-    }
-
-    let existing: Option<i64> =
-        sqlx::query_scalar("SELECT id FROM users WHERE username = ? COLLATE NOCASE")
-            .bind(username)
-            .fetch_optional(&mut *tx)
-            .await?;
-    if existing.is_some() {
-        return Err(AuthError::UsernameTaken);
-    }
+    // Runs on the transaction's connection so the RESERVED write lock from
+    // `BEGIN IMMEDIATE` covers the count/uniqueness checks.
+    let is_first = check_registration_preconditions(&mut tx, username).await?;
 
     let is_admin = if is_first { 1i64 } else { 0 };
     let can_upload = if is_first { 1i64 } else { 0 };
@@ -95,6 +73,46 @@ pub async fn create_user(pool: &SqlitePool, username: &str, password: &str) -> A
         can_download: can_download != 0,
         kindle_email: None,
     })
+}
+
+/// Precondition checks for [`create_user`], run inside its `BEGIN IMMEDIATE`
+/// transaction. Returns whether this is the first user (who becomes admin).
+///
+/// Errors with [`AuthError::RegistrationDisabled`] when the table is
+/// non-empty and self-registration is off, or [`AuthError::UsernameTaken`]
+/// when the (case-insensitive) username already exists. Takes the
+/// transaction connection so the caller's write lock guards these reads.
+async fn check_registration_preconditions(
+    conn: &mut SqliteConnection,
+    username: &str,
+) -> AuthResult<bool> {
+    let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&mut *conn)
+        .await?;
+
+    let is_first = user_count == 0;
+
+    if !is_first {
+        let enabled: String =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'registration_enabled'")
+                .fetch_optional(&mut *conn)
+                .await?
+                .unwrap_or_else(|| "0".to_string());
+        if enabled != "1" {
+            return Err(AuthError::RegistrationDisabled);
+        }
+    }
+
+    let existing: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM users WHERE username = ? COLLATE NOCASE")
+            .bind(username)
+            .fetch_optional(&mut *conn)
+            .await?;
+    if existing.is_some() {
+        return Err(AuthError::UsernameTaken);
+    }
+
+    Ok(is_first)
 }
 
 /// Look up a user record by username (case-insensitive); returns `None` if no match.
