@@ -136,64 +136,130 @@ pub fn BookReadPage(uuid: String) -> Element {
 
     rsx! {
         ReaderLayout {
-            uuid: uuid.clone(),
-            book_title,
-            book_author,
-            book_accent,
-            chapter_title: chapter_title_display,
-            current_cfi,
-            page_str,
-            chapter_str,
-            pct,
-            status: status(),
-            show_aa,
-            selection,
-            highlights,
-            toc,
-            show_toc,
-            show_highlights,
-            note_target,
-            quote_target,
-            show_search,
-            search_results,
-            show_bookmarks,
-            on_keydown,
-            on_back,
-            on_prev,
-            on_next,
+            meta: ReaderMeta {
+                uuid: uuid.clone(),
+                book_title,
+                book_author,
+                book_accent,
+                chapter_title: chapter_title_display,
+                current_cfi,
+            },
+            progress: ReaderProgress {
+                page_str,
+                chapter_str,
+                pct,
+                status: status(),
+            },
+            panels: ReaderPanelSignals {
+                show_aa,
+                selection,
+                highlights,
+                toc,
+                show_toc,
+                show_highlights,
+                note_target,
+                quote_target,
+                show_search,
+                search_results,
+                show_bookmarks,
+            },
+            nav: ReaderNavHandlers {
+                on_keydown,
+                on_back,
+                on_prev,
+                on_next,
+            },
         }
     }
+}
+
+/// Book identity + display strings the reader chrome renders.
+#[derive(Clone, PartialEq)]
+pub(super) struct ReaderMeta {
+    pub uuid: String,
+    pub book_title: String,
+    pub book_author: String,
+    pub book_accent: String,
+    pub chapter_title: String,
+    pub current_cfi: String,
+}
+
+/// Bottom-bar progress labels and the load-status overlay state.
+#[derive(Clone, PartialEq)]
+pub(super) struct ReaderProgress {
+    pub page_str: String,
+    pub chapter_str: String,
+    pub pct: u32,
+    pub status: ReaderStatus,
+}
+
+/// Overlay/panel signals the reader chrome toggles or renders from.
+#[derive(Copy, Clone, PartialEq)]
+pub(super) struct ReaderPanelSignals {
+    pub show_aa: Signal<bool>,
+    pub selection: Signal<Option<SelectionData>>,
+    pub highlights: Signal<Vec<Highlight>>,
+    pub toc: Signal<Vec<TocEntry>>,
+    pub show_toc: Signal<bool>,
+    pub show_highlights: Signal<bool>,
+    pub note_target: Signal<Option<Highlight>>,
+    pub quote_target: Signal<Option<Highlight>>,
+    pub show_search: Signal<bool>,
+    pub search_results: Signal<Vec<SearchResult>>,
+    pub show_bookmarks: Signal<bool>,
+}
+
+/// Navigation + keyboard handlers for the top bar, page-turn gutters, and surface keydown.
+#[derive(Copy, Clone, PartialEq)]
+pub(super) struct ReaderNavHandlers {
+    pub on_keydown: EventHandler<KeyboardEvent>,
+    pub on_back: EventHandler<MouseEvent>,
+    pub on_prev: EventHandler<MouseEvent>,
+    pub on_next: EventHandler<MouseEvent>,
 }
 
 /// Reader chrome + panels (top bar, viewer stage, gutters, status bar, Aa panel, selection popover).
 #[component]
 fn ReaderLayout(
-    uuid: String,
-    book_title: String,
-    book_author: String,
-    book_accent: String,
-    chapter_title: String,
-    current_cfi: String,
-    page_str: String,
-    chapter_str: String,
-    pct: u32,
-    status: ReaderStatus,
-    show_aa: Signal<bool>,
-    selection: Signal<Option<SelectionData>>,
-    highlights: Signal<Vec<Highlight>>,
-    toc: Signal<Vec<TocEntry>>,
-    show_toc: Signal<bool>,
-    show_highlights: Signal<bool>,
-    note_target: Signal<Option<Highlight>>,
-    quote_target: Signal<Option<Highlight>>,
-    show_search: Signal<bool>,
-    search_results: Signal<Vec<SearchResult>>,
-    show_bookmarks: Signal<bool>,
-    on_keydown: EventHandler<KeyboardEvent>,
-    on_back: EventHandler<MouseEvent>,
-    on_prev: EventHandler<MouseEvent>,
-    on_next: EventHandler<MouseEvent>,
+    meta: ReaderMeta,
+    progress: ReaderProgress,
+    panels: ReaderPanelSignals,
+    nav: ReaderNavHandlers,
 ) -> Element {
+    let ReaderMeta {
+        uuid,
+        book_title,
+        book_author,
+        book_accent,
+        chapter_title,
+        current_cfi,
+    } = meta;
+    let ReaderProgress {
+        page_str,
+        chapter_str,
+        pct,
+        status,
+    } = progress;
+    let ReaderPanelSignals {
+        show_aa,
+        selection,
+        highlights,
+        toc,
+        show_toc,
+        show_highlights,
+        note_target,
+        quote_target,
+        show_search,
+        search_results,
+        show_bookmarks,
+    } = panels;
+    let ReaderNavHandlers {
+        on_keydown,
+        on_back,
+        on_prev,
+        on_next,
+    } = nav;
+
     let highlight_count = highlights.read().len();
 
     // Close every overlay (panel, drawer, composer) — `Fn` + `Copy` so each
