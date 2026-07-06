@@ -46,8 +46,10 @@ jobs:
     name: build ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     strategy:
-      # Publish whichever arch legs succeed independently; a merge-time miss is
-      # caught by the manifest step rather than silently dropping an arch.
+      # fail-fast: false lets a healthy arch leg finish (and warm its cache)
+      # instead of being cancelled when the other fails, so both legs' failures
+      # surface in one run. A failed leg still fails the build job, so merge
+      # (needs: build) is skipped — publishing is all-or-nothing, never partial.
       fail-fast: false
       matrix:
         include:
