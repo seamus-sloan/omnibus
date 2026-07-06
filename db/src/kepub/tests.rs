@@ -83,6 +83,18 @@ fn kepub_path_is_book_id_under_data_dir() {
 }
 
 #[test]
+fn kepub_dir_prefers_explicit_override_over_data_dir() {
+    let data = tempfile::tempdir().unwrap();
+    let over = tempfile::tempdir().unwrap();
+    // OMNIBUS_KEPUB_DIR wins even when OMNIBUS_DATA_DIR is set, and is used
+    // verbatim (no `kepub` subdir appended).
+    let _g = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(data.path().as_os_str()))
+        .also_set_os("OMNIBUS_KEPUB_DIR", Some(over.path().as_os_str()));
+    assert_eq!(kepub_dir(), over.path());
+    assert_eq!(kepub_path(42), over.path().join("42.kepub.epub"));
+}
+
+#[test]
 fn is_stale_returns_true_when_cache_missing() {
     let (_g, _dir) = data_dir_guard();
     assert!(is_stale(999_999, 0));

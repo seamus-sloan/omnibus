@@ -9,7 +9,7 @@ use crate::components::SendToKindleButton;
 
 /// The "Export" trigger + dropdown panel. Renders the download links for
 /// whichever formats the book has, the interactive Send-to-Kindle button,
-/// and the (still-stubbed) Send-to-Kobo row.
+/// and the Send-to-Kobo KEPUB download.
 #[component]
 pub(super) fn BdExportMenu(uuid: String, has_ebook: bool, has_audio: bool) -> Element {
     let mut open = use_signal(|| false);
@@ -100,11 +100,19 @@ fn BdExportPanel(uuid: String, has_ebook: bool, has_audio: bool, open: Signal<bo
                     testid: "hero-send-kindle".to_string(),
                 }
             }
-            button {
-                class: "bd-export-item",
-                disabled: true,
-                title: "Send-to-Kobo coming soon",
-                span { class: "bd-export-item-label", "Send to Kobo" }
+            // Send-to-Kobo downloads the book as KEPUB; the endpoint converts
+            // the EPUB (falling back to plain EPUB when kepubify is absent), so
+            // it only applies to books with an ebook. Plain anchor for a real
+            // browser download, same as the EPUB row above.
+            if has_ebook {
+                a {
+                    class: "bd-export-item",
+                    "data-testid": "export-send-kobo",
+                    href: "/api/ebooks/{uuid}/kepub",
+                    download: "",
+                    onclick: move |_| open.set(false),
+                    span { class: "bd-export-item-label", "Send to Kobo" }
+                }
             }
         }
     }
