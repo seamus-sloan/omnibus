@@ -1,5 +1,8 @@
 [application]
-name = "omnibus-mobile"
+name = "Omnibus"
+
+[background]
+audio = true
 
 [bundle]
 # Unique reverse-DNS id used for the iOS CFBundleIdentifier and the Android
