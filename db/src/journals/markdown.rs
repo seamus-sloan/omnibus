@@ -149,7 +149,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_strikethrough() {
+    fn render_emits_del_for_strikethrough() {
         let html = render("~~gone~~");
         assert!(html.contains("<del>gone</del>"), "got: {html}");
     }
