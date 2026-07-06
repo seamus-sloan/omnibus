@@ -36,21 +36,33 @@ pub enum InitDbError {
 /// Initialize or open the SQLite pool at `database_url`, apply per-connection PRAGMAs, run pending
 /// migrations, and — on non-memory databases — perform a one-time legacy cover-cache directory purge.
 pub async fn init_db(database_url: &str) -> Result<SqlitePool, InitDbError> {
-    // PRAGMAs `foreign_keys`, `busy_timeout`, and `synchronous` are
-    // *per-connection* settings — they only apply to the connection that
-    // executed them, and any future connection the pool spins up would
-    // start with SQLite's defaults. Apply them inside `after_connect` so
-    // every pooled connection initializes the same way.
-    //
-    // `journal_mode = WAL` is a database-level setting that lives in the
-    // SQLite header, so it only needs to take effect once; running it on
-    // every connection is cheap (returns the current mode) and keeps the
-    // logic in one place. We still skip it for in-memory databases so the
-    // test output isn't littered with "memory" pragma results.
-    //
-    // See issue #82 for the rationale on each PRAGMA value.
     let is_memory = is_memory_url(database_url);
-    let pool = SqlitePoolOptions::new()
+    let pool = connect_pool(database_url, is_memory).await?;
+
+    MIGRATOR.run(&pool).await?;
+    run_boot_backfills(&pool).await?;
+
+    if !is_memory {
+        run_legacy_cover_purge().await;
+    }
+
+    Ok(pool)
+}
+
+/// Build the SQLite pool and register the per-connection PRAGMA setup.
+///
+/// PRAGMAs `foreign_keys`, `busy_timeout`, and `synchronous` are
+/// *per-connection* settings — they only apply to the connection that
+/// executed them, and any future connection the pool spins up would start
+/// with SQLite's defaults. Applying them inside `after_connect` makes every
+/// pooled connection initialize the same way. `journal_mode = WAL` is a
+/// database-level setting stored in the SQLite header, so it only needs to
+/// take effect once; running it on every connection is cheap (returns the
+/// current mode) and keeps the logic in one place. It's skipped for
+/// in-memory databases so test output isn't littered with pragma results.
+/// See issue #82 for the rationale on each PRAGMA value.
+async fn connect_pool(database_url: &str, is_memory: bool) -> Result<SqlitePool, sqlx::Error> {
+    SqlitePoolOptions::new()
         .max_connections(5)
         .after_connect(move |conn, _meta| {
             Box::pin(async move {
@@ -64,58 +76,47 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, InitDbError> {
             })
         })
         .connect(database_url)
-        .await?;
-
-    MIGRATOR.run(&pool).await?;
-
-    // One-time fill of the auto-attach match key for rows indexed before
-    // migration 0016. Idempotent and a no-op once caught up.
-    crate::normalize::backfill_norm_columns(&pool).await?;
-
-    // One-time fill of the F2 `scan_key` diff key for rows indexed before
-    // migration 0026. Pure DB work (reconstructed from stored columns, no
-    // filesystem reads), idempotent, safe against in-memory test DBs.
-    crate::identity::backfill_scan_keys(&pool).await?;
-
-    // One-time fill of the F5b `series_sort` keyset column for rows indexed
-    // before migration 0028. Reconstructed from the existing series link;
-    // idempotent and a no-op once every linked book is filled.
-    crate::sort_keys::backfill_series_sort(&pool).await?;
-
-    // One-time stamp of the F10 missing-files flags for rows that were already
-    // fileless before migration 0029, starting their GC clock at boot time.
-    // Idempotent and a no-op once caught up.
-    crate::missing_files::backfill_missing_files_flags(&pool).await?;
-
-    // Issue #94: the previous `stable_uuid` implementation hashed via
-    // `DefaultHasher` and produced toolchain-dependent UUIDs. Switching to
-    // UUIDv5 changes every cover id on the next reindex, so any pre-existing
-    // `<old-uuid>.<ext>` files in the covers directory would be orphaned and
-    // never served again. Purge once on startup, then drop a sentinel so we
-    // don't keep deleting freshly-written covers on every boot. Gated on a
-    // real (non-memory) DB so that the rapid-fire test suite doesn't touch
-    // the developer's actual covers directory.
-    if !is_memory {
-        // The purge walks the covers dir and unlinks every legacy file with
-        // synchronous `std::fs`. On the worst-case first boot after the #94
-        // upgrade that directory can be large, so run it on the blocking pool
-        // rather than tying up an async runtime worker for the whole sweep.
-        // Boot still awaits completion here — this keeps the runtime's other
-        // tasks schedulable during the sweep, it does not make startup
-        // non-blocking. `JoinError` (a panic in the sweep) is logged and
-        // swallowed — the covers dir is a rebuildable cache, so a failed
-        // purge must not abort boot.
-        let dir = covers_dir();
-        if let Err(join_err) = tokio::task::spawn_blocking(move || {
-            purge_legacy_covers_once(&dir);
-        })
         .await
-        {
-            tracing::error!("issue #94: legacy cover purge spawn_blocking failed: {join_err}");
-        }
-    }
+}
 
-    Ok(pool)
+/// Run the one-time, idempotent column backfills that fill values older
+/// migrations couldn't compute. Each is a no-op once caught up and is safe
+/// against in-memory test DBs (all pure DB work, no filesystem reads).
+async fn run_boot_backfills(pool: &SqlitePool) -> Result<(), InitDbError> {
+    // Auto-attach match key for rows indexed before migration 0016.
+    crate::normalize::backfill_norm_columns(pool).await?;
+    // F2 `scan_key` diff key for rows indexed before migration 0026,
+    // reconstructed from stored columns.
+    crate::identity::backfill_scan_keys(pool).await?;
+    // F5b `series_sort` keyset column for rows indexed before migration 0028,
+    // reconstructed from the existing series link.
+    crate::sort_keys::backfill_series_sort(pool).await?;
+    // F10 missing-files flags for rows already fileless before migration 0029,
+    // starting their GC clock at boot time.
+    crate::missing_files::backfill_missing_files_flags(pool).await?;
+    Ok(())
+}
+
+/// Run the one-time issue-#94 legacy cover-cache purge on the blocking pool.
+///
+/// The previous `stable_uuid` implementation hashed via `DefaultHasher` and
+/// produced toolchain-dependent UUIDs. Switching to UUIDv5 changes every
+/// cover id on the next reindex, so any pre-existing `<old-uuid>.<ext>` files
+/// would be orphaned and never served again. `purge_legacy_covers_once`
+/// walks the covers dir with synchronous `std::fs`, which can be large on the
+/// first boot after the upgrade, so it runs on the blocking pool — boot still
+/// awaits completion, keeping other runtime tasks schedulable during the
+/// sweep. A `JoinError` (a panic in the sweep) is logged and swallowed: the
+/// covers dir is a rebuildable cache, so a failed purge must not abort boot.
+async fn run_legacy_cover_purge() {
+    let dir = covers_dir();
+    if let Err(join_err) = tokio::task::spawn_blocking(move || {
+        purge_legacy_covers_once(&dir);
+    })
+    .await
+    {
+        tracing::error!("issue #94: legacy cover purge spawn_blocking failed: {join_err}");
+    }
 }
 
 /// Returns `true` if `database_url` points at an in-memory SQLite database.

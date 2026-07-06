@@ -5,6 +5,7 @@
 //! into the wire DTO. Mounted on the REST router in [`super::rest_router`].
 
 use axum::{
+    body::Bytes,
     extract::{Path, State},
     response::{IntoResponse, Response},
     Json,
@@ -127,46 +128,8 @@ pub(super) async fn post_ebook_cover(
         Err(response) => return response,
     };
 
-    // Look up the prior overrides row BEFORE touching disk. `write_override_cover`
-    // deletes any existing `override-<uuid>.*` before writing the new file, so if
-    // we wrote first and only fetched the prior row to decide on cleanup, a DB
-    // failure could orphan the user's previously-set cover (#529). Fetching first
-    // keeps the disk-write/cleanup decision race-free: only cleanup when the row
-    // is absent OR `has_cover_override` was false going in.
-    let (existing_overrides, had_prior_cover_override) =
-        match db::get_metadata_overrides(&state.pool, &uuid).await {
-            Ok(Some((ov, has_cover))) => (ov, has_cover),
-            Ok(None) => (MetadataOverrides::default(), false),
-            Err(e) => return internal("get_metadata_overrides", e),
-        };
-
-    // Write the override cover to disk. `write_override_cover` is a sync
-    // `std::fs` call — run it on the blocking pool so the axum runtime stays
-    // responsive while we hit disk (#106). `uuid` is needed again below for
-    // the overrides table update, so it's the only value we clone.
-    let uuid_for_write = uuid.clone();
-    let write_result = tokio::task::spawn_blocking(move || {
-        db::write_override_cover(&uuid_for_write, &mime, &bytes)
-    })
-    .await;
-    match write_result {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => return internal("write_override_cover", e),
-        Err(e) => return internal("spawn_blocking(write_override_cover)", e),
-    }
-
-    // Mark the overrides table with has_cover_override = 1. Preserve existing
-    // field overrides if any. If the upsert fails, only clean the file we
-    // just wrote when no prior override cover existed — otherwise the
-    // `write_override_cover` step would have deleted the user's previous
-    // valid cover, and the cleanup would compound the data loss (#516, #529).
-    if let Err(e) =
-        db::upsert_metadata_overrides(&state.pool, &uuid, &existing_overrides, true, user.id).await
-    {
-        if !had_prior_cover_override {
-            cleanup_orphan_cover(&uuid).await;
-        }
-        return internal("upsert_metadata_overrides", e);
+    if let Err(response) = persist_cover(&state, &uuid, user.id, mime, bytes).await {
+        return response;
     }
 
     // Invalidate thumb cache so next request regenerates from new cover.
@@ -180,6 +143,54 @@ pub(super) async fn post_ebook_cover(
         Ok(None) => (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
         Err(e) => internal("get_book", e),
     }
+}
+
+/// Write the new override cover to disk and mark `has_cover_override = 1`,
+/// preserving any existing field overrides. Returns the error `Response`
+/// already formed on failure so the caller can early-return.
+///
+/// The prior overrides row is read BEFORE touching disk: `write_override_cover`
+/// deletes any existing `override-<uuid>.*` before writing, so fetching first
+/// keeps the disk-write/cleanup decision race-free (#529). If the upsert fails,
+/// the just-written file is cleaned up ONLY when no prior override cover existed
+/// — otherwise the write step already replaced the user's previous valid cover
+/// and cleanup would compound the loss (#516, #529).
+async fn persist_cover(
+    state: &AppState,
+    uuid: &str,
+    user_id: i64,
+    mime: String,
+    bytes: Bytes,
+) -> Result<(), Response> {
+    let (existing_overrides, had_prior_cover_override) =
+        match db::get_metadata_overrides(&state.pool, uuid).await {
+            Ok(Some((ov, has_cover))) => (ov, has_cover),
+            Ok(None) => (MetadataOverrides::default(), false),
+            Err(e) => return Err(internal("get_metadata_overrides", e)),
+        };
+
+    // `write_override_cover` is a sync `std::fs` call — run it on the blocking
+    // pool so the axum runtime stays responsive while we hit disk (#106).
+    let uuid_for_write = uuid.to_string();
+    let write_result = tokio::task::spawn_blocking(move || {
+        db::write_override_cover(&uuid_for_write, &mime, &bytes)
+    })
+    .await;
+    match write_result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(internal("write_override_cover", e)),
+        Err(e) => return Err(internal("spawn_blocking(write_override_cover)", e)),
+    }
+
+    if let Err(e) =
+        db::upsert_metadata_overrides(&state.pool, uuid, &existing_overrides, true, user_id).await
+    {
+        if !had_prior_cover_override {
+            cleanup_orphan_cover(uuid).await;
+        }
+        return Err(internal("upsert_metadata_overrides", e));
+    }
+    Ok(())
 }
 
 /// Best-effort delete of the on-disk override cover after a DB failure in

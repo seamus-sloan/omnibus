@@ -102,6 +102,24 @@ struct BookSnapshot {
     author_norm: Option<String>,
 }
 
+/// The source book's file rows plus the attach-ledger split derived from them.
+struct FileRows {
+    moved_formats: Vec<String>,
+    moved_file_ids: Vec<i64>,
+    native_formats: Vec<String>,
+    merged_uuid_rows: Vec<(String, String, String)>,
+}
+
+/// The source book's satellite link rows, stored by name for undo.
+struct LinkRows {
+    authors: Vec<(String, Option<String>, i64)>,
+    series: Vec<String>,
+    tags: Vec<String>,
+    publishers: Vec<String>,
+    languages: Vec<String>,
+    identifiers: Vec<(String, String)>,
+}
+
 /// Load the full snapshot for `book_id` inside the merge transaction.
 pub(super) async fn build_snapshot(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
@@ -118,6 +136,45 @@ pub(super) async fn build_snapshot(
     .fetch_one(&mut **tx)
     .await?;
 
+    let files = load_file_rows(tx, book_id).await?;
+    let links = load_link_rows(tx, book_id).await?;
+
+    Ok(SourceSnapshot {
+        uuid: row.uuid,
+        library_path: row.library_path,
+        path: row.path,
+        title: row.title,
+        sort: row.sort,
+        author_sort: row.author_sort,
+        series_sort: row.series_sort,
+        series_index: row.series_index,
+        pubdate: row.pubdate,
+        timestamp: row.timestamp,
+        has_cover: row.has_cover,
+        description: row.description,
+        accent_color: row.accent_color,
+        title_norm: row.title_norm,
+        author_norm: row.author_norm,
+        moved_formats: files.moved_formats,
+        moved_file_ids: files.moved_file_ids,
+        native_formats: files.native_formats,
+        authors: links.authors,
+        series: links.series,
+        tags: links.tags,
+        publishers: links.publishers,
+        languages: links.languages,
+        identifiers: links.identifiers,
+        merged_uuid_rows: files.merged_uuid_rows,
+    })
+}
+
+/// Load the source's `book_files` formats + ids and its `merged_uuids` rows,
+/// then derive `native_formats` (moved formats that aren't themselves
+/// attachments recorded in `merged_uuids`).
+async fn load_file_rows(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+) -> Result<FileRows, sqlx::Error> {
     let moved_formats: Vec<String> =
         sqlx::query_scalar("SELECT format FROM book_files WHERE book_id = ? ORDER BY format")
             .bind(book_id)
@@ -143,7 +200,20 @@ pub(super) async fn build_snapshot(
         .filter(|f| !attached_formats.contains(&f.to_uppercase()))
         .cloned()
         .collect();
+    Ok(FileRows {
+        moved_formats,
+        moved_file_ids,
+        native_formats,
+        merged_uuid_rows,
+    })
+}
 
+/// Load the source's satellite link rows (authors/series/tags/publishers/
+/// languages/identifiers) by name, for name-keyed restore on undo.
+async fn load_link_rows(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+) -> Result<LinkRows, sqlx::Error> {
     let authors: Vec<(String, Option<String>, i64)> = sqlx::query_as(
         "SELECT a.name, a.sort, l.position FROM books_authors_link l
            JOIN authors a ON a.id = l.author WHERE l.book = ? ORDER BY l.position",
@@ -182,33 +252,13 @@ pub(super) async fn build_snapshot(
             .bind(book_id)
             .fetch_all(&mut **tx)
             .await?;
-
-    Ok(SourceSnapshot {
-        uuid: row.uuid,
-        library_path: row.library_path,
-        path: row.path,
-        title: row.title,
-        sort: row.sort,
-        author_sort: row.author_sort,
-        series_sort: row.series_sort,
-        series_index: row.series_index,
-        pubdate: row.pubdate,
-        timestamp: row.timestamp,
-        has_cover: row.has_cover,
-        description: row.description,
-        accent_color: row.accent_color,
-        title_norm: row.title_norm,
-        author_norm: row.author_norm,
-        moved_formats,
-        moved_file_ids,
-        native_formats,
+    Ok(LinkRows {
         authors,
         series,
         tags,
         publishers,
         languages,
         identifiers,
-        merged_uuid_rows,
     })
 }
 

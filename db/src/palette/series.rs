@@ -9,38 +9,29 @@ use omnibus_shared::PaletteSeriesHit;
 
 use super::PaletteError;
 
-/// Run the series arm of the palette for `like_pattern` (already escaped)
-/// scoped to `library_path`, capped to `limit`.
-pub async fn search_series(
-    pool: &SqlitePool,
-    library_path: &str,
-    like_pattern: &str,
-    limit: i32,
-) -> Result<Vec<PaletteSeriesHit>, PaletteError> {
-    // F5.1: both the count and the `author_display` line use the effective
-    // (override-aware) view, mirroring `get_series` and the palette author
-    // count. `overrides.series` (string) drives membership; if a book's
-    // first creator was renamed through the metadata edit form,
-    // `overrides.creators[0].name` drives the displayed author. Visibility
-    // still requires at least one canonical link in this library so we
-    // don't list series that exist only inside override JSON (no
-    // navigable id).
-    //
-    // Issue #154: the per-series correlated `COUNT(*)` is replaced with a
-    // single-pass `effective` membership CTE (scoped to the library up
-    // front) — the UNION of (1) canonical `books_series_link` rows whose
-    // book has no `series` override and (2) the scalar `overrides.series`
-    // string for books that do. Each visible series' count is then a single
-    // scan of that union. The override match stays BINARY
-    // (`json_extract(...) = s.name`, no COLLATE) exactly as before. The
-    // clear-all case (`Some("")`) falls out: it drops the book from arm (1)
-    // and the empty string won't equal any real series name in arm (2). The
-    // `author_display` subquery below is unchanged (not a count — out of
-    // scope for #154). UNION (not ALL) is harmless here (a book has one
-    // scalar series override) but keeps the shape uniform with the other
-    // sites.
-    let rows = sqlx::query(
-        r"
+/// Series-arm palette query, bound `?1 = library_path`, `?2 = like_pattern`,
+/// `?3 = limit`.
+///
+/// F5.1: both the count and the `author_display` line use the effective
+/// (override-aware) view, mirroring `get_series` and the palette author
+/// count. `overrides.series` (string) drives membership; if a book's first
+/// creator was renamed through the metadata edit form,
+/// `overrides.creators[0].name` drives the displayed author. Visibility still
+/// requires at least one canonical link in this library so we don't list
+/// series that exist only inside override JSON (no navigable id).
+///
+/// Issue #154: the per-series correlated `COUNT(*)` is replaced with a
+/// single-pass `effective` membership CTE (scoped to the library up front) —
+/// the UNION of (1) canonical `books_series_link` rows whose book has no
+/// `series` override and (2) the scalar `overrides.series` string for books
+/// that do. Each visible series' count is then a single scan of that union.
+/// The override match stays BINARY (`json_extract(...) = s.name`, no COLLATE)
+/// exactly as before. The clear-all case (`Some("")`) falls out: it drops the
+/// book from arm (1) and the empty string won't equal any real series name in
+/// arm (2). The `author_display` subquery is unchanged (not a count — out of
+/// scope for #154). UNION (not ALL) is harmless here (a book has one scalar
+/// series override) but keeps the shape uniform with the other sites.
+const SEARCH_SERIES_SQL: &str = r"
         WITH effective AS (
           SELECT bsl.series AS series_id, NULL AS series_name, bsl.book AS book_id
             FROM books_series_link bsl
@@ -96,13 +87,22 @@ pub async fn search_series(
           )
         ORDER BY book_count DESC, s.name
         LIMIT ?3
-        ",
-    )
-    .bind(library_path)
-    .bind(like_pattern)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
+        ";
+
+/// Run the series arm of the palette for `like_pattern` (already escaped)
+/// scoped to `library_path`, capped to `limit`.
+pub async fn search_series(
+    pool: &SqlitePool,
+    library_path: &str,
+    like_pattern: &str,
+    limit: i32,
+) -> Result<Vec<PaletteSeriesHit>, PaletteError> {
+    let rows = sqlx::query(SEARCH_SERIES_SQL)
+        .bind(library_path)
+        .bind(like_pattern)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows
         .iter()
