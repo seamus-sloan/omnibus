@@ -64,7 +64,7 @@ ignore = [
     # (`cargo update -p memmap2`; patched in >= 0.9.11), which needs no change
     # to the Dioxus pin. See Cargo.lock.
     { id = "RUSTSEC-2024-0429", reason = "glib 0.18.5 VariantStrIter unsoundness — mobile/desktop only via wry→gtk→glib (patched in glib 0.20, forced by upstream gtk-rs 0.18 pin under wry); not reachable in the server build" },
-    { id = "RUSTSEC-2026-0097", reason = "rand 0.7.3 thread_rng unsoundness — build-dependency only via phf_generator 0.8 (ammonia/html5ever codegen under wry); never links into any runtime binary, unsound path (custom logger reseed) not exercised in a build script" },
+    { id = "RUSTSEC-2026-0097", reason = "rand 0.7.3 unsoundness — aliased mutable reference when a custom `log` logger calls rand::rng()/thread_rng() and ThreadRng reseeds mid-log; build-dependency only via phf_generator 0.8 (ammonia/html5ever codegen under wry), never links into any runtime binary and that logger-reseed path is not exercised in a build script" },
 ]
 
 # ---------------------------------------------------------------------------
