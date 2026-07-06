@@ -10,12 +10,7 @@ use omnibus_shared::EbookMetadata;
 use crate::components::atrium::Cover;
 use crate::Route;
 
-/// Build the responsive thumbnail `src`/`srcset` for a book.
-///
-/// Prefers the `/api/thumbs/:uuid/{sm,md,lg}` endpoint (resized WebP) over the
-/// raw cover: `src` points at the `md` variant and `srcset` offers all three
-/// so the browser can pick per slot. Books with no cover return `(None, None)`
-/// so [`Cover`] falls back to the plate template.
+/// Responsive `md`-src + sm/md/lg `srcset` for a book's cover thumbnail; `(None, None)` when it has no cover.
 pub fn thumb_srcs(
     book: &EbookMetadata,
     uuid: &str,
@@ -34,9 +29,7 @@ pub fn thumb_srcs(
     }
 }
 
-/// Toggle a book `uuid` in a picker's `picked` selection signal: remove it if
-/// present, otherwise append it. Shared by the create-shelf and add-books
-/// pickers.
+/// Toggle a book `uuid` in a picker's selection signal (remove if present, else append).
 pub fn toggle_picked(picked: &mut Signal<Vec<String>>, uuid: &str) {
     picked.with_mut(|v| {
         if let Some(pos) = v.iter().position(|x| x == uuid) {
@@ -65,8 +58,7 @@ pub enum CoverTileKind {
     MemberLink { title: String },
 }
 
-/// One cover tile. The `kind` selects the wrapper chrome; the [`Cover`] inside
-/// is identical across variants (responsive thumbnail via [`thumb_srcs`]).
+/// One cover tile; `kind` selects the wrapper chrome around a shared [`Cover`].
 #[component]
 pub fn CoverTile(
     book: EbookMetadata,

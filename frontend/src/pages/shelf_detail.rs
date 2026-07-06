@@ -13,6 +13,7 @@ use omnibus_shared::{
     UpdateShelfRequest, Visibility,
 };
 
+use crate::components::atrium::fallback_title;
 use crate::components::cover_tile::toggle_picked;
 use crate::components::{CoverTile, CoverTileKind, RailActive, ShelvesRail};
 use crate::{data, use_server_url, Route};
@@ -160,7 +161,10 @@ fn member_grid(
         div { class: "lib-grid shelf-grid", "data-testid": "shelf-grid", role: "list",
             for book in books.iter().cloned() {
                 {
-                    let title = book.title.as_deref().unwrap_or(&book.filename).to_string();
+                    // Match `Cover`'s empty-title handling (issue #92): blank /
+                    // whitespace-only titles fall back to the filename so the
+                    // caption + aria-label never render empty.
+                    let title = fallback_title(book.title.as_deref(), &book.filename);
                     rsx! {
                         div {
                             key: "{book.id}",

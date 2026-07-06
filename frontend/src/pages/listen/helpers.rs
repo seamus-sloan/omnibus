@@ -3,6 +3,9 @@
 //! transport click-handler builders shared by the mini-dock and full player.
 //! Consumed by `listen.rs`, `controls`, `speed_panel`, and `bootstrap`.
 
+// Imported for `Asset`/`MouseEvent`; the audio helpers below that use it are
+// all gated to non-mobile targets, so the import is too (unused on mobile).
+#[cfg(not(feature = "mobile"))]
 use dioxus::prelude::*;
 
 /// Vendored hls.js for the HLS fallback path.
@@ -16,8 +19,13 @@ pub(super) fn audio_call(method: &str, arg_js: &str) {
     let _ = dioxus::document::eval(&js);
 }
 
-/// Click handler that toggles play/pause via `window.OmnibusAudio`. No-op on
-/// non-web targets (SSR), where there is no audio element to poke.
+// The transport handlers are shared by the mini-dock and full player, both of
+// which are `#![cfg(not(feature = "mobile"))]`, so gate the builders to match
+// — on mobile they'd be dead code and fail clippy's `-D warnings`. Each is a
+// no-op on non-web (SSR) targets, where there is no audio element to poke.
+
+/// Click handler that toggles play/pause via `window.OmnibusAudio`.
+#[cfg(not(feature = "mobile"))]
 pub(super) fn on_toggle_playback() -> impl FnMut(MouseEvent) + 'static {
     move |_: MouseEvent| {
         #[cfg(feature = "web")]
@@ -25,7 +33,8 @@ pub(super) fn on_toggle_playback() -> impl FnMut(MouseEvent) + 'static {
     }
 }
 
-/// Click handler that skips back 30 seconds. No-op on non-web targets.
+/// Click handler that skips back 30 seconds.
+#[cfg(not(feature = "mobile"))]
 pub(super) fn on_skip_back_30() -> impl FnMut(MouseEvent) + 'static {
     move |_: MouseEvent| {
         #[cfg(feature = "web")]
@@ -33,7 +42,8 @@ pub(super) fn on_skip_back_30() -> impl FnMut(MouseEvent) + 'static {
     }
 }
 
-/// Click handler that skips forward 30 seconds. No-op on non-web targets.
+/// Click handler that skips forward 30 seconds.
+#[cfg(not(feature = "mobile"))]
 pub(super) fn on_skip_forward_30() -> impl FnMut(MouseEvent) + 'static {
     move |_: MouseEvent| {
         #[cfg(feature = "web")]
