@@ -1,5 +1,11 @@
 [application]
-name = "omnibus-mobile"
+name = "Omnibus"
+
+[background]
+# Keep audiobook playback alive when the app is backgrounded or the screen is
+# locked. dx maps this to iOS UIBackgroundModes "audio" and Android
+# FOREGROUND_SERVICE_MEDIA_PLAYBACK.
+audio = true
 
 [android]
 uses_cleartext_traffic = true
