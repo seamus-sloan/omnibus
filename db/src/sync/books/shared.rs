@@ -40,7 +40,7 @@ pub(super) async fn rewrite_book_in_place(
     insert_book_file_row(tx, book_id, b).await?;
     insert_metadata_links(tx, book_id, &b.metadata).await?;
     upsert_fts(tx, book_id).await?;
-    super::super::push_cover(covers, uuid.to_string(), &b.cover);
+    super::super::push_cover(covers, uuid, &b.cover);
     Ok(())
 }
 

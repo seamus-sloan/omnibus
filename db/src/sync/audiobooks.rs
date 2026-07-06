@@ -290,7 +290,7 @@ async fn rewrite_audiobook_in_place(
     insert_chapters(tx, book_file_id, &b.chapters, &b.parts).await?;
     insert_audiobook_author_link(tx, book_id, b.creator_name.as_deref()).await?;
     upsert_fts(tx, book_id).await?;
-    super::push_cover(covers, uuid.to_string(), &b.cover);
+    super::push_cover(covers, uuid, &b.cover);
     Ok(())
 }
 
@@ -363,7 +363,7 @@ async fn insert_new_audiobook(
     insert_chapters(tx, inserted.book_file_id, &b.chapters, &b.parts).await?;
     insert_audiobook_author_link(tx, inserted.book_id, b.creator_name.as_deref()).await?;
     upsert_fts(tx, inserted.book_id).await?;
-    super::push_cover(covers, inserted.uuid, &b.cover);
+    super::push_cover(covers, &inserted.uuid, &b.cover);
     Ok(())
 }
 

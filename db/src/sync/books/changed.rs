@@ -123,7 +123,7 @@ async fn sync_changed_one(
         insert_metadata_links(tx, inserted.book_id, &b.metadata).await?;
         // Source the FTS row from the rows we just wrote via the door.
         upsert_fts(tx, inserted.book_id).await?;
-        super::super::push_cover(changed_covers, inserted.uuid, &b.cover);
+        super::super::push_cover(changed_covers, &inserted.uuid, &b.cover);
         return Ok(());
     };
 
