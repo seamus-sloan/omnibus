@@ -82,16 +82,34 @@ mod tests {
     }
 }
 
+/// Props for the [`ChapterMap`] component.
+#[derive(Props, Clone, PartialEq)]
+pub(super) struct ChapterMapProps {
+    /// Ordered chapter markers; empty falls back to a single-segment bar.
+    pub chapters: Vec<ChapterInfo>,
+    /// Seconds elapsed in the whole book.
+    pub elapsed: f64,
+    /// Total book duration in seconds.
+    pub duration: f64,
+    /// Seconds remaining in the whole book.
+    pub remaining: f64,
+    /// Index of the currently-playing chapter.
+    pub current_chapter_index: usize,
+    /// Fired with the target time in seconds when a segment is clicked.
+    pub on_seek: EventHandler<f64>,
+}
+
 /// The chapter progress map component.
 #[component]
-pub(super) fn ChapterMap(
-    chapters: Vec<ChapterInfo>,
-    elapsed: f64,
-    duration: f64,
-    remaining: f64,
-    current_chapter_index: usize,
-    on_seek: EventHandler<f64>,
-) -> Element {
+pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
+    let ChapterMapProps {
+        chapters,
+        elapsed,
+        duration,
+        remaining,
+        current_chapter_index,
+        on_seek,
+    } = props;
     if chapters.is_empty() {
         let fill_pct = no_chapter_fill_pct(elapsed, duration);
         return rsx! {

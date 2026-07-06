@@ -212,18 +212,38 @@ pub fn LoginPage() -> Element {
     out
 }
 
+/// Props for the [`LoginForm`] component.
+#[derive(Props, Clone, PartialEq)]
+struct LoginFormProps {
+    /// Username input value, shared with the parent.
+    username: Signal<String>,
+    /// Password input value, shared with the parent.
+    password: Signal<String>,
+    /// Current submission error, if any.
+    error: Signal<Option<String>>,
+    /// True while a login request is in flight.
+    submitting: Signal<bool>,
+    /// "Keep me signed in" checkbox state.
+    keep_signed_in: Signal<bool>,
+    /// Fired on form submission (submit-button click or Enter).
+    on_submit: EventHandler<FormEvent>,
+    /// Fired on Enter keydown in either input.
+    on_keydown: EventHandler<Event<KeyboardData>>,
+}
+
 /// Login form body — inputs write the parent's signals through,
 /// submission delegates via `on_submit`/`on_keydown`.
 #[component]
-fn LoginForm(
-    username: Signal<String>,
-    password: Signal<String>,
-    error: Signal<Option<String>>,
-    submitting: Signal<bool>,
-    mut keep_signed_in: Signal<bool>,
-    on_submit: EventHandler<FormEvent>,
-    on_keydown: EventHandler<Event<KeyboardData>>,
-) -> Element {
+fn LoginForm(props: LoginFormProps) -> Element {
+    let LoginFormProps {
+        username,
+        password,
+        error,
+        submitting,
+        mut keep_signed_in,
+        on_submit,
+        on_keydown,
+    } = props;
     rsx! {
         form { class: "auth-form-inner",
             onsubmit: on_submit,

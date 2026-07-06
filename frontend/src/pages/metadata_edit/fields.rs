@@ -108,16 +108,37 @@ pub(super) fn MeField(
     }
 }
 
+/// Props for the [`MeArea`] component.
+#[derive(Props, Clone, PartialEq)]
+pub(super) struct MeAreaProps {
+    /// Field label; also slugified into the textarea's `id`.
+    pub label: String,
+    /// The textarea's bound value signal.
+    pub value: Signal<String>,
+    /// Fired with the new text on every input.
+    pub on_change: EventHandler<String>,
+    /// Visible row count for the textarea.
+    #[props(default = 4)]
+    pub rows: i32,
+    /// When true, applies the "edited" accent + badge.
+    #[props(default)]
+    pub edited: bool,
+    /// Optional hint copy shown beside the label.
+    #[props(default)]
+    pub hint: String,
+}
+
 /// Multi-line textarea field.
 #[component]
-pub(super) fn MeArea(
-    label: String,
-    value: Signal<String>,
-    on_change: EventHandler<String>,
-    #[props(default = 4)] rows: i32,
-    #[props(default)] edited: bool,
-    #[props(default)] hint: String,
-) -> Element {
+pub(super) fn MeArea(props: MeAreaProps) -> Element {
+    let MeAreaProps {
+        label,
+        value,
+        on_change,
+        rows,
+        edited,
+        hint,
+    } = props;
     let border_class = if edited { " me-input-edited" } else { "" };
     let field_id = label_to_id(&label);
 

@@ -6,7 +6,7 @@
 
 use dioxus::prelude::*;
 
-/// Form field with shared label / hint / error / success states.
+/// Props for the [`Field`] component.
 ///
 /// The outer element is a `<div>`, and the visible label is a real
 /// `<label for={input_id}>`. **The error / hint message is rendered as a
@@ -18,34 +18,50 @@ use dioxus::prelude::*;
 /// Callers pass any input element (`input`, `select`, `textarea`) as
 /// `children` and the matching `input_id` so the `<label>` can bind via
 /// `for=`.
-///
-/// Props:
-/// - `label` — visible label text.
-/// - `input_id` — the `id` set on the inner input element; drives the
-///   label's `for=` binding so screen readers and Playwright's
-///   `getByLabel` resolve the input by label text alone.
-/// - `hint` — supporting copy under the input (hidden when an error is shown).
-/// - `error` — when present, switches the field to its error visual and
-///   shows the message under the input as `role="alert"`.
-/// - `success` — when true, switches the field to its success visual
-///   (green accent + check mark).
-/// - `action` — optional slot rendered visually at the top-right of the
-///   field (e.g. a "Forgot?" link). Lives **after** the input in DOM order
-///   and is positioned by CSS, so tabbing through the form goes
-///   label → input → action → next field rather than label → action →
-///   input (the latter pulls focus to the action between fields and traps
-///   typed characters that the user thought were going into the input).
-/// - `children` — the input element.
+#[derive(Props, Clone, PartialEq)]
+pub struct FieldProps {
+    /// Visible label text.
+    pub label: String,
+    /// The `id` set on the inner input element; drives the label's
+    /// `for=` binding so screen readers and Playwright's `getByLabel`
+    /// resolve the input by label text alone.
+    pub input_id: String,
+    /// Supporting copy under the input (hidden when an error is shown).
+    #[props(default)]
+    pub hint: Option<String>,
+    /// When present, switches the field to its error visual and shows
+    /// the message under the input as `role="alert"`.
+    #[props(default)]
+    pub error: Option<String>,
+    /// When true, switches the field to its success visual (green accent
+    /// + check mark).
+    #[props(default = false)]
+    pub success: bool,
+    /// Optional slot rendered visually at the top-right of the field
+    /// (e.g. a "Forgot?" link). Lives **after** the input in DOM order
+    /// and is positioned by CSS, so tabbing through the form goes
+    /// label → input → action → next field rather than label → action →
+    /// input (the latter pulls focus to the action between fields and
+    /// traps typed characters the user meant for the input).
+    #[props(default)]
+    pub action: Option<Element>,
+    /// The input element.
+    pub children: Element,
+}
+
+/// Form field with shared label / hint / error / success states. See
+/// [`FieldProps`] for the field contract.
 #[component]
-pub fn Field(
-    label: String,
-    input_id: String,
-    #[props(default)] hint: Option<String>,
-    #[props(default)] error: Option<String>,
-    #[props(default = false)] success: bool,
-    #[props(default)] action: Option<Element>,
-    children: Element,
-) -> Element {
+pub fn Field(props: FieldProps) -> Element {
+    let FieldProps {
+        label,
+        input_id,
+        hint,
+        error,
+        success,
+        action,
+        children,
+    } = props;
     let state_class = field_state_class(error.as_deref(), success);
     let wrapper_class = format!("auth-field {state_class}");
 
