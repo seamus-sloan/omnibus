@@ -171,30 +171,22 @@ async fn move_files_back(
     formats: &[String],
 ) -> Result<(), sqlx::Error> {
     if !file_ids.is_empty() {
-        // Fetch format for each file so we can assign per-format ordinals.
+        // Batch the format lookup, then assign per-format ordinals in Rust in
+        // the original `file_ids` order (files that vanished since the merge
+        // are absent from the map and skipped, leaving the book fileless).
+        let formats_by_file = fetch_file_formats(tx, target_id, file_ids).await?;
         let mut per_format: std::collections::HashMap<String, i64> =
             std::collections::HashMap::new();
+        let mut assignments: Vec<(i64, i64)> = Vec::with_capacity(file_ids.len());
         for &fid in file_ids {
-            let fmt: Option<String> =
-                sqlx::query_scalar("SELECT format FROM book_files WHERE id = ? AND book_id = ?")
-                    .bind(fid)
-                    .bind(target_id)
-                    .fetch_optional(&mut **tx)
-                    .await?;
-            let Some(fmt) = fmt else { continue };
+            let Some(fmt) = formats_by_file.get(&fid) else {
+                continue;
+            };
             let ordinal = per_format.entry(fmt.to_uppercase()).or_insert(0);
-            sqlx::query(
-                "UPDATE book_files SET book_id = ?1, ordinal = ?2, label = NULL
-                  WHERE id = ?3 AND book_id = ?4",
-            )
-            .bind(new_source_id)
-            .bind(*ordinal)
-            .bind(fid)
-            .bind(target_id)
-            .execute(&mut **tx)
-            .await?;
+            assignments.push((fid, *ordinal));
             *ordinal += 1;
         }
+        reparent_files_with_ordinals(tx, new_source_id, target_id, &assignments).await?;
     } else {
         // Legacy snapshot without file IDs — move by format.
         for fmt in formats {
@@ -209,6 +201,143 @@ async fn move_files_back(
     Ok(())
 }
 
+/// Rows per chunk for [`fetch_file_formats`] / [`reparent_files_with_ordinals`].
+/// The SELECT binds one id per row (+1 for `target_id`); the UPDATE binds three
+/// (two in the `CASE`, one in the `IN` list). 200 keeps either chunk under
+/// SQLite's 999-parameter cap.
+const MOVE_BACK_CHUNK: usize = 200;
+
+/// Batch-fetch the `format` for each of `file_ids` still owned by `target_id`,
+/// keyed by file id. Files that vanished since the merge are simply absent.
+async fn fetch_file_formats(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    target_id: i64,
+    file_ids: &[i64],
+) -> Result<std::collections::HashMap<i64, String>, sqlx::Error> {
+    let mut out = std::collections::HashMap::with_capacity(file_ids.len());
+    for chunk in file_ids.chunks(MOVE_BACK_CHUNK) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT id, format FROM book_files
+              WHERE book_id = ? AND id IN ({placeholders})"
+        );
+        let mut q = sqlx::query_as::<_, (i64, String)>(&sql).bind(target_id);
+        for fid in chunk {
+            q = q.bind(fid);
+        }
+        for (id, fmt) in q.fetch_all(&mut **tx).await? {
+            out.insert(id, fmt);
+        }
+    }
+    Ok(out)
+}
+
+/// Re-parent each `(file_id, ordinal)` onto `new_source_id`, clearing its
+/// label, via one `CASE`-based UPDATE per chunk. Equivalent to a per-row
+/// `UPDATE … SET book_id, ordinal, label = NULL WHERE id = ? AND book_id = ?`
+/// but in a single statement per chunk.
+async fn reparent_files_with_ordinals(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    new_source_id: i64,
+    target_id: i64,
+    assignments: &[(i64, i64)],
+) -> Result<(), sqlx::Error> {
+    for chunk in assignments.chunks(MOVE_BACK_CHUNK) {
+        let cases = std::iter::repeat_n("WHEN ? THEN ?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "UPDATE book_files
+                SET book_id = ?, ordinal = CASE id {cases} END, label = NULL
+              WHERE book_id = ? AND id IN ({placeholders})"
+        );
+        let mut q = sqlx::query(&sql).bind(new_source_id);
+        for (fid, ordinal) in chunk {
+            q = q.bind(fid).bind(ordinal);
+        }
+        q = q.bind(target_id);
+        for (fid, _) in chunk {
+            q = q.bind(fid);
+        }
+        q.execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+
+/// Restore the source's author links by name in two batched statements
+/// (mirroring the sync writer): one `INSERT ... ON CONFLICT` upsert that keeps
+/// each name's first non-null sort, then one `INSERT OR IGNORE ... SELECT ...
+/// JOIN authors` that resolves ids by name. A name repeated in the snapshot
+/// keeps its first (lowest) position — identical to the old per-row
+/// `INSERT OR IGNORE` loop, since `books_authors_link` is keyed `(book,
+/// author)`.
+async fn restore_author_links(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    authors: &[(String, Option<String>, i64)],
+) -> Result<(), sqlx::Error> {
+    if authors.is_empty() {
+        return Ok(());
+    }
+
+    // Distinct names in first-seen order, each mapped to its first non-null
+    // sort — matching the old per-row `COALESCE(authors.sort, excluded.sort)`.
+    let mut order: Vec<&str> = Vec::new();
+    let mut sort_for: std::collections::HashMap<&str, Option<&str>> =
+        std::collections::HashMap::new();
+    for (name, sort, _) in authors {
+        match sort_for.get_mut(name.as_str()) {
+            Some(slot) if slot.is_none() => *slot = sort.as_deref(),
+            Some(_) => {}
+            None => {
+                order.push(name);
+                sort_for.insert(name, sort.as_deref());
+            }
+        }
+    }
+
+    let author_rows = std::iter::repeat_n("(?, ?)", order.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let upsert_sql = format!(
+        "INSERT INTO authors (name, sort) VALUES {author_rows} \
+         ON CONFLICT(name) DO UPDATE SET sort = COALESCE(authors.sort, excluded.sort)"
+    );
+    let mut q = sqlx::query(&upsert_sql);
+    for name in &order {
+        q = q.bind(*name).bind(sort_for[*name]);
+    }
+    q.execute(&mut **tx).await?;
+
+    // Link rows deduped by name, keeping the first (lowest) position.
+    let mut linked: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let link_entries: Vec<(&str, i64)> = authors
+        .iter()
+        .filter(|(name, _, _)| linked.insert(name))
+        .map(|(name, _, pos)| (name.as_str(), *pos))
+        .collect();
+    let link_rows = std::iter::repeat_n("(?, ?)", link_entries.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let link_sql = format!(
+        "INSERT OR IGNORE INTO books_authors_link (book, author, position) \
+         SELECT ?, a.id, v.column2 \
+         FROM (VALUES {link_rows}) AS v \
+         JOIN authors a ON a.name = v.column1"
+    );
+    let mut q = sqlx::query(&link_sql).bind(book_id);
+    for (name, pos) in &link_entries {
+        q = q.bind(*name).bind(*pos);
+    }
+    q.execute(&mut **tx).await?;
+    Ok(())
+}
+
 /// Restore the source's link rows by **name** — taxonomy ids may have
 /// been garbage-collected between merge and undo. The unioned copies on
 /// the target are left in place.
@@ -217,25 +346,12 @@ async fn restore_links(
     book_id: i64,
     snap: &SourceSnapshot,
 ) -> Result<(), sqlx::Error> {
-    for (name, sort, position) in &snap.authors {
-        sqlx::query(
-            "INSERT INTO authors (name, sort) VALUES (?, ?)
-             ON CONFLICT(name) DO UPDATE SET sort = COALESCE(authors.sort, excluded.sort)",
-        )
-        .bind(name)
-        .bind(sort)
-        .execute(&mut **tx)
-        .await?;
-        sqlx::query(
-            "INSERT OR IGNORE INTO books_authors_link (book, author, position)
-             SELECT ?, a.id, ? FROM authors a WHERE a.name = ?",
-        )
-        .bind(book_id)
-        .bind(position)
-        .bind(name)
-        .execute(&mut **tx)
-        .await?;
-    }
+    restore_author_links(tx, book_id, &snap.authors).await?;
+    // Series/tags/publishers/languages go through the per-name
+    // `resolve_or_insert_*` taxonomy helpers (INSERT OR IGNORE + SELECT id per
+    // name). A snapshot restores at most a handful of each on a rare admin
+    // undo, and batching would mean a new batch resolver in `taxonomy.rs`; the
+    // per-name loop is the accepted tradeoff here.
     for name in &snap.series {
         let id = resolve_or_insert_series(tx, name).await?;
         sqlx::query("INSERT OR IGNORE INTO books_series_link (book, series) VALUES (?, ?)")
