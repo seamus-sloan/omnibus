@@ -14,7 +14,9 @@ layout {
             // --addr 0.0.0.0 binds all interfaces so other devices on the LAN
             // can reach the dev server. Cookie-authed POSTs from a LAN origin
             // still need that origin in OMNIBUS_PUBLIC_ORIGIN plus
-            // OMNIBUS_SECURE_COOKIES=0 — see .env.example.
+            // OMNIBUS_SECURE_COOKIES=0 — see .env.example. Trusted networks
+            // only: this exposes the dev server (auth endpoints included) to
+            // the whole LAN, so don't run it on public/untrusted Wi-Fi.
             args "develop" ".#web" "--command" "dx" "serve" "--platform" "web" "--fullstack" "--port" "3000" "--addr" "0.0.0.0" "--package" "omnibus"
         }
     }
