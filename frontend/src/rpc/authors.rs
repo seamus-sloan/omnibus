@@ -114,7 +114,7 @@ pub async fn rpc_set_author_photo_url(id: i64, url: String) -> Result<()> {
             .bind(id)
             .fetch_one(&pool.0)
             .await
-            .map_err(|e| ServerFnError::new(format!("author exists check: {e}")))?
+            .map_err(|e| internal_rpc_error("author exists check", e))?
             != 0;
     if !author_exists {
         return Err(ServerFnError::new("author not found").into());
@@ -133,7 +133,7 @@ pub async fn rpc_set_author_photo_url(id: i64, url: String) -> Result<()> {
         Some(&bytes),
     )
     .await
-    .map_err(|e| ServerFnError::new(format!("upsert_author_photo: {e}")))?;
+    .map_err(|e| internal_rpc_error("upsert author photo", e))?;
     Ok(())
 }
 
