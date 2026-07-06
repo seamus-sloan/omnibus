@@ -481,19 +481,21 @@ pub(super) fn BdCrumb(items: Vec<BdCrumbItem>) -> Element {
     rsx! {
         nav { class: "bd-crumb", "aria-label": "breadcrumb",
             for (i, item) in items.iter().cloned().enumerate() {
-                if i > 0 {
-                    span { class: "bd-crumb-sep", "\u{203a}" }
-                }
-                if i == last_idx {
-                    span { class: "bd-crumb-curr", "{item.text}" }
-                } else if let Some(route) = item.target.clone() {
-                    Link {
-                        to: route,
-                        class: if i == 0 { "bd-crumb-home" } else { "bd-crumb-step" },
-                        "{item.text}"
+                Fragment { key: "{i}-{item.text}",
+                    if i > 0 {
+                        span { class: "bd-crumb-sep", "\u{203a}" }
                     }
-                } else {
-                    span { class: "bd-crumb-step", "{item.text}" }
+                    if i == last_idx {
+                        span { class: "bd-crumb-curr", "{item.text}" }
+                    } else if let Some(route) = item.target.clone() {
+                        Link {
+                            to: route,
+                            class: if i == 0 { "bd-crumb-home" } else { "bd-crumb-step" },
+                            "{item.text}"
+                        }
+                    } else {
+                        span { class: "bd-crumb-step", "{item.text}" }
+                    }
                 }
             }
         }

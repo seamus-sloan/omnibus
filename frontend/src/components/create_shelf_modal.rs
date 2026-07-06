@@ -371,7 +371,10 @@ fn render_preview(preview: &Option<RulePreview>, server_url: &str) -> Element {
             }
             div { class: "shelf-preview-grid",
                 for book in p.sample.iter().cloned() {
-                    {sample_cover(book, server_url)}
+                    div {
+                        key: "{book.unique_identifier.clone().unwrap_or_default()}",
+                        {sample_cover(book, server_url)}
+                    }
                 }
             }
         },
@@ -472,7 +475,7 @@ fn ConditionRow(
                 value: field.as_str(),
                 onchange: on_field,
                 for (f, label) in FIELDS.iter() {
-                    option { value: f.as_str(), "{label}" }
+                    option { key: "{f.as_str()}", value: f.as_str(), "{label}" }
                 }
             }
             select {
@@ -481,7 +484,7 @@ fn ConditionRow(
                 value: op.as_str(),
                 onchange: on_op,
                 for (o, label) in OPS.iter().filter(|(o, _)| field.accepts(*o)) {
-                    option { value: o.as_str(), "{label}" }
+                    option { key: "{o.as_str()}", value: o.as_str(), "{label}" }
                 }
             }
             {condition_value_input(&draft, on_val, on_val2, on_unit)}
@@ -613,7 +616,10 @@ fn PickerBody(picked: Signal<Vec<String>>, server_url: String) -> Element {
             }
             div { class: "shelf-picker-grid",
                 for book in filtered.iter().map(|b| (*b).clone()) {
-                    {picker_tile(book, &server_url, picked, &mut picked)}
+                    div {
+                        key: "{book.unique_identifier.clone().unwrap_or_default()}",
+                        {picker_tile(book, &server_url, picked, &mut picked)}
+                    }
                 }
             }
         }

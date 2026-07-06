@@ -53,6 +53,7 @@ pub(super) fn TocDrawer(
                             let indent = format!("padding-left:{}px;", 14 + entry.level * 16);
                             rsx! {
                                 button {
+                                    key: "{entry.href}",
                                     class: "{row_class}",
                                     style: "{indent}",
                                     r#type: "button",

@@ -144,6 +144,7 @@ pub(super) fn ChapterMap(
 
                         rsx! {
                             div {
+                                key: "{ch.ordinal}",
                                 class: "{class_name}",
                                 style: "flex: {flex_val};",
                                 title: "{title}",

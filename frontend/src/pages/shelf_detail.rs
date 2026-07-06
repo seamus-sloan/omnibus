@@ -106,8 +106,8 @@ pub fn ShelfDetailPage(id: i64) -> Element {
 
                 if is_smart {
                     div { class: "shelf-rule-summary",
-                        for rule in current.rules.iter() {
-                            span { class: "shelf-rule-chip", "{rule_text(rule)}" }
+                        for (i, rule) in current.rules.iter().enumerate() {
+                            span { key: "{i}", class: "shelf-rule-chip", "{rule_text(rule)}" }
                         }
                     }
                     div { class: "shelf-sort-row",
@@ -159,7 +159,10 @@ fn member_grid(
     rsx! {
         div { class: "lib-grid shelf-grid", "data-testid": "shelf-grid", role: "list",
             for book in books.iter().cloned() {
-                {member_tile(book, server_url)}
+                div {
+                    key: "{book.unique_identifier.clone().unwrap_or_default()}",
+                    {member_tile(book, server_url)}
+                }
             }
             if !is_smart {
                 {
@@ -408,7 +411,10 @@ fn AddBooksModal(shelf_id: i64, on_close: EventHandler<()>, on_added: EventHandl
                     }
                     div { class: "shelf-picker-grid",
                         for book in filtered.iter().map(|b| (*b).clone()) {
-                            {add_picker_tile(book, &server_url, picked)}
+                            div {
+                                key: "{book.unique_identifier.clone().unwrap_or_default()}",
+                                {add_picker_tile(book, &server_url, picked)}
+                            }
                         }
                     }
                 }
