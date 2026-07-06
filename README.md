@@ -170,6 +170,14 @@ just test    # full matrix: db + server + frontend(--features server) + shared
 just lint    # cargo fmt --check + clippy across the crate/feature matrix + stylelint
 just check   # lint then test
 
+# …or per-crate. Note: `cargo test --workspace` SKIPS the frontend rpc/page
+# tests (they need --features server to compile the server-function bodies)
+# and mobile (out of default-members, no tests), so run each crate explicitly:
+cargo test -p omnibus                              # /api/* REST integration tests
+cargo test -p omnibus-db                           # db + scanner + sync tests
+cargo test -p omnibus-frontend --features server   # rpc + page tests (server feature required)
+cargo test -p omnibus-shared                       # shared serde / ebook / progress tests
+
 # Web E2E (Playwright — server must be running; Chromium comes from Nix)
 cd ui_tests/playwright
 npm install                 # first time only; do NOT run `npx playwright install`
