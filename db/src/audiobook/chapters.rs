@@ -55,10 +55,13 @@ fn find_child_box(
     parent_size: u64,
     target: &[u8; 4],
 ) -> Option<BoxInfo> {
-    let end = parent_offset + parent_size;
+    // Adversarial size fields are attacker-controlled u64s, so every offset
+    // arithmetic uses checked ops: a box claiming a length that overflows or
+    // underruns its own header bails out rather than panicking mid-scan.
+    let end = parent_offset.checked_add(parent_size)?;
     let mut pos = parent_offset;
 
-    while pos + 8 <= end {
+    while pos.checked_add(8)? <= end {
         file.seek(SeekFrom::Start(pos)).ok()?;
         let mut header = [0u8; 8];
         file.read_exact(&mut header).ok()?;
@@ -71,20 +74,27 @@ fn find_child_box(
             let mut ext = [0u8; 8];
             file.read_exact(&mut ext).ok()?;
             let ext_size = u64::from_be_bytes(ext);
-            (ext_size, pos + 16)
+            (ext_size, pos.checked_add(16)?)
         } else if size == 0 {
             // Box extends to end of file
-            (end - pos, pos + 8)
+            (end.checked_sub(pos)?, pos.checked_add(8)?)
         } else {
-            (size, pos + 8)
+            (size, pos.checked_add(8)?)
         };
 
-        if box_size < 8 {
+        // Reject a box whose declared size doesn't cover its own header
+        // (guards the `box_size - header_len` subtraction below) or that
+        // runs past the parent region.
+        let header_len = data_offset.checked_sub(pos)?;
+        if box_size < header_len {
+            return None;
+        }
+        if pos.checked_add(box_size)? > end {
             return None;
         }
 
         if box_type == target {
-            let data_size = box_size - (data_offset - pos);
+            let data_size = box_size - header_len;
             return Some(BoxInfo {
                 data_offset,
                 data_size,
