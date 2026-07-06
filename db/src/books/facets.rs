@@ -23,7 +23,21 @@ pub async fn library_facets(
     }
     let ph = super::page::placeholders(library_paths.len());
 
-    let authors = facet_query(
+    Ok(FacetCounts {
+        authors: author_facets(pool, &ph, library_paths).await?,
+        series: series_facets(pool, &ph, library_paths).await?,
+        formats: format_facets(pool, &ph, library_paths).await?,
+        tags: tag_facets(pool, &ph, library_paths).await?,
+    })
+}
+
+/// Author facet counts: books-per-author over the fileless-excluded library.
+async fn author_facets(
+    pool: &SqlitePool,
+    ph: &str,
+    library_paths: &[&str],
+) -> Result<Vec<FacetCount>, sqlx::Error> {
+    facet_query(
         pool,
         &format!(
             r"
@@ -40,9 +54,16 @@ pub async fn library_facets(
         ),
         library_paths,
     )
-    .await?;
+    .await
+}
 
-    let series = facet_query(
+/// Series facet counts, excluding the empty-name series and fileless books.
+async fn series_facets(
+    pool: &SqlitePool,
+    ph: &str,
+    library_paths: &[&str],
+) -> Result<Vec<FacetCount>, sqlx::Error> {
+    facet_query(
         pool,
         &format!(
             r"
@@ -60,13 +81,19 @@ pub async fn library_facets(
         ),
         library_paths,
     )
-    .await?;
+    .await
+}
 
-    // The JOIN to `book_files` already excludes fileless books (a row with no file
-    // contributes none), so no extra EXISTS is needed here. `(book_id, format)`
-    // is unique, so COUNT(DISTINCT b.id) per lowercased format equals the
-    // number of books carrying it.
-    let formats = facet_query(
+/// Format facet counts. The JOIN to `book_files` already excludes fileless
+/// books (a row with no file contributes none), so no extra EXISTS is needed.
+/// `(book_id, format)` is unique, so COUNT(DISTINCT b.id) per lowercased format
+/// equals the number of books carrying it.
+async fn format_facets(
+    pool: &SqlitePool,
+    ph: &str,
+    library_paths: &[&str],
+) -> Result<Vec<FacetCount>, sqlx::Error> {
+    facet_query(
         pool,
         &format!(
             r"
@@ -81,9 +108,16 @@ pub async fn library_facets(
         ),
         library_paths,
     )
-    .await?;
+    .await
+}
 
-    let tags = facet_query(
+/// Tag facet counts, excluding the empty-name tag and fileless books.
+async fn tag_facets(
+    pool: &SqlitePool,
+    ph: &str,
+    library_paths: &[&str],
+) -> Result<Vec<FacetCount>, sqlx::Error> {
+    facet_query(
         pool,
         &format!(
             r"
@@ -101,14 +135,7 @@ pub async fn library_facets(
         ),
         library_paths,
     )
-    .await?;
-
-    Ok(FacetCounts {
-        authors,
-        series,
-        formats,
-        tags,
-    })
+    .await
 }
 
 /// Run one `(value, count)` facet aggregate, binding `library_paths` into its
