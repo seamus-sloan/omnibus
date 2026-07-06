@@ -480,17 +480,35 @@ fn render_player(p: PlayerProps) -> Element {
     }
 }
 
+/// Props for the [`ChaptersSheet`] component.
+#[derive(Props, Clone, PartialEq)]
+struct ChaptersSheetProps {
+    /// Ordered chapter markers rendered as sheet rows.
+    chapters: Vec<ChapterInfo>,
+    /// Index of the currently-playing chapter.
+    current_index: usize,
+    /// Seconds elapsed in the whole book (drives the current row's bar).
+    elapsed: f64,
+    /// Formatted total-duration label shown in the sheet header.
+    total_label: String,
+    /// Fired with the target time in seconds when a row is tapped.
+    on_seek: EventHandler<f64>,
+    /// Fired when the scrim or a row dismisses the sheet.
+    on_close: EventHandler<MouseEvent>,
+}
+
 /// Bottom-sheet chapter list. Current row is accent-highlighted with a mini
 /// progress bar; done rows show a check, upcoming rows show their duration.
 #[component]
-fn ChaptersSheet(
-    chapters: Vec<ChapterInfo>,
-    current_index: usize,
-    elapsed: f64,
-    total_label: String,
-    on_seek: EventHandler<f64>,
-    on_close: EventHandler<MouseEvent>,
-) -> Element {
+fn ChaptersSheet(props: ChaptersSheetProps) -> Element {
+    let ChaptersSheetProps {
+        chapters,
+        current_index,
+        elapsed,
+        total_label,
+        on_seek,
+        on_close,
+    } = props;
     let count = chapters.len();
     rsx! {
         div { class: "m-sheet-scrim", "data-testid": "mobile-chapters-sheet", onclick: move |e| on_close.call(e),

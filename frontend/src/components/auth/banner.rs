@@ -46,22 +46,44 @@ impl BannerKind {
     }
 }
 
-/// Top-of-form callout. Use [`BannerKind`] to pick severity; `title` is
-/// required, `message` and `action` are optional.
+/// Props for the [`Banner`] component. Use [`BannerKind`] to pick
+/// severity; `title` is required, `message` and `action` are optional.
 ///
 /// `dismissible` renders an inline dismiss button — purely visual here;
 /// callers are responsible for hiding the banner in response to the
 /// click. (The primitive stays stateless so the same component works
 /// under SSR.)
+#[derive(Props, Clone, PartialEq)]
+pub struct BannerProps {
+    /// Severity tier — drives color, icon, and ARIA role.
+    pub kind: BannerKind,
+    /// Bold headline copy (required).
+    pub title: String,
+    /// Optional supporting line under the title.
+    #[props(default)]
+    pub message: Option<String>,
+    /// Optional action slot rendered under the message.
+    #[props(default)]
+    pub action: Option<Element>,
+    /// When true, renders an inline dismiss button (visual only).
+    #[props(default = false)]
+    pub dismissible: bool,
+    /// Fired when the dismiss button is clicked.
+    #[props(default)]
+    pub on_dismiss: Option<EventHandler<MouseEvent>>,
+}
+
+/// Top-of-form callout. See [`BannerProps`] for the field contract.
 #[component]
-pub fn Banner(
-    kind: BannerKind,
-    title: String,
-    #[props(default)] message: Option<String>,
-    #[props(default)] action: Option<Element>,
-    #[props(default = false)] dismissible: bool,
-    #[props(default)] on_dismiss: Option<EventHandler<MouseEvent>>,
-) -> Element {
+pub fn Banner(props: BannerProps) -> Element {
+    let BannerProps {
+        kind,
+        title,
+        message,
+        action,
+        dismissible,
+        on_dismiss,
+    } = props;
     let kind_class = kind.class_suffix();
     let wrapper_class = format!("auth-banner auth-banner-{kind_class}");
     let icon = kind.icon();

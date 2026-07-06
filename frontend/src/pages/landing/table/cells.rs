@@ -330,6 +330,23 @@ pub(super) fn EditableCell(
     }
 }
 
+/// Props for the [`AuthorsCell`] component.
+#[derive(Props, Clone, PartialEq)]
+pub(super) struct AuthorsCellProps {
+    /// Gates edit affordances — only admins can open the chip editor.
+    pub is_admin: bool,
+    /// Which field (if any) the row is currently editing.
+    pub editing: Signal<Option<EditField>>,
+    /// The in-progress author chip list shared with the row.
+    pub authors_draft: Signal<Vec<String>>,
+    /// Comma-joined author names shown in display mode.
+    pub authors_text: String,
+    /// Library-wide author pool surfaced in the dropdown.
+    pub suggestions: ReadSignal<Vec<SuggestionItem>>,
+    /// Fired with the new full author list on every add/remove.
+    pub on_change: EventHandler<Vec<String>>,
+}
+
 /// Inline-editable Authors cell. Unlike [`EditableCell`] (which hosts
 /// a single-line text input), the Authors cell renders the full
 /// [`ChipEditor`] *inside* the `<td>` when the row's editing signal
@@ -340,14 +357,15 @@ pub(super) fn EditableCell(
 /// Click: swaps to chip editor (auto-focused) with the library-wide
 /// author pool surfaced in the dropdown. Escape exits edit mode.
 #[component]
-pub(super) fn AuthorsCell(
-    is_admin: bool,
-    editing: Signal<Option<EditField>>,
-    authors_draft: Signal<Vec<String>>,
-    authors_text: String,
-    suggestions: ReadSignal<Vec<SuggestionItem>>,
-    on_change: EventHandler<Vec<String>>,
-) -> Element {
+pub(super) fn AuthorsCell(props: AuthorsCellProps) -> Element {
+    let AuthorsCellProps {
+        is_admin,
+        editing,
+        authors_draft,
+        authors_text,
+        suggestions,
+        on_change,
+    } = props;
     let mut editing = editing;
     let is_editing = editing() == Some(EditField::Authors);
     let active_class = if is_editing {
