@@ -3,7 +3,7 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::SeriesDetail;
+use omnibus_shared::{EbookMetadata, SeriesDetail};
 
 use crate::components::atrium::Cover;
 use crate::{data, use_server_url, Route};
@@ -72,6 +72,27 @@ fn render_series(s: SeriesDetail) -> Element {
         .find_map(|b| b.creators.first().map(|c| (c.name.clone(), c.id)))
         .unwrap_or_default();
 
+    rsx! {
+        div { class: "disc-page", style: "--accent: {accent}",
+            {series_header(&s, &primary_author, primary_author_id)}
+            div { class: "disc-body",
+                div { class: "series-cards",
+                    for book in s.books.iter() {
+                        {series_book_row(book)}
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Series page header: breadcrumb (with an optional linked author crumb) and
+/// the italic-first-word hero title.
+fn series_header(
+    s: &SeriesDetail,
+    primary_author: &str,
+    primary_author_id: Option<i64>,
+) -> Element {
     // Split series name for italic styling on key word.
     let title_parts: Vec<&str> = s.name.splitn(2, ' ').collect();
     let title_first = title_parts.first().copied().unwrap_or("");
@@ -80,76 +101,71 @@ fn render_series(s: SeriesDetail) -> Element {
     } else {
         ""
     };
-
     rsx! {
-        div { class: "disc-page", style: "--accent: {accent}",
-            // Header
-            div { class: "disc-series-header",
-                nav { class: "breadcrumb", aria_label: "breadcrumb",
-                    Link { to: Route::Landing {}, "Library" }
-                    span { class: "breadcrumb-sep", " › " }
-                    if !primary_author.is_empty() {
-                        if let Some(author_id) = primary_author_id {
-                            Link {
-                                to: Route::AuthorDetail { id: author_id },
-                                "data-testid": "series-crumb-author",
-                                "{primary_author}"
-                            }
-                        } else {
-                            span { "data-testid": "series-crumb-author", "{primary_author}" }
+        div { class: "disc-series-header",
+            nav { class: "breadcrumb", aria_label: "breadcrumb",
+                Link { to: Route::Landing {}, "Library" }
+                span { class: "breadcrumb-sep", " › " }
+                if !primary_author.is_empty() {
+                    if let Some(author_id) = primary_author_id {
+                        Link {
+                            to: Route::AuthorDetail { id: author_id },
+                            "data-testid": "series-crumb-author",
+                            "{primary_author}"
                         }
-                        span { class: "breadcrumb-sep", " › " }
+                    } else {
+                        span { "data-testid": "series-crumb-author", "{primary_author}" }
                     }
-                    span { "{s.name}" }
+                    span { class: "breadcrumb-sep", " › " }
                 }
-                div { class: "disc-series-head-row",
-                    div {
-                        span { class: "label", "Series · {s.book_count} in library" }
-                        h1 { class: "disc-hero-title",
-                            em { "{title_first}" }
-                            if !title_rest.is_empty() {
-                                " {title_rest}"
-                            }
+                span { "{s.name}" }
+            }
+            div { class: "disc-series-head-row",
+                div {
+                    span { class: "label", "Series · {s.book_count} in library" }
+                    h1 { class: "disc-hero-title",
+                        em { "{title_first}" }
+                        if !title_rest.is_empty() {
+                            " {title_rest}"
                         }
                     }
                 }
             }
+        }
+    }
+}
 
-            // Body: card grid of books
-            div { class: "disc-body",
-                div { class: "series-cards",
-                    for book in s.books.iter() {
-                        article {
-                            key: "{book.id}",
-                            class: "card series-card",
-                            div { class: "series-card-cover",
-                                Link {
-                                    to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
-                                    Cover { book: book.clone() }
-                                }
-                            }
-                            div { class: "series-card-info",
-                                span { class: "label",
-                                    if let Some(ref idx) = book.series_index {
-                                        "Book #{idx}"
-                                    }
-                                    if let Some(ref year) = book.published {
-                                        " · {year}"
-                                    }
-                                }
-                                h3 { class: "series-card-title",
-                                    Link {
-                                        to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
-                                        "{book.title.as_deref().unwrap_or(&book.filename)}"
-                                    }
-                                }
-                                if let Some(ref desc) = book.description {
-                                    div { class: "series-card-desc",
-                                        dangerous_inner_html: "{desc}"
-                                    }
-                                }
-                            }
-                        }
+/// One book card in the series grid: cover, index/year label, title link, and
+/// an optional description.
+fn series_book_row(book: &EbookMetadata) -> Element {
+    rsx! {
+        article {
+            key: "{book.id}",
+            class: "card series-card",
+            div { class: "series-card-cover",
+                Link {
+                    to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
+                    Cover { book: book.clone() }
+                }
+            }
+            div { class: "series-card-info",
+                span { class: "label",
+                    if let Some(ref idx) = book.series_index {
+                        "Book #{idx}"
+                    }
+                    if let Some(ref year) = book.published {
+                        " · {year}"
+                    }
+                }
+                h3 { class: "series-card-title",
+                    Link {
+                        to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
+                        "{book.title.as_deref().unwrap_or(&book.filename)}"
+                    }
+                }
+                if let Some(ref desc) = book.description {
+                    div { class: "series-card-desc",
+                        dangerous_inner_html: "{desc}"
                     }
                 }
             }

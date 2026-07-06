@@ -86,60 +86,12 @@ pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatSca
                         error: Some(format!("could not read directory: {e}")),
                     };
                 }
-                // Sub-dir unreadable: record a placeholder with an empty
-                // uuid so the legacy wrapper can lift it into an error
-                // row. Carry the io::Error string so callers can
-                // distinguish "permission denied" from "no such file" —
-                // the incremental indexer ignores empty-uuid entries.
-                let relative = current
-                    .strip_prefix(dir)
-                    .unwrap_or(&current)
-                    .to_string_lossy()
-                    .to_string();
-                entries.push(StatEntry {
-                    filename: relative,
-                    scan_key: String::new(),
-                    mtime_epoch: 0,
-                    size_bytes: 0,
-                    error: Some(e.to_string()),
-                });
+                entries.push(unreadable_subdir_entry(dir, &current, &e));
                 continue;
             }
         };
         for entry in read.flatten() {
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            let entry_path = entry.path();
-            if file_type.is_dir() {
-                stack.push(entry_path);
-                continue;
-            }
-            if !file_type.is_file() {
-                continue;
-            }
-            let is_epub = entry_path
-                .extension()
-                .and_then(|s| s.to_str())
-                .map(|s| s.eq_ignore_ascii_case("epub"))
-                .unwrap_or(false);
-            if !is_epub {
-                continue;
-            }
-            let relative = entry_path
-                .strip_prefix(dir)
-                .unwrap_or(&entry_path)
-                .to_string_lossy()
-                .to_string();
-            let (mtime_epoch, size_bytes) = stat_file(&entry_path);
-            let scan_key = crate::helpers::scan_key_for(&relative);
-            entries.push(StatEntry {
-                filename: relative,
-                scan_key,
-                mtime_epoch,
-                size_bytes,
-                error: None,
-            });
+            push_dir_entry(dir, &entry, &mut stack, &mut entries);
         }
     }
 
@@ -150,6 +102,70 @@ pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatSca
         entries,
         error: None,
     }
+}
+
+/// Build the empty-`scan_key` placeholder for an unreadable subdirectory.
+///
+/// Carries the io::Error string so callers can distinguish "permission
+/// denied" from "no such file" — the legacy wrapper lifts these into error
+/// rows and the incremental indexer ignores empty-`scan_key` entries.
+fn unreadable_subdir_entry(base: &Path, current: &Path, err: &std::io::Error) -> StatEntry {
+    let relative = current
+        .strip_prefix(base)
+        .unwrap_or(current)
+        .to_string_lossy()
+        .to_string();
+    StatEntry {
+        filename: relative,
+        scan_key: String::new(),
+        mtime_epoch: 0,
+        size_bytes: 0,
+        error: Some(err.to_string()),
+    }
+}
+
+/// Process one `read_dir` entry: push subdirectories onto `stack` for the
+/// walk, and append a stat row for each `.epub` file. Non-epub files and
+/// entries whose `file_type()` can't be read are skipped.
+fn push_dir_entry(
+    base: &Path,
+    entry: &std::fs::DirEntry,
+    stack: &mut Vec<PathBuf>,
+    entries: &mut Vec<StatEntry>,
+) {
+    let Ok(file_type) = entry.file_type() else {
+        return;
+    };
+    let entry_path = entry.path();
+    if file_type.is_dir() {
+        stack.push(entry_path);
+        return;
+    }
+    if !file_type.is_file() {
+        return;
+    }
+    let is_epub = entry_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.eq_ignore_ascii_case("epub"))
+        .unwrap_or(false);
+    if !is_epub {
+        return;
+    }
+    let relative = entry_path
+        .strip_prefix(base)
+        .unwrap_or(&entry_path)
+        .to_string_lossy()
+        .to_string();
+    let (mtime_epoch, size_bytes) = stat_file(&entry_path);
+    let scan_key = crate::helpers::scan_key_for(&relative);
+    entries.push(StatEntry {
+        filename: relative,
+        scan_key,
+        mtime_epoch,
+        size_bytes,
+        error: None,
+    });
 }
 
 /// `entry.metadata()` + `modified()` → epoch seconds. Anything we can't

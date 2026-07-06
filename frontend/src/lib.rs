@@ -209,6 +209,86 @@ fn use_user_and_playback_contexts() {
 #[cfg(feature = "mobile")]
 fn use_user_and_playback_contexts() {}
 
+/// Install the app-root playback shim and the single boot-time `/me` fetch.
+///
+/// Web only: installs the `window.OmnibusAudio` shim (so the `<audio>` element
+/// and playback signals outlive navigation for the persistent mini-dock) and
+/// runs one `current_user()` fetch, then subscribes to `web_auth_state` so a
+/// fresh login refills the cache and a 401 clears it without a hard reload.
+/// Called unconditionally from [`App`]; the cfg lives here so the call site
+/// stays gate-free.
+#[cfg(feature = "web")]
+fn use_current_user_boot() {
+    // App-root audiobook playback driver: installs the `window.OmnibusAudio`
+    // shim and reacts to the playback context's `uuid` signal.
+    pages::install_audio_bootstrap(use_playback());
+
+    let mut slot = use_context::<CurrentUser>().0;
+    use_future(move || async move {
+        // Initial fetch on mount. Only an explicit `Ok(_)` updates
+        // state — transient errors (network blip, rate-limit 429)
+        // leave the signal at `None` so callers keep showing the
+        // pre-resolve placeholder.
+        if let Ok(resolved) = data::current_user().await {
+            slot.set(Some(resolved));
+        }
+
+        // React to subsequent auth-state transitions. `current_user`
+        // itself pings `web_auth_state` on every call (true on 200,
+        // false on 401), so the very first transition we observe
+        // here is usually `true -> true` from the initial fetch
+        // above — skip same-value updates to avoid a redundant
+        // refetch loop.
+        let mut rx = data::web_auth_state::subscribe();
+        let mut last = *rx.borrow_and_update();
+        while rx.changed().await.is_ok() {
+            let now = *rx.borrow_and_update();
+            if now == last {
+                continue;
+            }
+            last = now;
+            if now {
+                // Fresh login (channel flipped false -> true): refetch
+                // so the avatar / admin gates update without a reload.
+                if let Ok(resolved) = data::current_user().await {
+                    slot.set(Some(resolved));
+                }
+            } else {
+                // 401 observed elsewhere: flip to unauthenticated
+                // immediately. ScreenLayout already drives the
+                // /login redirect off the same channel.
+                slot.set(Some(None));
+            }
+        }
+    });
+}
+
+/// Non-web stub: no playback shim, no `/me` boot fetch.
+#[cfg(not(feature = "web"))]
+fn use_current_user_boot() {}
+
+/// Patch the viewport meta on mobile so content fills the screen edge-to-edge.
+///
+/// Mobile (wry WKWebView) only: the Dioxus-generated viewport meta lacks
+/// `viewport-fit=cover`, so the WebView insets its scroll content by the safe
+/// areas (status bar + home indicator) — a phantom ~100px of scroll behind the
+/// fixed full-screen player, and `env(safe-area-inset-*)` reads 0. The patch is
+/// an effect (not markup), so it's free to be target-gated. Non-mobile is a
+/// no-op stub; called unconditionally from [`App`].
+#[cfg(feature = "mobile")]
+fn use_mobile_viewport_fix() {
+    use_effect(|| {
+        dioxus::document::eval(
+            "const m = document.querySelector('meta[name=viewport]');\
+             if (m) m.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover');",
+        );
+    });
+}
+
+/// Non-mobile stub: the viewport meta is already correct.
+#[cfg(not(feature = "mobile"))]
+fn use_mobile_viewport_fix() {}
+
 /// Root app component. Renders global styles and the router.
 #[component]
 pub fn App() -> Element {
@@ -218,76 +298,11 @@ pub fn App() -> Element {
     // every target.
     use_palette_setup();
     use_user_and_playback_contexts();
-
-    // Single boot-time `/me` fetch (replaces the per-component effects in
-    // user_menu / landing / author). Also subscribes to `web_auth_state`
-    // so a fresh login refills the cache and a 401 clears it without
-    // requiring a hard reload.
-    // App-root audiobook playback driver: installs the `window.OmnibusAudio`
-    // shim and reacts to the playback context's `uuid` signal. Mounted here
-    // (not in the route) so the `<audio>` element and signals outlive
-    // navigation, enabling the persistent mini-dock.
-    #[cfg(feature = "web")]
-    pages::install_audio_bootstrap(use_playback());
-
-    #[cfg(feature = "web")]
-    {
-        let mut slot = use_context::<CurrentUser>().0;
-        use_future(move || async move {
-            // Initial fetch on mount. Only an explicit `Ok(_)` updates
-            // state — transient errors (network blip, rate-limit 429)
-            // leave the signal at `None` so callers keep showing the
-            // pre-resolve placeholder.
-            if let Ok(resolved) = data::current_user().await {
-                slot.set(Some(resolved));
-            }
-
-            // React to subsequent auth-state transitions. `current_user`
-            // itself pings `web_auth_state` on every call (true on 200,
-            // false on 401), so the very first transition we observe
-            // here is usually `true -> true` from the initial fetch
-            // above — skip same-value updates to avoid a redundant
-            // refetch loop.
-            let mut rx = data::web_auth_state::subscribe();
-            let mut last = *rx.borrow_and_update();
-            while rx.changed().await.is_ok() {
-                let now = *rx.borrow_and_update();
-                if now == last {
-                    continue;
-                }
-                last = now;
-                if now {
-                    // Fresh login (channel flipped false -> true): refetch
-                    // so the avatar / admin gates update without a reload.
-                    if let Ok(resolved) = data::current_user().await {
-                        slot.set(Some(resolved));
-                    }
-                } else {
-                    // 401 observed elsewhere: flip to unauthenticated
-                    // immediately. ScreenLayout already drives the
-                    // /login redirect off the same channel.
-                    slot.set(Some(None));
-                }
-            }
-        });
-    }
+    use_current_user_boot();
 
     components::atrium::init_theme();
 
-    // Mobile (wry WKWebView): the Dioxus-generated viewport meta lacks
-    // `viewport-fit=cover`, so the WebView insets its scroll content by the
-    // safe areas (status bar + home indicator) — a phantom ~100px of scroll
-    // behind the fixed full-screen player, and `env(safe-area-inset-*)` reads 0.
-    // Patch the meta once at startup so content fills the screen edge-to-edge
-    // and the player's safe-area padding applies. Effect (not markup), so it's
-    // free to be target-gated.
-    #[cfg(feature = "mobile")]
-    use_effect(|| {
-        dioxus::document::eval(
-            "const m = document.querySelector('meta[name=viewport]');\
-             if (m) m.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover');",
-        );
-    });
+    use_mobile_viewport_fix();
 
     // The single `<audio>` element, mounted at the App root (sibling of the
     // Router) so it never unmounts on navigation — the persistence anchor for
