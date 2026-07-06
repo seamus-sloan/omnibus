@@ -92,14 +92,8 @@ jobs:
       - name: Clippy frontend
         run: nix develop --command cargo clippy -p omnibus-frontend --features server --all-targets -- -D warnings
 
-      # The `server`-feature step above never compiles the `#[cfg(feature =
-      # "web")]` half of the frontend, so web-only warnings (e.g. a
-      # `#[warn(deprecated)]` web-sys call) slip past `-D warnings`. Lint the
-      # `web` feature explicitly against `wasm32-unknown-unknown` — the target
-      # it actually ships to via `dx serve --platform web`. The wasm rust-std
-      # lives in the slim shell (see flake.nix `rustCore`), so this needs the
-      # default `nix develop`, not the heavier `.#web` shell: clippy is a
-      # type-check, not a bundle, so no dioxus-cli / wasm-bindgen is required.
+      # Lint the `web` feature on wasm32 so web-only (`#[cfg(feature = "web")]`)
+      # deprecations/warnings are caught — the `server` step above never sees them.
       - name: Clippy frontend (web)
         run: nix develop --command cargo clippy -p omnibus-frontend --features web --all-targets --target wasm32-unknown-unknown -- -D warnings
 
