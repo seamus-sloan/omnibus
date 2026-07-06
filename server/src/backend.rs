@@ -28,6 +28,7 @@ mod covers;
 mod ebooks;
 mod health;
 mod highlights;
+mod image_upload;
 mod journals;
 mod kindle;
 mod overrides;
