@@ -9,9 +9,14 @@ Implement the `/kobo/v1/*` protocol natively, including EPUB → KEPUB conversio
 > wireless protocol's annotation-loss hazard (see [Risks](#risks)):
 >
 > - **Stage 1 — wired KEPUB sideload (shipped).** A **Send to Kobo** button on
->   each book downloads the book as KEPUB (via kepubify) to copy onto the device
->   over USB. No tokens, no protocol, no wireless sync — and **no data-loss
->   risk**, since a USB file copy never touches the device's annotation channel.
+>   each book delivers the book as KEPUB (via kepubify) to a device plugged into
+>   the *client* machine. On Chromium (Chrome/Edge) it writes the file straight
+>   onto the mounted Kobo drive via the File System Access API (remembering the
+>   directory handle so repeat sends need no prompt); other browsers fall back to
+>   a plain download the user copies over. No tokens, no protocol, no wireless
+>   sync — and **no data-loss risk**, since dropping a loose file on the drive
+>   root never touches `KoboReader.sqlite` or the annotation channel (the write
+>   is the safe mirror of the [F4.4](4-4-kobo-annotation-import.md) USB *read*).
 >   User guide: [docs/kobo.md](../kobo.md). This is the KEPUB **Sub-scope** below,
 >   promoted to ship first.
 > - **Stage 2 — wireless sync (deferred).** The `/kobo/v1/*` protocol described
