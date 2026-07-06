@@ -30,8 +30,8 @@ fn ebook_blob(bytes: &[u8]) -> Result<web_sys::Blob, DataError> {
     let u8 = js_sys::Uint8Array::from(bytes);
     let parts = js_sys::Array::new();
     parts.push(&u8);
-    let mut opts = web_sys::BlobPropertyBag::new();
-    opts.type_("application/epub+zip");
+    let opts = web_sys::BlobPropertyBag::new();
+    opts.set_type("application/epub+zip");
     web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts)
         .map_err(|e| DataError::Other(format!("Blob::new: {e:?}")))
 }
