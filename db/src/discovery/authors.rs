@@ -3,9 +3,8 @@
 //! canonical `books_authors_link` so the form-edited creator list drives
 //! both the shelf contents and the per-card creator names.
 
-use sqlx::{Row, SqlitePool};
-
 use omnibus_shared::{AuthorDetail, EbookMetadata};
+use sqlx::{Row, SqlitePool};
 
 use crate::books::{backfill_creator_ids, row_to_ebook, BOOK_COLUMNS};
 use crate::metadata_overrides::{apply_overrides, load_overrides_bulk};
