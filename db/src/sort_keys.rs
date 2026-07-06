@@ -10,9 +10,8 @@
 //! `metadata_overrides` is a read layer and is deliberately ignored, so a
 //! book's sort position tracks its scanned series, not an override.
 
-use sqlx::SqlitePool;
-
 use omnibus_shared::EbookMetadata;
+use sqlx::SqlitePool;
 
 /// Errors returned by [`backfill_series_sort`].
 #[derive(Debug, thiserror::Error)]
