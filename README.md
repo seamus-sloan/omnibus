@@ -98,7 +98,7 @@ just dev-bounce  # cleanly restart a wedged dev server (e.g. after a migration)
 ```
 
 `just serve` / `just serve-pc` multiplex every platform into one session using
-the shared [`justfile`](justfile). Prefer to drive the pieces yourself?
+the shared [`Justfile`](Justfile). Prefer to drive the pieces yourself?
 
 ```bash
 dx serve --platform web -p omnibus   # fullstack SSR + WASM at http://localhost:8080
@@ -169,6 +169,14 @@ simulator and installs the app with no extra commands.
 just test    # full matrix: db + server + frontend(--features server) + shared
 just lint    # cargo fmt --check + clippy across the crate/feature matrix + stylelint
 just check   # lint then test
+
+# …or per-crate. Note: `cargo test --workspace` SKIPS the frontend rpc/page
+# tests (they need --features server to compile the server-function bodies)
+# and mobile (out of default-members, no tests), so run each crate explicitly:
+cargo test -p omnibus                              # /api/* REST integration tests
+cargo test -p omnibus-db                           # db + scanner + sync tests
+cargo test -p omnibus-frontend --features server   # rpc + page tests (server feature required)
+cargo test -p omnibus-shared                       # shared serde / ebook / progress tests
 
 # Web E2E (Playwright — server must be running; Chromium comes from Nix)
 cd ui_tests/playwright
