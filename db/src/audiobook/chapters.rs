@@ -101,7 +101,7 @@ fn find_child_box(
             });
         }
 
-        pos += box_size;
+        pos = pos.checked_add(box_size)?;
     }
     None
 }
