@@ -4,6 +4,9 @@
 //! callsites keep importing `crate::rpc::rpc_*`; this module owns only the
 //! shared `PoolExt` / `WorkerExt` / `AdminUser` / `AuthUser` pieces.
 
+#[cfg(feature = "server")]
+use dioxus::prelude::ServerFnError;
+
 mod account;
 mod authors;
 mod bookmarks;
@@ -33,6 +36,21 @@ pub use ratings::*;
 pub use series::*;
 pub use settings::*;
 pub use shelves::*;
+
+/// Log the real error server-side and return a generic message safe to hand
+/// to the client, mirroring `server/src/backend.rs`'s `internal()` one layer
+/// up (HTTP/RPC response boundary instead of a Rust module boundary — see
+/// `.claude/rules/02-error-handling.md`'s boundary rule). Only for opaque
+/// failures (`Sqlx`, transport, IO) — typed/validation variants a client
+/// legitimately branches on should keep their specific message.
+#[cfg(feature = "server")]
+pub(crate) fn internal_rpc_error<E: std::fmt::Display>(
+    context: &'static str,
+    e: E,
+) -> ServerFnError {
+    tracing::error!(error = %e, context = context, "rpc handler error");
+    ServerFnError::new("internal server error")
+}
 
 /// Server-only extractor alias used by each server function. Only referenced
 /// by the server-side body; the `#[cfg(feature = "server")]` stops the
