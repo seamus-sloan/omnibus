@@ -92,6 +92,11 @@ jobs:
       - name: Clippy frontend
         run: nix develop --command cargo clippy -p omnibus-frontend --features server --all-targets -- -D warnings
 
+      # Lint the `web` feature on wasm32 so web-only (`#[cfg(feature = "web")]`)
+      # deprecations/warnings are caught — the `server` step above never sees them.
+      - name: Clippy frontend (web)
+        run: nix develop --command cargo clippy -p omnibus-frontend --features web --all-targets --target wasm32-unknown-unknown -- -D warnings
+
       - name: Clippy shared
         run: nix develop --command cargo clippy -p omnibus-shared --all-targets -- -D warnings
 
