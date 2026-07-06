@@ -3,12 +3,11 @@
 
 use std::collections::HashMap;
 
-use sqlx::{Row, SqlitePool};
-
 use omnibus_shared::{
     EbookMetadata, MatchMode, RuleField, RuleOp, RulePreview, Shelf, ShelfKind, ShelfPage,
     ShelfRule, ShelfSummary, SortDir, SortKey, Visibility,
 };
+use sqlx::{Row, SqlitePool};
 
 use super::rules::{membership_predicate, Bind};
 use super::ShelfError;

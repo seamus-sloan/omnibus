@@ -4,9 +4,8 @@
 //! use scoped `LIKE` substring matches against the name columns. Bounded
 //! per category and scoped to `library_path`.
 
-use sqlx::SqlitePool;
-
 use omnibus_shared::PaletteResults;
+use sqlx::SqlitePool;
 
 use crate::helpers::cap_query_len;
 

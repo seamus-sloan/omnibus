@@ -5,9 +5,8 @@
 
 use std::collections::HashMap;
 
-use sqlx::{Executor, SqlitePool};
-
 use omnibus_shared::{EbookMetadata, MetadataOverrides};
+use sqlx::{Executor, SqlitePool};
 
 use crate::books::resolve_book_id_by_uuid_exec;
 use crate::sync::upsert_fts;
