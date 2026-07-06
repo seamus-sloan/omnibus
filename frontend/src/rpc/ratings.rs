@@ -8,7 +8,7 @@ use omnibus_shared::{RatingRecord, RatingUpdate};
 use omnibus_db as db;
 
 #[cfg(feature = "server")]
-use super::{AuthUser, PoolExt};
+use super::{internal_rpc_error, AuthUser, PoolExt};
 
 /// Set (or change) the current user's star rating for a book. Mobile uses the
 /// analogous REST route in `server::backend::ratings`. POST carries the
@@ -23,7 +23,7 @@ pub async fn rpc_set_rating(update: RatingUpdate) -> Result<RatingRecord> {
         Err(db::ratings::RatingError::BookNotFound) => {
             Err(ServerFnError::new("book not found").into())
         }
-        Err(db::ratings::RatingError::Sqlx(e)) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(db::ratings::RatingError::Sqlx(e)) => Err(internal_rpc_error("set rating", e).into()),
     }
 }
 

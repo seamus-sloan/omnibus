@@ -8,7 +8,7 @@ use omnibus_shared::{CreateJournalEntry, JournalEntry, UpdateJournalEntry};
 use omnibus_db as db;
 
 #[cfg(feature = "server")]
-use super::{AuthUser, PoolExt};
+use super::{internal_rpc_error, AuthUser, PoolExt};
 
 /// Create a public journal entry on a book. Mobile uses the analogous REST
 /// route in `server::backend::journals`; the rest of this family follows the
@@ -26,7 +26,9 @@ pub async fn rpc_create_journal_entry(input: CreateJournalEntry) -> Result<Journ
         Err(db::journals::JournalError::NotFound) => {
             Err(ServerFnError::new("journal entry not found").into())
         }
-        Err(db::journals::JournalError::Sqlx(e)) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(db::journals::JournalError::Sqlx(e)) => {
+            Err(internal_rpc_error("create journal entry", e).into())
+        }
     }
 }
 
@@ -37,7 +39,7 @@ pub async fn rpc_create_journal_entry(input: CreateJournalEntry) -> Result<Journ
 pub async fn rpc_list_journal_entries(book_uuid: String) -> Result<Vec<JournalEntry>> {
     match db::journals::list_journal_entries(&pool.0, &book_uuid).await {
         Ok(list) => Ok(list),
-        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(e) => Err(internal_rpc_error("list journal entries", e).into()),
     }
 }
 
@@ -54,7 +56,7 @@ pub async fn rpc_update_journal_entry(id: i64, input: UpdateJournalEntry) -> Res
         Err(db::journals::JournalError::NotFound) => {
             Err(ServerFnError::new("journal entry not found").into())
         }
-        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(e) => Err(internal_rpc_error("update journal entry", e).into()),
     }
 }
 
@@ -68,7 +70,7 @@ pub async fn rpc_delete_journal_entry(id: i64) -> Result<()> {
         Err(db::journals::JournalError::NotFound) => {
             Err(ServerFnError::new("journal entry not found").into())
         }
-        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(e) => Err(internal_rpc_error("delete journal entry", e).into()),
     }
 }
 

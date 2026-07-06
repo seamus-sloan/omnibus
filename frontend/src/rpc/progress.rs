@@ -13,7 +13,7 @@ use omnibus_db as db;
 use omnibus_shared::SESSION_BATCH_CAP;
 
 #[cfg(feature = "server")]
-use super::{AuthUser, PoolExt};
+use super::{internal_rpc_error, AuthUser, PoolExt};
 
 /// Progress-sync save. Mobile uses the analogous REST route in
 /// `server::backend::progress`. POST because Dioxus `#[get]` server
@@ -29,7 +29,9 @@ pub async fn rpc_save_progress(update: ProgressUpdate) -> Result<ProgressRecord>
         Err(db::progress::ProgressError::BookNotFound) => {
             Err(ServerFnError::new("book not found").into())
         }
-        Err(db::progress::ProgressError::Sqlx(e)) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(db::progress::ProgressError::Sqlx(e)) => {
+            Err(internal_rpc_error("save progress", e).into())
+        }
     }
 }
 

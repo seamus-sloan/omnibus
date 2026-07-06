@@ -8,7 +8,7 @@ use dioxus::prelude::*;
 use omnibus_db::{self as db, auth::AuthError};
 
 #[cfg(feature = "server")]
-use super::{AuthUser, PoolExt};
+use super::{internal_rpc_error, AuthUser, PoolExt};
 
 /// Set (or clear, with `None`/blank) the authenticated user's Kindle email.
 /// Rejects a malformed address with a validation `ServerFnError`.
@@ -17,6 +17,6 @@ pub async fn rpc_set_kindle_email(email: Option<String>) -> Result<()> {
     match db::auth::set_kindle_email(&pool.0, user.id, email.as_deref()).await {
         Ok(()) => Ok(()),
         Err(AuthError::Validation(msg)) => Err(ServerFnError::new(msg).into()),
-        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(e) => Err(internal_rpc_error("set kindle email", e).into()),
     }
 }
