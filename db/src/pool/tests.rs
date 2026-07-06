@@ -18,56 +18,30 @@ async fn init_db_returns_migrate_error_when_applied_checksum_is_tampered() {
     // migration against the checksum recorded in `_sqlx_migrations`. A row
     // whose stored checksum no longer matches (an edited-after-apply migration,
     // per rule 06) must fail startup — the typed wrapper surfaces it as
-    // `InitDbError::Migrate`, not a panic or a leaked `MigrateError`. Seed an
-    // on-disk DB with a tampered version-1 checksum, then run `init_db` on it.
-    let tmp = std::env::temp_dir().join(format!(
-        "omnibus-migrate-tamper-{}-{}.db",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = std::fs::remove_file(&tmp);
-    let url = format!("sqlite://{}?mode=rwc", tmp.display());
+    // `InitDbError::Migrate`, not a panic or a leaked `MigrateError`.
+    //
+    // First `init_db` lets sqlx create and populate `_sqlx_migrations` itself
+    // (no hand-recreation of its internal schema, which would rot across sqlx
+    // versions); then we tamper version 1's checksum in place and re-open. The
+    // tempdir auto-removes the DB plus its WAL/`-shm` sidecars on drop.
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("omnibus.db");
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
 
-    // Pre-create the migrations table with sqlx's exact DDL (CREATE TABLE IF
-    // NOT EXISTS, so the migrator reuses it) and record version 1 as applied
-    // with a deliberately wrong checksum (48 zero bytes ≠ the real SHA-384).
-    let pool = SqlitePool::connect(&url).await.unwrap();
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS _sqlx_migrations (
-            version BIGINT PRIMARY KEY,
-            description TEXT NOT NULL,
-            installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            success BOOLEAN NOT NULL,
-            checksum BLOB NOT NULL,
-            execution_time BIGINT NOT NULL
-        )",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
-         VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(1_i64)
-    .bind("tampered")
-    .bind(true)
-    .bind(vec![0u8; 48])
-    .bind(0_i64)
-    .execute(&pool)
-    .await
-    .unwrap();
+    let pool = init_db(&url).await.expect("initial init_db should succeed");
+    sqlx::query("UPDATE _sqlx_migrations SET checksum = zeroblob(48) WHERE version = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
     drop(pool);
 
     let err = init_db(&url)
         .await
         .expect_err("a tampered migration checksum must fail startup");
-    let is_migrate = matches!(err, InitDbError::Migrate(_));
-    let _ = std::fs::remove_file(&tmp);
-    assert!(is_migrate, "expected InitDbError::Migrate, got {err:?}");
+    assert!(
+        matches!(err, InitDbError::Migrate(_)),
+        "expected InitDbError::Migrate, got {err:?}"
+    );
 }
 
 #[tokio::test]

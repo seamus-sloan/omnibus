@@ -513,19 +513,25 @@ async fn fetch_remote_image_rejects_svg_content_type() {
 }
 
 #[tokio::test]
-async fn fetch_remote_image_rejects_body_exceeding_size_cap() {
-    // A body larger than `REMOTE_IMAGE_MAX_BYTES` must abort mid-stream (the
-    // per-chunk cap that bounds memory even when the server lies about, or
-    // omits, `Content-Length`), surfacing as a `Validation` error naming the
-    // byte cap. The content-type is a valid image so the size gate — not the
-    // type gate — is what fires.
+async fn fetch_remote_image_rejects_oversized_content_length() {
+    // An advertised `Content-Length` past `REMOTE_IMAGE_MAX_BYTES` must bail on
+    // the pre-check (remote.rs `resp.content_length()`) — before the streaming
+    // read — so an obviously-oversized download aborts up front. This is the
+    // gate that actually fires here: the streamed body path is the belt-and-
+    // braces fallback for servers that omit or lie about Content-Length.
+    //
+    // hyper refuses to emit a Content-Length that disagrees with the body it
+    // sends (it panics on the mismatch), so a fabricated huge header over a
+    // tiny body isn't possible over wiremock — the body must genuinely exceed
+    // the cap by one byte, which is what makes the honest Content-Length
+    // oversized. `+ 1` keeps the allocation to the minimum that trips the gate.
     let server = MockServer::start().await;
-    let oversized_body = vec![0xFFu8; (super::remote::REMOTE_IMAGE_MAX_BYTES as usize) + 1024];
+    let body = vec![0xFFu8; (super::remote::REMOTE_IMAGE_MAX_BYTES as usize) + 1];
     Mock::given(method("GET"))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "image/jpeg")
-                .set_body_bytes(oversized_body),
+                .set_body_bytes(body),
         )
         .mount(&server)
         .await;
@@ -534,7 +540,7 @@ async fn fetch_remote_image_rejects_body_exceeding_size_cap() {
     };
     let err = fetch_remote_image_with(&format!("{}/big.jpg", server.uri()), &cfg)
         .await
-        .expect_err("oversized body must be rejected");
+        .expect_err("oversized Content-Length must be rejected");
     assert!(
         matches!(&err, FetchRemoteImageError::Validation(msg) if msg.contains("cap")),
         "got {err:?}",
