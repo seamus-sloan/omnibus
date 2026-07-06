@@ -2074,3 +2074,26 @@ async fn get_book_uuid_by_scan_key_returns_none_for_unknown_key() {
         .unwrap()
         .is_none());
 }
+
+// ---------- BooksError variants ----------
+
+#[test]
+fn books_error_maps_overrides_serialization_to_overrides_json_variant() {
+    // The `From<MetadataOverridesError>` bridge (the only site that mints
+    // `BooksError::OverridesJson`) must route a corrupt-overrides-JSON
+    // deserialization failure to `OverridesJson`, carrying the underlying
+    // `serde_json::Error` and its message — never collapsing it into `Db`.
+    let json_err =
+        serde_json::from_str::<MetadataOverrides>("{ not valid json").expect_err("must not parse");
+    let src = crate::metadata_overrides::MetadataOverridesError::Serialization(json_err);
+    let err: BooksError = src.into();
+    assert!(
+        matches!(err, BooksError::OverridesJson(_)),
+        "Serialization must map to OverridesJson, got {err:?}"
+    );
+    assert!(
+        err.to_string()
+            .starts_with("overrides deserialization failed"),
+        "got {err}"
+    );
+}

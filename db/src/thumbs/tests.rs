@@ -113,3 +113,32 @@ fn evict_if_over_cap_removes_oldest_files() {
     let remaining: Vec<_> = std::fs::read_dir(tmp.path()).unwrap().flatten().collect();
     assert_eq!(remaining.len(), 2, "should have evicted 1 oldest file");
 }
+
+// ---------- ThumbError variants ----------
+
+#[test]
+fn generate_thumbnail_returns_failed_when_bytes_are_not_a_decodable_image() {
+    // The decode step (`image::load_from_memory`) is the pipeline's first
+    // fallible stage; garbage bytes that aren't any known image format must
+    // surface as `ThumbError::Failed` with a message naming the decode step,
+    // rather than panicking. `Failed` is the coarse variant folding the
+    // former Decode/Encode/I-O cases, so the decode failure exercises it.
+    let _guard = EnvVarGuard::set("OMNIBUS_THUMBS_DIR", None);
+    let err = generate_thumbnail(7, ThumbSize::Sm, b"definitely not an image")
+        .expect_err("undecodable bytes must not produce a thumbnail");
+    assert!(
+        matches!(err, ThumbError::Failed(ref msg) if msg.contains("decode")),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn thumb_error_no_cover_renders_book_id_in_message() {
+    // `NoCover` carries the book id so a caller (and the download handler)
+    // can render "no cover available for book N". Constructed directly: it is
+    // a coarse, caller-branchable variant whose message contract is asserted
+    // here even though the current pipeline reaches the missing-cover case
+    // before minting it.
+    let err = ThumbError::NoCover(451);
+    assert_eq!(err.to_string(), "no cover available for book 451");
+}

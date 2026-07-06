@@ -128,6 +128,27 @@ fn audiobook_error_unsupported_variant_renders_format_token() {
 }
 
 #[test]
+fn build_indexed_book_surfaces_tag_error_for_undecodable_audio() {
+    // `build_indexed_book` propagates the lofty decode/container failure via
+    // `?` as `AudiobookError::Tag` — the direct-propagation counterpart to
+    // `parse_audiobook_targets`, which instead folds the same failure into an
+    // `error` metadata row. Feeding a file with an audio extension but junk
+    // bytes drives `lofty::read_from_path` to error, which `#[from]` maps to
+    // `Tag`.
+    let dir = make_test_dir("tag_err");
+    let f = dir.join("garbage.m4b");
+    fs::write(&f, b"this is not a valid m4b container").unwrap();
+    let err =
+        build_indexed_book(&f, "garbage.m4b".into()).expect_err("undecodable audio must not parse");
+    fs::remove_dir_all(&dir).unwrap();
+    assert!(matches!(err, AudiobookError::Tag(_)), "got {err:?}");
+    assert!(
+        err.to_string().starts_with("tag decode failed"),
+        "got {err}"
+    );
+}
+
+#[test]
 fn duration_to_hm_splits_finite_seconds_into_hours_and_minutes() {
     assert_eq!(duration_to_hm(3661.0), (1, 1));
     assert_eq!(duration_to_hm(0.0), (0, 0));
