@@ -71,22 +71,44 @@ pub async fn backfill_norm_columns(pool: &SqlitePool) -> Result<(), NormalizeErr
         return Ok(());
     }
 
+    // `title_norm` lands as '' (not NULL) when nothing survives normalization,
+    // so the `IS NULL` guard above stays idempotent. Empty strings never
+    // match: the attach lookup only binds non-empty keys. `author_norm` stays
+    // genuinely nullable (no fallback).
+    let updates: Vec<(i64, String, Option<String>)> = rows
+        .into_iter()
+        .map(|(id, title, author)| {
+            (
+                id,
+                normalize_title(&title).unwrap_or_default(),
+                author.as_deref().and_then(normalize_author),
+            )
+        })
+        .collect();
+
     let mut tx = pool.begin().await?;
-    for (id, title, author) in rows {
-        // `title_norm` lands as '' (not NULL) when nothing survives
-        // normalization, so the IS NULL guard above stays idempotent.
-        // Empty strings never match: the attach lookup only binds
-        // non-empty keys.
-        sqlx::query("UPDATE books SET title_norm = ?, author_norm = ? WHERE id = ?")
-            .bind(normalize_title(&title).unwrap_or_default())
-            .bind(author.as_deref().and_then(normalize_author))
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
+    for chunk in updates.chunks(NORM_UPDATE_CHUNK) {
+        let values = std::iter::repeat_n("(?, ?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "UPDATE books SET title_norm = v.column2, author_norm = v.column3
+               FROM (VALUES {values}) AS v
+              WHERE books.id = v.column1"
+        );
+        let mut q = sqlx::query(&sql);
+        for (id, title_norm, author_norm) in chunk {
+            q = q.bind(id).bind(title_norm).bind(author_norm);
+        }
+        q.execute(&mut *tx).await?;
     }
     tx.commit().await?;
     Ok(())
 }
+
+/// Rows per chunk for the norm-column backfill UPDATE. Three binds per row
+/// keeps a chunk under SQLite's 999-parameter cap.
+const NORM_UPDATE_CHUNK: usize = 300;
 
 #[cfg(test)]
 mod tests;
