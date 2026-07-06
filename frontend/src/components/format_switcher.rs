@@ -235,6 +235,10 @@ pub fn SendToKoboButton(
     let mut in_flight = use_signal(|| false);
     // (is_error, message) — None until a send completes / the toast is dismissed.
     let mut result = use_signal(|| None::<(bool, String)>);
+    // Monotonic id of the latest send. A superseded task must not touch shared
+    // state — otherwise an earlier send's auto-dismiss sleep can clear (or hide
+    // the error of) a newer send's toast.
+    let mut send_seq = use_signal(|| 0u64);
 
     rsx! {
         button {
@@ -245,17 +249,27 @@ pub fn SendToKoboButton(
             "data-testid": "{testid}",
             onclick: move |_| {
                 let uuid = uuid.clone();
+                let seq = *send_seq.peek() + 1;
+                send_seq.set(seq);
                 in_flight.set(true);
                 result.set(None);
                 spawn(async move {
                     let outcome = write_kepub_to_kobo(&uuid).await;
+                    // A newer send has superseded this one — leave all shared
+                    // state to it.
+                    if *send_seq.peek() != seq {
+                        return;
+                    }
                     in_flight.set(false);
                     // `None` = the user cancelled the directory picker; stay quiet.
                     if let Some((is_error, message)) = outcome {
                         result.set(Some((is_error, message)));
                         if !is_error {
                             async_sleep_ms(5000).await;
-                            result.set(None);
+                            // Only clear if we're still the latest send.
+                            if *send_seq.peek() == seq {
+                                result.set(None);
+                            }
                         }
                     }
                 });
