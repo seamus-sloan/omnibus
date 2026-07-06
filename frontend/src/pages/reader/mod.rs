@@ -173,9 +173,7 @@ pub fn BookReadPage(uuid: String) -> Element {
     }
 }
 
-/// Book identity + display strings the reader chrome renders (title bar,
-/// quote/note panels, bookmark labels). Rebuilt each render from the parent's
-/// metadata reads; `PartialEq` lets Dioxus skip the layout when unchanged.
+/// Book identity + display strings the reader chrome renders.
 #[derive(Clone, PartialEq)]
 pub(super) struct ReaderMeta {
     pub uuid: String,
@@ -195,9 +193,7 @@ pub(super) struct ReaderProgress {
     pub status: ReaderStatus,
 }
 
-/// Every overlay/panel signal the reader chrome toggles or renders from
-/// (Aa panel, selection popover, TOC/highlights/search/bookmarks drawers,
-/// note + quote composers). All `Copy` signals, so the struct is `Copy`.
+/// Overlay/panel signals the reader chrome toggles or renders from.
 #[derive(Copy, Clone, PartialEq)]
 pub(super) struct ReaderPanelSignals {
     pub show_aa: Signal<bool>,
@@ -213,8 +209,7 @@ pub(super) struct ReaderPanelSignals {
     pub show_bookmarks: Signal<bool>,
 }
 
-/// Navigation + keyboard handlers built by `install_chrome_handlers` and
-/// threaded into the top bar, page-turn gutters, and surface keydown.
+/// Navigation + keyboard handlers for the top bar, page-turn gutters, and surface keydown.
 #[derive(Copy, Clone, PartialEq)]
 pub(super) struct ReaderNavHandlers {
     pub on_keydown: EventHandler<KeyboardEvent>,
