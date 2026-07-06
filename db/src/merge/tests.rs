@@ -631,6 +631,35 @@ async fn undo_merge_rejects_double_undo() {
 }
 
 #[tokio::test]
+async fn undo_merge_returns_snapshot_error_when_source_metadata_is_corrupt() {
+    // `undo_merge` replays `merge_log.source_metadata` via
+    // `serde_json::from_str`; a row whose snapshot JSON is corrupt (truncated
+    // by a bad manual edit or a partial write) must surface as
+    // `MergeError::Snapshot` — the `#[from] serde_json::Error` variant — not
+    // as a panic or a `Db` error. Overwrite a real log entry's snapshot with
+    // malformed JSON to drive the decode failure.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let target = seed_ebook(&pool, "A/Dracula.epub", "Dracula", "Bram Stoker").await;
+    let source = seed_audiobook(&pool, "B/Drakula.m4b", "Drakula", "Bram Stoker").await;
+    let out = merge_books(&pool, &source, &target, None).await.unwrap();
+
+    sqlx::query("UPDATE merge_log SET source_metadata = ? WHERE id = ?")
+        .bind("{ this is not valid json")
+        .bind(out.merge_log_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let err = undo_merge(&pool, out.merge_log_id).await.unwrap_err();
+    assert!(matches!(err, MergeError::Snapshot(_)), "got {err:?}");
+    assert!(
+        err.to_string()
+            .starts_with("merge snapshot encode/decode failed"),
+        "got {err}"
+    );
+}
+
+#[tokio::test]
 async fn merge_moves_highlights_to_target() {
     // F1 merge fix: highlights are now in the re-parent set, so a manual
     // merge no longer loses the source book's highlights.
