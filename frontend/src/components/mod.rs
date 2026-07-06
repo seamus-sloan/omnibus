@@ -36,6 +36,8 @@ mod format_switcher;
 pub use format_switcher::FormatSwitcher;
 #[cfg(not(feature = "mobile"))]
 pub use format_switcher::SendToKindleButton;
+#[cfg(not(feature = "mobile"))]
+pub use format_switcher::SendToKoboButton;
 
 // Reusable add/remove chip editor with a substring-match suggestion
 // dropdown. See `chip_editor.rs` for the full API.
@@ -43,6 +45,12 @@ pub mod chip_editor;
 pub use chip_editor::ChipEditor;
 
 pub mod atrium;
+
+// Shared cover-tile chrome (`thumb_srcs` + the `CoverTile` wrapper) used by
+// the landing grid, shelf detail, and the shelf pickers. Platform-agnostic so
+// the same markup ships under web SSR/WASM and mobile native.
+pub mod cover_tile;
+pub use cover_tile::{CoverTile, CoverTileKind};
 
 // F1.11 follow-up: hover-overlay "edit photo" affordance + modal with
 // three actions (paste URL, upload file, scan Open Library). Mounted by

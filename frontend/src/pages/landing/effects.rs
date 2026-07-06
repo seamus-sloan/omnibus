@@ -76,17 +76,13 @@ pub(super) fn spawn_page_fetch_effect(
     )>,
     sigs: FetchSignals,
 ) {
-    let FetchSignals {
-        mut books,
-        mut next_cursor,
-        mut total,
-        mut lib_path,
-        mut lib_error,
-        mut loading,
-        loading_more: _,
-        mut error,
-        mut fetch_epoch,
-    } = sigs;
+    // `sigs` is `Copy`; the result-application signals are set inside
+    // `apply_browse_result` / `apply_search_result`. Only the fetch-lifecycle
+    // signals are driven from this body.
+    let mut next_cursor = sigs.next_cursor;
+    let mut loading = sigs.loading;
+    let mut error = sigs.error;
+    let mut fetch_epoch = sigs.fetch_epoch;
     use_effect(move || {
         let (q, sort_key, sort_dir, filters) = fetch_key();
         let epoch = {
@@ -106,47 +102,81 @@ pub(super) fn spawn_page_fetch_effect(
                 if *fetch_epoch.peek() != epoch {
                     return; // a newer fetch superseded us — drop this result
                 }
-                match result {
-                    Ok(page) => {
-                        lib_path.set(page.path);
-                        lib_error.set(None);
-                        next_cursor.set(page.next_cursor);
-                        total.set(page.total);
-                        books.set(page.books);
-                    }
-                    Err(e) => {
-                        error.set(Some(e.to_string()));
-                        // Clear the derived signals so the error state doesn't
-                        // render a stale header count.
-                        books.set(Vec::new());
-                        total.set(None);
-                        lib_error.set(None);
-                    }
-                }
+                apply_browse_result(sigs, result);
             } else {
                 // Search: capped full result set, sorted/filtered client-side.
                 let result = data::search_ebooks(&url, &q).await;
                 if *fetch_epoch.peek() != epoch {
                     return;
                 }
-                match result {
-                    Ok(lib) => {
-                        lib_path.set(lib.path);
-                        lib_error.set(lib.error);
-                        total.set(lib.total);
-                        books.set(lib.books);
-                    }
-                    Err(e) => {
-                        error.set(Some(e.to_string()));
-                        books.set(Vec::new());
-                        total.set(None);
-                        lib_error.set(None);
-                    }
-                }
+                apply_search_result(sigs, result);
             }
             loading.set(false);
         });
     });
+}
+
+/// Apply a browse (keyset page-1) fetch outcome to the page signals. On error,
+/// the derived signals are cleared so the error state doesn't render a stale
+/// header count.
+fn apply_browse_result(
+    sigs: FetchSignals,
+    result: Result<omnibus_shared::LibraryPage, data::DataError>,
+) {
+    let FetchSignals {
+        mut books,
+        mut next_cursor,
+        mut total,
+        mut lib_path,
+        mut lib_error,
+        mut error,
+        ..
+    } = sigs;
+    match result {
+        Ok(page) => {
+            lib_path.set(page.path);
+            lib_error.set(None);
+            next_cursor.set(page.next_cursor);
+            total.set(page.total);
+            books.set(page.books);
+        }
+        Err(e) => {
+            error.set(Some(e.to_string()));
+            books.set(Vec::new());
+            total.set(None);
+            lib_error.set(None);
+        }
+    }
+}
+
+/// Apply a search (capped full result set) fetch outcome to the page signals.
+/// On error, the derived signals are cleared to avoid a stale header count.
+fn apply_search_result(
+    sigs: FetchSignals,
+    result: Result<omnibus_shared::EbookLibrary, data::DataError>,
+) {
+    let FetchSignals {
+        mut books,
+        mut total,
+        mut lib_path,
+        mut lib_error,
+        mut error,
+        ..
+    } = sigs;
+    match result {
+        Ok(lib) => {
+            lib_path.set(lib.path);
+            lib_error.set(lib.error);
+            total.set(lib.total);
+            books.set(lib.books);
+        }
+        Err(e) => {
+            error.set(Some(e.to_string()));
+            books.set(Vec::new());
+            total.set(None);
+            lib_error.set(None);
+        }
+    }
 }
 
 /// Append the next page when `want_more` bumps; drops the append if a page-1 refetch supersedes it.

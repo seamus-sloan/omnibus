@@ -393,14 +393,16 @@ async fn fetch_remote_image_blocks_ipv6_loopback_under_strict_config() {
 #[tokio::test]
 async fn fetch_remote_image_rejects_invalid_url() {
     let cfg = RemoteImageConfig::default();
-    // Garbage URL — must surface InvalidUrl, never reach the resolver.
+    // Garbage URL (no host) — must be rejected at validation, before any
+    // resolution. Asserting `Validation` *only* (not `BlockedAddress`) catches
+    // a regression where a malformed URL slips through to DNS resolution.
     let err = fetch_remote_image_with("http://", &cfg)
         .await
         .expect_err("must reject malformed URL");
-    assert!(matches!(
-        err,
-        FetchRemoteImageError::InvalidUrl | FetchRemoteImageError::BlockedAddress(_)
-    ));
+    assert!(
+        matches!(err, FetchRemoteImageError::Validation(_)),
+        "malformed URL must be a validation error, not resolved, got {err:?}",
+    );
 }
 
 #[tokio::test]
@@ -409,7 +411,10 @@ async fn fetch_remote_image_rejects_non_http_scheme() {
     let err = fetch_remote_image_with("ftp://example.com/p.jpg", &cfg)
         .await
         .expect_err("must reject non-http(s)");
-    assert!(matches!(err, FetchRemoteImageError::BadScheme));
+    assert!(
+        matches!(&err, FetchRemoteImageError::Validation(msg) if msg.contains("http://")),
+        "expected a scheme validation error, got {err:?}",
+    );
 }
 
 #[tokio::test]
@@ -421,7 +426,7 @@ async fn fetch_remote_image_does_not_follow_redirects_to_private_ips() {
     // it re-resolves through its default resolver and the IP-range
     // guard never sees the new host — full bypass. The fix disables
     // redirect-following on the per-call client, so a 3xx surfaces
-    // as a 302 status (BadStatus) and the SSRF target is never hit.
+    // as a 302-status validation error and the SSRF target is never hit.
     //
     // The test runs under `allow_private_addresses` so the wiremock
     // server bound to loopback isn't rejected up-front — the point
@@ -442,8 +447,103 @@ async fn fetch_remote_image_does_not_follow_redirects_to_private_ips() {
         .await
         .expect_err("redirect must NOT be followed");
     assert!(
-        matches!(err, FetchRemoteImageError::BadStatus(302)),
-        "expected BadStatus(302) (redirect not followed), got {err:?}",
+        matches!(&err, FetchRemoteImageError::Validation(msg) if msg.contains("302")),
+        "expected a 302-status validation error (redirect not followed), got {err:?}",
+    );
+}
+
+#[tokio::test]
+async fn fetch_remote_image_rejects_non_image_content_type() {
+    // Post-fetch validation gate: a 200 whose content-type isn't `image/*`
+    // (e.g. an HTML error page served with 200) must be rejected as a
+    // `Validation` error naming the content-type, never persisted as a photo.
+    // Runs under the test config so the loopback wiremock host isn't blocked
+    // up-front — the point is the content-type gate, not the SSRF guard.
+    let server = MockServer::start().await;
+    // `set_body_bytes` (unlike `set_body_string`) doesn't stamp its own
+    // content-type, so the explicit `insert_header` is what reqwest observes.
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html")
+                .set_body_bytes(b"<html>not an image</html>".to_vec()),
+        )
+        .mount(&server)
+        .await;
+    let cfg = RemoteImageConfig {
+        allow_private_addresses: true,
+    };
+    let err = fetch_remote_image_with(&format!("{}/x.jpg", server.uri()), &cfg)
+        .await
+        .expect_err("non-image content-type must be rejected");
+    assert!(
+        matches!(&err, FetchRemoteImageError::Validation(msg) if msg.contains("not an image")),
+        "got {err:?}",
+    );
+}
+
+#[tokio::test]
+async fn fetch_remote_image_rejects_svg_content_type() {
+    // SVG is an image type but is refused outright (it can carry scripts), so
+    // a `content-type: image/svg+xml` response — which passes the `image/`
+    // prefix check — must still be rejected by the dedicated SVG gate as a
+    // `Validation` error.
+    let server = MockServer::start().await;
+    // `set_body_bytes` keeps our `image/svg+xml` header intact (a string body
+    // would force `text/plain` and hit the not-an-image gate instead), so the
+    // response passes the `image/` prefix check and reaches the SVG gate.
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "image/svg+xml")
+                .set_body_bytes(b"<svg/>".to_vec()),
+        )
+        .mount(&server)
+        .await;
+    let cfg = RemoteImageConfig {
+        allow_private_addresses: true,
+    };
+    let err = fetch_remote_image_with(&format!("{}/x.svg", server.uri()), &cfg)
+        .await
+        .expect_err("SVG content-type must be rejected");
+    assert!(
+        matches!(&err, FetchRemoteImageError::Validation(msg) if msg.contains("SVG")),
+        "got {err:?}",
+    );
+}
+
+#[tokio::test]
+async fn fetch_remote_image_rejects_oversized_content_length() {
+    // An advertised `Content-Length` past `REMOTE_IMAGE_MAX_BYTES` must bail on
+    // the pre-check (remote.rs `resp.content_length()`) — before the streaming
+    // read — so an obviously-oversized download aborts up front. This is the
+    // gate that actually fires here: the streamed body path is the belt-and-
+    // braces fallback for servers that omit or lie about Content-Length.
+    //
+    // hyper refuses to emit a Content-Length that disagrees with the body it
+    // sends (it panics on the mismatch), so a fabricated huge header over a
+    // tiny body isn't possible over wiremock — the body must genuinely exceed
+    // the cap by one byte, which is what makes the honest Content-Length
+    // oversized. `+ 1` keeps the allocation to the minimum that trips the gate.
+    let server = MockServer::start().await;
+    let body = vec![0xFFu8; (super::remote::REMOTE_IMAGE_MAX_BYTES as usize) + 1];
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "image/jpeg")
+                .set_body_bytes(body),
+        )
+        .mount(&server)
+        .await;
+    let cfg = RemoteImageConfig {
+        allow_private_addresses: true,
+    };
+    let err = fetch_remote_image_with(&format!("{}/big.jpg", server.uri()), &cfg)
+        .await
+        .expect_err("oversized Content-Length must be rejected");
+    assert!(
+        matches!(&err, FetchRemoteImageError::Validation(msg) if msg.contains("cap")),
+        "got {err:?}",
     );
 }
 

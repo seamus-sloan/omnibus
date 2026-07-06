@@ -64,21 +64,35 @@ pub(super) async fn get_ebooks(
     // byte-identical to the pre-F5b full (capped) library, so existing mobile
     // clients keep working untouched.
     if q.sort.is_none() && q.dir.is_none() && q.cursor.is_none() && q.limit.is_none() {
-        return match db::library_from_db_with_total_combined(
-            &state.pool,
-            ebook.as_deref(),
-            audiobook.as_deref(),
-        )
-        .await
-        {
-            Ok((library, total)) => with_pagination_headers(Json(library).into_response(), total),
-            Err(error) => internal("read books", error),
-        };
+        return respond_full_library(&state, ebook.as_deref(), audiobook.as_deref()).await;
     }
 
-    // Paged keyset form. A cursor is decoded relative to the request's sort
-    // axis, so it's only meaningful with an explicit `sort` + `dir` — enforce
-    // that as a 400 rather than silently mis-positioning the page.
+    respond_keyset_page(&state, &q, ebook.as_deref(), audiobook.as_deref()).await
+}
+
+/// Full (capped) combined library, with `X-Total-Count` / `X-Total-Cap`
+/// headers — the pre-F5b response shape for clients that send no pagination.
+async fn respond_full_library(
+    state: &AppState,
+    ebook: Option<&str>,
+    audiobook: Option<&str>,
+) -> Response {
+    match db::library_from_db_with_total_combined(&state.pool, ebook, audiobook).await {
+        Ok((library, total)) => with_pagination_headers(Json(library).into_response(), total),
+        Err(error) => internal("read books", error),
+    }
+}
+
+/// Keyset-paginated page for an explicit `sort`/`dir`/`cursor`/`limit`. A
+/// cursor is decoded relative to the request's sort axis, so a cursor without
+/// an explicit `sort` **and** `dir`, or a malformed cursor, is a 400 rather
+/// than a silently mis-positioned page or a 500.
+async fn respond_keyset_page(
+    state: &AppState,
+    q: &EbooksQuery,
+    ebook: Option<&str>,
+    audiobook: Option<&str>,
+) -> Response {
     if q.cursor.is_some() && (q.sort.is_none() || q.dir.is_none()) {
         return (
             axum::http::StatusCode::BAD_REQUEST,
@@ -86,7 +100,6 @@ pub(super) async fn get_ebooks(
         )
             .into_response();
     }
-    // A malformed cursor is likewise a client error (400), not a 500.
     let cursor = match q.cursor.as_deref() {
         Some(c) => match db::PageCursor::decode(c) {
             Ok(p) => Some(p),
@@ -96,8 +109,8 @@ pub(super) async fn get_ebooks(
         },
         None => None,
     };
-    let path = ebook.clone().or_else(|| audiobook.clone());
-    let paths = db::collect_paths(ebook.as_deref(), audiobook.as_deref());
+    let path = ebook.or(audiobook).map(str::to_string);
+    let paths = db::collect_paths(ebook, audiobook);
     let page = match db::list_books_page(
         &state.pool,
         &paths,

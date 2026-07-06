@@ -6,6 +6,8 @@
 
 use std::sync::Arc;
 
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
 use omnibus_shared::ProgressState;
 
 use super::types::{lock_unpoison, Task, TaskId, TaskOutcome, Worker};
@@ -29,60 +31,31 @@ impl Worker {
         };
 
         let _scan_permit = if task.uses_scan_sem() {
-            match self.scan_sem.clone().acquire_owned().await {
+            match self
+                .acquire_permit(&self.scan_sem, id, "scan semaphore closed")
+                .await
+            {
                 Ok(p) => Some(p),
-                Err(_) => {
-                    self.write_terminal_progress(
-                        id,
-                        ProgressState::Failed {
-                            message: "scan semaphore closed".into(),
-                        },
-                    );
-                    return TaskOutcome::Err("scan semaphore closed".into());
-                }
+                Err(outcome) => return outcome,
             }
         } else {
             None
         };
 
         let _hls_permit = if task.uses_hls_sem() {
-            match self.hls_sem.clone().acquire_owned().await {
+            match self
+                .acquire_permit(&self.hls_sem, id, "hls semaphore closed")
+                .await
+            {
                 Ok(p) => Some(p),
-                Err(_) => {
-                    self.write_terminal_progress(
-                        id,
-                        ProgressState::Failed {
-                            message: "hls semaphore closed".into(),
-                        },
-                    );
-                    return TaskOutcome::Err("hls semaphore closed".into());
-                }
+                Err(outcome) => return outcome,
             }
         } else {
             None
         };
 
         let outcome = self.execute(task, id).await;
-        // Project the outcome into the wire-facing terminal state. We pull
-        // the last reported `processed` count out of the progress map so a
-        // Phase-2 in-flight progress report stays reflected in the final
-        // `Done`. Today there is no in-flight reporter so this is always 0.
-        let terminal = match &outcome {
-            TaskOutcome::Ok => {
-                let processed = lock_unpoison(&self.progress)
-                    .get(&id)
-                    .and_then(|e| match e.progress.state {
-                        ProgressState::Running { processed, .. } => Some(processed),
-                        _ => None,
-                    })
-                    .unwrap_or(0);
-                ProgressState::Done { processed }
-            }
-            TaskOutcome::Err(msg) => ProgressState::Failed {
-                message: msg.clone(),
-            },
-        };
-        self.write_terminal_progress(id, terminal);
+        self.write_terminal_progress(id, self.project_terminal(id, &outcome));
 
         // Drop the resource guard before pruning so this task no longer
         // counts as a reference to the keyed mutex when we check it. Without
@@ -96,5 +69,50 @@ impl Worker {
         }
 
         outcome
+    }
+
+    /// Acquire one owned permit from `sem`. On a closed semaphore, write the
+    /// terminal `Failed` progress with `closed_msg` and hand the caller the
+    /// matching `Err(TaskOutcome)` to return from [`run`].
+    async fn acquire_permit(
+        &self,
+        sem: &Arc<Semaphore>,
+        id: TaskId,
+        closed_msg: &str,
+    ) -> Result<OwnedSemaphorePermit, TaskOutcome> {
+        match sem.clone().acquire_owned().await {
+            Ok(p) => Ok(p),
+            Err(_) => {
+                self.write_terminal_progress(
+                    id,
+                    ProgressState::Failed {
+                        message: closed_msg.into(),
+                    },
+                );
+                Err(TaskOutcome::Err(closed_msg.into()))
+            }
+        }
+    }
+
+    /// Project a task's `outcome` into its wire-facing terminal state. On
+    /// success, the last reported `processed` count is pulled out of the
+    /// progress map so a Phase-2 in-flight report stays reflected in the final
+    /// `Done` (today there is no in-flight reporter, so this is always 0).
+    fn project_terminal(&self, id: TaskId, outcome: &TaskOutcome) -> ProgressState {
+        match outcome {
+            TaskOutcome::Ok => {
+                let processed = lock_unpoison(&self.progress)
+                    .get(&id)
+                    .and_then(|e| match e.progress.state {
+                        ProgressState::Running { processed, .. } => Some(processed),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
+                ProgressState::Done { processed }
+            }
+            TaskOutcome::Err(msg) => ProgressState::Failed {
+                message: msg.clone(),
+            },
+        }
     }
 }

@@ -39,151 +39,178 @@ pub(super) fn FormGrid(
     fields: FormFields,
     suggestions: FormSuggestions,
 ) -> Element {
+    rsx! {
+        div { class: "me-form",
+            FieldGrid { orig, fields, suggestions }
+            TagsSection { tags: fields.tags, tag_suggestions: suggestions.tags }
+            SeriesSection { orig, series: fields.series, series_index: fields.series_index }
+        }
+    }
+}
+
+/// Main field grid: title, sort/filename, publisher, published, language,
+/// the author chip row, and the description textarea.
+#[component]
+fn FieldGrid(
+    orig: Signal<EbookMetadata>,
+    fields: FormFields,
+    suggestions: FormSuggestions,
+) -> Element {
     let mut title = fields.title;
     let mut description = fields.description;
     let mut publisher = fields.publisher;
     let mut published = fields.published;
     let mut language = fields.language;
-    let mut series = fields.series;
-    let mut series_index = fields.series_index;
     let authors = fields.authors;
-    let tags = fields.tags;
     let sort_by = fields.sort_by;
     let filename = fields.filename;
     let author_suggestions = suggestions.authors;
-    let tag_suggestions = suggestions.tags;
 
     rsx! {
-        div { class: "me-form",
-            div { class: "me-field-grid",
+        div { class: "me-field-grid",
 
-                // Title — spans 2 cols, big serif
-                MeField {
-                    label: "Title",
-                    value: title,
-                    on_change: move |v: String| title.set(v),
-                    w: 2,
-                    big: true,
-                    serif: true,
-                    edited: title() != orig().title.clone().unwrap_or_default(),
+            // Title — spans 2 cols, big serif
+            MeField {
+                label: "Title",
+                value: title,
+                on_change: move |v: String| title.set(v),
+                w: 2,
+                big: true,
+                serif: true,
+                edited: title() != orig().title.clone().unwrap_or_default(),
+            }
+
+            // File-as / sort name (mono, read-only for now)
+            MeField {
+                label: "Sort by",
+                value: sort_by,
+                on_change: move |_: String| {},
+                mono: true,
+                locked: true,
+                hint: "from file-as",
+            }
+
+            // Filename (mono, read-only)
+            MeField {
+                label: "Filename",
+                value: filename,
+                on_change: move |_: String| {},
+                mono: true,
+                locked: true,
+            }
+
+            // Publisher
+            MeField {
+                label: "Publisher",
+                value: publisher,
+                on_change: move |v: String| publisher.set(v),
+                w: 2,
+                edited: publisher() != orig().publisher.clone().unwrap_or_default(),
+            }
+
+            // Published date
+            MeField {
+                label: "Published",
+                value: published,
+                on_change: move |v: String| published.set(v),
+                mono: true,
+                edited: published() != orig().published.clone().unwrap_or_default(),
+            }
+
+            // Language
+            MeField {
+                label: "Language",
+                value: language,
+                on_change: move |v: String| language.set(v),
+                edited: language() != orig().language.clone().unwrap_or_default(),
+            }
+
+            // Authors — chip row spanning 4 cols
+            div { class: "me-field-full",
+                MeLabel {
+                    text: "Author(s)",
+                    edited: {
+                        let orig_authors: Vec<String> = orig().creators.iter().map(|c| c.name.clone()).collect();
+                        authors() != orig_authors
+                    },
+                    hint: "primary author first",
                 }
-
-                // File-as / sort name (mono, read-only for now)
-                MeField {
-                    label: "Sort by",
-                    value: sort_by,
-                    on_change: move |_: String| {},
-                    mono: true,
-                    locked: true,
-                    hint: "from file-as",
-                }
-
-                // Filename (mono, read-only)
-                MeField {
-                    label: "Filename",
-                    value: filename,
-                    on_change: move |_: String| {},
-                    mono: true,
-                    locked: true,
-                }
-
-                // Publisher
-                MeField {
-                    label: "Publisher",
-                    value: publisher,
-                    on_change: move |v: String| publisher.set(v),
-                    w: 2,
-                    edited: publisher() != orig().publisher.clone().unwrap_or_default(),
-                }
-
-                // Published date
-                MeField {
-                    label: "Published",
-                    value: published,
-                    on_change: move |v: String| published.set(v),
-                    mono: true,
-                    edited: published() != orig().published.clone().unwrap_or_default(),
-                }
-
-                // Language
-                MeField {
-                    label: "Language",
-                    value: language,
-                    on_change: move |v: String| language.set(v),
-                    edited: language() != orig().language.clone().unwrap_or_default(),
-                }
-
-                // Authors — chip row spanning 4 cols
-                div { class: "me-field-full",
-                    MeLabel {
-                        text: "Author(s)",
-                        edited: {
-                            let orig_authors: Vec<String> = orig().creators.iter().map(|c| c.name.clone()).collect();
-                            authors() != orig_authors
-                        },
-                        hint: "primary author first",
-                    }
-                    div { class: "me-chip-row",
-                        ChipEditor {
-                            values: authors,
-                            placeholder: "+ add author\u{2026}".to_string(),
-                            on_change: move |_| {},
-                            suggestions: author_suggestions,
-                            show_avatar: true,
-                            aria_remove_prefix: "Remove".to_string(),
-                            testid_prefix: "me-authors".to_string(),
-                        }
+                div { class: "me-chip-row",
+                    ChipEditor {
+                        values: authors,
+                        placeholder: "+ add author\u{2026}".to_string(),
+                        on_change: move |_| {},
+                        suggestions: author_suggestions,
+                        show_avatar: true,
+                        aria_remove_prefix: "Remove".to_string(),
+                        testid_prefix: "me-authors".to_string(),
                     }
                 }
-
-                // Description — textarea spanning 2 cols
-                MeArea {
-                    label: "Description",
-                    value: description,
-                    on_change: move |v: String| description.set(v),
-                    rows: 5,
-                    edited: description() != orig().description.clone().unwrap_or_default(),
-                    hint: "plain text or HTML",
-                }
             }
 
-            // ── Tags section ───────────────────────────────
-            div { class: "divider" }
-            div { class: "me-tags-header",
-                div { class: "label", "Tags" }
+            // Description — textarea spanning 2 cols
+            MeArea {
+                label: "Description",
+                value: description,
+                on_change: move |v: String| description.set(v),
+                rows: 5,
+                edited: description() != orig().description.clone().unwrap_or_default(),
+                hint: "plain text or HTML",
             }
-            div { class: "me-tag-chips",
-                ChipEditor {
-                    values: tags,
-                    placeholder: "+ add tag\u{2026}".to_string(),
-                    on_change: move |_| {},
-                    suggestions: tag_suggestions,
-                    show_avatar: false,
-                    input_class: "me-tag-input".to_string(),
-                    aria_remove_prefix: "Remove tag".to_string(),
-                    testid_prefix: "me-tags".to_string(),
-                }
-            }
+        }
+    }
+}
 
-            // ── Series section ─────────────────────────────
-            div { class: "divider" }
-            div { class: "label", "Series & position" }
-            div { class: "me-series-grid",
-                MeField {
-                    label: "Series",
-                    value: series,
-                    on_change: move |v: String| series.set(v),
-                    placeholder: "not part of a series",
-                    edited: series() != orig().series.clone().unwrap_or_default(),
-                }
-                MeField {
-                    label: "Book #",
-                    value: series_index,
-                    on_change: move |v: String| series_index.set(v),
-                    mono: true,
-                    placeholder: "\u{2014}",
-                    edited: series_index() != orig().series_index.clone().unwrap_or_default(),
-                }
+/// Divider + tag chip editor for the metadata form's tags section.
+#[component]
+fn TagsSection(tags: Signal<Vec<String>>, tag_suggestions: Signal<Vec<SuggestionItem>>) -> Element {
+    rsx! {
+        div { class: "divider" }
+        div { class: "me-tags-header",
+            div { class: "label", "Tags" }
+        }
+        div { class: "me-tag-chips",
+            ChipEditor {
+                values: tags,
+                placeholder: "+ add tag\u{2026}".to_string(),
+                on_change: move |_| {},
+                suggestions: tag_suggestions,
+                show_avatar: false,
+                input_class: "me-tag-input".to_string(),
+                aria_remove_prefix: "Remove tag".to_string(),
+                testid_prefix: "me-tags".to_string(),
+            }
+        }
+    }
+}
+
+/// Divider + series name and book-number fields for the metadata form.
+#[component]
+fn SeriesSection(
+    orig: Signal<EbookMetadata>,
+    series: Signal<String>,
+    series_index: Signal<String>,
+) -> Element {
+    let mut series = series;
+    let mut series_index = series_index;
+    rsx! {
+        div { class: "divider" }
+        div { class: "label", "Series & position" }
+        div { class: "me-series-grid",
+            MeField {
+                label: "Series",
+                value: series,
+                on_change: move |v: String| series.set(v),
+                placeholder: "not part of a series",
+                edited: series() != orig().series.clone().unwrap_or_default(),
+            }
+            MeField {
+                label: "Book #",
+                value: series_index,
+                on_change: move |v: String| series_index.set(v),
+                mono: true,
+                placeholder: "\u{2014}",
+                edited: series_index() != orig().series_index.clone().unwrap_or_default(),
             }
         }
     }

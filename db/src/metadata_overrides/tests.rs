@@ -182,6 +182,34 @@ async fn get_metadata_overrides_returns_none_when_absent() {
     assert!(result.is_none());
 }
 #[tokio::test]
+async fn get_metadata_overrides_returns_serialization_error_for_corrupt_blob() {
+    // The write path serializes valid JSON, but a row can still hold a corrupt
+    // `overrides` blob (a hand-edited DB, or a schema predating a field). When
+    // the read decodes it via `serde_json::from_str`, the failure must surface
+    // as `MetadataOverridesError::Serialization` — the `#[from] serde_json`
+    // variant — not a `Db` error. Insert malformed JSON directly to bypass the
+    // serialize-on-write and drive the decode failure.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sqlx::query("INSERT INTO metadata_overrides (book_uuid, overrides) VALUES (?, ?)")
+        .bind("corrupt-uuid")
+        .bind("{ not valid json")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let err = get_metadata_overrides(&pool, "corrupt-uuid")
+        .await
+        .expect_err("corrupt overrides JSON must not decode");
+    assert!(
+        matches!(err, MetadataOverridesError::Serialization(_)),
+        "got {err:?}"
+    );
+    assert!(
+        err.to_string().starts_with("JSON (de)serialization failed"),
+        "got {err}"
+    );
+}
+#[tokio::test]
 async fn delete_metadata_overrides_removes_row() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")

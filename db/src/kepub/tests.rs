@@ -83,6 +83,18 @@ fn kepub_path_is_book_id_under_data_dir() {
 }
 
 #[test]
+fn kepub_dir_prefers_explicit_override_over_data_dir() {
+    let data = tempfile::tempdir().unwrap();
+    let over = tempfile::tempdir().unwrap();
+    // OMNIBUS_KEPUB_DIR wins even when OMNIBUS_DATA_DIR is set, and is used
+    // verbatim (no `kepub` subdir appended).
+    let _g = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(data.path().as_os_str()))
+        .also_set_os("OMNIBUS_KEPUB_DIR", Some(over.path().as_os_str()));
+    assert_eq!(kepub_dir(), over.path());
+    assert_eq!(kepub_path(42), over.path().join("42.kepub.epub"));
+}
+
+#[test]
 fn is_stale_returns_true_when_cache_missing() {
     let (_g, _dir) = data_dir_guard();
     assert!(is_stale(999_999, 0));
@@ -205,6 +217,45 @@ async fn convert_book_errors_when_kepubify_binary_absent() {
         .also_set("OMNIBUS_KEPUBIFY_PATH", Some("/no/such/kepubify"));
     let err = convert_book(&pool, book_id).await.unwrap_err();
     assert!(matches!(err, KepubError::Io(_)), "got {err:?}");
+}
+
+#[tokio::test]
+async fn convert_book_returns_non_zero_when_kepubify_exits_non_zero() {
+    // A kepubify run that exits non-zero (unsupported EPUB, internal error)
+    // must surface as `KepubError::NonZero` carrying the exit status and the
+    // captured stderr, so the caller can log it and fall back to plain EPUB —
+    // never a torn cache file. A fake binary that prints to stderr and exits 3
+    // drives the exit-code branch in `run_kepubify`.
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let lib = tempfile::tempdir().unwrap();
+    let book_id = seed_epub_book(&pool, lib.path()).await;
+
+    let cache = tempfile::tempdir().unwrap();
+    let bin_dir = tempfile::tempdir().unwrap();
+    let script = bin_dir.path().join("kepubify");
+    write_failing_kepubify(&script);
+    let _env = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(cache.path().as_os_str()))
+        .also_set_os("OMNIBUS_KEPUBIFY_PATH", Some(script.as_os_str()));
+
+    let err = convert_book(&pool, book_id).await.unwrap_err();
+    assert!(
+        matches!(&err, KepubError::NonZero { stderr, .. } if stderr.contains("boom")),
+        "got {err:?}"
+    );
+    // No cache file left behind on failure.
+    assert!(!kepub_path(book_id).exists());
+}
+
+/// Write a fake `kepubify` at `path` that answers `--version` (so detection
+/// passes) but for any real invocation writes to stderr and exits non-zero,
+/// driving the `NonZero` branch in `run_kepubify`.
+fn write_failing_kepubify(path: &Path) {
+    let script = "#!/bin/sh\n\
+         if [ \"$1\" = \"--version\" ]; then echo 'kepubify 0-fake'; exit 0; fi\n\
+         echo 'boom: conversion failed' 1>&2\n\
+         exit 3\n";
+    std::fs::write(path, script).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 /// Number of lines the fake kepubify appended to `counter` (== run count).

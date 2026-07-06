@@ -207,7 +207,7 @@ pub(crate) async fn prune_orphan_libraries(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     keep: &[Option<&str>],
 ) -> Result<Vec<String>, SettingsError> {
-    let childless_orphans: Vec<i64> = sqlx::query_as("SELECT id, path FROM scan_roots")
+    let orphan_ids: Vec<i64> = sqlx::query_as("SELECT id, path FROM scan_roots")
         .fetch_all(&mut **tx)
         .await?
         .into_iter()
@@ -217,17 +217,27 @@ pub(crate) async fn prune_orphan_libraries(
         .map(|(id, _)| id)
         .collect();
 
-    for id in childless_orphans {
-        // Conditional delete: the row goes only if it has no books. A root
-        // that still owns books is left in place (never-prune) so the FK
-        // cascade on `books.library_id` is never triggered.
-        sqlx::query(
-            "DELETE FROM scan_roots WHERE id = ?
-              AND NOT EXISTS (SELECT 1 FROM books WHERE library_id = scan_roots.id)",
-        )
-        .bind(id)
-        .execute(&mut **tx)
-        .await?;
+    // One batched conditional delete per chunk: an orphan row goes only if it
+    // has no books. A root that still owns books is left in place (never-prune)
+    // so the FK cascade on `books.library_id` is never triggered. The
+    // `NOT EXISTS` filter keeps that guard per-row inside the set delete, so a
+    // book-owning orphan in the id list survives untouched. Chunked at 499 ids
+    // so a pathologically large scan-root table can't exceed SQLite's
+    // 999-parameter cap.
+    for chunk in orphan_ids.chunks(499) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "DELETE FROM scan_roots
+              WHERE id IN ({placeholders})
+                AND NOT EXISTS (SELECT 1 FROM books WHERE library_id = scan_roots.id)"
+        );
+        let mut q = sqlx::query(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        q.execute(&mut **tx).await?;
     }
 
     Ok(Vec::new())

@@ -228,25 +228,7 @@ pub async fn replace_suggestions(
         .bind(book_uuid)
         .execute(&mut *tx)
         .await?;
-    for (rank, s) in rows.iter().enumerate() {
-        sqlx::query(
-            "INSERT INTO book_suggestions
-                 (book_uuid, rank, hardcover_id, hardcover_slug, title, author,
-                  list_count, cover_mime, cover_bytes)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(book_uuid)
-        .bind(rank as i64)
-        .bind(s.hardcover_id)
-        .bind(s.hardcover_slug.as_deref())
-        .bind(&s.title)
-        .bind(&s.author)
-        .bind(s.list_count)
-        .bind(s.cover_mime.as_deref())
-        .bind(s.cover_bytes.as_deref())
-        .execute(&mut *tx)
-        .await?;
-    }
+    insert_suggestion_rows(&mut tx, book_uuid, rows).await?;
     sqlx::query(
         "INSERT INTO book_suggestion_state (book_uuid, state, fetched_at)
               VALUES (?, ?, strftime('%s','now'))
@@ -259,6 +241,47 @@ pub async fn replace_suggestions(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    Ok(())
+}
+
+/// Rows per chunk in [`insert_suggestion_rows`]. Nine binds per row keeps a
+/// 100-row chunk (900 binds) comfortably under SQLite's 999-parameter cap.
+const SUGGESTION_INSERT_CHUNK: usize = 100;
+
+/// Bulk-insert `rows` at ranks `0..rows.len()` via one multi-row
+/// `INSERT ... VALUES (..),(..),..` per chunk, preserving insertion order as
+/// the rank. Chunked so a large result set can't exceed SQLite's bind cap.
+async fn insert_suggestion_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    book_uuid: &str,
+    rows: &[NewSuggestion],
+) -> Result<(), SuggestionsDataError> {
+    for (chunk_idx, chunk) in rows.chunks(SUGGESTION_INSERT_CHUNK).enumerate() {
+        let base = chunk_idx * SUGGESTION_INSERT_CHUNK;
+        let values = std::iter::repeat_n("(?, ?, ?, ?, ?, ?, ?, ?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "INSERT INTO book_suggestions
+                 (book_uuid, rank, hardcover_id, hardcover_slug, title, author,
+                  list_count, cover_mime, cover_bytes)
+             VALUES {values}"
+        );
+        let mut q = sqlx::query(&sql);
+        for (i, s) in chunk.iter().enumerate() {
+            q = q
+                .bind(book_uuid)
+                .bind((base + i) as i64)
+                .bind(s.hardcover_id)
+                .bind(s.hardcover_slug.as_deref())
+                .bind(&s.title)
+                .bind(&s.author)
+                .bind(s.list_count)
+                .bind(s.cover_mime.as_deref())
+                .bind(s.cover_bytes.as_deref());
+        }
+        q.execute(&mut **tx).await?;
+    }
     Ok(())
 }
 

@@ -110,18 +110,9 @@ fn MiniDockProgress(elapsed: f64, duration: f64) -> Element {
 fn MiniDockControls(playing: bool, rate: f64) -> Element {
     let play_label = if playing { "Pause" } else { "Play" }.to_string();
     let rate_label = format!("{rate:.2}\u{00d7}");
-    let on_toggle = move |_: MouseEvent| {
-        #[cfg(feature = "web")]
-        super::helpers::audio_call("toggle", "");
-    };
-    let on_skip_back = move |_: MouseEvent| {
-        #[cfg(feature = "web")]
-        super::helpers::audio_call("skip", "-30");
-    };
-    let on_skip_forward = move |_: MouseEvent| {
-        #[cfg(feature = "web")]
-        super::helpers::audio_call("skip", "30");
-    };
+    let on_toggle = super::helpers::on_toggle_playback();
+    let on_skip_back = super::helpers::on_skip_back_30();
+    let on_skip_forward = super::helpers::on_skip_forward_30();
     rsx! {
         div { class: "mini-dock-controls",
             button {

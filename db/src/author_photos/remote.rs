@@ -24,8 +24,10 @@ const REMOTE_IMAGE_TIMEOUT: Duration = Duration::from_secs(15);
 /// rephrasing.
 #[derive(Debug, thiserror::Error)]
 pub enum FetchRemoteImageError {
-    #[error("URL must start with http:// or https://")]
-    BadScheme,
+    /// A pre-persist validation gate failed (scheme, URL, status, content-type,
+    /// SVG, or size cap); the message names which, and the handler maps it to 400.
+    #[error("{0}")]
+    Validation(String),
     /// SSRF guard triggered. The supplied URL parsed cleanly, but either its
     /// host could not be resolved or one of the resolved IPs falls into a
     /// blocked range (loopback / private RFC1918 / link-local / multicast /
@@ -35,18 +37,23 @@ pub enum FetchRemoteImageError {
     /// internal-network surface area.
     #[error("URL host is not allowed: {0}")]
     BlockedAddress(String),
-    #[error("URL is not parseable")]
-    InvalidUrl,
-    #[error("remote server returned {0}")]
-    BadStatus(u16),
-    #[error("remote response content-type is not an image ({0})")]
-    NotImage(String),
-    #[error("SVG photos are not accepted")]
-    SvgRejected,
-    #[error("image exceeds {} byte cap", REMOTE_IMAGE_MAX_BYTES)]
-    TooLarge,
     #[error(transparent)]
     Http(#[from] reqwest::Error),
+}
+
+/// Validation error for a URL that doesn't parse or lacks a usable host/port.
+fn invalid_url() -> FetchRemoteImageError {
+    FetchRemoteImageError::Validation("URL is not parseable".into())
+}
+
+/// Validation error for a URL whose scheme isn't `http`/`https`.
+fn bad_scheme() -> FetchRemoteImageError {
+    FetchRemoteImageError::Validation("URL must start with http:// or https://".into())
+}
+
+/// Validation error for a download that exceeds [`REMOTE_IMAGE_MAX_BYTES`].
+fn too_large() -> FetchRemoteImageError {
+    FetchRemoteImageError::Validation(format!("image exceeds {REMOTE_IMAGE_MAX_BYTES} byte cap"))
 }
 
 /// Knobs for [`fetch_remote_image_with`]. Production code constructs
@@ -139,18 +146,13 @@ pub(super) fn is_blocked_address(addr: IpAddr) -> bool {
 /// the validated set (defeats DNS rebinding between our check and reqwest's
 /// own resolution).
 async fn validated_resolve(url: &str) -> Result<(String, Vec<SocketAddr>), FetchRemoteImageError> {
-    let parsed = reqwest::Url::parse(url).map_err(|_| FetchRemoteImageError::InvalidUrl)?;
+    let parsed = reqwest::Url::parse(url).map_err(|_| invalid_url())?;
     let scheme = parsed.scheme();
     if scheme != "http" && scheme != "https" {
-        return Err(FetchRemoteImageError::BadScheme);
+        return Err(bad_scheme());
     }
-    let host = parsed
-        .host_str()
-        .ok_or(FetchRemoteImageError::InvalidUrl)?
-        .to_string();
-    let port = parsed
-        .port_or_known_default()
-        .ok_or(FetchRemoteImageError::InvalidUrl)?;
+    let host = parsed.host_str().ok_or_else(invalid_url)?.to_string();
+    let port = parsed.port_or_known_default().ok_or_else(invalid_url)?;
 
     // Fast path: the host is already a literal IP — `lookup_host` would still
     // work, but skipping it avoids spurious DNS lookups on IP-literal URLs.
@@ -204,7 +206,7 @@ pub async fn fetch_remote_image_with(
     config: &RemoteImageConfig,
 ) -> Result<(String, Vec<u8>), FetchRemoteImageError> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err(FetchRemoteImageError::BadScheme);
+        return Err(bad_scheme());
     }
 
     // Strict mode (the default): resolve host → validate IPs → pin the
@@ -230,7 +232,10 @@ pub async fn fetch_remote_image_with(
     let resp = client.get(url).timeout(REMOTE_IMAGE_TIMEOUT).send().await?;
     let status = resp.status();
     if !status.is_success() {
-        return Err(FetchRemoteImageError::BadStatus(status.as_u16()));
+        return Err(FetchRemoteImageError::Validation(format!(
+            "remote server returned {}",
+            status.as_u16()
+        )));
     }
     let content_type = resp
         .headers()
@@ -239,16 +244,20 @@ pub async fn fetch_remote_image_with(
         .map(std::string::ToString::to_string)
         .unwrap_or_else(|| "application/octet-stream".into());
     if !content_type.starts_with("image/") {
-        return Err(FetchRemoteImageError::NotImage(content_type));
+        return Err(FetchRemoteImageError::Validation(format!(
+            "remote response content-type is not an image ({content_type})"
+        )));
     }
     if content_type.contains("svg") {
-        return Err(FetchRemoteImageError::SvgRejected);
+        return Err(FetchRemoteImageError::Validation(
+            "SVG photos are not accepted".into(),
+        ));
     }
     // Pre-check Content-Length when the server advertises it so an
     // obviously-oversized download bails before allocating.
     if let Some(len) = resp.content_length() {
         if len > REMOTE_IMAGE_MAX_BYTES {
-            return Err(FetchRemoteImageError::TooLarge);
+            return Err(too_large());
         }
     }
     // Stream the body and abort the moment we'd cross the cap. A hostile
@@ -261,7 +270,7 @@ pub async fn fetch_remote_image_with(
     let mut stream = resp;
     while let Some(chunk) = stream.chunk().await? {
         if buf.len() as u64 + chunk.len() as u64 > REMOTE_IMAGE_MAX_BYTES {
-            return Err(FetchRemoteImageError::TooLarge);
+            return Err(too_large());
         }
         buf.extend_from_slice(&chunk);
     }

@@ -176,7 +176,7 @@ pub fn Cover(
 /// Pick the text for the typographic cover plate: the book's `title` when it
 /// carries non-blank content, otherwise the on-disk `filename`. Guards the
 /// `Some("")` / whitespace-only case that otherwise renders a blank plate.
-fn fallback_title(title: Option<&str>, filename: &str) -> String {
+pub(crate) fn fallback_title(title: Option<&str>, filename: &str) -> String {
     match title {
         Some(t) if !t.trim().is_empty() => t.to_string(),
         _ => filename.to_string(),

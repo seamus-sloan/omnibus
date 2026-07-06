@@ -5,13 +5,15 @@
 //! into the wire DTO. Mounted on the REST router in [`super::rest_router`].
 
 use axum::{
+    body::Bytes,
     extract::{Path, State},
     response::{IntoResponse, Response},
     Json,
 };
 use omnibus_db::{self as db};
-use omnibus_shared::{detect_image_format, MetadataOverrides};
+use omnibus_shared::MetadataOverrides;
 
+use super::image_upload::extract_validated_image;
 use super::{internal, AppState};
 use crate::auth::AuthUser;
 
@@ -121,113 +123,13 @@ pub(super) async fn post_ebook_cover(
     };
 
     // Extract the cover field from the multipart body.
-    let (mime, bytes) = loop {
-        match multipart.next_field().await {
-            Ok(Some(field)) => {
-                let name = field.name().unwrap_or("").to_string();
-                if name != "cover" {
-                    continue;
-                }
-                let content_type = field
-                    .content_type()
-                    .unwrap_or("application/octet-stream")
-                    .to_string();
-                if !content_type.starts_with("image/") {
-                    return (
-                        axum::http::StatusCode::BAD_REQUEST,
-                        "cover must be an image",
-                    )
-                        .into_response();
-                }
-                // Reject SVG — contains executable content and can XSS when
-                // opened directly in a browser tab.
-                if content_type.contains("svg") {
-                    return (
-                        axum::http::StatusCode::BAD_REQUEST,
-                        "SVG covers are not accepted",
-                    )
-                        .into_response();
-                }
-                match field.bytes().await {
-                    Ok(b) => {
-                        if b.len() > 10 * 1024 * 1024 {
-                            return (
-                                axum::http::StatusCode::BAD_REQUEST,
-                                "cover must be under 10 MB",
-                            )
-                                .into_response();
-                        }
-                        // Validate magic bytes — don't trust Content-Type alone.
-                        // Bind the detected MIME directly: a `None` here means the
-                        // bytes carry no recognisable image header, so surface a
-                        // 415 rather than `.unwrap()`-panicking the task (#210).
-                        match detect_image_format(&b) {
-                            // Use the detected MIME so the stored extension matches
-                            // actual content, not the (untrusted) client header.
-                            Some(mime) => break (mime, b),
-                            None => {
-                                return (
-                                    axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                                    "Could not detect image format",
-                                )
-                                    .into_response();
-                            }
-                        }
-                    }
-                    Err(e) => return internal("read cover field", e),
-                }
-            }
-            Ok(None) => {
-                return (
-                    axum::http::StatusCode::BAD_REQUEST,
-                    "missing 'cover' field in multipart body",
-                )
-                    .into_response()
-            }
-            Err(e) => return internal("parse multipart", e),
-        }
+    let (mime, bytes) = match extract_validated_image(&mut multipart, "cover").await {
+        Ok(pair) => pair,
+        Err(response) => return response,
     };
 
-    // Look up the prior overrides row BEFORE touching disk. `write_override_cover`
-    // deletes any existing `override-<uuid>.*` before writing the new file, so if
-    // we wrote first and only fetched the prior row to decide on cleanup, a DB
-    // failure could orphan the user's previously-set cover (#529). Fetching first
-    // keeps the disk-write/cleanup decision race-free: only cleanup when the row
-    // is absent OR `has_cover_override` was false going in.
-    let (existing_overrides, had_prior_cover_override) =
-        match db::get_metadata_overrides(&state.pool, &uuid).await {
-            Ok(Some((ov, has_cover))) => (ov, has_cover),
-            Ok(None) => (MetadataOverrides::default(), false),
-            Err(e) => return internal("get_metadata_overrides", e),
-        };
-
-    // Write the override cover to disk. `write_override_cover` is a sync
-    // `std::fs` call — run it on the blocking pool so the axum runtime stays
-    // responsive while we hit disk (#106). `uuid` is needed again below for
-    // the overrides table update, so it's the only value we clone.
-    let uuid_for_write = uuid.clone();
-    let write_result = tokio::task::spawn_blocking(move || {
-        db::write_override_cover(&uuid_for_write, &mime, &bytes)
-    })
-    .await;
-    match write_result {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => return internal("write_override_cover", e),
-        Err(e) => return internal("spawn_blocking(write_override_cover)", e),
-    }
-
-    // Mark the overrides table with has_cover_override = 1. Preserve existing
-    // field overrides if any. If the upsert fails, only clean the file we
-    // just wrote when no prior override cover existed — otherwise the
-    // `write_override_cover` step would have deleted the user's previous
-    // valid cover, and the cleanup would compound the data loss (#516, #529).
-    if let Err(e) =
-        db::upsert_metadata_overrides(&state.pool, &uuid, &existing_overrides, true, user.id).await
-    {
-        if !had_prior_cover_override {
-            cleanup_orphan_cover(&uuid).await;
-        }
-        return internal("upsert_metadata_overrides", e);
+    if let Err(response) = persist_cover(&state, &uuid, user.id, mime, bytes).await {
+        return response;
     }
 
     // Invalidate thumb cache so next request regenerates from new cover.
@@ -241,6 +143,54 @@ pub(super) async fn post_ebook_cover(
         Ok(None) => (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
         Err(e) => internal("get_book", e),
     }
+}
+
+/// Write the new override cover to disk and mark `has_cover_override = 1`,
+/// preserving any existing field overrides. Returns the error `Response`
+/// already formed on failure so the caller can early-return.
+///
+/// The prior overrides row is read BEFORE touching disk: `write_override_cover`
+/// deletes any existing `override-<uuid>.*` before writing, so fetching first
+/// keeps the disk-write/cleanup decision race-free (#529). If the upsert fails,
+/// the just-written file is cleaned up ONLY when no prior override cover existed
+/// — otherwise the write step already replaced the user's previous valid cover
+/// and cleanup would compound the loss (#516, #529).
+async fn persist_cover(
+    state: &AppState,
+    uuid: &str,
+    user_id: i64,
+    mime: String,
+    bytes: Bytes,
+) -> Result<(), Response> {
+    let (existing_overrides, had_prior_cover_override) =
+        match db::get_metadata_overrides(&state.pool, uuid).await {
+            Ok(Some((ov, has_cover))) => (ov, has_cover),
+            Ok(None) => (MetadataOverrides::default(), false),
+            Err(e) => return Err(internal("get_metadata_overrides", e)),
+        };
+
+    // `write_override_cover` is a sync `std::fs` call — run it on the blocking
+    // pool so the axum runtime stays responsive while we hit disk (#106).
+    let uuid_for_write = uuid.to_string();
+    let write_result = tokio::task::spawn_blocking(move || {
+        db::write_override_cover(&uuid_for_write, &mime, &bytes)
+    })
+    .await;
+    match write_result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(internal("write_override_cover", e)),
+        Err(e) => return Err(internal("spawn_blocking(write_override_cover)", e)),
+    }
+
+    if let Err(e) =
+        db::upsert_metadata_overrides(&state.pool, uuid, &existing_overrides, true, user_id).await
+    {
+        if !had_prior_cover_override {
+            cleanup_orphan_cover(uuid).await;
+        }
+        return Err(internal("upsert_metadata_overrides", e));
+    }
+    Ok(())
 }
 
 /// Best-effort delete of the on-disk override cover after a DB failure in

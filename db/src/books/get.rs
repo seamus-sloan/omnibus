@@ -4,9 +4,8 @@
 
 use std::collections::HashMap;
 
-use sqlx::{Row, Sqlite, SqlitePool, Transaction};
-
 use omnibus_shared::EbookMetadata;
+use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
 use crate::metadata_overrides::{apply_overrides, get_metadata_overrides};
 

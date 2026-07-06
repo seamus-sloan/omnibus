@@ -11,6 +11,10 @@ use crate::components::search_palette::SearchPaletteHost;
 use crate::components::user_menu::UserMenu;
 use crate::Route;
 
+/// Stoat brand mark shown next to the wordmark. Bundled + content-hashed by
+/// manganis; served as a real URL so it hydrates identically SSR and WASM.
+const BRAND_MARK: Asset = asset!("/assets/omnibus-stoat.png");
+
 /// Renders the top navigation bar component.
 #[component]
 pub fn TopNav() -> Element {
@@ -29,7 +33,7 @@ pub fn TopNav() -> Element {
             Link {
                 to: Route::Landing {},
                 class: "atrium-brand",
-                div { class: "atrium-brand-mark" }
+                img { class: "atrium-brand-mark", src: BRAND_MARK, alt: "" }
                 div { class: "atrium-brand-word", "Omnibus" }
             }
             div { class: "atrium-nav",

@@ -7,9 +7,8 @@
 //! multi-thousand-author library doesn't pay an O(rows × books) cost.
 //! Single-tenant today — no per-user ACL filtering.
 
-use sqlx::{Row, SqlitePool};
-
 use omnibus_shared::{AuthorSummary, SeriesSummary};
+use sqlx::{Row, SqlitePool};
 
 /// Errors returned by the browse index queries.
 #[derive(Debug, thiserror::Error)]

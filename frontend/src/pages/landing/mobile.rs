@@ -10,18 +10,39 @@ use omnibus_shared::EbookMetadata;
 use crate::components::atrium::Cover;
 use crate::Route;
 
+/// Props for [`MobileLanding`] — the already-derived view state handed
+/// down from [`super::LandingPage`].
+#[derive(Props, Clone, PartialEq)]
+pub(super) struct MobileLandingProps {
+    /// Total book count shown in the "N books" label.
+    pub book_count: usize,
+    /// The page of books to render as cover cells.
+    pub books: Vec<EbookMetadata>,
+    /// True while the first page is still loading.
+    pub is_loading: bool,
+    /// True when more pages remain to load.
+    pub has_more: bool,
+    /// True while a "Load more" fetch is in flight.
+    pub is_loading_more: bool,
+    /// Fired when the "Load more" button is pressed.
+    pub on_load_more: EventHandler<()>,
+    /// Base server URL used to build thumbnail `src`/`srcset`.
+    pub server_url: String,
+}
+
 /// Mobile landing surface. Fed the already-derived view state from
 /// [`super::LandingPage`] so the data path stays shared across targets.
 #[component]
-pub(super) fn MobileLanding(
-    book_count: usize,
-    books: Vec<EbookMetadata>,
-    is_loading: bool,
-    has_more: bool,
-    is_loading_more: bool,
-    on_load_more: EventHandler<()>,
-    server_url: String,
-) -> Element {
+pub(super) fn MobileLanding(props: MobileLandingProps) -> Element {
+    let MobileLandingProps {
+        book_count,
+        books,
+        is_loading,
+        has_more,
+        is_loading_more,
+        on_load_more,
+        server_url,
+    } = props;
     rsx! {
         div { class: "m-lib", "data-testid": "mobile-landing",
             header { class: "m-lib-head",

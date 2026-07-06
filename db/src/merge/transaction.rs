@@ -83,6 +83,8 @@ async fn rewire_merged_uuid_refs(
             .bind(source_id)
             .fetch_optional(&mut **tx)
             .await?;
+    // Bounded by a book's native format count (typically 1-2), so this stays
+    // a per-format loop rather than a batched multi-row insert.
     for fmt in &snapshot.native_formats {
         sqlx::query(
             "INSERT OR REPLACE INTO merged_uuids (uuid, book_id, format, library_path, scan_key)

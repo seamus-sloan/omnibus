@@ -71,24 +71,43 @@ async fn backfill_books_scan_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> 
         return Ok(());
     }
 
+    // A book with two native formats would appear twice; the first
+    // reconstruction wins (any native file locates the same book).
     let mut seen = std::collections::HashSet::new();
+    let updates: Vec<(i64, String)> = rows
+        .into_iter()
+        .filter(|(id, ..)| seen.insert(*id))
+        .map(|(id, path, filename, format, part_count)| {
+            (
+                id,
+                reconstruct_scan_key(&path, &filename, &format, part_count),
+            )
+        })
+        .collect();
+
     let mut tx = pool.begin().await?;
-    for (id, path, filename, format, part_count) in rows {
-        // A book with two native formats would appear twice; the first
-        // reconstruction wins (any native file locates the same book).
-        if !seen.insert(id) {
-            continue;
+    for chunk in updates.chunks(SCAN_KEY_UPDATE_CHUNK) {
+        let values = std::iter::repeat_n("(?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "UPDATE books SET scan_key = v.column2
+               FROM (VALUES {values}) AS v
+              WHERE books.id = v.column1"
+        );
+        let mut q = sqlx::query(&sql);
+        for (id, scan_key) in chunk {
+            q = q.bind(id).bind(scan_key);
         }
-        let scan_key = reconstruct_scan_key(&path, &filename, &format, part_count);
-        sqlx::query("UPDATE books SET scan_key = ? WHERE id = ?")
-            .bind(&scan_key)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
+        q.execute(&mut *tx).await?;
     }
     tx.commit().await?;
     Ok(())
 }
+
+/// Rows per chunk for the `scan_key` backfill UPDATEs. Two binds per row keeps
+/// a chunk well under SQLite's 999-parameter cap.
+const SCAN_KEY_UPDATE_CHUNK: usize = 400;
 
 /// Fill `merged_uuids.scan_key` from the attached file's `book_files` row
 /// (its location-override `path` + stem), so an attached file survives a
@@ -107,14 +126,31 @@ async fn backfill_merged_scan_keys(pool: &SqlitePool) -> Result<(), sqlx::Error>
         return Ok(());
     }
 
+    let updates: Vec<(String, String)> = rows
+        .into_iter()
+        .map(|(uuid, path, filename, format, part_count)| {
+            (
+                uuid,
+                reconstruct_scan_key(&path, &filename, &format, part_count),
+            )
+        })
+        .collect();
+
     let mut tx = pool.begin().await?;
-    for (uuid, path, filename, format, part_count) in rows {
-        let scan_key = reconstruct_scan_key(&path, &filename, &format, part_count);
-        sqlx::query("UPDATE merged_uuids SET scan_key = ? WHERE uuid = ?")
-            .bind(&scan_key)
-            .bind(&uuid)
-            .execute(&mut *tx)
-            .await?;
+    for chunk in updates.chunks(SCAN_KEY_UPDATE_CHUNK) {
+        let values = std::iter::repeat_n("(?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "UPDATE merged_uuids SET scan_key = v.column2
+               FROM (VALUES {values}) AS v
+              WHERE merged_uuids.uuid = v.column1"
+        );
+        let mut q = sqlx::query(&sql);
+        for (uuid, scan_key) in chunk {
+            q = q.bind(uuid).bind(scan_key);
+        }
+        q.execute(&mut *tx).await?;
     }
     tx.commit().await?;
     Ok(())

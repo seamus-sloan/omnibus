@@ -47,6 +47,24 @@ ignore = [
     { id = "RUSTSEC-2024-0420", reason = "gtk-rs GTK3 binding unmaintained — Linux-only Dioxus desktop dep (wry/tao); awaiting upstream migration to GTK4" },
     { id = "RUSTSEC-2024-0436", reason = "paste unmaintained — transitive via Dioxus mobile/desktop crates; awaiting upstream migration" },
     { id = "RUSTSEC-2025-0057", reason = "fxhash unmaintained — transitive via Dioxus mobile/desktop crates; awaiting upstream migration" },
+
+    # ---- Unsound (informational) advisories in the Dioxus desktop/mobile
+    # GTK/WebKit tree. Like the unmaintained notices above these are NOT
+    # vulnerabilities (cargo-audit's --json gate counts 0 vulnerabilities);
+    # they flag `unsafe` blocks upstream can misuse. Both are confined to the
+    # mobile/desktop native shell and neither is reachable from the shipped
+    # `omnibus` server. Fixing them requires an upstream Dioxus bump we don't
+    # control (both crates are pinned deep under the git-pinned wry/gtk tree).
+    # Triaged 2026-07-06 (issue #773). Revisit when Dioxus upgrades wry/gtk.
+    #
+    # NB: RUSTSEC-2026-0186 (memmap2 unchecked pointer offset) is the third
+    # advisory from that triage. It was NOT ignored — it was the one path
+    # reachable from the default (non-mobile) build (memmap2 → subsecond →
+    # dioxus-core), so it was fixed for real by bumping memmap2 0.9.10 → 0.9.11
+    # (`cargo update -p memmap2`; patched in >= 0.9.11), which needs no change
+    # to the Dioxus pin. See Cargo.lock.
+    { id = "RUSTSEC-2024-0429", reason = "glib 0.18.5 VariantStrIter unsoundness — mobile/desktop only via wry→gtk→glib (patched in glib 0.20, forced by upstream gtk-rs 0.18 pin under wry); not reachable in the server build" },
+    { id = "RUSTSEC-2026-0097", reason = "rand 0.7.3 unsoundness — aliased mutable reference when a custom `log` logger calls rand::rng()/thread_rng() and ThreadRng reseeds mid-log; build-dependency only via phf_generator 0.8 (ammonia/html5ever codegen under wry), never links into any runtime binary and that logger-reseed path is not exercised in a build script" },
 ]
 
 # ---------------------------------------------------------------------------
@@ -136,11 +154,17 @@ skip = [
     { name = "tokio-tungstenite", version = "0.28.0" },
 
     # --- thiserror v1 ---
-    # Pulled by cairo-rs, gio, glib, gloo-net, jni, ndk — all transitive
-    # through the Dioxus WASM/desktop/mobile stacks. Our first-party crates
-    # use v2. Blocked until those upstream crates bump to thiserror 2.
-    { name = "thiserror", version = "1.0.69" },
-    { name = "thiserror-impl", version = "1.0.69" },
+    # thiserror 1 reaches the tree by two independent routes: (1) `gloo-net`
+    # (→ dioxus-fullstack, a DIRECT dep of omnibus/omnibus-frontend, NOT under
+    # the native shell) in the default server build; (2) the desktop/mobile
+    # native shell (cairo-rs, gio, glib, jni, ndk) under wry/tao. Our first-
+    # party crates are on v2. No explicit skip is listed here: with the wry/tao
+    # skip-tree below in effect, `cargo deny check bans` already collapses
+    # thiserror to a single counted version, so an explicit skip trips its
+    # `unnecessary-skip` lint. If the native-shell (skip-tree) paths ever go
+    # away, re-add `{ name = "thiserror"/"thiserror-impl", version = "1.0.69" }`
+    # here to keep the gloo-net path triaged. Blocked until upstream bumps to
+    # thiserror 2.
 
     # --- const-serialize alpha ---
     # 0.7.2 from crates.io manganis; 0.8.0-alpha.0 bundled in Dioxus git tag.
@@ -151,14 +175,24 @@ skip = [
     # --- getrandom + rand_core (four-way getrandom split) ---
     # 0.1 from rand 0.7.3 (phf_generator, build-dep only).
     # 0.2 intentionally kept for argon2/rand_core 0.6 auth path in db.
-    # 0.3 from tungstenite/rand 0.9. 0.4 from tempfile (dev-dep only).
+    # 0.3 from tungstenite/rand 0.9. 0.4 runtime via uuid (see below).
     # rand_core 0.5/0.6/0.9 mirror those paths.
     # See docs/dependency-audit.md for upgrade trigger conditions.
     { name = "getrandom", version = "0.1.16" },
     { name = "getrandom", version = "0.2.17" },
     { name = "getrandom", version = "0.3.4" },
+    # getrandom 0.4 pulled in since the June triage via `uuid 1.x` — a RUNTIME
+    # dependency: db::helpers::mint_uuid calls Uuid::new_v4() in non-test code
+    # (uuid's `v4` feature → getrandom 0.4), so it DOES link into the shipped
+    # server binary; uuid also enters via cfb/infer under dioxus-asset-resolver.
+    # (tempfile 3 is the dev/test path.) Accepted — this is the modern getrandom
+    # line and cannot collapse onto the 0.2 auth pin without an argon2 upgrade.
+    { name = "getrandom", version = "0.4.2" },
     { name = "rand_core", version = "0.5.1" },
     { name = "rand_core", version = "0.6.4" },
+    # rand_core 0.9 appeared alongside rand 0.9 (tungstenite websocket path,
+    # see below). Mirrors that split; blocked by the same upstream pin.
+    { name = "rand_core", version = "0.9.5" },
 
     # --- hashbrown four-way split ---
     # 0.14 from dashmap (dioxus-server), 0.15 from sqlx-core,
@@ -167,8 +201,10 @@ skip = [
     { name = "hashbrown", version = "0.14.5" },
     { name = "hashbrown", version = "0.15.5" },
     { name = "hashbrown", version = "0.16.1" },
-    # foldhash mirrors hashbrown minor versions (each hashbrown ships its own)
+    # foldhash ships one copy per hashbrown minor: 0.1 with hashbrown 0.15,
+    # 0.2 with hashbrown 0.16. Both are internal impl details of hashbrown.
     { name = "foldhash", version = "0.1.5" },
+    { name = "foldhash", version = "0.2.0" },
 
     # --- convert_case (proc-macro only) ---
     # 0.4 from derive_more 0.99.20 (transitive via Dioxus desktop/mobile);
@@ -177,12 +213,15 @@ skip = [
     { name = "convert_case", version = "0.4.0" },
     { name = "convert_case", version = "0.8.0" },
 
-    # --- rand 0.7 / 0.8 (build-dep only) ---
+    # --- rand 0.7 / 0.8 (build-dep only) + 0.9 (websocket) ---
     # phf_generator (build dep of ammonia→html5ever) uses rand 0.7 and 0.8
-    # via two separate phf_generator versions on the codegen path.
-    # Never links into the runtime binary.
+    # via two separate phf_generator versions on the codegen path — never
+    # links into the runtime binary. rand 0.9 is the runtime copy pulled by
+    # tungstenite (masking-key RNG) across all three websocket versions;
+    # blocked by the same Dioxus/Axum websocket split as tungstenite above.
     { name = "rand", version = "0.7.3" },
     { name = "rand", version = "0.8.6" },
+    { name = "rand", version = "0.9.4" },
 
     # --- webpki-roots ---
     # 0.26 from sqlx-core; 1.0 from hyper-rustls (reqwest).
@@ -190,7 +229,27 @@ skip = [
     { name = "webpki-roots", version = "0.26.11" },
 ]
 
-skip-tree = []
+# ---------------------------------------------------------------------------
+# Accepted duplicate SUBTREES (skip-tree)
+# ---------------------------------------------------------------------------
+# `cargo deny check bans` scans the whole workspace across all targets —
+# including `omnibus-mobile`, which is out of default-members — so it surfaces
+# a large tail of duplicates from the Dioxus **desktop/mobile native shell**
+# that a default-build `cargo tree -d` never shows (wry/tao → webkit2gtk/gtk-rs
+# on Linux, muda/tray-icon, plus the windows-* and core-foundation/core-graphics
+# platform crates). These are old pinned versions carried by the native webview
+# stack (e.g. bitflags 1, derive_more 0.99, heck 0.4, html5ever/markup5ever,
+# string_cache, jni, png, raw-window-handle, rustc-hash, siphasher, the
+# windows-sys/windows-targets family). None link into the shipped `omnibus`
+# server binary — they exist only under the native shell. Collapsing them
+# requires upstream wry/tao to migrate off gtk-rs 0.18 / bitflags 1 etc., which
+# is gated on the Dioxus pin (see [patch.crates-io] in root Cargo.toml). We
+# skip the whole subtree rather than enumerate ~40 leaf crates that all share
+# this single root cause. Revisit when Dioxus upgrades wry/tao.
+skip-tree = [
+    { name = "wry" },
+    { name = "tao" },
+]
 
 # ---------------------------------------------------------------------------
 # Sources

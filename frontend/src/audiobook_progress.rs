@@ -225,7 +225,7 @@ mod ssr_tests {
     }
 
     #[test]
-    fn save_is_a_noop() {
+    fn save_is_a_noop_under_ssr() {
         save("book-a", 100.0);
         assert_eq!(load("book-a"), None);
     }

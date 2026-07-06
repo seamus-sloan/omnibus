@@ -24,3 +24,14 @@ pub use books::{replace_books, sync_books, sync_books_with_progress, SyncPlan};
 // admin endpoint that repair the whole index.
 pub use fts::rebuild_all_fts;
 pub(crate) use fts::{delete_fts, upsert_fts};
+
+/// Push a post-commit cover triple onto `covers`, allocating only when the book actually has a cover.
+pub(crate) fn push_cover(
+    covers: &mut Vec<(String, String, Vec<u8>)>,
+    uuid: &str,
+    cover: &Option<(String, Vec<u8>)>,
+) {
+    if let Some((mime, bytes)) = cover {
+        covers.push((uuid.to_string(), mime.clone(), bytes.clone()));
+    }
+}

@@ -13,6 +13,38 @@ async fn init_db_returns_db_error_when_url_is_invalid() {
 }
 
 #[tokio::test]
+async fn init_db_returns_migrate_error_when_applied_checksum_is_tampered() {
+    // sqlx checksums every migration and, at startup, compares each embedded
+    // migration against the checksum recorded in `_sqlx_migrations`. A row
+    // whose stored checksum no longer matches (an edited-after-apply migration,
+    // per rule 06) must fail startup — the typed wrapper surfaces it as
+    // `InitDbError::Migrate`, not a panic or a leaked `MigrateError`.
+    //
+    // First `init_db` lets sqlx create and populate `_sqlx_migrations` itself
+    // (no hand-recreation of its internal schema, which would rot across sqlx
+    // versions); then we tamper version 1's checksum in place and re-open. The
+    // tempdir auto-removes the DB plus its WAL/`-shm` sidecars on drop.
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("omnibus.db");
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
+
+    let pool = init_db(&url).await.expect("initial init_db should succeed");
+    sqlx::query("UPDATE _sqlx_migrations SET checksum = zeroblob(48) WHERE version = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    drop(pool);
+
+    let err = init_db(&url)
+        .await
+        .expect_err("a tampered migration checksum must fail startup");
+    assert!(
+        matches!(err, InitDbError::Migrate(_)),
+        "expected InitDbError::Migrate, got {err:?}"
+    );
+}
+
+#[tokio::test]
 async fn migrator_records_applied_versions() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let versions: Vec<i64> =

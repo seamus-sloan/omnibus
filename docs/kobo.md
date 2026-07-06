@@ -1,29 +1,44 @@
 # Send a book to your Kobo
 
 Omnibus can hand a book to a Kobo e-reader as a **KEPUB** — Kobo's own EPUB
-variant, which gets noticeably faster page turns than a plain EPUB. Today this
-is a **manual, wired transfer**: you download the KEPUB from Omnibus and copy it
-onto the Kobo over USB.
+variant, which gets noticeably faster page turns than a plain EPUB. It's a
+**wired transfer**: your Kobo plugs into the computer running the browser (never
+the Omnibus server), and the book copies onto it over USB.
+
+On **Chrome or Edge**, Omnibus writes the file straight onto the plugged-in
+device in one click. On other browsers (Firefox, Safari), it downloads the KEPUB
+and you copy it over yourself. Both are described below.
 
 > [!TIP]
 > This transfer is completely safe for your device. Copying a file over USB
 > **cannot delete or change anything already on your Kobo** — not your books,
-> not your highlights, not your notes. (That is *not* true of wireless "sync",
-> which is a different feature Omnibus does not yet offer — see the note at the
-> bottom.)
+> not your highlights, not your notes. Omnibus only ever *adds* a book file; it
+> never touches the device's internal database. (That is *not* true of wireless
+> "sync", which is a different feature Omnibus does not yet offer — see the note
+> at the bottom.)
 
-## Steps
+## Chrome / Edge — one-click write
+
+1. Connect your Kobo with a USB cable and tap **Connect** on the device. It
+   appears as a USB drive.
+2. Open the book's page in Omnibus and click **Send to Kobo**.
+3. The first time, your browser asks you to pick a folder — choose the **Kobo
+   drive** and allow saving. Omnibus remembers it, so later sends write silently
+   with no prompt.
+4. When it reports success, **eject the Kobo safely**, then unplug it. The book
+   appears in your library, titled from its own metadata (not the filename).
+
+## Other browsers — download, then copy
 
 1. Open the book's page in Omnibus and click **Send to Kobo**. A file named
    `<id>.kepub.epub` downloads to your computer.
-2. Connect your Kobo to the computer with a USB cable and tap **Connect** on the
-   device. It appears as a USB drive.
+2. Connect your Kobo with a USB cable and tap **Connect** on the device. It
+   appears as a USB drive.
 3. Copy the downloaded `.kepub.epub` file onto the Kobo drive. You can drop it at
    the top level or into any folder — the Kobo scans the whole drive.
-4. **Eject the Kobo safely**, then unplug it. The book appears in your library,
-   titled from its own metadata (not the filename).
+4. **Eject the Kobo safely**, then unplug it. The book appears in your library.
 
-That's it. Open the book on the Kobo and you'll get the faster KEPUB page turns.
+Either way, open the book on the Kobo and you'll get the faster KEPUB page turns.
 
 ## What this does and doesn't do
 

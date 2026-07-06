@@ -262,6 +262,13 @@ test("renders the detail contents for the selected book", async ({ page, request
   const heroKindleBtn = exportPanel.getByTestId("hero-send-kindle");
   await expect(heroKindleBtn).toBeVisible();
   await expect(heroKindleBtn).toBeEnabled();
+  // Send-to-Kobo is the interactive button (writes the KEPUB onto a plugged-in
+  // Kobo on Chromium, or downloads it to copy over elsewhere); enabled because
+  // the book has an EPUB. Its own testid keeps it distinct from the per-format
+  // action-kobo above.
+  const koboExport = exportPanel.getByTestId("hero-send-kobo");
+  await expect(koboExport).toBeVisible();
+  await expect(koboExport).toBeEnabled();
   // The audiobook download only appears for books with an audio file; the
   // ebook-only seed must not render it. Close the menu again via the scrim.
   // The scrim fills the viewport, so click a corner clear of the panel
@@ -294,22 +301,34 @@ test("renders the detail contents for the selected book", async ({ page, request
   await expect(page.getByTestId("ebook-table")).toBeVisible();
 });
 
-// Action — Send to Kobo (F4.1 KEPUB download)
+// Action — Send to Kobo (F4.1 KEPUB direct write / download fallback)
 // ---------------------------------------------------------------------------
 
-test("Send to Kobo downloads the book with a uuid-named file", async ({ page, request }) => {
+test("Send to Kobo delivers the book with a uuid-named file", async ({ page, request }) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+
+  // Force the download fallback path: without the File System Access API the
+  // button fetches the KEPUB and triggers a normal browser download. The native
+  // directory picker can't be driven headlessly (and isn't present in every
+  // Chromium build), so nulling `showDirectoryPicker` makes the path
+  // deterministic in CI. Must run before navigation so it applies to the page.
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "showDirectoryPicker", {
+      configurable: true,
+      value: undefined,
+    });
+  });
   await gotoReady(page, `/books/${uuid}`);
 
   const epubRow = page.getByTestId("format-switcher").getByTestId("format-row-epub");
   const koboBtn = epubRow.getByTestId("action-kobo");
   await expect(koboBtn).toBeVisible();
-  await expect(koboBtn).toHaveAttribute("href", new RegExp(`/api/ebooks/${uuid}/kepub$`));
+  await expect(koboBtn).toBeEnabled();
 
-  // Clicking downloads the file (the `download` attribute keeps the page put).
-  // The filename stem is the canonical book uuid; the extension is
-  // `.kepub.epub` when kepubify converts, or `.epub` on fallback — assert the
-  // uuid-embedded contract that F4.4's USB import relies on, tolerant of both.
+  // Clicking downloads the file (the fallback anchor keeps the page put). The
+  // filename stem is the canonical book uuid; the extension is `.kepub.epub`
+  // when kepubify converts, or `.epub` on fallback — assert the uuid-embedded
+  // contract that F4.4's USB import relies on, tolerant of both.
   const [download] = await Promise.all([
     page.waitForEvent("download"),
     koboBtn.click(),
