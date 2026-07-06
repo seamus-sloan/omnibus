@@ -293,9 +293,11 @@ fn use_mobile_viewport_fix() {}
 #[component]
 pub fn App() -> Element {
     use_context_provider(|| SearchQuery(Signal::new(String::new())));
-    // Per rule 07, hook calls in App() are unconditional — feature gates
-    // live inside the helper bodies so the call sequence is identical on
-    // every target.
+    // Hook calls in App() are unconditional — the feature gates live inside
+    // the helper bodies (mobile compiles them to no-op stubs). This keeps
+    // rule 07's SSR-vs-WASM hydration parity within the not(mobile) build,
+    // where the helpers are real hooks; true hook-count parity across mobile
+    // isn't claimed (the stubs run no hooks).
     use_palette_setup();
     use_user_and_playback_contexts();
     use_current_user_boot();

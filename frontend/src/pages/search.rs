@@ -197,10 +197,7 @@ fn empty_results(r: &PaletteResults, q: &str) -> Element {
     }
 }
 
-/// Non-empty section order plus whether the query matched a tag name. A tag-name
-/// match leads with Tags (the second design artboard); otherwise the canonical
-/// type order. Empty sections are filtered out. The bool is threaded on to the
-/// section renderers so they can annotate a tag-driven result set.
+/// Non-empty section order (tags-first on a tag-name match) plus that match flag.
 fn section_order(r: &PaletteResults, q: &str) -> (Vec<Section>, bool) {
     let q_lower = q.to_lowercase();
     let tag_match = r
