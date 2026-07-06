@@ -65,6 +65,8 @@ pub fn stat_audiobook_library(
         let read = match std::fs::read_dir(&current) {
             Ok(e) => e,
             Err(e) => {
+                // A read failure on the root is fatal; on a subdir it becomes a
+                // synthetic placeholder row the diff classifier ignores.
                 if current == dir {
                     return AudiobookStatScanResult {
                         path: Some(path_str.to_string()),
@@ -72,18 +74,7 @@ pub fn stat_audiobook_library(
                         error: Some(format!("could not read directory: {e}")),
                     };
                 }
-                let relative = current
-                    .strip_prefix(dir)
-                    .unwrap_or(&current)
-                    .to_string_lossy()
-                    .to_string();
-                entries.push(AudiobookStatEntry {
-                    filename: relative,
-                    scan_key: String::new(),
-                    mtime_epoch: 0,
-                    size_bytes: 0,
-                    error: Some(e.to_string()),
-                });
+                entries.push(unreadable_subdir_entry(dir, &current, &e));
                 continue;
             }
         };
@@ -99,30 +90,9 @@ pub fn stat_audiobook_library(
             if !file_type.is_file() {
                 continue;
             }
-            let ext = entry_path
-                .extension()
-                .and_then(|s| s.to_str())
-                .map(str::to_ascii_lowercase);
-            let accepted = ext
-                .as_deref()
-                .is_some_and(|e| super::AUDIOBOOK_EXTENSIONS.contains(&e));
-            if !accepted {
-                continue;
+            if let Some(stat_entry) = stat_accepted_file(dir, &entry_path) {
+                entries.push(stat_entry);
             }
-            let relative = entry_path
-                .strip_prefix(dir)
-                .unwrap_or(&entry_path)
-                .to_string_lossy()
-                .to_string();
-            let (mtime_epoch, size_bytes) = stat_file(&entry_path);
-            let scan_key = crate::helpers::scan_key_for(&relative);
-            entries.push(AudiobookStatEntry {
-                filename: relative,
-                scan_key,
-                mtime_epoch,
-                size_bytes,
-                error: None,
-            });
         }
     }
 
@@ -133,6 +103,53 @@ pub fn stat_audiobook_library(
         entries,
         error: None,
     }
+}
+
+/// Build the empty-uuid placeholder row for a subdirectory that couldn't be
+/// read, recording the error against its scan-root-relative path.
+fn unreadable_subdir_entry(dir: &Path, current: &Path, err: &std::io::Error) -> AudiobookStatEntry {
+    let relative = current
+        .strip_prefix(dir)
+        .unwrap_or(current)
+        .to_string_lossy()
+        .to_string();
+    AudiobookStatEntry {
+        filename: relative,
+        scan_key: String::new(),
+        mtime_epoch: 0,
+        size_bytes: 0,
+        error: Some(err.to_string()),
+    }
+}
+
+/// Stat one regular file, returning a [`AudiobookStatEntry`] only when its
+/// extension is in [`super::AUDIOBOOK_EXTENSIONS`] (else `None` so the caller
+/// skips it).
+fn stat_accepted_file(dir: &Path, entry_path: &Path) -> Option<AudiobookStatEntry> {
+    let ext = entry_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(str::to_ascii_lowercase);
+    let accepted = ext
+        .as_deref()
+        .is_some_and(|e| super::AUDIOBOOK_EXTENSIONS.contains(&e));
+    if !accepted {
+        return None;
+    }
+    let relative = entry_path
+        .strip_prefix(dir)
+        .unwrap_or(entry_path)
+        .to_string_lossy()
+        .to_string();
+    let (mtime_epoch, size_bytes) = stat_file(entry_path);
+    let scan_key = crate::helpers::scan_key_for(&relative);
+    Some(AudiobookStatEntry {
+        filename: relative,
+        scan_key,
+        mtime_epoch,
+        size_bytes,
+        error: None,
+    })
 }
 
 fn stat_file(path: &Path) -> (i64, i64) {

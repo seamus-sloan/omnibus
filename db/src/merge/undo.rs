@@ -52,29 +52,10 @@ pub async fn undo_merge(pool: &SqlitePool, merge_log_id: i64) -> Result<String, 
     .await?;
     restore_links(&mut tx, new_id, &snap).await?;
     restore_identifiers(&mut tx, new_id, &snap).await?;
-
-    // Point pre-merge attachment uuids back at the restored row and drop
-    // the source-uuid guard so future reindexes treat the file as the
-    // source's own again.
-    for (uuid, format, library_path) in &snap.merged_uuid_rows {
-        sqlx::query(
-            "INSERT OR REPLACE INTO merged_uuids (uuid, book_id, format, library_path)
-             VALUES (?, ?, ?, ?)",
-        )
-        .bind(uuid)
-        .bind(new_id)
-        .bind(format)
-        .bind(library_path)
-        .execute(&mut *tx)
-        .await?;
-    }
-    sqlx::query("DELETE FROM merged_uuids WHERE uuid = ?")
-        .bind(&source_uuid)
-        .execute(&mut *tx)
-        .await?;
+    restore_attach_ledger(&mut tx, new_id, &source_uuid, &snap.merged_uuid_rows).await?;
 
     // The restored `books` row + links + identifiers are all written by
-    // now, so the door reconstructs the FTS row from them directly.
+    // now, so the code reconstructs the FTS row from them directly.
     upsert_fts(&mut tx, new_id).await?;
 
     sqlx::query("UPDATE merge_log SET undone_at = strftime('%s','now') WHERE id = ?")
@@ -84,9 +65,47 @@ pub async fn undo_merge(pool: &SqlitePool, merge_log_id: i64) -> Result<String, 
 
     tx.commit().await?;
 
-    // Post-commit, best-effort: the target's FTS row still carries the
-    // union (acceptable — links stayed), but rebuild it anyway so any
-    // override-driven text is current.
+    rebuild_target_fts_best_effort(pool, target_id).await?;
+
+    Ok(source_uuid)
+}
+
+/// Point the snapshot's pre-merge attachment uuids back at the restored row
+/// and drop the source-uuid guard, so future reindexes treat the source's
+/// file as its own again rather than a merged attachment of the target.
+async fn restore_attach_ledger(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    new_id: i64,
+    source_uuid: &str,
+    merged_uuid_rows: &[(String, String, String)],
+) -> Result<(), sqlx::Error> {
+    for (uuid, format, library_path) in merged_uuid_rows {
+        sqlx::query(
+            "INSERT OR REPLACE INTO merged_uuids (uuid, book_id, format, library_path)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(uuid)
+        .bind(new_id)
+        .bind(format)
+        .bind(library_path)
+        .execute(&mut **tx)
+        .await?;
+    }
+    sqlx::query("DELETE FROM merged_uuids WHERE uuid = ?")
+        .bind(source_uuid)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// Post-commit, best-effort rebuild of the merge target's FTS row. The
+/// target's row still carries the union (acceptable — links stayed), but a
+/// rebuild keeps any override-driven text current. A rebuild failure is
+/// logged and swallowed so it can't fail an already-committed undo.
+async fn rebuild_target_fts_best_effort(
+    pool: &SqlitePool,
+    target_id: i64,
+) -> Result<(), sqlx::Error> {
     let target_uuid: Option<String> = sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
         .bind(target_id)
         .fetch_optional(pool)
@@ -101,8 +120,7 @@ pub async fn undo_merge(pool: &SqlitePool, merge_log_id: i64) -> Result<String, 
             tracing::warn!(error = %e, uuid = %uuid, "undo_merge: target FTS rebuild failed");
         }
     }
-
-    Ok(source_uuid)
+    Ok(())
 }
 
 /// Recreate the source `books` row from the snapshot. The original uuid

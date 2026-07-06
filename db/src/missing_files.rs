@@ -63,8 +63,23 @@ pub async fn gc_books_missing_files(
         return Ok(0);
     }
 
+    delete_victim_rows(pool, &victims).await?;
+
+    let purged = victims.len() as u64;
+    let uuids: Vec<String> = victims.into_iter().map(|(_, uuid)| uuid).collect();
+    cleanup_victim_covers(uuids).await;
+
+    Ok(purged)
+}
+
+/// Hard-delete the `(id, uuid)` victims in one transaction: their
+/// `metadata_overrides`, `books`, and `books_fts` rows (chunked at 500 to
+/// stay under SQLite's 999-bind cap), then any taxonomy the purge orphaned.
+async fn delete_victim_rows(
+    pool: &SqlitePool,
+    victims: &[(i64, String)],
+) -> Result<(), MissingFilesError> {
     let mut tx = pool.begin().await?;
-    // Chunk at 500 to stay under SQLite's 999-bind cap on a large sweep —
     // `metadata_overrides` keys on uuid, `books` on id, so bind both per chunk.
     for chunk in victims.chunks(500) {
         let placeholders = std::iter::repeat_n("?", chunk.len())
@@ -101,9 +116,14 @@ pub async fn gc_books_missing_files(
     // taxonomy survives with it).
     crate::taxonomy::delete_orphan_taxonomy(&mut tx).await?;
     tx.commit().await?;
+    Ok(())
+}
 
-    let purged = victims.len() as u64;
-    let uuids: Vec<String> = victims.into_iter().map(|(_, uuid)| uuid).collect();
+/// Best-effort unlink of each purged book's override + scanned cover files,
+/// off the runtime via `spawn_blocking`. A `JoinError` is logged and swallowed
+/// — covers are a rebuildable cache, so a failed unlink must not fail the GC
+/// (mirrors `set_settings`).
+async fn cleanup_victim_covers(uuids: Vec<String>) {
     if let Err(join_err) = tokio::task::spawn_blocking(move || {
         for uuid in &uuids {
             delete_override_cover(uuid);
@@ -114,8 +134,6 @@ pub async fn gc_books_missing_files(
     {
         tracing::error!("gc_books_missing_files: cover cleanup spawn_blocking failed: {join_err}");
     }
-
-    Ok(purged)
 }
 
 /// One-time stamp of `is_missing_files` / `missing_files_since` for rows that
