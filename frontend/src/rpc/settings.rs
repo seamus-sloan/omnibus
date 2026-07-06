@@ -11,7 +11,7 @@ use omnibus_shared::{
 use omnibus_db::{self as db, scanner};
 
 #[cfg(feature = "server")]
-use super::{AdminUser, AuthUser, PoolExt, WorkerExt};
+use super::{internal_error, AdminUser, AuthUser, PoolExt, WorkerExt};
 
 /// Fetch the current server settings row. Admin-only.
 #[get("/api/rpc/settings", pool: PoolExt, _admin: AdminUser)]
@@ -101,7 +101,7 @@ pub async fn rpc_set_hardcover_key(key: Option<String>) -> Result<HardcoverKeySt
     match db::set_hardcover_api_key(&pool.0, key.as_deref()).await {
         Ok(()) => Ok(db::hardcover_key_status(&pool.0).await?),
         Err(db::SettingsError::Validation(msg)) => Err(ServerFnError::new(msg).into()),
-        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(e) => Err(internal_error("set_hardcover_key", e).into()),
     }
 }
 
@@ -120,7 +120,7 @@ pub async fn rpc_set_smtp_config(update: SmtpConfigUpdate) -> Result<SmtpConfigS
     match db::set_smtp_config(&pool.0, &update).await {
         Ok(()) => Ok(db::smtp_status(&pool.0).await?),
         Err(db::SettingsError::Validation(msg)) => Err(ServerFnError::new(msg).into()),
-        Err(e) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(e) => Err(internal_error("set_smtp_config", e).into()),
     }
 }
 
@@ -139,7 +139,7 @@ pub async fn rpc_clear_smtp_config() -> Result<SmtpConfigStatus> {
 pub async fn rpc_send_smtp_test() -> Result<()> {
     let email = db::auth::get_kindle_email(&pool.0, admin.0.id)
         .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+        .map_err(|e| internal_error("get_kindle_email", e))?;
     let Some(email) = email else {
         return Err(ServerFnError::new(
             "set your Kindle email on your account page first, then send a test",
@@ -148,7 +148,7 @@ pub async fn rpc_send_smtp_test() -> Result<()> {
     };
     db::kindle::send_test(&pool.0, &email)
         .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+        .map_err(|e| internal_error("send_smtp_test", e))?;
     Ok(())
 }
 

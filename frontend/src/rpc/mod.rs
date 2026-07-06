@@ -50,6 +50,23 @@ type WorkerExt = dioxus::fullstack::axum::Extension<std::sync::Arc<omnibus_db::w
 #[cfg(feature = "server")]
 pub use server_auth::{AdminUser, AuthUser};
 
+/// Log an internal RPC failure server-side and return a generic client-facing
+/// `ServerFnError`, so raw `sqlx`/transport error text (which can carry SQL,
+/// schema, or network details) never reaches the client — mirrors the REST
+/// `server::backend::internal` helper for the `/api/rpc/*` surface. Returns
+/// the concrete `ServerFnError` (rather than a generic `Into`-bound `Result`
+/// error) so it composes with both `Err(internal_error(...).into())` match
+/// arms and `.map_err(|e| internal_error(...))?` chains without the compiler
+/// needing to disambiguate two different `From` conversions at once.
+#[cfg(feature = "server")]
+pub(crate) fn internal_error<E>(op: &'static str, e: E) -> dioxus::fullstack::ServerFnError
+where
+    E: std::fmt::Display,
+{
+    tracing::error!(op = op, error = %e, "rpc internal error");
+    dioxus::fullstack::ServerFnError::new("internal server error")
+}
+
 /// Server-side per-route authorization extractors used by the `#[get]` /
 /// `#[post]` macros in the submodules. These are deliberately scoped to this
 /// module instead of imported from `crate::omnibus::auth` — the `frontend`

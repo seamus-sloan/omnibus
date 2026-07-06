@@ -13,7 +13,7 @@ use omnibus_db as db;
 use omnibus_shared::SESSION_BATCH_CAP;
 
 #[cfg(feature = "server")]
-use super::{AuthUser, PoolExt};
+use super::{internal_error, AuthUser, PoolExt};
 
 /// Progress-sync save. Mobile uses the analogous REST route in
 /// `server::backend::progress`. POST because Dioxus `#[get]` server
@@ -29,7 +29,7 @@ pub async fn rpc_save_progress(update: ProgressUpdate) -> Result<ProgressRecord>
         Err(db::progress::ProgressError::BookNotFound) => {
             Err(ServerFnError::new("book not found").into())
         }
-        Err(db::progress::ProgressError::Sqlx(e)) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(db::progress::ProgressError::Sqlx(e)) => Err(internal_error("save_progress", e).into()),
     }
 }
 
@@ -41,7 +41,10 @@ pub async fn rpc_get_progress(
     uuid: String,
     format: ProgressFormat,
 ) -> Result<Option<ProgressRecord>> {
-    Ok(db::progress::get_progress(&pool.0, user.id, &uuid, format).await?)
+    match db::progress::get_progress(&pool.0, user.id, &uuid, format).await {
+        Ok(rec) => Ok(rec),
+        Err(e) => Err(internal_error("get_progress", e).into()),
+    }
 }
 
 /// Reject over-cap session batches at the RPC boundary, mirroring the mobile
@@ -83,7 +86,10 @@ pub async fn rpc_record_sessions(reports: Vec<SessionReport>) -> Result<u64> {
     }
     let mut inserted = 0u64;
     for r in &reports {
-        if db::progress::record_session(&pool.0, user.id, r).await? {
+        let recorded = db::progress::record_session(&pool.0, user.id, r)
+            .await
+            .map_err(|e| internal_error("record_session", e))?;
+        if recorded {
             inserted += 1;
         }
     }

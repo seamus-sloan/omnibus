@@ -17,7 +17,7 @@ use omnibus_shared::ProgressState;
 use omnibus_db as db;
 
 #[cfg(feature = "server")]
-use super::{AuthUser, PoolExt, WorkerExt};
+use super::{internal_error, AuthUser, PoolExt, WorkerExt};
 
 /// Enqueue a send of the EPUB for `book_uuid` (optionally a specific `file_id`
 /// for multi-EPUB books) to the authenticated user's Kindle address, returning
@@ -29,7 +29,7 @@ use super::{AuthUser, PoolExt, WorkerExt};
 pub async fn rpc_send_to_kindle(book_uuid: String, file_id: Option<i64>) -> Result<u64> {
     let recipient = db::auth::get_kindle_email(&pool.0, user.id)
         .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+        .map_err(|e| internal_error("get_kindle_email", e))?;
     let Some(recipient) = recipient else {
         return Err(ServerFnError::new(
             "add your Kindle email on your account page before sending",

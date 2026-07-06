@@ -9,20 +9,7 @@ use omnibus_shared::{Bookmark, CreateBookmark, UpdateBookmark};
 use omnibus_db as db;
 
 #[cfg(feature = "server")]
-use super::{AuthUser, PoolExt};
-
-/// Log a bookmark DB error server-side and return a generic client error so
-/// raw `sqlx` text (which can carry SQL / schema details) never reaches the
-/// authed client — mirrors the REST `internal(...)` helper.
-#[cfg(feature = "server")]
-fn bookmark_db_error<E, R>(op: &str, e: E) -> R
-where
-    E: std::fmt::Display,
-    R: From<ServerFnError>,
-{
-    tracing::error!(op = op, error = %e, "rpc bookmark db error");
-    ServerFnError::new("internal server error").into()
-}
+use super::{internal_error, AuthUser, PoolExt};
 
 /// Create a bookmark on a book. Mobile uses the analogous REST route in
 /// `server::backend::bookmarks`; the rest of this family follows the same
@@ -45,7 +32,7 @@ pub async fn rpc_create_bookmark(input: CreateBookmark) -> Result<Bookmark> {
             tracing::error!(error = %e, "rpc_create_bookmark: inserted row could not be re-read");
             Err(ServerFnError::new("internal server error").into())
         }
-        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(bookmark_db_error("create", e)),
+        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(internal_error("create", e).into()),
     }
 }
 
@@ -56,8 +43,8 @@ pub async fn rpc_create_bookmark(input: CreateBookmark) -> Result<Bookmark> {
 pub async fn rpc_list_bookmarks(book_uuid: String) -> Result<Vec<Bookmark>> {
     match db::bookmarks::list_bookmarks(&pool.0, user.id, &book_uuid).await {
         Ok(list) => Ok(list),
-        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(bookmark_db_error("list", e)),
-        Err(e) => Err(bookmark_db_error("list", e)),
+        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(internal_error("list", e).into()),
+        Err(e) => Err(internal_error("list", e).into()),
     }
 }
 
@@ -75,8 +62,8 @@ pub async fn rpc_update_bookmark(id: i64, body: UpdateBookmark) -> Result<()> {
         Err(db::bookmarks::BookmarkError::NotFound) => {
             Err(ServerFnError::new("bookmark not found").into())
         }
-        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(bookmark_db_error("update", e)),
-        Err(e) => Err(bookmark_db_error("update", e)),
+        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(internal_error("update", e).into()),
+        Err(e) => Err(internal_error("update", e).into()),
     }
 }
 
@@ -90,7 +77,7 @@ pub async fn rpc_delete_bookmark(id: i64) -> Result<()> {
         Err(db::bookmarks::BookmarkError::NotFound) => {
             Err(ServerFnError::new("bookmark not found").into())
         }
-        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(bookmark_db_error("delete", e)),
-        Err(e) => Err(bookmark_db_error("delete", e)),
+        Err(db::bookmarks::BookmarkError::Sqlx(e)) => Err(internal_error("delete", e).into()),
+        Err(e) => Err(internal_error("delete", e).into()),
     }
 }
