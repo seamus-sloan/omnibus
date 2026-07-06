@@ -69,3 +69,24 @@ lint: lint-css
 
 # Lint then test — the pre-push gate referenced by rule 99.
 check: lint test
+
+# Inject the Omnibus launcher icon into a built iOS `.app`. dx 0.7 installs no
+# iOS app icon and `[bundle] icon` only feeds the desktop bundlers
+# (DioxusLabs/dioxus#3685), so run this after `dx build --platform ios` and
+# before `simctl install`. Defaults to the debug simulator build; pass a path
+# to target another. Re-runnable/idempotent — see scripts/apply-ios-icon.sh.
+ios-icon app="":
+    nix develop .#mobile --command bash -ec '\
+        app="{{app}}"; \
+        : "${CARGO_TARGET_DIR:="$HOME/.cache/cargo-target/$(basename "$(pwd)")"}"; \
+        [ -n "$app" ] || app="$(find "$CARGO_TARGET_DIR/dx/omnibus-mobile" -type d -name "*.app" -path "*ios*" -print0 2>/dev/null | xargs -0 ls -dt 2>/dev/null | head -1)"; \
+        scripts/apply-ios-icon.sh "$app" iphonesimulator'
+
+# Build, brand, sign, and install Omnibus on a connected iPhone. Requires an
+# Apple Developer membership + an "Apple Development" cert (Xcode ▸ Settings ▸
+# Accounts) + the phone plugged in and trusted. dx handles the device build +
+# provisioning + signing; the script injects the launcher icon and the App
+# Transport Security exception (for the plain-http LAN server), then re-signs
+# and installs. Pass a device name to disambiguate. See scripts/install-ios.sh.
+install-ios device="":
+    nix develop .#mobile --command scripts/install-ios.sh "{{device}}"

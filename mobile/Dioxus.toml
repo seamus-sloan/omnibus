@@ -4,5 +4,11 @@ name = "Omnibus"
 [background]
 audio = true
 
+[bundle]
+# Unique reverse-DNS id used for the iOS CFBundleIdentifier and the Android
+# applicationId. Required for real code signing / device installs — the
+# default `com.example.*` can't be provisioned under a real Apple team.
+identifier = "com.omnibus.mobile"
+
 [android]
 uses_cleartext_traffic = true
