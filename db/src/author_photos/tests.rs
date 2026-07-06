@@ -393,14 +393,16 @@ async fn fetch_remote_image_blocks_ipv6_loopback_under_strict_config() {
 #[tokio::test]
 async fn fetch_remote_image_rejects_invalid_url() {
     let cfg = RemoteImageConfig::default();
-    // Garbage URL — must surface a validation error, never reach the resolver.
+    // Garbage URL (no host) — must be rejected at validation, before any
+    // resolution. Asserting `Validation` *only* (not `BlockedAddress`) catches
+    // a regression where a malformed URL slips through to DNS resolution.
     let err = fetch_remote_image_with("http://", &cfg)
         .await
         .expect_err("must reject malformed URL");
-    assert!(matches!(
-        err,
-        FetchRemoteImageError::Validation(_) | FetchRemoteImageError::BlockedAddress(_)
-    ));
+    assert!(
+        matches!(err, FetchRemoteImageError::Validation(_)),
+        "malformed URL must be a validation error, not resolved, got {err:?}",
+    );
 }
 
 #[tokio::test]

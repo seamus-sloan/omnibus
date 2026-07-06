@@ -56,8 +56,7 @@ impl std::str::FromStr for ThumbSize {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ThumbError {
-    /// Decode, encode, or I/O failure in the thumbnail pipeline. The message
-    /// carries which step failed — no caller branches on the distinction.
+    /// Decode, encode, or I/O failure in the pipeline; the message names the step.
     #[error("thumbnail generation failed: {0}")]
     Failed(String),
     #[error("no cover available for book {0}")]

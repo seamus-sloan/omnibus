@@ -24,12 +24,8 @@ const REMOTE_IMAGE_TIMEOUT: Duration = Duration::from_secs(15);
 /// rephrasing.
 #[derive(Debug, thiserror::Error)]
 pub enum FetchRemoteImageError {
-    /// The URL or the remote response failed a pre-persist validation gate:
-    /// bad scheme, unparseable URL, non-2xx status, non-image content-type,
-    /// SVG rejection, or over the size cap. The message carries which gate
-    /// fired — the handler maps every variant here to a 400. Kept distinct
-    /// from [`Self::BlockedAddress`] so the SSRF guard stays independently
-    /// assertable in tests.
+    /// A pre-persist validation gate failed (scheme, URL, status, content-type,
+    /// SVG, or size cap); the message names which, and the handler maps it to 400.
     #[error("{0}")]
     Validation(String),
     /// SSRF guard triggered. The supplied URL parsed cleanly, but either its
