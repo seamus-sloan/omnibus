@@ -393,13 +393,13 @@ async fn fetch_remote_image_blocks_ipv6_loopback_under_strict_config() {
 #[tokio::test]
 async fn fetch_remote_image_rejects_invalid_url() {
     let cfg = RemoteImageConfig::default();
-    // Garbage URL — must surface InvalidUrl, never reach the resolver.
+    // Garbage URL — must surface a validation error, never reach the resolver.
     let err = fetch_remote_image_with("http://", &cfg)
         .await
         .expect_err("must reject malformed URL");
     assert!(matches!(
         err,
-        FetchRemoteImageError::InvalidUrl | FetchRemoteImageError::BlockedAddress(_)
+        FetchRemoteImageError::Validation(_) | FetchRemoteImageError::BlockedAddress(_)
     ));
 }
 
@@ -409,7 +409,10 @@ async fn fetch_remote_image_rejects_non_http_scheme() {
     let err = fetch_remote_image_with("ftp://example.com/p.jpg", &cfg)
         .await
         .expect_err("must reject non-http(s)");
-    assert!(matches!(err, FetchRemoteImageError::BadScheme));
+    assert!(
+        matches!(&err, FetchRemoteImageError::Validation(msg) if msg.contains("http://")),
+        "expected a scheme validation error, got {err:?}",
+    );
 }
 
 #[tokio::test]
@@ -421,7 +424,7 @@ async fn fetch_remote_image_does_not_follow_redirects_to_private_ips() {
     // it re-resolves through its default resolver and the IP-range
     // guard never sees the new host — full bypass. The fix disables
     // redirect-following on the per-call client, so a 3xx surfaces
-    // as a 302 status (BadStatus) and the SSRF target is never hit.
+    // as a 302-status validation error and the SSRF target is never hit.
     //
     // The test runs under `allow_private_addresses` so the wiremock
     // server bound to loopback isn't rejected up-front — the point
@@ -442,8 +445,8 @@ async fn fetch_remote_image_does_not_follow_redirects_to_private_ips() {
         .await
         .expect_err("redirect must NOT be followed");
     assert!(
-        matches!(err, FetchRemoteImageError::BadStatus(302)),
-        "expected BadStatus(302) (redirect not followed), got {err:?}",
+        matches!(&err, FetchRemoteImageError::Validation(msg) if msg.contains("302")),
+        "expected a 302-status validation error (redirect not followed), got {err:?}",
     );
 }
 

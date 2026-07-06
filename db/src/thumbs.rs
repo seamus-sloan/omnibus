@@ -56,12 +56,10 @@ impl std::str::FromStr for ThumbSize {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ThumbError {
-    #[error("cover decode failed: {0}")]
-    Decode(String),
-    #[error("WebP encode failed: {0}")]
-    Encode(String),
-    #[error("I/O error: {0}")]
-    Io(String),
+    /// Decode, encode, or I/O failure in the thumbnail pipeline. The message
+    /// carries which step failed — no caller branches on the distinction.
+    #[error("thumbnail generation failed: {0}")]
+    Failed(String),
     #[error("no cover available for book {0}")]
     NoCover(i64),
     #[error("db error: {0}")]
@@ -144,20 +142,22 @@ fn write_thumbnail(
         let mut buf = std::io::Cursor::new(Vec::new());
         resized
             .write_to(&mut buf, ImageFormat::WebP)
-            .map_err(|e| ThumbError::Encode(e.to_string()))?;
+            .map_err(|e| ThumbError::Failed(format!("WebP encode failed: {e}")))?;
         buf.into_inner()
     };
 
     let dir = thumbs_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| ThumbError::Io(e.to_string()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| ThumbError::Failed(format!("I/O error: {e}")))?;
 
     let final_path = thumb_path_for(book_id, size);
     // Per-(book,size) temp name keeps concurrent generations from clobbering
     // each other's temp files. The worker's `thumb:{book_id}` resource lock
     // already serializes per-book, so a single suffix is enough.
     let tmp_path = dir.join(format!("{book_id}_{size}.webp.tmp"));
-    std::fs::write(&tmp_path, &webp_bytes).map_err(|e| ThumbError::Io(e.to_string()))?;
-    std::fs::rename(&tmp_path, &final_path).map_err(|e| ThumbError::Io(e.to_string()))?;
+    std::fs::write(&tmp_path, &webp_bytes)
+        .map_err(|e| ThumbError::Failed(format!("I/O error: {e}")))?;
+    std::fs::rename(&tmp_path, &final_path)
+        .map_err(|e| ThumbError::Failed(format!("I/O error: {e}")))?;
 
     Ok(webp_bytes.len())
 }
@@ -172,8 +172,8 @@ pub fn generate_thumbnail(
     size: ThumbSize,
     cover_bytes: &[u8],
 ) -> Result<usize, ThumbError> {
-    let decoded =
-        image::load_from_memory(cover_bytes).map_err(|e| ThumbError::Decode(e.to_string()))?;
+    let decoded = image::load_from_memory(cover_bytes)
+        .map_err(|e| ThumbError::Failed(format!("cover decode failed: {e}")))?;
     write_thumbnail(book_id, size, &decoded)
 }
 
@@ -197,7 +197,7 @@ pub fn ensure_thumbnails_sync(
             Some(img) => img,
             None => decoded.insert(
                 image::load_from_memory(&cover_bytes)
-                    .map_err(|e| ThumbError::Decode(e.to_string()))?,
+                    .map_err(|e| ThumbError::Failed(format!("cover decode failed: {e}")))?,
             ),
         };
         write_thumbnail(book_id, size, img)?;
