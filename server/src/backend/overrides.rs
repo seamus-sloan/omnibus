@@ -10,9 +10,9 @@ use axum::{
     Json,
 };
 use omnibus_db::{self as db};
-use omnibus_shared::{detect_image_format, MetadataOverrides};
+use omnibus_shared::MetadataOverrides;
 
-use super::{internal, AppState};
+use super::{image_upload::extract_validated_image, internal, AppState};
 use crate::auth::AuthUser;
 
 /// Save metadata overrides for a book. Requires `can_edit` or admin.
@@ -121,71 +121,9 @@ pub(super) async fn post_ebook_cover(
     };
 
     // Extract the cover field from the multipart body.
-    let (mime, bytes) = loop {
-        match multipart.next_field().await {
-            Ok(Some(field)) => {
-                let name = field.name().unwrap_or("").to_string();
-                if name != "cover" {
-                    continue;
-                }
-                let content_type = field
-                    .content_type()
-                    .unwrap_or("application/octet-stream")
-                    .to_string();
-                if !content_type.starts_with("image/") {
-                    return (
-                        axum::http::StatusCode::BAD_REQUEST,
-                        "cover must be an image",
-                    )
-                        .into_response();
-                }
-                // Reject SVG — contains executable content and can XSS when
-                // opened directly in a browser tab.
-                if content_type.contains("svg") {
-                    return (
-                        axum::http::StatusCode::BAD_REQUEST,
-                        "SVG covers are not accepted",
-                    )
-                        .into_response();
-                }
-                match field.bytes().await {
-                    Ok(b) => {
-                        if b.len() > 10 * 1024 * 1024 {
-                            return (
-                                axum::http::StatusCode::BAD_REQUEST,
-                                "cover must be under 10 MB",
-                            )
-                                .into_response();
-                        }
-                        // Validate magic bytes — don't trust Content-Type alone.
-                        // Bind the detected MIME directly: a `None` here means the
-                        // bytes carry no recognisable image header, so surface a
-                        // 415 rather than `.unwrap()`-panicking the task (#210).
-                        match detect_image_format(&b) {
-                            // Use the detected MIME so the stored extension matches
-                            // actual content, not the (untrusted) client header.
-                            Some(mime) => break (mime, b),
-                            None => {
-                                return (
-                                    axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                                    "Could not detect image format",
-                                )
-                                    .into_response();
-                            }
-                        }
-                    }
-                    Err(e) => return internal("read cover field", e),
-                }
-            }
-            Ok(None) => {
-                return (
-                    axum::http::StatusCode::BAD_REQUEST,
-                    "missing 'cover' field in multipart body",
-                )
-                    .into_response()
-            }
-            Err(e) => return internal("parse multipart", e),
-        }
+    let (mime, bytes) = match extract_validated_image(&mut multipart, "cover").await {
+        Ok(pair) => pair,
+        Err(response) => return response,
     };
 
     // Look up the prior overrides row BEFORE touching disk. `write_override_cover`

@@ -16,7 +16,7 @@ use omnibus_shared::detect_image_format;
 use serde::Deserialize;
 use sqlx::SqlitePool;
 
-use super::{internal, AppState};
+use super::{image_upload::extract_validated_image, internal, AppState};
 use crate::auth::{AdminUser, MediaAuthUser};
 
 /// Returns `true` when an `authors` row with `id` exists. Extracted because
@@ -86,66 +86,9 @@ pub(super) async fn put_author_photo(
         return (axum::http::StatusCode::NOT_FOUND, "author not found").into_response();
     }
 
-    let (mime, bytes) = loop {
-        match multipart.next_field().await {
-            Ok(Some(field)) => {
-                let name = field.name().unwrap_or("").to_string();
-                if name != "photo" {
-                    continue;
-                }
-                let content_type = field
-                    .content_type()
-                    .unwrap_or("application/octet-stream")
-                    .to_string();
-                if !content_type.starts_with("image/") {
-                    return (
-                        axum::http::StatusCode::BAD_REQUEST,
-                        "photo must be an image",
-                    )
-                        .into_response();
-                }
-                if content_type.contains("svg") {
-                    return (
-                        axum::http::StatusCode::BAD_REQUEST,
-                        "SVG photos are not accepted",
-                    )
-                        .into_response();
-                }
-                match field.bytes().await {
-                    Ok(b) => {
-                        if b.len() > 10 * 1024 * 1024 {
-                            return (
-                                axum::http::StatusCode::BAD_REQUEST,
-                                "photo must be under 10 MB",
-                            )
-                                .into_response();
-                        }
-                        // Bind the detected MIME directly: a `None` here means the
-                        // bytes carry no recognisable image header, so surface a
-                        // 415 rather than `.unwrap()`-panicking the task (#210).
-                        match detect_image_format(&b) {
-                            Some(mime) => break (mime, b),
-                            None => {
-                                return (
-                                    axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                                    "Could not detect image format",
-                                )
-                                    .into_response();
-                            }
-                        }
-                    }
-                    Err(e) => return internal("read photo field", e),
-                }
-            }
-            Ok(None) => {
-                return (
-                    axum::http::StatusCode::BAD_REQUEST,
-                    "missing 'photo' field in multipart body",
-                )
-                    .into_response()
-            }
-            Err(e) => return internal("parse multipart", e),
-        }
+    let (mime, bytes) = match extract_validated_image(&mut multipart, "photo").await {
+        Ok(pair) => pair,
+        Err(response) => return response,
     };
 
     if let Err(e) = db::upsert_author_photo(
