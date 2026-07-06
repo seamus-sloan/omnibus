@@ -72,6 +72,183 @@ async fn merge_books_moves_files_links_and_records_log() {
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM books_fts").await, 1);
 }
 
+/// The `move_links` series/tags/publishers/languages loop and the blind
+/// `move_progress_and_history` re-parent of bookmarks/sessions/highlights are
+/// only ever seeded with an author elsewhere; this covers a book carrying the
+/// full taxonomy and user-data on *both* sides, so a merge moves every kind to
+/// the target and drops the source's rows.
+#[tokio::test]
+async fn merge_books_moves_all_taxonomy_and_user_data_to_target() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool).await;
+    // M4B target + MP3 source: distinct file formats (pass the collision
+    // check) that both map to the coarse 'audio' progress format.
+    let target = seed_audiobook(&pool, "A/Dracula.m4b", "Dracula", "Bram Stoker").await;
+    let mut mp3 = indexed_audiobook("B/Drakula mp3", "Drakula", Some("Bram Stoker"));
+    mp3.format = "MP3".into();
+    let source_scan_key = mp3.scan_key.clone();
+    sync_audiobooks(
+        &pool,
+        "/audio",
+        AudiobookSyncPlan {
+            new_books: vec![mp3],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let source = crate::test_support::uuid_by_scan_key(&pool, &source_scan_key).await;
+    let source_id = book_id_by_uuid(&pool, &source).await;
+    let target_id = book_id_by_uuid(&pool, &target).await;
+
+    // Full taxonomy on the source; a *shared* series on the target so the
+    // insert hits an OR-IGNORE collision rather than a plain move.
+    for (tbl, col, name) in [
+        ("series", "name", "Gothic Horror"),
+        ("tags", "name", "horror"),
+        ("publishers", "name", "Archibald Constable"),
+        ("languages", "code", "en"),
+    ] {
+        sqlx::query(&format!("INSERT INTO {tbl} ({col}) VALUES (?)"))
+            .bind(name)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    for (link, col, tbl, name_col, name, book) in [
+        (
+            "books_series_link",
+            "series",
+            "series",
+            "name",
+            "Gothic Horror",
+            source_id,
+        ),
+        (
+            "books_series_link",
+            "series",
+            "series",
+            "name",
+            "Gothic Horror",
+            target_id,
+        ),
+        (
+            "books_tags_link",
+            "tag",
+            "tags",
+            "name",
+            "horror",
+            source_id,
+        ),
+        (
+            "books_publishers_link",
+            "publisher",
+            "publishers",
+            "name",
+            "Archibald Constable",
+            source_id,
+        ),
+        (
+            "books_languages_link",
+            "language",
+            "languages",
+            "code",
+            "en",
+            source_id,
+        ),
+    ] {
+        sqlx::query(&format!(
+            "INSERT INTO {link} (book, {col}) SELECT ?, id FROM {tbl} WHERE {name_col} = ?"
+        ))
+        .bind(book)
+        .bind(name)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    // Same-format audio progress on both (source newer -> its position wins),
+    // plus bookmarks / sessions / highlights on both (no UNIQUE, blind move).
+    for (uuid, pos, ts) in [(&target, 100.0, 1000), (&source, 200.0, 2000)] {
+        sqlx::query(
+            "INSERT INTO reading_progress (user_id, book_uuid, format, audio_position_seconds, updated_at)
+             VALUES (?, ?, 'audio', ?, ?)",
+        )
+        .bind(user)
+        .bind(uuid)
+        .bind(pos)
+        .bind(ts)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    for uuid in [&source, &target] {
+        sqlx::query("INSERT INTO bookmarks (user_id, book_uuid, position) VALUES (?, ?, 'x')")
+            .bind(user)
+            .bind(uuid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO listening_sessions (user_id, book_uuid, started_at, ended_at, seconds_listened) VALUES (?, ?, 1, 2, 1)")
+            .bind(user).bind(uuid).execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO highlights (user_id, book_uuid, epub_cfi_range) VALUES (?, ?, 'r')",
+        )
+        .bind(user)
+        .bind(uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    merge_books(&pool, &source, &target, Some(user))
+        .await
+        .unwrap();
+
+    // Every taxonomy link now hangs off the target; none off the deleted source.
+    for (link, col) in [
+        ("books_series_link", "series"),
+        ("books_tags_link", "tag"),
+        ("books_publishers_link", "publisher"),
+        ("books_languages_link", "language"),
+    ] {
+        let on_target: i64 = sqlx::query_scalar(&format!(
+            "SELECT COUNT(*) FROM {link} WHERE book = ? AND {col} IS NOT NULL"
+        ))
+        .bind(target_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            on_target, 1,
+            "{link} should have exactly one row on the target"
+        );
+    }
+    // Source book row is gone, so no link can reference it.
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 1);
+
+    // Progress deduped to the newer (source) position, re-parented to target.
+    let prog: Vec<(String, f64)> =
+        sqlx::query_as("SELECT book_uuid, audio_position_seconds FROM reading_progress")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(prog, vec![(target.clone(), 200.0)]);
+    // Bookmarks / sessions / highlights: both books' rows now on the target.
+    for tbl in ["bookmarks", "listening_sessions", "highlights"] {
+        let on_target: i64 =
+            sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {tbl} WHERE book_uuid = ?"))
+                .bind(&target)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            on_target, 2,
+            "{tbl} should re-parent both books' rows to the target"
+        );
+    }
+}
+
 #[tokio::test]
 async fn merge_books_rejects_same_book() {
     let pool = init_db("sqlite::memory:").await.unwrap();
