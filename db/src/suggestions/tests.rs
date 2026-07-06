@@ -343,6 +343,31 @@ async fn curated_list_ids_returns_list_ids() {
 }
 
 #[tokio::test]
+async fn post_graphql_surfaces_graphql_error_envelope() {
+    // Hasura returns HTTP 200 even for a failed operation, carrying the
+    // failure in an `errors[]` array. `post_graphql` must join those messages
+    // into `HardcoverError::Graphql` rather than treating the 200 as success
+    // or trying to decode the (absent) `data`. Driven through `curated_list_ids`
+    // since `post_graphql` is private.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "errors": [{ "message": "field 'list_books' not found" }]
+        })))
+        .mount(&server)
+        .await;
+    let cfg = config_for(&server);
+    let err = curated_list_ids(&cfg, 714600)
+        .await
+        .expect_err("an errors[] envelope must not decode as success");
+    assert!(
+        matches!(&err, crate::suggestions::hardcover::HardcoverError::Graphql(msg)
+            if msg.contains("field 'list_books' not found")),
+        "got {err:?}"
+    );
+}
+
+#[tokio::test]
 async fn co_listed_counts_ranks_by_shared_list_appearances() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

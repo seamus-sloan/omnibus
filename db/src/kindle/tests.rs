@@ -83,3 +83,29 @@ fn build_epub_email_rejects_malformed_address() {
     .unwrap_err();
     assert!(matches!(err, KindleError::Address(_)));
 }
+
+#[test]
+fn kindle_error_timeout_reports_the_overall_send_cap() {
+    // `deliver` maps a `tokio::time::timeout` elapse to `Timeout` (a unit
+    // variant) so a hung relay surfaces a bounded failure instead of hanging
+    // the worker forever. Its rendered message must name the overall cap so an
+    // admin can tell it apart from a per-command `Smtp` error.
+    let err = KindleError::Timeout;
+    assert_eq!(err.to_string(), "SMTP delivery timed out after 90s");
+}
+
+#[test]
+fn kindle_error_build_wraps_lettre_message_error() {
+    // The MIME builders (`build_epub_email` / `send_test`) surface a lettre
+    // message-assembly failure through `#[from] lettre::error::Error` as
+    // `KindleError::Build`. Feeding a real lettre error through the `From`
+    // bridge asserts that mapping (and its `{0}` message) without needing a
+    // live SMTP relay.
+    let src = lettre::error::Error::MissingFrom;
+    let err: KindleError = src.into();
+    assert!(matches!(err, KindleError::Build(_)), "got {err:?}");
+    assert!(
+        err.to_string().starts_with("failed to build the email"),
+        "got {err}"
+    );
+}
