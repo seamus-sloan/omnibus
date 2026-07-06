@@ -4,8 +4,11 @@
 
 use super::*;
 
-/// Every `SortKey` variant, so a round-trip test can't silently skip one
-/// a future variant would add.
+/// Hand-maintained list of every `SortKey` variant — keep it in sync when
+/// a new variant is added, or the round-trip test below will silently skip
+/// the new one. (A `SortKey::ALL` const or an exhaustive `match` in
+/// `as_wire` would make this automatic; the tests just mirror the current
+/// shape.)
 const ALL_SORT_KEYS: [SortKey; 5] = [
     SortKey::Title,
     SortKey::Author,
