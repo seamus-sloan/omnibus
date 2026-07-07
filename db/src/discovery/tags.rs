@@ -3,9 +3,8 @@
 //! a book are reflected here; visibility still requires a canonical
 //! `books_tags_link` row so override-only tags never surface.
 
-use sqlx::{Row, SqlitePool};
-
 use omnibus_shared::TagWeight;
+use sqlx::{Row, SqlitePool};
 
 use super::DiscoveryError;
 

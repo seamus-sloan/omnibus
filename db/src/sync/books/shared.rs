@@ -4,9 +4,8 @@
 //! the rewrite-in-place and cross-format attach paths, and the
 //! post-commit cover materialization + missing-files marker helper.
 
-use sqlx::Transaction;
-
 use omnibus_shared::EbookMetadata;
+use sqlx::Transaction;
 
 use crate::covers::write_cover_file;
 use crate::helpers::{

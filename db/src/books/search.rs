@@ -3,9 +3,8 @@
 //! results hydrate into the same `EbookMetadata` shape `list_books` /
 //! `get_book` return.
 
-use sqlx::{Row, SqlitePool};
-
 use omnibus_shared::EbookMetadata;
+use sqlx::{Row, SqlitePool};
 
 use crate::helpers::{build_fts_match, cap_query_len};
 

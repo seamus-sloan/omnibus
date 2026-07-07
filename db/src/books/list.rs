@@ -1,9 +1,8 @@
 //! Library-scoped list/count read paths plus the small `IndexedRow`
 //! projection used by the incremental reindex diff.
 
-use sqlx::{Row, SqlitePool};
-
 use omnibus_shared::{EbookLibrary, EbookMetadata};
+use sqlx::{Row, SqlitePool};
 
 use super::projection::{
     backfill_creator_ids, merge_overrides_into_books, row_to_ebook, BOOK_COLUMNS,

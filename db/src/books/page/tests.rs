@@ -2,9 +2,8 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use sqlx::SqlitePool;
-
 use omnibus_shared::{SortDir, SortKey, ViewFilters};
+use sqlx::SqlitePool;
 
 use super::*;
 use crate::pool::init_db;
