@@ -211,8 +211,11 @@ pub fn diff_library(
 
 /// Fraction of a library's previously file-backed books that a single
 /// removal pass may flag missing before it's treated as a scan
-/// malfunction rather than genuine deletions (F819 circuit breaker).
-pub const REMOVAL_CIRCUIT_BREAKER_FRACTION: f64 = 0.2;
+/// malfunction rather than genuine deletions (F819 circuit breaker):
+/// 1-in-5, i.e. 20%. Expressed as an integer divisor rather than a float
+/// so the boundary check (`removed * DIVISOR <= total`) is exact — no
+/// floating-point rounding at "exactly 20%".
+pub const REMOVAL_CIRCUIT_BREAKER_DIVISOR: usize = 5;
 
 /// Removals at or below this absolute count are always allowed, regardless
 /// of the fraction they represent. The percentage breaker above is aimed
@@ -230,7 +233,7 @@ const REMOVAL_CIRCUIT_BREAKER_MIN_REMOVED: usize = 2;
 ///   "absent from the walk" can't be trusted to mean "genuinely deleted"
 ///   for anything the walk didn't fully see.
 /// - The circuit breaker: even after a clean walk, flagging more than
-///   [`REMOVAL_CIRCUIT_BREAKER_FRACTION`] of the previously file-backed
+///   1-in-[`REMOVAL_CIRCUIT_BREAKER_DIVISOR`] of the previously file-backed
 ///   library missing in one pass — above [`REMOVAL_CIRCUIT_BREAKER_MIN_REMOVED`]
 ///   — (e.g. a mount that isn't ready yet reads as an empty but otherwise
 ///   error-free root) reads as a scan malfunction, not real deletions.
@@ -245,8 +248,7 @@ fn removal_pass_is_safe(
     if removed_count <= REMOVAL_CIRCUIT_BREAKER_MIN_REMOVED {
         return true;
     }
-    (removed_count as f64)
-        <= (previously_file_backed_count as f64) * REMOVAL_CIRCUIT_BREAKER_FRACTION
+    removed_count * REMOVAL_CIRCUIT_BREAKER_DIVISOR <= previously_file_backed_count
 }
 
 /// Clear `diff.removed` in place when [`removal_pass_is_safe`] refuses it,

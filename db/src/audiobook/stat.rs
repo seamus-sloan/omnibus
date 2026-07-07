@@ -42,8 +42,9 @@ impl AudiobookStatScanResult {
 /// Walk `path`, stat every file with an extension in
 /// [`super::AUDIOBOOK_EXTENSIONS`], and return one
 /// [`AudiobookStatEntry`] per file. Synthetic placeholder rows for
-/// unreadable subdirectories use the same empty-uuid convention as
-/// [`crate::ebook::stat`], so the diff classifier ignores them.
+/// unreadable subdirectories or files use the same empty-`scan_key`
+/// convention as [`crate::ebook::stat`], so the diff classifier ignores
+/// them.
 pub fn stat_audiobook_library(
     path: Option<&str>,
     library_path_key: &str,

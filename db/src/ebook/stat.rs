@@ -56,7 +56,7 @@ impl StatScanResult {
 
 /// Phase A: walk the library and `stat` every `.epub` without opening the
 /// zip. Returns one `StatEntry` per file plus a synthetic entry (empty
-/// `uuid`) for any unreadable subdirectory — the legacy
+/// `scan_key`) for any unreadable subdirectory or file — the legacy
 /// `scan_ebook_library_with` shape surfaces these as error rows.
 ///
 /// `library_path_key` is retained for signature compatibility with the
