@@ -162,3 +162,15 @@ first, redirecting to `/connect` when it's empty — see the Server URL
 Protection + the `0o600` perms; **TODO**: harden with iOS Keychain /
 Android Keystore. Android persistence is not yet wired (`data_dir` returns
 `None` → memory-only) pending a JNI `Context.getFilesDir()` resolver.
+
+**iOS TestFlight release:** the manually-triggered
+`.github/workflows/testflight.yml` (workflow_dispatch, `macos-14` runner)
+builds the app and ships it to TestFlight. `dx` has no signing, so it
+`dx bundle --platform ios --release`s an unsigned `.app`, then
+`scripts/ios-package-ipa.sh` patches Info.plist (adds the `DTPlatformName`
+dx omits, stamps the CI build number), embeds the provisioning profile,
+`codesign`s with the distribution identity, and zips a `Payload/` `.ipa`
+that `xcrun altool` uploads. Bundle ID `com.omnibus.mobile` lives in
+`mobile/Dioxus.toml`. Signing assets are seven CI-only repo secrets
+(distribution cert, provisioning profile, App Store Connect API key +
+IDs) — enumerated in the workflow file's header comment.
