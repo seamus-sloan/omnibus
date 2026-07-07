@@ -55,46 +55,22 @@ fn reader_call(method: &str, arg_js: &str) {
 #[component]
 pub fn BookReadPage(uuid: String) -> Element {
     let theme = use_context::<Signal<Theme>>();
-
-    // Seed identically on SSR and WASM so the first client render matches the
-    // server-rendered markup — the overlay (rendered when `Loading`) must be
-    // present in both, otherwise Dioxus mis-adopts nodes during hydration
-    // (see .claude/rules/07-hydration.md). The web `use_effect` below
-    // transitions to `Ready` via the JS glue's `on_status` callback after the
-    // reader mounts.
-    let status = use_signal(ReaderStatus::default);
-
-    let prefs = init_reader_prefs(theme);
-    use_context_provider(|| prefs);
-
-    let show_aa = use_signal(|| false);
-    let selection: Signal<Option<SelectionData>> = use_signal(|| None);
-    let highlights: Signal<Vec<Highlight>> = use_signal(Vec::new);
-    let toc: Signal<Vec<TocEntry>> = use_signal(Vec::new);
-    let show_toc = use_signal(|| false);
-    let show_highlights = use_signal(|| false);
-    let note_target: Signal<Option<Highlight>> = use_signal(|| None);
-    let quote_target: Signal<Option<Highlight>> = use_signal(|| None);
-    let show_search = use_signal(|| false);
-    let search_results: Signal<Vec<SearchResult>> = use_signal(Vec::new);
-    let show_bookmarks = use_signal(|| false);
-    let loc = use_signal(RelocateData::default);
-    let book_meta = use_book_metadata(uuid.clone());
-
-    #[cfg(feature = "web")]
-    install_reader_web_interop(
-        uuid.clone(),
-        prefs,
-        InteropSignals {
-            status,
-            loc,
-            selection,
-            highlights,
-            toc,
-            search_results,
-        },
-    );
-
+    let ReaderSignals {
+        status,
+        show_aa,
+        selection,
+        highlights,
+        toc,
+        show_toc,
+        show_highlights,
+        note_target,
+        quote_target,
+        show_search,
+        search_results,
+        show_bookmarks,
+        loc,
+        book_meta,
+    } = use_reader_signals(&uuid, theme);
     let (on_back, on_prev, on_next, on_keydown) = chrome_handlers::install_chrome_handlers(
         selection,
         chrome_handlers::OverlaySignals {
@@ -107,32 +83,16 @@ pub fn BookReadPage(uuid: String) -> Element {
             quote_target,
         },
     );
-
-    let (page_str, chapter_str) = format_progress_labels(&loc.read());
-    let pct = loc.read().pct;
-    let chapter_title_display = loc.read().chapter_title.clone();
-    let current_cfi = loc.read().cfi.clone().unwrap_or_default();
-    let book_title = book_meta
-        .read()
-        .as_ref()
-        .and_then(|b| b.title.clone())
-        .unwrap_or_default();
-    let book_author = book_meta
-        .read()
-        .as_ref()
-        .and_then(|b| b.creators.first().map(|c| c.name.clone()))
-        .unwrap_or_default();
-    let book_accent = book_meta
-        .read()
-        .as_ref()
-        .and_then(|b| b.accent.clone())
-        .unwrap_or_else(|| "#3a3027".to_string());
-
-    // Suppress the `prefs` unused-variable warning on non-web targets:
-    // `install_reader_web_interop` is web-only, so on SSR / mobile the
-    // local binding is published via context but never read.
-    #[cfg(not(feature = "web"))]
-    let _ = prefs;
+    let ReaderDisplay {
+        page_str,
+        chapter_str,
+        pct,
+        chapter_title,
+        current_cfi,
+        book_title,
+        book_author,
+        book_accent,
+    } = derive_reader_display(loc, book_meta);
 
     rsx! {
         ReaderLayout {
@@ -141,7 +101,7 @@ pub fn BookReadPage(uuid: String) -> Element {
                 book_title,
                 book_author,
                 book_accent,
-                chapter_title: chapter_title_display,
+                chapter_title,
                 current_cfi,
             },
             progress: ReaderProgress {
@@ -170,6 +130,142 @@ pub fn BookReadPage(uuid: String) -> Element {
                 on_next,
             },
         }
+    }
+}
+
+/// Every signal `BookReadPage` owns, minus the reader-prefs context (which
+/// is published but not otherwise threaded through the component body).
+#[derive(Copy, Clone)]
+struct ReaderSignals {
+    status: Signal<ReaderStatus>,
+    show_aa: Signal<bool>,
+    selection: Signal<Option<SelectionData>>,
+    highlights: Signal<Vec<Highlight>>,
+    toc: Signal<Vec<TocEntry>>,
+    show_toc: Signal<bool>,
+    show_highlights: Signal<bool>,
+    note_target: Signal<Option<Highlight>>,
+    quote_target: Signal<Option<Highlight>>,
+    show_search: Signal<bool>,
+    search_results: Signal<Vec<SearchResult>>,
+    show_bookmarks: Signal<bool>,
+    loc: Signal<RelocateData>,
+    book_meta: Signal<Option<omnibus_shared::EbookMetadata>>,
+}
+
+/// Construct every signal `BookReadPage` owns, publish `prefs` to context,
+/// and (on web) install the epub.js JS interop. Must run unconditionally
+/// from `BookReadPage` — every call here is a Dioxus hook, so the call
+/// order has to stay stable across renders.
+fn use_reader_signals(uuid: &str, theme: Signal<Theme>) -> ReaderSignals {
+    // Seed identically on SSR and WASM so the first client render matches the
+    // server-rendered markup — the overlay (rendered when `Loading`) must be
+    // present in both, otherwise Dioxus mis-adopts nodes during hydration
+    // (see .claude/rules/07-hydration.md). The web `use_effect` in
+    // `install_reader_web_interop` transitions to `Ready` via the JS glue's
+    // `on_status` callback after the reader mounts.
+    let status = use_signal(ReaderStatus::default);
+
+    let prefs = init_reader_prefs(theme);
+    use_context_provider(|| prefs);
+
+    let show_aa = use_signal(|| false);
+    let selection: Signal<Option<SelectionData>> = use_signal(|| None);
+    let highlights: Signal<Vec<Highlight>> = use_signal(Vec::new);
+    let toc: Signal<Vec<TocEntry>> = use_signal(Vec::new);
+    let show_toc = use_signal(|| false);
+    let show_highlights = use_signal(|| false);
+    let note_target: Signal<Option<Highlight>> = use_signal(|| None);
+    let quote_target: Signal<Option<Highlight>> = use_signal(|| None);
+    let show_search = use_signal(|| false);
+    let search_results: Signal<Vec<SearchResult>> = use_signal(Vec::new);
+    let show_bookmarks = use_signal(|| false);
+    let loc = use_signal(RelocateData::default);
+    let book_meta = use_book_metadata(uuid.to_string());
+
+    #[cfg(feature = "web")]
+    install_reader_web_interop(
+        uuid.to_string(),
+        prefs,
+        InteropSignals {
+            status,
+            loc,
+            selection,
+            highlights,
+            toc,
+            search_results,
+        },
+    );
+
+    // Suppress the `prefs` unused-variable warning on non-web targets:
+    // `install_reader_web_interop` is web-only, so on SSR / mobile the
+    // local binding is published via context but never read.
+    #[cfg(not(feature = "web"))]
+    let _ = prefs;
+
+    ReaderSignals {
+        status,
+        show_aa,
+        selection,
+        highlights,
+        toc,
+        show_toc,
+        show_highlights,
+        note_target,
+        quote_target,
+        show_search,
+        search_results,
+        show_bookmarks,
+        loc,
+        book_meta,
+    }
+}
+
+/// Display strings/values the reader chrome renders, derived from `loc` and `book_meta`.
+struct ReaderDisplay {
+    page_str: String,
+    chapter_str: String,
+    pct: u32,
+    chapter_title: String,
+    current_cfi: String,
+    book_title: String,
+    book_author: String,
+    book_accent: String,
+}
+
+/// Derive page/chapter labels and book title/author/accent from `loc` and `book_meta`.
+fn derive_reader_display(
+    loc: Signal<RelocateData>,
+    book_meta: Signal<Option<omnibus_shared::EbookMetadata>>,
+) -> ReaderDisplay {
+    let (page_str, chapter_str) = format_progress_labels(&loc.read());
+    let pct = loc.read().pct;
+    let chapter_title = loc.read().chapter_title.clone();
+    let current_cfi = loc.read().cfi.clone().unwrap_or_default();
+    let book_title = book_meta
+        .read()
+        .as_ref()
+        .and_then(|b| b.title.clone())
+        .unwrap_or_default();
+    let book_author = book_meta
+        .read()
+        .as_ref()
+        .and_then(|b| b.creators.first().map(|c| c.name.clone()))
+        .unwrap_or_default();
+    let book_accent = book_meta
+        .read()
+        .as_ref()
+        .and_then(|b| b.accent.clone())
+        .unwrap_or_else(|| "#3a3027".to_string());
+    ReaderDisplay {
+        page_str,
+        chapter_str,
+        pct,
+        chapter_title,
+        current_cfi,
+        book_title,
+        book_author,
+        book_accent,
     }
 }
 

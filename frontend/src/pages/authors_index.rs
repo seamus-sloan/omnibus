@@ -45,27 +45,13 @@ struct AuthorIndexFilter {
 pub fn AuthorsIndexPage() -> Element {
     let server_url = use_server_url();
     let server_url_for_cards = server_url.clone();
-    let mut authors: Signal<Vec<AuthorSummary>> = use_signal(Vec::new);
-    let mut loading = use_signal(|| true);
-    let mut error: Signal<Option<String>> = use_signal(|| None);
+    let authors: Signal<Vec<AuthorSummary>> = use_signal(Vec::new);
+    let loading = use_signal(|| true);
+    let error: Signal<Option<String>> = use_signal(|| None);
     let mut filter = use_signal(String::new);
     let mut sort = use_signal(|| Sort::Name);
 
-    let url = server_url.clone();
-    use_effect(move || {
-        let url = url.clone();
-        spawn(async move {
-            loading.set(true);
-            match data::list_authors(&url).await {
-                Ok(a) => {
-                    authors.set(a);
-                    error.set(None);
-                }
-                Err(e) => error.set(Some(e.to_string())),
-            }
-            loading.set(false);
-        });
-    });
+    use_authors_fetch_effect(server_url.clone(), authors, loading, error);
 
     if loading() {
         return rsx! {
@@ -88,49 +74,15 @@ pub fn AuthorsIndexPage() -> Element {
     let total_authors = all.len();
     let total_books: usize = all.iter().map(|a| a.book_count).sum();
 
-    // Client-side filter + sort.
     let q = filter.read().to_lowercase();
-    let mut filtered: Vec<&AuthorSummary> = if q.is_empty() {
-        all.iter().collect()
-    } else {
-        all.iter()
-            .filter(|a| a.name.to_lowercase().contains(&q))
-            .collect()
-    };
-    match sort() {
-        // Within Sort::Name the primary axis is the sort_key bucket:
-        // alpha first (`is_alpha_bucket` → false sorts before true),
-        // non-alpha (digits, punctuation, accented mononyms, etc.)
-        // trail at the end under the '#' section. Secondary axis is
-        // the lowercased key itself so cards stay alphabetical within
-        // their letter group.
-        Sort::Name => filtered.sort_by(|a, b| {
-            let ka = sort_key(a);
-            let kb = sort_key(b);
-            is_non_alpha_key(&ka)
-                .cmp(&is_non_alpha_key(&kb))
-                .then_with(|| ka.to_lowercase().cmp(&kb.to_lowercase()))
-        }),
-        Sort::BookCount => filtered.sort_by(|a, b| {
-            b.book_count
-                .cmp(&a.book_count)
-                .then_with(|| sort_key(a).to_lowercase().cmp(&sort_key(b).to_lowercase()))
-        }),
-    }
+    let mut filtered = filter_authors(&all, &q);
+    sort_authors(&mut filtered, sort());
 
     // Group by first letter of sort key (last name when available, else name).
     // Only meaningful when sorting by name.
     let show_letters = matches!(sort(), Sort::Name);
-    let mut letters: Vec<(char, Vec<&AuthorSummary>)> = Vec::new();
-    if show_letters {
-        for a in &filtered {
-            let l = first_letter(a);
-            match letters.last_mut() {
-                Some((existing, group)) if *existing == l => group.push(a),
-                _ => letters.push((l, vec![a])),
-            }
-        }
-    }
+    let letters = group_by_letter(&filtered, show_letters);
+
     // Alphabet strip: A–Z followed by a single '#' bucket for any
     // authors whose surname-equivalent doesn't start with an ASCII
     // letter (digits, punctuation, accented mononyms, …). The '#'
@@ -167,6 +119,82 @@ pub fn AuthorsIndexPage() -> Element {
             {authors_index_body(&filtered, &letters, show_letters, any_in_library, &server_url_for_cards)}
         }
     }
+}
+
+/// Fetches the full author list on mount and whenever `server_url` changes.
+fn use_authors_fetch_effect(
+    server_url: String,
+    mut authors: Signal<Vec<AuthorSummary>>,
+    mut loading: Signal<bool>,
+    mut error: Signal<Option<String>>,
+) {
+    use_effect(move || {
+        let url = server_url.clone();
+        spawn(async move {
+            loading.set(true);
+            match data::list_authors(&url).await {
+                Ok(a) => {
+                    authors.set(a);
+                    error.set(None);
+                }
+                Err(e) => error.set(Some(e.to_string())),
+            }
+            loading.set(false);
+        });
+    });
+}
+
+/// Client-side name filter (case-insensitive substring match).
+fn filter_authors<'a>(all: &'a [AuthorSummary], query: &str) -> Vec<&'a AuthorSummary> {
+    if query.is_empty() {
+        all.iter().collect()
+    } else {
+        all.iter()
+            .filter(|a| a.name.to_lowercase().contains(query))
+            .collect()
+    }
+}
+
+/// Sorts `filtered` in place along the selected axis.
+fn sort_authors(filtered: &mut [&AuthorSummary], sort: Sort) {
+    match sort {
+        // Within Sort::Name the primary axis is the sort_key bucket:
+        // alpha first (`is_alpha_bucket` → false sorts before true),
+        // non-alpha (digits, punctuation, accented mononyms, etc.)
+        // trail at the end under the '#' section. Secondary axis is
+        // the lowercased key itself so cards stay alphabetical within
+        // their letter group.
+        Sort::Name => filtered.sort_by(|a, b| {
+            let ka = sort_key(a);
+            let kb = sort_key(b);
+            is_non_alpha_key(&ka)
+                .cmp(&is_non_alpha_key(&kb))
+                .then_with(|| ka.to_lowercase().cmp(&kb.to_lowercase()))
+        }),
+        Sort::BookCount => filtered.sort_by(|a, b| {
+            b.book_count
+                .cmp(&a.book_count)
+                .then_with(|| sort_key(a).to_lowercase().cmp(&sort_key(b).to_lowercase()))
+        }),
+    }
+}
+
+/// Buckets `filtered` by first letter of `sort_key`; empty when `show_letters` is false.
+fn group_by_letter<'a>(
+    filtered: &[&'a AuthorSummary],
+    show_letters: bool,
+) -> Vec<(char, Vec<&'a AuthorSummary>)> {
+    let mut letters: Vec<(char, Vec<&AuthorSummary>)> = Vec::new();
+    if show_letters {
+        for a in filtered {
+            let l = first_letter(a);
+            match letters.last_mut() {
+                Some((existing, group)) if *existing == l => group.push(a),
+                _ => letters.push((l, vec![a])),
+            }
+        }
+    }
+    letters
 }
 
 /// Body section (plain fn, not `#[component]`, so we can keep the borrow-only
