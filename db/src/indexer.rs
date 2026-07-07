@@ -41,6 +41,19 @@ impl From<crate::settings::SettingsError> for IndexerError {
 /// thrashing the disk for users who leave the app open all day.
 pub const REFRESH_AFTER_SECS: i64 = 60 * 60;
 
+/// Above this fraction of a previously-indexed library's file-backed books,
+/// a `removed` bucket reads as a mass wipe rather than real housekeeping
+/// (see #819) — halt instead of applying it. Only checked once `removed`
+/// also clears [`MIN_REMOVED_FOR_CIRCUIT_BREAKER`], so removing the one
+/// book in a 3-book library (100%) is still ordinary housekeeping, not a
+/// suspected wipe.
+const REMOVED_FRACTION_CIRCUIT_BREAKER: f64 = 0.2;
+
+/// The fraction check above only engages once at least this many books
+/// would be removed in one pass — small libraries routinely have a single
+/// book vanish (100% of a 1-book library), which is normal, not a wipe.
+const MIN_REMOVED_FOR_CIRCUIT_BREAKER: usize = 10;
+
 /// True when a refresh should be kicked off: no state at all, or state
 /// older than [`REFRESH_AFTER_SECS`].
 ///
@@ -209,6 +222,71 @@ pub fn diff_library(
     out
 }
 
+/// True when the disk enumeration behind [`diff_library`]'s `removed`
+/// bucket cannot be trusted as a complete listing (#819): an unreadable
+/// subdirectory (`had_placeholder`), or a previously-populated library
+/// that read back with zero real entries — e.g. an NFS share whose mount
+/// hasn't landed yet reads as an empty, not erroring, directory. Either
+/// case must be treated as "we don't know", never as "the files are
+/// gone".
+fn scan_enumeration_is_partial(
+    had_placeholder: bool,
+    had_real_entry: bool,
+    db_has_existing_files: bool,
+) -> bool {
+    had_placeholder || (!had_real_entry && db_has_existing_files)
+}
+
+/// Guard the removal side of a [`ReindexDiff`] against #819: an incomplete
+/// enumeration must never mark books missing, and even a complete-looking
+/// enumeration that would flag an implausibly large fraction of a library
+/// is treated as suspicious rather than applied.
+///
+/// - `partial` (see [`scan_enumeration_is_partial`]) — clears
+///   `diff.removed` (logging what was skipped) and returns `Ok`. New /
+///   Changed / Backfill buckets, built only from files actually observed,
+///   still apply.
+/// - Otherwise, once `diff.removed` reaches
+///   [`MIN_REMOVED_FOR_CIRCUIT_BREAKER`] *and* exceeds
+///   [`REMOVED_FRACTION_CIRCUIT_BREAKER`] of `known_file_backed` (the
+///   library's current file-backed book count), returns `Err` so the
+///   caller aborts the whole reindex and the existing index is untouched
+///   — the same "preserve on failure" contract as a fatal scan error.
+fn guard_removal_pass(
+    diff: &mut ReindexDiff,
+    partial: bool,
+    known_file_backed: usize,
+    library_path: &str,
+) -> anyhow::Result<()> {
+    if partial {
+        if !diff.removed.is_empty() {
+            tracing::warn!(
+                library_path,
+                skipped = diff.removed.len(),
+                "reindex: scan enumeration was incomplete (unreadable subdirectory, or an \
+                 empty read of a previously-populated root); skipping the removal pass"
+            );
+            diff.removed.clear();
+        }
+        return Ok(());
+    }
+
+    if known_file_backed > 0 && diff.removed.len() >= MIN_REMOVED_FOR_CIRCUIT_BREAKER {
+        let fraction = diff.removed.len() as f64 / known_file_backed as f64;
+        if fraction > REMOVED_FRACTION_CIRCUIT_BREAKER {
+            anyhow::bail!(
+                "reindex of {library_path} would mark {} of {known_file_backed} books missing \
+                 ({:.0}%, above the {:.0}% safety threshold); aborting without applying the \
+                 removal — see #819",
+                diff.removed.len(),
+                fraction * 100.0,
+                REMOVED_FRACTION_CIRCUIT_BREAKER * 100.0
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Scan `library_path`, diff against the existing index, and apply only
 /// the per-book changes the diff demands. Runs the scan on the blocking
 /// pool so callers can `await` it from a normal async context without
@@ -254,7 +332,15 @@ pub async fn reindex_with_progress(
         books::list_merged_rows_for_formats(pool, library_path, ebook::EBOOK_FORMATS).await?,
     );
     let library_root: PathBuf = PathBuf::from(library_path);
-    let diff = diff_library(&stat.entries, &db_rows, &library_root);
+    let mut diff = diff_library(&stat.entries, &db_rows, &library_root);
+
+    let had_placeholder = stat.entries.iter().any(|e| e.scan_key.is_empty());
+    let had_real_entry = stat.entries.iter().any(|e| !e.scan_key.is_empty());
+    let db_has_existing_files = db_rows.iter().any(|r| r.has_file);
+    let partial =
+        scan_enumeration_is_partial(had_placeholder, had_real_entry, db_has_existing_files);
+    let known_file_backed = db_rows.iter().filter(|r| r.has_file).count();
+    guard_removal_pass(&mut diff, partial, known_file_backed, library_path)?;
 
     // Parse Phase B only for the buckets that need it.
     let new_targets = diff.new.clone();
@@ -375,7 +461,18 @@ pub async fn reindex_audiobooks_with_progress(
     );
     let library_root: PathBuf = PathBuf::from(library_path);
     let groups_as_stat = project_groups_to_stat(&groups);
-    let diff = diff_library(&groups_as_stat, &db_rows, &library_root);
+    let mut diff = diff_library(&groups_as_stat, &db_rows, &library_root);
+
+    // `project_groups_to_stat` filters out empty-`scan_key` placeholder
+    // groups, so the partiality signal must be read off `groups` (the
+    // pre-projection list) rather than `groups_as_stat`.
+    let had_placeholder = groups.iter().any(|g| g.scan_key.is_empty());
+    let had_real_entry = groups.iter().any(|g| !g.scan_key.is_empty());
+    let db_has_existing_files = db_rows.iter().any(|r| r.has_file);
+    let partial =
+        scan_enumeration_is_partial(had_placeholder, had_real_entry, db_has_existing_files);
+    let known_file_backed = db_rows.iter().filter(|r| r.has_file).count();
+    guard_removal_pass(&mut diff, partial, known_file_backed, library_path)?;
 
     // Phase B: parse only the New and Changed groups.
     let groups_by_group_path: std::collections::HashMap<String, audiobook::AudiobookGroup> = groups
