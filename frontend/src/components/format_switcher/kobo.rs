@@ -1,4 +1,4 @@
-//! F4.1 "Send to Kobo" family: the interactive [`SendToKoboButton`], its
+//! "Send to Kobo" family: the interactive [`SendToKoboButton`], its
 //! per-row action helper, the File System Access write flow, and the pure
 //! path-sanitizing helpers that nest the KEPUB under `<Author>/<Title>/`.
 

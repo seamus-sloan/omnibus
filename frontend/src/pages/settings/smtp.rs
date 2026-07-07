@@ -1,4 +1,4 @@
-//! Admin-only SMTP relay config card (F4.3) for the settings page.
+//! Admin-only SMTP relay config card for the settings page.
 //!
 //! Backs Send-to-Kindle: loads the masked config on mount, saves/clears the
 //! stored secret, and fires a test email. The password is never read back to

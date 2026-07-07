@@ -1,4 +1,4 @@
-//! F4.3 "Send to Kindle" family: the interactive [`SendToKindleButton`], its
+//! "Send to Kindle" family: the interactive [`SendToKindleButton`], its
 //! per-row action helper, and the worker-poll that maps the enqueued job's
 //! terminal state to the in-place toast.
 
@@ -110,11 +110,12 @@ pub fn SendToKindleButton(
     }
 }
 
-/// Poll the worker until the enqueued send reaches a terminal state, mapping it
-/// to the toast's `(is_error, message)` pair. `Ok(None)` means the task id went
-/// unknown before we saw a terminal state (evicted past the worker's retention
-/// window) — rare under sub-second polling, surfaced as a soft error since we
-/// can't confirm delivery.
+/// Poll the worker until the enqueued send reaches a terminal state, returning
+/// the toast's `(is_error, message)` pair — `false` on delivery, `true` with an
+/// error message otherwise. When the underlying `kindle_send_status` query
+/// itself returns `Ok(None)`, the task id went unknown before we saw a terminal
+/// state (evicted past the worker's retention window) — rare under sub-second
+/// polling, surfaced as a soft error since we can't confirm delivery.
 #[cfg(not(feature = "mobile"))]
 async fn poll_send_result(url: &str, task_id: u64) -> (bool, String) {
     const POLL_INTERVAL_MS: u32 = 700;
