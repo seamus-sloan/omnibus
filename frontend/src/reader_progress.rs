@@ -1,9 +1,8 @@
 //! Reading-position persistence — saved EPUB CFI per book. Web stores
 //! per-UUID in `localStorage`, mobile keeps an in-memory map, SSR is a
-//! no-op. Offline / first-paint cache for the progress-sync endpoint:
-//! reader reads sync, saves write here AND fire-and-forget POST.
-//! Kept flat: each `load`/`save` impl is a mutually-exclusive `#[cfg]` variant
-//! of the same signature, so per-target submodules would only add indirection.
+//! no-op. Offline / first-paint cache for the progress-sync endpoint.
+//! Kept flat: each impl is a `#[cfg]` variant of one signature, so
+//! per-target submodules would only add indirection.
 
 #[cfg(feature = "web")]
 const STORAGE_PREFIX: &str = "omn.reading::";

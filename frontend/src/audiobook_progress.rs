@@ -1,10 +1,8 @@
 //! Listening-position persistence — the saved `currentTime` (seconds,
 //! float) for each audiobook. Mirrors [`crate::reader_progress`] in shape
-//! (web `localStorage`, mobile in-memory map, server no-op); also the
-//! offline / first-paint cache layer the listen page reads before
-//! reconciling against the `POST /api/progress` sync endpoint.
-//! Kept flat: each `load`/`save` impl is a mutually-exclusive `#[cfg]` variant
-//! of the same signature, so per-target submodules would only add indirection.
+//! (web `localStorage`, mobile in-memory map, server no-op) and caches the
+//! first-paint position the listen page reconciles against `POST /api/progress`.
+//! Kept flat: each impl is a `#[cfg]` variant of one signature (no submodules).
 
 #[cfg(feature = "web")]
 const STORAGE_PREFIX: &str = "omn.listening::";

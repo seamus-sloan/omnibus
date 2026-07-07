@@ -1,9 +1,8 @@
 //! Per-library view-preference persistence for [`ViewPrefs`]. Web stores
 //! per library-path in `localStorage`, mobile keeps an in-memory map, SSR
 //! returns defaults so first-hydration markup matches the WASM client.
-//! Shape lives in `omnibus-shared` so a future server endpoint can reuse it.
-//! Kept flat: each `load`/`save` impl is a mutually-exclusive `#[cfg]` variant
-//! of the same signature, so per-target submodules would only add indirection.
+//! Shape lives in `omnibus-shared`. Kept flat: each impl is a `#[cfg]`
+//! variant of one signature, so per-target submodules would only indirect.
 
 use omnibus_shared::ViewPrefs;
 
