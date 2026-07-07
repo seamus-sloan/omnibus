@@ -10,6 +10,7 @@ use omnibus_shared::{AuthorDetail, EbookMetadata};
 
 use crate::components::atrium::Cover;
 use crate::components::author_photo_edit::AuthorPhotoEditOverlay;
+use crate::components::{PageError, PageLoading, PageNotFound};
 use crate::{data, use_server_url, Route};
 
 /// Renders the author discovery page.
@@ -46,21 +47,13 @@ pub fn AuthorPage(id: i64) -> Element {
     }));
 
     if loading() {
-        return rsx! {
-            p { class: "subtitle", "Loading\u{2026}" }
-        };
+        return rsx! { PageLoading {} };
     }
     if let Some(msg) = error() {
-        return rsx! {
-            p { role: "alert", class: "subtitle", "{msg}" }
-            Link { to: Route::Landing {}, class: "btn", "Back to library" }
-        };
+        return rsx! { PageError { message: msg, back_to: Route::Landing {} } };
     }
     let Some(a) = author() else {
-        return rsx! {
-            p { class: "subtitle", "Author not found." }
-            Link { to: Route::Landing {}, class: "btn", "Back to library" }
-        };
+        return rsx! { PageNotFound { subject: "Author", back_to: Route::Landing {} } };
     };
 
     // `is_admin` starts at `false` and only flips to `true` after the

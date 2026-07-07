@@ -38,7 +38,7 @@ type CallbackHolder =
 /// highlights into the viewer. No-op on non-web targets.
 #[cfg(feature = "web")]
 pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs: InteropSignals) {
-    use super::reader_call;
+    use super::{json_literal, reader_call_json};
 
     let cb_holder: CallbackHolder =
         use_hook(|| std::rc::Rc::new(std::cell::RefCell::new(Vec::new())));
@@ -64,17 +64,13 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
             Some(fid) => format!("/api/ebooks/{uuid}/file?file_id={fid}"),
             None => format!("/api/ebooks/{uuid}/file"),
         };
-        let url_lit = serde_json::to_string(&file_url).unwrap_or_else(|_| "\"\"".into());
-        let theme_lit = serde_json::to_string(theme_name).unwrap_or_else(|_| "\"dark\"".into());
-        let font_family_lit =
-            serde_json::to_string(prefs.typeface.read().to_css()).unwrap_or_else(|_| "null".into());
-        let line_height_lit = serde_json::to_string(prefs.line_spacing.read().to_css())
-            .unwrap_or_else(|_| "null".into());
-        let max_width_lit =
-            serde_json::to_string(prefs.margins.read().to_css()).unwrap_or_else(|_| "null".into());
+        let url_lit = json_literal(&file_url);
+        let theme_lit = json_literal(theme_name);
+        let font_family_lit = json_literal(prefs.typeface.read().to_css());
+        let line_height_lit = json_literal(prefs.line_spacing.read().to_css());
+        let max_width_lit = json_literal(prefs.margins.read().to_css());
         let justify_val = *prefs.justify.read();
-        let spread_lit = serde_json::to_string(prefs.spread.read().to_css())
-            .unwrap_or_else(|_| "\"auto\"".into());
+        let spread_lit = json_literal(prefs.spread.read().to_css());
 
         if let Some(window) = web_sys::window() {
             *cb_holder.borrow_mut() = register_window_callbacks(&window, uuid_cb.clone(), sigs);
@@ -99,9 +95,7 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
     }));
 
     use_effect(move || {
-        let attr_lit =
-            serde_json::to_string(theme.read().as_attr()).unwrap_or_else(|_| "\"dark\"".into());
-        reader_call("setTheme", &attr_lit);
+        reader_call_json("setTheme", theme.read().as_attr());
     });
 }
 
@@ -213,7 +207,7 @@ async fn spawn_bootstrap_and_highlights(
     mut highlights: Signal<Vec<Highlight>>,
 ) {
     use super::bootstrap::{reader_bootstrap_js, BootstrapArgs};
-    use super::reader_call;
+    use super::{json_literal, reader_call_json2};
     use crate::data;
 
     let server_cfi = crate::data::get_progress("", &uuid, omnibus_shared::ProgressFormat::Epub)
@@ -222,7 +216,7 @@ async fn spawn_bootstrap_and_highlights(
         .flatten()
         .and_then(|r| r.epub_cfi);
     let chosen = server_cfi.or(local_saved);
-    let cfi_arg = serde_json::to_string(&chosen).unwrap_or_else(|_| "null".into());
+    let cfi_arg = json_literal(&chosen);
     let js = reader_bootstrap_js(&BootstrapArgs {
         url_lit: &lits.url_lit,
         cfi_arg: &cfi_arg,
@@ -238,11 +232,7 @@ async fn spawn_bootstrap_and_highlights(
 
     if let Ok(list) = data::list_highlights("", &uuid).await {
         for h in &list {
-            let cfi_lit =
-                serde_json::to_string(&h.epub_cfi_range).unwrap_or_else(|_| "\"\"".into());
-            let color_lit =
-                serde_json::to_string(h.color.as_str()).unwrap_or_else(|_| "\"amber\"".into());
-            reader_call("addAnnotation", &format!("{cfi_lit}, {color_lit}"));
+            reader_call_json2("addAnnotation", &h.epub_cfi_range, h.color.as_str());
         }
         highlights.set(list);
     }

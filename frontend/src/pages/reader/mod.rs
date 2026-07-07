@@ -51,6 +51,31 @@ fn reader_call(method: &str, arg_js: &str) {
     let _ = dioxus::document::eval(&js);
 }
 
+/// Encode `value` as a JS literal, falling back to `null` on the
+/// unreachable-in-practice encode failure (every caller passes a
+/// `str`/enum/bool, none of which can fail to serialize).
+#[cfg(feature = "web")]
+fn json_literal<T: serde::Serialize + ?Sized>(value: &T) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "null".into())
+}
+
+/// [`reader_call`] with a single JSON-encoded argument — the common case.
+#[cfg(feature = "web")]
+fn reader_call_json<T: serde::Serialize + ?Sized>(method: &str, value: &T) {
+    reader_call(method, &json_literal(value));
+}
+
+/// [`reader_call`] with two JSON-encoded arguments, e.g.
+/// `addAnnotation(cfi, color)`.
+#[cfg(feature = "web")]
+fn reader_call_json2<A: serde::Serialize + ?Sized, B: serde::Serialize + ?Sized>(
+    method: &str,
+    a: &A,
+    b: &B,
+) {
+    reader_call(method, &format!("{}, {}", json_literal(a), json_literal(b)));
+}
+
 /// Full-screen EPUB reader page (web-feature interop, all-target chrome).
 #[component]
 pub fn BookReadPage(uuid: String) -> Element {
@@ -472,22 +497,14 @@ fn ReaderSelectionPopover(
             },
             on_copy: move |text: String| {
                 #[cfg(feature = "web")]
-                {
-                    let lit = serde_json::to_string(&text)
-                        .unwrap_or_else(|_| "\"\"".into());
-                    reader_call("copyText", &lit);
-                }
+                reader_call_json("copyText", &text);
                 let _ = &text;
                 let mut selection = selection;
                 selection.set(None);
             },
             on_share: move |text: String| {
                 #[cfg(feature = "web")]
-                {
-                    let lit = serde_json::to_string(&text)
-                        .unwrap_or_else(|_| "\"\"".into());
-                    reader_call("shareText", &lit);
-                }
+                reader_call_json("shareText", &text);
                 let _ = &text;
                 let mut selection = selection;
                 selection.set(None);
@@ -540,10 +557,7 @@ fn ReaderOverlays(meta: OverlayMeta, panels: ReaderPanelSignals) -> Element {
                 current_title: chapter_title.clone(),
                 on_navigate: move |href: String| {
                     #[cfg(feature = "web")]
-                    {
-                        let lit = serde_json::to_string(&href).unwrap_or_else(|_| "\"\"".into());
-                        reader_call("display", &lit);
-                    }
+                    reader_call_json("display", &href);
                     let _ = &href;
                     let mut show_toc = show_toc;
                     show_toc.set(false);
@@ -582,18 +596,12 @@ fn ReaderOverlays(meta: OverlayMeta, panels: ReaderPanelSignals) -> Element {
                 results: search_results,
                 on_query: move |q: String| {
                     #[cfg(feature = "web")]
-                    {
-                        let lit = serde_json::to_string(&q).unwrap_or_else(|_| "\"\"".into());
-                        reader_call("search", &lit);
-                    }
+                    reader_call_json("search", &q);
                     let _ = &q;
                 },
                 on_navigate: move |cfi: String| {
                     #[cfg(feature = "web")]
-                    {
-                        let lit = serde_json::to_string(&cfi).unwrap_or_else(|_| "\"\"".into());
-                        reader_call("display", &lit);
-                    }
+                    reader_call_json("display", &cfi);
                     let _ = &cfi;
                     let mut show_search = show_search;
                     show_search.set(false);
@@ -612,10 +620,7 @@ fn ReaderOverlays(meta: OverlayMeta, panels: ReaderPanelSignals) -> Element {
                 current_label: chapter_title.clone(),
                 on_navigate: move |cfi: String| {
                     #[cfg(feature = "web")]
-                    {
-                        let lit = serde_json::to_string(&cfi).unwrap_or_else(|_| "\"\"".into());
-                        reader_call("display", &lit);
-                    }
+                    reader_call_json("display", &cfi);
                     let _ = &cfi;
                     let mut show_bookmarks = show_bookmarks;
                     show_bookmarks.set(false);

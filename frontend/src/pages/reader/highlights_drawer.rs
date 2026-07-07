@@ -19,20 +19,14 @@ const PALETTE: [(HighlightColor, &str); 5] = [
 #[cfg_attr(not(feature = "web"), allow(unused_variables))]
 fn navigate_to(cfi: &str) {
     #[cfg(feature = "web")]
-    {
-        let lit = serde_json::to_string(cfi).unwrap_or_else(|_| "\"\"".into());
-        super::reader_call("display", &lit);
-    }
+    super::reader_call_json("display", cfi);
 }
 
 /// Copy text to the clipboard via the glue (web only).
 #[cfg_attr(not(feature = "web"), allow(unused_variables))]
 fn copy_text(text: &str) {
     #[cfg(feature = "web")]
-    {
-        let lit = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
-        super::reader_call("copyText", &lit);
-    }
+    super::reader_call_json("copyText", text);
 }
 
 /// Repaint a highlight's annotation in place: drop the old swatch and re-add
@@ -42,11 +36,8 @@ fn copy_text(text: &str) {
 fn reannotate(cfi: &str, color: HighlightColor) {
     #[cfg(feature = "web")]
     {
-        let cfi_lit = serde_json::to_string(cfi).unwrap_or_else(|_| "\"\"".into());
-        super::reader_call("removeAnnotation", &cfi_lit);
-        let color_lit =
-            serde_json::to_string(color.as_str()).unwrap_or_else(|_| "\"amber\"".into());
-        super::reader_call("addAnnotation", &format!("{cfi_lit}, {color_lit}"));
+        super::reader_call_json("removeAnnotation", cfi);
+        super::reader_call_json2("addAnnotation", cfi, color.as_str());
     }
 }
 
@@ -199,10 +190,7 @@ fn HighlightRow(
         spawn(async move {
             if crate::data::delete_highlight("", id).await.is_ok() {
                 #[cfg(feature = "web")]
-                {
-                    let lit = serde_json::to_string(&cfi).unwrap_or_else(|_| "\"\"".into());
-                    super::reader_call("removeAnnotation", &lit);
-                }
+                super::reader_call_json("removeAnnotation", &cfi);
                 let _ = &cfi;
                 highlights.write().retain(|h| h.id != id);
             }

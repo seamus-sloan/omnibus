@@ -33,12 +33,7 @@ pub(crate) fn spawn_create_highlight(
     post: PostCreate,
 ) {
     #[cfg(feature = "web")]
-    {
-        let cfi_lit = serde_json::to_string(&cfi).unwrap_or_else(|_| "\"\"".into());
-        let color_lit =
-            serde_json::to_string(color.as_str()).unwrap_or_else(|_| "\"amber\"".into());
-        super::reader_call("addAnnotation", &format!("{cfi_lit}, {color_lit}"));
-    }
+    super::reader_call_json2("addAnnotation", &cfi, color.as_str());
     let create = omnibus_shared::CreateHighlight {
         book_uuid: uuid,
         epub_cfi_range: cfi.clone(),
@@ -57,10 +52,7 @@ pub(crate) fn spawn_create_highlight(
             }
             Err(_) => {
                 #[cfg(feature = "web")]
-                {
-                    let cfi_lit = serde_json::to_string(&cfi).unwrap_or_else(|_| "\"\"".into());
-                    super::reader_call("removeAnnotation", &cfi_lit);
-                }
+                super::reader_call_json("removeAnnotation", &cfi);
                 let _ = &cfi;
             }
         }

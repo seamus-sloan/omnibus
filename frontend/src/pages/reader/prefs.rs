@@ -11,6 +11,8 @@ use crate::components::atrium::{persist_theme, Theme};
 #[cfg(feature = "web")]
 use super::reader_call;
 #[cfg(feature = "web")]
+use super::reader_call_json;
+#[cfg(feature = "web")]
 use super::typography::save_reader_pref;
 use super::typography::{LineSpacing, Margins, Spread, Typeface};
 
@@ -73,8 +75,7 @@ impl ReaderPrefs {
         typeface.set(t);
         #[cfg(feature = "web")]
         {
-            let lit = serde_json::to_string(t.to_css()).unwrap_or_else(|_| "null".into());
-            reader_call("setFont", &lit);
+            reader_call_json("setFont", t.to_css());
             save_reader_pref("omn.typeface", t.to_storage());
         }
     }
@@ -85,8 +86,7 @@ impl ReaderPrefs {
         line_spacing.set(ls);
         #[cfg(feature = "web")]
         {
-            let lit = serde_json::to_string(ls.to_css()).unwrap_or_else(|_| "null".into());
-            reader_call("setLineHeight", &lit);
+            reader_call_json("setLineHeight", ls.to_css());
             save_reader_pref("omn.lineSpacing", ls.to_storage());
         }
     }
@@ -97,8 +97,7 @@ impl ReaderPrefs {
         margins.set(m);
         #[cfg(feature = "web")]
         {
-            let lit = serde_json::to_string(m.to_css()).unwrap_or_else(|_| "null".into());
-            reader_call("setMargins", &lit);
+            reader_call_json("setMargins", m.to_css());
             save_reader_pref("omn.margins", m.to_storage());
         }
     }
@@ -109,8 +108,7 @@ impl ReaderPrefs {
         spread.set(s);
         #[cfg(feature = "web")]
         {
-            let lit = serde_json::to_string(s.to_css()).unwrap_or_else(|_| "\"auto\"".into());
-            reader_call("setSpread", &lit);
+            reader_call_json("setSpread", s.to_css());
             save_reader_pref("omn.spread", s.to_storage());
         }
     }

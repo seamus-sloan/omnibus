@@ -94,8 +94,7 @@ pub(super) fn QuotePanel(
                     "filename": "omnibus-quote",
                 })
                 .to_string();
-                let arg = serde_json::to_string(&payload).unwrap_or_else(|_| "\"{}\"".into());
-                super::reader_call("exportQuoteCard", &arg);
+                super::reader_call_json("exportQuoteCard", &payload);
             }
             #[cfg(not(feature = "web"))]
             let _ = (&dl_text, &dl_author, &dl_subtitle);
