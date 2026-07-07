@@ -31,7 +31,7 @@ thiserror = "2"
 # (`macros`, `rt-multi-thread`, `sync`, `time`).
 tokio = { version = "1", default-features = false }
 tracing = "0.1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 tempfile = "3"
 
 # Pin every dioxus-* crate to the v0.7.9 monorepo tag. The `dx` CLI we ship via
