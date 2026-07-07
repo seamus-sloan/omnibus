@@ -133,11 +133,6 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
             &on_close,
         );
     };
-    let SelectionView {
-        filtered,
-        typed,
-        show_create_row,
-    } = selection;
 
     rsx! {
         Fragment {
@@ -150,40 +145,100 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                     on_change_remove.call(new_values);
                 },
             }
-            div { class: "chip-editor-input-wrap",
-                ChipInput {
-                    input,
-                    placeholder: props.placeholder.clone(),
-                    input_class: props.input_class.clone(),
-                    testid: format!("{}-input", props.testid_prefix),
-                    autofocus: props.autofocus,
-                    on_focus: move |_| {
-                        focused.set(true);
-                        suppress_open.set(false);
+            ChipInputArea {
+                input,
+                placeholder: props.placeholder.clone(),
+                input_class: props.input_class.clone(),
+                testid_prefix: props.testid_prefix.clone(),
+                autofocus: props.autofocus,
+                dropdown_header: props.dropdown_header.clone(),
+                selection,
+                highlight: highlight(),
+                on_focus: move |_| {
+                    focused.set(true);
+                    suppress_open.set(false);
+                },
+                on_blur: move |_| {
+                    focused.set(false);
+                    highlight.set(None);
+                },
+                on_input: move |value: String| {
+                    input.set(value);
+                    highlight.set(None);
+                    suppress_open.set(false);
+                },
+                on_keydown,
+                on_pick: move |name: String| commit(name),
+            }
+        }
+    }
+}
+
+/// Props for the [`ChipInputArea`] sub-component.
+#[derive(Props, Clone, PartialEq)]
+struct ChipInputAreaProps {
+    input: Signal<String>,
+    placeholder: String,
+    input_class: String,
+    testid_prefix: String,
+    autofocus: bool,
+    dropdown_header: String,
+    selection: SelectionView,
+    highlight: Option<usize>,
+    on_focus: EventHandler<()>,
+    on_blur: EventHandler<()>,
+    on_input: EventHandler<String>,
+    on_keydown: EventHandler<Event<KeyboardData>>,
+    on_pick: EventHandler<String>,
+}
+
+/// Input field plus its suggestion dropdown.
+#[component]
+fn ChipInputArea(props: ChipInputAreaProps) -> Element {
+    let ChipInputAreaProps {
+        input,
+        placeholder,
+        input_class,
+        testid_prefix,
+        autofocus,
+        dropdown_header,
+        selection,
+        highlight,
+        on_focus,
+        on_blur,
+        on_input,
+        on_keydown,
+        on_pick,
+    } = props;
+    let SelectionView {
+        filtered,
+        typed,
+        show_create_row,
+    } = selection;
+    rsx! {
+        div { class: "chip-editor-input-wrap",
+            ChipInput {
+                input,
+                placeholder,
+                input_class,
+                testid: format!("{testid_prefix}-input"),
+                autofocus,
+                on_focus,
+                on_blur,
+                on_input,
+                on_keydown,
+            }
+            if !filtered.is_empty() || show_create_row {
+                SuggestionDropdown {
+                    selection: DropdownSelectionState {
+                        filtered: filtered.clone(),
+                        show_create_row,
+                        typed: typed.clone(),
+                        highlight,
                     },
-                    on_blur: move |_| {
-                        focused.set(false);
-                        highlight.set(None);
-                    },
-                    on_input: move |value: String| {
-                        input.set(value);
-                        highlight.set(None);
-                        suppress_open.set(false);
-                    },
-                    on_keydown,
-                }
-                if !filtered.is_empty() || show_create_row {
-                    SuggestionDropdown {
-                        selection: DropdownSelectionState {
-                            filtered: filtered.clone(),
-                            show_create_row,
-                            typed: typed.clone(),
-                            highlight: highlight(),
-                        },
-                        dropdown_header: props.dropdown_header.clone(),
-                        testid: format!("{}-suggestions", props.testid_prefix),
-                        on_pick: move |name: String| commit(name),
-                    }
+                    dropdown_header,
+                    testid: format!("{testid_prefix}-suggestions"),
+                    on_pick,
                 }
             }
         }
@@ -191,7 +246,7 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
 }
 
 /// Per-render derived view bundling the filtered suggestion rows, the typed text, and the Create-row flag.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct SelectionView {
     filtered: Vec<SuggestionItem>,
     typed: String,
