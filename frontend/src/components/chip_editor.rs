@@ -192,8 +192,7 @@ struct ChipInputAreaProps {
     on_pick: EventHandler<String>,
 }
 
-/// Input + suggestion-dropdown half of `ChipEditor`'s markup, split out so
-/// `ChipEditor` itself stays a thin composition of `ChipList` + this area.
+/// Input field plus its suggestion dropdown.
 #[component]
 fn ChipInputArea(props: ChipInputAreaProps) -> Element {
     let ChipInputAreaProps {

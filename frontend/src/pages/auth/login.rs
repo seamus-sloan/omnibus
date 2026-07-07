@@ -147,8 +147,7 @@ pub fn LoginPage() -> Element {
     out
 }
 
-/// Mobile login body: connected-server bar plus the credentials form. Split
-/// out of `LoginPage` so the mobile branch reads as a plain composition.
+/// Mobile login body: connected-server bar plus the credentials form.
 #[cfg(feature = "mobile")]
 #[component]
 fn MobileLoginForm(

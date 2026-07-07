@@ -135,8 +135,6 @@ pub fn BookReadPage(uuid: String) -> Element {
 
 /// Every signal `BookReadPage` owns, minus the reader-prefs context (which
 /// is published but not otherwise threaded through the component body).
-/// Returned by [`use_reader_signals`] so the page body stays a thin
-/// composition of setup → handlers → display → markup.
 #[derive(Copy, Clone)]
 struct ReaderSignals {
     status: Signal<ReaderStatus>,
@@ -223,9 +221,7 @@ fn use_reader_signals(uuid: &str, theme: Signal<Theme>) -> ReaderSignals {
     }
 }
 
-/// Display strings/values the reader chrome renders, derived from `loc` +
-/// `book_meta`. Split out of `BookReadPage` so the render-prep stage reads
-/// as one call instead of six sequential signal reads.
+/// Display strings/values the reader chrome renders, derived from `loc` and `book_meta`.
 struct ReaderDisplay {
     page_str: String,
     chapter_str: String,
@@ -237,6 +233,7 @@ struct ReaderDisplay {
     book_accent: String,
 }
 
+/// Derive page/chapter labels and book title/author/accent from `loc` and `book_meta`.
 fn derive_reader_display(
     loc: Signal<RelocateData>,
     book_meta: Signal<Option<omnibus_shared::EbookMetadata>>,
