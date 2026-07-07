@@ -227,6 +227,24 @@ skip = [
     # 0.26 from sqlx-core; 1.0 from hyper-rustls (reqwest).
     # Collapses when sqlx bumps its rustls deps.
     { name = "webpki-roots", version = "0.26.11" },
+
+    # --- reqwest (issue #774 bump) ---
+    # 0.12.28 via dioxus-fullstack (git-pinned Dioxus tag); 0.13.4 is our own
+    # direct dep (workspace + db + frontend/mobile). Collapses when Dioxus
+    # bumps its own reqwest dep past 0.13.
+    { name = "reqwest", version = "0.12.28" },
+
+    # --- axum-extra (issue #774 bump) ---
+    # 0.10.3 via dioxus-server (git-pinned Dioxus tag); 0.12.6 is our own
+    # direct dep in server/Cargo.toml. Collapses when Dioxus bumps its own
+    # axum-extra dep past 0.12.
+    { name = "axum-extra", version = "0.10.3" },
+
+    # --- tower-http (issue #774 bump) ---
+    # 0.6.11 via dioxus-fullstack/dioxus-server (git-pinned Dioxus tag);
+    # 0.7.0 is our own direct dep in server/Cargo.toml. Collapses when Dioxus
+    # bumps its own tower-http dep past 0.7.
+    { name = "tower-http", version = "0.6.11" },
 ]
 
 # ---------------------------------------------------------------------------

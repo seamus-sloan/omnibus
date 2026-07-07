@@ -1,6 +1,6 @@
 # Dependency Audit — Cargo.lock Duplicate Families
 
-Last updated: 2026-06-09 (issue #412).
+Last updated: 2026-07-07 (issue #774).
 
 Run `cargo tree -d` and inspect the output any time Dioxus or Axum are bumped.
 The `deny.toml` `[bans]` section has matching `skip` entries for all accepted
@@ -21,6 +21,9 @@ this list.
 | `convert_case` | 0.4.0, 0.8.0, 0.10.0 | 0.4 from `derive_more 0.99.20` (proc-macro path, transitive via Dioxus desktop/mobile shells); 0.8 from Dioxus proc-macro crates (`dioxus-core-macro`, `dioxus-html-internal-macro`, `dioxus-stores-macro`); 0.10 from `derive_more-impl` (pulled by `dioxus-fullstack`) | **blocked by upstream** | Pure proc-macro dependency; not in any runtime binary image. |
 | `rand` | 0.7.3, 0.8.6, 0.9.4 | 0.7 from `phf_generator 0.8.0` (build dep of `ammonia` → `html5ever` chain); 0.8 from a separate `phf_generator` path; 0.9 from `rand_core@0.9` (via tungstenite) | **blocked by upstream** | The 0.7 and 0.8 copies are build-only (`phf_codegen` / `string_cache_codegen`) and never link into the runtime binary. |
 | `webpki-roots` | 0.26.11, 1.0.7 | 0.26 from `sqlx-core`; 1.0.7 from `hyper-rustls` (reqwest) | **blocked by upstream** | sqlx-core pins 0.26; reqwest/hyper-rustls have moved to 1.x. Collapses when sqlx bumps its rustls deps. |
+| `reqwest` | 0.12.28, 0.13.4 | 0.12.28 via `dioxus-fullstack` (git-pinned Dioxus tag); 0.13.4 is our own direct dep (workspace + `db` + `frontend` mobile feature) | **blocked by upstream** | Bumped to 0.13 for issue #774; the 0.12 copy remains only because `dioxus-fullstack` depends on it directly. Collapses when Dioxus bumps its own `reqwest` past 0.13. |
+| `axum-extra` | 0.10.3, 0.12.6 | 0.10.3 via `dioxus-server` (git-pinned Dioxus tag); 0.12.6 is our own direct dep in `server/Cargo.toml` | **blocked by upstream** | Bumped to 0.12 for issue #774. Collapses when Dioxus bumps its own `axum-extra` past 0.12. |
+| `tower-http` | 0.6.11, 0.7.0 | 0.6.11 via `dioxus-fullstack`/`dioxus-server` (git-pinned Dioxus tag); 0.7.0 is our own direct dep in `server/Cargo.toml` | **blocked by upstream** | Bumped to 0.7 for issue #774. Collapses when Dioxus bumps its own `tower-http` past 0.7. |
 | `digest` | 0.10.7 (×2) | Both consumers are `sha1` (axum/tungstenite) + `blake2`/`sha2` (argon2/sqlx) | N/A — same version | `cargo tree -d` shows two entry paths to the same version (different consumers). No actual duplicate in the lockfile. |
 | `bytes`, `futures-*`, `num-traits`, `tokio`, `manganis-core` | (shown ×2 each) | Multiple downstream consumers | N/A — same version | Same pattern as `digest`: one version, multiple reverse-dependency entry points in the `cargo tree -d` output. Not true duplicates. |
 

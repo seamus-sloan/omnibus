@@ -17,8 +17,8 @@ serde_json = { workspace = true, optional = true }
 # default-members check). Version matches `omnibus-db`.
 thiserror.workspace = true
 reqwest = { workspace = true, optional = true, features = ["multipart"] }
-gloo-net = { version = "0.6", default-features = false, features = ["http", "json"], optional = true }
-gloo-timers = { version = "0.3", features = ["futures"], optional = true }
+gloo-net = { version = "0.7", default-features = false, features = ["http", "json"], optional = true }
+gloo-timers = { version = "0.4", features = ["futures"], optional = true }
 # `web-sys` is enabled only on the WASM client for `Window::local_storage()`.
 # F1.3 view-mode / sort / filter prefs are persisted there per library path.
 # F1.11: FormData/Blob/BlobPropertyBag are used by `data::upload_author_photo`
@@ -34,6 +34,8 @@ js-sys = { version = "0.3", optional = true }
 # pulled in with no default features so each consuming feature opts into
 # only what it needs — mobile gets `sync` for `watch`, server gets the
 # multi-thread runtime + macros for `#[tokio::main]`-style usage in rpc.rs.
+# Held back at 0.8 — see the rationale on `omnibus-db`'s `sqlx` dep in
+# db/Cargo.toml (issue #774). Must stay lock-stepped with `omnibus-db`.
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"], optional = true }
 tokio = { workspace = true, optional = true }
 # Server-side structured logging for #[cfg(feature = "server")] code paths
