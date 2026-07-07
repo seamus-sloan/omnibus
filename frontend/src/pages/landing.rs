@@ -322,7 +322,23 @@ pub fn LandingPage() -> Element {
     // only the presentation branches. (Mobile is a separate build, so this
     // cfg split doesn't affect web SSR/WASM hydration parity — rule 07.)
     #[cfg(feature = "mobile")]
-    let body = rsx! {
+    let body = mobile_landing_body(view, handlers, server_url);
+
+    #[cfg(not(feature = "mobile"))]
+    let body = web_landing_body(&sigs, view, handlers, server_url);
+
+    body
+}
+
+/// Mobile presentation branch of [`LandingPage`]: a single compact grid, no
+/// admin table or suggestion pools.
+#[cfg(feature = "mobile")]
+fn mobile_landing_body(
+    view: LandingViewState,
+    handlers: LandingHandlers,
+    server_url: String,
+) -> Element {
+    rsx! {
         mobile::MobileLanding {
             book_count: view.book_count,
             books: view.visible_books,
@@ -332,65 +348,70 @@ pub fn LandingPage() -> Element {
             on_load_more: handlers.on_load_more,
             server_url,
         }
-    };
+    }
+}
 
-    #[cfg(not(feature = "mobile"))]
-    let body = {
-        let prefs = sigs.prefs;
-        let LandingHandlers {
-            on_prefs_change_header,
-            on_prefs_change_content,
-            on_load_more,
-            on_clear_filters,
-        } = handlers;
-        rsx! {
-            div { class: "shelf-layout",
-                ShelvesRail { active: RailActive::All }
-                div { class: "shelf-main",
-                    LandingHeader {
-                        view: LandingHeaderView {
-                            path_subtitle: view.path_subtitle,
-                            book_count: view.book_count,
-                            path_missing: view.path_missing,
-                            page_error: view.page_error.clone(),
-                            lib_err: view.lib_err.clone(),
+/// Web presentation branch of [`LandingPage`]: shelves rail + header +
+/// grid/table content, wired to the admin table context and suggestion pools.
+#[cfg(not(feature = "mobile"))]
+fn web_landing_body(
+    sigs: &LandingSignals,
+    view: LandingViewState,
+    handlers: LandingHandlers,
+    server_url: String,
+) -> Element {
+    let prefs = sigs.prefs;
+    let LandingHandlers {
+        on_prefs_change_header,
+        on_prefs_change_content,
+        on_load_more,
+        on_clear_filters,
+    } = handlers;
+    rsx! {
+        div { class: "shelf-layout",
+            ShelvesRail { active: RailActive::All }
+            div { class: "shelf-main",
+                LandingHeader {
+                    view: LandingHeaderView {
+                        path_subtitle: view.path_subtitle,
+                        book_count: view.book_count,
+                        path_missing: view.path_missing,
+                        page_error: view.page_error.clone(),
+                        lib_err: view.lib_err.clone(),
+                    },
+                    prefs: prefs(),
+                    on_prefs_change: on_prefs_change_header,
+                }
+
+                LandingContent {
+                    ..LandingContentProps {
+                        books: BooksView {
+                            is_loading: view.is_loading,
+                            visible_books: view.visible_books,
+                            visible_is_empty: view.visible_is_empty,
+                            books_empty: view.books_empty,
+                            lib_err: view.lib_err,
+                            page_error: view.page_error,
+                            has_more: view.has_more,
+                            is_loading_more: view.is_loading_more,
                         },
                         prefs: prefs(),
-                        on_prefs_change: on_prefs_change_header,
-                    }
-
-                    LandingContent {
-                        ..LandingContentProps {
-                            books: BooksView {
-                                is_loading: view.is_loading,
-                                visible_books: view.visible_books,
-                                visible_is_empty: view.visible_is_empty,
-                                books_empty: view.books_empty,
-                                lib_err: view.lib_err,
-                                page_error: view.page_error,
-                                has_more: view.has_more,
-                                is_loading_more: view.is_loading_more,
-                            },
-                            prefs: prefs(),
-                            ctx: BookTableContext {
-                                server_url,
-                                is_admin: (sigs.is_admin)(),
-                                author_suggestions: sigs.pools.authors.into(),
-                                tag_suggestions: sigs.pools.tags.into(),
-                            },
-                            handlers: LandingContentHandlers {
-                                on_prefs_change: on_prefs_change_content,
-                                on_load_more,
-                                on_clear_filters,
-                            },
-                        }
+                        ctx: BookTableContext {
+                            server_url,
+                            is_admin: (sigs.is_admin)(),
+                            author_suggestions: sigs.pools.authors.into(),
+                            tag_suggestions: sigs.pools.tags.into(),
+                        },
+                        handlers: LandingContentHandlers {
+                            on_prefs_change: on_prefs_change_content,
+                            on_load_more,
+                            on_clear_filters,
+                        },
                     }
                 }
             }
         }
-    };
-
-    body
+    }
 }
 
 /// Short, human-friendly tail of an absolute library path. We show only the

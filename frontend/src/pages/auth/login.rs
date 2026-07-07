@@ -127,89 +127,110 @@ pub fn LoginPage() -> Element {
     };
 
     #[cfg(feature = "mobile")]
-    let mut username = username;
-    #[cfg(feature = "mobile")]
-    let mut password = password;
-    #[cfg(feature = "mobile")]
-    let nav = use_navigator();
-    #[cfg(feature = "mobile")]
     let host = display_host(&use_server_url());
     #[cfg(feature = "mobile")]
     let out = m_auth_shell(
         "Your library, wherever you are.",
         rsx! {
-            // Connected-to bar: shows which server this login targets, with a
-            // Back affordance that returns to the Connect screen (which
-            // pre-fills the current URL) without clearing it.
-            div { class: "m-auth-connected",
-                button {
-                    class: "m-auth-back",
-                    r#type: "button",
-                    onclick: move |_| { nav.replace(Route::ServerConnect {}); },
-                    "← Back"
-                }
-                div { class: "m-auth-connected-to",
-                    span { class: "m-auth-connected-dot" }
-                    span { class: "m-auth-connected-label",
-                        "Logging into "
-                        span { class: "mono", "{host}" }
-                    }
-                }
-            }
-            form { class: "auth-form-inner",
-                onsubmit: on_submit,
-                "data-testid": "login-form",
-                if let Some(msg) = error() {
-                    Banner { kind: BannerKind::Err, title: msg, dismissible: false }
-                }
-                Field { label: "Email or username".to_string(), input_id: "login-username".to_string(),
-                    input {
-                        id: "login-username",
-                        name: "username",
-                        r#type: "text",
-                        autocomplete: "username",
-                        autocapitalize: "none",
-                        autocorrect: "off",
-                        spellcheck: "false",
-                        value: "{username}",
-                        oninput: move |e| username.set(e.value()),
-                        onkeydown: on_keydown,
-                    }
-                }
-                Field {
-                    label: "Password".to_string(),
-                    input_id: "login-password".to_string(),
-                    action: rsx! {
-                        Link { to: Route::Login {}, class: "auth-field-action-link", "Forgot?" }
-                    },
-                    input {
-                        id: "login-password",
-                        name: "password",
-                        r#type: "password",
-                        autocomplete: "current-password",
-                        autocapitalize: "none",
-                        autocorrect: "off",
-                        spellcheck: "false",
-                        value: "{password}",
-                        oninput: move |e| password.set(e.value()),
-                        onkeydown: on_keydown,
-                    }
-                }
-                button {
-                    class: "btn primary lg auth-submit",
-                    r#type: "submit",
-                    disabled: submitting(),
-                    if submitting() { "Signing in…" } else { "Sign in" }
-                }
-                p { class: "auth-footer",
-                    "New here? "
-                    Link { to: Route::Register {}, "Create an account" }
-                }
+            MobileLoginForm {
+                host,
+                username,
+                password,
+                error,
+                submitting,
+                on_submit,
+                on_keydown,
             }
         },
     );
 
     out
+}
+
+/// Mobile login body: connected-server bar plus the credentials form. Split
+/// out of `LoginPage` so the mobile branch reads as a plain composition.
+#[cfg(feature = "mobile")]
+#[component]
+fn MobileLoginForm(
+    host: String,
+    mut username: Signal<String>,
+    mut password: Signal<String>,
+    error: Signal<Option<String>>,
+    submitting: Signal<bool>,
+    on_submit: EventHandler<FormEvent>,
+    on_keydown: EventHandler<Event<KeyboardData>>,
+) -> Element {
+    let nav = use_navigator();
+    rsx! {
+        // Connected-to bar: shows which server this login targets, with a
+        // Back affordance that returns to the Connect screen (which
+        // pre-fills the current URL) without clearing it.
+        div { class: "m-auth-connected",
+            button {
+                class: "m-auth-back",
+                r#type: "button",
+                onclick: move |_| { nav.replace(Route::ServerConnect {}); },
+                "← Back"
+            }
+            div { class: "m-auth-connected-to",
+                span { class: "m-auth-connected-dot" }
+                span { class: "m-auth-connected-label",
+                    "Logging into "
+                    span { class: "mono", "{host}" }
+                }
+            }
+        }
+        form { class: "auth-form-inner",
+            onsubmit: on_submit,
+            "data-testid": "login-form",
+            if let Some(msg) = error() {
+                Banner { kind: BannerKind::Err, title: msg, dismissible: false }
+            }
+            Field { label: "Email or username".to_string(), input_id: "login-username".to_string(),
+                input {
+                    id: "login-username",
+                    name: "username",
+                    r#type: "text",
+                    autocomplete: "username",
+                    autocapitalize: "none",
+                    autocorrect: "off",
+                    spellcheck: "false",
+                    value: "{username}",
+                    oninput: move |e| username.set(e.value()),
+                    onkeydown: on_keydown,
+                }
+            }
+            Field {
+                label: "Password".to_string(),
+                input_id: "login-password".to_string(),
+                action: rsx! {
+                    Link { to: Route::Login {}, class: "auth-field-action-link", "Forgot?" }
+                },
+                input {
+                    id: "login-password",
+                    name: "password",
+                    r#type: "password",
+                    autocomplete: "current-password",
+                    autocapitalize: "none",
+                    autocorrect: "off",
+                    spellcheck: "false",
+                    value: "{password}",
+                    oninput: move |e| password.set(e.value()),
+                    onkeydown: on_keydown,
+                }
+            }
+            button {
+                class: "btn primary lg auth-submit",
+                r#type: "submit",
+                disabled: submitting(),
+                if submitting() { "Signing in…" } else { "Sign in" }
+            }
+            p { class: "auth-footer",
+                "New here? "
+                Link { to: Route::Register {}, "Create an account" }
+            }
+        }
+    }
 }
 
 /// Props for the [`LoginForm`] component.
