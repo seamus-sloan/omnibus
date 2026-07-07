@@ -10,11 +10,10 @@ use omnibus_shared::EbookMetadata;
 
 use super::super::sorting::{contributor_names, row_slug};
 use super::cells::{
-    build_save_authors, build_save_field, AuthorsCell, EbookRowCoverCell, EbookRowFormatsCell,
-    RowScalarCell, RowSeriesCell, RowTitleCell,
+    build_save_authors, build_save_field, AuthorsCell, CellEditCtx, EbookRowCoverCell,
+    EbookRowFormatsCell, RowContext, RowScalarCell, RowSeriesCell, RowTitleCell,
 };
 use super::{BookTableContext, EditField};
-use crate::components::chip_editor::SuggestionItem;
 use crate::Route;
 
 /// One row in the power-user table for `book`.
@@ -33,17 +32,17 @@ pub(super) fn EbookRow(book: EbookMetadata, ctx: BookTableContext) -> Element {
     let save_authors = build_save_authors(uuid.clone(), server_url.clone(), book_state);
     let display = derive_row_display(&book_state.read(), &server_url, &uuid);
 
+    let ctx = RowContext {
+        is_admin,
+        editing,
+        authors_draft,
+        author_suggestions,
+        save_field: EventHandler::new(save_field),
+        save_authors: EventHandler::new(save_authors),
+    };
+
     rsx! {
-        EbookRowMarkup {
-            display,
-            uuid,
-            is_admin,
-            editing,
-            authors_draft,
-            author_suggestions,
-            save_field,
-            save_authors,
-        }
+        EbookRowMarkup { display, uuid, ctx }
     }
 }
 
@@ -152,16 +151,8 @@ fn derive_row_display(book: &EbookMetadata, server_url: &str, uuid: &str) -> Row
 /// so the parent stays a thin state-setup shell. All inputs are already
 /// derived; this component does no signal seeding of its own.
 #[component]
-fn EbookRowMarkup(
-    display: RowDisplay,
-    uuid: String,
-    is_admin: bool,
-    editing: Signal<Option<EditField>>,
-    authors_draft: Signal<Vec<String>>,
-    author_suggestions: ReadSignal<Vec<SuggestionItem>>,
-    save_field: EventHandler<(EditField, String)>,
-    save_authors: EventHandler<Vec<String>>,
-) -> Element {
+fn EbookRowMarkup(display: RowDisplay, uuid: String, ctx: RowContext) -> Element {
+    let editing = ctx.editing;
     let nav = use_navigator();
     let uuid_click = uuid.clone();
     let uuid_key = uuid;
@@ -199,15 +190,7 @@ fn EbookRowMarkup(
                     nav.push(Route::BookDetail { uuid: uuid_key.clone() });
                 }
             },
-            EbookRowCells {
-                display,
-                is_admin,
-                editing,
-                authors_draft,
-                author_suggestions,
-                save_field,
-                save_authors,
-            }
+            EbookRowCells { display, ctx }
         }
     }
 }
@@ -216,15 +199,22 @@ fn EbookRowMarkup(
 /// [`EbookRowMarkup`] so the row-level event handlers and the per-cell
 /// wiring live in separate functions.
 #[component]
-fn EbookRowCells(
-    display: RowDisplay,
-    is_admin: bool,
-    editing: Signal<Option<EditField>>,
-    authors_draft: Signal<Vec<String>>,
-    author_suggestions: ReadSignal<Vec<SuggestionItem>>,
-    save_field: EventHandler<(EditField, String)>,
-    save_authors: EventHandler<Vec<String>>,
-) -> Element {
+fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
+    let RowContext {
+        is_admin,
+        editing,
+        authors_draft,
+        author_suggestions,
+        save_field,
+        save_authors,
+    } = ctx;
+    // Cloned per scalar cell so each wrapper owns its own copy of the shared
+    // admin/editing/save context.
+    let cell_ctx = CellEditCtx {
+        is_admin,
+        editing,
+        save_field,
+    };
     let RowDisplay {
         book,
         row_testid: _,
@@ -245,13 +235,7 @@ fn EbookRowCells(
 
     rsx! {
         EbookRowCoverCell { thumb_src, thumb_srcset, has_cover, alt_title: cover_alt }
-        RowTitleCell {
-            title,
-            error: book.error,
-            is_admin,
-            editing,
-            save_field,
-        }
+        RowTitleCell { title, error: book.error, ctx: cell_ctx.clone() }
         AuthorsCell {
             is_admin,
             editing,
@@ -260,16 +244,14 @@ fn EbookRowCells(
             suggestions: author_suggestions,
             on_change: move |names: Vec<String>| save_authors.call(names),
         }
-        RowSeriesCell { series_line, series_text, is_admin, editing, save_field }
+        RowSeriesCell { series_line, series_text, ctx: cell_ctx.clone() }
         RowScalarCell {
             col_class: "ebook-col-publisher".to_string(),
             cell_testid: "ebook-cell-publisher".to_string(),
             field: EditField::Publisher,
             value: publisher,
             placeholder: "Publisher".to_string(),
-            is_admin,
-            editing,
-            save_field,
+            ctx: cell_ctx.clone(),
         }
         RowScalarCell {
             col_class: "ebook-col-published".to_string(),
@@ -277,9 +259,7 @@ fn EbookRowCells(
             field: EditField::Published,
             value: published,
             placeholder: "YYYY-MM-DD".to_string(),
-            is_admin,
-            editing,
-            save_field,
+            ctx: cell_ctx.clone(),
         }
         EbookRowFormatsCell { formats: book.formats }
         td { class: "ebook-col-updated", "data-testid": "ebook-cell-updated", "{updated}" }
@@ -290,9 +270,7 @@ fn EbookRowCells(
             field: EditField::Language,
             value: language,
             placeholder: "en".to_string(),
-            is_admin,
-            editing,
-            save_field,
+            ctx: cell_ctx,
         }
     }
 }

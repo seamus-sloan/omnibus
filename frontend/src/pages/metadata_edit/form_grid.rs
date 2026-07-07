@@ -6,7 +6,7 @@ use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
 
 use super::fields::{MeArea, MeField, MeLabel};
-use crate::components::chip_editor::{ChipEditor, SuggestionItem};
+use crate::components::chip_editor::{ChipEditor, ChipEditorOptions, SuggestionItem};
 
 /// Per-field editable signals threaded through the form rows from `MetadataEditForm`.
 #[derive(Clone, Copy, PartialEq)]
@@ -138,12 +138,15 @@ fn FieldGrid(
                 div { class: "me-chip-row",
                     ChipEditor {
                         values: authors,
-                        placeholder: "+ add author\u{2026}".to_string(),
                         on_change: move |_| {},
                         suggestions: author_suggestions,
-                        show_avatar: true,
-                        aria_remove_prefix: "Remove".to_string(),
-                        testid_prefix: "me-authors".to_string(),
+                        options: ChipEditorOptions {
+                            placeholder: "+ add author\u{2026}".to_string(),
+                            show_avatar: true,
+                            aria_remove_prefix: "Remove".to_string(),
+                            testid_prefix: "me-authors".to_string(),
+                            ..ChipEditorOptions::default()
+                        },
                     }
                 }
             }
@@ -172,13 +175,16 @@ fn TagsSection(tags: Signal<Vec<String>>, tag_suggestions: Signal<Vec<Suggestion
         div { class: "me-tag-chips",
             ChipEditor {
                 values: tags,
-                placeholder: "+ add tag\u{2026}".to_string(),
                 on_change: move |_| {},
                 suggestions: tag_suggestions,
-                show_avatar: false,
-                input_class: "me-tag-input".to_string(),
-                aria_remove_prefix: "Remove tag".to_string(),
-                testid_prefix: "me-tags".to_string(),
+                options: ChipEditorOptions {
+                    placeholder: "+ add tag\u{2026}".to_string(),
+                    show_avatar: false,
+                    input_class: "me-tag-input".to_string(),
+                    aria_remove_prefix: "Remove tag".to_string(),
+                    testid_prefix: "me-tags".to_string(),
+                    ..ChipEditorOptions::default()
+                },
             }
         }
     }
