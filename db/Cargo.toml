@@ -93,12 +93,12 @@ lofty = "0.24"
 # id derivation (issue #94); it is no longer the book identity / diff key.
 uuid = { version = "1", features = ["v4", "v5"] }
 
-# F1.11 author profile photos: outbound HTTP for the Open Library resolver
-# (`db::author_photos`). `rustls` matches the rest of our async TLS
-# choices (sqlx uses `runtime-tokio-rustls`) so we don't pull in OpenSSL.
-# `json` is needed to deserialize the `/search/authors.json` response.
-# This is the only outbound HTTP in the codebase — keep it scoped to the
-# resolver module.
+# Outbound HTTP: the Open Library author-photo resolver (`db::author_photos`)
+# and the Hardcover GraphQL client (`db::suggestions::hardcover`) are the only
+# two consumers — both share this one `reqwest` dep rather than each pulling
+# their own. `rustls` matches the rest of our async TLS choices (sqlx uses
+# `runtime-tokio-rustls`) so we don't pull in OpenSSL. `json` is needed to
+# deserialize both APIs' JSON responses.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 urlencoding = "2"
 

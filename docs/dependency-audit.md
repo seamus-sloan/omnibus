@@ -7,6 +7,15 @@ The `deny.toml` `[bans]` section has matching `skip` entries for all accepted
 and blocked duplicates; `cargo deny check bans` will warn on anything outside
 this list.
 
+Note: CI's `cargo deny check bans` step runs with no explicit `--features`
+flag, so it resolves each crate's *default* feature set. `omnibus-frontend`'s
+default features are `[]` — the `web`/`mobile` features (and anything they
+pull in) are invisible to that default-resolution graph and to a bare
+`cargo tree -d`. A handful of duplicates below only show up once `web` is
+enabled (`cargo tree -d -p omnibus-frontend --features web`); those rows are
+marked "web-feature only" and have no `deny.toml` skip entry since cargo-deny
+never encounters them in its default run.
+
 ## Duplicate-family inventory
 
 | Crate | Versions | Sources | Classification | Notes |
@@ -24,6 +33,9 @@ this list.
 | `reqwest` | 0.12.28, 0.13.4 | 0.12.28 via `dioxus-fullstack` (git-pinned Dioxus tag); 0.13.4 is our own direct dep (workspace + `db` + `frontend` mobile feature) | **blocked by upstream** | Bumped to 0.13 for issue #774; the 0.12 copy remains only because `dioxus-fullstack` depends on it directly. Collapses when Dioxus bumps its own `reqwest` past 0.13. |
 | `axum-extra` | 0.10.3, 0.12.6 | 0.10.3 via `dioxus-server` (git-pinned Dioxus tag); 0.12.6 is our own direct dep in `server/Cargo.toml` | **blocked by upstream** | Bumped to 0.12 for issue #774. Collapses when Dioxus bumps its own `axum-extra` past 0.12. |
 | `tower-http` | 0.6.11, 0.7.0 | 0.6.11 via `dioxus-fullstack`/`dioxus-server` (git-pinned Dioxus tag); 0.7.0 is our own direct dep in `server/Cargo.toml` | **blocked by upstream** | Bumped to 0.7 for issue #774. Collapses when Dioxus bumps its own `tower-http` past 0.7. |
+| `gloo-net` | 0.6.0, 0.7.0 | 0.6.0 via `dioxus-fullstack` (git-pinned Dioxus tag); 0.7.0 is our own direct dep in `frontend/Cargo.toml`, gated behind the `web` feature | **blocked by upstream — web-feature only** | Bumped to 0.7 for issue #774. Not visible to `cargo deny check bans`'s default (no-`web`) run — see the scope note above. Collapses when Dioxus bumps its own `gloo-net` past 0.7. |
+| `gloo-timers` | 0.3.0, 0.4.0 | 0.3.0 via `dioxus-fullstack` (git-pinned Dioxus tag); 0.4.0 is our own direct dep in `frontend/Cargo.toml`, gated behind the `web` feature | **blocked by upstream — web-feature only** | Bumped to 0.4 for issue #774. Same scope caveat as `gloo-net` above. |
+| `gloo-utils` | 0.2.0, 0.3.0 | 0.2.0 pulled in by `gloo-net` 0.6.0 (Dioxus); 0.3.0 pulled in by our `gloo-net` 0.7.0 | **blocked by upstream — web-feature only** | Knock-on duplicate from the `gloo-net` bump above; not a dep we declare directly. Same scope caveat. |
 | `digest` | 0.10.7 (×2) | Both consumers are `sha1` (axum/tungstenite) + `blake2`/`sha2` (argon2/sqlx) | N/A — same version | `cargo tree -d` shows two entry paths to the same version (different consumers). No actual duplicate in the lockfile. |
 | `bytes`, `futures-*`, `num-traits`, `tokio`, `manganis-core` | (shown ×2 each) | Multiple downstream consumers | N/A — same version | Same pattern as `digest`: one version, multiple reverse-dependency entry points in the `cargo tree -d` output. Not true duplicates. |
 
