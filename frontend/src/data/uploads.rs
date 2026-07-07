@@ -22,7 +22,7 @@ pub struct EbookUploadMeta {
     pub series_index: String,
 }
 
-// --- Web (gloo-net + FormData) ---------------------------------------------
+// Web (gloo-net + FormData).
 
 /// Build a one-shot `Blob` from raw bytes with the given MIME type.
 #[cfg(feature = "web")]
@@ -120,7 +120,7 @@ pub async fn upload_ebook(
         .map_err(|e| DataError::Other(e.to_string()))
 }
 
-// --- Mobile (reqwest multipart) --------------------------------------------
+// Mobile (reqwest multipart).
 
 #[cfg(feature = "mobile")]
 pub async fn inspect_ebook(
@@ -176,7 +176,7 @@ pub async fn upload_ebook(
     Ok(response.json::<UploadCommitResult>().await?)
 }
 
-// --- Fallback stub (SSR / no platform feature) -----------------------------
+// Fallback stub (SSR / no platform feature).
 
 #[cfg(not(any(feature = "web", feature = "mobile")))]
 pub async fn inspect_ebook(

@@ -17,15 +17,12 @@ use crate::data;
 /// closure that registers them.
 type JsCallbackHolder = std::rc::Rc<std::cell::RefCell<Vec<Closure<dyn FnMut(f64)>>>>;
 
-// ---------------------------------------------------------------------------
-// Pure helpers — extracted so they can be tested without a browser.
-// Everything else in this module is a JS interop seam:
-//   * `register_js_callbacks` — writes closures into `window.*` properties.
-//   * `inject_hls_script` / `install_control_surface` — call `eval()`.
-//   * `run_manifest_init` — async manifest fetch + `/status` poll loop.
-// Those three functions cannot be unit-tested without a WASM runtime.
-// The logic below is the Rust-side decision surface that *can* be tested.
-// ---------------------------------------------------------------------------
+// The functions below are the Rust-side decision surface, extracted so they
+// can be unit-tested without a browser. Everything else in this module is a JS
+// interop seam that needs a WASM runtime: `register_js_callbacks` writes
+// closures into `window.*` properties, `inject_hls_script` /
+// `install_control_surface` call `eval()`, and `run_manifest_init` runs the
+// async manifest fetch + `/status` poll loop.
 
 /// Select the resume position: prefer the server-authoritative value when
 /// available, fall back to the locally cached initial position.

@@ -14,7 +14,7 @@ use super::DataError;
 #[cfg(feature = "mobile")]
 use super::{drain_error, http_client, note_status, with_bearer};
 
-// --- mobile (REST) ---------------------------------------------------------
+// Mobile (REST).
 
 /// GET `/api/shelves` — the caller's visible shelves.
 #[cfg(feature = "mobile")]
@@ -174,7 +174,7 @@ pub async fn preview_shelf_rule(
     Ok(response.json::<RulePreview>().await?)
 }
 
-// --- web / SSR (RPC server functions) --------------------------------------
+// Web / SSR (RPC server functions).
 
 #[cfg(not(feature = "mobile"))]
 pub async fn list_shelves(_server_url: &str) -> Result<Vec<ShelfSummary>, DataError> {

@@ -2,7 +2,8 @@
 //! per-UUID in `localStorage`, mobile keeps an in-memory map, SSR is a
 //! no-op. Offline / first-paint cache for the progress-sync endpoint:
 //! reader reads sync, saves write here AND fire-and-forget POST.
-//! In-file `#[cfg]`-framing dividers retained per rule 05's nav-aid exception.
+//! Kept flat: each `load`/`save` impl is a mutually-exclusive `#[cfg]` variant
+//! of the same signature, so per-target submodules would only add indirection.
 
 #[cfg(feature = "web")]
 const STORAGE_PREFIX: &str = "omn.reading::";
@@ -19,10 +20,7 @@ pub fn save(uuid: &str, cfi: &str) {
     save_impl(uuid, cfi);
 }
 
-// -----------------------------------------------------------------------------
-// Web — localStorage
-// -----------------------------------------------------------------------------
-
+// Web — localStorage.
 #[cfg(feature = "web")]
 fn storage_key(uuid: &str) -> String {
     format!("{STORAGE_PREFIX}{uuid}")
@@ -47,10 +45,7 @@ fn save_impl(uuid: &str, cfi: &str) {
     let _ = storage.set_item(&storage_key(uuid), cfi);
 }
 
-// -----------------------------------------------------------------------------
 // Mobile — process-local map; resets on cold launch.
-// -----------------------------------------------------------------------------
-
 #[cfg(feature = "mobile")]
 mod mobile_store {
     use std::collections::HashMap;
@@ -93,10 +88,7 @@ fn save_impl(uuid: &str, cfi: &str) {
     mobile_store::set(uuid, cfi.to_string());
 }
 
-// -----------------------------------------------------------------------------
 // SSR / server-only build — no persistence.
-// -----------------------------------------------------------------------------
-
 #[cfg(not(any(feature = "web", feature = "mobile")))]
 fn load_impl(_uuid: &str) -> Option<String> {
     None
@@ -105,10 +97,7 @@ fn load_impl(_uuid: &str) -> Option<String> {
 #[cfg(not(any(feature = "web", feature = "mobile")))]
 fn save_impl(_uuid: &str, _cfi: &str) {}
 
-// -----------------------------------------------------------------------------
 // Tests — only the in-memory mobile store can be exercised without a browser.
-// -----------------------------------------------------------------------------
-
 #[cfg(all(test, feature = "mobile"))]
 mod tests {
     use super::*;
@@ -145,13 +134,11 @@ mod tests {
     }
 }
 
-// -----------------------------------------------------------------------------
 // SSR / server-only tests — exercise the no-persistence path that compiles
 // under the `server` feature (the default `cargo test -p omnibus-frontend
 // --features server`). The `web`/`mobile` impls live behind their own cfgs and
 // are unreachable here, so these assertions pin the documented SSR contract:
 // every load returns `None` and `save` is an inert no-op.
-// -----------------------------------------------------------------------------
 #[cfg(all(test, not(any(feature = "web", feature = "mobile"))))]
 mod ssr_tests {
     use super::*;

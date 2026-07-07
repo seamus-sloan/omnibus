@@ -9,7 +9,7 @@ use dioxus::prelude::*;
 
 use super::stage::{ToolbarState, TransportCallbacks, TransportState};
 
-// --- Pure helpers extracted so they can be unit-tested without a renderer.
+// Pure helpers extracted so they can be unit-tested without a renderer.
 
 /// CSS class for the rate button — appends `" on"` when the speed panel is open.
 pub(super) fn rate_btn_class(active: bool) -> &'static str {
