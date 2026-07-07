@@ -35,25 +35,26 @@ tracing.workspace = true
 
 # Auth (F0.3). Argon2id password hashing, CSPRNG token generation, SHA-256
 # of the raw token for at-rest storage, base64url for wire-format tokens.
-# getrandom is used directly for CSPRNG token/key generation (it is already
-# a transitive dep via sqlx/argon2) to avoid pulling in the pre-1.0 rand 0.8
-# crate for this security-critical path. rand_core is pinned to 0.6 (same
-# version already in the lock via password-hash) with `getrandom` enabled so
+# getrandom is used directly (via `getrandom::fill`) for CSPRNG token/key
+# generation in token.rs / session_key.rs — it is already a transitive dep
+# via sqlx/argon2, so using it directly avoids pulling in the pre-1.0 rand
+# crate for this security-critical path. rand_core carries `getrandom` so
 # that OsRng is available for SaltString::generate in password.rs.
 #
-# Why the version mix isn't uniformly "latest":
-# * argon2 0.5 is the latest *stable* release; 0.6 is only available as
-#   pre-release (0.6.0-rc.*) and we don't ship release candidates of
-#   password-hashing code. 0.5.3 has no open advisories.
-# * rand_core stays at 0.6 because argon2 0.5's transitive `password-hash`
-#   pulls 0.6, and our direct dep only exists to flip on the `getrandom`
-#   feature on that *same* 0.6 instance — a 0.9 direct bump would be dead
-#   weight (separate version, doesn't reach argon2's OsRng). Lock-stepped
-#   with the argon2 bump above.
-argon2 = "0.5"
+# held at 0.5: argon2 0.6 has never shipped a *stable* release — the latest
+#   published version is a release candidate (0.6.0-rc.*), and we don't ship
+#   an RC of password-hashing code. 0.5.3 has no open advisories. Revisit
+#   when 0.6.0 final lands; the bump then also pulls password-hash 0.6 (and
+#   rand_core 0.9), which is why rand_core is lock-stepped below.
+argon2 = "0.5" # held at 0.5: no stable 0.6 upstream (latest is 0.6.0-rc.*)
 getrandom = "0.3"
-rand_core = { version = "0.6", features = ["getrandom"] }
-sha2 = "0.10"
+# held at 0.6: rand_core exists here only to flip on the `getrandom` feature
+#   on the *same* 0.6 instance argon2 0.5's transitive `password-hash` 0.5
+#   pulls in, so OsRng reaches SaltString::generate. A 0.9 direct bump would
+#   be dead weight (a separate version that never reaches argon2's OsRng)
+#   until argon2 0.6 stabilizes and moves password-hash to rand_core 0.9.
+rand_core = { version = "0.6", features = ["getrandom"] } # held at 0.6: tied to argon2 0.5's password-hash
+sha2 = "0.11"
 base64 = "0.22"
 
 # F1.2 thumbnail pipeline: decode EPUB covers (JPEG/PNG/WebP) and re-encode
