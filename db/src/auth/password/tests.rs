@@ -8,14 +8,8 @@ fn hash_password_and_verify_password_round_trips_a_matching_credential() {
     assert!(!verify_password("wrong password entirely", &phc).unwrap());
 }
 
-/// Forward-compatibility guard for the crypto-crate staleness bumps
-/// (issue #523). This is a real Argon2id PHC string captured from an
-/// earlier `argon2` release — the exact byte-format already sitting in
-/// deployed `users.password_hash` columns. It must keep validating
-/// verbatim through whatever `argon2` / `password-hash` versions this
-/// crate pins, so any future bump that would silently reject stored
-/// hashes fails here instead of locking every existing account out at
-/// login. The plaintext is `correct horse battery staple`.
+/// Compatibility guard: ensures previously stored Argon2id PHC hashes still verify after dependency bumps.
+/// This PHC string was captured from a deployed database row.
 const KNOWN_STORED_PHC: &str =
     "$argon2id$v=19$m=19456,t=2,p=1$hfViri/PktpsaVGThRVdQg$FuImGjf9eL7k2PhxMjxBJSlSRgXCSKi1/KrKELG4DuA";
 
