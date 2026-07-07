@@ -44,6 +44,16 @@ pub struct StatScanResult {
     pub error: Option<String>,
 }
 
+impl StatScanResult {
+    /// True when the walk hit at least one unreadable subdirectory or file
+    /// (an empty-`scan_key` placeholder row) and therefore did not see the
+    /// full library. Callers must not trust "absent from `entries`" to mean
+    /// "genuinely deleted" when this is true (F819).
+    pub fn enumeration_incomplete(&self) -> bool {
+        self.entries.iter().any(|e| e.scan_key.is_empty())
+    }
+}
+
 /// Phase A: walk the library and `stat` every `.epub` without opening the
 /// zip. Returns one `StatEntry` per file plus a synthetic entry (empty
 /// `uuid`) for any unreadable subdirectory — the legacy
@@ -86,7 +96,7 @@ pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatSca
                         error: Some(format!("could not read directory: {e}")),
                     };
                 }
-                entries.push(unreadable_subdir_entry(dir, &current, &e));
+                entries.push(unreadable_entry(dir, &current, &e));
                 continue;
             }
         };
@@ -104,12 +114,15 @@ pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatSca
     }
 }
 
-/// Build the empty-`scan_key` placeholder for an unreadable subdirectory.
+/// Build the empty-`scan_key` placeholder for a subdirectory or file that
+/// couldn't be read/typed.
 ///
 /// Carries the io::Error string so callers can distinguish "permission
 /// denied" from "no such file" — the legacy wrapper lifts these into error
-/// rows and the incremental indexer ignores empty-`scan_key` entries.
-fn unreadable_subdir_entry(base: &Path, current: &Path, err: &std::io::Error) -> StatEntry {
+/// rows, and the incremental indexer both ignores empty-`scan_key` entries
+/// as disk evidence and treats their presence as a signal the enumeration
+/// is incomplete (see [`StatScanResult::enumeration_incomplete`]).
+fn unreadable_entry(base: &Path, current: &Path, err: &std::io::Error) -> StatEntry {
     let relative = current
         .strip_prefix(base)
         .unwrap_or(current)
@@ -125,16 +138,24 @@ fn unreadable_subdir_entry(base: &Path, current: &Path, err: &std::io::Error) ->
 }
 
 /// Process one `read_dir` entry: push subdirectories onto `stack` for the
-/// walk, and append a stat row for each `.epub` file. Non-epub files and
-/// entries whose `file_type()` can't be read are skipped.
+/// walk, and append a stat row for each `.epub` file. Non-epub files are
+/// skipped outright; an entry whose `file_type()` can't be read gets a
+/// placeholder row instead (F819) so a book at that path isn't silently
+/// treated as absent-from-disk by the diff, and the enumeration is marked
+/// incomplete rather than aborted — the walk still continues over its
+/// siblings.
 fn push_dir_entry(
     base: &Path,
     entry: &std::fs::DirEntry,
     stack: &mut Vec<PathBuf>,
     entries: &mut Vec<StatEntry>,
 ) {
-    let Ok(file_type) = entry.file_type() else {
-        return;
+    let file_type = match entry.file_type() {
+        Ok(ft) => ft,
+        Err(e) => {
+            entries.push(unreadable_entry(base, &entry.path(), &e));
+            return;
+        }
     };
     let entry_path = entry.path();
     if file_type.is_dir() {

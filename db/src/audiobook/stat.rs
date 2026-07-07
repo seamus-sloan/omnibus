@@ -30,6 +30,15 @@ pub struct AudiobookStatScanResult {
     pub error: Option<String>,
 }
 
+impl AudiobookStatScanResult {
+    /// True when the walk hit at least one unreadable subdirectory or file
+    /// (an empty-`scan_key` placeholder row) and therefore did not see the
+    /// full library. Mirrors [`crate::ebook::stat::StatScanResult::enumeration_incomplete`] (F819).
+    pub fn enumeration_incomplete(&self) -> bool {
+        self.entries.iter().any(|e| e.scan_key.is_empty())
+    }
+}
+
 /// Walk `path`, stat every file with an extension in
 /// [`super::AUDIOBOOK_EXTENSIONS`], and return one
 /// [`AudiobookStatEntry`] per file. Synthetic placeholder rows for
@@ -74,13 +83,17 @@ pub fn stat_audiobook_library(
                         error: Some(format!("could not read directory: {e}")),
                     };
                 }
-                entries.push(unreadable_subdir_entry(dir, &current, &e));
+                entries.push(unreadable_entry(dir, &current, &e));
                 continue;
             }
         };
         for entry in read.flatten() {
-            let Ok(file_type) = entry.file_type() else {
-                continue;
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(e) => {
+                    entries.push(unreadable_entry(dir, &entry.path(), &e));
+                    continue;
+                }
             };
             let entry_path = entry.path();
             if file_type.is_dir() {
@@ -105,9 +118,11 @@ pub fn stat_audiobook_library(
     }
 }
 
-/// Build the empty-uuid placeholder row for a subdirectory that couldn't be
-/// read, recording the error against its scan-root-relative path.
-fn unreadable_subdir_entry(dir: &Path, current: &Path, err: &std::io::Error) -> AudiobookStatEntry {
+/// Build the empty-`scan_key` placeholder row for a subdirectory or file
+/// that couldn't be read/typed, recording the error against its
+/// scan-root-relative path. Presence of any such row signals an incomplete
+/// enumeration (see [`AudiobookStatScanResult::enumeration_incomplete`]).
+fn unreadable_entry(dir: &Path, current: &Path, err: &std::io::Error) -> AudiobookStatEntry {
     let relative = current
         .strip_prefix(dir)
         .unwrap_or(current)
@@ -164,4 +179,41 @@ fn stat_file(path: &Path) -> (i64, i64) {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     (mtime, size)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enumeration_incomplete_is_false_with_only_real_entries() {
+        let result = AudiobookStatScanResult {
+            path: Some("/lib".into()),
+            entries: vec![AudiobookStatEntry {
+                filename: "a.m4b".into(),
+                scan_key: "a.m4b".into(),
+                mtime_epoch: 1,
+                size_bytes: 1,
+                error: None,
+            }],
+            error: None,
+        };
+        assert!(!result.enumeration_incomplete());
+    }
+
+    #[test]
+    fn enumeration_incomplete_is_true_with_a_placeholder_entry() {
+        let result = AudiobookStatScanResult {
+            path: Some("/lib".into()),
+            entries: vec![AudiobookStatEntry {
+                filename: "locked".into(),
+                scan_key: String::new(),
+                mtime_epoch: 0,
+                size_bytes: 0,
+                error: Some("permission denied".into()),
+            }],
+            error: None,
+        };
+        assert!(result.enumeration_incomplete());
+    }
 }

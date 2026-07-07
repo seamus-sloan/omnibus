@@ -209,6 +209,75 @@ pub fn diff_library(
     out
 }
 
+/// Fraction of a library's previously file-backed books that a single
+/// removal pass may flag missing before it's treated as a scan
+/// malfunction rather than genuine deletions (F819 circuit breaker).
+pub const REMOVAL_CIRCUIT_BREAKER_FRACTION: f64 = 0.2;
+
+/// Removals at or below this absolute count are always allowed, regardless
+/// of the fraction they represent. The percentage breaker above is aimed
+/// at library-wide mass-removal events; without this floor it would also
+/// block the ordinary case of a couple of files disappearing from a small
+/// or format-scoped library view (e.g. one audiobook in a 1-book scoped
+/// diff is a 100% "removal" but not a malfunction).
+const REMOVAL_CIRCUIT_BREAKER_MIN_REMOVED: usize = 2;
+
+/// Decide whether a diff's `removed` bucket is safe to commit.
+///
+/// Two independent guards, either of which blocks the removal pass:
+/// - `enumeration_incomplete`: the disk walk hit an unreadable
+///   subdirectory or file (an empty-`scan_key` placeholder row), so
+///   "absent from the walk" can't be trusted to mean "genuinely deleted"
+///   for anything the walk didn't fully see.
+/// - The circuit breaker: even after a clean walk, flagging more than
+///   [`REMOVAL_CIRCUIT_BREAKER_FRACTION`] of the previously file-backed
+///   library missing in one pass — above [`REMOVAL_CIRCUIT_BREAKER_MIN_REMOVED`]
+///   — (e.g. a mount that isn't ready yet reads as an empty but otherwise
+///   error-free root) reads as a scan malfunction, not real deletions.
+fn removal_pass_is_safe(
+    enumeration_incomplete: bool,
+    removed_count: usize,
+    previously_file_backed_count: usize,
+) -> bool {
+    if enumeration_incomplete {
+        return false;
+    }
+    if removed_count <= REMOVAL_CIRCUIT_BREAKER_MIN_REMOVED {
+        return true;
+    }
+    (removed_count as f64)
+        <= (previously_file_backed_count as f64) * REMOVAL_CIRCUIT_BREAKER_FRACTION
+}
+
+/// Clear `diff.removed` in place when [`removal_pass_is_safe`] refuses it,
+/// logging the counts that tripped the guard. Shared by the ebook and
+/// audiobook reindex paths.
+fn guard_removal_pass(
+    diff: &mut ReindexDiff,
+    library_path: &str,
+    enumeration_incomplete: bool,
+    previously_file_backed_count: usize,
+) {
+    if diff.removed.is_empty() {
+        return;
+    }
+    if removal_pass_is_safe(
+        enumeration_incomplete,
+        diff.removed.len(),
+        previously_file_backed_count,
+    ) {
+        return;
+    }
+    tracing::error!(
+        library_path,
+        removed = diff.removed.len(),
+        previously_file_backed = previously_file_backed_count,
+        enumeration_incomplete,
+        "reindex: refusing removal pass — suspected partial/failed scan (F819)"
+    );
+    diff.removed.clear();
+}
+
 /// Scan `library_path`, diff against the existing index, and apply only
 /// the per-book changes the diff demands. Runs the scan on the blocking
 /// pool so callers can `await` it from a normal async context without
@@ -219,7 +288,10 @@ pub fn diff_library(
 /// stale-but-good data than wipe the table and mark the index "fresh"
 /// (which would also suppress retries until [`REFRESH_AFTER_SECS`]
 /// elapses). Per-book parse failures are *not* fatal; they land in the
-/// DB as rows with `error = Some(_)`, same as before.
+/// DB as rows with `error = Some(_)`, same as before. A non-fatal but
+/// incomplete or suspiciously large removal (see [`guard_removal_pass`])
+/// is refused rather than committed, so new/changed files still index
+/// normally while missing-file bookkeeping is left untouched.
 pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()> {
     reindex_with_progress(pool, library_path, |_, _| {}).await
 }
@@ -239,6 +311,7 @@ pub async fn reindex_with_progress(
         ebook::stat_ebook_library(Some(&path_for_scan), &library_key_for_scan)
     })
     .await?;
+    let enumeration_incomplete = stat.enumeration_incomplete();
     if let Some(msg) = stat.error {
         anyhow::bail!("scan of {library_path} failed: {msg}");
     }
@@ -254,7 +327,13 @@ pub async fn reindex_with_progress(
         books::list_merged_rows_for_formats(pool, library_path, ebook::EBOOK_FORMATS).await?,
     );
     let library_root: PathBuf = PathBuf::from(library_path);
-    let diff = diff_library(&stat.entries, &db_rows, &library_root);
+    let mut diff = diff_library(&stat.entries, &db_rows, &library_root);
+    guard_removal_pass(
+        &mut diff,
+        library_path,
+        enumeration_incomplete,
+        db_rows.iter().filter(|r| r.has_file).count(),
+    );
 
     // Parse Phase B only for the buckets that need it.
     let new_targets = diff.new.clone();
@@ -359,6 +438,10 @@ pub async fn reindex_audiobooks_with_progress(
     on_progress: impl FnMut(u32, u32),
 ) -> anyhow::Result<()> {
     let groups = stat_and_group_audiobooks(library_path).await?;
+    // A placeholder group (empty scan_key) is a subdir/file the walk
+    // couldn't read (F819) — captured here, before `project_groups_to_stat`
+    // filters placeholders out below.
+    let enumeration_incomplete = groups.iter().any(|g| g.scan_key.is_empty());
 
     // Diff groups against DB rows (project groups to the ebook StatEntry shape
     // so diff_library can be reused verbatim). Scope to audiobook formats so a
@@ -375,7 +458,13 @@ pub async fn reindex_audiobooks_with_progress(
     );
     let library_root: PathBuf = PathBuf::from(library_path);
     let groups_as_stat = project_groups_to_stat(&groups);
-    let diff = diff_library(&groups_as_stat, &db_rows, &library_root);
+    let mut diff = diff_library(&groups_as_stat, &db_rows, &library_root);
+    guard_removal_pass(
+        &mut diff,
+        library_path,
+        enumeration_incomplete,
+        db_rows.iter().filter(|r| r.has_file).count(),
+    );
 
     // Phase B: parse only the New and Changed groups.
     let groups_by_group_path: std::collections::HashMap<String, audiobook::AudiobookGroup> = groups

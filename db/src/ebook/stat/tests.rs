@@ -1,5 +1,6 @@
 use crate::ebook::scan_ebook_library;
 use crate::ebook::test_support::*;
+use crate::ebook::{StatEntry, StatScanResult};
 
 #[test]
 fn scan_with_no_path_returns_empty() {
@@ -107,4 +108,54 @@ fn scan_continues_past_unreadable_subdirectory() {
         msg.len() > "could not read directory".len(),
         "error message should include the io detail, got {msg:?}",
     );
+}
+
+fn real_entry(scan_key: &str) -> StatEntry {
+    StatEntry {
+        filename: format!("{scan_key}.epub"),
+        scan_key: scan_key.into(),
+        mtime_epoch: 1,
+        size_bytes: 1,
+        error: None,
+    }
+}
+
+fn placeholder_entry(filename: &str) -> StatEntry {
+    StatEntry {
+        filename: filename.into(),
+        scan_key: String::new(),
+        mtime_epoch: 0,
+        size_bytes: 0,
+        error: Some("permission denied".into()),
+    }
+}
+
+#[test]
+fn enumeration_incomplete_is_false_with_only_real_entries() {
+    let result = StatScanResult {
+        path: Some("/lib".into()),
+        entries: vec![real_entry("a")],
+        error: None,
+    };
+    assert!(!result.enumeration_incomplete());
+}
+
+#[test]
+fn enumeration_incomplete_is_true_with_a_placeholder_entry() {
+    let result = StatScanResult {
+        path: Some("/lib".into()),
+        entries: vec![real_entry("a"), placeholder_entry("locked")],
+        error: None,
+    };
+    assert!(result.enumeration_incomplete());
+}
+
+#[test]
+fn enumeration_incomplete_is_false_for_an_empty_walk() {
+    let result = StatScanResult {
+        path: Some("/lib".into()),
+        entries: vec![],
+        error: None,
+    };
+    assert!(!result.enumeration_incomplete());
 }

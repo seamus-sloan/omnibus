@@ -7,7 +7,7 @@ use crate::books::{list_books, IndexedRow};
 use crate::ebook::StatEntry;
 use crate::pool::init_db;
 use crate::sync::replace_books;
-use crate::test_support::{indexed, CoversTempDir};
+use crate::test_support::{indexed, indexed_audiobook, make_test_dir, CoversTempDir};
 
 /// Seed a `scan_roots` row for `path` with an explicit `last_indexed`
 /// epoch-seconds value. There's no public writer for `last_indexed`
@@ -590,4 +590,285 @@ async fn backfill_chapters_is_idempotent_after_all_books_have_chapters() {
         progress_calls, 0,
         "on_progress must not be called when all books already have chapters"
     );
+}
+
+// ---------- #819: partial/failed-scan removal-pass safety ----------
+
+#[test]
+fn removal_pass_is_safe_allows_removals_at_or_below_the_absolute_floor() {
+    // Even a "high fraction" removal is allowed at tiny absolute counts —
+    // otherwise a single genuine deletion in a small or format-scoped
+    // library view would trip the breaker on 100% of a 1-book diff.
+    assert!(removal_pass_is_safe(false, 0, 0));
+    assert!(removal_pass_is_safe(false, 1, 1));
+    assert!(removal_pass_is_safe(false, 2, 2));
+}
+
+#[test]
+fn removal_pass_is_safe_allows_removed_fraction_at_or_below_threshold_above_the_floor() {
+    assert!(removal_pass_is_safe(false, 3, 15)); // exactly 20%, above the floor
+}
+
+#[test]
+fn removal_pass_is_safe_blocks_removed_fraction_over_threshold_above_the_floor() {
+    assert!(!removal_pass_is_safe(false, 4, 15)); // ~27%, above the floor
+}
+
+#[test]
+fn removal_pass_is_safe_blocks_any_removal_when_enumeration_incomplete() {
+    assert!(!removal_pass_is_safe(true, 0, 10));
+    assert!(!removal_pass_is_safe(true, 1, 10));
+}
+
+#[tokio::test]
+async fn reindex_refuses_removal_when_a_populated_root_reads_empty_without_error() {
+    // A mount not yet ready (e.g. NFS at boot) reads as an empty-but-readable
+    // root — no io::Error — so it isn't caught by the fatal-scan-error path.
+    // The circuit breaker must still refuse to mass-remove the library.
+    let _covers = CoversTempDir::new("reindex-empty-root");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let dir = make_test_dir("reindex-empty-root-lib");
+    let library_path = dir.to_string_lossy().into_owned();
+
+    replace_books(
+        &pool,
+        &library_path,
+        vec![
+            indexed("a.epub", Some("A"), &["Author"], &[], None, None),
+            indexed("b.epub", Some("B"), &["Author"], &[], None, None),
+            indexed("c.epub", Some("C"), &["Author"], &[], None, None),
+        ],
+    )
+    .await
+    .unwrap();
+
+    // `dir` exists but is empty — no files were ever written to it.
+    reindex(&pool, &library_path).await.unwrap();
+
+    let missing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books WHERE is_missing_files = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        missing, 0,
+        "an empty-but-error-free scan must not mass-flag books missing"
+    );
+    let file_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM book_files")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        file_rows, 3,
+        "book_files rows must survive a suspiciously-empty scan"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn reindex_still_applies_removal_below_the_circuit_breaker_threshold() {
+    // Regression guard: the circuit breaker must not block ordinary,
+    // small-scale removals (a single genuinely deleted file among many).
+    let _covers = CoversTempDir::new("reindex-small-removal");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let dir = make_test_dir("reindex-small-removal-lib");
+    let library_path = dir.to_string_lossy().into_owned();
+
+    let mut books = vec![indexed(
+        "gone.epub",
+        Some("Gone"),
+        &["Author"],
+        &[],
+        None,
+        None,
+    )];
+    for i in 0..9 {
+        let filename = format!("keep{i}.epub");
+        std::fs::write(dir.join(&filename), b"not a zip").unwrap();
+        books.push(indexed(
+            &filename,
+            Some("Keep"),
+            &["Author"],
+            &[],
+            None,
+            None,
+        ));
+    }
+    replace_books(&pool, &library_path, books).await.unwrap();
+
+    // `gone.epub` (10% of the library) is the only file absent from disk.
+    reindex(&pool, &library_path).await.unwrap();
+
+    let missing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books WHERE is_missing_files = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        missing, 1,
+        "a genuine single-file removal below the threshold must still apply"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reindex_refuses_removal_when_a_subdirectory_becomes_unreadable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _covers = CoversTempDir::new("reindex-locked-subdir");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let dir = make_test_dir("reindex-locked-subdir-lib");
+    let library_path = dir.to_string_lossy().into_owned();
+
+    let locked = dir.join("locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(locked.join("hidden.epub"), b"not a zip").unwrap();
+    std::fs::write(dir.join("visible.epub"), b"not a zip").unwrap();
+
+    replace_books(
+        &pool,
+        &library_path,
+        vec![
+            indexed(
+                "locked/hidden.epub",
+                Some("Hidden"),
+                &["Author"],
+                &[],
+                None,
+                None,
+            ),
+            indexed(
+                "visible.epub",
+                Some("Visible"),
+                &["Author"],
+                &[],
+                None,
+                None,
+            ),
+        ],
+    )
+    .await
+    .unwrap();
+
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&locked).is_ok() {
+        // Can't actually lock out reads in this environment (e.g. running
+        // as root) — restore and skip rather than assert a false positive.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+
+    reindex(&pool, &library_path).await.unwrap();
+
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let missing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books WHERE is_missing_files = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        missing, 0,
+        "an unreadable subdirectory must not flag its contents (or anything else) missing"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reindex_audiobooks_protects_merged_uuids_when_removal_pass_is_refused() {
+    // Merge/attach records are curation state (F819): an incomplete scan of
+    // the audiobook root (an unrelated unreadable subdirectory) must not
+    // erode `merged_uuids` any more than it should wipe `book_files` — even
+    // though the attach ledger has just one row, far below the circuit
+    // breaker's absolute floor, `enumeration_incomplete` blocks the removal
+    // pass unconditionally.
+    use std::os::unix::fs::PermissionsExt;
+
+    let _covers = CoversTempDir::new("reindex-audio-merged-protect");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let ebook_dir = make_test_dir("reindex-merged-protect-ebooks");
+    let audio_dir = make_test_dir("reindex-merged-protect-audio");
+    let ebook_path = ebook_dir.to_string_lossy().into_owned();
+    let audio_path = audio_dir.to_string_lossy().into_owned();
+
+    sync::sync_books(
+        &pool,
+        &ebook_path,
+        sync::SyncPlan {
+            new_books: vec![indexed(
+                "Stoker/Dracula.epub",
+                Some("Dracula"),
+                &["Bram Stoker"],
+                &[],
+                None,
+                None,
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    sync::sync_audiobooks(
+        &pool,
+        &audio_path,
+        sync::AudiobookSyncPlan {
+            new_books: vec![indexed_audiobook(
+                "Stoker/Dracula.m4b",
+                "Dracula",
+                Some("Bram Stoker"),
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM merged_uuids")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1,
+        "test precondition: the audiobook auto-attached to the ebook"
+    );
+
+    // An unrelated locked subdirectory makes the audiobook walk incomplete
+    // — the attached m4b itself is untouched, but the diff still can't
+    // trust "not seen" for anything in this pass.
+    let locked = audio_dir.join("locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&locked).is_ok() {
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = std::fs::remove_dir_all(&ebook_dir);
+        let _ = std::fs::remove_dir_all(&audio_dir);
+        return;
+    }
+
+    reindex_audiobooks(&pool, &audio_path).await.unwrap();
+
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM merged_uuids")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1,
+        "merged_uuids must survive an incomplete audiobook scan"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM book_files WHERE format = 'M4B'")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1,
+        "the attached M4B file row must survive"
+    );
+
+    let _ = std::fs::remove_dir_all(&ebook_dir);
+    let _ = std::fs::remove_dir_all(&audio_dir);
 }
