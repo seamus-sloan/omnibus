@@ -1,4 +1,5 @@
 use crate::ebook::scan_ebook_library;
+use crate::ebook::stat::stat_ebook_library;
 use crate::ebook::test_support::*;
 
 #[test]
@@ -106,5 +107,80 @@ fn scan_continues_past_unreadable_subdirectory() {
     assert!(
         msg.len() > "could not read directory".len(),
         "error message should include the io detail, got {msg:?}",
+    );
+}
+
+#[test]
+fn stat_marks_result_complete_on_a_healthy_tree() {
+    let dir = make_test_dir("stat_complete");
+    std::fs::write(dir.join("a.epub"), b"not a zip").unwrap();
+    let out = stat_ebook_library(Some(dir.to_str().unwrap()), dir.to_str().unwrap());
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(out.error.is_none());
+    assert!(
+        !out.incomplete,
+        "a fully-readable tree must report a complete enumeration"
+    );
+    assert!(out.saw_any_file, "a tree with a file must set saw_any_file");
+}
+
+#[test]
+fn stat_sets_saw_any_file_for_non_epub_files_only() {
+    // A root that holds files of another format (no .epub) must still report
+    // `saw_any_file` — the #819 guard uses this to keep a shared root
+    // trustworthy even when this format's diff is empty.
+    let dir = make_test_dir("stat_saw_other");
+    std::fs::write(dir.join("cover.jpg"), b"ignore").unwrap();
+    let out = stat_ebook_library(Some(dir.to_str().unwrap()), dir.to_str().unwrap());
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(out.entries.is_empty(), "no .epub means no stat entries");
+    assert!(
+        out.saw_any_file,
+        "a non-epub file must still set saw_any_file"
+    );
+}
+
+#[test]
+fn stat_leaves_saw_any_file_false_on_a_truly_empty_root() {
+    let dir = make_test_dir("stat_empty");
+    let out = stat_ebook_library(Some(dir.to_str().unwrap()), dir.to_str().unwrap());
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(
+        !out.saw_any_file,
+        "a truly-empty root must leave saw_any_file false"
+    );
+}
+
+// An unreadable subdir makes the enumeration partial — the `incomplete`
+// flag is the signal the indexer uses to skip its removal pass (#819).
+#[cfg(unix)]
+#[test]
+fn stat_flags_incomplete_when_a_subdirectory_is_unreadable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = make_test_dir("stat_incomplete");
+    std::fs::write(dir.join("good.epub"), b"not a zip").unwrap();
+    let locked = dir.join("locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&locked).is_ok() {
+        // Running as root (CI container) — perms don't bite; skip.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        return;
+    }
+
+    let out = stat_ebook_library(Some(dir.to_str().unwrap()), dir.to_str().unwrap());
+
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    assert!(
+        out.error.is_none(),
+        "a subdir fault is not a fatal root error"
+    );
+    assert!(
+        out.incomplete,
+        "an unreadable subdir must flag the enumeration incomplete"
     );
 }

@@ -501,7 +501,7 @@ async fn reindex_diff_classifies_merged_source_file_as_unchanged() {
         size_bytes: ab.total_size_bytes,
         error: None,
     }];
-    let diff = diff_library(&disk, &db_rows, std::path::Path::new("/audio"));
+    let diff = diff_library(&disk, &db_rows, std::path::Path::new("/audio"), true);
     // The merged row's identity in the diff is `merged_uuids.uuid` = the
     // source book's (now-deleted) uuid, which equals `source`.
     assert_eq!(diff.unchanged, vec![source]);
