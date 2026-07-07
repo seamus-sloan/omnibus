@@ -57,10 +57,12 @@ rand_core = { version = "0.6", features = ["getrandom"] } # held at 0.6: tied to
 sha2 = "0.11"
 base64 = "0.22"
 
-# F1.2 thumbnail pipeline: decode EPUB covers (JPEG/PNG/WebP) and re-encode
-# as WebP at multiple sizes. Only the three listed formats are enabled to keep
-# compile times and binary size down.
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+# F1.2 thumbnail pipeline: decode EPUB covers (JPEG/PNG/WebP/GIF) and re-encode
+# as WebP at multiple sizes. Only the listed formats are enabled to keep
+# compile times and binary size down. `gif` is enabled so a cover whose bytes
+# are actually a GIF (even when mislabelled `image/jpeg`) decodes to its first
+# frame instead of failing `The image format Gif is not supported` (#828).
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 
 # HTML sanitization for EPUB description fields (issue #62) and F3.2 journal
 # entries. OPF `<dc:description>` is often HTML; journal bodies are
