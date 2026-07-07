@@ -6,6 +6,7 @@ use dioxus_router::Link;
 use omnibus_shared::{EbookMetadata, SeriesDetail};
 
 use crate::components::atrium::Cover;
+use crate::components::{PageError, PageLoading, PageNotFound};
 use crate::{data, use_server_url, Route};
 
 /// Renders the series discovery page.
@@ -34,21 +35,13 @@ pub fn SeriesPage(id: i64) -> Element {
     }));
 
     if loading() {
-        return rsx! {
-            p { class: "subtitle", "Loading\u{2026}" }
-        };
+        return rsx! { PageLoading {} };
     }
     if let Some(msg) = error() {
-        return rsx! {
-            p { role: "alert", class: "subtitle", "{msg}" }
-            Link { to: Route::Landing {}, class: "btn", "Back to library" }
-        };
+        return rsx! { PageError { message: msg, back_to: Route::Landing {} } };
     }
     let Some(s) = series() else {
-        return rsx! {
-            p { class: "subtitle", "Series not found." }
-            Link { to: Route::Landing {}, class: "btn", "Back to library" }
-        };
+        return rsx! { PageNotFound { subject: "Series", back_to: Route::Landing {} } };
     };
 
     render_series(s)

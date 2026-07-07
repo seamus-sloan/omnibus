@@ -6,6 +6,7 @@ use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::AuthorSummary;
 
+use crate::components::{PageError, PageLoading};
 use crate::{data, use_server_url, Route};
 
 /// Sort axes exposed in the toolbar. Mirrors the design's "Last name A–Z /
@@ -68,15 +69,10 @@ pub fn AuthorsIndexPage() -> Element {
     });
 
     if loading() {
-        return rsx! {
-            p { class: "subtitle", "Loading\u{2026}" }
-        };
+        return rsx! { PageLoading {} };
     }
     if let Some(msg) = error() {
-        return rsx! {
-            p { role: "alert", class: "subtitle", "{msg}" }
-            Link { to: Route::Landing {}, class: "btn", "Back to library" }
-        };
+        return rsx! { PageError { message: msg, back_to: Route::Landing {} } };
     }
 
     // Borrow the signal's contents instead of cloning. The list can hold

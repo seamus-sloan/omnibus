@@ -7,6 +7,7 @@ use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::{EbookMetadata, MergeBooksResult, SuggestionsResponse};
 
+use crate::components::{PageError, PageLoading, PageNotFound};
 use crate::{data, use_server_url, Route};
 
 mod journal;
@@ -80,21 +81,13 @@ pub fn BookDetailPage(uuid: String) -> Element {
     );
 
     if loading() {
-        return rsx! {
-            p { class: "subtitle", "Loading\u{2026}" }
-        };
+        return rsx! { PageLoading {} };
     }
     if let Some(msg) = error() {
-        return rsx! {
-            p { role: "alert", class: "subtitle", "{msg}" }
-            Link { to: Route::Landing {}, class: "btn", "Back to library" }
-        };
+        return rsx! { PageError { message: msg, back_to: Route::Landing {} } };
     }
     let Some(b) = book() else {
-        return rsx! {
-            p { class: "subtitle", "Book not found." }
-            Link { to: Route::Landing {}, class: "btn", "Back to library" }
-        };
+        return rsx! { PageNotFound { subject: "Book", back_to: Route::Landing {} } };
     };
 
     render_book_shell(

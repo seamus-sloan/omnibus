@@ -8,6 +8,7 @@ use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::SeriesSummary;
 
+use crate::components::{PageError, PageLoading};
 use crate::{data, use_server_url, Route};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -25,10 +26,10 @@ pub fn SeriesIndexPage() -> Element {
     let (series, loading, error) = use_series_data(server_url);
 
     if loading() {
-        return render_loading_state();
+        return rsx! { PageLoading {} };
     }
     if let Some(msg) = error() {
-        return render_error_state(&msg);
+        return rsx! { PageError { message: msg, back_to: Route::Landing {} } };
     }
 
     // Borrow the signal's contents instead of cloning — see authors_index
@@ -117,21 +118,6 @@ fn apply_filter_and_sort<'a>(
         }
     }
     filtered
-}
-
-/// Loading placeholder shown while `list_series` is in flight.
-fn render_loading_state() -> Element {
-    rsx! {
-        p { class: "subtitle", "Loading\u{2026}" }
-    }
-}
-
-/// Error state with the fetch message and a link back to the library.
-fn render_error_state(msg: &str) -> Element {
-    rsx! {
-        p { role: "alert", class: "subtitle", "{msg}" }
-        Link { to: Route::Landing {}, class: "btn", "Back to library" }
-    }
 }
 
 /// Body grid: empty-state copy when `filtered` is empty, otherwise the card grid.
