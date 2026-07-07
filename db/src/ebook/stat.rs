@@ -117,8 +117,16 @@ pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatSca
                 continue;
             }
         };
-        for entry in read.flatten() {
-            push_dir_entry(dir, &entry, &mut stack, &mut entries, &mut saw_any_file);
+        // Iterate the ReadDir results explicitly rather than `.flatten()`:
+        // an `Err` mid-enumeration is a partial `readdir` (an I/O fault
+        // after the dir opened), so it must flag the walk `incomplete` — a
+        // `.flatten()` here would silently drop the bad entry and leave the
+        // enumeration looking complete, defeating the #819 removal guard.
+        for entry in read {
+            match entry {
+                Ok(e) => push_dir_entry(dir, &e, &mut stack, &mut entries, &mut saw_any_file),
+                Err(_) => incomplete = true,
+            }
         }
     }
 

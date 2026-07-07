@@ -779,7 +779,14 @@ async fn seed_ebook_at(pool: &SqlitePool, library_path: &str, filename: &str, ti
 fn make_unreadable(dir: &std::path::Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o000)).unwrap();
-    std::fs::read_dir(dir).is_err()
+    if std::fs::read_dir(dir).is_err() {
+        return true;
+    }
+    // The platform ignored the perm change (e.g. running as root). Restore
+    // read access before bailing so the caller's temp-dir cleanup doesn't
+    // trip over a 0o000 directory.
+    restore_readable(dir);
+    false
 }
 
 #[cfg(unix)]

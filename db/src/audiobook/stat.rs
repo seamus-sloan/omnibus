@@ -100,7 +100,18 @@ pub fn stat_audiobook_library(
                 continue;
             }
         };
-        for entry in read.flatten() {
+        // Explicit iteration (not `.flatten()`): an `Err` mid-enumeration is
+        // a partial `readdir` and must flag the walk `incomplete`, or the
+        // #819 removal guard would treat a partial view as complete. Mirrors
+        // the ebook walker.
+        for entry in read {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => {
+                    incomplete = true;
+                    continue;
+                }
+            };
             let Ok(file_type) = entry.file_type() else {
                 continue;
             };
