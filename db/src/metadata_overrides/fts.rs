@@ -4,9 +4,8 @@
 //! patch in one transaction. Called best-effort by the upsert/merge paths;
 //! the delete path restores canonical FTS in its own transaction instead.
 
-use sqlx::{Sqlite, SqliteConnection, SqlitePool, Transaction};
-
 use omnibus_shared::EbookMetadata;
+use sqlx::{Sqlite, SqliteConnection, SqlitePool, Transaction};
 
 use crate::books::{get_books_by_ids, resolve_book_id_by_uuid, resolve_book_ids_bulk};
 use crate::sync::upsert_fts;

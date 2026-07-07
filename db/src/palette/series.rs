@@ -3,9 +3,8 @@
 //! first book's effective creators. Visibility still requires at least
 //! one canonical link in this library.
 
-use sqlx::{Row, SqlitePool};
-
 use omnibus_shared::PaletteSeriesHit;
+use sqlx::{Row, SqlitePool};
 
 use super::PaletteError;
 

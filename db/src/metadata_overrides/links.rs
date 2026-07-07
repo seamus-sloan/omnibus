@@ -4,9 +4,8 @@
 //! read time via `apply_overrides` and doesn't yet need a sibling helper
 //! here.
 
-use sqlx::SqliteConnection;
-
 use omnibus_shared::MetadataOverrides;
+use sqlx::SqliteConnection;
 
 /// When an override sets a series name, ensure a `series` row and
 /// `books_series_link` exist so the browse index and detail-page breadcrumb

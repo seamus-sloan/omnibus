@@ -3,9 +3,8 @@
 //! blocklist, upserts surviving names into `authors`, and writes the
 //! per-book join rows in a constant handful of statements.
 
-use sqlx::Transaction;
-
 use omnibus_shared::EbookMetadata;
+use sqlx::Transaction;
 
 /// Batch-insert author join rows from the merged `creators` list. The OPF
 /// parser appends `<dc:contributor>` entries onto `creators` in source

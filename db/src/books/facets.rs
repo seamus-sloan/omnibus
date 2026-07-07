@@ -6,9 +6,8 @@
 //! mirroring the former client-side `facet_counts`, which tallied the full
 //! hydrated list regardless of the active filter selection.
 
-use sqlx::SqlitePool;
-
 use omnibus_shared::{FacetCount, FacetCounts};
+use sqlx::SqlitePool;
 
 /// Per-facet book counts for `library_paths`, ordered by count descending then
 /// value ascending (the order the sidebar renders). Empty `library_paths`

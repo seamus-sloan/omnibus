@@ -2,9 +2,8 @@
 //! matches with override-aware overlays applied after hydration so the
 //! palette row matches what the rest of the app renders.
 
-use sqlx::{Row, SqlitePool};
-
 use omnibus_shared::PaletteBookHit;
+use sqlx::{Row, SqlitePool};
 
 use crate::books::parse_json_array;
 use crate::helpers::build_fts_match;

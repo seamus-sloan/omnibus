@@ -4,9 +4,8 @@
 //! `crate::books`, plus the discovery read paths (`get_author`,
 //! `get_series`) via `pub(crate)` re-exports.
 
-use sqlx::{Row, SqlitePool};
-
 use omnibus_shared::{Contributor, EbookMetadata, Identifier};
+use sqlx::{Row, SqlitePool};
 
 use crate::helpers::format_series_index;
 use crate::metadata_overrides::{apply_overrides, load_overrides_bulk};

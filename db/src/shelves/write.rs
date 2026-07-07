@@ -5,9 +5,8 @@
 //! still points at the surviving book. Name collisions per owner surface as
 //! [`ShelfError::NameTaken`].
 
-use sqlx::{Sqlite, SqlitePool, Transaction};
-
 use omnibus_shared::{CreateShelfRequest, Shelf, ShelfKind, ShelfRule, UpdateShelfRequest};
+use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use super::read::get_shelf;
 use super::ShelfError;
