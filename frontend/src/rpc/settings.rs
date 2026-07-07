@@ -152,6 +152,30 @@ pub async fn rpc_send_smtp_test() -> Result<()> {
     Ok(())
 }
 
+/// Admin: manually trigger a rescan of the configured ebook and audiobook
+/// library paths. Posts `Task::Scan` / `Task::ScanAudiobooks` to the shared
+/// worker (same tasks a settings save would) and returns immediately;
+/// progress surfaces via the `WorkerStatusIndicator`. Errors when neither
+/// library path is configured.
+#[post("/api/rpc/scan-library", pool: PoolExt, worker: WorkerExt, _admin: AdminUser)]
+pub async fn rpc_scan_library() -> Result<()> {
+    let settings = db::get_settings(&pool.0).await?;
+    if settings.ebook_library_path.is_none() && settings.audiobook_library_path.is_none() {
+        return Err(ServerFnError::new("no library path configured").into());
+    }
+    if let Some(library_path) = settings.ebook_library_path {
+        worker
+            .0
+            .post(omnibus_db::worker::Task::Scan { library_path });
+    }
+    if let Some(library_path) = settings.audiobook_library_path {
+        worker
+            .0
+            .post(omnibus_db::worker::Task::ScanAudiobooks { library_path });
+    }
+    Ok(())
+}
+
 /// Admin: manually trigger chapter extraction for audiobooks missing
 /// chapters. Posts `Task::BackfillChapters` to the background worker and
 /// returns immediately.

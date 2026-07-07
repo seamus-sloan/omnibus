@@ -3707,6 +3707,12 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 
 /* ── Settings page ─────────────────────────────────────────────────── */
+/* Stack the settings cards with breathing room between each section. */
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
 .settings-form {
   display: flex;
   flex-direction: column;

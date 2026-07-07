@@ -27,6 +27,7 @@ pub fn SettingsPage() -> Element {
     let library = use_signal(LibraryContents::default);
     let refetch_in_flight = use_signal(|| false);
     let backfill_in_flight = use_signal(|| false);
+    let scan_in_flight = use_signal(|| false);
     // Bumped after a successful save to re-trigger the library-refresh effect.
     let library_refresh = use_signal(|| 0u32);
 
@@ -56,6 +57,7 @@ pub fn SettingsPage() -> Element {
     );
 
     rsx! {
+        div { class: "settings-page",
         section { class: "card",
             h1 { "Settings" }
             p { class: "subtitle", "Configure your library paths." }
@@ -78,6 +80,8 @@ pub fn SettingsPage() -> Element {
                         status_is_error,
                         refetch_in_flight,
                         backfill_in_flight,
+                        scan_in_flight,
+                        library_refresh,
                     }
                 }
             }
@@ -93,6 +97,7 @@ pub fn SettingsPage() -> Element {
         if is_admin() {
             HardcoverKeyField {}
             SmtpConfigField {}
+        }
         }
     }
 }
@@ -226,19 +231,48 @@ fn LibraryPathFields(
     }
 }
 
-/// Ghost buttons for one-off maintenance jobs (author photo refetch, chapter backfill).
+/// Ghost buttons for one-off maintenance jobs (library rescan, author photo
+/// refetch, chapter backfill).
 #[component]
 fn MaintenanceActions(
     mut status: Signal<Option<String>>,
     mut status_is_error: Signal<bool>,
     mut refetch_in_flight: Signal<bool>,
     mut backfill_in_flight: Signal<bool>,
+    mut scan_in_flight: Signal<bool>,
+    mut library_refresh: Signal<u32>,
 ) -> Element {
     let server_url = use_server_url();
+    let url_for_scan = server_url.clone();
     let url_for_refetch = server_url.clone();
     let url_for_backfill = server_url;
 
     rsx! {
+        button {
+            r#type: "button",
+            class: "btn ghost",
+            disabled: scan_in_flight(),
+            "data-testid": "scan-library",
+            onclick: move |_| {
+                let url = url_for_scan.clone();
+                scan_in_flight.set(true);
+                spawn(async move {
+                    match data::scan_library(&url).await {
+                        Ok(()) => {
+                            status.set(Some("Library scan queued.".into()));
+                            status_is_error.set(false);
+                            library_refresh.set(library_refresh() + 1);
+                        }
+                        Err(e) => {
+                            status.set(Some(format!("Failed to start library scan: {e}")));
+                            status_is_error.set(true);
+                        }
+                    }
+                    scan_in_flight.set(false);
+                });
+            },
+            "Scan Library"
+        }
         button {
             r#type: "button",
             class: "btn ghost",

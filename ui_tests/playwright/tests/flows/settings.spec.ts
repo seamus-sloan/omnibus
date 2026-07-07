@@ -31,6 +31,7 @@ test("renders the settings page layout", async ({ page }) => {
   await expect(ebookInput(page)).toBeVisible();
   await expect(audiobookInput(page)).toBeVisible();
   await expect(saveButton(page)).toBeVisible();
+  await expect(page.getByTestId("scan-library")).toBeVisible();
   await expect(settingsStatus(page)).toBeAttached();
   await expect(page.getByTestId("ebook-library-summary")).toBeAttached();
   await expect(page.getByTestId("audiobook-library-summary")).toBeAttached();
@@ -140,6 +141,26 @@ test("shows an error status when saving settings fails", async ({ page }) => {
   );
 
   await expect(settingsStatus(page)).toHaveText("Failed to save settings.");
+  await expect(settingsStatus(page)).toHaveClass(/error/);
+});
+
+test("shows an error status when a manual library scan fails", async ({ page }) => {
+  await gotoReady(page, "/settings");
+
+  await page.route("**/api/rpc/scan-library", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
+    }
+    return route.continue();
+  });
+
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/scan-library", expectedStatus: 500 },
+    async () => page.getByTestId("scan-library").click(),
+  );
+
+  await expect(settingsStatus(page)).toContainText("Failed to start library scan");
   await expect(settingsStatus(page)).toHaveClass(/error/);
 });
 
