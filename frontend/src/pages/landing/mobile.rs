@@ -48,14 +48,14 @@ pub(super) fn MobileLanding(props: MobileLandingProps) -> Element {
             header { class: "m-lib-head",
                 div { class: "omn-brand-word m-lib-brand", "Omnibus" }
                 div { class: "m-lib-head-actions",
-                    // A dedicated mobile search screen is a follow-up; until it
-                    // exists there's no valid destination (`/search/:query`
-                    // needs a query), so the header carries only the avatar.
+                    // Search entry — opens the mobile-native search screen.
+                    // Account/settings lives on the bottom-nav "You" tab.
                     Link {
-                        to: Route::Settings {},
-                        class: "omn-avatar m-lib-avatar",
-                        "aria-label": "Your account",
-                        "ek"
+                        to: Route::MobileSearch {},
+                        class: "m-icon-btn",
+                        "aria-label": "Search",
+                        "data-testid": "mobile-search-entry",
+                        {search_glyph()}
                     }
                 }
             }
@@ -155,6 +155,17 @@ fn thumb_srcs(
         )
     } else {
         (None, None)
+    }
+}
+
+fn search_glyph() -> Element {
+    rsx! {
+        svg {
+            width: "18", height: "18", view_box: "0 0 24 24", fill: "none",
+            stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", stroke_linejoin: "round",
+            circle { cx: "11", cy: "11", r: "8" }
+            line { x1: "21", y1: "21", x2: "16.65", y2: "16.65" }
+        }
     }
 }
 

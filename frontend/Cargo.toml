@@ -64,9 +64,10 @@ web = [
 # Native mobile client: talks to `/api/*` REST routes via reqwest.
 # tokio is enabled for `sync::watch` — used by `data::token_store` to
 # notify the UI when auth state changes so screens redirect to /login
-# without a polling loop. No runtime/macro features are pulled in here:
-# reqwest's own runtime is sufficient and `watch` is sync-only.
-mobile = ["dep:reqwest", "dep:serde_json", "dep:tokio", "tokio/sync", "dep:tracing"]
+# without a polling loop. `tokio/time` backs the debounce sleep in the
+# mobile search screen (`pages::search_mobile`); reqwest's runtime already
+# drives the timer, so no extra runtime/macro features are needed.
+mobile = ["dep:reqwest", "dep:serde_json", "dep:tokio", "tokio/sync", "tokio/time", "dep:tracing"]
 # Server-function bodies: compiles the server-side halves of the #[get]/#[post]
 # functions in rpc.rs against the real DB layer. Used by `server/` when
 # building the fullstack native binary. The DB work lives in `omnibus-db`;
