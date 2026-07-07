@@ -19,7 +19,7 @@ Default `cargo build` / `clippy` covers `server`, `shared`, `frontend` only. Mob
 
 **Database:** schema ships as numbered SQL migrations under [db/migrations/](../db/migrations/), embedded via `sqlx::migrate!` and run on pool init in `omnibus_db::init_db`. Applied versions are recorded in the `_sqlx_migrations` table. Add new migrations as `NNNN_description.sql` — never edit an applied file. All tests use `sqlite::memory:` for isolation; the migrator runs against them the same as production.
 
-**Server URL (mobile):** the backend base URL is a reactive `ServerUrl(Signal<String>)` context, seeded at launch from `data::server_url_store` (persisted at `$HOME/.omnibus-server`, plaintext, all builds — the URL isn't secret). Empty on first run → the mobile `ScreenLayout` gate routes to the unguarded `/connect` route (`pages/server_connect.rs`), which validates reachability via `data::check_server` (`GET /api/_health`) before persisting and advancing to `/login`. The login screen shows a connected-to bar with a Back button to change it. `use_server_url()` still returns a `String` snapshot, so all readers are unchanged; `use_server_url_signal()` is the writer accessor.
+**Server URL (mobile):** the backend base URL is a reactive `ServerUrl(Signal<String>)` context, seeded at launch from `data::server_url_store` (persisted at `<data_dir>/server` — `Library/Application Support/omnibus/server` on iOS, `$HOME/.omnibus/server` on desktop/dev — plaintext, all builds; the URL isn't secret). Empty on first run → the mobile `ScreenLayout` gate routes to the unguarded `/connect` route (`pages/server_connect.rs`), which validates reachability via `data::check_server` (`GET /api/_health`) before persisting and advancing to `/login`. The login screen shows a connected-to bar with a Back button to change it. `use_server_url()` still returns a `String` snapshot, so all readers are unchanged; `use_server_url_signal()` is the writer accessor.
 
 ## shared/src/
 
@@ -149,11 +149,16 @@ Mobile auth: bearer-token login flow lives in `frontend/src/data.rs` under
 `feature = "mobile"`. `data::mobile_login` / `mobile_register` POST to
 `/api/auth/{login,register}` with `client_kind: ios|android|bearer` so the
 server returns a bearer token in the JSON body. `data::token_store` keeps
-the token in a process-local `OnceLock<RwLock<...>>` and — **only in
-debug builds** (`cfg!(debug_assertions)`) — persists it to
-`$HOME/.omnibus-token`. Release builds keep the token in memory only and
-require re-login on every cold start. UI components subscribe to
-`data::token_store::subscribe()` (a `tokio::sync::watch` receiver) so a
-401-driven `token_store::clear()` reactively redirects to `/login` (the gate checks the `ServerUrl` context first, redirecting to `/connect` when it's empty — see the Server URL (mobile) note above).
-**TODO**: replace the disk-persistence stub with iOS Keychain / Android
-Keystore and flip persistence on unconditionally — see the module docs.
+the token in a process-local `OnceLock<RwLock<...>>` and persists it (in
+every build) to `<data_dir>/token` with `0o600` perms, where `data_dir`
+(`data::app_dirs`) resolves to `Library/Application Support/omnibus` on iOS
+and `$HOME/.omnibus` on desktop/dev. So the user stays signed in across a
+cold start and is only logged out when the server rejects the bearer. UI
+components subscribe to `data::token_store::subscribe()` (a
+`tokio::sync::watch` receiver) so a 401-driven `token_store::clear()`
+reactively redirects to `/login` (the gate checks the `ServerUrl` context
+first, redirecting to `/connect` when it's empty — see the Server URL
+(mobile) note above). At-rest protection is the iOS sandbox + Data
+Protection + the `0o600` perms; **TODO**: harden with iOS Keychain /
+Android Keystore. Android persistence is not yet wired (`data_dir` returns
+`None` → memory-only) pending a JNI `Context.getFilesDir()` resolver.

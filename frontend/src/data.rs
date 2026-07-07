@@ -102,6 +102,71 @@ impl DataError {
 pub struct ServerUrl(pub dioxus::prelude::Signal<String>);
 
 #[cfg(feature = "mobile")]
+pub mod app_dirs {
+    //! Resolves the writable, per-app directory that [`super::token_store`]
+    //! and [`super::server_url_store`] persist into. Historically both wrote
+    //! to `$HOME/.omnibus-*`, but on iOS `$HOME` is the app-container *root*,
+    //! which is read-only — only its `Library`/`Documents`/`tmp` subdirs are
+    //! writable — so every write silently failed and nothing survived a cold
+    //! start. We now target `Library/Application Support/omnibus` on iOS (the
+    //! Apple-sanctioned, backed-up location for app-managed data) and
+    //! `$HOME/.omnibus` on desktop/dev.
+    use std::path::{Path, PathBuf};
+
+    /// Pure per-platform base-dir resolution from a home dir. No I/O, so it's
+    /// unit-testable without touching the process environment.
+    pub(crate) fn data_dir_from_home(home: &Path) -> PathBuf {
+        #[cfg(target_os = "ios")]
+        {
+            home.join("Library/Application Support/omnibus")
+        }
+        #[cfg(not(target_os = "ios"))]
+        {
+            home.join(".omnibus")
+        }
+    }
+
+    /// Resolve and create the writable data dir. `None` → the caller keeps
+    /// its in-memory-only behavior (unchanged from before): no home dir, an
+    /// unwritable location, or Android (persistence not yet wired — see the
+    /// GH issue tracking the JNI `Context.getFilesDir()` resolver).
+    pub fn data_dir() -> Option<PathBuf> {
+        // Android's `$HOME` under tao/wry isn't the app files dir; resolving
+        // it needs JNI. Until that lands, stay memory-only (no regression).
+        #[cfg(target_os = "android")]
+        {
+            // TODO(#837): resolve Context.getFilesDir() via JNI, then persist.
+            return None;
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let home = std::env::var_os("HOME")?;
+            let dir = data_dir_from_home(Path::new(&home));
+            std::fs::create_dir_all(&dir).ok()?;
+            Some(dir)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn data_dir_from_home_targets_platform_subdir() {
+            let dir = data_dir_from_home(Path::new("/home/reader"));
+            if cfg!(target_os = "ios") {
+                assert_eq!(
+                    dir,
+                    Path::new("/home/reader/Library/Application Support/omnibus")
+                );
+            } else {
+                assert_eq!(dir, Path::new("/home/reader/.omnibus"));
+            }
+        }
+    }
+}
+
+#[cfg(feature = "mobile")]
 pub mod server_url_store {
     //! On-disk persistence for the user-entered backend base URL. Far
     //! simpler than [`super::token_store`]: the URL is not a secret, so it
@@ -112,11 +177,10 @@ pub mod server_url_store {
     //! it back when the user connects.
     use std::path::PathBuf;
 
-    /// On-disk path for the persisted server URL, or `None` when no home
-    /// directory is available (same `HOME`-based resolution as the token
-    /// store; iOS sandboxes set `HOME` to the app container).
+    /// On-disk path for the persisted server URL, or `None` when no writable
+    /// app data dir is available (see [`super::app_dirs::data_dir`]).
     pub fn server_path() -> Option<PathBuf> {
-        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".omnibus-server"))
+        super::app_dirs::data_dir().map(|d| d.join("server"))
     }
 
     /// Trim persisted file contents into a usable URL, rejecting an
@@ -219,14 +283,12 @@ pub mod token_store {
 
     /// On-disk path for the persisted bearer token.
     ///
-    /// Returns `None` when no platform-appropriate home directory is
-    /// available (`HOME` unset on a non-Unix-y target, etc.). In that case
-    /// the token stays in memory only and the user re-logs in on next
-    /// launch — strictly safer than dropping a token file in an arbitrary
-    /// working directory. iOS app sandboxes set `HOME` to the app's
-    /// container, so the common path is covered.
+    /// Returns `None` when no writable app data dir is available (see
+    /// [`super::app_dirs::data_dir`]); the token then stays in memory only and
+    /// the user re-logs in on next launch — strictly safer than dropping a
+    /// token file in an arbitrary or unwritable location.
     pub fn token_path() -> Option<PathBuf> {
-        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".omnibus-token"))
+        super::app_dirs::data_dir().map(|d| d.join("token"))
     }
 
     /// Read the on-disk token (if any) into the in-memory store. Call once
@@ -261,16 +323,15 @@ pub mod token_store {
         unpoison(cell().read()).clone()
     }
 
-    /// `true` when this build is allowed to persist the bearer token to
-    /// disk. Gated behind `cfg(debug_assertions)` so a release build can
-    /// never accidentally write a long-lived credential to the
-    /// filesystem in plaintext — release users re-login on every cold
-    /// start until iOS Keychain / Android Keystore support lands and
-    /// flips this to unconditionally `true` (against secure storage).
-    /// Dev builds (`dx serve --platform ios|android`) keep the
-    /// persistence path so the dev-loop UX isn't crippled.
+    /// `true` when this build persists the bearer token to disk. Now
+    /// unconditional: the token lands in the sandboxed app data dir (see
+    /// [`super::app_dirs`]) with `0o600` perms, protected at rest by the iOS
+    /// sandbox + Data Protection. Release builds persist too, so users stay
+    /// signed in across a cold start and are only logged out when the server
+    /// rejects the bearer (expiry/revoke). iOS Keychain / Android Keystore
+    /// remains a future hardening step, not a prerequisite for persistence.
     fn persistence_enabled() -> bool {
-        cfg!(debug_assertions)
+        true
     }
 
     /// Set the token in memory immediately, notify UI subscribers, and
@@ -412,6 +473,41 @@ pub mod token_store {
     fn write_token_file(path: &Path, token: &[u8]) -> std::io::Result<()> {
         std::fs::write(path, token)
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn persistence_enabled_is_true_in_every_build() {
+            // Release builds must persist too — a false here would resurrect
+            // the "logged out on app close" bug.
+            assert!(persistence_enabled());
+        }
+
+        #[test]
+        fn write_token_file_round_trips_the_token() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("token");
+            write_token_file(&path, b"secret-bearer").expect("write");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "secret-bearer");
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn write_token_file_is_owner_only_on_unix() {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("token");
+            // Pre-create with loose perms to prove the mode is re-applied even
+            // when the file already exists (the buggy-older-build case).
+            std::fs::write(&path, b"old").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            write_token_file(&path, b"secret-bearer").expect("write");
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+    }
 }
 
 /// Best-effort `client_kind` for the bearer-login request body, used
@@ -452,6 +548,10 @@ pub(crate) fn with_bearer(rb: reqwest::RequestBuilder) -> reqwest::RequestBuilde
 /// Inspect a response: if it's a 401, clear the stored bearer token so the
 /// next render of the auth-aware UI can route to `/login`. Returns the same
 /// status the caller was about to inspect.
+///
+/// The server is the sole authority on session expiry (bearer TTL is 90 days);
+/// this 401 path is the *only* logout trigger. Do not add a client-side clock
+/// — the persisted token intentionally survives cold starts.
 #[cfg(feature = "mobile")]
 pub(crate) fn note_status(status: reqwest::StatusCode) -> reqwest::StatusCode {
     if status == reqwest::StatusCode::UNAUTHORIZED {
