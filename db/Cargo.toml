@@ -11,6 +11,11 @@ license.workspace = true
 
 [dependencies]
 omnibus-shared = { path = "../shared" }
+# held at 0.8: 0.9 requires `impl SqlSafeStr` on every `query*()` call — the ~55
+# dynamic-SQL sites here (`sqlx::query(&sql)` / `&format!(...)`) would each need
+# an `AssertSqlSafe(...)` wrap, and the combined `runtime-tokio-rustls` feature
+# is split into `runtime-tokio` + `tls-rustls-*`. That's a nontrivial migration,
+# out of scope for this staleness bump; track it as a follow-up.
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time", "process", "io-util"] }
 anyhow = "1"
@@ -66,13 +71,13 @@ ammonia = "4"
 # F3.2 journals: render user-authored markdown to HTML server-side (then
 # sanitized by `ammonia` above). Strikethrough is enabled to match the
 # composer's formatting affordances; a custom `||spoiler||` pass runs first.
-pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 
 # F2.3 audiobook metadata: read title/artist/album/duration and embedded
 # cover artwork from m4b/m4a/mp3 (and any other container lofty supports).
 # Chosen over `mp4ameta` so mp3 works through the same Tag API without an
 # ffprobe fallback.
-lofty = "0.22"
+lofty = "0.24"
 
 
 # `v4` mints the durable, content-independent `books.uuid` (F2): a fresh
@@ -83,19 +88,18 @@ lofty = "0.22"
 uuid = { version = "1", features = ["v4", "v5"] }
 
 # F1.11 author profile photos: outbound HTTP for the Open Library resolver
-# (`db::author_photos`). `rustls-tls` matches the rest of our async TLS
-# choices (sqlx uses `runtime-tokio-rustls`) so we don't pull in OpenSSL.
-# `json` is needed to deserialize the `/search/authors.json` response.
-# This is the only outbound HTTP in the codebase — keep it scoped to the
-# resolver module.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# (`db::author_photos`). rustls-based TLS matches the rest of our async TLS
+# choices so we don't pull in OpenSSL. `json` is needed to deserialize the
+# `/search/authors.json` response. This is the only outbound HTTP in the
+# codebase — keep it scoped to the resolver module.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 urlencoding = "2"
 
 # F4.3 Send-to-Kindle: SMTP delivery of the EPUB as an email attachment.
-# `rustls-tls` matches the async-TLS choice used by sqlx/reqwest so we never
-# pull in OpenSSL; `builder` provides the multipart `Message` API. Default
-# features are off to drop the sync `native-tls` transport and file/sendmail
-# transports we don't use.
+# rustls-based TLS matches the async-TLS choice used by sqlx/reqwest so we
+# never pull in OpenSSL; `builder` provides the multipart `Message` API.
+# Default features are off to drop the sync `native-tls` transport and
+# file/sendmail transports we don't use.
 lettre = { version = "0.11", default-features = false, features = [
     "builder",
     "hostname",
