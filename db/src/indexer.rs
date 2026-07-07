@@ -41,6 +41,79 @@ impl From<crate::settings::SettingsError> for IndexerError {
 /// thrashing the disk for users who leave the app open all day.
 pub const REFRESH_AFTER_SECS: i64 = 60 * 60;
 
+/// Circuit-breaker threshold (issue #819): abort the removal pass when a
+/// single scan would flag more than this fraction of a previously-populated
+/// library missing. A legitimate bulk delete this large is rare; a scan
+/// that would erase a fifth of the library is far more likely a transient
+/// mount/permission fault, so we halt and serve the existing index rather
+/// than commit the wipe.
+pub const MASS_MISSING_FRACTION: f64 = 0.20;
+
+/// A scan that flags at most this many books missing is always allowed
+/// through, regardless of [`MASS_MISSING_FRACTION`]. Without a floor, the
+/// circuit-breaker would trip on ordinary small-library edits (deleting 1
+/// of 3 books is 33%). Only libraries larger than this can trip the
+/// percentage guard.
+pub const MASS_MISSING_MIN_ABSOLUTE: usize = 10;
+
+/// Error raised when the removal pass would flag an implausible share of the
+/// library missing. Surfaced (not swallowed) so the worker logs it and the
+/// existing index is left intact — the underlying files are almost certainly
+/// still on disk behind a transient fault.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "reindex aborted: {removed} of {total} books ({percent:.0}%) would be flagged missing — \
+     refusing to erode the library on a likely-transient scan fault (issue #819)"
+)]
+pub struct MassMissingError {
+    pub removed: usize,
+    pub total: usize,
+    pub percent: f64,
+}
+
+/// Decide whether a scan's enumeration can be trusted to drive the removal
+/// pass. Untrustworthy when the walk was `incomplete` (a subdir read
+/// failed), or when the root read **totally empty** (`saw_any_file ==
+/// false`) while the DB still holds file-backed books under it — the
+/// boot-race / unmounted-NFS case where an empty read would otherwise mark
+/// the whole library missing.
+///
+/// `saw_any_file` counts files of *any* extension, so a shared root that
+/// legitimately holds files of another format but none of this library's
+/// (e.g. EPUBs under an audiobook reindex) stays trustworthy — only a truly
+/// empty directory trips the guard.
+///
+/// A genuinely empty library (`db_has_files == false`) is trustworthy: the
+/// first-ever scan of an empty root, or a library the user really did clear,
+/// must still be indexable.
+fn enumeration_is_trustworthy(incomplete: bool, saw_any_file: bool, db_has_files: bool) -> bool {
+    if incomplete {
+        return false;
+    }
+    // A previously-populated root that now reads totally empty is the
+    // transient fault, not a real mass-delete — distrust it. Equivalently:
+    // trust when the walk saw a file, or when the DB has nothing to lose.
+    saw_any_file || !db_has_files
+}
+
+/// Trip the circuit-breaker when `removed` exceeds both the absolute floor
+/// and [`MASS_MISSING_FRACTION`] of the file-backed library. Returns the
+/// typed error to surface; `Ok(())` when the removal is within bounds.
+fn check_mass_missing(removed: usize, db_file_backed: usize) -> Result<(), MassMissingError> {
+    if removed <= MASS_MISSING_MIN_ABSOLUTE || db_file_backed == 0 {
+        return Ok(());
+    }
+    let fraction = removed as f64 / db_file_backed as f64;
+    if fraction > MASS_MISSING_FRACTION {
+        return Err(MassMissingError {
+            removed,
+            total: db_file_backed,
+            percent: fraction * 100.0,
+        });
+    }
+    Ok(())
+}
+
 /// True when a refresh should be kicked off: no state at all, or state
 /// older than [`REFRESH_AFTER_SECS`].
 ///
@@ -111,6 +184,13 @@ pub struct ReindexDiff {
 /// with each `filename` to fill `ParseTarget.absolute` so Phase B can
 /// open files directly without re-walking.
 ///
+/// `enumeration_trustworthy` gates the **Removed** bucket only: when the
+/// caller could not fully enumerate the tree (a subdir read failed, or a
+/// once-populated root read empty) it passes `false`, and `diff_library`
+/// leaves `removed` empty so a partial scan can never flag a book missing.
+/// The New / Changed / Backfill buckets are unaffected — an incomplete
+/// scan still safely indexes the files it *did* see.
+///
 /// # Bucket semantics
 ///
 /// - **Unchanged** — on disk, in DB, `(mtime_epoch, size_bytes)` matches.
@@ -122,6 +202,7 @@ pub struct ReindexDiff {
 ///   row is dropped so the book becomes a **fileless book** (the `books`
 ///   row + its soft-ref user data are retained, not deleted); a returning
 ///   file re-attaches via Changed. An already-fileless book is left alone.
+///   Only populated when `enumeration_trustworthy` is `true`.
 /// - **Backfill** — in DB, in disk, DB has the migration default
 ///   `(mtime_epoch=0, size_bytes=0)`. Treated as the sentinel for "fs
 ///   metadata never observed" (post-migration), so the writer only
@@ -132,6 +213,7 @@ pub fn diff_library(
     disk: &[ebook::StatEntry],
     db: &[books::IndexedRow],
     library_root: &Path,
+    enumeration_trustworthy: bool,
 ) -> ReindexDiff {
     use std::collections::HashMap;
 
@@ -184,16 +266,22 @@ pub fn diff_library(
         }
     }
 
-    for row in db {
-        if row.scan_key.is_empty() {
-            continue;
-        }
-        if !disk_by_key.contains_key(row.scan_key.as_str()) {
-            // A file-backed book whose file is gone becomes a fileless
-            // book (the row + its soft-ref user data are retained, not
-            // deleted). An already-fileless book is left untouched.
-            if row.has_file {
-                out.removed.push(row.uuid.clone());
+    // The removal pass runs only on a fully-trusted enumeration. On a
+    // partial scan (unreadable subdir, or a once-populated root now
+    // reading empty) we leave `removed` empty so no book is flagged
+    // missing and no `merged_uuids` row is eroded (issue #819).
+    if enumeration_trustworthy {
+        for row in db {
+            if row.scan_key.is_empty() {
+                continue;
+            }
+            if !disk_by_key.contains_key(row.scan_key.as_str()) {
+                // A file-backed book whose file is gone becomes a fileless
+                // book (the row + its soft-ref user data are retained, not
+                // deleted). An already-fileless book is left untouched.
+                if row.has_file {
+                    out.removed.push(row.uuid.clone());
+                }
             }
         }
     }
@@ -254,7 +342,21 @@ pub async fn reindex_with_progress(
         books::list_merged_rows_for_formats(pool, library_path, ebook::EBOOK_FORMATS).await?,
     );
     let library_root: PathBuf = PathBuf::from(library_path);
-    let diff = diff_library(&stat.entries, &db_rows, &library_root);
+    let db_file_backed = db_rows.iter().filter(|r| r.has_file).count();
+    let trustworthy =
+        enumeration_is_trustworthy(stat.incomplete, stat.saw_any_file, db_file_backed > 0);
+    if !trustworthy {
+        tracing::warn!(
+            library_path,
+            incomplete = stat.incomplete,
+            saw_any_file = stat.saw_any_file,
+            db_file_backed,
+            "reindex: enumeration incomplete or a populated root read empty — \
+             skipping the removal pass; no books marked missing (issue #819)"
+        );
+    }
+    let diff = diff_library(&stat.entries, &db_rows, &library_root, trustworthy);
+    check_mass_missing(diff.removed.len(), db_file_backed)?;
 
     // Parse Phase B only for the buckets that need it.
     let new_targets = diff.new.clone();
@@ -308,12 +410,23 @@ pub async fn reindex_audiobooks(pool: &SqlitePool, library_path: &str) -> anyhow
     reindex_audiobooks_with_progress(pool, library_path, |_, _| {}).await
 }
 
+/// Enumeration-trust signals lifted out of Phase A so the caller can gate
+/// the removal pass without re-reading the filesystem (issue #819).
+struct EnumerationSignals {
+    /// A subdir `read_dir` failed — partial view.
+    incomplete: bool,
+    /// The walk saw at least one regular file (of any extension).
+    saw_any_file: bool,
+}
+
 /// Phase A of [`reindex_audiobooks_with_progress`]: stat every audio file
 /// under `library_path`, then group the per-file entries into one
-/// [`audiobook::AudiobookGroup`] per book (folder-based grouping).
+/// [`audiobook::AudiobookGroup`] per book (folder-based grouping). The
+/// [`EnumerationSignals`] ride alongside so the caller can suppress the
+/// removal pass on a partial or empty scan (issue #819).
 async fn stat_and_group_audiobooks(
     library_path: &str,
-) -> anyhow::Result<Vec<audiobook::AudiobookGroup>> {
+) -> anyhow::Result<(Vec<audiobook::AudiobookGroup>, EnumerationSignals)> {
     let path_for_scan = library_path.to_owned();
     let library_key = library_path.to_owned();
     let stat = tokio::task::spawn_blocking(move || {
@@ -324,12 +437,16 @@ async fn stat_and_group_audiobooks(
         anyhow::bail!("audiobook scan of {library_path} failed: {msg}");
     }
 
+    let signals = EnumerationSignals {
+        incomplete: stat.incomplete,
+        saw_any_file: stat.saw_any_file,
+    };
     let entries = stat.entries;
     let library_key2 = library_path.to_owned();
     let groups =
         tokio::task::spawn_blocking(move || audiobook::group_into_books(entries, &library_key2))
             .await?;
-    Ok(groups)
+    Ok((groups, signals))
 }
 
 /// Project audiobook groups to the ebook [`ebook::StatEntry`] shape so
@@ -358,7 +475,7 @@ pub async fn reindex_audiobooks_with_progress(
     library_path: &str,
     on_progress: impl FnMut(u32, u32),
 ) -> anyhow::Result<()> {
-    let groups = stat_and_group_audiobooks(library_path).await?;
+    let (groups, signals) = stat_and_group_audiobooks(library_path).await?;
 
     // Diff groups against DB rows (project groups to the ebook StatEntry shape
     // so diff_library can be reused verbatim). Scope to audiobook formats so a
@@ -375,7 +492,21 @@ pub async fn reindex_audiobooks_with_progress(
     );
     let library_root: PathBuf = PathBuf::from(library_path);
     let groups_as_stat = project_groups_to_stat(&groups);
-    let diff = diff_library(&groups_as_stat, &db_rows, &library_root);
+    let db_file_backed = db_rows.iter().filter(|r| r.has_file).count();
+    let trustworthy =
+        enumeration_is_trustworthy(signals.incomplete, signals.saw_any_file, db_file_backed > 0);
+    if !trustworthy {
+        tracing::warn!(
+            library_path,
+            incomplete = signals.incomplete,
+            saw_any_file = signals.saw_any_file,
+            db_file_backed,
+            "reindex_audiobooks: enumeration incomplete or a populated root read empty — \
+             skipping the removal pass; no books marked missing (issue #819)"
+        );
+    }
+    let diff = diff_library(&groups_as_stat, &db_rows, &library_root, trustworthy);
+    check_mass_missing(diff.removed.len(), db_file_backed)?;
 
     // Phase B: parse only the New and Changed groups.
     let groups_by_group_path: std::collections::HashMap<String, audiobook::AudiobookGroup> = groups
