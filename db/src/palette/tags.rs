@@ -3,9 +3,8 @@
 //! still requires at least one canonical link so override-only tags
 //! (no navigable id) don't appear.
 
-use sqlx::{Row, SqlitePool};
-
 use omnibus_shared::PaletteTagHit;
+use sqlx::{Row, SqlitePool};
 
 use super::PaletteError;
 

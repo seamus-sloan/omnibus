@@ -4,9 +4,8 @@
 //! set so books moved into or out of a series via the edit form surface
 //! here too.
 
-use sqlx::{Row, SqlitePool};
-
 use omnibus_shared::{EbookMetadata, SeriesDetail};
+use sqlx::{Row, SqlitePool};
 
 use crate::books::{backfill_creator_ids, row_to_ebook, BOOK_COLUMNS};
 use crate::metadata_overrides::{apply_overrides, load_overrides_bulk};

@@ -2,9 +2,8 @@
 //! to the target, snapshot the source into `merge_log`, and delete the
 //! source row — all-or-nothing.
 
-use sqlx::{SqlitePool, Transaction};
-
 use omnibus_shared::MetadataOverrides;
+use sqlx::{SqlitePool, Transaction};
 
 use crate::covers::{find_cover_file, write_cover_file};
 use crate::sync::delete_fts;
