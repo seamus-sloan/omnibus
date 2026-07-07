@@ -42,6 +42,18 @@ pub struct StatScanResult {
     pub path: Option<String>,
     pub entries: Vec<StatEntry>,
     pub error: Option<String>,
+    /// True when the walk could not fully enumerate the tree — a subdir
+    /// `read_dir` failed (EACCES, transient I/O), so `entries` is a
+    /// **partial** view. The indexer must not run its removal pass on a
+    /// partial enumeration, or it flags every un-enumerated book missing
+    /// (see `crate::indexer::reindex`).
+    pub incomplete: bool,
+    /// True when the walk saw **any** regular file, of any extension. A
+    /// populated root that reads *totally* empty (no files at all) is the
+    /// boot-race / unmounted-NFS signature the indexer distrusts — as
+    /// opposed to a shared root that legitimately has files of another
+    /// format but no `.epub` (which stays trustworthy).
+    pub saw_any_file: bool,
 }
 
 /// Phase A: walk the library and `stat` every `.epub` without opening the
@@ -60,6 +72,8 @@ pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatSca
             path: None,
             entries: vec![],
             error: None,
+            incomplete: false,
+            saw_any_file: false,
         };
     };
 
@@ -69,10 +83,20 @@ pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatSca
             path: Some(path_str.to_string()),
             entries: vec![],
             error: Some(format!("path not found: {path_str}")),
+            incomplete: false,
+            saw_any_file: false,
         };
     }
 
     let mut entries: Vec<StatEntry> = Vec::new();
+    // Set when any subdir read fails: the enumeration is partial, so the
+    // indexer must skip its removal pass rather than flag the missing
+    // subtree as gone.
+    let mut incomplete = false;
+    // Set when the walk sees any regular file at all (any extension) — a
+    // totally-empty read of a populated library is the transient-fault
+    // signature the indexer distrusts.
+    let mut saw_any_file = false;
     let mut stack: Vec<PathBuf> = vec![dir.to_path_buf()];
     while let Some(current) = stack.pop() {
         let read = match std::fs::read_dir(&current) {
@@ -84,14 +108,25 @@ pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatSca
                         path: Some(path_str.to_string()),
                         entries: vec![],
                         error: Some(format!("could not read directory: {e}")),
+                        incomplete: true,
+                        saw_any_file: false,
                     };
                 }
+                incomplete = true;
                 entries.push(unreadable_subdir_entry(dir, &current, &e));
                 continue;
             }
         };
-        for entry in read.flatten() {
-            push_dir_entry(dir, &entry, &mut stack, &mut entries);
+        // Iterate the ReadDir results explicitly rather than `.flatten()`:
+        // an `Err` mid-enumeration is a partial `readdir` (an I/O fault
+        // after the dir opened), so it must flag the walk `incomplete` — a
+        // `.flatten()` here would silently drop the bad entry and leave the
+        // enumeration looking complete, defeating the #819 removal guard.
+        for entry in read {
+            match entry {
+                Ok(e) => push_dir_entry(dir, &e, &mut stack, &mut entries, &mut saw_any_file),
+                Err(_) => incomplete = true,
+            }
         }
     }
 
@@ -101,6 +136,8 @@ pub fn stat_ebook_library(path: Option<&str>, library_path_key: &str) -> StatSca
         path: Some(path_str.to_string()),
         entries,
         error: None,
+        incomplete,
+        saw_any_file,
     }
 }
 
@@ -126,12 +163,15 @@ fn unreadable_subdir_entry(base: &Path, current: &Path, err: &std::io::Error) ->
 
 /// Process one `read_dir` entry: push subdirectories onto `stack` for the
 /// walk, and append a stat row for each `.epub` file. Non-epub files and
-/// entries whose `file_type()` can't be read are skipped.
+/// entries whose `file_type()` can't be read are skipped. `saw_any_file` is
+/// set for every regular file regardless of extension (the "root isn't
+/// empty" signal, see the caller).
 fn push_dir_entry(
     base: &Path,
     entry: &std::fs::DirEntry,
     stack: &mut Vec<PathBuf>,
     entries: &mut Vec<StatEntry>,
+    saw_any_file: &mut bool,
 ) {
     let Ok(file_type) = entry.file_type() else {
         return;
@@ -144,6 +184,7 @@ fn push_dir_entry(
     if !file_type.is_file() {
         return;
     }
+    *saw_any_file = true;
     let is_epub = entry_path
         .extension()
         .and_then(|s| s.to_str())

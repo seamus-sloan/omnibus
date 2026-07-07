@@ -28,6 +28,15 @@ pub struct AudiobookStatScanResult {
     pub path: Option<String>,
     pub entries: Vec<AudiobookStatEntry>,
     pub error: Option<String>,
+    /// True when a subdir `read_dir` failed, so `entries` is a partial
+    /// enumeration. Mirrors [`crate::ebook::StatScanResult::incomplete`];
+    /// the audiobook reindex must not run its removal pass on it.
+    pub incomplete: bool,
+    /// True when the walk saw any regular file of any extension. Mirrors
+    /// [`crate::ebook::StatScanResult::saw_any_file`] — distinguishes a
+    /// totally-empty populated root (distrust) from a shared root with no
+    /// audio files (trust).
+    pub saw_any_file: bool,
 }
 
 /// Walk `path`, stat every file with an extension in
@@ -47,6 +56,8 @@ pub fn stat_audiobook_library(
             path: None,
             entries: vec![],
             error: None,
+            incomplete: false,
+            saw_any_file: false,
         };
     };
 
@@ -56,10 +67,18 @@ pub fn stat_audiobook_library(
             path: Some(path_str.to_string()),
             entries: vec![],
             error: Some(format!("path not found: {path_str}")),
+            incomplete: false,
+            saw_any_file: false,
         };
     }
 
     let mut entries: Vec<AudiobookStatEntry> = Vec::new();
+    // Set when any subdir read fails — partial enumeration; see the
+    // ebook walker for the rationale.
+    let mut incomplete = false;
+    // Set for any regular file of any extension — the "root isn't empty"
+    // signal (see the ebook walker).
+    let mut saw_any_file = false;
     let mut stack: Vec<PathBuf> = vec![dir.to_path_buf()];
     while let Some(current) = stack.pop() {
         let read = match std::fs::read_dir(&current) {
@@ -72,13 +91,27 @@ pub fn stat_audiobook_library(
                         path: Some(path_str.to_string()),
                         entries: vec![],
                         error: Some(format!("could not read directory: {e}")),
+                        incomplete: true,
+                        saw_any_file: false,
                     };
                 }
+                incomplete = true;
                 entries.push(unreadable_subdir_entry(dir, &current, &e));
                 continue;
             }
         };
-        for entry in read.flatten() {
+        // Explicit iteration (not `.flatten()`): an `Err` mid-enumeration is
+        // a partial `readdir` and must flag the walk `incomplete`, or the
+        // #819 removal guard would treat a partial view as complete. Mirrors
+        // the ebook walker.
+        for entry in read {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => {
+                    incomplete = true;
+                    continue;
+                }
+            };
             let Ok(file_type) = entry.file_type() else {
                 continue;
             };
@@ -90,6 +123,7 @@ pub fn stat_audiobook_library(
             if !file_type.is_file() {
                 continue;
             }
+            saw_any_file = true;
             if let Some(stat_entry) = stat_accepted_file(dir, &entry_path) {
                 entries.push(stat_entry);
             }
@@ -102,6 +136,8 @@ pub fn stat_audiobook_library(
         path: Some(path_str.to_string()),
         entries,
         error: None,
+        incomplete,
+        saw_any_file,
     }
 }
 
