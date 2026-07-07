@@ -5,6 +5,7 @@ use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::TagWeight;
 
+use crate::components::{PageError, PageLoading};
 use crate::{data, use_server_url, Route};
 
 /// Renders the tag cloud page.
@@ -32,15 +33,10 @@ pub fn TagCloudPage() -> Element {
     });
 
     if loading() {
-        return rsx! {
-            p { class: "subtitle", "Loading\u{2026}" }
-        };
+        return rsx! { PageLoading {} };
     }
     if let Some(msg) = error() {
-        return rsx! {
-            p { role: "alert", class: "subtitle", "{msg}" }
-            Link { to: Route::Landing {}, class: "btn", "Back to library" }
-        };
+        return rsx! { PageError { message: msg, back_to: Route::Landing {} } };
     }
 
     let tag_list = tags();

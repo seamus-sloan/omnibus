@@ -5,9 +5,9 @@
 //! signal to the original merged [`EbookMetadata`] loaded on mount.
 
 use dioxus::prelude::*;
-use dioxus_router::Link;
 use omnibus_shared::{Contributor, EbookMetadata, MetadataOverrides};
 
+use crate::components::{PageError, PageLoading, PageNotFound};
 use crate::{data, use_server_url, Route};
 
 mod fields;
@@ -49,21 +49,19 @@ pub fn MetadataEditPage(uuid: String) -> Element {
     }));
 
     if loading() {
-        return rsx! {
-            p { class: "subtitle", "Loading\u{2026}" }
-        };
+        return rsx! { PageLoading {} };
     }
     if let Some(msg) = error() {
         return rsx! {
-            p { role: "alert", class: "subtitle", "{msg}" }
-            Link { to: Route::BookDetail { uuid: uuid.clone() }, class: "btn", "Back to book" }
+            PageError {
+                message: msg,
+                back_to: Route::BookDetail { uuid: uuid.clone() },
+                back_label: "Back to book",
+            }
         };
     }
     let Some(b) = book() else {
-        return rsx! {
-            p { class: "subtitle", "Book not found." }
-            Link { to: Route::Landing {}, class: "btn", "Back to library" }
-        };
+        return rsx! { PageNotFound { subject: "Book", back_to: Route::Landing {} } };
     };
 
     rsx! {

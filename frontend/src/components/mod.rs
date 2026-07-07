@@ -46,6 +46,11 @@ pub use chip_editor::ChipEditor;
 
 pub mod atrium;
 
+// Shared loading/error/not-found states for top-level pages — see
+// `page_state.rs` for the role/text contract each one preserves.
+pub mod page_state;
+pub use page_state::{PageError, PageLoading, PageNotFound};
+
 // Shared cover-tile chrome (`thumb_srcs` + the `CoverTile` wrapper) used by
 // the landing grid, shelf detail, and the shelf pickers. Platform-agnostic so
 // the same markup ships under web SSR/WASM and mobile native.
