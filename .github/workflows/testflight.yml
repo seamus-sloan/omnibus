@@ -8,11 +8,11 @@ name: TestFlight
 # com.omnibus.mobile, app record, distribution cert, App Store Connect API
 # key) must already exist.
 #
-# Required repository secrets:
+# Required repository secrets (the signing identity is derived from the cert,
+# so no IOS_SIGNING_IDENTITY name secret is needed):
 #   IOS_DIST_CERT_P12_BASE64         base64 of the Apple Distribution .p12
 #   IOS_DIST_CERT_PASSWORD           password for that .p12
 #   IOS_PROVISIONING_PROFILE_BASE64  base64 of the App Store .mobileprovision
-#   IOS_SIGNING_IDENTITY             e.g. "Apple Distribution: Name (TEAMID)"
 #   ASC_API_KEY_BASE64               base64 of the App Store Connect AuthKey_*.p8
 #   ASC_KEY_ID                       App Store Connect API key ID
 #   ASC_ISSUER_ID                    App Store Connect API issuer ID
@@ -109,6 +109,22 @@ jobs:
           rm -f "$CERT_P12"
           echo "SIGNING_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
 
+          # Derive the signing identity's SHA-1 from the imported cert rather
+          # than trusting a hand-entered name — codesign matches the hash
+          # exactly, so a mistyped IOS_SIGNING_IDENTITY can't cause a silent
+          # "item could not be found in the keychain". Fail loudly (dumping
+          # what's present) if the cert has no usable codesigning identity —
+          # the usual cause is a .p12 exported without its private key.
+          IDENTITY_HASH="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | awk 'match($0, /[0-9A-F]{40}/) { print substr($0, RSTART, RLENGTH); exit }')"
+          if [ -z "$IDENTITY_HASH" ]; then
+            echo "::error::No codesigning identity in the imported keychain — IOS_DIST_CERT_P12_BASE64 must be an Apple Distribution cert exported WITH its private key."
+            security find-identity -v -p codesigning "$KEYCHAIN" || true
+            exit 1
+          fi
+          echo "Using codesigning identity $IDENTITY_HASH"
+          echo "SIGNING_IDENTITY_HASH=$IDENTITY_HASH" >> "$GITHUB_ENV"
+
       - name: Decode provisioning profile
         env:
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
@@ -128,7 +144,8 @@ jobs:
 
       - name: Sign and package .ipa
         env:
-          SIGNING_IDENTITY: ${{ secrets.IOS_SIGNING_IDENTITY }}
+          # SHA-1 derived from the imported cert above (not the secret name).
+          SIGNING_IDENTITY: ${{ env.SIGNING_IDENTITY_HASH }}
           IPA_OUT: ${{ github.workspace }}/omnibus-mobile.ipa
         run: |
           set -euo pipefail
