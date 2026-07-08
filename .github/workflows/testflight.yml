@@ -87,8 +87,14 @@ jobs:
             [ -n "$tag" ] || { echo "::error::No v* git tag found and no marketing_version input given."; exit 1; }
             version="${tag#v}"
           fi
+          # Reject anything but digits and dots before writing to $GITHUB_ENV: a
+          # dispatch input containing a newline would otherwise inject extra env
+          # assignments into every later step. Same guard the packaging script uses.
+          case "$version" in
+            '' | *[!0-9.]*) echo "::error::marketing version must be numeric/dot-separated, got: '$version'"; exit 1 ;;
+          esac
           echo "Marketing version: $version"
-          echo "MARKETING_VERSION=$version" >> "$GITHUB_ENV"
+          printf 'MARKETING_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v22
