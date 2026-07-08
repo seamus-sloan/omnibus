@@ -6,6 +6,15 @@
 
 use dioxus::document::Eval;
 
+/// Absolute URLs of the vendored reader runtime, resolved from the `asset!`
+/// bundle. Loaded in this order on mobile — `JSZip` first, since epub.js's UMD
+/// binds `window.JSZip` at evaluation time.
+pub(super) struct ReaderScripts {
+    pub jszip: String,
+    pub epub: String,
+    pub glue: String,
+}
+
 /// Build the tokened, absolute EPUB-file URL epub.js fetches from the WebView.
 /// That cross-origin XHR can carry neither a cookie nor a bearer header, so the
 /// session token rides the `?token=` query (server side: `MediaAuthUser`).
@@ -18,13 +27,23 @@ pub(super) fn file_token_url(server_url: &str, uuid: &str, token: Option<&str>) 
 }
 
 /// Build the install IIFE: define the `__omnibusOn*` → `dioxus.send` shims,
-/// poll ~10 s (200 × 50 ms) for the vendored globals, then mount the book.
-/// Mirrors the web `reader_bootstrap_js` poll/timeout, but the callback sink is
-/// the Dioxus eval channel rather than `window` closures. `opts` is any
-/// JSON-serializable value shaped like the glue's `init` options bag.
-pub(super) fn install_surface_js(url: &str, opts: &serde_json::Value) -> String {
+/// then load the vendored runtime **in order** (`JSZip` → epub.js → glue) and
+/// mount the book. Unlike the web build (whose SSR emits ordered, parser-
+/// inserted `<script>` tags), mobile has no ordering guarantee from
+/// `document::Script`, so we chain `onload` promises here — epub.js binds
+/// `window.JSZip` at evaluation time, so it must not run before JSZip exists.
+/// Each script is skipped if its global is already present (SPA re-entry).
+/// `opts` is any JSON-serializable value shaped like the glue's `init` bag.
+pub(super) fn install_surface_js(
+    url: &str,
+    opts: &serde_json::Value,
+    scripts: &ReaderScripts,
+) -> String {
     let url_lit = serde_json::to_string(url).unwrap_or_else(|_| "\"\"".into());
     let opts_lit = serde_json::to_string(opts).unwrap_or_else(|_| "{}".into());
+    let jszip = serde_json::to_string(&scripts.jszip).unwrap_or_else(|_| "\"\"".into());
+    let epub = serde_json::to_string(&scripts.epub).unwrap_or_else(|_| "\"\"".into());
+    let glue = serde_json::to_string(&scripts.glue).unwrap_or_else(|_| "\"\"".into());
     format!(
         r#"(function(){{
   window.__omnibusOnRelocate=function(j){{dioxus.send({{kind:"Relocate",json:j}});}};
@@ -32,20 +51,33 @@ pub(super) fn install_surface_js(url: &str, opts: &serde_json::Value) -> String 
   window.__omnibusOnSelection=function(j){{dioxus.send({{kind:"Selection",json:j}});}};
   window.__omnibusOnToc=function(j){{dioxus.send({{kind:"Toc",json:j}});}};
   window.__omnibusOnSearchResults=function(j){{dioxus.send({{kind:"Search",json:j}});}};
-  var n=0;(function go(){{
-    if(window.OmnibusReader&&window.ePub){{
-      window.OmnibusReader.init("omnibus-viewer",{url_lit},{opts_lit});
-    }}else if(n++<200){{setTimeout(go,50);}}
-    else{{dioxus.send({{kind:"Status",state:"error"}});}}
-  }})();
+  function load(src){{return new Promise(function(res,rej){{
+    var s=document.createElement("script");s.src=src;s.async=false;
+    s.onload=function(){{res();}};s.onerror=function(){{rej();}};
+    document.head.appendChild(s);
+  }});}}
+  function ensure(has,src){{return has()?Promise.resolve():load(src);}}
+  ensure(function(){{return !!window.JSZip;}},{jszip})
+    .then(function(){{return ensure(function(){{return !!window.ePub;}},{epub});}})
+    .then(function(){{return ensure(function(){{return !!window.OmnibusReader;}},{glue});}})
+    .then(function(){{
+      if(window.OmnibusReader&&window.ePub){{
+        window.OmnibusReader.init("omnibus-viewer",{url_lit},{opts_lit});
+      }}else{{dioxus.send({{kind:"Status",state:"error"}});}}
+    }})
+    .catch(function(){{dioxus.send({{kind:"Status",state:"error"}});}});
 }})();"#
     )
 }
 
 /// Eval the install script and return the persistent [`Eval`] the caller drains
 /// for reader events.
-pub(super) fn install_reader_surface(url: &str, opts: &serde_json::Value) -> Eval {
-    dioxus::document::eval(&install_surface_js(url, opts))
+pub(super) fn install_reader_surface(
+    url: &str,
+    opts: &serde_json::Value,
+    scripts: &ReaderScripts,
+) -> Eval {
+    dioxus::document::eval(&install_surface_js(url, opts, scripts))
 }
 
 #[cfg(test)]
@@ -67,7 +99,12 @@ mod tests {
     #[test]
     fn install_surface_js_defines_shims_and_calls_init_with_url_and_opts() {
         let opts = serde_json::json!({ "cfi": "epubcfi(/6/2)", "fontSize": 18, "theme": "sepia" });
-        let js = install_surface_js("http://h/api/ebooks/x/file?token=t", &opts);
+        let scripts = ReaderScripts {
+            jszip: "/assets/jszip.js".into(),
+            epub: "/assets/epub.js".into(),
+            glue: "/assets/glue.js".into(),
+        };
+        let js = install_surface_js("http://h/api/ebooks/x/file?token=t", &opts, &scripts);
         // Every glue callback is shimmed into the Dioxus eval channel.
         for cb in [
             "__omnibusOnRelocate",
@@ -84,7 +121,12 @@ mod tests {
         assert!(js.contains(r#""http://h/api/ebooks/x/file?token=t""#));
         assert!(js.contains(r#""theme":"sepia""#));
         assert!(js.contains(r#""fontSize":18"#));
-        // Polls for the vendored globals and errors out after the budget.
+        // Loads the runtime JSZip-first (epub.js binds JSZip at eval time),
+        // then guards init on the globals being present.
+        let jz = js.find("/assets/jszip.js").expect("loads jszip");
+        let ep = js.find("/assets/epub.js").expect("loads epub");
+        let gl = js.find("/assets/glue.js").expect("loads glue");
+        assert!(jz < ep && ep < gl, "runtime must load JSZip → epub → glue");
         assert!(js.contains("window.OmnibusReader&&window.ePub"));
         assert!(js.contains(r#"{kind:"Status",state:"error"}"#));
         // No leaked `format!` escape pairs.

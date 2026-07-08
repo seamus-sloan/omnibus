@@ -4382,8 +4382,16 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   display: flex; align-items: center; gap: 16px; padding: 0 26px;
   background: color-mix(in oklch, var(--bg-0) 80%, transparent);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
-.rd-top { top: 0; height: 60px; border-bottom: 1px solid var(--line-2); }
-.rd-bottom { bottom: 0; height: 54px; border-top: 1px solid var(--line-2);
+/* The bars grow by the OS safe-area insets and pad their content in past
+   them so the top row clears the notch / Dynamic Island and the bottom row
+   clears the home indicator. `env(safe-area-inset-*)` is 0 on the desktop
+   web build, so the bars stay 60/54px there — this only bites on mobile,
+   where `viewport-fit=cover` (set in `use_mobile_viewport_fix`) makes the
+   insets non-zero. */
+.rd-top { top: 0; height: calc(60px + env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top); border-bottom: 1px solid var(--line-2); }
+.rd-bottom { bottom: 0; height: calc(54px + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom); border-top: 1px solid var(--line-2);
   font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
 .rd-tool { display: inline-flex; align-items: center; justify-content: center; gap: 7px;
   height: 34px; min-width: 34px; padding: 0 8px; border-radius: 9px; cursor: pointer;
@@ -4393,7 +4401,13 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-tool.on { color: var(--ink-0); background: var(--bg-2); border-color: var(--line-2); }
 .rd-tool .rd-badge { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
 .rd-aa { font-family: var(--serif); font-size: 19px; line-height: 1; padding-bottom: 2px; }
-.rd-stage { position: absolute; inset: 0; overflow: hidden; }
+/* Inset below the top bar and above the bottom bar, both safe-area-aware so
+   the paginated prose never slides under the chrome (or the notch/home
+   indicator). Matches the bar heights above; env insets are 0 on desktop. */
+.rd-stage { position: absolute; left: 0; right: 0;
+  top: calc(60px + env(safe-area-inset-top));
+  bottom: calc(54px + env(safe-area-inset-bottom));
+  overflow: hidden; }
 .rd-viewer { position: absolute; inset: 0; }
 .rd-turn { position: absolute; top: 50%; transform: translateY(-50%); z-index: 5;
   width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center;
@@ -4648,7 +4662,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
  * second `@media` later in the file, whose equal specificity would win the
  * cascade and silently override these. */
 @media (max-width: 480px) {
-  .rd-top, .rd-bottom { padding: 0 14px; gap: 8px; }
+  /* Only tighten the horizontal padding here — the vertical padding is the
+     safe-area inset set on the base rules, and a `padding: 0 14px` shorthand
+     would zero it back out and re-hide the bars under the notch. */
+  .rd-top { padding-left: 14px; padding-right: 14px; gap: 8px; }
+  .rd-bottom { padding-left: 14px; padding-right: 14px; gap: 8px; }
   .rd-title-book { font-size: 15px; }
   .rd-title-sep { margin: 0 6px; }
   .rd-tool { min-width: 32px; padding: 0 6px; }
@@ -4666,7 +4684,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 
   /* The Aa display panel drops the tool-anchored caret and becomes a sheet
      pinned below the top bar. */
-  .rd-aa-panel { left: 12px; right: 12px; width: auto; top: 64px; }
+  .rd-aa-panel { left: 12px; right: 12px; width: auto;
+    top: calc(64px + env(safe-area-inset-top)); }
   .rd-aa-panel::before { display: none; }
 
   /* Note composer keeps a margin off the viewport edges. */
@@ -4676,7 +4695,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
      caret rect drives inline top/left, so the sheet position needs
      !important to win over them. */
   .rd-selection-popover {
-    top: auto !important; bottom: 66px !important;
+    top: auto !important; bottom: calc(66px + env(safe-area-inset-bottom)) !important;
     left: 16px !important; right: 16px !important;
     padding: 14px 12px; border-radius: 16px;
     background: color-mix(in oklch, var(--bg-1) 96%, transparent);
