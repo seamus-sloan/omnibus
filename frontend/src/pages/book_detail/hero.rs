@@ -175,17 +175,7 @@ fn BdCtaRow(
     rsx! {
         div { class: "bd-cta-row",
             if has_ebook {
-                {
-                    #[cfg(not(feature = "mobile"))]
-                    let start_reading = rsx! {
-                        Link { to: Route::BookRead { uuid: uuid.clone() }, class: "btn primary lg", "data-testid": "start-reading", "Start reading" }
-                    };
-                    #[cfg(feature = "mobile")]
-                    let start_reading = rsx! {
-                        button { class: "btn primary lg", disabled: true, title: "Reading on mobile coming soon", "Start reading" }
-                    };
-                    start_reading
-                }
+                Link { to: Route::BookRead { uuid: uuid.clone() }, class: "btn primary lg", "data-testid": "start-reading", "Start reading" }
             } else if has_audio {
                 {
                     #[cfg(not(feature = "mobile"))]
