@@ -1,8 +1,8 @@
 //! Per-library view-preference persistence for [`ViewPrefs`]. Web stores
 //! per library-path in `localStorage`, mobile keeps an in-memory map, SSR
 //! returns defaults so first-hydration markup matches the WASM client.
-//! Shape lives in `omnibus-shared` so a future server endpoint can reuse it.
-//! In-file `#[cfg]`-framing dividers retained per rule 05's nav-aid exception.
+//! Shape lives in `omnibus-shared`. Kept flat: each impl is a `#[cfg]`
+//! variant of one signature, so per-target submodules would only indirect.
 
 use omnibus_shared::ViewPrefs;
 
@@ -22,10 +22,7 @@ pub fn save(library_path: &str, prefs: &ViewPrefs) {
     save_impl(library_path, prefs);
 }
 
-// -----------------------------------------------------------------------------
-// Web — localStorage
-// -----------------------------------------------------------------------------
-
+// Web — localStorage.
 #[cfg(feature = "web")]
 fn storage_key(library_path: &str) -> String {
     format!("{STORAGE_PREFIX}{library_path}")
@@ -59,10 +56,7 @@ fn save_impl(library_path: &str, prefs: &ViewPrefs) {
     let _ = storage.set_item(&storage_key(library_path), &raw);
 }
 
-// -----------------------------------------------------------------------------
 // Mobile — process-local map; resets on cold launch.
-// -----------------------------------------------------------------------------
-
 #[cfg(feature = "mobile")]
 mod mobile_store {
     use omnibus_shared::ViewPrefs;
@@ -110,10 +104,7 @@ fn save_impl(library_path: &str, prefs: &ViewPrefs) {
     mobile_store::set(library_path, prefs.clone());
 }
 
-// -----------------------------------------------------------------------------
 // SSR / server-only build — no persistence; defaults always.
-// -----------------------------------------------------------------------------
-
 #[cfg(not(any(feature = "web", feature = "mobile")))]
 fn load_impl(_library_path: &str) -> ViewPrefs {
     ViewPrefs::default()
@@ -122,10 +113,7 @@ fn load_impl(_library_path: &str) -> ViewPrefs {
 #[cfg(not(any(feature = "web", feature = "mobile")))]
 fn save_impl(_library_path: &str, _prefs: &ViewPrefs) {}
 
-// -----------------------------------------------------------------------------
 // Tests — only the in-memory mobile store can be exercised without a browser.
-// -----------------------------------------------------------------------------
-
 #[cfg(all(test, feature = "mobile"))]
 mod tests {
     use super::*;
@@ -169,13 +157,11 @@ mod tests {
     }
 }
 
-// -----------------------------------------------------------------------------
 // SSR / server-only tests — exercise the no-persistence path that compiles
 // under the `server` feature (the default `cargo test -p omnibus-frontend
 // --features server`). The `web`/`mobile` impls live behind their own cfgs and
 // are unreachable here, so these assertions pin the documented SSR contract:
 // every call returns defaults and `save` is an inert no-op.
-// -----------------------------------------------------------------------------
 #[cfg(all(test, not(any(feature = "web", feature = "mobile"))))]
 mod ssr_tests {
     use super::*;

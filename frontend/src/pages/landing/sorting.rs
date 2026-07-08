@@ -255,8 +255,7 @@ mod tests {
         books.iter().map(|b| b.id).collect()
     }
 
-    // --- row_slug ---
-
+    // row_slug cases.
     #[test]
     fn row_slug_lowercases_and_strips_extension() {
         assert_eq!(row_slug("Alpha.epub"), "alpha");
@@ -278,8 +277,7 @@ mod tests {
         assert_eq!(row_slug("plain"), "plain");
     }
 
-    // --- sort_books ---
-
+    // sort_books cases.
     fn sample() -> Vec<EbookMetadata> {
         vec![
             book(BookSpec {

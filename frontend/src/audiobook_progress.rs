@@ -1,8 +1,8 @@
 //! Listening-position persistence — the saved `currentTime` (seconds,
 //! float) for each audiobook. Mirrors [`crate::reader_progress`] in shape
-//! (web `localStorage`, mobile in-memory map, server no-op); also the
-//! offline / first-paint cache layer the listen page reads before
-//! reconciling against the `POST /api/progress` sync endpoint.
+//! (web `localStorage`, mobile in-memory map, server no-op) and caches the
+//! first-paint position the listen page reconciles against `POST /api/progress`.
+//! Kept flat: each impl is a `#[cfg]` variant of one signature (no submodules).
 
 #[cfg(feature = "web")]
 const STORAGE_PREFIX: &str = "omn.listening::";
@@ -29,10 +29,7 @@ pub fn save_rate(uuid: &str, rate: f64) {
     save_rate_impl(uuid, rate);
 }
 
-// -----------------------------------------------------------------------------
-// Web — localStorage
-// -----------------------------------------------------------------------------
-
+// Web — localStorage.
 #[cfg(feature = "web")]
 fn storage_key(uuid: &str) -> String {
     format!("{STORAGE_PREFIX}{uuid}")
@@ -85,10 +82,7 @@ fn save_rate_impl(uuid: &str, rate: f64) {
     let _ = storage.set_item(&rate_key(uuid), &format!("{rate}"));
 }
 
-// -----------------------------------------------------------------------------
 // Mobile — process-local map; resets on cold launch.
-// -----------------------------------------------------------------------------
-
 #[cfg(feature = "mobile")]
 mod mobile_store {
     use std::collections::HashMap;
@@ -160,10 +154,7 @@ fn save_rate_impl(uuid: &str, rate: f64) {
     mobile_store::set_rate(uuid, rate);
 }
 
-// -----------------------------------------------------------------------------
 // SSR / server-only build — no persistence.
-// -----------------------------------------------------------------------------
-
 #[cfg(not(any(feature = "web", feature = "mobile")))]
 fn load_impl(_uuid: &str) -> Option<f64> {
     None
@@ -180,10 +171,7 @@ fn load_rate_impl(_uuid: &str) -> Option<f64> {
 #[cfg(not(any(feature = "web", feature = "mobile")))]
 fn save_rate_impl(_uuid: &str, _rate: f64) {}
 
-// -----------------------------------------------------------------------------
 // Tests — only the in-memory mobile store can be exercised without a browser.
-// -----------------------------------------------------------------------------
-
 #[cfg(all(test, feature = "mobile"))]
 mod tests {
     use super::*;
