@@ -14,6 +14,43 @@ use crate::{data, use_server_url};
 use super::journal_editor::*;
 use super::BdSectionHead;
 
+/// Draft-composer signals owned by [`BdJournalComposer`] and threaded into
+/// its footer. Grouped so the composer sub-components stay under the prop cap.
+#[derive(Clone, Copy, PartialEq)]
+struct JournalComposerState {
+    open: Signal<bool>,
+    body: Signal<String>,
+    track_progress: Signal<bool>,
+    progress: Signal<i64>,
+    saving: Signal<bool>,
+    error: Signal<Option<String>>,
+    show_preview: Signal<bool>,
+}
+
+/// Per-entry inline-edit signals shared by the entry card, its header action
+/// row, and the edit form. Grouped so those components stay under the prop cap.
+#[derive(Clone, Copy, PartialEq)]
+struct JournalEntryEditState {
+    editing: Signal<bool>,
+    edit_body: Signal<String>,
+    saving: Signal<bool>,
+    error: Signal<Option<String>>,
+    reload: Signal<u32>,
+}
+
+/// Presentational fields for a journal entry card header (author identity,
+/// meta line, and the data an owner's Edit action needs to seed the form).
+#[derive(Clone, PartialEq)]
+struct JournalEntryHeaderView {
+    author_name: String,
+    initial: String,
+    is_owner: bool,
+    meta_line: String,
+    entry_id: i64,
+    body_for_edit: String,
+    server_url: String,
+}
+
 /// Public reading-journal section: header, composer, and the entry feed.
 #[component]
 pub(super) fn BdJournalSection(uuid: String) -> Element {
@@ -178,13 +215,15 @@ fn BdJournalComposer(uuid: String, server_url: String, reload: Signal<u32>) -> E
                 uuid,
                 server_url,
                 reload,
-                open,
-                body,
-                track_progress,
-                progress,
-                saving,
-                error,
-                show_preview,
+                state: JournalComposerState {
+                    open,
+                    body,
+                    track_progress,
+                    progress,
+                    saving,
+                    error,
+                    show_preview,
+                },
             }
         }
     }
@@ -415,14 +454,17 @@ fn BdJournalComposerFoot(
     uuid: String,
     server_url: String,
     reload: Signal<u32>,
-    open: Signal<bool>,
-    body: Signal<String>,
-    track_progress: Signal<bool>,
-    progress: Signal<i64>,
-    saving: Signal<bool>,
-    error: Signal<Option<String>>,
-    show_preview: Signal<bool>,
+    state: JournalComposerState,
 ) -> Element {
+    let JournalComposerState {
+        open,
+        body,
+        mut track_progress,
+        progress,
+        saving,
+        error,
+        show_preview,
+    } = state;
     let mut reload = reload;
     let mut open = open;
     let mut body = body;
@@ -487,20 +529,23 @@ fn BdJournalComposerFoot(
 /// editing — the Edit/Delete action row. Delete removes the entry and
 /// reloads the feed; Edit seeds the edit-form body and opens it.
 #[component]
-fn BdJournalEntryHeader(
-    author_name: String,
-    initial: String,
-    is_owner: bool,
-    meta_line: String,
-    entry_id: i64,
-    body_for_edit: String,
-    server_url: String,
-    editing: Signal<bool>,
-    edit_body: Signal<String>,
-    saving: Signal<bool>,
-    error: Signal<Option<String>>,
-    reload: Signal<u32>,
-) -> Element {
+fn BdJournalEntryHeader(view: JournalEntryHeaderView, edit: JournalEntryEditState) -> Element {
+    let JournalEntryHeaderView {
+        author_name,
+        initial,
+        is_owner,
+        meta_line,
+        entry_id,
+        body_for_edit,
+        server_url,
+    } = view;
+    let JournalEntryEditState {
+        editing,
+        edit_body,
+        saving,
+        error,
+        reload,
+    } = edit;
     let mut editing = editing;
     let mut edit_body = edit_body;
     let mut saving = saving;
@@ -566,10 +611,15 @@ fn BdJournalEntryCard(
     server_url: String,
     reload: Signal<u32>,
 ) -> Element {
-    let editing = use_signal(|| false);
-    let edit_body = use_signal(|| entry.body_md.clone());
-    let saving = use_signal(|| false);
-    let error = use_signal(|| None::<String>);
+    let edit = JournalEntryEditState {
+        editing: use_signal(|| false),
+        edit_body: use_signal(|| entry.body_md.clone()),
+        saving: use_signal(|| false),
+        error: use_signal(|| None::<String>),
+        reload,
+    };
+    let editing = edit.editing;
+    let error = edit.error;
 
     let is_owner = current_user
         .as_ref()
@@ -592,29 +642,23 @@ fn BdJournalEntryCard(
     rsx! {
         article { class: "card bd-journal-entry", "data-testid": "journal-entry",
             BdJournalEntryHeader {
-                author_name: entry.author_name.clone(),
-                initial,
-                is_owner,
-                meta_line,
-                entry_id,
-                body_for_edit: entry.body_md.clone(),
-                server_url: server_url.clone(),
-                editing,
-                edit_body,
-                saving,
-                error,
-                reload,
+                view: JournalEntryHeaderView {
+                    author_name: entry.author_name.clone(),
+                    initial,
+                    is_owner,
+                    meta_line,
+                    entry_id,
+                    body_for_edit: entry.body_md.clone(),
+                    server_url: server_url.clone(),
+                },
+                edit,
             }
             if editing() {
                 BdJournalEntryEditForm {
                     entry_id,
                     entry_progress,
                     server_url: server_url.clone(),
-                    edit_body,
-                    saving,
-                    error,
-                    editing,
-                    reload,
+                    edit,
                 }
             } else {
                 div {
@@ -675,12 +719,15 @@ fn BdJournalEntryEditForm(
     entry_id: i64,
     entry_progress: Option<u8>,
     server_url: String,
-    edit_body: Signal<String>,
-    saving: Signal<bool>,
-    error: Signal<Option<String>>,
-    editing: Signal<bool>,
-    reload: Signal<u32>,
+    edit: JournalEntryEditState,
 ) -> Element {
+    let JournalEntryEditState {
+        editing,
+        edit_body,
+        saving,
+        error,
+        reload,
+    } = edit;
     let mut saving = saving;
     let mut error = error;
     let mut editing = editing;

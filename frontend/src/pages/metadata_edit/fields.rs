@@ -60,21 +60,58 @@ pub(super) fn label_to_id(label: &str) -> String {
     )
 }
 
+/// Props for the [`MeField`] component.
+#[derive(Props, Clone, PartialEq)]
+pub(super) struct MeFieldProps {
+    /// Field label; also slugified into the input's `id` and used as the
+    /// fallback placeholder.
+    pub label: String,
+    /// The input's bound value signal.
+    pub value: Signal<String>,
+    /// Fired with the new text on every input.
+    pub on_change: EventHandler<String>,
+    /// Grid width in columns (`2` spans two columns; anything else is one).
+    #[props(default)]
+    pub w: i32,
+    /// Big serif display styling (title field).
+    #[props(default)]
+    pub big: bool,
+    /// Serif input styling.
+    #[props(default)]
+    pub serif: bool,
+    /// Monospace input styling.
+    #[props(default)]
+    pub mono: bool,
+    /// When true, applies the "edited" accent + badge.
+    #[props(default)]
+    pub edited: bool,
+    /// Renders the input read-only + disabled.
+    #[props(default)]
+    pub locked: bool,
+    /// Optional hint copy shown beside the label.
+    #[props(default)]
+    pub hint: String,
+    /// Overrides the placeholder (defaults to the label when empty).
+    #[props(default)]
+    pub placeholder: String,
+}
+
 /// Single-line input field in the form grid.
 #[component]
-pub(super) fn MeField(
-    label: String,
-    value: Signal<String>,
-    on_change: EventHandler<String>,
-    #[props(default)] w: i32,
-    #[props(default)] big: bool,
-    #[props(default)] serif: bool,
-    #[props(default)] mono: bool,
-    #[props(default)] edited: bool,
-    #[props(default)] locked: bool,
-    #[props(default)] hint: String,
-    #[props(default)] placeholder: String,
-) -> Element {
+pub(super) fn MeField(props: MeFieldProps) -> Element {
+    let MeFieldProps {
+        label,
+        value,
+        on_change,
+        w,
+        big,
+        serif,
+        mono,
+        edited,
+        locked,
+        hint,
+        placeholder,
+    } = props;
     let col_class = match w {
         2 => "me-field me-field-w2",
         _ => "me-field",

@@ -31,14 +31,66 @@ impl SuggestionItem {
     }
 }
 
-/// Props for the [`ChipEditor`] component.
+/// Presentational options for [`ChipEditor`] — everything that shapes how the
+/// chips, input, and dropdown look, split out of [`ChipEditorProps`] so the
+/// component's props stay small (the values/suggestions/handlers stay on the
+/// props; the knobs live here). Every field defaults, so a consumer can pass
+/// `ChipEditorOptions::default()` and override only what differs.
+#[derive(Clone, PartialEq)]
+pub struct ChipEditorOptions {
+    /// Placeholder shown inside the chip-input.
+    pub placeholder: String,
+    /// When true, each chip is prefixed with an uppercase-initials
+    /// avatar. Used by author chips (`me-avatar`); off for tags.
+    pub show_avatar: bool,
+    /// CSS class for the inline `<input>`. Defaults to `me-chip-input`
+    /// (the author/landing-row style); tag rows pass `me-tag-input`.
+    pub input_class: String,
+    /// Prefix for the per-chip Remove button's `aria-label`, e.g.
+    /// "Remove" → "Remove Ada Lovelace" or "Remove tag" → "Remove tag
+    /// fiction".
+    pub aria_remove_prefix: String,
+    /// Per-instance testid prefix so multiple ChipEditors on one page
+    /// don't collide. The `<input>` gets `<prefix>-input` and the
+    /// suggestions `<ul>` gets `<prefix>-suggestions`. Suggestion
+    /// `<li>`s use `role="option"` with the suggestion as accessible
+    /// name (no per-row testid) so Playwright resolves them via
+    /// `getByRole("option", { name })`.
+    pub testid_prefix: String,
+    /// When `true`, the inline `<input>` receives `autofocus` so the
+    /// dropdown surfaces on first paint. Used by the landing-page
+    /// Authors cell so admins don't have to click twice (once to
+    /// enter edit mode, once to focus the input). Off by default to
+    /// keep the metadata-edit page from stealing focus from the page's
+    /// other fields on mount.
+    pub autofocus: bool,
+    /// Optional uppercase mini-header rendered at the top of the
+    /// suggestion dropdown — "ADD AUTHOR" / "ADD TAG". Empty string (the
+    /// default) suppresses the header entirely.
+    pub dropdown_header: String,
+}
+
+impl Default for ChipEditorOptions {
+    fn default() -> Self {
+        Self {
+            placeholder: String::new(),
+            show_avatar: false,
+            input_class: "me-chip-input".to_string(),
+            aria_remove_prefix: "Remove".to_string(),
+            testid_prefix: "chip-editor".to_string(),
+            autofocus: false,
+            dropdown_header: String::new(),
+        }
+    }
+}
+
+/// Props for the [`ChipEditor`] component. The data + behavioral props live
+/// here; presentational knobs are grouped in [`ChipEditorOptions`].
 #[derive(Props, PartialEq, Clone)]
 pub struct ChipEditorProps {
     /// The chip list. Shared with the consumer so the parent can read
     /// it for dirty-detection / persistence.
     pub values: Signal<Vec<String>>,
-    /// Placeholder shown inside the chip-input.
-    pub placeholder: String,
     /// Fired after every chip add or remove with the new full list, so
     /// the consumer can persist on change (e.g. POST overrides) without
     /// having to re-subscribe to the signal.
@@ -51,45 +103,14 @@ pub struct ChipEditorProps {
     /// the wrapping `ReadSignal`; an empty signal suppresses the
     /// dropdown entirely.
     pub suggestions: ReadSignal<Vec<SuggestionItem>>,
-    /// When true, each chip is prefixed with an uppercase-initials
-    /// avatar. Used by author chips (`me-avatar`); off for tags.
-    #[props(default = false)]
-    pub show_avatar: bool,
-    /// CSS class for the inline `<input>`. Defaults to `me-chip-input`
-    /// (the author/landing-row style); tag rows pass `me-tag-input`.
-    #[props(default = "me-chip-input".to_string())]
-    pub input_class: String,
-    /// Prefix for the per-chip Remove button's `aria-label`, e.g.
-    /// "Remove" → "Remove Ada Lovelace" or "Remove tag" → "Remove tag
-    /// fiction".
-    #[props(default = "Remove".to_string())]
-    pub aria_remove_prefix: String,
-    /// Per-instance testid prefix so multiple ChipEditors on one page
-    /// don't collide. The `<input>` gets `<prefix>-input` and the
-    /// suggestions `<ul>` gets `<prefix>-suggestions`. Suggestion
-    /// `<li>`s use `role="option"` with the suggestion as accessible
-    /// name (no per-row testid) so Playwright resolves them via
-    /// `getByRole("option", { name })`.
-    #[props(default = "chip-editor".to_string())]
-    pub testid_prefix: String,
-    /// When `true`, the inline `<input>` receives `autofocus` so the
-    /// dropdown surfaces on first paint. Used by the landing-page
-    /// Authors cell so admins don't have to click twice (once to
-    /// enter edit mode, once to focus the input). Off by default to
-    /// keep the metadata-edit page from stealing focus from the page's
-    /// other fields on mount.
-    #[props(default = false)]
-    pub autofocus: bool,
-    /// Optional uppercase mini-header rendered at the top of the
-    /// suggestion dropdown — "ADD AUTHOR" / "ADD TAG". Empty string (the
-    /// default) suppresses the header entirely.
-    #[props(default)]
-    pub dropdown_header: String,
     /// Fired when the user presses Escape inside the input. Useful for
     /// host components that want to exit a wrapping edit mode in
     /// addition to clearing the dropdown highlight. Default no-op.
     #[props(default)]
     pub on_close: EventHandler<()>,
+    /// Presentational knobs (placeholder, avatar, testids, …).
+    #[props(default)]
+    pub options: ChipEditorOptions,
 }
 
 /// Add/remove chip editor with autocomplete dropdown.
@@ -103,7 +124,7 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
     // re-surface the pool; any keystroke / fresh focus clears it.
     let mut input = use_signal(String::new);
     let mut highlight = use_signal::<Option<usize>>(|| None);
-    let mut focused = use_signal(|| props.autofocus);
+    let mut focused = use_signal(|| props.options.autofocus);
     let mut suppress_open = use_signal(|| false);
 
     let selection = compute_selection(&props, input(), focused(), suppress_open());
@@ -138,8 +159,8 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
         Fragment {
             ChipList {
                 values: values_sig,
-                show_avatar: props.show_avatar,
-                aria_remove_prefix: props.aria_remove_prefix.clone(),
+                show_avatar: props.options.show_avatar,
+                aria_remove_prefix: props.options.aria_remove_prefix.clone(),
                 on_remove: move |new_values: Vec<String>| {
                     values_sig.set(new_values.clone());
                     on_change_remove.call(new_values);
@@ -147,11 +168,11 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
             }
             ChipInputArea {
                 input,
-                placeholder: props.placeholder.clone(),
-                input_class: props.input_class.clone(),
-                testid_prefix: props.testid_prefix.clone(),
-                autofocus: props.autofocus,
-                dropdown_header: props.dropdown_header.clone(),
+                placeholder: props.options.placeholder.clone(),
+                input_class: props.options.input_class.clone(),
+                testid_prefix: props.options.testid_prefix.clone(),
+                autofocus: props.options.autofocus,
+                dropdown_header: props.options.dropdown_header.clone(),
                 selection,
                 highlight: highlight(),
                 on_focus: move |_| {
@@ -401,9 +422,9 @@ fn dispatch_keydown(
     }
 }
 
-/// Inline `<input>` for the chip editor — owns nothing, forwards every event to the parent's handlers.
-#[component]
-fn ChipInput(
+/// Props for the [`ChipInput`] sub-component.
+#[derive(Props, Clone, PartialEq)]
+struct ChipInputProps {
     input: Signal<String>,
     placeholder: String,
     input_class: String,
@@ -413,7 +434,22 @@ fn ChipInput(
     on_blur: EventHandler<()>,
     on_input: EventHandler<String>,
     on_keydown: EventHandler<Event<KeyboardData>>,
-) -> Element {
+}
+
+/// Inline `<input>` for the chip editor — owns nothing, forwards every event to the parent's handlers.
+#[component]
+fn ChipInput(props: ChipInputProps) -> Element {
+    let ChipInputProps {
+        input,
+        placeholder,
+        input_class,
+        testid,
+        autofocus,
+        on_focus,
+        on_blur,
+        on_input,
+        on_keydown,
+    } = props;
     rsx! {
         input {
             class: "{input_class}",

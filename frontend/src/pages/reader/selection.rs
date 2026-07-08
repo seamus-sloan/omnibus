@@ -23,22 +23,47 @@ pub(crate) struct SelectionRect {
     pub(crate) width: f64,
 }
 
+/// Placement + payload for the selection popover: the live selection's screen
+/// rect plus the CFI/text the action handlers fire with.
+#[derive(Clone, PartialEq)]
+pub(crate) struct SelectionAnchor {
+    pub(crate) sel_rect_x: f64,
+    pub(crate) sel_rect_y: f64,
+    pub(crate) sel_rect_width: f64,
+    pub(crate) sel_cfi: String,
+    pub(crate) sel_text: String,
+}
+
+/// Action handlers for the selection popover — one per swatch/button.
+#[derive(Clone, PartialEq)]
+pub(crate) struct SelectionActions {
+    pub(crate) on_dismiss: EventHandler<MouseEvent>,
+    pub(crate) on_highlight: EventHandler<(String, HighlightColor, String)>,
+    pub(crate) on_note: EventHandler<(String, String)>,
+    pub(crate) on_copy: EventHandler<String>,
+    pub(crate) on_quote: EventHandler<(String, String)>,
+    pub(crate) on_share: EventHandler<String>,
+}
+
 /// Floating popover shown over a text selection: highlight color swatches
 /// plus Note / Copy / Share actions.
 #[component]
-pub(crate) fn SelectionPopover(
-    sel_rect_x: f64,
-    sel_rect_y: f64,
-    sel_rect_width: f64,
-    sel_cfi: String,
-    sel_text: String,
-    on_dismiss: EventHandler<MouseEvent>,
-    on_highlight: EventHandler<(String, HighlightColor, String)>,
-    on_note: EventHandler<(String, String)>,
-    on_copy: EventHandler<String>,
-    on_quote: EventHandler<(String, String)>,
-    on_share: EventHandler<String>,
-) -> Element {
+pub(crate) fn SelectionPopover(anchor: SelectionAnchor, actions: SelectionActions) -> Element {
+    let SelectionAnchor {
+        sel_rect_x,
+        sel_rect_y,
+        sel_rect_width,
+        sel_cfi,
+        sel_text,
+    } = anchor;
+    let SelectionActions {
+        on_dismiss,
+        on_highlight,
+        on_note,
+        on_copy,
+        on_quote,
+        on_share,
+    } = actions;
     let top = (sel_rect_y - 52.0).max(8.0);
     let left = (sel_rect_x + sel_rect_width / 2.0 - 150.0).clamp(8.0, 560.0);
     let style = format!("top:{top}px; left:{left}px;");
