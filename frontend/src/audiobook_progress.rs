@@ -187,15 +187,22 @@ fn save_rate_impl(_uuid: &str, _rate: f64) {}
 #[cfg(all(test, feature = "mobile"))]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // These tests share one process-global map and each `clear()`s it, so
+    // running them in parallel wipes each other. Serialize them.
+    static TEST_GUARD: Mutex<()> = Mutex::new(());
 
     #[test]
     fn returns_none_when_unset() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         mobile_store::clear();
         assert_eq!(load("book-a"), None);
     }
 
     #[test]
     fn round_trips_per_uuid() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         mobile_store::clear();
         save("book-a", 12.5);
         save("book-b", 600.0);
@@ -205,6 +212,7 @@ mod tests {
 
     #[test]
     fn rate_defaults_and_persists_per_book() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         mobile_store::clear();
         assert!((load_rate("book-a") - 1.0).abs() < f64::EPSILON);
         save_rate("book-a", 1.5);

@@ -130,9 +130,15 @@ fn save_impl(_library_path: &str, _prefs: &ViewPrefs) {}
 mod tests {
     use super::*;
     use omnibus_shared::{SortDir, SortKey, ViewMode};
+    use std::sync::Mutex;
+
+    // These tests share one process-global map and each `clear()`s it, so
+    // running them in parallel wipes each other. Serialize them.
+    static TEST_GUARD: Mutex<()> = Mutex::new(());
 
     #[test]
     fn returns_default_when_unset() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         mobile_store::clear();
         let prefs = load("/library/a");
         assert_eq!(prefs, ViewPrefs::default());
@@ -140,6 +146,7 @@ mod tests {
 
     #[test]
     fn round_trips_and_isolates_per_library() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         mobile_store::clear();
         let a = ViewPrefs {
             view_mode: ViewMode::Grid,

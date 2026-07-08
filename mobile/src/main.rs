@@ -14,11 +14,15 @@ use omnibus_frontend::{
 
 fn main() {
     // Pull any persisted bearer token into the in-memory store before the
-    // first render so the initial API calls go out authenticated.
+    // first render so the initial API calls go out authenticated. On
+    // iOS/desktop this persists in every build (0o600 file under the sandboxed
+    // app data dir), so users stay signed in across a cold start. On Android
+    // it's a no-op until the JNI data-dir resolver lands (#837) — the user
+    // re-logs in on each launch there.
     //
-    // TODO(F0.3 follow-up): the token is currently plaintext on disk.
-    // Replace with iOS Keychain / Android Keystore before shipping to end
-    // users — see the module docs on `omnibus_frontend::data::token_store`.
+    // TODO: harden at-rest storage with iOS Keychain / Android Keystore.
+    // Current protection is the iOS sandbox + Data Protection + 0o600 — see the
+    // module docs on `omnibus_frontend::data::token_store` / `app_dirs`.
     token_store::load_from_disk();
 
     dioxus::launch(Root);
