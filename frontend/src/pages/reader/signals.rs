@@ -11,7 +11,7 @@ use crate::data;
 use omnibus_shared::EbookMetadata;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 pub(crate) enum ReaderStatus {
     // INVARIANT: `Loading` is the SSR/WASM-first-paint seed (see
     // `BookReadPage`). Changing the default flips the rendered overlay and
@@ -26,8 +26,8 @@ pub(crate) enum ReaderStatus {
 #[derive(Clone, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RelocateData {
-    // Only the web-feature progress-save path reads `cfi`; the other fields are read unconditionally by the bottom-bar render.
-    #[cfg_attr(not(feature = "web"), allow(dead_code))]
+    // The web + mobile progress-save paths read `cfi`; the other fields are read unconditionally by the bottom-bar render.
+    #[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
     pub(crate) cfi: Option<String>,
     pub(crate) page: u32,
     pub(crate) total_pages: u32,

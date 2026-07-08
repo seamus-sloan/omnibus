@@ -8,9 +8,9 @@ use dioxus::prelude::*;
 
 use crate::components::atrium::{persist_theme, Theme};
 
-#[cfg(feature = "web")]
+#[cfg(any(feature = "web", feature = "mobile"))]
 use super::reader_call;
-#[cfg(feature = "web")]
+#[cfg(any(feature = "web", feature = "mobile"))]
 use super::reader_call_json;
 #[cfg(feature = "web")]
 use super::typography::save_reader_pref;
@@ -44,73 +44,67 @@ impl ReaderPrefs {
     }
 
     /// Step the font size down one px (clamped to `FONT_SIZE_MIN`), push
-    /// to JS, persist to localStorage.
+    /// to JS, persist to localStorage (web).
     pub(crate) fn decrease_font(self) {
         let mut font_size = self.font_size;
         let next = (*font_size.read() - 1).clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
         font_size.set(next);
+        #[cfg(any(feature = "web", feature = "mobile"))]
+        reader_call("setFontSize", &next.to_string());
         #[cfg(feature = "web")]
-        {
-            reader_call("setFontSize", &next.to_string());
-            save_reader_pref("omn.fontSize", &next.to_string());
-        }
+        save_reader_pref("omn.fontSize", &next.to_string());
     }
 
     /// Step the font size up one px (clamped to `FONT_SIZE_MAX`), push to
-    /// JS, persist to localStorage.
+    /// JS, persist to localStorage (web).
     pub(crate) fn increase_font(self) {
         let mut font_size = self.font_size;
         let next = (*font_size.read() + 1).clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
         font_size.set(next);
+        #[cfg(any(feature = "web", feature = "mobile"))]
+        reader_call("setFontSize", &next.to_string());
         #[cfg(feature = "web")]
-        {
-            reader_call("setFontSize", &next.to_string());
-            save_reader_pref("omn.fontSize", &next.to_string());
-        }
+        save_reader_pref("omn.fontSize", &next.to_string());
     }
 
-    /// Apply a typeface, push to JS, persist to localStorage.
+    /// Apply a typeface, push to JS, persist to localStorage (web).
     pub(crate) fn set_typeface(self, t: Typeface) {
         let mut typeface = self.typeface;
         typeface.set(t);
+        #[cfg(any(feature = "web", feature = "mobile"))]
+        reader_call_json("setFont", t.to_css());
         #[cfg(feature = "web")]
-        {
-            reader_call_json("setFont", t.to_css());
-            save_reader_pref("omn.typeface", t.to_storage());
-        }
+        save_reader_pref("omn.typeface", t.to_storage());
     }
 
-    /// Apply a line-spacing choice, push to JS, persist to localStorage.
+    /// Apply a line-spacing choice, push to JS, persist to localStorage (web).
     pub(crate) fn set_line_spacing(self, ls: LineSpacing) {
         let mut line_spacing = self.line_spacing;
         line_spacing.set(ls);
+        #[cfg(any(feature = "web", feature = "mobile"))]
+        reader_call_json("setLineHeight", ls.to_css());
         #[cfg(feature = "web")]
-        {
-            reader_call_json("setLineHeight", ls.to_css());
-            save_reader_pref("omn.lineSpacing", ls.to_storage());
-        }
+        save_reader_pref("omn.lineSpacing", ls.to_storage());
     }
 
-    /// Apply a margins choice, push to JS, persist to localStorage.
+    /// Apply a margins choice, push to JS, persist to localStorage (web).
     pub(crate) fn set_margins(self, m: Margins) {
         let mut margins = self.margins;
         margins.set(m);
+        #[cfg(any(feature = "web", feature = "mobile"))]
+        reader_call_json("setMargins", m.to_css());
         #[cfg(feature = "web")]
-        {
-            reader_call_json("setMargins", m.to_css());
-            save_reader_pref("omn.margins", m.to_storage());
-        }
+        save_reader_pref("omn.margins", m.to_storage());
     }
 
-    /// Apply a page-view (spread) choice, push to JS, persist to localStorage.
+    /// Apply a page-view (spread) choice, push to JS, persist to localStorage (web).
     pub(crate) fn set_spread(self, s: Spread) {
         let mut spread = self.spread;
         spread.set(s);
+        #[cfg(any(feature = "web", feature = "mobile"))]
+        reader_call_json("setSpread", s.to_css());
         #[cfg(feature = "web")]
-        {
-            reader_call_json("setSpread", s.to_css());
-            save_reader_pref("omn.spread", s.to_storage());
-        }
+        save_reader_pref("omn.spread", s.to_storage());
     }
 
     /// Flip the justify toggle and push the new boolean into the JS glue.
@@ -118,11 +112,10 @@ impl ReaderPrefs {
         let mut justify = self.justify;
         let next = !*justify.read();
         justify.set(next);
+        #[cfg(any(feature = "web", feature = "mobile"))]
+        reader_call("setJustify", if next { "true" } else { "false" });
         #[cfg(feature = "web")]
-        {
-            reader_call("setJustify", if next { "true" } else { "false" });
-            save_reader_pref("omn.justify", if next { "true" } else { "false" });
-        }
+        save_reader_pref("omn.justify", if next { "true" } else { "false" });
     }
 
     /// Slider position for the AA-panel size track, expressed as 0–100%.
