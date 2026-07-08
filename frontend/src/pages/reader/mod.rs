@@ -398,10 +398,20 @@ fn ReaderLayout(
     let note_target = panels.note_target;
     let quote_target = panels.quote_target;
 
-    rsx! {
+    // Web/SSR emit ordered, parser-inserted tags (JSZip before epub.js, which
+    // binds `window.JSZip` at load time). Mobile has no SSR, so it loads the
+    // runtime in order from `mobile::interop` instead (see `install_surface_js`).
+    #[cfg(not(feature = "mobile"))]
+    let reader_scripts = rsx! {
         document::Script { src: JSZIP_JS }
         document::Script { src: EPUBJS_JS }
         document::Script { src: READER_GLUE_JS }
+    };
+    #[cfg(feature = "mobile")]
+    let reader_scripts = rsx! {};
+
+    rsx! {
+        {reader_scripts}
 
         div {
             class: "rd-surface",

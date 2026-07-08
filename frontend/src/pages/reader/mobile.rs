@@ -102,7 +102,14 @@ async fn mount_and_drain(
 
     let token = data::token_store::get();
     let file_url = interop::file_token_url(&server_url, &uuid, token.as_deref());
-    let eval = interop::install_reader_surface(&file_url, &init_opts(prefs, cfi));
+    // Resolve the vendored runtime URLs from the `asset!` bundle so the WebView
+    // loads them JSZip-first (see `install_surface_js`).
+    let scripts = interop::ReaderScripts {
+        jszip: super::JSZIP_JS.to_string(),
+        epub: super::EPUBJS_JS.to_string(),
+        glue: super::READER_GLUE_JS.to_string(),
+    };
+    let eval = interop::install_reader_surface(&file_url, &init_opts(prefs, cfi), &scripts);
 
     // Fetch the saved highlights up front; they're replayed into the viewer
     // once the glue reports `ready` (annotations need a live rendition).
