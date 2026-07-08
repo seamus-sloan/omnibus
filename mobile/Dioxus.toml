@@ -8,6 +8,9 @@ audio = true
 # Unique reverse-DNS id used for the iOS CFBundleIdentifier and the Android
 # applicationId. Required for real code signing / device installs — the
 # default `com.example.*` can't be provisioned under a real Apple team.
+# Must exactly match the App Store Connect app record so `dx bundle` stamps
+# the right CFBundleIdentifier — the TestFlight upload
+# (.github/workflows/testflight.yml) rejects a mismatch.
 identifier = "com.omnibus.mobile"
 
 [android]
