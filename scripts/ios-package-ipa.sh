@@ -66,9 +66,14 @@ plist_set DTPlatformName string iphoneos
 # ("Invalid Bundle OS Type code"); dx omits it like DTPlatformName.
 plist_set CFBundlePackageType string APPL
 plist_set CFBundleVersion string "$BUILD_NUMBER"
-# Only add a floor if the build didn't already declare one.
-"$plistbuddy" -c "Print :MinimumOSVersion" "$info_plist" >/dev/null 2>&1 \
-  || "$plistbuddy" -c "Add :MinimumOSVersion string 13.0" "$info_plist"
+# Floor at iOS 14 — the minimum for the storyboard-free UILaunchScreen the
+# iPad build needs below. Set unconditionally so it matches the compile-time
+# deployment target the workflow pins.
+if "$plistbuddy" -c "Print :MinimumOSVersion" "$info_plist" >/dev/null 2>&1; then
+  "$plistbuddy" -c "Set :MinimumOSVersion 14.0" "$info_plist"
+else
+  "$plistbuddy" -c "Add :MinimumOSVersion string 14.0" "$info_plist"
+fi
 
 # dx (unlike Xcode) omits the build-provenance keys that App Store validation
 # reads to identify the toolchain; without them altool rejects with
@@ -88,6 +93,34 @@ plist_set DTXcode string "$dtxcode"
 plist_set DTXcodeBuild string "$xcode_build"
 plist_set DTCompiler string "com.apple.compilers.llvm.clang.1_0"
 plist_set BuildMachineOSBuild string "$(sw_vers -buildVersion)"
+
+# App icon: dx bundles none, so validation fails with missing CFBundleIconName
+# and missing icon files. Compile the asset catalog with actool (renders every
+# iPhone/iPad size from the 1024 source into Assets.car + loose PNGs) and merge
+# its icon keys. CFBundleIconName must also exist at the top level.
+icon_xcassets="${ICON_XCASSETS:-mobile/assets/Assets.xcassets}"
+[ -d "$icon_xcassets" ] || die "asset catalog not found: $icon_xcassets"
+icon_partial="$(mktemp)"
+xcrun actool "$icon_xcassets" \
+  --compile "$app_dir" \
+  --app-icon AppIcon \
+  --platform iphoneos \
+  --minimum-deployment-target 14.0 \
+  --target-device iphone --target-device ipad \
+  --output-partial-info-plist "$icon_partial" \
+  --output-format human-readable-text >/dev/null || die "actool failed to compile app icon"
+"$plistbuddy" -c "Merge $icon_partial" "$info_plist"
+rm -f "$icon_partial"
+plist_set CFBundleIconName string AppIcon
+
+# dx marks the app for iPhone and iPad. App Store validation needs a single
+# CFBundleSupportedPlatforms value, and iPad multitasking needs a launch
+# screen — the empty UILaunchScreen dict is the storyboard-free default.
+"$plistbuddy" -c "Delete :CFBundleSupportedPlatforms" "$info_plist" 2>/dev/null || true
+"$plistbuddy" -c "Add :CFBundleSupportedPlatforms array" "$info_plist"
+"$plistbuddy" -c "Add :CFBundleSupportedPlatforms:0 string iPhoneOS" "$info_plist"
+"$plistbuddy" -c "Print :UILaunchScreen" "$info_plist" >/dev/null 2>&1 \
+  || "$plistbuddy" -c "Add :UILaunchScreen dict" "$info_plist"
 
 plutil -lint "$info_plist" >/dev/null || die "Info.plist failed plutil lint after patching"
 

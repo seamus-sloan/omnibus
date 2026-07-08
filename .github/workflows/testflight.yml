@@ -56,10 +56,11 @@ jobs:
       # Pin the iOS deployment target so the C crypto deps (aws-lc-sys, ring)
       # and the final Rust link agree on the min-iOS version. Without it dx
       # links at iOS 10.0 while the runner's SDK compiles the C objects for
-      # 17.5, leaving `___chkstk_darwin` unresolved at link time. Matches the
-      # MinimumOSVersion the packaging script stamps into Info.plist. Both the
-      # `cc` crate and rustc read this env var.
-      IPHONEOS_DEPLOYMENT_TARGET: "13.0"
+      # 17.5, leaving `___chkstk_darwin` unresolved at link time. 14.0 is the
+      # floor for the storyboard-free UILaunchScreen the iPad build needs, and
+      # matches the MinimumOSVersion the packaging script stamps. Both the `cc`
+      # crate and rustc read this env var.
+      IPHONEOS_DEPLOYMENT_TARGET: "14.0"
     steps:
       - uses: actions/checkout@v4
 

@@ -164,13 +164,17 @@ Android Keystore. Android persistence is not yet wired (`data_dir` returns
 `None` → memory-only) pending a JNI `Context.getFilesDir()` resolver.
 
 **iOS TestFlight release:** the manually-triggered
-`.github/workflows/testflight.yml` (workflow_dispatch, `macos-14` runner)
-builds the app and ships it to TestFlight. `dx` has no signing, so it
-`dx bundle --platform ios --release`s an unsigned `.app`, then
-`scripts/ios-package-ipa.sh` patches Info.plist (adds the `DTPlatformName`
-dx omits, stamps the CI build number), embeds the provisioning profile,
-`codesign`s with the distribution identity, and zips a `Payload/` `.ipa`
-that `xcrun altool` uploads. Bundle ID `com.omnibus.mobile` lives in
-`mobile/Dioxus.toml`. Signing assets are seven CI-only repo secrets
-(distribution cert, provisioning profile, App Store Connect API key +
-IDs) — enumerated in the workflow file's header comment.
+`.github/workflows/testflight.yml` (workflow_dispatch, `macos-26` runner —
+Xcode 26 / iOS 26 SDK, which App Store Connect now requires) builds the
+universal iPhone/iPad app and ships it to TestFlight. `dx` has no signing
+and emits a bare `.app`, so `scripts/ios-package-ipa.sh` does everything
+Xcode normally would: patches Info.plist (the keys dx omits —
+`DTPlatformName`, `CFBundlePackageType`, the `DT*` toolchain-provenance
+keys, `CFBundleSupportedPlatforms`, `UILaunchScreen`, build number),
+compiles the app-icon asset catalog (`mobile/assets/Assets.xcassets`) with
+`actool`, embeds the provisioning profile, `codesign`s with the identity
+derived from the imported cert, and zips a `Payload/` `.ipa` that
+`xcrun altool` uploads. Bundle ID `com.omnibus.mobile` lives in
+`mobile/Dioxus.toml`. Signing is six CI-only repo secrets (distribution
+cert + password, provisioning profile, App Store Connect API key + key-id
++ issuer-id) — enumerated in the workflow file's header comment.
