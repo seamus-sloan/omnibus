@@ -429,6 +429,66 @@ async fn api_get_ebook_file_returns_200_with_epub_bytes() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+/// The `/file` stream is gated by `MediaAuthUser`, so a `?token=` query param
+/// authenticates it with neither a cookie nor a bearer header — the path
+/// epub.js takes from inside the mobile WebView. Mirrors the bearer 200 test
+/// but authenticates purely via the query token on an otherwise-anonymous GET.
+#[tokio::test]
+async fn api_get_ebook_file_returns_200_with_query_token() {
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("omnibus_ebook_file_token_test_{pid}_{nanos}"));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let stem = "alpha";
+    std::fs::write(tmp.join(format!("{stem}.epub")), b"PK\x03\x04 fake-epub").unwrap();
+
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(tmp.to_str().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let uuid = "44444444-4444-4444-4444-444444444444";
+    let book_id =
+        sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, ?, 'Alpha')")
+            .bind(uuid)
+            .bind(lib_id)
+            .bind(tmp.to_str().unwrap())
+            .execute(&pool)
+            .await
+            .unwrap()
+            .last_insert_rowid();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'EPUB', ?, 0)",
+    )
+    .bind(book_id)
+    .bind(stem)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    // Anonymous request (no Authorization header) — the query token is the
+    // only credential, exactly as an `<... src>` fetch from the WebView.
+    let res = app
+        .oneshot(get_anon(&format!("/api/ebooks/{uuid}/file?token={token}")))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], b"PK\x03\x04 fake-epub");
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 /// Drives the first `internal(...)` arm of `get_ebook_file`: when
 /// `db::resolve_book_id_by_uuid` returns `Err`, the handler must
 /// surface 500 (not 404). The induce-sqlx-error idiom is to drop

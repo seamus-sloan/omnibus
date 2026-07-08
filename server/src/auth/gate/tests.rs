@@ -15,6 +15,7 @@ async fn app() -> (Router, sqlx::SqlitePool) {
             "/api/audiobooks/{uuid}/parts/{ordinal}",
             get(|| async { "part ok" }),
         )
+        .route("/api/ebooks/{uuid}/file", get(|| async { "file ok" }))
         .route("/api/auth/login", get(|| async { "login ok" }))
         .route("/api/_health", get(|| async { "health ok" }))
         .route("/", get(|| async { "home" }))
@@ -264,6 +265,40 @@ async fn audiobook_part_get_without_auth_is_401() {
         .oneshot(
             Request::builder()
                 .uri("/api/audiobooks/some-uuid/parts/0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn ebook_file_get_with_query_token_passes() {
+    // epub.js fetches the EPUB from the mobile WebView with the session as
+    // `?token=`; the `/file` stream must accept it like the audiobook parts do.
+    let (app, pool) = app().await;
+    let token = seed_bearer_token(&pool).await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/ebooks/some-uuid/file?token={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn ebook_file_get_without_auth_is_401() {
+    let (app, pool) = app().await;
+    seed_bearer_token(&pool).await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/ebooks/some-uuid/file")
                 .body(Body::empty())
                 .unwrap(),
         )

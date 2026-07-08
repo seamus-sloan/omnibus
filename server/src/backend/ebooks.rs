@@ -2,7 +2,10 @@
 //!
 //! Cookie-gated reads that list the configured library, look up a single
 //! book by uuid, and stream the raw EPUB bytes for the in-app reader.
-//! Mounted on the mobile REST router in [`super::rest_router`].
+//! Mounted on the mobile REST router in [`super::rest_router`]. The
+//! `/file` stream additionally accepts a `?token=` query param
+//! ([`MediaAuthUser`]) so epub.js can fetch the book from the mobile WebView,
+//! which carries neither a cookie nor an `Authorization` header.
 
 use axum::{
     extract::{Path, Query, Request, State},
@@ -18,7 +21,7 @@ use omnibus_shared::{EbookLibrary, SortDir, SortKey, ViewFilters};
 use serde::Deserialize;
 
 use super::{internal, with_pagination_headers, AppState};
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, MediaAuthUser};
 
 /// Default keyset page size for the paginated `GET /api/ebooks` form (F5b
 /// open question #1). A grid renders ~30–60 cards above the fold and the table
@@ -200,8 +203,13 @@ async fn resolve_epub_path(
 
 /// Streams the raw EPUB bytes. Accepts optional `?file_id=N` to target
 /// a specific `book_files` row for multi-EPUB books.
+///
+/// Gated by [`MediaAuthUser`] rather than [`AuthUser`]: epub.js fetches this
+/// URL from inside the mobile WebView, which can carry neither a session
+/// cookie nor a bearer header, so the session token rides a `?token=` query
+/// param. The web reader's same-origin cookie fetch keeps working unchanged.
 pub(super) async fn get_ebook_file(
-    _user: AuthUser,
+    _user: MediaAuthUser,
     State(state): State<AppState>,
     Path(uuid): Path<String>,
     Query(query): Query<EbookFileQuery>,
@@ -217,6 +225,12 @@ pub(super) async fn get_ebook_file(
                 (header::CACHE_CONTROL, "private, max-age=86400"),
                 (header::VARY, "Cookie"),
                 (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                // epub.js reads this stream over XHR from inside the mobile
+                // WebView — a cross-origin, readable fetch (unlike the
+                // CORS-exempt `<img>`/`<audio>` media the app uses elsewhere).
+                // The URL query token is the only credential, so a wildcard
+                // ACAO is safe: it never widens access beyond holding the token.
+                (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
             ],
             bytes,
         )
