@@ -5,7 +5,9 @@
 //! still points at the surviving book. Name collisions per owner surface as
 //! [`ShelfError::NameTaken`].
 
-use omnibus_shared::{CreateShelfRequest, Shelf, ShelfKind, ShelfRule, UpdateShelfRequest};
+use omnibus_shared::{
+    CreateShelfRequest, MatchMode, Shelf, ShelfKind, ShelfRule, UpdateShelfRequest, Visibility,
+};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use super::read::get_shelf;
@@ -43,7 +45,7 @@ pub async fn create_shelf(
     .bind(req.name.trim())
     .bind(req.description.as_deref())
     .bind(req.visibility.as_str())
-    .bind(req.match_mode.map(|m| m.as_str()))
+    .bind(req.match_mode.map(MatchMode::as_str))
     .bind(&accent)
     .bind(position)
     .fetch_one(&mut *tx)
@@ -113,8 +115,8 @@ pub async fn update_shelf(
     )
     .bind(req.name.as_deref().map(str::trim))
     .bind(req.description.as_deref())
-    .bind(req.visibility.map(|v| v.as_str()))
-    .bind(req.match_mode.map(|m| m.as_str()))
+    .bind(req.visibility.map(Visibility::as_str))
+    .bind(req.match_mode.map(MatchMode::as_str))
     .bind(id)
     .execute(&mut *tx)
     .await
