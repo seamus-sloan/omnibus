@@ -15,6 +15,8 @@ mod listen;
 mod metadata_edit;
 mod reader;
 mod search;
+#[cfg(feature = "mobile")]
+mod search_mobile;
 mod series;
 mod series_index;
 mod server_connect;
@@ -38,6 +40,8 @@ pub(crate) use listen::{AudioElement, MiniDock};
 pub use metadata_edit::MetadataEditPage;
 pub use reader::BookReadPage;
 pub use search::SearchPage;
+#[cfg(feature = "mobile")]
+pub use search_mobile::MobileSearchPage;
 pub use series::SeriesPage;
 pub use series_index::SeriesIndexPage;
 pub use server_connect::ServerConnectPage;

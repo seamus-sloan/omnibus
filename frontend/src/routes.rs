@@ -43,6 +43,8 @@ pub enum Route {
     Shelves {},
     #[route("/shelves/:id")]
     ShelfDetail { id: i64 },
+    #[route("/search")]
+    MobileSearch {},
     #[route("/search/:query")]
     Search { query: String },
     #[route("/connect")]
@@ -199,6 +201,31 @@ pub fn ShelfDetail(id: i64) -> Element {
     rsx! {
         ScreenLayout { ShelfDetailPage { id } }
     }
+}
+
+/// Route target for `/search` — the mobile-native live search screen.
+///
+/// Mobile wraps [`MobileSearchPage`] in [`ScreenLayout`] so the bottom nav is
+/// retained (matching the `Search & discovery` design). On web `/search` has no
+/// query — web search is the ⌘K palette — so it redirects to the landing page.
+#[cfg(feature = "mobile")]
+#[component]
+pub fn MobileSearch() -> Element {
+    rsx! {
+        ScreenLayout { MobileSearchPage {} }
+    }
+}
+
+/// Non-mobile stub for `/search`: redirect to the landing page. Web reaches
+/// full results via the ⌘K palette's `/search/:query`, never a bare `/search`.
+#[cfg(not(feature = "mobile"))]
+#[component]
+pub fn MobileSearch() -> Element {
+    let nav = dioxus_router::use_navigator();
+    use_effect(move || {
+        nav.replace(Route::Landing {});
+    });
+    rsx! {}
 }
 
 /// Route target for `/search/:query` — full-page search results.
