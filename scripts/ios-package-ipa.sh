@@ -68,6 +68,13 @@ plist_set DTPlatformName string iphoneos
 # App Store validation rejects the bundle without CFBundlePackageType=APPL
 # ("Invalid Bundle OS Type code"); dx omits it like DTPlatformName.
 plist_set CFBundlePackageType string APPL
+# Declare export-compliance exemption up front. The app's only cryptography is
+# the HTTPS/TLS it uses to talk to its own server — Apple-exempt "standard"
+# encryption. Without this key App Store Connect blocks every build on a manual
+# "Missing Compliance" gate (the US export-compliance question, plus a second
+# France-specific encryption declaration), which stops TestFlight auto-
+# distribution. Declaring false answers both and lets builds flow to testers.
+plist_set ITSAppUsesNonExemptEncryption bool false
 plist_set CFBundleVersion string "$BUILD_NUMBER"
 # CFBundleShortVersionString is the user-visible "marketing" version. dx stamps
 # it from mobile/Cargo.toml (0.1.0); override it here so the TestFlight build's
