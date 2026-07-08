@@ -123,7 +123,7 @@ pub fn CreateShelfModal(on_close: EventHandler<()>, on_created: EventHandler<She
         let req = match kind() {
             ShelfKind::Smart => {
                 let wire: Vec<ShelfRule> =
-                    rules.read().iter().filter_map(|r| r.to_rule()).collect();
+                    rules.read().iter().filter_map(RuleDraft::to_rule).collect();
                 CreateShelfRequest {
                     kind: ShelfKind::Smart,
                     name: name(),
@@ -287,7 +287,7 @@ fn SmartBody(
     // Recompute the preview whenever the rule set or match mode changes. Keyed
     // on a memo of the encoded rules so unrelated re-renders don't refetch.
     let preview_key = use_memo(move || {
-        let complete: Vec<ShelfRule> = rules.read().iter().filter_map(|r| r.to_rule()).collect();
+        let complete: Vec<ShelfRule> = rules.read().iter().filter_map(RuleDraft::to_rule).collect();
         (match_mode, complete)
     });
     let preview_url = server_url.clone();

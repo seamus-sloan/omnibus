@@ -76,7 +76,7 @@ impl EnvVarGuard {
     pub fn set_os(var: &'static str, value: Option<&OsStr>) -> Self {
         let lock = ENV_LOCK
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let prev = std::env::var_os(var);
         // SAFETY: ENV_LOCK is held; no other thread in this process
         // mutates the environment concurrently.
@@ -152,7 +152,7 @@ impl CoversTempDir {
     pub fn new(tag: &str) -> Self {
         let guard = COVERS_ENV_LOCK
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let pid = std::process::id();
         let seq = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -204,7 +204,7 @@ pub async fn seed_minimal_books(pool: &SqlitePool, count: i64) {
         .await
         .unwrap();
     sqlx::query(
-        r#"
+        r"
         WITH RECURSIVE n(i) AS (
             SELECT 1
             UNION ALL
@@ -214,7 +214,7 @@ pub async fn seed_minimal_books(pool: &SqlitePool, count: i64) {
         SELECT 'uuid-' || i, 'b' || i || '.epub', ?, '/lib/b' || i, 'Title ' || i,
                'Title ' || printf('%010d', i)
           FROM n
-        "#,
+        ",
     )
     .bind(count)
     .bind(lib_id)
@@ -423,7 +423,7 @@ pub async fn seed_books_for_one_author_and_series(pool: &SqlitePool, count: i64)
             .await
             .unwrap();
     sqlx::query(
-        r#"
+        r"
         WITH RECURSIVE n(i) AS (
             SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
         )
@@ -431,7 +431,7 @@ pub async fn seed_books_for_one_author_and_series(pool: &SqlitePool, count: i64)
         SELECT 'uuid-' || i, ?, '/lib/b' || i, 'Title ' || i,
                'Title ' || printf('%010d', i), i
           FROM n
-        "#,
+        ",
     )
     .bind(count)
     .bind(lib_id)

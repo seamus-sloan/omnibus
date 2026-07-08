@@ -318,20 +318,20 @@ mod tests {
     // `epub` crate's tolerance for a missing mimetype.
     const MIMETYPE: &[u8] = b"application/epub+zip";
 
-    const CONTAINER_XML: &[u8] = br##"<?xml version="1.0"?>
+    const CONTAINER_XML: &[u8] = br#"<?xml version="1.0"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
   <rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles>
-</container>"##;
+</container>"#;
 
     // Minimal EPUB3 navigation document the OPF manifest references. Included
     // so the manifest points at a real resource instead of a dangling href.
-    const NAV_XHTML: &[u8] = br##"<?xml version="1.0" encoding="utf-8"?>
+    const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="utf-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
   <head><title>Contents</title></head>
   <body>
     <nav epub:type="toc"><ol><li><a href="content.opf">Start</a></li></ol></nav>
   </body>
-</html>"##;
+</html>"#;
 
     /// Parse an in-memory EPUB whose sole OPF is `opf`. The manifest/spine are
     /// required by the parser, so every fixture below wraps its `<metadata>`
@@ -351,14 +351,14 @@ mod tests {
     /// where `opf:*` attributes on `<dc:*>` become refinements).
     fn opf_package(version: &str, metadata_body: &str) -> String {
         format!(
-            r##"<?xml version="1.0"?>
+            r#"<?xml version="1.0"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="pub-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
 {metadata_body}
   </metadata>
   <manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml"/></manifest>
   <spine><itemref idref="nav"/></spine>
-</package>"##
+</package>"#
         )
     }
 
@@ -437,7 +437,7 @@ mod tests {
         // `<dc:creator>` element rather than separate `<meta refines>` nodes.
         let doc = doc_from_opf(&opf_package(
             "2.0",
-            r##"    <dc:creator opf:role="aut" opf:file-as="Le Guin, Ursula K.">Ursula K. Le Guin</dc:creator>"##,
+            r#"    <dc:creator opf:role="aut" opf:file-as="Le Guin, Ursula K.">Ursula K. Le Guin</dc:creator>"#,
         ));
         let creators = collect_contributors(&doc, "creator");
         assert_eq!(creators.len(), 1);
@@ -453,9 +453,9 @@ mod tests {
         // for the second role the pipeline merges in.
         let doc = doc_from_opf(&opf_package(
             "3.0",
-            r##"    <dc:creator>Primary Author</dc:creator>
+            r"    <dc:creator>Primary Author</dc:creator>
     <dc:contributor>   </dc:contributor>
-    <dc:contributor>Jane Editor</dc:contributor>"##,
+    <dc:contributor>Jane Editor</dc:contributor>",
         ));
         let contributors = collect_contributors(&doc, "contributor");
         assert_eq!(contributors.len(), 1);
@@ -484,8 +484,8 @@ mod tests {
         // supply both the name and the index.
         let doc = doc_from_opf(&opf_package(
             "2.0",
-            r##"    <meta name="calibre:series" content="Earthsea"/>
-    <meta name="calibre:series_index" content="2.0"/>"##,
+            r#"    <meta name="calibre:series" content="Earthsea"/>
+    <meta name="calibre:series_index" content="2.0"/>"#,
         ));
         let (series, index) = collect_series(&doc);
         assert_eq!(series.as_deref(), Some("Earthsea"));
@@ -494,10 +494,7 @@ mod tests {
 
     #[test]
     fn collect_series_returns_none_when_no_series_metadata_present() {
-        let doc = doc_from_opf(&opf_package(
-            "3.0",
-            r##"    <dc:title>Standalone</dc:title>"##,
-        ));
+        let doc = doc_from_opf(&opf_package("3.0", r"    <dc:title>Standalone</dc:title>"));
         let (series, index) = collect_series(&doc);
         assert_eq!(series, None);
         assert_eq!(index, None);
@@ -524,7 +521,7 @@ mod tests {
         // the parser surfaces as a `scheme` refinement.
         let doc = doc_from_opf(&opf_package(
             "2.0",
-            r##"    <dc:identifier id="pub-id" opf:scheme="ISBN">9780000000000</dc:identifier>"##,
+            r#"    <dc:identifier id="pub-id" opf:scheme="ISBN">9780000000000</dc:identifier>"#,
         ));
         let ids = collect_identifiers(&doc);
         assert_eq!(ids.len(), 1);
@@ -536,8 +533,8 @@ mod tests {
     fn collect_identifiers_leaves_scheme_none_when_unspecified_and_skips_blanks() {
         let doc = doc_from_opf(&opf_package(
             "3.0",
-            r##"    <dc:identifier>plain-id</dc:identifier>
-    <dc:identifier>   </dc:identifier>"##,
+            r"    <dc:identifier>plain-id</dc:identifier>
+    <dc:identifier>   </dc:identifier>",
         ));
         let ids = collect_identifiers(&doc);
         assert_eq!(ids.len(), 1);
@@ -551,7 +548,7 @@ mod tests {
     fn first_returns_trimmed_value_for_present_key_and_none_otherwise() {
         let doc = doc_from_opf(&opf_package(
             "3.0",
-            r##"    <dc:title>  Earthsea  </dc:title>"##,
+            r"    <dc:title>  Earthsea  </dc:title>",
         ));
         assert_eq!(first(&doc, "title").as_deref(), Some("Earthsea"));
         assert_eq!(first(&doc, "publisher"), None);

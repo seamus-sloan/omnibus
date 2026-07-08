@@ -147,7 +147,7 @@ fn norm(value: &Option<String>) -> Option<String> {
         .as_ref()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
+        .map(str::to_string)
 }
 
 // --- Streaming helper -------------------------------------------------------

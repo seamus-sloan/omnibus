@@ -183,13 +183,13 @@ async fn delete_bookmark_returns_not_found_for_other_user() {
 /// 1500-row response-cap fixture.
 async fn seed_bookmarks_raw(pool: &SqlitePool, user_id: i64, book_uuid: &str, count: i64) {
     sqlx::query(
-        r#"
+        r"
         WITH RECURSIVE n(i) AS (
             SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
         )
         INSERT INTO bookmarks (user_id, book_uuid, position, created_at)
         SELECT ?, ?, 'p' || i, i FROM n
-        "#,
+        ",
     )
     .bind(count)
     .bind(user_id)

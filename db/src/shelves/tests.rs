@@ -426,13 +426,13 @@ async fn list_visible_scopes_by_owner_public_and_admin() {
 /// through `create_shelf` — too slow at over-cap row counts.
 async fn seed_shelves_raw(pool: &sqlx::SqlitePool, owner_id: i64, count: i64) {
     sqlx::query(
-        r#"
+        r"
         WITH RECURSIVE n(i) AS (
             SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
         )
         INSERT INTO shelves (owner_user_id, kind, name, position)
         SELECT ?, 'manual', 'Shelf ' || i, i FROM n
-        "#,
+        ",
     )
     .bind(count)
     .bind(owner_id)

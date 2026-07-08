@@ -239,13 +239,13 @@ async fn create_resolves_merged_uuid_to_surviving_book() {
 /// `create_journal_entry` — too slow at over-cap row counts.
 async fn seed_entries_raw(pool: &SqlitePool, user_id: i64, book_uuid: &str, count: i64) {
     sqlx::query(
-        r#"
+        r"
         WITH RECURSIVE n(i) AS (
             SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
         )
         INSERT INTO journal_entries (user_id, book_uuid, body_md, created_at)
         SELECT ?, ?, 'entry ' || i, i FROM n
-        "#,
+        ",
     )
     .bind(count)
     .bind(user_id)

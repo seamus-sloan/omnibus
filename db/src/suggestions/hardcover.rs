@@ -328,7 +328,7 @@ pub async fn co_listed_counts(
     }
     let ids_csv = list_ids
         .iter()
-        .map(|id| id.to_string())
+        .map(i64::to_string)
         .collect::<Vec<_>>()
         .join(", ");
     let mut counts: HashMap<i64, i64> = HashMap::new();

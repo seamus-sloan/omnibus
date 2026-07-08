@@ -284,6 +284,6 @@ mod tests {
         assert_eq!(ts(r#"{"timestamp":"2024-01-02 03:04:05"}"#), None);
         // Null / missing -> None.
         assert_eq!(ts(r#"{"timestamp":null}"#), None);
-        assert_eq!(ts(r#"{}"#), None);
+        assert_eq!(ts(r"{}"), None);
     }
 }

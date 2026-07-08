@@ -253,13 +253,13 @@ async fn delete_highlight_returns_not_found_for_other_user() {
 /// 1500-row response-cap fixture.
 async fn seed_highlights_raw(pool: &SqlitePool, user_id: i64, book_uuid: &str, count: i64) {
     sqlx::query(
-        r#"
+        r"
         WITH RECURSIVE n(i) AS (
             SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
         )
         INSERT INTO highlights (user_id, book_uuid, epub_cfi_range, color, created_at)
         SELECT ?, ?, 'epubcfi(/' || i || ')', 'amber', i FROM n
-        "#,
+        ",
     )
     .bind(count)
     .bind(user_id)
