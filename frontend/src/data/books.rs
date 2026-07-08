@@ -295,10 +295,10 @@ pub async fn scan_library(_server_url: &str) -> Result<(), DataError> {
         .map_err(note_server_fn_err)
 }
 
-/// Mobile stub for `scan_library` — posts the ebook reindex REST route.
+/// Mobile stub for `scan_library` — queues both library scans via REST.
 #[cfg(feature = "mobile")]
 pub async fn scan_library(server_url: &str) -> Result<(), DataError> {
-    let url = format!("{server_url}/api/reindex");
+    let url = format!("{server_url}/api/scan-library");
     let response = with_bearer(http_client().post(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {

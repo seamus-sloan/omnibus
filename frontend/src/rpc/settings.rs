@@ -159,16 +159,19 @@ pub async fn rpc_send_smtp_test() -> Result<()> {
 /// library path is configured.
 #[post("/api/rpc/scan-library", pool: PoolExt, worker: WorkerExt, _admin: AdminUser)]
 pub async fn rpc_scan_library() -> Result<()> {
-    let settings = db::get_settings(&pool.0).await?;
-    if settings.ebook_library_path.is_none() && settings.audiobook_library_path.is_none() {
+    let Settings {
+        ebook_library_path,
+        audiobook_library_path,
+    } = db::get_settings(&pool.0).await?;
+    if ebook_library_path.is_none() && audiobook_library_path.is_none() {
         return Err(ServerFnError::new("no library path configured").into());
     }
-    if let Some(library_path) = settings.ebook_library_path {
+    if let Some(library_path) = ebook_library_path {
         worker
             .0
             .post(omnibus_db::worker::Task::Scan { library_path });
     }
-    if let Some(library_path) = settings.audiobook_library_path {
+    if let Some(library_path) = audiobook_library_path {
         worker
             .0
             .post(omnibus_db::worker::Task::ScanAudiobooks { library_path });

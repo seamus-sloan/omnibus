@@ -327,6 +327,92 @@ async fn reindex_returns_200_when_scan_succeeds() {
 }
 
 #[tokio::test]
+async fn scan_library_returns_200_when_a_path_is_configured() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    // Fire-and-forget: the handler returns 200 as soon as the tasks are
+    // queued, so a not-yet-existent path still yields 200 (unlike the
+    // synchronous `/api/reindex`, which awaits the scan and would 500).
+    let settings = omnibus_shared::Settings {
+        ebook_library_path: Some("/some/library".to_string()),
+        audiobook_library_path: None,
+    };
+    db::set_settings(&pool, &settings)
+        .await
+        .expect("set_settings should persist the path");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/scan-library")
+                .method("POST")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn scan_library_returns_409_when_no_library_path_configured() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/scan-library")
+                .method("POST")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn scan_library_returns_401_when_anonymous() {
+    let (app, _, _) = fixture().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/scan-library")
+                .method("POST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn scan_library_returns_403_when_not_admin() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "reader").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/scan-library")
+                .method("POST")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn post_fts_rebuild_returns_200_for_admin() {
     let (app, _state, pool) = fixture().await;
     let admin = auth_test_support::create_admin(&pool, "admin").await;
