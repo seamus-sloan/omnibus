@@ -1,8 +1,10 @@
 //! Immersive full-screen EPUB reader. Loads the vendored epub.js +
 //! JSZip glue (`window.OmnibusReader`) via `dioxus::document::eval`, streams
-//! bytes from cookie-gated `GET /api/ebooks/:uuid/file`, and persists
-//! position via [`crate::reader_progress`]. Chrome compiles on every
-//! target; the JS interop that mounts a book is web-only.
+//! bytes from `GET /api/ebooks/:uuid/file`, and persists position via
+//! [`crate::reader_progress`]. Chrome compiles on every target; the JS interop
+//! that mounts a book has a per-target seam — `interop` (web, `wasm_bindgen`
+//! callbacks + same-origin cookie fetch) and `mobile` (wry WebView,
+//! `dioxus.send` event channel + tokened cross-origin fetch).
 
 mod aa_panel;
 mod bootstrap;
@@ -12,6 +14,8 @@ mod highlights;
 mod highlights_drawer;
 #[cfg(feature = "web")]
 mod interop;
+#[cfg(feature = "mobile")]
+mod mobile;
 mod note_composer;
 mod overlays;
 mod prefs;
@@ -44,7 +48,10 @@ const JSZIP_JS: Asset = asset!("/assets/vendor/jszip.min.js");
 const EPUBJS_JS: Asset = asset!("/assets/vendor/epub.min.js");
 const READER_GLUE_JS: Asset = asset!("/assets/vendor/epub-reader-glue.js");
 
-#[cfg(feature = "web")]
+// The `reader_call*` helpers drive the same `window.OmnibusReader` glue on both
+// interactive targets: web (WASM) and mobile (wry WebView). Only SSR compiles
+// them out. `dioxus::document::eval` is the shared seam.
+#[cfg(any(feature = "web", feature = "mobile"))]
 fn reader_call(method: &str, arg_js: &str) {
     let js = format!("window.OmnibusReader && window.OmnibusReader.{method}({arg_js});");
     let _ = dioxus::document::eval(&js);
@@ -53,20 +60,20 @@ fn reader_call(method: &str, arg_js: &str) {
 /// Encode `value` as a JS literal, falling back to `null` on the
 /// unreachable-in-practice encode failure (every caller passes a
 /// `str`/enum/bool, none of which can fail to serialize).
-#[cfg(feature = "web")]
+#[cfg(any(feature = "web", feature = "mobile"))]
 fn json_literal<T: serde::Serialize + ?Sized>(value: &T) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "null".into())
 }
 
 /// [`reader_call`] with a single JSON-encoded argument — the common case.
-#[cfg(feature = "web")]
+#[cfg(any(feature = "web", feature = "mobile"))]
 fn reader_call_json<T: serde::Serialize + ?Sized>(method: &str, value: &T) {
     reader_call(method, &json_literal(value));
 }
 
 /// [`reader_call`] with two JSON-encoded arguments, e.g.
 /// `addAnnotation(cfi, color)`.
-#[cfg(feature = "web")]
+#[cfg(any(feature = "web", feature = "mobile"))]
 fn reader_call_json2<A: serde::Serialize + ?Sized, B: serde::Serialize + ?Sized>(
     method: &str,
     a: &A,
@@ -221,10 +228,28 @@ fn use_reader_signals(uuid: &str, theme: Signal<Theme>) -> ReaderSignals {
         },
     );
 
-    // Suppress the `prefs` unused-variable warning on non-web targets:
-    // `install_reader_web_interop` is web-only, so on SSR / mobile the
-    // local binding is published via context but never read.
-    #[cfg(not(feature = "web"))]
+    // Mobile drives the same glue through the wry WebView's `dioxus.send`
+    // event channel rather than `wasm_bindgen` window callbacks. `use_effect`
+    // hooks inside run unconditionally, so hook order stays stable (rule 07).
+    #[cfg(feature = "mobile")]
+    mobile::install_reader_mobile_interop(
+        uuid.to_string(),
+        prefs,
+        mobile::InteropSignals {
+            status,
+            loc,
+            selection,
+            highlights,
+            toc,
+            search_results,
+        },
+        crate::contexts::use_server_url(),
+    );
+
+    // Suppress the `prefs` unused-variable warning on SSR: the interop that
+    // reads it is web/mobile-only, so on SSR the binding is published via
+    // context but never read.
+    #[cfg(not(any(feature = "web", feature = "mobile")))]
     let _ = prefs;
 
     ReaderSignals {
