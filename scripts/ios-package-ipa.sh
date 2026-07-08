@@ -23,6 +23,13 @@ die() { echo "ios-package-ipa: $*" >&2; exit 1; }
 : "${PROVISIONING_PROFILE:?PROVISIONING_PROFILE is required}"
 : "${BUILD_NUMBER:?BUILD_NUMBER is required}"
 
+# BUILD_NUMBER is interpolated into PlistBuddy commands; CFBundleVersion is
+# numeric (optionally dot-separated). Reject anything else so a stray value
+# can't malform the plist or inject command arguments.
+case "$BUILD_NUMBER" in
+  '' | *[!0-9.]*) die "BUILD_NUMBER must be numeric/dot-separated, got: '$BUILD_NUMBER'" ;;
+esac
+
 plistbuddy=/usr/libexec/PlistBuddy
 [ -x "$plistbuddy" ] || die "PlistBuddy not found at $plistbuddy (need macOS)"
 [ -f "$PROVISIONING_PROFILE" ] || die "provisioning profile not found: $PROVISIONING_PROFILE"
@@ -49,8 +56,10 @@ info_plist="$app_dir/Info.plist"
 # `Set` fails on an absent key, so Add-then-Set each.
 plist_set() {
   local key="$1" type="$2" value="$3"
-  "$plistbuddy" -c "Add :$key $type $value" "$info_plist" 2>/dev/null \
-    || "$plistbuddy" -c "Set :$key $value" "$info_plist"
+  # Quote the value inside the PlistBuddy command so a value with spaces or
+  # shell-significant characters can't split the argument or inject commands.
+  "$plistbuddy" -c "Add :$key $type \"$value\"" "$info_plist" 2>/dev/null \
+    || "$plistbuddy" -c "Set :$key \"$value\"" "$info_plist"
 }
 plist_set DTPlatformName string iphoneos
 plist_set CFBundleVersion string "$BUILD_NUMBER"

@@ -83,7 +83,9 @@ jobs:
           KEYCHAIN="$RUNNER_TEMP/omnibus-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
           CERT_P12="$RUNNER_TEMP/dist.p12"
-          echo "$IOS_DIST_CERT_P12_BASE64" | base64 --decode > "$CERT_P12"
+          # `-D` is the BSD/macOS decode flag (`--decode` is a GNU long-opt
+          # some macOS images lack); these steps run outside nix on the runner.
+          echo "$IOS_DIST_CERT_P12_BASE64" | base64 -D > "$CERT_P12"
 
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
@@ -106,7 +108,7 @@ jobs:
         run: |
           set -euo pipefail
           PROFILE="$RUNNER_TEMP/omnibus.mobileprovision"
-          echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PROFILE"
+          echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 -D > "$PROFILE"
           echo "PROVISIONING_PROFILE=$PROFILE" >> "$GITHUB_ENV"
 
       # Build the unsigned .app. Runs in the `.#mobile` shell for `dx` + the
@@ -134,7 +136,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$HOME/.appstoreconnect/private_keys"
           KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
-          echo "$ASC_API_KEY_BASE64" | base64 --decode > "$KEY_PATH"
+          echo "$ASC_API_KEY_BASE64" | base64 -D > "$KEY_PATH"
           xcrun altool --upload-app -f "$GITHUB_WORKSPACE/omnibus-mobile.ipa" -t ios \
             --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
           rm -f "$KEY_PATH"
