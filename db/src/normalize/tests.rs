@@ -82,7 +82,7 @@ fn tricky_inputs() -> Vec<String> {
         "trailing comma,",
     ]
     .iter()
-    .map(|s| s.to_string())
+    .map(ToString::to_string)
     .collect();
     // A very long input to exercise the capacity/allocation path.
     v.push("Tomás Ërník ".repeat(5_000));
