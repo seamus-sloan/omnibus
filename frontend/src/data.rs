@@ -142,7 +142,12 @@ pub mod app_dirs {
         {
             let home = std::env::var_os("HOME")?;
             let dir = data_dir_from_home(Path::new(&home));
-            std::fs::create_dir_all(&dir).ok()?;
+            // Log before falling back to memory-only: a silent create failure
+            // is exactly the class of bug this module exists to fix.
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                tracing::warn!(error = %e, path = %dir.display(), "could not create app data dir; persistence disabled this launch");
+                return None;
+            }
             Some(dir)
         }
     }
@@ -170,11 +175,13 @@ pub mod app_dirs {
 pub mod server_url_store {
     //! On-disk persistence for the user-entered backend base URL. Far
     //! simpler than [`super::token_store`]: the URL is not a secret, so it
-    //! persists in every build (no `debug_assertions` gate) with default
-    //! permissions, and there is no in-memory cache or change channel — the
-    //! reactive [`super::ServerUrl`] context signal is the in-memory source
-    //! of truth, while this module only reads it once at launch and writes
-    //! it back when the user connects.
+    //! persists with default permissions and no in-memory cache or change
+    //! channel — the reactive [`super::ServerUrl`] context signal is the
+    //! in-memory source of truth, while this module only reads it once at
+    //! launch and writes it back when the user connects. Persistence is
+    //! conditional on a writable dir (see [`super::app_dirs::data_dir`]):
+    //! available on iOS/desktop, but currently `None` on Android, which stays
+    //! memory-only.
     use std::path::PathBuf;
 
     /// On-disk path for the persisted server URL, or `None` when no writable
@@ -323,20 +330,22 @@ pub mod token_store {
         unpoison(cell().read()).clone()
     }
 
-    /// `true` when this build persists the bearer token to disk. Now
-    /// unconditional: the token lands in the sandboxed app data dir (see
-    /// [`super::app_dirs`]) with `0o600` perms, protected at rest by the iOS
-    /// sandbox + Data Protection. Release builds persist too, so users stay
+    /// `true` when this build persists the bearer token to disk. No longer
+    /// gated on `debug_assertions` — release builds persist too, so users stay
     /// signed in across a cold start and are only logged out when the server
-    /// rejects the bearer (expiry/revoke). iOS Keychain / Android Keystore
-    /// remains a future hardening step, not a prerequisite for persistence.
+    /// rejects the bearer (expiry/revoke). The actual write still depends on a
+    /// writable dir: on iOS/desktop the token lands in the sandboxed app data
+    /// dir (see [`super::app_dirs`]) with `0o600` perms (protected at rest by
+    /// the iOS sandbox + Data Protection); on Android [`token_path`] is `None`,
+    /// so persistence is a no-op there until the JNI resolver lands. iOS
+    /// Keychain / Android Keystore remains a future hardening step.
     fn persistence_enabled() -> bool {
         true
     }
 
-    /// Set the token in memory immediately, notify UI subscribers, and
-    /// (in dev builds only) enqueue a disk write on the persistence
-    /// worker.
+    /// Set the token in memory immediately, notify UI subscribers, and (when
+    /// a writable [`token_path`] exists) enqueue a disk write on the
+    /// persistence worker.
     pub fn set(token: String) {
         *unpoison(cell().write()) = Some(token.clone());
         notify(true);
@@ -348,10 +357,10 @@ pub mod token_store {
         }
     }
 
-    /// Clear the token from memory immediately, notify UI subscribers,
-    /// and (in dev builds only) enqueue a disk delete on the persistence
-    /// worker. Channel ordering guarantees a clear always supersedes any
-    /// earlier set.
+    /// Clear the token from memory immediately, notify UI subscribers, and
+    /// (when a writable [`token_path`] exists) enqueue a disk delete on the
+    /// persistence worker. Channel ordering guarantees a clear always
+    /// supersedes any earlier set.
     pub fn clear() {
         *unpoison(cell().write()) = None;
         notify(false);

@@ -41,9 +41,11 @@ dev-bounce:
 # Run the full unit/integration test matrix. `cargo test --workspace` is a
 # trap here — it silently skips the frontend rpc/page tests (they need
 # --features server) — so run each crate explicitly. The frontend runs twice
-# under mutually-exclusive features: `server` (rpc/page tests) and `mobile`
-# (the `data::token_store` / `app_dirs` persistence tests). The `omnibus-mobile`
-# shell crate itself has no tests (lint covers it via `just lint`).
+# with different feature sets: `server` (rpc/page tests) and `mobile` (the
+# `data::token_store` / `app_dirs` persistence tests) — the `web`/`mobile`/
+# `server` impls are cfg-split, so each set exercises a different code path.
+# The `omnibus-mobile` shell crate itself has no tests (lint covers it via
+# `just lint`).
 # Self-wraps in the slim nix shell so it works from a bare checkout too.
 test:
     nix develop --command bash -ec '\
