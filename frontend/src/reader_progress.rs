@@ -112,15 +112,22 @@ fn save_impl(_uuid: &str, _cfi: &str) {}
 #[cfg(all(test, feature = "mobile"))]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // These tests share one process-global map and each `clear()`s it, so
+    // running them in parallel wipes each other. Serialize them.
+    static TEST_GUARD: Mutex<()> = Mutex::new(());
 
     #[test]
     fn returns_none_when_unset() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         mobile_store::clear();
         assert_eq!(load("book-a"), None);
     }
 
     #[test]
     fn round_trips_and_isolates_per_uuid() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         mobile_store::clear();
         save("book-a", "epubcfi(/6/4[chap01]!/4/2/1:0)");
         save("book-b", "epubcfi(/6/8[chap04]!/4/10/2:42)");
@@ -138,6 +145,7 @@ mod tests {
 
     #[test]
     fn save_overwrites_prior_position() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         mobile_store::clear();
         save("book-a", "epubcfi(/6/4!/4/2/1:0)");
         save("book-a", "epubcfi(/6/12!/4/8/3:7)");

@@ -43,6 +43,10 @@ tokio = { workspace = true, optional = true }
 # pull tracing into the bundle.
 tracing = { workspace = true, optional = true }
 
+[dev-dependencies]
+# Sandboxed temp dirs for the mobile `token_store` / `app_dirs` file tests.
+tempfile.workspace = true
+
 [features]
 default = []
 # Web client (WASM): uses dioxus-fullstack server-function client stubs.
