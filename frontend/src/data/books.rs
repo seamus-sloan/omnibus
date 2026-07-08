@@ -287,6 +287,26 @@ pub async fn worker_status(_server_url: &str) -> Result<WorkerStatus, DataError>
     Ok(WorkerStatus::default())
 }
 
+/// Admin: manually trigger a rescan of the configured library paths.
+#[cfg(not(feature = "mobile"))]
+pub async fn scan_library(_server_url: &str) -> Result<(), DataError> {
+    crate::rpc::rpc_scan_library()
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Mobile stub for `scan_library` — queues both library scans via REST.
+#[cfg(feature = "mobile")]
+pub async fn scan_library(server_url: &str) -> Result<(), DataError> {
+    let url = format!("{server_url}/api/scan-library");
+    let response = with_bearer(http_client().post(&url)).send().await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(())
+}
+
 /// Admin: manually trigger chapter extraction for audiobooks missing chapters.
 #[cfg(not(feature = "mobile"))]
 pub async fn backfill_chapters(_server_url: &str) -> Result<(), DataError> {
