@@ -62,6 +62,9 @@ plist_set() {
     || "$plistbuddy" -c "Set :$key \"$value\"" "$info_plist"
 }
 plist_set DTPlatformName string iphoneos
+# App Store validation rejects the bundle without CFBundlePackageType=APPL
+# ("Invalid Bundle OS Type code"); dx omits it like DTPlatformName.
+plist_set CFBundlePackageType string APPL
 plist_set CFBundleVersion string "$BUILD_NUMBER"
 # Only add a floor if the build didn't already declare one.
 "$plistbuddy" -c "Print :MinimumOSVersion" "$info_plist" >/dev/null 2>&1 \
