@@ -35,7 +35,10 @@ permissions:
 jobs:
   upload:
     name: build + upload to TestFlight
-    runs-on: macos-14
+    # macos-26 ships Xcode 26 / the iOS 26 SDK. App Store Connect rejects any
+    # upload built with an older SDK ("must be built with the iOS 26 SDK or
+    # later"), so the older macos-14/15 images (Xcode 15/16) can't be used.
+    runs-on: macos-26
     permissions:
       contents: read
       # nix-installer-action needs the OIDC token endpoints to auth to FlakeHub
