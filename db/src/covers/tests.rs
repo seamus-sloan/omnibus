@@ -180,3 +180,42 @@ async fn cover_returns_none_for_missing_book_id() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     assert!(get_cover(&pool, 999_999).await.unwrap().is_none());
 }
+
+/// A minimal but valid 1x1 GIF87a: header + logical-screen descriptor + a
+/// 2-colour global table + one image descriptor and a single-pixel LZW frame.
+/// Enough for `image` to sniff the format and decode a first frame (#828).
+const GIF_1X1: &[u8] = &[
+    0x47, 0x49, 0x46, 0x38, 0x37, 0x61, // "GIF87a"
+    0x01, 0x00, 0x01, 0x00, // 1x1 logical screen
+    0x80, 0x00, 0x00, // GCT flag, 2 colours, no bg/aspect
+    0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, // palette: black, white
+    0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, // image descriptor
+    0x02, 0x02, 0x44, 0x01, 0x00, // LZW min code size + 1-pixel data block
+    0x3B, // trailer
+];
+
+/// A cover whose bytes are really a GIF must be written as `<uuid>.gif` even
+/// when the caller hands us `image/jpeg` — the extension is sniffed from the
+/// bytes, not trusted from the mime (#828). This is the root cause of covers
+/// landing as `<uuid>.jpg` and later failing to decode.
+#[tokio::test]
+async fn write_cover_file_stores_gif_when_bytes_are_gif_despite_jpeg_mime() {
+    let _covers = CoversTempDir::new("gif_extension");
+    let uuid = "gif-book";
+
+    write_cover_file(uuid, "image/jpeg", GIF_1X1).unwrap();
+
+    // The `.gif` path exists with the GIF bytes; no `.jpg` was written.
+    assert_eq!(std::fs::read(cover_path_for(uuid, "gif")).unwrap(), GIF_1X1);
+    assert!(std::fs::read(cover_path_for(uuid, "jpg")).is_err());
+}
+
+/// The `gif` codec is compiled into the `image` crate, so GIF cover bytes
+/// decode via `load_from_memory` instead of erroring with "The image format
+/// Gif is not supported" — the fatal failure reported in #828.
+#[test]
+fn gif_cover_bytes_decode_via_load_from_memory() {
+    let img =
+        image::load_from_memory(GIF_1X1).expect("GIF must decode once the gif codec is enabled");
+    assert_eq!((img.width(), img.height()), (1, 1));
+}
