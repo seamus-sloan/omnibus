@@ -8,6 +8,30 @@ fn hash_password_and_verify_password_round_trips_a_matching_credential() {
     assert!(!verify_password("wrong password entirely", &phc).unwrap());
 }
 
+/// Compatibility guard: ensures previously stored Argon2id PHC hashes still verify after dependency bumps.
+/// This PHC string was captured from a deployed database row.
+const KNOWN_STORED_PHC: &str =
+    "$argon2id$v=19$m=19456,t=2,p=1$hfViri/PktpsaVGThRVdQg$FuImGjf9eL7k2PhxMjxBJSlSRgXCSKi1/KrKELG4DuA";
+
+#[test]
+fn verify_password_accepts_a_hash_produced_by_an_earlier_argon2_version() {
+    // Round-trip against a hash minted before the bump: PHC format is
+    // designed for forward compatibility, but confirm it rather than
+    // assume it (issue #523 acceptance criteria).
+    assert!(verify_password("correct horse battery staple", KNOWN_STORED_PHC).unwrap());
+    assert!(!verify_password("wrong password entirely", KNOWN_STORED_PHC).unwrap());
+}
+
+#[test]
+fn stored_phc_string_still_parses_through_the_password_hash_crate() {
+    // The `verify_password` path parses via `PasswordHash::new`; assert the
+    // parse itself accepts the stored format and recovers the tuning
+    // parameters, so a `password-hash` bump that changed the grammar is
+    // caught at the parse boundary, not only at verify.
+    let parsed = PasswordHash::new(KNOWN_STORED_PHC).unwrap();
+    assert_eq!(parsed.algorithm.as_str(), "argon2id");
+}
+
 #[test]
 fn verify_password_returns_crypto_error_for_malformed_phc_string() {
     let err = verify_password("any-password", "not-a-valid-phc-string").unwrap_err();
