@@ -1,7 +1,8 @@
 //! Top-bar / page-turn / keydown event handlers for `BookReadPage`.
 //! Extracted so the parent component reads as setup → render rather than
 //! a 60-line block of cfg-gated closures. Each handler bridges signal
-//! state with the (web-only) JS calls and (non-mobile) router navigation.
+//! state with the (web/mobile) JS glue calls and (non-mobile) router
+//! navigation.
 
 use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]
@@ -64,7 +65,7 @@ enum Direction {
 }
 
 /// Clear any live selection and ask the epub.js glue to page in `dir`.
-#[cfg(feature = "web")]
+#[cfg(any(feature = "web", feature = "mobile"))]
 fn advance_page(mut selection: Signal<Option<SelectionData>>, dir: Direction) {
     selection.set(None);
     match dir {
@@ -73,8 +74,8 @@ fn advance_page(mut selection: Signal<Option<SelectionData>>, dir: Direction) {
     }
 }
 
-/// Non-web stub: the JS glue only exists in the browser, so paging is a no-op.
-#[cfg(not(feature = "web"))]
+/// SSR stub: the JS glue only exists in the WebView, so paging is a no-op.
+#[cfg(not(any(feature = "web", feature = "mobile")))]
 fn advance_page(_: Signal<Option<SelectionData>>, _: Direction) {}
 
 /// Reader keyboard map: arrows page the book; Escape peels back the topmost
@@ -89,12 +90,12 @@ fn handle_keydown(
     match evt.key() {
         Key::ArrowLeft => {
             evt.prevent_default();
-            #[cfg(feature = "web")]
+            #[cfg(any(feature = "web", feature = "mobile"))]
             super::reader_call("prev", "");
         }
         Key::ArrowRight => {
             evt.prevent_default();
-            #[cfg(feature = "web")]
+            #[cfg(any(feature = "web", feature = "mobile"))]
             super::reader_call("next", "");
         }
         Key::Escape => {

@@ -80,10 +80,14 @@ pub(super) fn render_loaded_mobile(b: EbookMetadata, server_url: String) -> Elem
                 }
             }
 
-            // Primary CTAs — reading stays stubbed; listening opens the player.
+            // Primary CTAs — reading opens the in-app reader; listening opens the player.
             div { class: "m-bd-cta",
                 if has_ebook {
-                    button { class: "btn primary lg", disabled: true, title: "Reading on mobile coming soon", "Read" }
+                    Link {
+                        to: Route::BookRead { uuid: uuid.clone() },
+                        class: "btn primary lg",
+                        "Read"
+                    }
                 }
                 if has_audio {
                     Link {
