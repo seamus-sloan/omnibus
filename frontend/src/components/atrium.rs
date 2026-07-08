@@ -148,6 +148,10 @@ pub fn Cover(
     });
     let srcset_attr = srcset.unwrap_or_default();
     let sizes_attr = sizes.unwrap_or_default();
+    // Broken/expired cover URLs otherwise render the browser's broken-image
+    // icon with no self-heal until a full reload; fall back to the
+    // typographic plate on a load error instead.
+    let mut cover_broken = use_signal(|| false);
 
     rsx! {
         div {
@@ -156,13 +160,14 @@ pub fn Cover(
             "data-testid": "cover",
             div {
                 class: "cover tpl-plate",
-                if let Some(url) = image_src {
+                if let Some(url) = image_src.filter(|_| !cover_broken()) {
                     img {
                         src: "{url}",
                         srcset: "{srcset_attr}",
                         sizes: "{sizes_attr}",
                         alt: "Cover of {title}",
                         loading: "lazy",
+                        onerror: move |_| cover_broken.set(true),
                     }
                 } else {
                     div { class: "ca", "{author_label}" }

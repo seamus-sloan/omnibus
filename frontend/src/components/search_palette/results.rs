@@ -146,7 +146,10 @@ fn SpBookRow(book: PaletteBookHit, selected: bool, on_click: EventHandler<MouseE
         "sp-row"
     };
     let server_url = use_server_url();
-    let cover = if book.cover_url.is_some() {
+    // A transient thumb-fetch failure otherwise renders the browser's
+    // broken-image icon with no self-heal until a full reload.
+    let mut cover_broken = use_signal(|| false);
+    let cover = if book.cover_url.is_some() && !cover_broken() {
         let url = book_thumb_url(&server_url, &book);
         rsx! {
             img {
@@ -154,6 +157,7 @@ fn SpBookRow(book: PaletteBookHit, selected: bool, on_click: EventHandler<MouseE
                 src: "{url}",
                 alt: "",
                 loading: "lazy",
+                onerror: move |_| cover_broken.set(true),
             }
         }
     } else {

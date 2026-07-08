@@ -225,6 +225,9 @@ fn author_avatar(
     mut author: Signal<Option<AuthorDetail>>,
     initial: &str,
 ) -> Element {
+    // A transient photo-fetch failure otherwise renders the browser's
+    // broken-image icon with no self-heal until a full reload.
+    let mut photo_broken = use_signal(|| false);
     rsx! {
         AuthorPhotoEditOverlay {
             author_id: a.id,
@@ -242,7 +245,7 @@ fn author_avatar(
                     });
                 }
             },
-            if a.has_photo {
+            if a.has_photo && !photo_broken() {
                 img {
                     class: "disc-avatar disc-avatar--photo",
                     // `media_url` server-prefixes and (mobile) appends the
@@ -250,6 +253,7 @@ fn author_avatar(
                     // authenticates; no-op on web.
                     src: crate::media_url(server_url, &format!("/api/authors/{}/photo", a.id)),
                     alt: "{a.name}",
+                    onerror: move |_| photo_broken.set(true),
                 }
             } else {
                 div { class: "disc-avatar", "{initial}" }

@@ -203,9 +203,12 @@ pub(super) fn EbookRowCoverCell(
     has_cover: bool,
     alt_title: String,
 ) -> Element {
+    // A transient thumb-fetch failure otherwise renders the browser's
+    // broken-image icon with no self-heal until a full reload.
+    let mut thumb_broken = use_signal(|| false);
     rsx! {
         td { class: "ebook-col-cover", "data-testid": "ebook-cell-cover",
-            if has_cover {
+            if has_cover && !thumb_broken() {
                 img {
                     class: "ebook-thumb",
                     src: "{thumb_src}",
@@ -215,6 +218,7 @@ pub(super) fn EbookRowCoverCell(
                     loading: "lazy",
                     width: "320",
                     height: "480",
+                    onerror: move |_| thumb_broken.set(true),
                 }
             } else {
                 div { class: "ebook-thumb ebook-thumb-fallback", "—" }
