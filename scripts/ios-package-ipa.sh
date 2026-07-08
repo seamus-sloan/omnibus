@@ -68,6 +68,12 @@ plist_set DTPlatformName string iphoneos
 # App Store validation rejects the bundle without CFBundlePackageType=APPL
 # ("Invalid Bundle OS Type code"); dx omits it like DTPlatformName.
 plist_set CFBundlePackageType string APPL
+# Pre-declare export-compliance exemption (HTTPS/TLS to our own server is
+# Apple-exempt) so ASC skips the "Missing Compliance" gate that blocks
+# TestFlight auto-distribution. Set via PlistBuddy directly, unquoted, so the
+# value is a real boolean (plist_set is for string keys).
+"$plistbuddy" -c "Add :ITSAppUsesNonExemptEncryption bool false" "$info_plist" 2>/dev/null \
+  || "$plistbuddy" -c "Set :ITSAppUsesNonExemptEncryption false" "$info_plist"
 plist_set CFBundleVersion string "$BUILD_NUMBER"
 # CFBundleShortVersionString is the user-visible "marketing" version. dx stamps
 # it from mobile/Cargo.toml (0.1.0); override it here so the TestFlight build's
