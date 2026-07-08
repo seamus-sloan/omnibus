@@ -32,8 +32,10 @@ pub(super) fn file_token_url(server_url: &str, uuid: &str, token: Option<&str>) 
 /// inserted `<script>` tags), mobile has no ordering guarantee from
 /// `document::Script`, so we chain `onload` promises here — epub.js binds
 /// `window.JSZip` at evaluation time, so it must not run before JSZip exists.
-/// Each script is skipped if its global is already present (SPA re-entry).
-/// `opts` is any JSON-serializable value shaped like the glue's `init` bag.
+/// Each script is skipped if its global is already present (SPA re-entry), and
+/// each `load` has a 10 s timeout so a stalled request surfaces the error
+/// overlay instead of hanging on "Loading…" forever. `opts` is any
+/// JSON-serializable value shaped like the glue's `init` bag.
 pub(super) fn install_surface_js(
     url: &str,
     opts: &serde_json::Value,
@@ -53,7 +55,9 @@ pub(super) fn install_surface_js(
   window.__omnibusOnSearchResults=function(j){{dioxus.send({{kind:"Search",json:j}});}};
   function load(src){{return new Promise(function(res,rej){{
     var s=document.createElement("script");s.src=src;s.async=false;
-    s.onload=function(){{res();}};s.onerror=function(){{rej();}};
+    var t=setTimeout(function(){{rej();}},10000);
+    s.onload=function(){{clearTimeout(t);res();}};
+    s.onerror=function(){{clearTimeout(t);rej();}};
     document.head.appendChild(s);
   }});}}
   function ensure(has,src){{return has()?Promise.resolve():load(src);}}
@@ -127,6 +131,8 @@ mod tests {
         let ep = js.find("/assets/epub.js").expect("loads epub");
         let gl = js.find("/assets/glue.js").expect("loads glue");
         assert!(jz < ep && ep < gl, "runtime must load JSZip → epub → glue");
+        // Each load is time-boxed so a stalled request can't hang init forever.
+        assert!(js.contains("setTimeout") && js.contains("clearTimeout"));
         assert!(js.contains("window.OmnibusReader&&window.ePub"));
         assert!(js.contains(r#"{kind:"Status",state:"error"}"#));
         // No leaked `format!` escape pairs.

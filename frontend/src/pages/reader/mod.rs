@@ -398,14 +398,9 @@ fn ReaderLayout(
     let note_target = panels.note_target;
     let quote_target = panels.quote_target;
 
-    // Web/SSR render the vendored runtime as ordered, parser-inserted
-    // `<script>` tags: JSZip must define `window.JSZip` before epub.js
-    // evaluates, because epub.js's UMD binds `window.JSZip` at load time. On
-    // mobile there is no SSR and `document::Script` injects each tag via
-    // `createElement`+`appendChild`, which loads them *async and unordered* —
-    // so epub.js can evaluate before JSZip exists and bind `undefined`,
-    // breaking every book. Mobile therefore loads them in a guaranteed order
-    // from `mobile::interop` instead (see `install_surface_js`).
+    // Web/SSR emit ordered, parser-inserted tags (JSZip before epub.js, which
+    // binds `window.JSZip` at load time). Mobile has no SSR, so it loads the
+    // runtime in order from `mobile::interop` instead (see `install_surface_js`).
     #[cfg(not(feature = "mobile"))]
     let reader_scripts = rsx! {
         document::Script { src: JSZIP_JS }
