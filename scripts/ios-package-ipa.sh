@@ -69,6 +69,26 @@ plist_set CFBundleVersion string "$BUILD_NUMBER"
 # Only add a floor if the build didn't already declare one.
 "$plistbuddy" -c "Print :MinimumOSVersion" "$info_plist" >/dev/null 2>&1 \
   || "$plistbuddy" -c "Add :MinimumOSVersion string 13.0" "$info_plist"
+
+# dx (unlike Xcode) omits the build-provenance keys that App Store validation
+# reads to identify the toolchain; without them altool rejects with
+# "Unsupported SDK or Xcode version". Derive them from the active Xcode/SDK so
+# they truthfully describe whatever toolchain built the .app.
+sdk_version="$(xcrun --sdk iphoneos --show-sdk-version)"
+sdk_build="$(xcrun --sdk iphoneos --show-sdk-build-version)"
+xcode_ver="$(xcodebuild -version | awk '/^Xcode/ { print $2 }')"
+xcode_build="$(xcodebuild -version | awk '/^Build version/ { print $3 }')"
+# DTXcode packs the version as 2-digit-major + minor + patch (26.4.1 -> "2641").
+dtxcode="$(printf '%s' "$xcode_ver" | awk -F. '{ printf "%02d%d%d", $1, ($2 == "" ? 0 : $2), ($3 == "" ? 0 : $3) }')"
+plist_set DTPlatformVersion string "$sdk_version"
+plist_set DTSDKName string "iphoneos${sdk_version}"
+plist_set DTSDKBuild string "$sdk_build"
+plist_set DTPlatformBuild string "$sdk_build"
+plist_set DTXcode string "$dtxcode"
+plist_set DTXcodeBuild string "$xcode_build"
+plist_set DTCompiler string "com.apple.compilers.llvm.clang.1_0"
+plist_set BuildMachineOSBuild string "$(sw_vers -buildVersion)"
+
 plutil -lint "$info_plist" >/dev/null || die "Info.plist failed plutil lint after patching"
 
 # Embed the provisioning profile the app is signed against.
