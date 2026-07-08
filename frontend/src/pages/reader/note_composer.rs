@@ -13,6 +13,7 @@ pub(super) fn NoteComposer(
     on_close: EventHandler<()>,
 ) -> Element {
     let id = highlight.id;
+    let server_url = crate::contexts::use_server_url();
     let mut draft = use_signal(|| highlight.note.clone().unwrap_or_default());
     let quote = highlight
         .text
@@ -23,8 +24,9 @@ pub(super) fn NoteComposer(
         let text = draft.peek().trim().to_string();
         let note = if text.is_empty() { None } else { Some(text) };
         let note_for_event = note.clone();
+        let server_url = server_url.clone();
         spawn(async move {
-            if crate::data::update_highlight_note("", id, note.clone())
+            if crate::data::update_highlight_note(&server_url, id, note.clone())
                 .await
                 .is_ok()
             {

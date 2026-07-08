@@ -82,7 +82,11 @@ pub(super) fn QuotePanel(
         let dl_author = author.clone();
         let dl_subtitle = subtitle.clone();
         move |_| {
-            #[cfg(feature = "web")]
+            // The glue draws the card to a canvas and saves it via an
+            // `<a download>`. That runs in the mobile WebView too, though
+            // WKWebView's handling of programmatic downloads is spotty — a
+            // native share fallback is a possible follow-up.
+            #[cfg(any(feature = "web", feature = "mobile"))]
             {
                 let payload = serde_json::json!({
                     "text": dl_text,
@@ -96,7 +100,7 @@ pub(super) fn QuotePanel(
                 .to_string();
                 super::reader_call_json("exportQuoteCard", &payload);
             }
-            #[cfg(not(feature = "web"))]
+            #[cfg(not(any(feature = "web", feature = "mobile")))]
             let _ = (&dl_text, &dl_author, &dl_subtitle);
         }
     };
