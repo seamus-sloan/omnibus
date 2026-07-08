@@ -12,7 +12,7 @@ use super::DataError;
 #[cfg(feature = "mobile")]
 use super::{drain_error, http_client, note_status, with_bearer};
 
-// --- Mobile (REST) -------------------------------------------------------
+// Mobile (REST).
 
 /// POST `/api/journals` — create a journal entry.
 #[cfg(feature = "mobile")]
@@ -93,7 +93,7 @@ pub async fn preview_journal_markdown(
     Ok(response.json::<String>().await?)
 }
 
-// --- Web / SSR (RPC) -----------------------------------------------------
+// Web / SSR (RPC).
 
 /// Web/SSR `create_journal_entry` — proxies to `rpc_create_journal_entry`.
 #[cfg(not(feature = "mobile"))]
