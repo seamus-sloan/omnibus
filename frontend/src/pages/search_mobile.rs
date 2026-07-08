@@ -55,6 +55,7 @@ pub fn MobileSearchPage() -> Element {
     let mut query = use_signal(String::new);
     let mut results = use_signal(|| Option::<PaletteResults>::None);
     let mut loading = use_signal(|| false);
+    let mut errored = use_signal(|| false);
     let mut scope = use_signal(|| Scope::All);
     // Handle of the in-flight debounce+fetch task so each new keystroke can
     // cancel the prior one — only one request is ever in flight (mirrors the
@@ -68,19 +69,29 @@ pub fn MobileSearchPage() -> Element {
         if let Some(prev) = current_task.write().take() {
             prev.cancel();
         }
+        let trimmed = v.trim().to_string();
+        if trimmed.is_empty() {
+            results.set(None);
+            loading.set(false);
+            errored.set(false);
+            return;
+        }
+        // Flip to loading synchronously — before the debounce sleep — so the
+        // results pane shows "Searching…" immediately instead of a blank gap.
+        loading.set(true);
+        errored.set(false);
         let url = search_url.clone();
         let task = spawn(async move {
             debounce_sleep_ms(150).await;
-            let trimmed = v.trim().to_string();
-            if trimmed.is_empty() {
-                results.set(None);
-                loading.set(false);
-                return;
-            }
-            loading.set(true);
             match data::search_palette(&url, &trimmed).await {
-                Ok(r) => results.set(Some(r)),
-                Err(_) => results.set(None),
+                Ok(r) => {
+                    results.set(Some(r));
+                    errored.set(false);
+                }
+                Err(_) => {
+                    results.set(None);
+                    errored.set(true);
+                }
             }
             loading.set(false);
         });
@@ -90,6 +101,7 @@ pub fn MobileSearchPage() -> Element {
     let res = results.read();
     let sc = scope();
     let is_loading = loading();
+    let is_errored = errored();
     let q = query();
     let has_query = !q.trim().is_empty();
 
@@ -102,6 +114,7 @@ pub fn MobileSearchPage() -> Element {
                     input {
                         class: "m-search-input",
                         "data-testid": "mobile-search-input",
+                        "aria-label": "Search your library",
                         r#type: "text",
                         placeholder: "Search books, authors, series, tags\u{2026}",
                         autofocus: true,
@@ -139,6 +152,10 @@ pub fn MobileSearchPage() -> Element {
                     {render_groups(r, sc, &q, server_url.as_str(), query, nav)}
                 } else if is_loading {
                     p { class: "m-search-note", "Searching\u{2026}" }
+                } else if is_errored {
+                    p { class: "m-search-note", role: "alert",
+                        "Couldn\u{2019}t run that search. Check your connection and try again."
+                    }
                 } else if !has_query {
                     p { class: "m-search-note m-search-note-initial",
                         "Search your library by title, author, series or tag."
