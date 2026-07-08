@@ -10,6 +10,17 @@ use omnibus_shared::{RatingRecord, RatingUpdate};
 
 use crate::{data, use_server_url};
 
+/// Live rating signals shared between [`BdRatingWidget`] and each
+/// [`BdStarHalf`] click target: the persisted record, hover preview, failed
+/// flag, and the monotonic op counter. Grouped to keep the half under the cap.
+#[derive(Clone, Copy, PartialEq)]
+struct RatingState {
+    current: Signal<Option<RatingRecord>>,
+    hover: Signal<Option<f32>>,
+    failed: Signal<bool>,
+    op_seq: Signal<u64>,
+}
+
 /// Clickable 0.5–5.0 star rating bound to the current user and `uuid`.
 #[component]
 pub(super) fn BdRatingWidget(uuid: String) -> Element {
@@ -23,6 +34,12 @@ pub(super) fn BdRatingWidget(uuid: String) -> Element {
     // Monotonic write counter: a save only applies its result if it's still the
     // latest, so an out-of-order (slow) response can't clobber a newer click.
     let op_seq = use_signal(|| 0u64);
+    let state = RatingState {
+        current,
+        hover,
+        failed,
+        op_seq,
+    };
 
     let load_url = server_url.clone();
     use_effect(use_reactive!(|uuid| {
@@ -81,20 +98,14 @@ pub(super) fn BdRatingWidget(uuid: String) -> Element {
                                 side: "left",
                                 uuid: uuid.clone(),
                                 server_url: server_url.clone(),
-                                current,
-                                hover,
-                                failed,
-                                op_seq,
+                                state,
                             }
                             BdStarHalf {
                                 value: slot,
                                 side: "right",
                                 uuid: uuid.clone(),
                                 server_url: server_url.clone(),
-                                current,
-                                hover,
-                                failed,
-                                op_seq,
+                                state,
                             }
                         }
                     }
@@ -118,11 +129,14 @@ fn BdStarHalf(
     side: &'static str,
     uuid: String,
     server_url: String,
-    current: Signal<Option<RatingRecord>>,
-    hover: Signal<Option<f32>>,
-    failed: Signal<bool>,
-    op_seq: Signal<u64>,
+    state: RatingState,
 ) -> Element {
+    let RatingState {
+        current,
+        mut hover,
+        failed,
+        op_seq,
+    } = state;
     rsx! {
         button {
             r#type: "button",

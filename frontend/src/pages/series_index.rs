@@ -46,10 +46,12 @@ pub fn SeriesIndexPage() -> Element {
     rsx! {
         div { class: "idx-page",
             SeriesIndexHeader {
-                total_series,
-                total_books,
-                filter: filter_text,
-                sort: current_sort,
+                view: SeriesHeaderView {
+                    total_series,
+                    total_books,
+                    filter: filter_text,
+                    sort: current_sort,
+                },
                 on_filter: move |v| filter.set(v),
                 on_sort: move |s| sort.set(s),
             }
@@ -143,16 +145,29 @@ fn render_series_body(filtered: &[&SeriesSummary], library_empty: bool) -> Eleme
     }
 }
 
-/// Header: breadcrumb, hero heading + subtitle, filter input, sort toggles.
-#[component]
-fn SeriesIndexHeader(
+/// Display state for [`SeriesIndexHeader`]: the two counts plus the current
+/// filter text and sort mode. Grouped to keep the header under the prop cap.
+#[derive(Clone, PartialEq)]
+struct SeriesHeaderView {
     total_series: usize,
     total_books: usize,
     filter: String,
     sort: Sort,
+}
+
+/// Header: breadcrumb, hero heading + subtitle, filter input, sort toggles.
+#[component]
+fn SeriesIndexHeader(
+    view: SeriesHeaderView,
     on_filter: EventHandler<String>,
     on_sort: EventHandler<Sort>,
 ) -> Element {
+    let SeriesHeaderView {
+        total_series,
+        total_books,
+        filter,
+        sort,
+    } = view;
     rsx! {
         div { class: "idx-header",
             nav {

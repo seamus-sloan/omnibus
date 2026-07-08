@@ -9,8 +9,32 @@ use omnibus_shared::{Contributor, EbookMetadata, MetadataOverrides};
 
 use super::super::filtering::format_badge_label;
 use super::EditField;
-use crate::components::chip_editor::{ChipEditor, SuggestionItem};
+use crate::components::chip_editor::{ChipEditor, ChipEditorOptions, SuggestionItem};
 use crate::data;
+
+/// Shared edit context for a scalar cell wrapper: admin gating, the row's
+/// current editing signal, and the per-field save callback. Grouped so the
+/// title/series/scalar wrappers stay under the prop cap.
+#[derive(Clone, PartialEq)]
+pub(super) struct CellEditCtx {
+    pub is_admin: bool,
+    pub editing: Signal<Option<EditField>>,
+    pub save_field: EventHandler<(EditField, String)>,
+}
+
+/// Per-row context threaded from `EbookRow` through `EbookRowMarkup` into
+/// `EbookRowCells`: admin gating, editing state, the authors chip draft +
+/// suggestion pool, and the two save callbacks. Grouped so the row markup
+/// components stay under the prop cap.
+#[derive(Clone, PartialEq)]
+pub(super) struct RowContext {
+    pub is_admin: bool,
+    pub editing: Signal<Option<EditField>>,
+    pub authors_draft: Signal<Vec<String>>,
+    pub author_suggestions: ReadSignal<Vec<SuggestionItem>>,
+    pub save_field: EventHandler<(EditField, String)>,
+    pub save_authors: EventHandler<Vec<String>>,
+}
 
 /// Build the common per-cell save callback. Empty strings clear the
 /// override (None — the scanned value re-surfaces); non-empty strings
@@ -92,13 +116,12 @@ pub(super) fn build_save_authors(
 /// Title cell wrapper — pre-wires the title field's [`EditableCell`] props
 /// and routes its `on_save` through the shared row save callback.
 #[component]
-pub(super) fn RowTitleCell(
-    title: String,
-    error: Option<String>,
-    is_admin: bool,
-    editing: Signal<Option<EditField>>,
-    save_field: EventHandler<(EditField, String)>,
-) -> Element {
+pub(super) fn RowTitleCell(title: String, error: Option<String>, ctx: CellEditCtx) -> Element {
+    let CellEditCtx {
+        is_admin,
+        editing,
+        save_field,
+    } = ctx;
     rsx! {
         EditableCell {
             col_class: "ebook-col-title".to_string(),
@@ -117,13 +140,12 @@ pub(super) fn RowTitleCell(
 /// Series cell wrapper — display shows "Name #Index" (F1.3), edit input
 /// seeds with just the series name (the index lives on the full edit page).
 #[component]
-pub(super) fn RowSeriesCell(
-    series_line: String,
-    series_text: String,
-    is_admin: bool,
-    editing: Signal<Option<EditField>>,
-    save_field: EventHandler<(EditField, String)>,
-) -> Element {
+pub(super) fn RowSeriesCell(series_line: String, series_text: String, ctx: CellEditCtx) -> Element {
+    let CellEditCtx {
+        is_admin,
+        editing,
+        save_field,
+    } = ctx;
     rsx! {
         EditableCell {
             col_class: "ebook-col-series".to_string(),
@@ -150,10 +172,13 @@ pub(super) fn RowScalarCell(
     field: EditField,
     value: String,
     placeholder: String,
-    is_admin: bool,
-    editing: Signal<Option<EditField>>,
-    save_field: EventHandler<(EditField, String)>,
+    ctx: CellEditCtx,
 ) -> Element {
+    let CellEditCtx {
+        is_admin,
+        editing,
+        save_field,
+    } = ctx;
     rsx! {
         EditableCell {
             col_class,
@@ -214,17 +239,13 @@ pub(super) fn EbookRowFormatsCell(formats: Vec<String>) -> Element {
     }
 }
 
-/// Inline-editable text cell used by `EbookRow`. Renders a span of text by
-/// default; in admin mode, a click swaps to a text input that commits via the
-/// `on_save` prop on Enter or blur and cancels on Escape. The input's `onclick`
-/// stops propagation so the row-level navigate handler doesn't fire while the
-/// user is editing.
-#[component]
-pub(super) fn EditableCell(
-    col_class: String,
-    cell_testid: String,
-    field: EditField,
-    display_value: String,
+/// Props for the [`EditableCell`] component.
+#[derive(Props, Clone, PartialEq)]
+pub(super) struct EditableCellProps {
+    pub col_class: String,
+    pub cell_testid: String,
+    pub field: EditField,
+    pub display_value: String,
     /// Separate value used to seed the input when edit mode opens.
     /// Some cells render a richer display string than the underlying
     /// scalar override — Series shows "Pioneers #1" but only "Pioneers"
@@ -232,13 +253,33 @@ pub(super) fn EditableCell(
     /// input seeds (and the blur-comparison runs against) the editable
     /// scalar, not the rendered text. Defaults to `display_value`.
     #[props(default)]
-    edit_value: Option<String>,
-    is_admin: bool,
-    editing: Signal<Option<EditField>>,
-    placeholder: String,
-    on_save: EventHandler<String>,
-    error: Option<String>,
-) -> Element {
+    pub edit_value: Option<String>,
+    pub is_admin: bool,
+    pub editing: Signal<Option<EditField>>,
+    pub placeholder: String,
+    pub on_save: EventHandler<String>,
+    pub error: Option<String>,
+}
+
+/// Inline-editable text cell used by `EbookRow`. Renders a span of text by
+/// default; in admin mode, a click swaps to a text input that commits via the
+/// `on_save` prop on Enter or blur and cancels on Escape. The input's `onclick`
+/// stops propagation so the row-level navigate handler doesn't fire while the
+/// user is editing.
+#[component]
+pub(super) fn EditableCell(props: EditableCellProps) -> Element {
+    let EditableCellProps {
+        col_class,
+        cell_testid,
+        field,
+        display_value,
+        edit_value,
+        is_admin,
+        editing,
+        placeholder,
+        on_save,
+        error,
+    } = props;
     let mut editing = editing;
     let mut draft = use_signal(String::new);
     let is_editing = editing() == Some(field);
@@ -393,14 +434,17 @@ pub(super) fn AuthorsCell(props: AuthorsCellProps) -> Element {
                 div { class: "ebook-cell-chip-host",
                     ChipEditor {
                         values: authors_draft,
-                        placeholder: "+ add author\u{2026}".to_string(),
                         on_change,
                         suggestions,
-                        show_avatar: false,
-                        aria_remove_prefix: "Remove".to_string(),
-                        testid_prefix: "ebook-cell-author".to_string(),
-                        autofocus: true,
-                        dropdown_header: "ADD AUTHOR".to_string(),
+                        options: ChipEditorOptions {
+                            placeholder: "+ add author\u{2026}".to_string(),
+                            show_avatar: false,
+                            aria_remove_prefix: "Remove".to_string(),
+                            testid_prefix: "ebook-cell-author".to_string(),
+                            autofocus: true,
+                            dropdown_header: "ADD AUTHOR".to_string(),
+                            ..ChipEditorOptions::default()
+                        },
                         on_close: move |_| {
                             editing.set(None);
                         },

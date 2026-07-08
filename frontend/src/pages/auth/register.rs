@@ -13,6 +13,18 @@ use crate::{use_server_url, Route};
 use super::m_auth_shell;
 use super::submit_register;
 
+/// Form-input signals shared across the register form body and its fields:
+/// the two inputs, the routed error, the in-flight flag, and the terms
+/// checkbox. Grouped so [`RegisterForm`] stays under the prop cap.
+#[derive(Clone, Copy, PartialEq)]
+struct RegisterFormState {
+    username: Signal<String>,
+    password: Signal<String>,
+    error: Signal<Option<RegisterError>>,
+    submitting: Signal<bool>,
+    terms_ack: Signal<bool>,
+}
+
 /// Renders the register page.
 #[component]
 pub fn RegisterPage() -> Element {
@@ -56,11 +68,13 @@ pub fn RegisterPage() -> Element {
     // (`RegisterForm`), only the surrounding shell differs.
     let form = rsx! {
         RegisterForm {
-            username,
-            password,
-            error,
-            submitting,
-            terms_ack,
+            state: RegisterFormState {
+                username,
+                password,
+                error,
+                submitting,
+                terms_ack,
+            },
             on_submit_now: move |_| submit_now.call(()),
         }
     };
@@ -135,14 +149,14 @@ fn register_submit_handlers(
 
 /// Register form body — inputs write the parent's signals through, submission delegates via `on_submit_now`.
 #[component]
-fn RegisterForm(
-    username: Signal<String>,
-    password: Signal<String>,
-    error: Signal<Option<RegisterError>>,
-    submitting: Signal<bool>,
-    mut terms_ack: Signal<bool>,
-    on_submit_now: EventHandler<()>,
-) -> Element {
+fn RegisterForm(state: RegisterFormState, on_submit_now: EventHandler<()>) -> Element {
+    let RegisterFormState {
+        username,
+        password,
+        error,
+        submitting,
+        mut terms_ack,
+    } = state;
     let (on_submit, on_keydown) = register_submit_handlers(submitting, error, on_submit_now);
 
     let err = error();

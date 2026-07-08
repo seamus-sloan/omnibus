@@ -13,7 +13,7 @@ use super::note_composer::NoteComposer;
 use super::quote_panel::QuotePanel;
 use super::reader_bookmarks::ReaderBookmarksDrawer;
 use super::search_panel::SearchPanel;
-use super::selection::{SelectionData, SelectionPopover};
+use super::selection::{SelectionActions, SelectionAnchor, SelectionData, SelectionPopover};
 use super::toc_drawer::TocDrawer;
 use super::ReaderPanelSignals;
 
@@ -32,61 +32,65 @@ pub(super) fn ReaderSelectionPopover(
     };
     rsx! {
         SelectionPopover {
-            sel_rect_x: sel.rect.x,
-            sel_rect_y: sel.rect.y,
-            sel_rect_width: sel.rect.width,
-            sel_cfi: sel.cfi_range.clone(),
-            sel_text: sel.text.clone(),
-            on_dismiss: move |_| {
-                let mut selection = selection;
-                selection.set(None);
+            anchor: SelectionAnchor {
+                sel_rect_x: sel.rect.x,
+                sel_rect_y: sel.rect.y,
+                sel_rect_width: sel.rect.width,
+                sel_cfi: sel.cfi_range.clone(),
+                sel_text: sel.text.clone(),
             },
-            on_highlight: {
-                let uuid = uuid.clone();
-                move |(cfi, color, text): (String, HighlightColor, String)| {
+            actions: SelectionActions {
+                on_dismiss: EventHandler::new(move |_| {
                     let mut selection = selection;
                     selection.set(None);
-                    spawn_create_highlight(
-                        uuid.clone(), cfi, color, text,
-                        highlights, note_target, quote_target, PostCreate::None,
-                    );
-                }
-            },
-            on_note: {
-                let uuid = uuid.clone();
-                move |(cfi, text): (String, String)| {
+                }),
+                on_highlight: EventHandler::new({
+                    let uuid = uuid.clone();
+                    move |(cfi, color, text): (String, HighlightColor, String)| {
+                        let mut selection = selection;
+                        selection.set(None);
+                        spawn_create_highlight(
+                            uuid.clone(), cfi, color, text,
+                            highlights, note_target, quote_target, PostCreate::None,
+                        );
+                    }
+                }),
+                on_note: EventHandler::new({
+                    let uuid = uuid.clone();
+                    move |(cfi, text): (String, String)| {
+                        let mut selection = selection;
+                        selection.set(None);
+                        spawn_create_highlight(
+                            uuid.clone(), cfi, HighlightColor::Amber, text,
+                            highlights, note_target, quote_target, PostCreate::Note,
+                        );
+                    }
+                }),
+                on_quote: EventHandler::new({
+                    let uuid = uuid.clone();
+                    move |(cfi, text): (String, String)| {
+                        let mut selection = selection;
+                        selection.set(None);
+                        spawn_create_highlight(
+                            uuid.clone(), cfi, HighlightColor::Amber, text,
+                            highlights, note_target, quote_target, PostCreate::Quote,
+                        );
+                    }
+                }),
+                on_copy: EventHandler::new(move |text: String| {
+                    #[cfg(feature = "web")]
+                    super::reader_call_json("copyText", &text);
+                    let _ = &text;
                     let mut selection = selection;
                     selection.set(None);
-                    spawn_create_highlight(
-                        uuid.clone(), cfi, HighlightColor::Amber, text,
-                        highlights, note_target, quote_target, PostCreate::Note,
-                    );
-                }
-            },
-            on_quote: {
-                let uuid = uuid.clone();
-                move |(cfi, text): (String, String)| {
+                }),
+                on_share: EventHandler::new(move |text: String| {
+                    #[cfg(feature = "web")]
+                    super::reader_call_json("shareText", &text);
+                    let _ = &text;
                     let mut selection = selection;
                     selection.set(None);
-                    spawn_create_highlight(
-                        uuid.clone(), cfi, HighlightColor::Amber, text,
-                        highlights, note_target, quote_target, PostCreate::Quote,
-                    );
-                }
-            },
-            on_copy: move |text: String| {
-                #[cfg(feature = "web")]
-                super::reader_call_json("copyText", &text);
-                let _ = &text;
-                let mut selection = selection;
-                selection.set(None);
-            },
-            on_share: move |text: String| {
-                #[cfg(feature = "web")]
-                super::reader_call_json("shareText", &text);
-                let _ = &text;
-                let mut selection = selection;
-                selection.set(None);
+                }),
             },
         }
     }

@@ -7,6 +7,31 @@ use dioxus::prelude::*;
 use super::signals::ReaderStatus;
 use super::ReaderPanelSignals;
 
+/// Display state for [`ReaderTopChrome`]: the titles plus which tools read as
+/// active and the highlight badge count. Grouped to keep the row under the cap.
+#[derive(Clone, PartialEq)]
+struct ReaderChromeState {
+    book_title: String,
+    chapter_title: String,
+    show_aa: bool,
+    toc_active: bool,
+    search_active: bool,
+    highlights_active: bool,
+    bookmarks_active: bool,
+    highlight_count: usize,
+}
+
+/// Click handlers for [`ReaderTopChrome`]: back plus one toggle per tool.
+#[derive(Clone, PartialEq)]
+struct ReaderChromeHandlers {
+    on_back: EventHandler<MouseEvent>,
+    on_toggle_aa: EventHandler<MouseEvent>,
+    on_toggle_toc: EventHandler<MouseEvent>,
+    on_toggle_search: EventHandler<MouseEvent>,
+    on_toggle_highlights: EventHandler<MouseEvent>,
+    on_toggle_bookmarks: EventHandler<MouseEvent>,
+}
+
 /// Owns the mutually-exclusive overlay toggles and renders [`ReaderTopChrome`].
 /// Each tool closes every other surface before opening its own.
 #[component]
@@ -47,44 +72,48 @@ pub(super) fn ReaderTopBar(
 
     rsx! {
         ReaderTopChrome {
-            book_title,
-            chapter_title,
-            show_aa: show_aa(),
-            toc_active: show_toc(),
-            search_active: show_search(),
-            highlights_active: show_highlights(),
-            bookmarks_active: show_bookmarks(),
-            highlight_count,
-            on_back,
-            on_toggle_aa: move |_| {
-                let cur = show_aa();
-                close_overlays();
-                let mut s = show_aa;
-                s.set(!cur);
+            state: ReaderChromeState {
+                book_title,
+                chapter_title,
+                show_aa: show_aa(),
+                toc_active: show_toc(),
+                search_active: show_search(),
+                highlights_active: show_highlights(),
+                bookmarks_active: show_bookmarks(),
+                highlight_count,
             },
-            on_toggle_toc: move |_| {
-                let cur = show_toc();
-                close_overlays();
-                let mut s = show_toc;
-                s.set(!cur);
-            },
-            on_toggle_search: move |_| {
-                let cur = show_search();
-                close_overlays();
-                let mut s = show_search;
-                s.set(!cur);
-            },
-            on_toggle_highlights: move |_| {
-                let cur = show_highlights();
-                close_overlays();
-                let mut s = show_highlights;
-                s.set(!cur);
-            },
-            on_toggle_bookmarks: move |_| {
-                let cur = show_bookmarks();
-                close_overlays();
-                let mut s = show_bookmarks;
-                s.set(!cur);
+            handlers: ReaderChromeHandlers {
+                on_back,
+                on_toggle_aa: EventHandler::new(move |_| {
+                    let cur = show_aa();
+                    close_overlays();
+                    let mut s = show_aa;
+                    s.set(!cur);
+                }),
+                on_toggle_toc: EventHandler::new(move |_| {
+                    let cur = show_toc();
+                    close_overlays();
+                    let mut s = show_toc;
+                    s.set(!cur);
+                }),
+                on_toggle_search: EventHandler::new(move |_| {
+                    let cur = show_search();
+                    close_overlays();
+                    let mut s = show_search;
+                    s.set(!cur);
+                }),
+                on_toggle_highlights: EventHandler::new(move |_| {
+                    let cur = show_highlights();
+                    close_overlays();
+                    let mut s = show_highlights;
+                    s.set(!cur);
+                }),
+                on_toggle_bookmarks: EventHandler::new(move |_| {
+                    let cur = show_bookmarks();
+                    close_overlays();
+                    let mut s = show_bookmarks;
+                    s.set(!cur);
+                }),
             },
         }
     }
@@ -92,22 +121,25 @@ pub(super) fn ReaderTopBar(
 
 /// Top navigation bar: back button, title + chapter display, Aa + bookmark tools.
 #[component]
-fn ReaderTopChrome(
-    book_title: String,
-    chapter_title: String,
-    show_aa: bool,
-    toc_active: bool,
-    search_active: bool,
-    highlights_active: bool,
-    bookmarks_active: bool,
-    highlight_count: usize,
-    on_back: EventHandler<MouseEvent>,
-    on_toggle_aa: EventHandler<MouseEvent>,
-    on_toggle_toc: EventHandler<MouseEvent>,
-    on_toggle_search: EventHandler<MouseEvent>,
-    on_toggle_highlights: EventHandler<MouseEvent>,
-    on_toggle_bookmarks: EventHandler<MouseEvent>,
-) -> Element {
+fn ReaderTopChrome(state: ReaderChromeState, handlers: ReaderChromeHandlers) -> Element {
+    let ReaderChromeState {
+        book_title,
+        chapter_title,
+        show_aa,
+        toc_active,
+        search_active,
+        highlights_active,
+        bookmarks_active,
+        highlight_count,
+    } = state;
+    let ReaderChromeHandlers {
+        on_back,
+        on_toggle_aa,
+        on_toggle_toc,
+        on_toggle_search,
+        on_toggle_highlights,
+        on_toggle_bookmarks,
+    } = handlers;
     rsx! {
         div {
             class: "rd-top",
