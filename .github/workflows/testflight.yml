@@ -24,6 +24,10 @@ on:
         description: "CFBundleVersion to stamp (must be higher than the last uploaded build). Defaults to the workflow run number."
         required: false
         type: string
+      marketing_version:
+        description: "CFBundleShortVersionString (user-visible version). Defaults to the latest v* release tag, so it tracks the server release."
+        required: false
+        type: string
 
 concurrency:
   group: testflight-${{ github.ref }}
@@ -62,7 +66,35 @@ jobs:
       # crate and rustc read this env var.
       IPHONEOS_DEPLOYMENT_TARGET: "14.0"
     steps:
+      # fetch-depth: 0 pulls full history + tags so `git describe` below can
+      # find the latest release tag (checkout fetches neither by default).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Resolve the user-visible marketing version so the TestFlight build's
+      # version matches the server's release tag. Prefer the dispatch input;
+      # otherwise use the latest v* git tag (the same tags release.yml mints).
+      - name: Resolve marketing version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.marketing_version }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_VERSION" ]; then
+            version="$INPUT_VERSION"
+          else
+            tag="$(git describe --tags --match 'v*' --abbrev=0 2>/dev/null || true)"
+            [ -n "$tag" ] || { echo "::error::No v* git tag found and no marketing_version input given."; exit 1; }
+            version="${tag#v}"
+          fi
+          # Reject anything but digits and dots before writing to $GITHUB_ENV: a
+          # dispatch input containing a newline would otherwise inject extra env
+          # assignments into every later step. Same guard the packaging script uses.
+          case "$version" in
+            '' | *[!0-9.]*) echo "::error::marketing version must be numeric/dot-separated, got: '$version'"; exit 1 ;;
+          esac
+          echo "Marketing version: $version"
+          printf 'MARKETING_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v22
@@ -150,6 +182,8 @@ jobs:
         env:
           # SHA-1 derived from the imported cert above (not the secret name).
           SIGNING_IDENTITY: ${{ env.SIGNING_IDENTITY_HASH }}
+          # Resolved from the release tag (or dispatch input) above.
+          MARKETING_VERSION: ${{ env.MARKETING_VERSION }}
           IPA_OUT: ${{ github.workspace }}/omnibus-mobile.ipa
         run: |
           set -euo pipefail
