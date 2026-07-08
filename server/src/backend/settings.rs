@@ -86,6 +86,35 @@ pub(super) async fn post_reindex(_admin: AdminUser, State(state): State<AppState
     }
 }
 
+/// Admin-only: queue a rescan of both configured library paths on the shared
+/// worker (fire-and-forget), mirroring the web `rpc_scan_library`. Unlike
+/// `post_reindex` (ebook-only, synchronous), this covers audiobooks too and
+/// returns as soon as the tasks are queued. 200 once queued, 409 when neither
+/// path is configured.
+pub(super) async fn post_scan_library(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+) -> Response {
+    let settings = match db::get_settings(&state.pool).await {
+        Ok(s) => s,
+        Err(error) => return internal("read settings", error),
+    };
+    if settings.ebook_library_path.is_none() && settings.audiobook_library_path.is_none() {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            "no library path configured",
+        )
+            .into_response();
+    }
+    if let Some(library_path) = settings.ebook_library_path {
+        state.worker.post(Task::Scan { library_path });
+    }
+    if let Some(library_path) = settings.audiobook_library_path {
+        state.worker.post(Task::ScanAudiobooks { library_path });
+    }
+    axum::http::StatusCode::OK.into_response()
+}
+
 /// Admin-only synchronous rebuild of the `books_fts` search index: clears
 /// and re-derives every row from `books`. 200 on success, 500 on worker
 /// failure. Repairs any drift left by a failed post-commit FTS refresh.
