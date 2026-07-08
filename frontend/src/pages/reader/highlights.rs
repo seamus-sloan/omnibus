@@ -23,6 +23,7 @@ pub(crate) enum PostCreate {
 /// optimistic annotation back if the write fails.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_create_highlight(
+    server_url: String,
     uuid: String,
     cfi: String,
     color: HighlightColor,
@@ -32,7 +33,7 @@ pub(crate) fn spawn_create_highlight(
     mut quote_target: Signal<Option<Highlight>>,
     post: PostCreate,
 ) {
-    #[cfg(feature = "web")]
+    #[cfg(any(feature = "web", feature = "mobile"))]
     super::reader_call_json2("addAnnotation", &cfi, color.as_str());
     let create = omnibus_shared::CreateHighlight {
         book_uuid: uuid,
@@ -41,7 +42,7 @@ pub(crate) fn spawn_create_highlight(
         text: if text.is_empty() { None } else { Some(text) },
     };
     spawn(async move {
-        match data::create_highlight("", create).await {
+        match data::create_highlight(&server_url, create).await {
             Ok(h) => {
                 highlights.write().push(h.clone());
                 match post {
@@ -51,7 +52,7 @@ pub(crate) fn spawn_create_highlight(
                 }
             }
             Err(_) => {
-                #[cfg(feature = "web")]
+                #[cfg(any(feature = "web", feature = "mobile"))]
                 super::reader_call_json("removeAnnotation", &cfi);
                 let _ = &cfi;
             }

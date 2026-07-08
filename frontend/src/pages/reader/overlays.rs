@@ -1,7 +1,8 @@
 //! Reader overlays: the live-selection `ReaderSelectionPopover` and the
 //! toggleable `ReaderOverlays` (contents / highlights / search / bookmarks
 //! drawers plus quote panel and note composer). Each renders only when its
-//! backing signal is set. Compiles on every target; the JS bridge is web-only.
+//! backing signal is set. Compiles on every target; the JS glue bridge runs on
+//! web + mobile (SSR no-ops).
 
 use dioxus::prelude::*;
 
@@ -27,6 +28,7 @@ pub(super) fn ReaderSelectionPopover(
     note_target: Signal<Option<Highlight>>,
     quote_target: Signal<Option<Highlight>>,
 ) -> Element {
+    let server_url = crate::contexts::use_server_url();
     let Some(sel) = selection.read().as_ref().cloned() else {
         return rsx! {};
     };
@@ -46,46 +48,49 @@ pub(super) fn ReaderSelectionPopover(
                 }),
                 on_highlight: EventHandler::new({
                     let uuid = uuid.clone();
+                    let server_url = server_url.clone();
                     move |(cfi, color, text): (String, HighlightColor, String)| {
                         let mut selection = selection;
                         selection.set(None);
                         spawn_create_highlight(
-                            uuid.clone(), cfi, color, text,
+                            server_url.clone(), uuid.clone(), cfi, color, text,
                             highlights, note_target, quote_target, PostCreate::None,
                         );
                     }
                 }),
                 on_note: EventHandler::new({
                     let uuid = uuid.clone();
+                    let server_url = server_url.clone();
                     move |(cfi, text): (String, String)| {
                         let mut selection = selection;
                         selection.set(None);
                         spawn_create_highlight(
-                            uuid.clone(), cfi, HighlightColor::Amber, text,
+                            server_url.clone(), uuid.clone(), cfi, HighlightColor::Amber, text,
                             highlights, note_target, quote_target, PostCreate::Note,
                         );
                     }
                 }),
                 on_quote: EventHandler::new({
                     let uuid = uuid.clone();
+                    let server_url = server_url.clone();
                     move |(cfi, text): (String, String)| {
                         let mut selection = selection;
                         selection.set(None);
                         spawn_create_highlight(
-                            uuid.clone(), cfi, HighlightColor::Amber, text,
+                            server_url.clone(), uuid.clone(), cfi, HighlightColor::Amber, text,
                             highlights, note_target, quote_target, PostCreate::Quote,
                         );
                     }
                 }),
                 on_copy: EventHandler::new(move |text: String| {
-                    #[cfg(feature = "web")]
+                    #[cfg(any(feature = "web", feature = "mobile"))]
                     super::reader_call_json("copyText", &text);
                     let _ = &text;
                     let mut selection = selection;
                     selection.set(None);
                 }),
                 on_share: EventHandler::new(move |text: String| {
-                    #[cfg(feature = "web")]
+                    #[cfg(any(feature = "web", feature = "mobile"))]
                     super::reader_call_json("shareText", &text);
                     let _ = &text;
                     let mut selection = selection;
@@ -139,7 +144,7 @@ pub(super) fn ReaderOverlays(meta: OverlayMeta, panels: ReaderPanelSignals) -> E
                 entries: toc.read().clone(),
                 current_title: chapter_title.clone(),
                 on_navigate: move |href: String| {
-                    #[cfg(feature = "web")]
+                    #[cfg(any(feature = "web", feature = "mobile"))]
                     super::reader_call_json("display", &href);
                     let _ = &href;
                     let mut show_toc = show_toc;
@@ -178,12 +183,12 @@ pub(super) fn ReaderOverlays(meta: OverlayMeta, panels: ReaderPanelSignals) -> E
             SearchPanel {
                 results: search_results,
                 on_query: move |q: String| {
-                    #[cfg(feature = "web")]
+                    #[cfg(any(feature = "web", feature = "mobile"))]
                     super::reader_call_json("search", &q);
                     let _ = &q;
                 },
                 on_navigate: move |cfi: String| {
-                    #[cfg(feature = "web")]
+                    #[cfg(any(feature = "web", feature = "mobile"))]
                     super::reader_call_json("display", &cfi);
                     let _ = &cfi;
                     let mut show_search = show_search;
@@ -202,7 +207,7 @@ pub(super) fn ReaderOverlays(meta: OverlayMeta, panels: ReaderPanelSignals) -> E
                 current_cfi: current_cfi.clone(),
                 current_label: chapter_title.clone(),
                 on_navigate: move |cfi: String| {
-                    #[cfg(feature = "web")]
+                    #[cfg(any(feature = "web", feature = "mobile"))]
                     super::reader_call_json("display", &cfi);
                     let _ = &cfi;
                     let mut show_bookmarks = show_bookmarks;
