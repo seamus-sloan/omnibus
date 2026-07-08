@@ -170,8 +170,11 @@ universal iPhone/iPad app and ships it to TestFlight. `dx` has no signing
 and emits a bare `.app`, so `scripts/ios-package-ipa.sh` does everything
 Xcode normally would: patches Info.plist (the keys dx omits —
 `DTPlatformName`, `CFBundlePackageType`, the `DT*` toolchain-provenance
-keys, `CFBundleSupportedPlatforms`, `UILaunchScreen`, build number),
-compiles the app-icon asset catalog (`mobile/assets/Assets.xcassets`) with
+keys, `CFBundleSupportedPlatforms`, `UILaunchScreen`, build number, and the
+marketing version — `CFBundleShortVersionString`, resolved from the latest
+`v*` release tag so the TestFlight version tracks the server release rather
+than the stale `Cargo.toml` `0.1.0`), compiles the app-icon asset catalog
+(`mobile/assets/Assets.xcassets`) with
 `actool`, embeds the provisioning profile, `codesign`s with the identity
 derived from the imported cert, and zips a `Payload/` `.ipa` that
 `xcrun altool` uploads. Bundle ID `com.omnibus.mobile` lives in
