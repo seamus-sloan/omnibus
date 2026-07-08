@@ -82,10 +82,7 @@ pub(super) fn QuotePanel(
         let dl_author = author.clone();
         let dl_subtitle = subtitle.clone();
         move |_| {
-            // The glue draws the card to a canvas and saves it via an
-            // `<a download>`. That runs in the mobile WebView too, though
-            // WKWebView's handling of programmatic downloads is spotty — a
-            // native share fallback is a possible follow-up.
+            // Runs the glue's canvas `<a download>`; WKWebView's programmatic-download support is spotty (native share fallback TBD).
             #[cfg(any(feature = "web", feature = "mobile"))]
             {
                 let payload = serde_json::json!({
