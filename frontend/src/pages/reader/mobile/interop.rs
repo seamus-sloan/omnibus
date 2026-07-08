@@ -1,15 +1,8 @@
-//! Mobile reader interop — the pure JS-string builders plus the
-//! `dioxus::document::eval` seam that mounts the vendored epub.js glue inside
-//! the wry WebView.
-//!
-//! The vendored `window.OmnibusReader` glue (loaded by the `<script>` tags in
-//! the shared reader chrome) reports events by calling a set of
-//! `window.__omnibusOn*` callbacks. On web those are `wasm_bindgen` closures;
-//! mobile runs natively (not WASM), so instead we install JS shims that forward
-//! each call into `dioxus.send(...)` and drain them with `Eval::recv().await`
-//! (see [`super`]) — the same JS↔Rust seam the mobile audio player uses. Only
-//! the two pure builders here are unit-tested; `install_reader_surface` is the
-//! eval seam.
+//! Mobile reader interop: pure JS-string builders plus the
+//! `dioxus::document::eval` seam that mounts the vendored epub.js glue in the
+//! wry WebView. Installs shims that forward the glue's `window.__omnibusOn*`
+//! callbacks into `dioxus.send(...)` (drained via `Eval::recv`). The two pure
+//! builders are unit-tested; `install_reader_surface` is the eval seam.
 
 use dioxus::document::Eval;
 

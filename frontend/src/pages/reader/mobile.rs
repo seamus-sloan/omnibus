@@ -1,15 +1,12 @@
-//! Mobile reader interop — mounts the vendored epub.js in the wry WebView and
-//! bridges its events into the shared reader signals.
-//!
-//! Mobile compiles the same reader chrome + overlays as web, but runs natively
-//! (not WASM), so the web `web_sys`/`wasm_bindgen` callback registration can't
-//! be reused. This installer instead evals a script that forwards the glue's
-//! `window.__omnibusOn*` calls into `dioxus.send(...)` and drains them with
-//! `Eval::recv().await`, mirroring `listen/mobile`. Reading position and saved
-//! highlights are synced through the mobile REST [`crate::data`] layer.
+//! Mobile reader interop: mounts the vendored epub.js in the wry WebView and
+//! bridges the glue's `window.__omnibusOn*` callbacks into Rust over the Dioxus
+//! `Eval` channel (mobile is native, not WASM, so the web `wasm_bindgen` path
+//! can't be reused). Position + saved highlights sync through the mobile REST
+//! [`crate::data`] layer.
 
 #![cfg(feature = "mobile")]
 
+use dioxus::core::Task;
 use dioxus::prelude::*;
 
 use omnibus_shared::{Highlight, ProgressFormat, ProgressUpdate};
@@ -60,14 +57,22 @@ pub(super) fn install_reader_mobile_interop(
     server_url: String,
 ) {
     let mut status = sigs.status;
+    // Retain the mount/drain task so a uuid / server-url change cancels the
+    // prior long-lived `Eval::recv` loop instead of leaking it (a plain
+    // `spawn` per effect run would stack an orphaned drain loop each time).
+    let mut mount_task = use_signal(|| None::<Task>);
     use_effect(use_reactive!(|(uuid, server_url)| {
+        if let Some(prev) = mount_task.write().take() {
+            prev.cancel();
+        }
         status.set(ReaderStatus::Loading);
-        spawn(mount_and_drain(
+        let task = spawn(mount_and_drain(
             uuid.clone(),
             prefs,
             sigs,
             server_url.clone(),
         ));
+        mount_task.set(Some(task));
     }));
 
     // Theme is app-wide (not pushed by the prefs setter), so mirror it into the

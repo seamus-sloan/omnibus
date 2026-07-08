@@ -44,7 +44,7 @@ impl ReaderPrefs {
     }
 
     /// Step the font size down one px (clamped to `FONT_SIZE_MIN`), push
-    /// to JS, persist to localStorage.
+    /// to JS, persist to localStorage (web).
     pub(crate) fn decrease_font(self) {
         let mut font_size = self.font_size;
         let next = (*font_size.read() - 1).clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
@@ -67,7 +67,7 @@ impl ReaderPrefs {
         save_reader_pref("omn.fontSize", &next.to_string());
     }
 
-    /// Apply a typeface, push to JS, persist to localStorage.
+    /// Apply a typeface, push to JS, persist to localStorage (web).
     pub(crate) fn set_typeface(self, t: Typeface) {
         let mut typeface = self.typeface;
         typeface.set(t);
@@ -77,7 +77,7 @@ impl ReaderPrefs {
         save_reader_pref("omn.typeface", t.to_storage());
     }
 
-    /// Apply a line-spacing choice, push to JS, persist to localStorage.
+    /// Apply a line-spacing choice, push to JS, persist to localStorage (web).
     pub(crate) fn set_line_spacing(self, ls: LineSpacing) {
         let mut line_spacing = self.line_spacing;
         line_spacing.set(ls);
@@ -87,7 +87,7 @@ impl ReaderPrefs {
         save_reader_pref("omn.lineSpacing", ls.to_storage());
     }
 
-    /// Apply a margins choice, push to JS, persist to localStorage.
+    /// Apply a margins choice, push to JS, persist to localStorage (web).
     pub(crate) fn set_margins(self, m: Margins) {
         let mut margins = self.margins;
         margins.set(m);
@@ -97,7 +97,7 @@ impl ReaderPrefs {
         save_reader_pref("omn.margins", m.to_storage());
     }
 
-    /// Apply a page-view (spread) choice, push to JS, persist to localStorage.
+    /// Apply a page-view (spread) choice, push to JS, persist to localStorage (web).
     pub(crate) fn set_spread(self, s: Spread) {
         let mut spread = self.spread;
         spread.set(s);
