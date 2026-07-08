@@ -1,6 +1,6 @@
 //! `/api/ebooks/*` handlers.
 //!
-//! Cookie-gated reads that list the configured library, look up a single
+//! Session-gated reads that list the configured library, look up a single
 //! book by uuid, and stream the raw EPUB bytes for the in-app reader.
 //! Mounted on the mobile REST router in [`super::rest_router`]. The
 //! `/file` stream additionally accepts a `?token=` query param
@@ -214,7 +214,24 @@ pub(super) async fn get_ebook_file(
     Path(uuid): Path<String>,
     Query(query): Query<EbookFileQuery>,
 ) -> Response {
-    let path = match resolve_epub_path(&state, &uuid, query.file_id).await {
+    let mut resp = read_ebook_file(&state, &uuid, query.file_id).await;
+    // epub.js reads this stream over a cross-origin XHR from inside the mobile
+    // WebView (unlike the CORS-exempt `<img>`/`<audio>` media the app uses
+    // elsewhere), so the ACAO must ride *every* response — including the 404 /
+    // 500 error paths — or the WebView can't read the outcome. The URL query
+    // token is the only credential, so a wildcard never widens real access.
+    resp.headers_mut().insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    resp
+}
+
+/// Resolve the on-disk EPUB and stream its bytes (200), or the resolution /
+/// read failure as a 404 / 500. CORS is layered on by the caller so it covers
+/// every arm uniformly.
+async fn read_ebook_file(state: &AppState, uuid: &str, file_id: Option<i64>) -> Response {
+    let path = match resolve_epub_path(state, uuid, file_id).await {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -225,12 +242,6 @@ pub(super) async fn get_ebook_file(
                 (header::CACHE_CONTROL, "private, max-age=86400"),
                 (header::VARY, "Cookie"),
                 (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-                // epub.js reads this stream over XHR from inside the mobile
-                // WebView — a cross-origin, readable fetch (unlike the
-                // CORS-exempt `<img>`/`<audio>` media the app uses elsewhere).
-                // The URL query token is the only credential, so a wildcard
-                // ACAO is safe: it never widens access beyond holding the token.
-                (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
             ],
             bytes,
         )

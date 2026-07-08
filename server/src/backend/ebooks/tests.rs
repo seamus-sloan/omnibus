@@ -483,6 +483,13 @@ async fn api_get_ebook_file_returns_200_with_query_token() {
         .await
         .expect("request should succeed");
     assert_eq!(res.status(), StatusCode::OK);
+    // The cross-origin XHR path must carry the CORS opt-in.
+    assert_eq!(
+        res.headers()
+            .get(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .and_then(|v| v.to_str().ok()),
+        Some("*"),
+    );
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     assert_eq!(&bytes[..], b"PK\x03\x04 fake-epub");
 
