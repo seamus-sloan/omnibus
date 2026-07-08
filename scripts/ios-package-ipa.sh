@@ -10,6 +10,9 @@
 #   SIGNING_IDENTITY   codesign identity, e.g. "Apple Distribution: Name (TEAMID)"
 #   PROVISIONING_PROFILE  path to the decoded .mobileprovision
 #   BUILD_NUMBER       CFBundleVersion to stamp (monotonic; CI run number)
+#   MARKETING_VERSION  optional CFBundleShortVersionString (user-visible version,
+#                      e.g. 1.4.2). Left as dx bundled it (from Cargo.toml) when
+#                      unset; the workflow resolves it from the latest release tag.
 #   APP_DIR            optional; the .app to sign. Defaults to the sole
 #                      target/dx/omnibus-mobile/release/ios/*.app
 #   IPA_OUT            optional output path (default ./omnibus-mobile.ipa)
@@ -66,6 +69,16 @@ plist_set DTPlatformName string iphoneos
 # ("Invalid Bundle OS Type code"); dx omits it like DTPlatformName.
 plist_set CFBundlePackageType string APPL
 plist_set CFBundleVersion string "$BUILD_NUMBER"
+# CFBundleShortVersionString is the user-visible "marketing" version. dx stamps
+# it from mobile/Cargo.toml (0.1.0); override it here so the TestFlight build's
+# version tracks the server's release tag. Same numeric/dot-separated guard as
+# BUILD_NUMBER since it's interpolated into a PlistBuddy command.
+if [ -n "${MARKETING_VERSION:-}" ]; then
+  case "$MARKETING_VERSION" in
+    *[!0-9.]*) die "MARKETING_VERSION must be numeric/dot-separated, got: '$MARKETING_VERSION'" ;;
+  esac
+  plist_set CFBundleShortVersionString string "$MARKETING_VERSION"
+fi
 # Floor at iOS 14 — the minimum for the storyboard-free UILaunchScreen the
 # iPad build needs below. Set unconditionally so it matches the compile-time
 # deployment target the workflow pins.
