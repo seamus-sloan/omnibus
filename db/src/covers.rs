@@ -75,6 +75,19 @@ impl ImageFormat {
         }
     }
 
+    /// Map the format `image::guess_format` sniffed from the bytes onto our
+    /// local set, or `None` for a codec we don't cache (SVG isn't a raster
+    /// format `image` sniffs, and anything else falls back to the mime).
+    fn from_guessed(guessed: image::ImageFormat) -> Option<Self> {
+        match guessed {
+            image::ImageFormat::Jpeg => Some(ImageFormat::Jpeg),
+            image::ImageFormat::Png => Some(ImageFormat::Png),
+            image::ImageFormat::Gif => Some(ImageFormat::Gif),
+            image::ImageFormat::WebP => Some(ImageFormat::Webp),
+            _ => None,
+        }
+    }
+
     pub(crate) fn from_ext(ext: &str) -> Self {
         match ext.to_ascii_lowercase().as_str() {
             "jpg" | "jpeg" => ImageFormat::Jpeg,
@@ -106,8 +119,15 @@ pub(crate) fn cover_path_for(uuid: &str, ext: &str) -> PathBuf {
 pub(crate) fn write_cover_file(uuid: &str, mime: &str, bytes: &[u8]) -> std::io::Result<()> {
     let dir = covers_dir();
     std::fs::create_dir_all(&dir)?;
-    let ext = ImageFormat::from_mime(mime).to_ext();
-    std::fs::write(cover_path_for(uuid, ext), bytes)
+    // Trust the bytes over the caller-supplied mime: a cover mislabelled
+    // `image/jpeg` whose bytes are really a GIF must land as `<uuid>.gif`,
+    // not `<uuid>.jpg` (#828). Fall back to the mime only when the sniff
+    // fails or yields a format outside our local set (e.g. SVG).
+    let fmt = image::guess_format(bytes)
+        .ok()
+        .and_then(ImageFormat::from_guessed)
+        .unwrap_or_else(|| ImageFormat::from_mime(mime));
+    std::fs::write(cover_path_for(uuid, fmt.to_ext()), bytes)
 }
 
 pub(crate) fn find_cover_file(uuid: &str) -> Option<(String, Vec<u8>)> {
