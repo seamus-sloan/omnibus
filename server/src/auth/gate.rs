@@ -34,6 +34,10 @@ fn is_media_read_path(path: &str) -> bool {
         // `<audio src>`, which can only carry the session as `?token=`. HLS
         // segments are web-only (cookie-authed) so they stay off this list.
         || (path.starts_with("/api/audiobooks/") && path.contains("/parts/"))
+        // The EPUB file stream is fetched by epub.js from the mobile WebView,
+        // a cross-origin XHR that carries neither cookie nor bearer header.
+        // Only `/file` opts in; `/download` and `/kepub` stay header/cookie-only.
+        || (path.starts_with("/api/ebooks/") && path.ends_with("/file"))
 }
 
 /// Reject `/api/*` requests without a live session with `401 Unauthorized`, after exempting `/api/auth/*` and `/api/_health`.
