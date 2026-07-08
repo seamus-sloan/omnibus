@@ -242,7 +242,6 @@ pub(super) fn ReaderViewerStage(status: ReaderStatus) -> Element {
     rsx! {
         div {
             class: "rd-stage",
-            style: "top:60px; bottom:54px;",
             div { id: "omnibus-viewer", class: "rd-viewer", "data-testid": "reader-viewer" }
             match status {
                 ReaderStatus::Loading => rsx! {
