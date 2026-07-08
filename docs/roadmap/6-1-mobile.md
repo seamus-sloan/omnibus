@@ -28,6 +28,11 @@ The feature that makes Omnibus an everyday tool instead of a desktop browser boo
 ## Changes from v1
 
 - v1 #14 "add `dioxus-mobile` crate target" is already done; that was the prototype. Scope shifts to feature parity and polish.
+- **"Dioxus Native" is a wry WebView** (WKWebView / Android WebView), not a JS-less native renderer — it runs JavaScript via `dioxus::document::eval`. This is what makes the reader/player feasible without a bespoke render engine.
+
+## Delivered so far
+
+- **In-app EPUB reader.** The reader mounts the same vendored epub.js glue in the mobile WebView (`frontend/src/pages/reader/mobile.rs`), bridging its callbacks over the Dioxus `Eval` channel and fetching the book from a tokened `/api/ebooks/:uuid/file?token=` URL (`MediaAuthUser`). Full parity with web — open/paginate, themes, TOC, Aa typography, highlights/notes/quote cards, in-book search, bookmarks — with position + highlights syncing as shared epub.js CFIs. Verified by unit/integration tests; on-device simulator sweep still recommended (WebView ATS on the EPUB fetch; WKWebView programmatic download for quote-card PNGs).
 
 ## Open question
 

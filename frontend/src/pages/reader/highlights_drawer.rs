@@ -15,26 +15,26 @@ const PALETTE: [(HighlightColor, &str); 5] = [
     (HighlightColor::Violet, "violet"),
 ];
 
-/// Navigate the rendition to a CFI (web only).
-#[cfg_attr(not(feature = "web"), allow(unused_variables))]
+/// Navigate the rendition to a CFI (via the glue; SSR no-op).
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(unused_variables))]
 fn navigate_to(cfi: &str) {
-    #[cfg(feature = "web")]
+    #[cfg(any(feature = "web", feature = "mobile"))]
     super::reader_call_json("display", cfi);
 }
 
-/// Copy text to the clipboard via the glue (web only).
-#[cfg_attr(not(feature = "web"), allow(unused_variables))]
+/// Copy text to the clipboard via the glue (SSR no-op).
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(unused_variables))]
 fn copy_text(text: &str) {
-    #[cfg(feature = "web")]
+    #[cfg(any(feature = "web", feature = "mobile"))]
     super::reader_call_json("copyText", text);
 }
 
 /// Repaint a highlight's annotation in place: drop the old swatch and re-add
-/// it at the same CFI in `color` (web only). Used when recoloring so the
-/// viewer reflects the new color without a full reload.
-#[cfg_attr(not(feature = "web"), allow(unused_variables))]
+/// it at the same CFI in `color` (via the glue; SSR no-op). Used when
+/// recoloring so the viewer reflects the new color without a full reload.
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(unused_variables))]
 fn reannotate(cfi: &str, color: HighlightColor) {
-    #[cfg(feature = "web")]
+    #[cfg(any(feature = "web", feature = "mobile"))]
     {
         super::reader_call_json("removeAnnotation", cfi);
         super::reader_call_json2("addAnnotation", cfi, color.as_str());
@@ -49,6 +49,7 @@ fn reannotate(cfi: &str, color: HighlightColor) {
 /// rollback is gated on the row still showing `next`, so a late failure from
 /// one request can't clobber a newer recolor that already succeeded.
 fn spawn_recolor(
+    server_url: String,
     mut highlights: Signal<Vec<Highlight>>,
     id: i64,
     cfi: String,
@@ -66,7 +67,7 @@ fn spawn_recolor(
         highlights.write()[i].color = next;
     }
     spawn(async move {
-        if crate::data::update_highlight_color("", id, next)
+        if crate::data::update_highlight_color(&server_url, id, next)
             .await
             .is_err()
         {
@@ -164,6 +165,7 @@ fn HighlightRow(
     on_quote: EventHandler<Highlight>,
     on_edit_note: EventHandler<Highlight>,
 ) -> Element {
+    let server_url = crate::contexts::use_server_url();
     let color = highlight.color.as_str();
     let quote = highlight
         .text
@@ -184,17 +186,21 @@ fn HighlightRow(
     };
     let id = highlight.id;
 
-    let on_delete = move |_| {
-        let mut highlights = highlights;
-        let cfi = cfi.clone();
-        spawn(async move {
-            if crate::data::delete_highlight("", id).await.is_ok() {
-                #[cfg(feature = "web")]
-                super::reader_call_json("removeAnnotation", &cfi);
-                let _ = &cfi;
-                highlights.write().retain(|h| h.id != id);
-            }
-        });
+    let on_delete = {
+        let server_url = server_url.clone();
+        move |_| {
+            let mut highlights = highlights;
+            let cfi = cfi.clone();
+            let server_url = server_url.clone();
+            spawn(async move {
+                if crate::data::delete_highlight(&server_url, id).await.is_ok() {
+                    #[cfg(any(feature = "web", feature = "mobile"))]
+                    super::reader_call_json("removeAnnotation", &cfi);
+                    let _ = &cfi;
+                    highlights.write().retain(|h| h.id != id);
+                }
+            });
+        }
     };
 
     let cur_color = highlight.color;
@@ -226,7 +232,8 @@ fn HighlightRow(
                         "aria-pressed": if swatch_color == cur_color { "true" } else { "false" },
                         onclick: {
                             let recolor_cfi = recolor_cfi.clone();
-                            move |_| spawn_recolor(highlights, id, recolor_cfi.clone(), swatch_color, cur_color)
+                            let server_url = server_url.clone();
+                            move |_| spawn_recolor(server_url.clone(), highlights, id, recolor_cfi.clone(), swatch_color, cur_color)
                         },
                     }
                 }
