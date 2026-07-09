@@ -149,6 +149,8 @@
         allowScriptedContent: false,
       });
 
+      installGestureNav();
+
       rendition.themes.register("light", {
         body: { background: "#fcfbfa", color: "#2a2725" },
       });
@@ -256,6 +258,43 @@
   function prev() {
     if (!rendition) return;
     rendition.prev();
+  }
+
+  // Touch page-turn for mobile: a horizontal swipe turns the page, and a tap in
+  // the outer 20% gutters pages forward (right) / back (left). Registered on
+  // every rendered section's iframe document via epub.js's content hook, so it
+  // covers the prose the reader actually shows. Touch-only, so desktop (mouse +
+  // the visible gutter buttons) is untouched; mobile CSS hides those buttons.
+  function installGestureNav() {
+    if (!rendition || !rendition.hooks || !rendition.hooks.content) return;
+    rendition.hooks.content.register(function (contents) {
+      var doc = contents.document;
+      var win = contents.window || window;
+      var sx = 0, sy = 0, st = 0;
+      doc.addEventListener("touchstart", function (e) {
+        var t = e.changedTouches[0];
+        sx = t.clientX; sy = t.clientY; st = Date.now();
+      }, { passive: true });
+      doc.addEventListener("touchend", function (e) {
+        // Never hijack the gesture that just made a text selection — that's the
+        // highlight/note flow, not a page turn.
+        var sel = win.getSelection && win.getSelection();
+        if (sel && String(sel).length > 0) return;
+        var t = e.changedTouches[0];
+        var dx = t.clientX - sx, dy = t.clientY - sy, dt = Date.now() - st;
+        var w = win.innerWidth || 360;
+        // A dominant horizontal swipe turns a page (swipe left = forward).
+        if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+          if (dx < 0) next(); else prev();
+          return;
+        }
+        // Otherwise a stationary tap in the outer 20% gutters turns the page.
+        if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 500) {
+          if (t.clientX > w * 0.8) next();
+          else if (t.clientX < w * 0.2) prev();
+        }
+      }, { passive: true });
+    });
   }
 
   function setFontSize(px) {
