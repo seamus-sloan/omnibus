@@ -157,34 +157,47 @@ pub mod app_dirs {
     /// backend) registers with `ndk-context` before any app code runs. No
     /// `create_dir_all` needed: unlike the home-relative dirs above, Android
     /// guarantees this directory already exists.
+    ///
+    /// Logs and falls back to memory-only on any JNI failure, mirroring the
+    /// `create_dir_all` failure path above — a silent `None` here would be
+    /// exactly the class of bug this module exists to fix.
     #[cfg(target_os = "android")]
     fn android_files_dir() -> Option<PathBuf> {
+        match android_files_dir_via_jni() {
+            Ok(dir) => Some(dir),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "could not resolve Android files dir via JNI; persistence disabled this launch"
+                );
+                None
+            }
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    fn android_files_dir_via_jni() -> jni::errors::Result<PathBuf> {
         let ctx = ndk_context::android_context();
         // SAFETY: `ctx.vm()` is the JavaVM pointer `ndk-context` was
         // initialized with at process start (before `main`), so it is valid
         // for the lifetime of the process.
-        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.ok()?;
-        let mut env = vm.attach_current_thread().ok()?;
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }?;
+        let mut env = vm.attach_current_thread()?;
         // SAFETY: `ctx.context()` is the `Activity`/`Context` jobject
         // registered alongside the JavaVM above, so it is a valid local JNI
         // reference for the duration of this call.
         let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
 
         let files_dir = env
-            .call_method(&activity, "getFilesDir", "()Ljava/io/File;", &[])
-            .ok()?
-            .l()
-            .ok()?;
+            .call_method(&activity, "getFilesDir", "()Ljava/io/File;", &[])?
+            .l()?;
         let path_obj = env
-            .call_method(&files_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
-            .ok()?
-            .l()
-            .ok()?;
+            .call_method(&files_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])?
+            .l()?;
         let path: String = env
-            .get_string(&jni::objects::JString::from(path_obj))
-            .ok()?
+            .get_string(&jni::objects::JString::from(path_obj))?
             .into();
-        Some(PathBuf::from(path))
+        Ok(PathBuf::from(path))
     }
 
     #[cfg(test)]
