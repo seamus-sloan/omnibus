@@ -4743,6 +4743,13 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   /* Note composer keeps a margin off the viewport edges. */
   .rd-note-composer { width: min(360px, calc(100vw - 32px)); }
 
+  /* While a selection is live, the transparent click-scrim must NOT overlay
+     the prose: it would swallow the touches that drag the native selection
+     handles (WebKit then resolves the drag against the host document and
+     snaps the range to the top/bottom of the page). Dismissal on phones is
+     driven by the glue's selection-cleared event instead. */
+  .rd-scrim-clear { display: none; }
+
   /* Selection popover → bottom action sheet ("highlight a passage"), on a
      fixed dark palette regardless of reader theme per the design. The caret
      rect drives inline top/left, so the sheet position needs !important. */
