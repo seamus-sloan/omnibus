@@ -3083,7 +3083,11 @@ body {
      inherited var so full-bleed children (e.g. the book-detail hero glow) can
      cancel it and reach the screen edge. */
   --screen-pad-top: calc(1.5rem + max(20px, env(safe-area-inset-top)));
-  padding: var(--screen-pad-top) 1rem 5rem;
+  /* Bottom padding must clear the fixed .m-tabbar (~60px of bar chrome plus
+     the OS home-indicator inset, which the bar adds to its own padding) or
+     the tail of every scrolling page — e.g. the library's "Load more"
+     button — sits unreachable behind it. */
+  padding: var(--screen-pad-top) 1rem calc(5rem + env(safe-area-inset-bottom));
 }
 
 .sr-only {
