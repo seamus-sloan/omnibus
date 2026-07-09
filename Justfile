@@ -88,6 +88,17 @@ lint: lint-css
 # Lint then test — the pre-push gate referenced by rule 99.
 check: lint test
 
+# Maestro mobile E2E suite (ui_tests/maestro/flows). Needs a booted simulator
+# with the app installed (`dx serve --platform ios` handles build+install) and
+# a running dev server for the happy-path flows. Port resolution: an explicit
+# $OMNIBUS_PORT wins (the multiplexer panes pin 3000 to match their server
+# tab), else `just dev-up`'s .claude/runtime/env.sh, else 3000. Extra args
+# pass through to maestro (e.g. `just e2e-mobile --include-tags smoke`).
+e2e-mobile *args:
+    nix develop .#mobile --command bash -ec '\
+        if [ -z "${OMNIBUS_PORT:-}" ] && [ -f .claude/runtime/env.sh ]; then source .claude/runtime/env.sh; fi; \
+        maestro test -e SERVER_URL="http://127.0.0.1:${OMNIBUS_PORT:-3000}" {{args}} ui_tests/maestro/flows/'
+
 # Inject the Omnibus launcher icon into a built iOS `.app`. dx 0.7 installs no
 # iOS app icon and `[bundle] icon` only feeds the desktop bundlers
 # (DioxusLabs/dioxus#3685), so run this after `dx build --platform ios` and

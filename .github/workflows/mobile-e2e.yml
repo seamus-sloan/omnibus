@@ -1,0 +1,287 @@
+name: Mobile E2E
+
+# Maestro flows (ui_tests/maestro) against the mobile app — the same YAML suite
+# drives iOS and Android. Right now only the **iOS** job runs on PR/push (macOS
+# runner); the Android job (KVM Linux runner) is gated to manual dispatch while
+# its emulator run is stabilized — see the `if:` on that job. Trigger paths are
+# scoped to what can change the mobile app or the suite. `server/**` + `db/**`
+# are included because the job boots the real native server and the flows probe
+# `GET /api/_health` — a server or boot regression can fail these runs even when
+# nothing mobile changed.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "mobile/**"
+      - "frontend/**"
+      - "shared/**"
+      - "server/**"
+      - "db/**"
+      - "ui_tests/maestro/**"
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "**/Dioxus.toml"
+      - "flake.lock"
+      - "flake.nix"
+      - ".github/workflows/mobile-e2e.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: mobile-e2e-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  maestro-ios:
+    name: maestro (iOS simulator)
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: write
+    env:
+      CARGO_TARGET_DIR: ./target
+      # Seeds a known admin on server boot — not needed by the current
+      # pre-login flows, but in place for the login flow that comes next.
+      OMNIBUS_DEV_SEED_USER: "admin:omnibus-dev"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-mobile-e2e-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-prefixes-first-match: nix-mobile-e2e-${{ runner.os }}-
+          purge: true
+          purge-prefixes: nix-mobile-e2e-${{ runner.os }}-
+          purge-last-accessed: 604800
+          purge-primary-key: never
+          gc-max-store-size-macos: 5G
+
+      # macOS-arm64 target dir — a different cache bucket from the Linux
+      # workflows' `shared-key: omnibus` by construction (rust-cache keys
+      # include the runner OS), so this shares only across mobile-e2e runs.
+      # cache-on-failure so a run that fails after the build still warms the
+      # cache — the iOS build is the slow part, and early runs fail downstream.
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          shared-key: omnibus-mobile-e2e
+          cache-on-failure: true
+
+      # Debug builds on purpose: both binaries are one-shot test fixtures,
+      # and debug compiles much faster than release on a cold cache. (The
+      # web E2E workflow needs release only to strip the dx hot-reload
+      # overlay from the WASM bundle — no WASM here.)
+      - name: Build native server
+        run: nix develop --command cargo build -p omnibus
+
+      - name: Build iOS simulator app
+        run: nix develop .#mobile --command dx build --platform ios --package omnibus-mobile
+
+      - name: Boot iOS simulator and install app
+        run: |
+          set -euo pipefail
+          # Pick the newest available iOS runtime, then choose an iPhone from
+          # THAT runtime's own supportedDeviceTypes — guarantees a compatible
+          # pair. Selecting a device type from the global list instead lands on
+          # traps: the iPod touch is filed under the iPhone family, and an old
+          # iPhone (e.g. 6s) paired with a current runtime fails with
+          # "Incompatible device". The name prefix drops iPod/iPad.
+          runtimes=$(xcrun simctl list runtimes -j)
+          runtime=$(echo "$runtimes" \
+            | jq -r '[.runtimes[] | select(.isAvailable and (.identifier | test("iOS")))] | last | .identifier')
+          device_type=$(echo "$runtimes" | jq -r --arg rt "$runtime" \
+            '.runtimes[] | select(.identifier==$rt) | .supportedDeviceTypes
+             | map(select(.name | test("^iPhone"))) | last | .identifier')
+          echo "creating sim: device_type=$device_type runtime=$runtime"
+          udid=$(xcrun simctl create maestro-ci "$device_type" "$runtime")
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid"
+          app=$(find "$CARGO_TARGET_DIR/dx/omnibus-mobile" -type d -name "*.app" -path "*ios*" -print0 \
+            | xargs -0 ls -dt | head -1)
+          echo "installing $app"
+          xcrun simctl install "$udid" "$app"
+
+      # Backgrounded with `nohup ... &` + `disown` so the server survives the
+      # step's shell exit (same pattern as e2e.yml). The simulator shares the
+      # host network, so the app reaches it at 127.0.0.1 directly.
+      # The dioxus fullstack server reads a `public/` dir next to the binary on
+      # boot and panics if it's missing; a plain `cargo build` (vs `dx bundle`)
+      # doesn't create one. An empty dir satisfies it — the mobile flows only
+      # touch `/api/*`, never web assets.
+      - name: Start server
+        run: |
+          nix develop --command bash -c '
+            set -euo pipefail
+            mkdir -p target/debug/public
+            nohup env PORT=3000 ./target/debug/omnibus >server.log 2>&1 &
+            disown
+            for _ in $(seq 60); do
+              curl -fsS http://127.0.0.1:3000/api/_health >/dev/null 2>&1 && exit 0
+              sleep 1
+            done
+            echo "server never became healthy" >&2
+            tail -50 server.log >&2
+            exit 1
+          '
+
+      - name: Run Maestro flows
+        run: |
+          nix develop .#mobile --command \
+            maestro test -e SERVER_URL=http://127.0.0.1:3000 ui_tests/maestro/flows/
+
+      # Maestro writes per-flow logs + failure screenshots under ~/.maestro.
+      - name: Upload Maestro artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maestro-artifacts-ios
+          path: ~/.maestro/tests
+          retention-days: 7
+
+      - name: Upload server log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-e2e-server-log-ios
+          path: server.log
+          retention-days: 7
+
+  # Manual-only for now: the build + server + emulator boot are green, but the
+  # flows themselves still fail on the emulator (WebView text selectors under
+  # investigation). Gated to workflow_dispatch so it's off the PR/push path and
+  # doesn't block merge — trigger it by hand from the Actions tab to iterate.
+  maestro-android:
+    name: maestro (Android emulator)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: write
+    env:
+      # ABSOLUTE, unlike the iOS job's ./target. dx resolves a relative
+      # CARGO_TARGET_DIR against the package dir (mobile/) when building the
+      # Android app, so a relative path makes wry's WRY_ANDROID_KOTLIN_FILES_OUT_DIR
+      # relative too — and the pre-created dir (see the build step) lands in the
+      # wrong place. An absolute base removes the CWD ambiguity.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      OMNIBUS_DEV_SEED_USER: "admin:omnibus-dev"
+    steps:
+      - uses: actions/checkout@v4
+
+      # Hardware acceleration for the x86_64 emulator — without KVM the
+      # emulator boots so slowly the job times out.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-mobile-e2e-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-prefixes-first-match: nix-mobile-e2e-${{ runner.os }}-
+          purge: true
+          purge-prefixes: nix-mobile-e2e-${{ runner.os }}-
+          purge-last-accessed: 604800
+          purge-primary-key: never
+          gc-max-store-size-linux: 5G
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          shared-key: omnibus-mobile-e2e
+          cache-on-failure: true
+
+      - name: Build native server
+        run: nix develop --command cargo build -p omnibus
+
+      # x86_64 APK: GHA Linux KVM runners are x86_64 hosts, so the emulator
+      # runs x86_64 system images — the default aarch64-linux-android build
+      # would install but crash on an incompatible ABI. The runner image's
+      # preinstalled SDK/NDK are picked up by the flake's shellHook
+      # (ANDROID_HOME is preset; the hook fills ANDROID_NDK_HOME from
+      # $ANDROID_HOME/ndk).
+      # Work around dioxus#3068: dx exports WRY_ANDROID_KOTLIN_FILES_OUT_DIR but
+      # never creates that dir before wry's build script runs, so wry
+      # canonicalizes a missing path and panics — deterministically (it's not a
+      # race; the dir is only created after a build that can't complete).
+      # Pre-create it and dx writes its kotlin glue there and bundles the APK
+      # (verified locally: the resulting APK carries the lib/x86_64 .so the
+      # emulator needs). CARGO_TARGET_DIR is absolute (job env) so this path is
+      # the exact one dx hands wry — see the note there.
+      - name: Build Android emulator app
+        run: |
+          nix develop .#mobile --command bash -c '
+            set -euo pipefail
+            mkdir -p "$CARGO_TARGET_DIR/dx/omnibus-mobile/debug/android/app/app/src/main/kotlin/dev/dioxus/main"
+            dx build --platform android --package omnibus-mobile --target x86_64-linux-android
+          '
+
+      # Empty public/ dir so the fullstack server doesn't panic on boot — see
+      # the iOS job's Start server step for the full rationale.
+      - name: Start server
+        run: |
+          nix develop --command bash -c '
+            set -euo pipefail
+            mkdir -p target/debug/public
+            nohup env PORT=3000 ./target/debug/omnibus >server.log 2>&1 &
+            disown
+            for _ in $(seq 60); do
+              curl -fsS http://127.0.0.1:3000/api/_health >/dev/null 2>&1 && exit 0
+              sleep 1
+            done
+            echo "server never became healthy" >&2
+            tail -50 server.log >&2
+            exit 1
+          '
+
+      # The action boots the emulator, runs `script`, and tears down. Inside
+      # the emulator the host's loopback is 10.0.2.2, not 127.0.0.1 — the
+      # flows take SERVER_URL precisely so this stays a parameter.
+      # `google_apis` images ship the Android System WebView the hybrid app
+      # renders in; AOSP (`default`) images do too, but google_apis matches
+      # what real devices run.
+      - name: Run Maestro flows on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-snapshot -no-window -no-audio -no-boot-anim
+          script: |
+            # Newest matching APK by mtime — deterministic if a prior build or
+            # variant left stale APKs in the tree (mirrors the iOS .app pick).
+            apk=$(find target/dx/omnibus-mobile -name '*.apk' -path '*android*' -print0 | xargs -0 ls -t | head -1)
+            echo "installing $apk"
+            adb install -r "$apk"
+            nix develop .#mobile --command maestro test -e SERVER_URL=http://10.0.2.2:3000 ui_tests/maestro/flows/
+
+      - name: Upload Maestro artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maestro-artifacts-android
+          path: ~/.maestro/tests
+          retention-days: 7
+
+      - name: Upload server log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-e2e-server-log-android
+          path: server.log
+          retention-days: 7
