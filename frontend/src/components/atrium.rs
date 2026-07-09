@@ -150,11 +150,13 @@ pub fn Cover(
     let sizes_attr = sizes.unwrap_or_default();
     // Broken/expired cover URLs otherwise render the browser's broken-image
     // icon with no self-heal until a full reload; fall back to the
-    // typographic plate on a load error instead. Cover/thumb URLs aren't
-    // content-versioned (same uuid+size url before and after a
-    // regeneration — see #832 item 4), so there's no signal to reset this
-    // on besides a remount; a keyed list already remounts on book change.
-    let mut cover_broken = use_signal(|| false);
+    // typographic plate on a load error instead. Tracks the *url* that
+    // failed (not just a bool) so a later render with a different url —
+    // a mobile token rotation, a different `src_override`, or (once #832
+    // item 4 versions thumb URLs) a regenerated cover — always gets a
+    // fresh chance to load, even though this component instance stays
+    // mounted across the change.
+    let mut broken_cover_src: Signal<Option<String>> = use_signal(|| None);
 
     rsx! {
         div {
@@ -163,14 +165,19 @@ pub fn Cover(
             "data-testid": "cover",
             div {
                 class: "cover tpl-plate",
-                if let Some(url) = image_src.filter(|_| !cover_broken()) {
+                if let Some(url) =
+                    image_src.filter(|u| broken_cover_src.read().as_deref() != Some(u.as_str()))
+                {
                     img {
                         src: "{url}",
                         srcset: "{srcset_attr}",
                         sizes: "{sizes_attr}",
                         alt: "Cover of {title}",
                         loading: "lazy",
-                        onerror: move |_| cover_broken.set(true),
+                        onerror: {
+                            let url = url.clone();
+                            move |_| broken_cover_src.set(Some(url.clone()))
+                        },
                     }
                 } else {
                     div { class: "ca", "{author_label}" }

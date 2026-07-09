@@ -92,14 +92,20 @@ pub(super) async fn get_thumb(
             // as recently-used (LRU) instead of evicting frequently-viewed
             // thumbs just because they're old. Detached via `tokio::spawn`
             // (never adds latency to this response) but still awaits the
-            // `spawn_blocking` JoinHandle to log a panic, matching the
-            // worker's spawn_blocking convention (db/src/worker/handlers.rs)
+            // `spawn_blocking` JoinHandle and distinguishes panic from
+            // cancellation, matching the worker's convention
+            // (`handle_generate_thumbs` in db/src/worker/handlers.rs)
             // instead of silently dropping it.
             tokio::spawn(async move {
                 if let Err(join_err) =
                     tokio::task::spawn_blocking(move || db::thumbs::touch_thumb(id, size)).await
                 {
-                    tracing::warn!(error = %join_err, book_id = id, "thumbs: touch_thumb panicked");
+                    let kind = if join_err.is_panic() {
+                        "panicked"
+                    } else {
+                        "was cancelled"
+                    };
+                    tracing::warn!(error = %join_err, book_id = id, "thumbs: touch_thumb {kind}");
                 }
             });
             return (

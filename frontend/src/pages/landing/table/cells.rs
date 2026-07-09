@@ -204,14 +204,17 @@ pub(super) fn EbookRowCoverCell(
     alt_title: String,
 ) -> Element {
     // A transient thumb-fetch failure otherwise renders the browser's
-    // broken-image icon with no self-heal until a full reload. Thumb URLs
-    // aren't content-versioned (same uuid+size url before and after a
-    // regeneration — see #832 item 4), so there's no signal to reset this
-    // on besides a remount; a keyed row already remounts on book change.
-    let mut thumb_broken = use_signal(|| false);
+    // broken-image icon with no self-heal until a full reload. Tracks the
+    // *url* that failed (not just a bool) so a later render with a
+    // different url — a mobile token rotation, or (once #832 item 4
+    // versions thumb URLs) a regenerated thumb — always gets a fresh
+    // chance to load, even though this row's component instance stays
+    // mounted (same key) across the change.
+    let mut broken_thumb_src: Signal<Option<String>> = use_signal(|| None);
+    let show_img = has_cover && broken_thumb_src.read().as_deref() != Some(thumb_src.as_str());
     rsx! {
         td { class: "ebook-col-cover", "data-testid": "ebook-cell-cover",
-            if has_cover && !thumb_broken() {
+            if show_img {
                 img {
                     class: "ebook-thumb",
                     src: "{thumb_src}",
@@ -221,7 +224,10 @@ pub(super) fn EbookRowCoverCell(
                     loading: "lazy",
                     width: "320",
                     height: "480",
-                    onerror: move |_| thumb_broken.set(true),
+                    onerror: {
+                        let thumb_src = thumb_src.clone();
+                        move |_| broken_thumb_src.set(Some(thumb_src.clone()))
+                    },
                 }
             } else {
                 div { class: "ebook-thumb ebook-thumb-fallback", "—" }

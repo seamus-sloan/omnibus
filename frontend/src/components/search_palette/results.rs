@@ -147,20 +147,30 @@ fn SpBookRow(book: PaletteBookHit, selected: bool, on_click: EventHandler<MouseE
     };
     let server_url = use_server_url();
     // A transient thumb-fetch failure otherwise renders the browser's
-    // broken-image icon with no self-heal until a full reload. Thumb URLs
-    // aren't content-versioned (same uuid+size url before and after a
-    // regeneration — see #832 item 4), so there's no signal to reset this
-    // on besides a remount; a keyed row already remounts on book change.
-    let mut cover_broken = use_signal(|| false);
-    let cover = if book.cover_url.is_some() && !cover_broken() {
-        let url = book_thumb_url(&server_url, &book);
+    // broken-image icon with no self-heal until a full reload. Tracks the
+    // *url* that failed (not just a bool) so a later render with a
+    // different url — a mobile token rotation, or (once #832 item 4
+    // versions thumb URLs) a regenerated thumb — always gets a fresh
+    // chance to load, even though this row's component instance stays
+    // mounted (same key) across the change.
+    let mut broken_cover_src: Signal<Option<String>> = use_signal(|| None);
+    let cover_url = book
+        .cover_url
+        .is_some()
+        .then(|| book_thumb_url(&server_url, &book));
+    let cover = if let Some(url) =
+        cover_url.filter(|u| broken_cover_src.read().as_deref() != Some(u.as_str()))
+    {
         rsx! {
             img {
                 class: "sp-row-cover",
                 src: "{url}",
                 alt: "",
                 loading: "lazy",
-                onerror: move |_| cover_broken.set(true),
+                onerror: {
+                    let url = url.clone();
+                    move |_| broken_cover_src.set(Some(url.clone()))
+                },
             }
         }
     } else {
