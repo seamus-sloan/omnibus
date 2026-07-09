@@ -88,6 +88,26 @@ pub(super) async fn get_thumb(
     let thumb_path = db::thumb_path_for(id, size);
     if !db::thumbs::is_stale_async(id, size, last_modified_epoch).await {
         if let Ok(bytes) = tokio::fs::read(&thumb_path).await {
+            // Fire-and-forget mtime bump so `evict_if_over_cap` treats this
+            // as recently-used (LRU) instead of evicting frequently-viewed
+            // thumbs just because they're old. Detached via `tokio::spawn`
+            // (never adds latency to this response) but still awaits the
+            // `spawn_blocking` JoinHandle and distinguishes panic from
+            // cancellation, matching the worker's convention
+            // (`handle_generate_thumbs` in db/src/worker/handlers.rs)
+            // instead of silently dropping it.
+            tokio::spawn(async move {
+                if let Err(join_err) =
+                    tokio::task::spawn_blocking(move || db::thumbs::touch_thumb(id, size)).await
+                {
+                    let kind = if join_err.is_panic() {
+                        "panicked"
+                    } else {
+                        "was cancelled"
+                    };
+                    tracing::warn!(error = %join_err, book_id = id, "thumbs: touch_thumb {kind}");
+                }
+            });
             return (
                 [
                     (header::CONTENT_TYPE, "image/webp"),

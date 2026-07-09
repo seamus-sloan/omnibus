@@ -225,6 +225,18 @@ fn author_avatar(
     mut author: Signal<Option<AuthorDetail>>,
     initial: &str,
 ) -> Element {
+    // A transient photo-fetch failure otherwise renders the browser's
+    // broken-image icon with no self-heal until a full reload. Tracks the
+    // *url* that failed (not just a bool) so a mobile token rotation —
+    // which changes the `media_url` query string — gets a fresh chance to
+    // load. That alone isn't enough for a same-URL content change though:
+    // the photo endpoint is keyed only by author id, so a successful
+    // re-upload via the edit overlay produces the *same* url. `on_change`
+    // fires exactly when that happens, so it explicitly resets too.
+    let mut broken_photo_src: Signal<Option<String>> = use_signal(|| None);
+    let photo_url = a
+        .has_photo
+        .then(|| crate::media_url(server_url, &format!("/api/authors/{}/photo", a.id)));
     rsx! {
         AuthorPhotoEditOverlay {
             author_id: a.id,
@@ -235,6 +247,7 @@ fn author_avatar(
                 let author_id = a.id;
                 move |_| {
                     let server_url = server_url.clone();
+                    broken_photo_src.set(None);
                     spawn(async move {
                         if let Ok(a2) = data::get_author(&server_url, author_id).await {
                             author.set(a2);
@@ -242,14 +255,20 @@ fn author_avatar(
                     });
                 }
             },
-            if a.has_photo {
+            if let Some(url) =
+                photo_url.filter(|u| broken_photo_src.read().as_deref() != Some(u.as_str()))
+            {
                 img {
                     class: "disc-avatar disc-avatar--photo",
                     // `media_url` server-prefixes and (mobile) appends the
                     // session token so the WebView's `<img>` fetch
                     // authenticates; no-op on web.
-                    src: crate::media_url(server_url, &format!("/api/authors/{}/photo", a.id)),
+                    src: "{url}",
                     alt: "{a.name}",
+                    onerror: {
+                        let url = url.clone();
+                        move |_| broken_photo_src.set(Some(url.clone()))
+                    },
                 }
             } else {
                 div { class: "disc-avatar", "{initial}" }
