@@ -4,10 +4,9 @@ name: Mobile E2E
 # emulator apps — the same YAML suite drives both. iOS runs on a macOS runner
 # (10x the Linux minute rate) and Android on a KVM-accelerated Linux runner,
 # so the trigger paths are scoped to what can change the mobile app or the
-# suite itself. The flows currently exercise the pre-login surface
-# (/api/_health probe + connect→login routing); when a flow starts logging
-# in, add `server/**` + `db/**` to the paths so auth-endpoint changes re-run
-# it too.
+# suite itself. `server/**` + `db/**` are included because each job boots the
+# real native server and the flows probe `GET /api/_health` — a server or
+# boot regression can fail these runs even when nothing mobile changed.
 on:
   push:
     branches: [main]
@@ -17,6 +16,8 @@ on:
       - "mobile/**"
       - "frontend/**"
       - "shared/**"
+      - "server/**"
+      - "db/**"
       - "ui_tests/maestro/**"
       - "**/Cargo.toml"
       - "Cargo.lock"
@@ -82,11 +83,19 @@ jobs:
       - name: Boot iOS simulator and install app
         run: |
           set -euo pipefail
-          # Newest iPhone device type paired with the image's default runtime —
-          # no hardcoded device name to rot when the runner image updates.
+          # Pick the newest *available* iOS runtime and pair it explicitly with
+          # a real iPhone device type. Two gotchas this avoids: simctl files the
+          # iPod touch under the "iPhone" productFamily (so a family filter can
+          # select a device with no installed runtime), and letting `create`
+          # infer the runtime fails with "no available runtime" when the chosen
+          # device type's default runtime isn't installed. Match on the name
+          # prefix (excludes iPod/iPad) and pin the runtime we know exists.
+          runtime=$(xcrun simctl list runtimes -j \
+            | jq -r '[.runtimes[] | select(.isAvailable and (.identifier | test("iOS")))] | last | .identifier')
           device_type=$(xcrun simctl list devicetypes -j \
-            | jq -r '.devicetypes | map(select(.productFamily == "iPhone")) | last | .identifier')
-          udid=$(xcrun simctl create maestro-ci "$device_type")
+            | jq -r '[.devicetypes[] | select(.name | test("^iPhone"))] | last | .identifier')
+          echo "creating sim: device_type=$device_type runtime=$runtime"
+          udid=$(xcrun simctl create maestro-ci "$device_type" "$runtime")
           xcrun simctl boot "$udid"
           xcrun simctl bootstatus "$udid"
           app=$(find "$CARGO_TARGET_DIR/dx/omnibus-mobile" -type d -name "*.app" -path "*ios*" -print0 \
@@ -184,10 +193,19 @@ jobs:
       # preinstalled SDK/NDK are picked up by the flake's shellHook
       # (ANDROID_HOME is preset; the hook fills ANDROID_NDK_HOME from
       # $ANDROID_HOME/ndk).
+      # Build twice on failure to work around dioxus#3068: on a clean tree
+      # wry's build script canonicalizes WRY_ANDROID_KOTLIN_FILES_OUT_DIR
+      # before dx has written that kotlin scaffold dir, and panics. The failed
+      # first pass leaves the scaffold behind, so the retry finds the dir and
+      # links cleanly (cargo already cross-compiled the x86_64 ABI fine — the
+      # target std is present; only the wry dir race bites).
       - name: Build Android emulator app
         run: |
-          nix develop .#mobile --command \
-            dx build --platform android --package omnibus-mobile --target x86_64-linux-android
+          nix develop .#mobile --command bash -c '
+            set -euo pipefail
+            build() { dx build --platform android --package omnibus-mobile --target x86_64-linux-android; }
+            build || { echo "::warning::retrying android build (dioxus#3068 kotlin-dir race)"; build; }
+          '
 
       - name: Start server
         run: |
@@ -219,7 +237,11 @@ jobs:
           disable-animations: true
           emulator-options: -no-snapshot -no-window -no-audio -no-boot-anim
           script: |
-            adb install -r "$(find target/dx/omnibus-mobile -name '*.apk' -path '*android*' | head -1)"
+            # Newest matching APK by mtime — deterministic if a prior build or
+            # variant left stale APKs in the tree (mirrors the iOS .app pick).
+            apk=$(find target/dx/omnibus-mobile -name '*.apk' -path '*android*' -print0 | xargs -0 ls -t | head -1)
+            echo "installing $apk"
+            adb install -r "$apk"
             nix develop .#mobile --command maestro test -e SERVER_URL=http://10.0.2.2:3000 ui_tests/maestro/flows/
 
       - name: Upload Maestro artifacts
