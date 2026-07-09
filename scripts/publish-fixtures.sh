@@ -103,8 +103,9 @@ Published $version. Now update the pins:
     FIXTURES_URL="$url"
     FIXTURES_SHA256="$published_sha"
 
-  CI (both .github/workflows/rust.yml and e2e.yml):
-    actions/cache key: $version
+  (CI cache keys are derived from hashFiles('scripts/fetch-fixtures.sh'),
+   so editing the pins above invalidates the cache automatically — no
+   workflow edit needed.)
 
   Then: refresh test_data/*/README.md fixture tables and, if EPUB metadata
   changed, ui_tests/playwright/tests/fixtures/*.ts expectations.

@@ -141,7 +141,10 @@ jobs:
             test_data/epubs/public_domain
             test_data/audiobooks/public_domain
             test_data/.fixtures-version
-          key: fixtures-v1 # keep in sync with FIXTURES_VERSION in scripts/fetch-fixtures.sh
+          # Key on the fetch script's content: bumping the pinned sha256/URL
+          # changes the hash, so a corrected tarball can't be shadowed by a
+          # stale cache entry saved under a static key.
+          key: fixtures-${{ hashFiles('scripts/fetch-fixtures.sh') }}
 
       - name: Fetch test fixtures
         run: scripts/fetch-fixtures.sh
