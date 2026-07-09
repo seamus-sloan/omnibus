@@ -107,10 +107,15 @@ jobs:
       # Backgrounded with `nohup ... &` + `disown` so the server survives the
       # step's shell exit (same pattern as e2e.yml). The simulator shares the
       # host network, so the app reaches it at 127.0.0.1 directly.
+      # The dioxus fullstack server reads a `public/` dir next to the binary on
+      # boot and panics if it's missing; a plain `cargo build` (vs `dx bundle`)
+      # doesn't create one. An empty dir satisfies it — the mobile flows only
+      # touch `/api/*`, never web assets.
       - name: Start server
         run: |
           nix develop --command bash -c '
             set -euo pipefail
+            mkdir -p target/debug/public
             nohup env PORT=3000 ./target/debug/omnibus >server.log 2>&1 &
             disown
             for _ in $(seq 60); do
@@ -215,10 +220,13 @@ jobs:
             dx build --platform android --package omnibus-mobile --target x86_64-linux-android
           '
 
+      # Empty public/ dir so the fullstack server doesn't panic on boot — see
+      # the iOS job's Start server step for the full rationale.
       - name: Start server
         run: |
           nix develop --command bash -c '
             set -euo pipefail
+            mkdir -p target/debug/public
             nohup env PORT=3000 ./target/debug/omnibus >server.log 2>&1 &
             disown
             for _ in $(seq 60); do
