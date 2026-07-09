@@ -8,6 +8,7 @@ use dioxus::prelude::*;
 
 use omnibus_shared::{Highlight, HighlightColor};
 
+use super::annotations_sheet::AnnotationsSheet;
 use super::highlights::{spawn_create_highlight, PostCreate};
 use super::highlights_drawer::HighlightsDrawer;
 use super::note_composer::NoteComposer;
@@ -138,6 +139,7 @@ pub(super) fn ReaderOverlays(meta: OverlayMeta, panels: ReaderPanelSignals) -> E
         show_search,
         search_results,
         show_bookmarks,
+        show_annotations,
         ..
     } = panels;
 
@@ -220,6 +222,38 @@ pub(super) fn ReaderOverlays(meta: OverlayMeta, panels: ReaderPanelSignals) -> E
                 on_close: move |_| {
                     let mut show_bookmarks = show_bookmarks;
                     show_bookmarks.set(false);
+                },
+            }
+        }
+
+        if show_annotations() {
+            AnnotationsSheet {
+                uuid: uuid.clone(),
+                current_cfi: current_cfi.clone(),
+                current_label: chapter_title.clone(),
+                highlights,
+                on_quote: move |h: Highlight| {
+                    let mut quote_target = quote_target;
+                    let mut show_annotations = show_annotations;
+                    quote_target.set(Some(h));
+                    show_annotations.set(false);
+                },
+                on_edit_note: move |h: Highlight| {
+                    let mut note_target = note_target;
+                    let mut show_annotations = show_annotations;
+                    note_target.set(Some(h));
+                    show_annotations.set(false);
+                },
+                on_navigate: move |cfi: String| {
+                    #[cfg(any(feature = "web", feature = "mobile"))]
+                    super::reader_call_json("display", &cfi);
+                    let _ = &cfi;
+                    let mut show_annotations = show_annotations;
+                    show_annotations.set(false);
+                },
+                on_close: move |_| {
+                    let mut show_annotations = show_annotations;
+                    show_annotations.set(false);
                 },
             }
         }

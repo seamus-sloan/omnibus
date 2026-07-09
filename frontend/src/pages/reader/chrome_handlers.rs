@@ -1,11 +1,9 @@
 //! Top-bar / page-turn / keydown event handlers for `BookReadPage`.
 //! Extracted so the parent component reads as setup → render rather than
 //! a 60-line block of cfg-gated closures. Each handler bridges signal
-//! state with the (web/mobile) JS glue calls and (non-mobile) router
-//! navigation.
+//! state with the (web/mobile) JS glue calls and router navigation.
 
 use dioxus::prelude::*;
-#[cfg(not(feature = "mobile"))]
 use dioxus_router::use_navigator;
 
 use omnibus_shared::Highlight;
@@ -21,6 +19,7 @@ pub(super) struct OverlaySignals {
     pub show_search: Signal<bool>,
     pub show_highlights: Signal<bool>,
     pub show_bookmarks: Signal<bool>,
+    pub show_annotations: Signal<bool>,
     pub note_target: Signal<Option<Highlight>>,
     pub quote_target: Signal<Option<Highlight>>,
 }
@@ -29,6 +28,7 @@ pub(super) struct OverlaySignals {
 /// by `ReaderLayout`. Each handler closes over the passed signals and
 /// (where applicable) the router navigator.
 pub(super) fn install_chrome_handlers(
+    uuid: String,
     selection: Signal<Option<SelectionData>>,
     overlays: OverlaySignals,
 ) -> (
@@ -37,24 +37,30 @@ pub(super) fn install_chrome_handlers(
     EventHandler<MouseEvent>,
     EventHandler<KeyboardEvent>,
 ) {
-    #[cfg(not(feature = "mobile"))]
     let nav = use_navigator();
-    let on_back = EventHandler::new(move |_: MouseEvent| {
-        #[cfg(not(feature = "mobile"))]
-        nav.go_back();
-    });
+    let back_uuid = uuid.clone();
+    let on_back = EventHandler::new(move |_: MouseEvent| back_to_book(nav, &back_uuid));
     let on_prev = EventHandler::new(move |_: MouseEvent| advance_page(selection, Direction::Prev));
     let on_next = EventHandler::new(move |_: MouseEvent| advance_page(selection, Direction::Next));
     let on_keydown = EventHandler::new(move |evt: KeyboardEvent| {
-        handle_keydown(
-            evt,
-            selection,
-            overlays,
-            #[cfg(not(feature = "mobile"))]
-            nav,
-        );
+        handle_keydown(evt, selection, overlays, nav, &uuid);
     });
     (on_back, on_prev, on_next, on_keydown)
+}
+
+/// Leave the reader: back through history when there is any, else route to
+/// the book's detail page. The native shell has no browser history to lean
+/// on when it cold-starts into `/read/:uuid`, and its `go_back` was a no-op
+/// for years — the explicit detail-page fallback matches the audiobook
+/// player's back affordance.
+fn back_to_book(nav: dioxus_router::Navigator, uuid: &str) {
+    if nav.can_go_back() {
+        nav.go_back();
+    } else {
+        let _ = nav.push(crate::Route::BookDetail {
+            uuid: uuid.to_string(),
+        });
+    }
 }
 
 /// Whether a page-turn was triggered backwards or forwards.
@@ -85,7 +91,8 @@ fn handle_keydown(
     evt: KeyboardEvent,
     selection: Signal<Option<SelectionData>>,
     overlays: OverlaySignals,
-    #[cfg(not(feature = "mobile"))] nav: dioxus_router::Navigator,
+    nav: dioxus_router::Navigator,
+    uuid: &str,
 ) {
     match evt.key() {
         Key::ArrowLeft => {
@@ -106,6 +113,7 @@ fn handle_keydown(
             let mut show_search = overlays.show_search;
             let mut show_highlights = overlays.show_highlights;
             let mut show_bookmarks = overlays.show_bookmarks;
+            let mut show_annotations = overlays.show_annotations;
             let mut note_target = overlays.note_target;
             let mut quote_target = overlays.quote_target;
             if selection.read().is_some() {
@@ -122,11 +130,12 @@ fn handle_keydown(
                 show_highlights.set(false);
             } else if *show_bookmarks.read() {
                 show_bookmarks.set(false);
+            } else if *show_annotations.read() {
+                show_annotations.set(false);
             } else if *show_aa.read() {
                 show_aa.set(false);
             } else {
-                #[cfg(not(feature = "mobile"))]
-                nav.go_back();
+                back_to_book(nav, uuid);
             }
         }
         _ => {}

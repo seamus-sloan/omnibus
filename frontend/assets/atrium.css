@@ -4435,13 +4435,18 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-title-ch { font-size: 13px; color: var(--ink-2); }
 /* Phone-only chrome pieces — rendered on every target for hydration parity
    (rule 07), displayed only by the phone breakpoint at the end of this
-   section. */
+   section. `.rd-phone-only` / `.rd-desktop-only` swap whole controls (e.g.
+   the combined Annotations tool vs the separate highlights + bookmarks
+   buttons) across the same breakpoint. */
 .rd-title-sub { display: none; font-family: var(--mono); font-size: 9.5px;
   color: var(--ink-3); }
 .rd-bottom-ch { display: none; }
 .rd-grabber { display: none; }
 .rd-drawer-sub { display: none; font-family: var(--mono); font-size: 10px;
   color: var(--ink-3); }
+.rd-phone-only { display: none; }
+.rd-filter-div { width: 1px; height: 18px; background: var(--line-2);
+  margin: 0 2px; align-self: center; }
 
 /* Aa typography panel */
 .rd-aa-panel { position: absolute; top: 66px; right: 26px; width: 320px; z-index: 16;
@@ -4764,6 +4769,21 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   .rd-selection-popover .rd-act:hover { background: transparent;
     color: oklch(0.97 0.006 80); }
   .rd-selection-popover .rd-act-accent { color: var(--accent); }
+
+  /* Toolbar swap: one combined Annotations tool instead of the separate
+     highlights + bookmarks buttons. `.rd-phone-only` is generic so the quote
+     sheet's Share button rides the same switch. */
+  .rd-phone-only { display: inline-flex; }
+  .rd-desktop-only { display: none; }
+
+  /* Combined annotations sheet: bookmark rows read as the designed accent
+     cards (also styles the standalone bookmarks drawer rows on phones). */
+  .rd-bm-row { background: var(--bg-2); border-left: 2px solid var(--accent);
+    border-radius: 10px; padding: 11px 10px; }
+
+  /* Quote sheet: full-height composer with equal-width actions. */
+  .rd-quote-drawer { max-height: 92vh; }
+  .rd-quote-actions > .btn { flex: 1; justify-content: center; }
 }
 
 /* ── F5.10 merge dialog (book detail) — "Merge duplicates" redesign ──

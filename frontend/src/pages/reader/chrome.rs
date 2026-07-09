@@ -19,6 +19,7 @@ struct ReaderChromeState {
     search_active: bool,
     highlights_active: bool,
     bookmarks_active: bool,
+    annotations_active: bool,
     highlight_count: usize,
 }
 
@@ -31,6 +32,7 @@ struct ReaderChromeHandlers {
     on_toggle_search: EventHandler<MouseEvent>,
     on_toggle_highlights: EventHandler<MouseEvent>,
     on_toggle_bookmarks: EventHandler<MouseEvent>,
+    on_toggle_annotations: EventHandler<MouseEvent>,
 }
 
 /// Owns the mutually-exclusive overlay toggles and renders [`ReaderTopChrome`].
@@ -48,6 +50,7 @@ pub(super) fn ReaderTopBar(
     let show_search = panels.show_search;
     let show_highlights = panels.show_highlights;
     let show_bookmarks = panels.show_bookmarks;
+    let show_annotations = panels.show_annotations;
     let note_target = panels.note_target;
     let quote_target = panels.quote_target;
     let highlight_count = panels.highlights.read().len();
@@ -66,6 +69,8 @@ pub(super) fn ReaderTopBar(
         d.set(false);
         let mut e = show_bookmarks;
         e.set(false);
+        let mut h = show_annotations;
+        h.set(false);
         let mut f = note_target;
         f.set(None);
         let mut g = quote_target;
@@ -83,6 +88,7 @@ pub(super) fn ReaderTopBar(
                 search_active: show_search(),
                 highlights_active: show_highlights(),
                 bookmarks_active: show_bookmarks(),
+                annotations_active: show_annotations(),
                 highlight_count,
             },
             handlers: ReaderChromeHandlers {
@@ -117,6 +123,12 @@ pub(super) fn ReaderTopBar(
                     let mut s = show_bookmarks;
                     s.set(!cur);
                 }),
+                on_toggle_annotations: EventHandler::new(move |_| {
+                    let cur = show_annotations();
+                    close_overlays();
+                    let mut s = show_annotations;
+                    s.set(!cur);
+                }),
             },
         }
     }
@@ -134,6 +146,7 @@ fn ReaderTopChrome(state: ReaderChromeState, handlers: ReaderChromeHandlers) -> 
         search_active,
         highlights_active,
         bookmarks_active,
+        annotations_active,
         highlight_count,
     } = state;
     let ReaderChromeHandlers {
@@ -143,6 +156,7 @@ fn ReaderTopChrome(state: ReaderChromeState, handlers: ReaderChromeHandlers) -> 
         on_toggle_search,
         on_toggle_highlights,
         on_toggle_bookmarks,
+        on_toggle_annotations,
     } = handlers;
     rsx! {
         div {
@@ -211,7 +225,7 @@ fn ReaderTopChrome(state: ReaderChromeState, handlers: ReaderChromeHandlers) -> 
                     "Aa"
                 }
                 button {
-                    class: if highlights_active { "rd-tool on" } else { "rd-tool" },
+                    class: if highlights_active { "rd-tool rd-desktop-only on" } else { "rd-tool rd-desktop-only" },
                     r#type: "button",
                     "data-testid": "reader-highlights",
                     "aria-label": "Highlights and notes",
@@ -228,7 +242,7 @@ fn ReaderTopChrome(state: ReaderChromeState, handlers: ReaderChromeHandlers) -> 
                     }
                 }
                 button {
-                    class: if bookmarks_active { "rd-tool on" } else { "rd-tool" },
+                    class: if bookmarks_active { "rd-tool rd-desktop-only on" } else { "rd-tool rd-desktop-only" },
                     r#type: "button",
                     "data-testid": "reader-bookmark",
                     "aria-label": "Bookmarks",
@@ -238,6 +252,22 @@ fn ReaderTopChrome(state: ReaderChromeState, handlers: ReaderChromeHandlers) -> 
                         fill: "none", stroke: "currentColor",
                         stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
                         path { d: "M7 4h10v16l-5-3.6L7 20V4z" }
+                    }
+                }
+                // Phone-only combined tool: highlights + notes + bookmarks in
+                // one sheet, replacing the two desktop buttons above.
+                button {
+                    class: if annotations_active { "rd-tool rd-phone-only on" } else { "rd-tool rd-phone-only" },
+                    r#type: "button",
+                    "data-testid": "reader-annotations",
+                    "aria-label": "Annotations",
+                    onclick: on_toggle_annotations,
+                    svg {
+                        width: "19", height: "19", view_box: "0 0 24 24",
+                        fill: "none", stroke: "currentColor",
+                        stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                        path { d: "M12 20h9" }
+                        path { d: "M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" }
                     }
                 }
             }

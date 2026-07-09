@@ -7,7 +7,7 @@ use dioxus::prelude::*;
 
 use omnibus_shared::{Highlight, HighlightColor};
 
-const PALETTE: [(HighlightColor, &str); 5] = [
+pub(super) const PALETTE: [(HighlightColor, &str); 5] = [
     (HighlightColor::Amber, "amber"),
     (HighlightColor::Green, "green"),
     (HighlightColor::Blue, "blue"),
@@ -160,7 +160,7 @@ pub(super) fn HighlightsDrawer(
 }
 
 #[component]
-fn HighlightRow(
+pub(super) fn HighlightRow(
     highlight: Highlight,
     highlights: Signal<Vec<Highlight>>,
     on_quote: EventHandler<Highlight>,

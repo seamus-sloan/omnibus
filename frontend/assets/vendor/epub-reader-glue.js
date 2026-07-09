@@ -18,7 +18,8 @@
  * Public surface: window.OmnibusReader
  *   init(elementId, fileUrl, opts)  opts = { cfi?, fontSize?, theme?,
  *                                           fontFamily?, lineHeight?,
- *                                           maxWidth?, justify? }
+ *                                           maxWidth?, justify?,
+ *                                           allowScriptedContent? }
  *   next()
  *   prev()
  *   setFontSize(px)
@@ -34,6 +35,10 @@
  *   display(target)                 navigate to a TOC href or CFI
  *   copyText(text)                  clipboard write
  *   shareText(text)                 navigator.share, clipboard fallback
+ *   exportQuoteCard(json)           canvas PNG → <a download>
+ *   shareQuoteCard(json)            canvas PNG → navigator.share(files),
+ *                                   download fallback
+ *   copyQuoteCardImage(json)        canvas PNG → clipboard, download fallback
  *   destroy()
  *
  * Selection callback:
@@ -146,7 +151,12 @@
         height: "100%",
         flow: "paginated",
         spread: "auto",
-        allowScriptedContent: false,
+        // Without `allow-scripts` on the section iframe, WebKit dispatches NO
+        // events to listeners inside it — gestures AND text selection are dead
+        // on iOS. The mobile shell opts in (its books are the user's own
+        // library); the web build keeps the stricter sandbox since desktop
+        // engines still fire parent-attached listeners.
+        allowScriptedContent: !!opts.allowScriptedContent,
       });
 
       installGestureNav();
@@ -282,16 +292,25 @@
         if (sel && String(sel).length > 0) return;
         var t = e.changedTouches[0];
         var dx = t.clientX - sx, dy = t.clientY - sy, dt = Date.now() - st;
-        var w = win.innerWidth || 360;
         // A dominant horizontal swipe turns a page (swipe left = forward).
         if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.5) {
           if (dx < 0) next(); else prev();
           return;
         }
         // Otherwise a stationary tap in the outer 20% gutters turns the page.
+        // The section iframe is the whole multi-column spine item translated
+        // as you page, so `clientX`/`innerWidth` are content coordinates —
+        // map the tap into the app viewport through the iframe's rect and
+        // compare against the app window's width instead.
         if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 500) {
-          if (t.clientX > w * 0.8) next();
-          else if (t.clientX < w * 0.2) prev();
+          var x = t.clientX;
+          try {
+            var fe = win.frameElement;
+            if (fe) x += fe.getBoundingClientRect().left;
+          } catch (err) { /* cross-origin safety */ }
+          var w = window.innerWidth || 360;
+          if (x > w * 0.8) next();
+          else if (x < w * 0.2) prev();
         }
       }, { passive: true });
     });
@@ -416,9 +435,76 @@
   }
 
   // Navigate to a TOC href or a CFI (highlight / bookmark target).
+  // Display `target`, then re-display it once the section's fonts/theme have
+  // settled. The first pass measures the target's column in a freshly
+  // rendered iframe whose metrics can still shift (webfont swap, theme
+  // injection) — the reflow leaves the viewport pages past the target, and
+  // the follow-up display corrects it against the final layout.
+  function displaySettled(target) {
+    if (!rendition) return;
+    rendition
+      .display(target)
+      .then(function () {
+        var doc = null;
+        try {
+          var contents = rendition.getContents();
+          var c = contents && contents[0];
+          doc = c && c.document;
+        } catch (e) {
+          /* best effort */
+        }
+        var ready =
+          doc && doc.fonts && doc.fonts.ready ? doc.fonts.ready : Promise.resolve();
+        return ready
+          .then(function () {
+            return new Promise(function (res) {
+              setTimeout(res, 80);
+            });
+          })
+          .then(function () {
+            if (rendition) return rendition.display(target);
+          });
+      })
+      .catch(function () {
+        /* target may be gone after a teardown */
+      });
+  }
+
   function display(target) {
     if (!rendition || !target) return;
-    rendition.display(target);
+    var t = String(target);
+    var hash = t.indexOf("#");
+    // CFIs and bare hrefs pass straight through. Fragment hrefs resolve to
+    // the anchor's first *rendered* element first — Gutenberg-style TOCs
+    // point at zero-size <a id> markers, and epub.js rounds an empty box to
+    // the next column, landing a page past the chapter heading.
+    if (hash > 0 && t.indexOf("epubcfi(") !== 0 && book && book.spine) {
+      var section = book.spine.get(t.slice(0, hash));
+      var id = t.slice(hash + 1);
+      if (section) {
+        section
+          .load(book.load.bind(book))
+          .then(function (doc) {
+            var el = doc.getElementById(id);
+            var probe = el;
+            while (probe && !probe.childNodes.length) {
+              probe = probe.nextElementSibling;
+            }
+            var cfi = null;
+            try {
+              cfi = section.cfiFromElement(probe || el);
+            } catch (e) {
+              /* fall back to the raw href below */
+            }
+            displaySettled(cfi || t);
+          })
+          .catch(function () {
+            displaySettled(t);
+          });
+        return;
+      }
+    }
+    displaySettled(t);
   }
 
   function copyText(text) {
@@ -489,12 +575,14 @@
   // (rather than rasterizing DOM) because the card is a fixed, bespoke layout —
   // a solid background, an italic serif quote, and an attribution footer — so
   // hand-drawing yields crisp output with no heavyweight DOM-capture dependency.
-  function exportQuoteCard(json) {
+  // Draw the quote card onto an offscreen canvas — the shared renderer behind
+  // the export / share / copy actions. Returns null on a bad payload.
+  function renderQuoteCanvas(json) {
     var o;
     try {
       o = JSON.parse(json);
     } catch (e) {
-      return;
+      return null;
     }
     var ratios = { "1:1": [1080, 1080], "4:5": [1080, 1350], "9:16": [1080, 1920], "3:4": [1080, 1440] };
     var dim = ratios[o.ratio] || ratios["1:1"];
@@ -503,7 +591,7 @@
     canvas.width = W;
     canvas.height = H;
     var ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) return null;
     var pad = Math.round(W * 0.1);
     ctx.fillStyle = o.bg || "#1a1a1a";
     ctx.fillRect(0, 0, W, H);
@@ -550,19 +638,74 @@
     ctx.font = "italic " + Math.round(W * 0.026) + "px Georgia, serif";
     ctx.fillText(o.subtitle || "", pad, footY + Math.round(W * 0.035));
     ctx.globalAlpha = 1;
+    return { canvas: canvas, name: (o.filename || "omnibus-quote") + ".png", title: o.subtitle || "Quote" };
+  }
 
-    canvas.toBlob(function (blob) {
+  function downloadBlob(blob, name) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 1000);
+  }
+
+  function exportQuoteCard(json) {
+    var r = renderQuoteCanvas(json);
+    if (!r) return;
+    r.canvas.toBlob(function (blob) {
       if (!blob) return;
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement("a");
-      a.href = url;
-      a.download = (o.filename || "omnibus-quote") + ".png";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(function () {
-        URL.revokeObjectURL(url);
-      }, 1000);
+      downloadBlob(blob, r.name);
+    }, "image/png");
+  }
+
+  // Native share sheet with the rendered PNG. Falls back to a plain download
+  // where Web Share can't take files (desktop browsers, older WebViews) —
+  // WKWebView's programmatic `<a download>` is spotty, which is exactly why
+  // the phone design routes through the share sheet instead.
+  function shareQuoteCard(json) {
+    var r = renderQuoteCanvas(json);
+    if (!r) return;
+    r.canvas.toBlob(function (blob) {
+      if (!blob) return;
+      try {
+        var f = new File([blob], r.name, { type: "image/png" });
+        if (navigator.canShare && navigator.canShare({ files: [f] })) {
+          navigator.share({ files: [f], title: r.title }).catch(function () {
+            /* user dismissed the sheet */
+          });
+          return;
+        }
+      } catch (e) {
+        /* File/Web Share unsupported */
+      }
+      downloadBlob(blob, r.name);
+    }, "image/png");
+  }
+
+  // Copy the rendered PNG to the clipboard; falls back to a download when
+  // ClipboardItem is unavailable.
+  function copyQuoteCardImage(json) {
+    var r = renderQuoteCanvas(json);
+    if (!r) return;
+    r.canvas.toBlob(function (blob) {
+      if (!blob) return;
+      try {
+        if (navigator.clipboard && window.ClipboardItem) {
+          var item = new ClipboardItem({ "image/png": blob });
+          navigator.clipboard.write([item]).catch(function () {
+            downloadBlob(blob, r.name);
+          });
+          return;
+        }
+      } catch (e) {
+        /* ClipboardItem unsupported */
+      }
+      downloadBlob(blob, r.name);
     }, "image/png");
   }
 
@@ -586,6 +729,8 @@
     shareText: shareText,
     search: search,
     exportQuoteCard: exportQuoteCard,
+    shareQuoteCard: shareQuoteCard,
+    copyQuoteCardImage: copyQuoteCardImage,
     destroy: destroy,
   };
 })();

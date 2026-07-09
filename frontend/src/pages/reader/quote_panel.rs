@@ -77,28 +77,52 @@ pub(super) fn QuotePanel(
         cur_ratio.replace(':', "/")
     );
 
+    // One canvas payload for all three glue actions (download / share /
+    // copy); `Clone` so each button handler owns a copy. Only the interactive
+    // targets build it — `serde_json` isn't compiled in on SSR.
+    #[cfg(any(feature = "web", feature = "mobile"))]
+    let build_payload = {
+        let text = quote_text.clone();
+        let author = author.clone();
+        let subtitle = subtitle.clone();
+        move || {
+            serde_json::json!({
+                "text": text,
+                "author": author,
+                "subtitle": subtitle,
+                "bg": bg.peek().clone(),
+                "ink": ink.peek().clone(),
+                "ratio": ratio.peek().clone(),
+                "filename": "omnibus-quote",
+            })
+            .to_string()
+        }
+    };
+    // Runs the glue's canvas `<a download>` (desktop). The phone actions below
+    // route the same canvas through the OS share sheet / clipboard instead —
+    // WKWebView's programmatic-download support is spotty.
     let download = {
-        let dl_text = quote_text.clone();
-        let dl_author = author.clone();
-        let dl_subtitle = subtitle.clone();
+        #[cfg(any(feature = "web", feature = "mobile"))]
+        let build_payload = build_payload.clone();
         move |_| {
-            // Runs the glue's canvas `<a download>`; WKWebView's programmatic-download support is spotty (native share fallback TBD).
             #[cfg(any(feature = "web", feature = "mobile"))]
-            {
-                let payload = serde_json::json!({
-                    "text": dl_text,
-                    "author": dl_author,
-                    "subtitle": dl_subtitle,
-                    "bg": bg.peek().clone(),
-                    "ink": ink.peek().clone(),
-                    "ratio": ratio.peek().clone(),
-                    "filename": "omnibus-quote",
-                })
-                .to_string();
-                super::reader_call_json("exportQuoteCard", &payload);
-            }
-            #[cfg(not(any(feature = "web", feature = "mobile")))]
-            let _ = (&dl_text, &dl_author, &dl_subtitle);
+            super::reader_call_json("exportQuoteCard", &build_payload());
+        }
+    };
+    let share = {
+        #[cfg(any(feature = "web", feature = "mobile"))]
+        let build_payload = build_payload.clone();
+        move |_| {
+            #[cfg(any(feature = "web", feature = "mobile"))]
+            super::reader_call_json("shareQuoteCard", &build_payload());
+        }
+    };
+    let copy_image = {
+        #[cfg(any(feature = "web", feature = "mobile"))]
+        let build_payload = build_payload.clone();
+        move |_| {
+            #[cfg(any(feature = "web", feature = "mobile"))]
+            super::reader_call_json("copyQuoteCardImage", &build_payload());
         }
     };
 
@@ -188,14 +212,31 @@ pub(super) fn QuotePanel(
 
                     div { class: "rd-quote-actions",
                         button {
-                            class: "btn primary",
+                            class: "btn primary rd-desktop-only",
                             r#type: "button",
                             "data-testid": "quote-download",
                             onclick: download,
                             "Download PNG"
                         }
                         button {
-                            class: "btn",
+                            class: "btn rd-phone-only",
+                            r#type: "button",
+                            "data-testid": "quote-copy-image",
+                            onclick: copy_image,
+                            "Copy image"
+                        }
+                        // Phone primary action: the OS share sheet takes the
+                        // rendered PNG (glue falls back to a download where
+                        // Web Share can't carry files).
+                        button {
+                            class: "btn primary rd-phone-only",
+                            r#type: "button",
+                            "data-testid": "quote-share",
+                            onclick: share,
+                            "Share"
+                        }
+                        button {
+                            class: "btn rd-desktop-only",
                             r#type: "button",
                             disabled: true,
                             title: "Journal & quote cards ship in a later phase",
