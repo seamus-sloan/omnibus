@@ -8,7 +8,7 @@ use omnibus_shared::{EbookMetadata, MetadataOverrides};
 use omnibus_db as db;
 
 #[cfg(feature = "server")]
-use super::{AuthUser, PoolExt};
+use super::{internal_rpc_error, AuthUser, PoolExt};
 
 /// Save metadata overrides for a book. Requires `can_edit` or admin.
 /// Returns the merged `EbookMetadata` so the client can update its state
@@ -27,8 +27,12 @@ pub async fn rpc_save_overrides(
     // Route through the db layer's read-merge-write (one BEGIN IMMEDIATE) so
     // concurrent edits to the same book can't interleave and drop each other's
     // changes, and a text-only edit keeps the existing cover flag.
-    db::merge_metadata_overrides(&pool.0, &uuid, &overrides, user.id).await?;
-    Ok(db::get_book_by_uuid(&pool.0, &uuid).await?)
+    db::merge_metadata_overrides(&pool.0, &uuid, &overrides, user.id)
+        .await
+        .map_err(|e| internal_rpc_error("save overrides", e))?;
+    Ok(db::get_book_by_uuid(&pool.0, &uuid)
+        .await
+        .map_err(|e| internal_rpc_error("get ebook", e))?)
 }
 
 /// Delete metadata overrides for a book, reverting to scanned values.
@@ -39,10 +43,15 @@ pub async fn rpc_delete_overrides(uuid: String) -> Result<Option<EbookMetadata>>
     }
     // Resolve uuid → id once so the `invalidate_thumbs` call (id-keyed by
     // the thumbnail pipeline's file layout) stays accurate.
-    let Some(book_id) = db::resolve_book_id_by_uuid(&pool.0, &uuid).await? else {
+    let Some(book_id) = db::resolve_book_id_by_uuid(&pool.0, &uuid)
+        .await
+        .map_err(|e| internal_rpc_error("resolve book id", e))?
+    else {
         return Ok(None);
     };
-    db::delete_metadata_overrides(&pool.0, &uuid).await?;
+    db::delete_metadata_overrides(&pool.0, &uuid)
+        .await
+        .map_err(|e| internal_rpc_error("delete overrides", e))?;
     // `delete_override_cover` + `invalidate_thumbs` are sync `std::fs`
     // operations; run them on the blocking pool so this server function
     // doesn't pin a tokio worker thread (#106).
@@ -52,6 +61,8 @@ pub async fn rpc_delete_overrides(uuid: String) -> Result<Option<EbookMetadata>>
         db::thumbs::invalidate_thumbs(book_id);
     })
     .await
-    .map_err(|e| ServerFnError::new(format!("spawn_blocking(delete_override_cover): {e}")))?;
-    Ok(db::get_book_by_uuid(&pool.0, &uuid).await?)
+    .map_err(|e| internal_rpc_error("spawn_blocking(delete_override_cover)", e))?;
+    Ok(db::get_book_by_uuid(&pool.0, &uuid)
+        .await
+        .map_err(|e| internal_rpc_error("get ebook", e))?)
 }

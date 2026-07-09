@@ -16,7 +16,9 @@ use super::{internal_rpc_error, AdminUser, AuthUser, PoolExt, WorkerExt};
 /// Fetch the current server settings row. Admin-only.
 #[get("/api/rpc/settings", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_get_settings() -> Result<Settings> {
-    Ok(db::get_settings(&pool.0).await?)
+    Ok(db::get_settings(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get settings", e))?)
 }
 
 /// Persist server settings and return the saved row. Admin-only. On success,
@@ -28,8 +30,12 @@ pub async fn rpc_save_settings(settings: Settings) -> Result<Settings> {
     if let Err(e) = settings.validate() {
         return Err(ServerFnError::new(e.to_string()).into());
     }
-    db::set_settings(&pool.0, &settings).await?;
-    let updated = db::get_settings(&pool.0).await?;
+    db::set_settings(&pool.0, &settings)
+        .await
+        .map_err(|e| internal_rpc_error("save settings", e))?;
+    let updated = db::get_settings(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get settings", e))?;
     // Library path may have changed (and even when it hasn't, the user has
     // signalled they want to pick up on-disk changes). Hand the reindex
     // off to the shared Worker so concurrent saves serialize per-path.
@@ -76,7 +82,9 @@ pub async fn rpc_worker_status() -> Result<WorkerStatus> {
 /// settings page to show what's on disk before reindex completes.
 #[get("/api/rpc/library", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_get_library() -> Result<LibraryContents> {
-    let settings = db::get_settings(&pool.0).await?;
+    let settings = db::get_settings(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get settings", e))?;
     Ok(scanner::scan_libraries(
         settings.ebook_library_path.as_deref(),
         settings.audiobook_library_path.as_deref(),
@@ -87,7 +95,9 @@ pub async fn rpc_get_library() -> Result<LibraryContents> {
 /// Never returns the raw key.
 #[get("/api/rpc/hardcover-key", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_get_hardcover_key() -> Result<HardcoverKeyStatus> {
-    Ok(db::hardcover_key_status(&pool.0).await?)
+    Ok(db::hardcover_key_status(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get hardcover key status", e))?)
 }
 
 /// Admin-only: save (or clear, with `None`/blank) the Hardcover key in
@@ -99,7 +109,9 @@ pub async fn rpc_get_hardcover_key() -> Result<HardcoverKeyStatus> {
 #[post("/api/rpc/hardcover-key", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_set_hardcover_key(key: Option<String>) -> Result<HardcoverKeyStatus> {
     match db::set_hardcover_api_key(&pool.0, key.as_deref()).await {
-        Ok(()) => Ok(db::hardcover_key_status(&pool.0).await?),
+        Ok(()) => Ok(db::hardcover_key_status(&pool.0)
+            .await
+            .map_err(|e| internal_rpc_error("get hardcover key status", e))?),
         Err(db::SettingsError::Validation(msg)) => Err(ServerFnError::new(msg).into()),
         Err(e) => Err(internal_rpc_error("set hardcover key", e).into()),
     }
@@ -109,7 +121,9 @@ pub async fn rpc_set_hardcover_key(key: Option<String>) -> Result<HardcoverKeySt
 /// returns the raw password.
 #[get("/api/rpc/smtp", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_get_smtp_config() -> Result<SmtpConfigStatus> {
-    Ok(db::smtp_status(&pool.0).await?)
+    Ok(db::smtp_status(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get smtp status", e))?)
 }
 
 /// Admin-only: save the server-wide SMTP config, returning the new masked
@@ -118,7 +132,9 @@ pub async fn rpc_get_smtp_config() -> Result<SmtpConfigStatus> {
 #[post("/api/rpc/smtp", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_set_smtp_config(update: SmtpConfigUpdate) -> Result<SmtpConfigStatus> {
     match db::set_smtp_config(&pool.0, &update).await {
-        Ok(()) => Ok(db::smtp_status(&pool.0).await?),
+        Ok(()) => Ok(db::smtp_status(&pool.0)
+            .await
+            .map_err(|e| internal_rpc_error("get smtp status", e))?),
         Err(db::SettingsError::Validation(msg)) => Err(ServerFnError::new(msg).into()),
         Err(e) => Err(internal_rpc_error("set smtp config", e).into()),
     }
@@ -128,8 +144,12 @@ pub async fn rpc_set_smtp_config(update: SmtpConfigUpdate) -> Result<SmtpConfigS
 /// masked status.
 #[post("/api/rpc/smtp/clear", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_clear_smtp_config() -> Result<SmtpConfigStatus> {
-    db::clear_smtp_config(&pool.0).await?;
-    Ok(db::smtp_status(&pool.0).await?)
+    db::clear_smtp_config(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("clear smtp config", e))?;
+    Ok(db::smtp_status(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get smtp status", e))?)
 }
 
 /// Admin-only: send a test email to the admin's own configured Kindle address
@@ -162,7 +182,9 @@ pub async fn rpc_scan_library() -> Result<()> {
     let Settings {
         ebook_library_path,
         audiobook_library_path,
-    } = db::get_settings(&pool.0).await?;
+    } = db::get_settings(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get settings", e))?;
     if ebook_library_path.is_none() && audiobook_library_path.is_none() {
         return Err(ServerFnError::new("no library path configured").into());
     }
@@ -184,7 +206,9 @@ pub async fn rpc_scan_library() -> Result<()> {
 /// returns immediately.
 #[post("/api/rpc/backfill-chapters", pool: PoolExt, worker: WorkerExt, _admin: AdminUser)]
 pub async fn rpc_backfill_chapters() -> Result<()> {
-    let settings = db::get_settings(&pool.0).await?;
+    let settings = db::get_settings(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get settings", e))?;
     let Some(library_path) = settings.audiobook_library_path else {
         return Err(ServerFnError::new("no audiobook library configured").into());
     };

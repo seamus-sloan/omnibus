@@ -181,7 +181,27 @@ pub(super) async fn post_smtp_test(admin: AdminUser, State(state): State<AppStat
             "email delivery is not configured on this server",
         )
             .into_response(),
-        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        // `NoEpub`/`Timeout` carry a safe, specific message.
+        Err(e @ (db::kindle::KindleError::NoEpub | db::kindle::KindleError::Timeout)) => {
+            (StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+        }
+        // `Address`/`Build`/`Smtp` wrap opaque `lettre` internals, but are
+        // still upstream-gateway failures (not our bug) — keep 502, drop the
+        // raw error text, and log the real cause server-side.
+        Err(
+            e @ (db::kindle::KindleError::Address(_)
+            | db::kindle::KindleError::Build(_)
+            | db::kindle::KindleError::Smtp(_)),
+        ) => {
+            tracing::error!(error = %e, context = "send test email", "smtp gateway error");
+            (
+                StatusCode::BAD_GATEWAY,
+                "failed to send the test email via the configured SMTP server",
+            )
+                .into_response()
+        }
+        // `Io`/`Settings`/`Books` are our own failures, not the gateway's.
+        Err(e) => internal("send test email", e),
     }
 }
 

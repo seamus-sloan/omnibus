@@ -32,9 +32,15 @@ use super::{internal_rpc_error, AdminUser, AuthUser, PoolExt, WorkerExt};
 /// mutex prevents duplicate queueing while resolution is in flight.
 #[post("/api/rpc/author", pool: PoolExt, worker: WorkerExt, _user: AuthUser)]
 pub async fn rpc_get_author(id: i64) -> Result<Option<AuthorDetail>> {
-    let author = db::get_author(&pool.0, id).await?;
+    let author = db::get_author(&pool.0, id)
+        .await
+        .map_err(|e| internal_rpc_error("get author", e))?;
     if let Some(ref a) = author {
-        if !a.has_photo && db::author_photo_status(&pool.0, id).await?.is_none() {
+        let has_status = db::author_photo_status(&pool.0, id)
+            .await
+            .map_err(|e| internal_rpc_error("author photo status", e))?
+            .is_some();
+        if !a.has_photo && !has_status {
             worker
                 .0
                 .post(db::worker::Task::ResolveAuthorPhoto { author_id: id });
@@ -58,12 +64,22 @@ pub async fn rpc_scan_author_photo(id: i64) -> Result<AuthorPhotoScanResult> {
         return Err(ServerFnError::new("forbidden: admin required").into());
     }
     // Manual uploads win — don't delete or overwrite.
-    if let Some((db::AuthorPhotoSource::Manual, _)) = db::author_photo_status(&pool.0, id).await? {
+    let status = db::author_photo_status(&pool.0, id)
+        .await
+        .map_err(|e| internal_rpc_error("author photo status", e))?;
+    if let Some((db::AuthorPhotoSource::Manual, _)) = status {
         return Ok(AuthorPhotoScanResult { resolved: true });
     }
-    db::delete_author_photo(&pool.0, id).await?;
-    db::author_photos::resolve(&pool.0, id).await?;
-    let resolved = db::get_author_photo(&pool.0, id).await?.is_some();
+    db::delete_author_photo(&pool.0, id)
+        .await
+        .map_err(|e| internal_rpc_error("delete author photo", e))?;
+    db::author_photos::resolve(&pool.0, id)
+        .await
+        .map_err(|e| internal_rpc_error("resolve author photo", e))?;
+    let resolved = db::get_author_photo(&pool.0, id)
+        .await
+        .map_err(|e| internal_rpc_error("get author photo", e))?
+        .is_some();
     Ok(AuthorPhotoScanResult { resolved })
 }
 
@@ -140,12 +156,16 @@ pub async fn rpc_set_author_photo_url(id: i64, url: String) -> Result<()> {
 /// `/authors` index: every author across both ebook and audiobook libraries.
 #[get("/api/rpc/authors", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_list_authors() -> Result<Vec<AuthorSummary>> {
-    let settings = db::get_settings(&pool.0).await?;
+    let settings = db::get_settings(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get settings", e))?;
     let paths = db::collect_paths(
         settings.ebook_library_path.as_deref(),
         settings.audiobook_library_path.as_deref(),
     );
-    Ok(db::list_authors(&pool.0, &paths).await?)
+    Ok(db::list_authors(&pool.0, &paths)
+        .await
+        .map_err(|e| internal_rpc_error("list authors", e))?)
 }
 
 /// Admin "Delete author". Removes the author row, drops every
@@ -155,7 +175,9 @@ pub async fn rpc_list_authors() -> Result<Vec<AuthorSummary>> {
 /// confirmation modal).
 #[post("/api/rpc/author/delete", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_delete_author(id: i64) -> Result<u64> {
-    Ok(db::delete_author(&pool.0, id).await?)
+    Ok(db::delete_author(&pool.0, id)
+        .await
+        .map_err(|e| internal_rpc_error("delete author", e))?)
 }
 
 // `server`-gated alongside `validate_author_photo_url`: these tests exercise
