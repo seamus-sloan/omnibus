@@ -19,7 +19,7 @@ Default `cargo build` / `clippy` covers `server`, `shared`, `frontend` only. Mob
 
 **Database:** schema ships as numbered SQL migrations under [db/migrations/](../db/migrations/), embedded via `sqlx::migrate!` and run on pool init in `omnibus_db::init_db`. Applied versions are recorded in the `_sqlx_migrations` table. Add new migrations as `NNNN_description.sql` — never edit an applied file. All tests use `sqlite::memory:` for isolation; the migrator runs against them the same as production.
 
-**Server URL (mobile):** the backend base URL is a reactive `ServerUrl(Signal<String>)` context, seeded at launch from `data::server_url_store` (persisted at `<data_dir>/server` — `Library/Application Support/omnibus/server` on iOS, `$HOME/.omnibus/server` on desktop/dev — plaintext, all builds; the URL isn't secret). Empty on first run → the mobile `ScreenLayout` gate routes to the unguarded `/connect` route (`pages/server_connect.rs`), which validates reachability via `data::check_server` (`GET /api/_health`) before persisting and advancing to `/login`. The login screen shows a connected-to bar with a Back button to change it. `use_server_url()` still returns a `String` snapshot, so all readers are unchanged; `use_server_url_signal()` is the writer accessor.
+**Server URL (mobile):** the backend base URL is a reactive `ServerUrl(Signal<String>)` context, seeded at launch from `data::server_url_store` (persisted at `<data_dir>/server` — `Library/Application Support/omnibus/server` on iOS, `$HOME/.omnibus/server` on desktop/dev, `Context.getFilesDir()/server` on Android — plaintext, all builds; the URL isn't secret). Empty on first run → the mobile `ScreenLayout` gate routes to the unguarded `/connect` route (`pages/server_connect.rs`), which validates reachability via `data::check_server` (`GET /api/_health`) before persisting and advancing to `/login`. The login screen shows a connected-to bar with a Back button to change it. `use_server_url()` still returns a `String` snapshot, so all readers are unchanged; `use_server_url_signal()` is the writer accessor.
 
 ## shared/src/
 
@@ -151,17 +151,17 @@ Mobile auth: bearer-token login flow lives in `frontend/src/data.rs` under
 server returns a bearer token in the JSON body. `data::token_store` keeps
 the token in a process-local `OnceLock<RwLock<...>>` and persists it (in
 every build) to `<data_dir>/token` with `0o600` perms, where `data_dir`
-(`data::app_dirs`) resolves to `Library/Application Support/omnibus` on iOS
-and `$HOME/.omnibus` on desktop/dev. So the user stays signed in across a
-cold start and is only logged out when the server rejects the bearer. UI
-components subscribe to `data::token_store::subscribe()` (a
-`tokio::sync::watch` receiver) so a 401-driven `token_store::clear()`
-reactively redirects to `/login` (the gate checks the `ServerUrl` context
-first, redirecting to `/connect` when it's empty — see the Server URL
-(mobile) note above). At-rest protection is the iOS sandbox + Data
-Protection + the `0o600` perms; **TODO**: harden with iOS Keychain /
-Android Keystore. Android persistence is not yet wired (`data_dir` returns
-`None` → memory-only) pending a JNI `Context.getFilesDir()` resolver.
+(`data::app_dirs`) resolves to `Library/Application Support/omnibus` on iOS,
+`$HOME/.omnibus` on desktop/dev, and `Context.getFilesDir()` on Android
+(resolved via JNI through the ambient `ndk_context::android_context()` that
+tao registers). So the user stays signed in across a cold start and is only
+logged out when the server rejects the bearer. UI components subscribe to
+`data::token_store::subscribe()` (a `tokio::sync::watch` receiver) so a
+401-driven `token_store::clear()` reactively redirects to `/login` (the gate
+checks the `ServerUrl` context first, redirecting to `/connect` when it's
+empty — see the Server URL (mobile) note above). At-rest protection is the
+iOS sandbox + Data Protection / Android's per-app UID sandbox + the `0o600`
+perms; **TODO**: harden with iOS Keychain / Android Keystore.
 
 **iOS TestFlight release:** the manually-triggered
 `.github/workflows/testflight.yml` (workflow_dispatch, `macos-26` runner —
