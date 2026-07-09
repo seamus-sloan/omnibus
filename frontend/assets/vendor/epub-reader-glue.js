@@ -41,10 +41,16 @@
  *   copyQuoteCardImage(json)        canvas PNG → clipboard, download fallback
  *   destroy()
  *
- * Selection callback:
+ * Selection callbacks:
  *   - `__omnibusOnSelection(json)` — invoked when the user selects text,
  *     with { cfiRange, text, rect: { x, y, width } } where rect is in
- *     viewport coordinates.
+ *     viewport coordinates. epub.js re-fires this as the selection is
+ *     adjusted (e.g. native handle drags), so the payload tracks the
+ *     live range.
+ *   - `__omnibusOnSelectionCleared(_)` — invoked (debounced) when the
+ *     selection collapses to nothing, so the host can dismiss its
+ *     selection UI without needing a scrim that would swallow the
+ *     native handle drags.
  * Table-of-contents callback:
  *   - `__omnibusOnToc(json)` — invoked once the book is ready (and on
  *     requestToc()), with a flat [{ label, href, level }] array.
@@ -160,6 +166,7 @@
       });
 
       installGestureNav();
+      installSelectionClearWatch();
 
       rendition.themes.register("light", {
         body: { background: "#fcfbfa", color: "#2a2725" },
@@ -270,6 +277,39 @@
     rendition.prev();
   }
 
+  // Emit `__omnibusOnSelectionCleared` (debounced) when the iframe selection
+  // collapses. epub.js only reports selections that exist ("selected"); the
+  // host needs the opposite edge — tap-away, iOS "done", a completed Copy —
+  // to dismiss its popover, now that no scrim overlays the prose (a scrim
+  // would swallow the native selection-handle drags, turning a range adjust
+  // into a page-spanning selection).
+  function installSelectionClearWatch() {
+    if (!rendition || !rendition.hooks || !rendition.hooks.content) return;
+    rendition.hooks.content.register(function (contents) {
+      var doc = contents.document;
+      var win = contents.window || window;
+      var clearTimer = null;
+      doc.addEventListener("selectionchange", function () {
+        if (clearTimer) clearTimeout(clearTimer);
+        // Debounce past the transient collapse WebKit emits mid-drag when a
+        // handle crosses a line boundary — only a settled empty selection
+        // should dismiss.
+        clearTimer = setTimeout(function () {
+          clearTimer = null;
+          var s = win.getSelection && win.getSelection();
+          if (s && !s.isCollapsed && String(s).trim()) return;
+          if (typeof window.__omnibusOnSelectionCleared === "function") {
+            try {
+              window.__omnibusOnSelectionCleared("");
+            } catch (e) {
+              /* ignore handler errors */
+            }
+          }
+        }, 300);
+      });
+    });
+  }
+
   // Touch page-turn for mobile: a horizontal swipe turns the page, and a tap in
   // the outer 20% gutters pages forward (right) / back (left). Registered on
   // every rendered section's iframe document via epub.js's content hook, so it
@@ -280,16 +320,20 @@
     rendition.hooks.content.register(function (contents) {
       var doc = contents.document;
       var win = contents.window || window;
-      var sx = 0, sy = 0, st = 0;
+      var sx = 0, sy = 0, st = 0, hadSel = false;
       doc.addEventListener("touchstart", function (e) {
         var t = e.changedTouches[0];
         sx = t.clientX; sy = t.clientY; st = Date.now();
+        // Snapshot whether a selection was live when the touch began: the
+        // tap that *dismisses* a selection clears it before touchend fires,
+        // and must not double as a page turn.
+        hadSel = !!(win.getSelection && String(win.getSelection()).length > 0);
       }, { passive: true });
       doc.addEventListener("touchend", function (e) {
-        // Never hijack the gesture that just made a text selection — that's the
-        // highlight/note flow, not a page turn.
+        // Never hijack a gesture that made — or just dismissed — a text
+        // selection; that's the highlight/note flow, not a page turn.
         var sel = win.getSelection && win.getSelection();
-        if (sel && String(sel).length > 0) return;
+        if (hadSel || (sel && String(sel).length > 0)) return;
         var t = e.changedTouches[0];
         var dx = t.clientX - sx, dy = t.clientY - sy, dt = Date.now() - st;
         // A dominant horizontal swipe turns a page (swipe left = forward).

@@ -42,6 +42,7 @@ enum ReaderEvent {
     Relocate { json: String },
     Status { state: String },
     Selection { json: String },
+    SelectionCleared,
     Toc { json: String },
     Search { json: String },
 }
@@ -195,6 +196,10 @@ async fn drain_reader_events(
                     selection.set(Some(data));
                 }
             }
+            // The selection collapsed (tap-away / adjusted to nothing):
+            // dismiss the popover. This is the only dismiss path on mobile —
+            // no scrim overlays the prose, so native handle drags get through.
+            Ok(ReaderEvent::SelectionCleared) => selection.set(None),
             Ok(ReaderEvent::Toc { json }) => {
                 if let Ok(entries) = serde_json::from_str::<Vec<TocEntry>>(&json) {
                     toc.set(entries);
