@@ -54,6 +54,11 @@
  * Table-of-contents callback:
  *   - `__omnibusOnToc(json)` — invoked once the book is ready (and on
  *     requestToc()), with a flat [{ label, href, level }] array.
+ * Native-share shims (optional; mobile shell only):
+ *   - `__omnibusOnShareText(text)` / `__omnibusOnShareImage(json)` — when
+ *     defined, shareText/shareQuoteCard route here instead of the Web Share
+ *     API (absent in WKWebView) and the host presents the OS share sheet.
+ *     The image payload is { name, dataUrl } with a base64 PNG data URL.
  */
 (function () {
   "use strict";
@@ -564,6 +569,17 @@
 
   function shareText(text) {
     if (!text) return;
+    // Native bridge first: WKWebView exposes no usable Web Share API, so the
+    // mobile shell installs this shim and presents the OS share sheet from
+    // Rust instead. Web builds never define it.
+    if (typeof window.__omnibusOnShareText === "function") {
+      try {
+        window.__omnibusOnShareText(text);
+      } catch (e) {
+        /* ignore handler errors */
+      }
+      return;
+    }
     try {
       if (navigator.share) {
         navigator.share({ text: text }).catch(function () {});
@@ -707,13 +723,24 @@
     }, "image/png");
   }
 
-  // Native share sheet with the rendered PNG. Falls back to a plain download
-  // where Web Share can't take files (desktop browsers, older WebViews) —
-  // WKWebView's programmatic `<a download>` is spotty, which is exactly why
-  // the phone design routes through the share sheet instead.
+  // Native share sheet with the rendered PNG. The mobile shell's
+  // `__omnibusOnShareImage` shim takes priority (WKWebView has no usable Web
+  // Share API — Rust presents the real sheet); after that, Web Share where it
+  // can take files, then a plain download (desktop browsers, older WebViews).
   function shareQuoteCard(json) {
     var r = renderQuoteCanvas(json);
     if (!r) return;
+    if (typeof window.__omnibusOnShareImage === "function") {
+      try {
+        window.__omnibusOnShareImage(JSON.stringify({
+          name: r.name,
+          dataUrl: r.canvas.toDataURL("image/png"),
+        }));
+      } catch (e) {
+        /* ignore handler errors */
+      }
+      return;
+    }
     r.canvas.toBlob(function (blob) {
       if (!blob) return;
       try {

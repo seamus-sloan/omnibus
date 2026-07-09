@@ -4304,6 +4304,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d87d638e33c06f577498cbcc50491496a3ed4246998a7fbba7ccb98b1e7eab22"
 dependencies = [
  "bitflags 2.11.1",
+ "block2",
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
@@ -4399,6 +4400,7 @@ dependencies = [
 name = "omnibus-frontend"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "dioxus",
  "dioxus-router",
  "gloo-net 0.7.0",
@@ -4406,6 +4408,10 @@ dependencies = [
  "jni 0.21.1",
  "js-sys",
  "ndk-context",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-foundation",
+ "objc2-ui-kit",
  "omnibus-db",
  "omnibus-shared",
  "reqwest 0.13.4",

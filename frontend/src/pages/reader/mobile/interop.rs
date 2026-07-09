@@ -35,17 +35,28 @@ pub(super) fn file_token_url(server_url: &str, uuid: &str, token: Option<&str>) 
 /// Each script is skipped if its global is already present (SPA re-entry), and
 /// each `load` has a 10 s timeout so a stalled request surfaces the error
 /// overlay instead of hanging on "Loading…" forever. `opts` is any
-/// JSON-serializable value shaped like the glue's `init` bag.
+/// JSON-serializable value shaped like the glue's `init` bag. `native_share`
+/// installs the `__omnibusOnShare*` shims the glue prefers over the Web Share
+/// API — only set where the host actually presents a sheet (iOS), so Android
+/// keeps its in-WebView share path.
 pub(super) fn install_surface_js(
     url: &str,
     opts: &serde_json::Value,
     scripts: &ReaderScripts,
+    native_share: bool,
 ) -> String {
     let url_lit = serde_json::to_string(url).unwrap_or_else(|_| "\"\"".into());
     let opts_lit = serde_json::to_string(opts).unwrap_or_else(|_| "{}".into());
     let jszip = serde_json::to_string(&scripts.jszip).unwrap_or_else(|_| "\"\"".into());
     let epub = serde_json::to_string(&scripts.epub).unwrap_or_else(|_| "\"\"".into());
     let glue = serde_json::to_string(&scripts.glue).unwrap_or_else(|_| "\"\"".into());
+    let share_shims = if native_share {
+        r#"
+  window.__omnibusOnShareText=function(t){dioxus.send({kind:"ShareText",text:t});};
+  window.__omnibusOnShareImage=function(j){dioxus.send({kind:"ShareImage",json:j});};"#
+    } else {
+        ""
+    };
     format!(
         r#"(function(){{
   window.__omnibusOnRelocate=function(j){{dioxus.send({{kind:"Relocate",json:j}});}};
@@ -53,7 +64,7 @@ pub(super) fn install_surface_js(
   window.__omnibusOnSelection=function(j){{dioxus.send({{kind:"Selection",json:j}});}};
   window.__omnibusOnSelectionCleared=function(){{dioxus.send({{kind:"SelectionCleared"}});}};
   window.__omnibusOnToc=function(j){{dioxus.send({{kind:"Toc",json:j}});}};
-  window.__omnibusOnSearchResults=function(j){{dioxus.send({{kind:"Search",json:j}});}};
+  window.__omnibusOnSearchResults=function(j){{dioxus.send({{kind:"Search",json:j}});}};{share_shims}
   function load(src){{return new Promise(function(res,rej){{
     var s=document.createElement("script");s.src=src;s.async=false;
     var t=setTimeout(function(){{rej();}},10000);
@@ -81,8 +92,9 @@ pub(super) fn install_reader_surface(
     url: &str,
     opts: &serde_json::Value,
     scripts: &ReaderScripts,
+    native_share: bool,
 ) -> Eval {
-    dioxus::document::eval(&install_surface_js(url, opts, scripts))
+    dioxus::document::eval(&install_surface_js(url, opts, scripts, native_share))
 }
 
 #[cfg(test)]
@@ -109,13 +121,15 @@ mod tests {
             epub: "/assets/epub.js".into(),
             glue: "/assets/glue.js".into(),
         };
-        let js = install_surface_js("http://h/api/ebooks/x/file?token=t", &opts, &scripts);
+        let js = install_surface_js("http://h/api/ebooks/x/file?token=t", &opts, &scripts, true);
         // Every glue callback is shimmed into the Dioxus eval channel.
         for cb in [
             "__omnibusOnRelocate",
             "__omnibusOnStatus",
             "__omnibusOnSelection",
             "__omnibusOnSelectionCleared",
+            "__omnibusOnShareText",
+            "__omnibusOnShareImage",
             "__omnibusOnToc",
             "__omnibusOnSearchResults",
         ] {
@@ -140,5 +154,19 @@ mod tests {
         // No leaked `format!` escape pairs.
         assert!(!js.contains("{{"), "literal {{ leaked into JS");
         assert!(!js.contains("}}"), "literal }} leaked into JS");
+    }
+
+    #[test]
+    fn install_surface_js_omits_share_shims_when_native_share_unsupported() {
+        let scripts = ReaderScripts {
+            jszip: "/a.js".into(),
+            epub: "/b.js".into(),
+            glue: "/c.js".into(),
+        };
+        let js = install_surface_js("u", &serde_json::json!({}), &scripts, false);
+        // Android / other targets keep the glue's in-WebView Web Share path,
+        // which only runs when these shims are absent.
+        assert!(!js.contains("__omnibusOnShareText"));
+        assert!(!js.contains("__omnibusOnShareImage"));
     }
 }
