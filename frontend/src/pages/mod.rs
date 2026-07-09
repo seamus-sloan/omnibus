@@ -37,6 +37,8 @@ pub(crate) use listen::install_audio_bootstrap;
 pub use listen::BookListenPage;
 #[cfg(not(feature = "mobile"))]
 pub(crate) use listen::{AudioElement, MiniDock};
+#[cfg(feature = "mobile")]
+pub(crate) use listen::{MobileAudioHost, MobileMiniPlayer, MobilePlayback};
 pub use metadata_edit::MetadataEditPage;
 pub use reader::BookReadPage;
 pub use search::SearchPage;

@@ -1,0 +1,108 @@
+//! Persistent mobile mini-player.
+//!
+//! Docked just above the bottom tab bar by the mobile `ScreenLayout`, so it
+//! shows on every main page while an audiobook is loaded — and is absent on
+//! the full-screen `/listen` route, which renders bare. Reads the app-wide
+//! [`super::state::MobilePlayback`] context; the backing `<audio>` element
+//! and event drain live at the App root, so playback keeps running while
+//! this is the only visible transport.
+
+use dioxus::prelude::*;
+use dioxus_router::Link;
+
+use crate::components::atrium::Cover;
+use crate::contexts::use_server_url;
+use crate::Route;
+
+use super::state::use_mobile_playback;
+use super::view::{chapter_index_for_elapsed, format_hms};
+use super::{cover_src, interop};
+
+/// Renders the docked mini-player, or nothing when no audiobook is loaded.
+#[component]
+pub fn MobileMiniPlayer() -> Element {
+    let ctx = use_mobile_playback();
+    let server_url = use_server_url();
+
+    let Some(view) = (ctx.view)() else {
+        return rsx! {};
+    };
+    // HLS books render an unsupported message in the full player and never
+    // start playback — nothing for a mini transport to control.
+    if (ctx.unsupported)() {
+        return rsx! {};
+    }
+    let uuid = (ctx.uuid)().unwrap_or_default();
+    let elapsed = (ctx.elapsed)();
+    let playing = (ctx.playing)();
+    let duration = if (ctx.duration)() > 0.0 {
+        (ctx.duration)()
+    } else {
+        view.total_duration
+    };
+    let pct = if duration > 0.0 {
+        (elapsed / duration).clamp(0.0, 1.0) * 100.0
+    } else {
+        0.0
+    };
+    let remaining = (duration - elapsed).max(0.0);
+    let subtitle = if view.chapters.is_empty() {
+        format!("{} left", format_hms(remaining))
+    } else {
+        let ch_no = chapter_index_for_elapsed(&view.chapters, elapsed) + 1;
+        format!("Ch. {ch_no} \u{00b7} {} left", format_hms(remaining))
+    };
+    let accent_style = view
+        .accent
+        .as_deref()
+        .map(|a| format!("--accent: {a};"))
+        .unwrap_or_default();
+
+    let mut playing_sig = ctx.playing;
+    let on_toggle = move |_| {
+        interop::toggle();
+        let now = *playing_sig.peek();
+        playing_sig.set(!now);
+    };
+
+    rsx! {
+        div { class: "m-mini", style: "{accent_style}", "data-testid": "mobile-miniplayer",
+            div { class: "m-mini-progress", div { style: "width:{pct}%" } }
+            div { class: "m-mini-row",
+                Link {
+                    to: Route::BookListen { uuid: uuid.clone() },
+                    class: "m-mini-main",
+                    "aria-label": "Open player for {view.title}",
+                    span { class: "m-mini-cover",
+                        Cover {
+                            book: view.book.clone(),
+                            src_override: cover_src(&view.book, &uuid, &server_url),
+                            sizes: Some("40px".to_string()),
+                        }
+                    }
+                    span { class: "m-mini-meta",
+                        span { class: "m-mini-title", "{view.title}" }
+                        span { class: "m-mini-sub", "{subtitle}" }
+                    }
+                }
+                button {
+                    r#type: "button", class: "m-mini-skip mono",
+                    "data-testid": "mini-skip-back", "aria-label": "Back 30 seconds",
+                    onclick: move |_| interop::skip(-30.0),
+                    "-30"
+                }
+                button {
+                    r#type: "button", class: "m-mini-play",
+                    "data-testid": "mini-toggle",
+                    "aria-label": if playing { "Pause" } else { "Play" },
+                    onclick: on_toggle,
+                    if playing {
+                        span { class: "m-mini-pause", span {} span {} }
+                    } else {
+                        span { class: "m-mini-tri" }
+                    }
+                }
+            }
+        }
+    }
+}

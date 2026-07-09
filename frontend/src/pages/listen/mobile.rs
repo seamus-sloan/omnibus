@@ -1,80 +1,106 @@
 //! Mobile audiobook player — the single-column phone adaptation of the
 //! desktop two-column "Now playing" surface.
 //!
-//! Fetches `GET /api/audiobooks/{uuid}/manifest` on mount, drives an HTML
-//! `<audio>` element (via `dioxus::document::eval`, since mobile is a wry
-//! WebView) for direct-play books, and persists/restores position + rate
-//! through [`crate::audiobook_progress`]. HLS manifests render an
-//! unsupported state rather than faking playback.
+//! The page is a view over the app-wide [`state::MobilePlayback`] context:
+//! on mount it retargets `ctx.uuid` and the app-root [`host::MobileAudioHost`]
+//! does the manifest fetch, drives the HTML `<audio>` element (via
+//! `dioxus::document::eval`, since mobile is a wry WebView), and persists
+//! position + rate through [`crate::audiobook_progress`] — so playback and
+//! position tracking survive navigating away (the mini-player takes over).
+//! HLS manifests render an unsupported state rather than faking playback.
 
 #![cfg(feature = "mobile")]
 
 use dioxus::prelude::*;
-use omnibus_shared::{
-    AudiobookManifest, ChapterInfo, EbookMetadata, ProgressFormat, ProgressUpdate,
-};
+use omnibus_shared::{EbookMetadata, ProgressFormat, ProgressUpdate};
 
 use crate::components::atrium::Cover;
 use crate::contexts::use_server_url;
 use crate::data;
 use crate::Route;
-use dioxus_router::Link;
+use dioxus_router::{use_navigator, Link};
 
+mod bookmarks_sheet;
+mod host;
 mod interop;
+mod mini;
+mod sheets;
+mod state;
 mod view;
 
+use bookmarks_sheet::{use_mobile_bookmarks, BookmarksSheet, MobileBookmarks};
+use sheets::{snap_rate, ChaptersSheet, SleepSheet, SpeedSheet};
+use state::{sleep_pill_label, use_mobile_playback, SleepState};
 use view::{chapter_index_for_elapsed, format_hms, format_ms, PlayerView};
 
-/// Renders the mobile audiobook player for `uuid`. Owns the manifest fetch,
-/// the `<audio>` control surface, and the position/rate persistence loop.
+pub use host::MobileAudioHost;
+pub use mini::MobileMiniPlayer;
+pub use state::MobilePlayback;
+
+/// Which bottom sheet is open, if any. One surface at a time — opening a
+/// sheet replaces the previous one, matching the design's modal sheets.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OpenSheet {
+    None,
+    Chapters,
+    Speed,
+    Sleep,
+    Bookmarks,
+}
+
+/// Renders the mobile audiobook player for `uuid`. Retargets the app-wide
+/// playback context and renders its state; the heavy lifting (fetch, audio
+/// surface, event drain) lives in the app-root [`host::MobileAudioHost`].
 #[component]
 pub fn MobilePlayer(uuid: String) -> Element {
     let server_url = use_server_url();
+    let ctx = use_mobile_playback();
+    let sheet = use_signal(|| OpenSheet::None);
+    let bookmarks = use_mobile_bookmarks(uuid.clone(), server_url.clone());
+    let nav = use_navigator();
 
-    // Playback + view state. All hooks declared unconditionally (rule 07).
-    let view = use_signal(|| None::<PlayerView>);
-    let error = use_signal(|| None::<String>);
-    let unsupported = use_signal(|| false);
-    let elapsed = use_signal(|| 0.0_f64);
-    let duration = use_signal(|| 0.0_f64);
-    let playing = use_signal(|| false);
-    let mut rate = use_signal(|| crate::audiobook_progress::load_rate(&uuid));
-    let chapters_open = use_signal(|| false);
+    // Back affordance: unwind the history stack rather than pushing a fresh
+    // `BookDetail`. The player is reached *from* the detail page, so a push
+    // stacks a second Detail entry and traps "back" bouncing between the two;
+    // `go_back` returns to wherever the user actually came from. Falls back to
+    // a Detail push only on a cold deep-link into `/listen/:uuid` (no history).
+    let back_uuid = uuid.clone();
+    let on_back = EventHandler::new(move |_: MouseEvent| {
+        if nav.can_go_back() {
+            nav.go_back();
+        } else {
+            nav.push(Route::BookDetail {
+                uuid: back_uuid.clone(),
+            });
+        }
+    });
 
-    // Load book metadata + manifest on mount (re-run if the uuid changes).
-    let load_uuid = uuid.clone();
-    let load_server = server_url.clone();
-    use_effect(use_reactive!(|(load_uuid, load_server)| {
-        spawn(load_player(LoadCtx {
-            uuid: load_uuid.clone(),
-            server_url: load_server.clone(),
-            view,
-            error,
-            unsupported,
-            duration,
-            elapsed,
-            playing,
-            rate,
-        }));
+    // Point the app-wide player at this route's book — only when it differs,
+    // so re-entering the currently-playing book (e.g. from the mini-player)
+    // is seamless instead of restarting the surface.
+    let route_uuid = uuid.clone();
+    use_effect(use_reactive!(|route_uuid| {
+        let mut uuid_sig = ctx.uuid;
+        if uuid_sig.peek().as_deref() != Some(route_uuid.as_str()) {
+            uuid_sig.set(Some(route_uuid.clone()));
+        }
     }));
 
-    if let Some(msg) = error.read().clone() {
+    if let Some(msg) = (ctx.error)() {
         return render_error(&msg);
     }
-    // Read the derived view before branching on `unsupported` so the HLS path
-    // can still draw the cover hero + title behind the unsupported message.
-    let Some(v) = view.read().clone() else {
+    let Some(v) = (ctx.view)() else {
         return rsx! {
             div { class: "m-player-loading", p { class: "subtitle", "Loading\u{2026}" } }
         };
     };
-    if unsupported() {
-        return render_unsupported(&v, &uuid, &server_url);
+    if (ctx.unsupported)() {
+        return render_unsupported(&v, &uuid, &server_url, on_back);
     }
 
-    let elapsed_now = elapsed();
-    let dur = if duration() > 0.0 {
-        duration()
+    let elapsed_now = (ctx.elapsed)();
+    let dur = if (ctx.duration)() > 0.0 {
+        (ctx.duration)()
     } else {
         v.total_duration
     };
@@ -85,16 +111,14 @@ pub fn MobilePlayer(uuid: String) -> Element {
         view: v,
         elapsed: elapsed_now,
         duration: dur,
-        playing: playing(),
-        rate: rate(),
+        playing: (ctx.playing)(),
+        rate: (ctx.rate)(),
+        sleep: (ctx.sleep)(),
         chapter_index: ch_idx,
-        chapters_open,
-        set_rate: EventHandler::new(move |r: f64| {
-            rate.set(r);
-            crate::audiobook_progress::save_rate(&uuid, r);
-            interop::set_rate(r);
-        }),
-        playing_signal: playing,
+        sheet,
+        bookmarks,
+        ctx,
+        on_nav_back: on_back,
     })
 }
 
@@ -107,117 +131,13 @@ struct PlayerProps {
     duration: f64,
     playing: bool,
     rate: f64,
+    sleep: SleepState,
     chapter_index: usize,
-    chapters_open: Signal<bool>,
-    set_rate: EventHandler<f64>,
-    playing_signal: Signal<bool>,
-}
-
-/// Signals the async loader writes into. Grouped so [`load_player`] takes one
-/// named argument rather than a wall of positional signals.
-#[derive(Clone)]
-struct LoadCtx {
-    uuid: String,
-    server_url: String,
-    view: Signal<Option<PlayerView>>,
-    error: Signal<Option<String>>,
-    unsupported: Signal<bool>,
-    duration: Signal<f64>,
-    elapsed: Signal<f64>,
-    playing: Signal<bool>,
-    rate: Signal<f64>,
-}
-
-/// Async loader: fetch metadata + manifest, seed the view, then install the
-/// audio control surface for direct-play books (or flag HLS as unsupported).
-async fn load_player(ctx: LoadCtx) {
-    let LoadCtx {
-        uuid,
-        server_url,
-        mut view,
-        mut error,
-        mut unsupported,
-        mut duration,
-        mut elapsed,
-        playing,
-        rate,
-    } = ctx;
-
-    let book = match data::get_ebook(&server_url, &uuid).await {
-        Ok(Some(b)) => b,
-        Ok(None) => {
-            error.set(Some("Audiobook not found.".into()));
-            return;
-        }
-        Err(e) => {
-            error.set(Some(e.to_string()));
-            return;
-        }
-    };
-    let file_id = book.book_files.first().map(|f| f.id);
-    let manifest = match data::get_manifest(&server_url, &uuid, file_id).await {
-        Ok(m) => m,
-        Err(e) => {
-            error.set(Some(e.to_string()));
-            return;
-        }
-    };
-
-    match manifest {
-        AudiobookManifest::Direct {
-            parts,
-            total_duration_seconds,
-            chapters,
-        } => {
-            let resume = resolve_resume(&server_url, &uuid).await;
-            view.set(Some(PlayerView::from_direct(
-                &book,
-                chapters,
-                total_duration_seconds,
-                parts.clone(),
-            )));
-            duration.set(total_duration_seconds);
-            elapsed.set(resume);
-            let eval = interop::install_direct_surface(&server_url, &parts, resume, *rate.peek());
-            drain_audio_events(eval, uuid, server_url, elapsed, playing).await;
-        }
-        AudiobookManifest::Hls { .. } => {
-            // hls.js isn't bundled on mobile; don't fake playback.
-            view.set(Some(PlayerView::from_hls(&book)));
-            unsupported.set(true);
-        }
-    }
-}
-
-/// Drain the JS→Rust audio event channel forever, updating the position /
-/// playing signals and throttling position persistence to ~5s deltas.
-async fn drain_audio_events(
-    mut eval: dioxus::document::Eval,
-    uuid: String,
-    server_url: String,
-    mut elapsed: Signal<f64>,
-    mut playing: Signal<bool>,
-) {
-    let mut last_saved = 0.0_f64;
-    loop {
-        match eval.recv::<interop::AudioEvent>().await {
-            Ok(interop::AudioEvent::Time { seconds }) => {
-                elapsed.set(seconds);
-                if (seconds - last_saved).abs() >= 5.0 {
-                    last_saved = seconds;
-                    persist_position(&uuid, &server_url, seconds);
-                }
-            }
-            Ok(interop::AudioEvent::Play) => playing.set(true),
-            Ok(interop::AudioEvent::Pause { seconds }) => {
-                playing.set(false);
-                elapsed.set(seconds);
-                persist_position(&uuid, &server_url, seconds);
-            }
-            // Channel closed (surface torn down / navigation) — stop draining.
-            Err(_) => return,
-        }
-    }
+    sheet: Signal<OpenSheet>,
+    bookmarks: MobileBookmarks,
+    ctx: MobilePlayback,
+    /// Top-bar back affordance (distinct from the `-30s` transport skip).
+    on_nav_back: EventHandler<MouseEvent>,
 }
 
 /// Reconcile the resume position: server-authoritative value wins, else the
@@ -261,7 +181,12 @@ fn render_error(msg: &str) -> Element {
 /// Streaming (HLS) books can't play on mobile yet, but we still show the cover
 /// hero + title/author so the screen isn't a bare error — only the transport is
 /// withheld behind the unsupported message.
-fn render_unsupported(view: &PlayerView, uuid: &str, server_url: &str) -> Element {
+fn render_unsupported(
+    view: &PlayerView,
+    uuid: &str,
+    server_url: &str,
+    on_back: EventHandler<MouseEvent>,
+) -> Element {
     let accent_style = view
         .accent
         .as_deref()
@@ -271,7 +196,7 @@ fn render_unsupported(view: &PlayerView, uuid: &str, server_url: &str) -> Elemen
         div { class: "m-player", style: "{accent_style}",
             div { class: "m-player-glow" }
             div { class: "m-player-bar",
-                Link { to: Route::BookDetail { uuid: uuid.to_string() }, class: "m-icon-btn", "aria-label": "Back", "\u{2190}" }
+                button { r#type: "button", class: "m-icon-btn", "aria-label": "Back", onclick: move |e| on_back.call(e), "\u{2190}" }
             }
             div { class: "m-player-cover",
                 Cover {
@@ -295,7 +220,7 @@ fn render_unsupported(view: &PlayerView, uuid: &str, server_url: &str) -> Elemen
 }
 
 /// Render the full player surface: cover hero, now-playing block, chapter
-/// scrubber, transport row, secondary controls, and the chapters sheet.
+/// scrubber, transport row, secondary controls, toast, and the bottom sheets.
 fn render_player(p: PlayerProps) -> Element {
     let PlayerProps {
         uuid,
@@ -304,10 +229,12 @@ fn render_player(p: PlayerProps) -> Element {
         duration,
         playing,
         rate,
+        sleep,
         chapter_index,
-        mut chapters_open,
-        set_rate,
-        playing_signal,
+        mut sheet,
+        bookmarks,
+        ctx,
+        on_nav_back,
     } = p;
 
     let server_url = use_server_url();
@@ -328,7 +255,10 @@ fn render_player(p: PlayerProps) -> Element {
         .map(|a| format!("--accent: {a};"))
         .unwrap_or_default();
     let rate_label = format!("{rate:.2}\u{00d7}");
+    let sleep_label = sleep_pill_label(sleep, elapsed);
+    let sleep_armed = sleep != SleepState::Off;
     let has_chapters = !view.chapters.is_empty();
+    let toast = (bookmarks.toast)();
 
     // Transport handlers — all route through the JS control surface.
     // Seek live on every input, but only persist on release (`onchange`) so
@@ -345,7 +275,7 @@ fn render_player(p: PlayerProps) -> Element {
             persist_position(&uuid_seek, &su_seek, secs);
         }
     };
-    let mut playing_sig = playing_signal;
+    let mut playing_sig = ctx.playing;
     let on_toggle = move |_| {
         interop::toggle();
         let now = *playing_sig.peek();
@@ -366,10 +296,24 @@ fn render_player(p: PlayerProps) -> Element {
             interop::seek(chs_next[chapter_index + 1].start_seconds);
         }
     };
-    let set_rate_cycle = set_rate;
-    let on_speed = move |_: MouseEvent| {
-        let next = view::next_rate(rate);
-        set_rate_cycle.call(next);
+
+    let chs_mark = view.chapters.clone();
+    let on_bookmark = move |_: MouseEvent| {
+        bookmarks.create(elapsed, &chs_mark);
+        sheet.set(OpenSheet::Bookmarks);
+    };
+
+    let sheet_props = SheetProps {
+        uuid: uuid.clone(),
+        view: view.clone(),
+        elapsed,
+        rate,
+        sleep,
+        chapter_index,
+        sheet,
+        bookmarks,
+        ctx,
+        server_url: server_url.clone(),
     };
 
     rsx! {
@@ -378,7 +322,7 @@ fn render_player(p: PlayerProps) -> Element {
 
             // Top bar
             div { class: "m-player-bar",
-                Link { to: Route::BookDetail { uuid: uuid.clone() }, class: "m-icon-btn", "aria-label": "Back", "\u{2190}" }
+                button { r#type: "button", class: "m-icon-btn", "aria-label": "Back", onclick: move |e| on_nav_back.call(e), "\u{2190}" }
             }
 
             // Cover hero
@@ -452,118 +396,130 @@ fn render_player(p: PlayerProps) -> Element {
                 }
             }
 
-            // Secondary controls — speed sits here (per the design).
+            // Secondary controls — each pill opens its bottom sheet.
             div { class: "m-player-secondary",
-                button { class: "m-pill", r#type: "button", "data-testid": "mobile-rate", "aria-label": "Playback speed", onclick: on_speed, "{rate_label}" }
-                button { class: "m-pill", r#type: "button", disabled: true, title: "Sleep timer (coming soon)", "Sleep" }
-                button { class: "m-pill", r#type: "button", disabled: true, title: "Bookmark (coming soon)", "Bookmark" }
                 button {
-                    class: if chapters_open() { "m-pill on" } else { "m-pill" },
+                    class: if sheet() == OpenSheet::Speed { "m-pill on" } else { "m-pill" },
+                    r#type: "button", "data-testid": "mobile-rate", "aria-label": "Playback speed",
+                    onclick: move |_| sheet.set(OpenSheet::Speed),
+                    "{rate_label}"
+                }
+                button {
+                    class: if sheet() == OpenSheet::Sleep || sleep_armed { "m-pill on" } else { "m-pill" },
+                    r#type: "button", "data-testid": "mobile-sleep",
+                    onclick: move |_| sheet.set(OpenSheet::Sleep),
+                    "{sleep_label}"
+                }
+                button {
+                    class: "m-pill", r#type: "button", "data-testid": "mobile-bookmark",
+                    onclick: on_bookmark,
+                    "Bookmark"
+                }
+                button {
+                    class: if sheet() == OpenSheet::Chapters { "m-pill on" } else { "m-pill" },
                     r#type: "button", "data-testid": "mobile-chapters-toggle",
-                    onclick: move |_| { let c = *chapters_open.peek(); chapters_open.set(!c); },
+                    onclick: move |_| sheet.set(OpenSheet::Chapters),
                     "Chapters"
                 }
-                button { class: "m-pill", r#type: "button", disabled: true, title: "Cast (coming soon)", "Cast" }
             }
 
-            if chapters_open() {
-                ChaptersSheet {
-                    chapters: view.chapters.clone(),
-                    current_index: chapter_index,
-                    elapsed,
-                    total_label: view.total_label.clone(),
-                    on_seek: EventHandler::new(move |secs: f64| { interop::seek(secs); chapters_open.set(false); }),
-                    on_close: move |_| chapters_open.set(false),
+            // "Bookmark saved" confirmation toast.
+            if let Some(label) = toast {
+                div { class: "m-toast", role: "status",
+                    span { class: "m-toast-flag", "\u{2691}" }
+                    span { class: "m-toast-text", "Bookmark saved" }
+                    span { class: "mono m-toast-meta", "{label}" }
                 }
             }
+
+            {render_sheets(&sheet_props)}
         }
     }
 }
 
-/// Props for the [`ChaptersSheet`] component.
-#[derive(Props, Clone, PartialEq)]
-struct ChaptersSheetProps {
-    /// Ordered chapter markers rendered as sheet rows.
-    chapters: Vec<ChapterInfo>,
-    /// Index of the currently-playing chapter.
-    current_index: usize,
-    /// Seconds elapsed in the whole book (drives the current row's bar).
+/// Everything the sheet layer needs, bundled so [`render_player`] stays a
+/// transport-focused function.
+struct SheetProps {
+    uuid: String,
+    view: PlayerView,
     elapsed: f64,
-    /// Formatted total-duration label shown in the sheet header.
-    total_label: String,
-    /// Fired with the target time in seconds when a row is tapped.
-    on_seek: EventHandler<f64>,
-    /// Fired when the scrim or a row dismisses the sheet.
-    on_close: EventHandler<MouseEvent>,
+    rate: f64,
+    sleep: SleepState,
+    chapter_index: usize,
+    sheet: Signal<OpenSheet>,
+    bookmarks: MobileBookmarks,
+    ctx: MobilePlayback,
+    server_url: String,
 }
 
-/// Bottom-sheet chapter list. Current row is accent-highlighted with a mini
-/// progress bar; done rows show a check, upcoming rows show their duration.
-#[component]
-fn ChaptersSheet(props: ChaptersSheetProps) -> Element {
-    let ChaptersSheetProps {
-        chapters,
-        current_index,
-        elapsed,
-        total_label,
-        on_seek,
-        on_close,
-    } = props;
-    let count = chapters.len();
-    rsx! {
-        div { class: "m-sheet-scrim", "data-testid": "mobile-chapters-sheet", onclick: move |e| on_close.call(e),
-            div { class: "m-sheet", onclick: move |e| e.stop_propagation(),
-                div { class: "m-sheet-grabber" }
-                div { class: "m-sheet-head",
-                    h4 { "Chapters" }
-                    span { class: "mono m-sheet-count", "{count} \u{00b7} {total_label}" }
-                }
-                div { class: "m-sheet-list",
-                    for (i, ch) in chapters.iter().enumerate() {
-                        {chapter_row(i, ch, current_index, elapsed, &on_seek)}
-                    }
+/// Mount whichever bottom sheet is open.
+fn render_sheets(p: &SheetProps) -> Element {
+    let mut sheet = p.sheet;
+    let close = move |_: MouseEvent| sheet.set(OpenSheet::None);
+
+    match (p.sheet)() {
+        OpenSheet::None => rsx! {},
+        OpenSheet::Chapters => rsx! {
+            ChaptersSheet {
+                chapters: p.view.chapters.clone(),
+                current_index: p.chapter_index,
+                elapsed: p.elapsed,
+                total_label: p.view.total_label.clone(),
+                on_seek: EventHandler::new(move |secs: f64| {
+                    interop::seek(secs);
+                    sheet.set(OpenSheet::None);
+                }),
+                on_close: close,
+            }
+        },
+        OpenSheet::Speed => {
+            let uuid = p.uuid.clone();
+            let mut rate_sig = p.ctx.rate;
+            rsx! {
+                SpeedSheet {
+                    rate: p.rate,
+                    on_set: EventHandler::new(move |r: f64| {
+                        let snapped = snap_rate(r);
+                        rate_sig.set(snapped);
+                        crate::audiobook_progress::save_rate(&uuid, snapped);
+                        interop::set_rate(snapped);
+                    }),
+                    on_close: close,
                 }
             }
         }
-    }
-}
-
-/// One chapter row in the sheet.
-fn chapter_row(
-    i: usize,
-    ch: &ChapterInfo,
-    current_index: usize,
-    elapsed: f64,
-    on_seek: &EventHandler<f64>,
-) -> Element {
-    let is_current = i == current_index;
-    let is_done = i < current_index;
-    let start = ch.start_seconds;
-    let handler = *on_seek;
-    let progress = if is_current && ch.duration_seconds > 0.0 {
-        (((elapsed - start) / ch.duration_seconds).clamp(0.0, 1.0) * 100.0) as i64
-    } else {
-        0
-    };
-    rsx! {
-        button {
-            key: "{ch.ordinal}",
-            class: if is_current { "m-ch-row current" } else { "m-ch-row" },
-            r#type: "button",
-            onclick: move |_| handler.call(start),
-            span { class: "mono m-ch-num", "{ch.ordinal}" }
-            div { class: "m-ch-body",
-                div { class: "m-ch-title", span { class: "m-em", "{ch.title}" } }
-                if is_current {
-                    div { class: "pbar m-ch-pbar", i { style: "width:{progress}%" } }
+        OpenSheet::Sleep => {
+            let chapter_end = p
+                .view
+                .chapters
+                .get(p.chapter_index)
+                .map(|c| c.start_seconds + c.duration_seconds);
+            let mut sleep_sig = p.ctx.sleep;
+            rsx! {
+                SleepSheet {
+                    sleep: p.sleep,
+                    elapsed: p.elapsed,
+                    chapter_end,
+                    chapter_no: p.chapter_index + 1,
+                    on_set: EventHandler::new(move |s: SleepState| sleep_sig.set(s)),
+                    on_close: close,
                 }
             }
-            if is_current {
-                span { class: "m-ch-trail m-ch-playing", "\u{25B6}" }
-            } else if is_done {
-                span { class: "m-ch-trail m-ch-done", "\u{2713}" }
-            } else {
-                span { class: "mono m-ch-trail m-ch-dur", "{format_ms(ch.duration_seconds)}" }
+        }
+        OpenSheet::Bookmarks => {
+            let uuid = p.uuid.clone();
+            let server_url = p.server_url.clone();
+            rsx! {
+                BookmarksSheet {
+                    bookmarks: p.bookmarks,
+                    chapters: p.view.chapters.clone(),
+                    on_seek: EventHandler::new(move |secs: f64| {
+                        interop::seek(secs);
+                        persist_position(&uuid, &server_url, secs);
+                        sheet.set(OpenSheet::None);
+                    }),
+                    on_close: close,
+                }
             }
         }
     }

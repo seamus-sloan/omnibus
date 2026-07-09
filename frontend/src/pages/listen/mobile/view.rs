@@ -8,9 +8,6 @@
 
 use omnibus_shared::{ChapterInfo, EbookMetadata, ManifestPart};
 
-/// Playback-rate presets cycled by the transport speed button.
-pub const RATE_CYCLE: &[f64] = &[1.0, 1.2, 1.5, 1.8, 2.0, 0.8];
-
 /// The derived, render-ready shape the mobile player draws from. Holds the
 /// book metadata (for the cover), display strings, and the chapter map.
 #[derive(Clone, PartialEq)]
@@ -173,16 +170,6 @@ pub fn next_part_index(part_count: usize, idx: usize) -> Option<usize> {
     (next < part_count).then_some(next)
 }
 
-/// Cycle to the next playback rate in [`RATE_CYCLE`]. Falls back to the first
-/// preset when `current` isn't a known preset.
-pub fn next_rate(current: f64) -> f64 {
-    let pos = RATE_CYCLE
-        .iter()
-        .position(|r| (r - current).abs() < 0.001)
-        .unwrap_or(usize::MAX);
-    RATE_CYCLE[pos.wrapping_add(1) % RATE_CYCLE.len()]
-}
-
 /// Build the authenticated URL for a manifest part on mobile: prefix the
 /// server origin and append the session token as `?token=` (or `&token=`
 /// when the part URL already carries a query, e.g. `?file_id=`). An `<audio
@@ -297,15 +284,6 @@ mod tests {
         assert_eq!(next_part_index(3, 1), Some(2));
         assert_eq!(next_part_index(3, 2), None);
         assert_eq!(next_part_index(1, 0), None);
-    }
-
-    #[test]
-    fn next_rate_cycles_through_presets_and_wraps() {
-        assert!((next_rate(1.0) - 1.2).abs() < f64::EPSILON);
-        assert!((next_rate(2.0) - 0.8).abs() < f64::EPSILON);
-        assert!((next_rate(0.8) - 1.0).abs() < f64::EPSILON);
-        // Unknown rate falls back to the first preset.
-        assert!((next_rate(1.37) - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]

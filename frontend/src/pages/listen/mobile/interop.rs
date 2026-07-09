@@ -74,6 +74,22 @@ pub fn skip(delta: f64) {
     ));
 }
 
+/// Pause playback (sleep-timer expiry — the UI toggle goes through
+/// [`toggle`]).
+pub fn pause() {
+    fire("window.OmnibusMobileAudio && window.OmnibusMobileAudio.pause();");
+}
+
+/// Remove the audio element and the control surface entirely (playback
+/// dismissed, not just paused).
+pub fn teardown() {
+    fire(
+        "var el = document.getElementById('m-omnibus-audio'); \
+         if (el) { try { el.pause(); } catch(_e) {} el.remove(); } \
+         window.OmnibusMobileAudio = null;",
+    );
+}
+
 /// Set the playback rate.
 pub fn set_rate(rate: f64) {
     let lit = serde_json::to_string(&rate).unwrap_or_else(|_| "1".into());
