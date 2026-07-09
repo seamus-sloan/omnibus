@@ -4433,6 +4433,15 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-title-sep { font-family: var(--mono); font-size: 11px; color: var(--ink-3);
   margin: 0 10px; }
 .rd-title-ch { font-size: 13px; color: var(--ink-2); }
+/* Phone-only chrome pieces — rendered on every target for hydration parity
+   (rule 07), displayed only by the phone breakpoint at the end of this
+   section. */
+.rd-title-sub { display: none; font-family: var(--mono); font-size: 9.5px;
+  color: var(--ink-3); }
+.rd-bottom-ch { display: none; }
+.rd-grabber { display: none; }
+.rd-drawer-sub { display: none; font-family: var(--mono); font-size: 10px;
+  color: var(--ink-3); }
 
 /* Aa typography panel */
 .rd-aa-panel { position: absolute; top: 66px; right: 26px; width: 320px; z-index: 16;
@@ -4596,6 +4605,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 
 /* Search panel (F2.4b). */
 .rd-search-box { padding: 12px 20px; border-bottom: 1px solid var(--line-2); }
+.rd-search-count { padding: 10px 20px 2px; font-family: var(--mono);
+  font-size: 10px; color: var(--ink-3); }
 .rd-search-input { width: 100%; background: var(--bg-2); color: var(--ink-0);
   border: 1px solid var(--line-2); border-radius: 9px; padding: 9px 12px;
   font-size: 14px; }
@@ -4665,47 +4676,94 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   /* Only tighten the horizontal padding here — the vertical padding is the
      safe-area inset set on the base rules, and a `padding: 0 14px` shorthand
      would zero it back out and re-hide the bars under the notch. */
-  .rd-top { padding-left: 14px; padding-right: 14px; gap: 8px; }
-  .rd-bottom { padding-left: 14px; padding-right: 14px; gap: 8px; }
-  .rd-title-book { font-size: 15px; }
-  .rd-title-sep { margin: 0 6px; }
-  .rd-tool { min-width: 32px; padding: 0 6px; }
-  /* Page + progress on the left already carry the position; the centred
-     "Ch. N of M" only crowds a narrow bar (the handoff bottom row is just
-     position on the left, time-left on the right). */
+  .rd-top { padding-left: 6px; padding-right: 8px; gap: 2px; }
+  .rd-bottom { padding-left: 22px; padding-right: 22px; gap: 8px;
+    font-size: 10px; }
+  /* Designed phone toolbar: sans title stacked over a "Ch. N · P%" line,
+     replacing the desktop's inline serif `title · chapter` pair. */
+  .rd-title-center { display: flex; flex-direction: column; align-items: center;
+    justify-content: center; line-height: 1.25; }
+  .rd-title-book { font-family: var(--sans); font-style: normal;
+    font-weight: 600; font-size: 13px; max-width: 100%; overflow: hidden;
+    white-space: nowrap; text-overflow: ellipsis; }
+  .rd-title-sep, .rd-title-ch { display: none; }
+  .rd-title-sub { display: block; }
+  .rd-tool { min-width: 34px; padding: 0 6px; }
+  .rd-aa { font-size: 17px; }
+  /* Phone footer: position on the left, chapter on the right (the centred
+     div is the desktop layout). */
   .rd-bottom > div { display: none; }
-  /* Mobile turns pages by swipe/tap; the circular gutter buttons would sit
-     over the prose on a phone-width column. */
+  .rd-bottom-ch { display: inline; }
+  /* Mobile turns pages by swipe/tap (the glue's `installGestureNav`); the
+     circular gutter buttons would sit over the prose on a phone column. */
   .rd-turn { display: none; }
 
-  /* Drawers (contents / search / highlights / bookmarks / quote card) span
-     the full width instead of a 380–432px side panel. */
-  .rd-drawer, .rd-quote-drawer { width: auto; left: 0; right: 0; }
+  /* Drawers (contents / highlights / bookmarks / quote card) become bottom
+     sheets: grabber, top-rounded, content-capped. Search opts out below. */
+  .rd-drawer, .rd-quote-drawer { top: auto; left: 0; right: 0; bottom: 0;
+    width: auto; max-height: 78vh;
+    border-left: 0; border-top: 1px solid var(--line-2);
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -20px 50px -20px rgba(0,0,0,.5);
+    padding-bottom: env(safe-area-inset-bottom); }
+  .rd-grabber { display: block; flex: 0 0 auto; width: 40px; height: 4px;
+    border-radius: 999px; background: var(--bg-3); margin: 12px auto 2px; }
+  .rd-drawer-head { padding: 4px 20px 10px; border-bottom: 0; }
+  .rd-drawer-title { font-size: 20px; }
+  .rd-drawer-sub { display: inline; }
 
-  /* The Aa display panel drops the tool-anchored caret and becomes a sheet
-     pinned below the top bar. */
-  .rd-aa-panel { left: 12px; right: 12px; width: auto;
-    top: calc(64px + env(safe-area-inset-top)); }
+  /* Search is the one full-screen surface (keyboard + result list want the
+     height); it drops the sheet radius and grabber. */
+  .rd-search-drawer { top: 0; max-height: none; border-radius: 0; border-top: 0;
+    padding-top: env(safe-area-inset-top); }
+  .rd-search-drawer .rd-grabber { display: none; }
+  .rd-search-box { padding: 10px 14px; }
+  .rd-search-input { height: 38px; border-radius: 10px; font-family: var(--sans); }
+  .rd-search-row { border-radius: 10px; padding: 11px 12px;
+    border-bottom: 1px solid var(--line-2); }
+  .rd-search-chapter { font-size: 9.5px; }
+  .rd-search-excerpt { font-family: var(--serif); font-size: 14.5px;
+    line-height: 1.5; }
+
+  /* The Aa display panel becomes a bottom sheet too (no caret). The spread
+     row is desktop-only — a phone column never renders a two-page spread. */
+  .rd-aa-panel { top: auto; bottom: 0; left: 0; right: 0; width: auto;
+    border-left: 0; border-right: 0; border-bottom: 0;
+    border-radius: 20px 20px 0 0;
+    padding: 4px 20px calc(20px + env(safe-area-inset-bottom)); }
   .rd-aa-panel::before { display: none; }
+  .rd-aa-row-spread { display: none; }
+  .rd-seg > button { height: 34px; }
 
   /* Note composer keeps a margin off the viewport edges. */
   .rd-note-composer { width: min(360px, calc(100vw - 32px)); }
 
-  /* Selection popover → bottom sheet ("highlight a passage" handoff). The
-     caret rect drives inline top/left, so the sheet position needs
-     !important to win over them. */
+  /* Selection popover → bottom action sheet ("highlight a passage"), on a
+     fixed dark palette regardless of reader theme per the design. The caret
+     rect drives inline top/left, so the sheet position needs !important. */
   .rd-selection-popover {
     top: auto !important; bottom: calc(66px + env(safe-area-inset-bottom)) !important;
     left: 16px !important; right: 16px !important;
     padding: 14px 12px; border-radius: 16px;
-    background: color-mix(in oklch, var(--bg-1) 96%, transparent);
-    box-shadow: 0 24px 48px -16px rgba(0,0,0,.5); }
+    background: oklch(0.18 0.006 70);
+    border-color: oklch(0.30 0.01 70 / .5);
+    backdrop-filter: none; -webkit-backdrop-filter: none;
+    box-shadow: 0 24px 48px -16px rgba(0,0,0,.6); }
   /* Swatches on one centred row, then a full-width rule, then the actions —
      the divider's 100% width forces the wrap between the two groups. */
-  .rd-swatch-row { flex-wrap: wrap; justify-content: center; row-gap: 12px; }
+  .rd-swatch-row { flex-wrap: wrap; justify-content: center; gap: 12px;
+    row-gap: 12px; }
   .rd-swatch { width: 30px; height: 30px; }
-  .rd-pop-div { width: 100%; height: 1px; align-self: auto; margin: 2px 4px; }
-  .rd-act { height: 36px; }
+  .rd-pop-div { width: 100%; height: 1px; align-self: auto; margin: 2px 4px;
+    background: oklch(0.30 0.01 70 / .4); }
+  /* Icon-over-label actions, Quote tinted as the primary. Scoped to the
+     popover so drawer-row `.rd-act` buttons keep their inline shape. */
+  .rd-selection-popover .rd-act { flex-direction: column; height: auto;
+    padding: 4px 12px; gap: 5px; font-size: 11px;
+    color: oklch(0.82 0.01 75); }
+  .rd-selection-popover .rd-act:hover { background: transparent;
+    color: oklch(0.97 0.006 80); }
+  .rd-selection-popover .rd-act-accent { color: var(--accent); }
 }
 
 /* ── F5.10 merge dialog (book detail) — "Merge duplicates" redesign ──

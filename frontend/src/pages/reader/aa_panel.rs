@@ -20,6 +20,7 @@ pub(crate) fn ReaderAaPanel(on_close: EventHandler<MouseEvent>) -> Element {
             class: "rd-aa-panel",
             onclick: move |evt: MouseEvent| evt.stop_propagation(),
 
+            div { class: "rd-grabber" }
             ThemeRow {}
             TypefaceRow {}
             TextSizeRow {}
@@ -210,7 +211,9 @@ fn PageViewRow() -> Element {
     let prefs = use_context::<ReaderPrefs>();
     let spread = *prefs.spread.read();
     rsx! {
-        div { class: "rd-aa-row",
+        // `rd-aa-row-spread` lets the phone breakpoint hide this row — a
+        // phone column never renders a two-page spread.
+        div { class: "rd-aa-row rd-aa-row-spread",
             div { class: "rd-aa-label", "Page view" }
             div {
                 class: "rd-seg",

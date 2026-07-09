@@ -41,7 +41,10 @@ use overlays::{OverlayMeta, ReaderOverlays, ReaderSelectionPopover};
 use prefs::init_reader_prefs;
 use search_panel::SearchResult;
 use selection::SelectionData;
-use signals::{format_progress_labels, use_book_metadata, ReaderStatus, RelocateData};
+use signals::{
+    format_contents_progress, format_progress_labels, format_title_sub, use_book_metadata,
+    ReaderStatus, RelocateData,
+};
 use toc_drawer::TocEntry;
 
 const JSZIP_JS: Asset = asset!("/assets/vendor/jszip.min.js");
@@ -117,6 +120,8 @@ pub fn BookReadPage(uuid: String) -> Element {
     let ReaderDisplay {
         page_str,
         chapter_str,
+        title_sub,
+        contents_progress,
         pct,
         chapter_title,
         current_cfi,
@@ -134,10 +139,12 @@ pub fn BookReadPage(uuid: String) -> Element {
                 book_accent,
                 chapter_title,
                 current_cfi,
+                contents_progress,
             },
             progress: ReaderProgress {
                 page_str,
                 chapter_str,
+                title_sub,
                 pct,
                 status: status(),
             },
@@ -274,6 +281,8 @@ fn use_reader_signals(uuid: &str, theme: Signal<Theme>) -> ReaderSignals {
 struct ReaderDisplay {
     page_str: String,
     chapter_str: String,
+    title_sub: String,
+    contents_progress: String,
     pct: u32,
     chapter_title: String,
     current_cfi: String,
@@ -287,10 +296,14 @@ fn derive_reader_display(
     loc: Signal<RelocateData>,
     book_meta: Signal<Option<omnibus_shared::EbookMetadata>>,
 ) -> ReaderDisplay {
-    let (page_str, chapter_str) = format_progress_labels(&loc.read());
-    let pct = loc.read().pct;
-    let chapter_title = loc.read().chapter_title.clone();
-    let current_cfi = loc.read().cfi.clone().unwrap_or_default();
+    // One read: every derived label comes from the same relocate snapshot.
+    let loc_now = loc.read();
+    let (page_str, chapter_str) = format_progress_labels(&loc_now);
+    let title_sub = format_title_sub(&loc_now);
+    let contents_progress = format_contents_progress(&loc_now);
+    let pct = loc_now.pct;
+    let chapter_title = loc_now.chapter_title.clone();
+    let current_cfi = loc_now.cfi.clone().unwrap_or_default();
     let book_title = book_meta
         .read()
         .as_ref()
@@ -309,6 +322,8 @@ fn derive_reader_display(
     ReaderDisplay {
         page_str,
         chapter_str,
+        title_sub,
+        contents_progress,
         pct,
         chapter_title,
         current_cfi,
@@ -327,6 +342,8 @@ pub(super) struct ReaderMeta {
     pub book_accent: String,
     pub chapter_title: String,
     pub current_cfi: String,
+    /// Contents-drawer progress line ("184 / 272 · 68%").
+    pub contents_progress: String,
 }
 
 /// Bottom-bar progress labels and the load-status overlay state.
@@ -334,6 +351,9 @@ pub(super) struct ReaderMeta {
 pub(super) struct ReaderProgress {
     pub page_str: String,
     pub chapter_str: String,
+    /// Phone top-bar sub-line ("Ch. 14 · 68%") — rendered on every target,
+    /// shown only by the phone breakpoint.
+    pub title_sub: String,
     pub pct: u32,
     pub status: ReaderStatus,
 }
@@ -378,10 +398,12 @@ fn ReaderLayout(
         book_accent,
         chapter_title,
         current_cfi,
+        contents_progress,
     } = meta;
     let ReaderProgress {
         page_str,
         chapter_str,
+        title_sub,
         pct,
         status,
     } = progress;
@@ -424,6 +446,7 @@ fn ReaderLayout(
             ReaderTopBar {
                 book_title: book_title.clone(),
                 chapter_title: chapter_title.clone(),
+                title_sub: title_sub.clone(),
                 panels,
                 on_back,
             }
@@ -436,7 +459,10 @@ fn ReaderLayout(
                 class: "rd-bottom",
                 span { style: "color:var(--ink-2);", "{page_str}" }
                 div { style: "flex:1; text-align:center; letter-spacing:.08em;", "{chapter_str}" }
-                span {}
+                // The phone footer moves the chapter position to the right
+                // edge (the centred div above is hidden there) — rendered on
+                // every target, shown only by the phone breakpoint (rule 07).
+                span { class: "rd-bottom-ch", "{chapter_str}" }
             }
             div { class: "rd-ribbon", i { style: "width:{pct}%;" } }
 
@@ -465,6 +491,7 @@ fn ReaderLayout(
                     book_accent: book_accent.clone(),
                     chapter_title: chapter_title.clone(),
                     current_cfi: current_cfi.clone(),
+                    contents_progress: contents_progress.clone(),
                 },
                 panels,
             }

@@ -13,6 +13,7 @@ use super::ReaderPanelSignals;
 struct ReaderChromeState {
     book_title: String,
     chapter_title: String,
+    title_sub: String,
     show_aa: bool,
     toc_active: bool,
     search_active: bool,
@@ -38,6 +39,7 @@ struct ReaderChromeHandlers {
 pub(super) fn ReaderTopBar(
     book_title: String,
     chapter_title: String,
+    title_sub: String,
     panels: ReaderPanelSignals,
     on_back: EventHandler<MouseEvent>,
 ) -> Element {
@@ -75,6 +77,7 @@ pub(super) fn ReaderTopBar(
             state: ReaderChromeState {
                 book_title,
                 chapter_title,
+                title_sub,
                 show_aa: show_aa(),
                 toc_active: show_toc(),
                 search_active: show_search(),
@@ -125,6 +128,7 @@ fn ReaderTopChrome(state: ReaderChromeState, handlers: ReaderChromeHandlers) -> 
     let ReaderChromeState {
         book_title,
         chapter_title,
+        title_sub,
         show_aa,
         toc_active,
         search_active,
@@ -162,6 +166,11 @@ fn ReaderTopChrome(state: ReaderChromeState, handlers: ReaderChromeHandlers) -> 
                 if !chapter_title.is_empty() {
                     span { class: "rd-title-sep", "\u{b7}" }
                     span { class: "rd-title-ch", "{chapter_title}" }
+                }
+                // Phone sub-line ("Ch. 14 · 68%") — the breakpoint stacks the
+                // title block and swaps the inline chapter for this.
+                if !title_sub.is_empty() {
+                    span { class: "rd-title-sub", "{title_sub}" }
                 }
             }
             div {
