@@ -57,7 +57,9 @@ pub(super) fn SearchPanel(
                     },
                 }
             }
-            if !hits.is_empty() {
+            if hits.len() == 1 {
+                div { class: "rd-search-count", "1 match \u{b7} in this book" }
+            } else if !hits.is_empty() {
                 div { class: "rd-search-count", "{hits.len()} matches \u{b7} in this book" }
             }
             div { class: "rd-drawer-body",

@@ -296,12 +296,14 @@ fn derive_reader_display(
     loc: Signal<RelocateData>,
     book_meta: Signal<Option<omnibus_shared::EbookMetadata>>,
 ) -> ReaderDisplay {
-    let (page_str, chapter_str) = format_progress_labels(&loc.read());
-    let title_sub = format_title_sub(&loc.read());
-    let contents_progress = format_contents_progress(&loc.read());
-    let pct = loc.read().pct;
-    let chapter_title = loc.read().chapter_title.clone();
-    let current_cfi = loc.read().cfi.clone().unwrap_or_default();
+    // One read: every derived label comes from the same relocate snapshot.
+    let loc_now = loc.read();
+    let (page_str, chapter_str) = format_progress_labels(&loc_now);
+    let title_sub = format_title_sub(&loc_now);
+    let contents_progress = format_contents_progress(&loc_now);
+    let pct = loc_now.pct;
+    let chapter_title = loc_now.chapter_title.clone();
+    let current_cfi = loc_now.cfi.clone().unwrap_or_default();
     let book_title = book_meta
         .read()
         .as_ref()
