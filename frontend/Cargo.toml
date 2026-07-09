@@ -43,6 +43,33 @@ tokio = { workspace = true, optional = true }
 # pull tracing into the bundle.
 tracing = { workspace = true, optional = true }
 
+# Decodes the quote card's base64 PNG data URL before staging it for the
+# native share sheet (`native_share`). Mobile-only.
+base64 = { version = "0.22", optional = true }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+# UIKit bindings for `native_share` — WKWebView has no usable Web Share API,
+# so the reader's Share actions present a real UIActivityViewController.
+# Versions match what wry (dioxus's WebView backend) already resolves.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString", "NSURL"] }
+objc2-ui-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "block2",
+    "objc2-core-foundation",
+    "UIActivity",
+    "UIActivityViewController",
+    "UIApplication",
+    "UIDevice",
+    "UIPopoverPresentationController",
+    "UIPresentationController",
+    "UIResponder",
+    "UIView",
+    "UIViewController",
+    "UIWindow",
+] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes"] }
+
 [target.'cfg(target_os = "android")'.dependencies]
 # Resolves `Context.getFilesDir()` via JNI so `data::app_dirs::data_dir()` can
 # persist the server URL / auth token on Android (#837), mirroring the iOS
@@ -88,6 +115,7 @@ mobile = [
     "dep:tracing",
     "dep:jni",
     "dep:ndk-context",
+    "dep:base64",
 ]
 # Server-function bodies: compiles the server-side halves of the #[get]/#[post]
 # functions in rpc.rs against the real DB layer. Used by `server/` when
