@@ -289,6 +289,36 @@ test.describe("mobile reader (phone viewport)", () => {
     // turns pages by swipe/tap; the buttons would sit over the prose).
     await expect(page.getByTestId("reader-prev")).toBeHidden();
     await expect(page.getByTestId("reader-next")).toBeHidden();
+
+    // Phone toolbar swaps the separate highlights + bookmarks tools for the
+    // single combined Annotations tool.
+    await expect(page.getByTestId("reader-annotations")).toBeVisible();
+    await expect(page.getByTestId("reader-highlights")).toBeHidden();
+    await expect(page.getByTestId("reader-bookmark")).toBeHidden();
+  });
+
+  test("opens the combined annotations sheet with kind filters", async ({
+    page,
+    request,
+  }) => {
+    const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+    await gotoReady(page, `/read/${uuid}`);
+    await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+    // One sheet for highlights + notes + bookmarks, with an All / Bookmarks
+    // kind filter and the add-bookmark affordance in its header.
+    await page.getByTestId("reader-annotations").click();
+    const sheet = page.getByTestId("reader-annotations-drawer");
+    await expect(sheet).toBeVisible();
+    await expect(page.getByTestId("annotations-filter-bookmarks")).toBeVisible();
+    await expect(page.getByTestId("reader-annotations-add")).toBeVisible();
+
+    // Kind filter narrows to bookmarks (empty on the shared dev DB, so the
+    // empty state holds) and Escape dismisses the sheet.
+    await page.getByTestId("annotations-filter-bookmarks").click();
+    await expect(sheet).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(sheet).toHaveCount(0);
   });
 
   test("drawers and the display panel span the full width", async ({
