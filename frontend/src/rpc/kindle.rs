@@ -36,10 +36,17 @@ pub async fn rpc_send_to_kindle(book_uuid: String, file_id: Option<i64>) -> Resu
         )
         .into());
     };
-    if db::effective_smtp_config(&pool.0).await?.is_none() {
+    let smtp_configured = db::effective_smtp_config(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get smtp config", e))?
+        .is_some();
+    if !smtp_configured {
         return Err(ServerFnError::new("email delivery is not configured on this server").into());
     }
-    let Some(book_id) = db::resolve_book_id_by_uuid(&pool.0, &book_uuid).await? else {
+    let Some(book_id) = db::resolve_book_id_by_uuid(&pool.0, &book_uuid)
+        .await
+        .map_err(|e| internal_rpc_error("resolve book id", e))?
+    else {
         return Err(ServerFnError::new("book not found").into());
     };
 

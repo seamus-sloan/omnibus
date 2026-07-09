@@ -31,12 +31,16 @@ pub async fn rpc_set_rating(update: RatingUpdate) -> Result<RatingRecord> {
 /// book is unknown or the user has not rated it yet.
 #[post("/api/rpc/ratings/get", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_get_rating(uuid: String) -> Result<Option<RatingRecord>> {
-    Ok(db::ratings::get_rating(&pool.0, user.id, &uuid).await?)
+    Ok(db::ratings::get_rating(&pool.0, user.id, &uuid)
+        .await
+        .map_err(|e| internal_rpc_error("get rating", e))?)
 }
 
 /// Clear (un-rate) the current user's rating for a book. A no-op when no
 /// rating exists, so it always succeeds for a known or unknown uuid.
 #[post("/api/rpc/ratings/clear", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_clear_rating(uuid: String) -> Result<()> {
-    Ok(db::ratings::delete_rating(&pool.0, user.id, &uuid).await?)
+    Ok(db::ratings::delete_rating(&pool.0, user.id, &uuid)
+        .await
+        .map_err(|e| internal_rpc_error("clear rating", e))?)
 }

@@ -9,21 +9,27 @@ use omnibus_shared::{PaletteResults, TagWeight};
 use omnibus_db as db;
 
 #[cfg(feature = "server")]
-use super::{AuthUser, PoolExt};
+use super::{internal_rpc_error, AuthUser, PoolExt};
 
 /// Return all tags with book counts for the tag cloud.
 #[get("/api/rpc/tags", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_get_tag_cloud() -> Result<Vec<TagWeight>> {
-    Ok(db::get_tag_cloud(&pool.0).await?)
+    Ok(db::get_tag_cloud(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get tag cloud", e))?)
 }
 
 /// Search palette — grouped results (books, authors, series, tags) for the
 /// command-palette overlay.
 #[post("/api/rpc/search-palette", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_search_palette(q: String) -> Result<PaletteResults> {
-    let settings = db::get_settings(&pool.0).await?;
+    let settings = db::get_settings(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get settings", e))?;
     let Some(path) = settings.ebook_library_path else {
         return Ok(PaletteResults::default());
     };
-    Ok(db::search_palette(&pool.0, &path, &q).await?)
+    Ok(db::search_palette(&pool.0, &path, &q)
+        .await
+        .map_err(|e| internal_rpc_error("search palette", e))?)
 }

@@ -18,14 +18,16 @@ use omnibus_db as db;
 use omnibus_shared::{BookSuggestion, RawSuggestion};
 
 #[cfg(feature = "server")]
-use super::{AdminUser, AuthUser, PoolExt, WorkerExt};
+use super::{internal_rpc_error, AdminUser, AuthUser, PoolExt, WorkerExt};
 
 /// Return the full indexed library (ebooks and audiobooks combined) for the
 /// landing grid. Result is capped at `db::MAX_BOOKS_RETURNED` rows; clients
 /// that need pagination should use `rpc_get_ebooks_page` instead.
 #[get("/api/rpc/ebooks", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_get_ebooks() -> Result<EbookLibrary> {
-    let settings = db::get_settings(&pool.0).await?;
+    let settings = db::get_settings(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get settings", e))?;
     // Served straight from the DB — the indexer is responsible for keeping
     // it up to date (startup + settings save triggers).
     //
@@ -46,7 +48,8 @@ pub async fn rpc_get_ebooks() -> Result<EbookLibrary> {
         settings.ebook_library_path.as_deref(),
         settings.audiobook_library_path.as_deref(),
     )
-    .await?)
+    .await
+    .map_err(|e| internal_rpc_error("list ebooks", e))?)
 }
 
 /// F5b keyset-paginated landing read (the web path's Option-B replacement for
@@ -67,7 +70,9 @@ pub async fn rpc_get_ebooks_page(
     cursor: Option<String>,
     limit: i64,
 ) -> Result<LibraryPage> {
-    let settings = db::get_settings(&pool.0).await?;
+    let settings = db::get_settings(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get settings", e))?;
     let ebook = settings.ebook_library_path;
     let audiobook = settings.audiobook_library_path;
     // The `EbookLibrary.path` convention: report the ebook path when set,
@@ -77,7 +82,8 @@ pub async fn rpc_get_ebooks_page(
 
     // A malformed cursor is a client error. The web client only echoes a
     // server-issued cursor, so this is defensive — surface it rather than
-    // silently restarting at the top.
+    // silently restarting at the top. `CursorError::Malformed` carries a
+    // caller-safe message, not raw internals, so it keeps its own text.
     let decoded = match cursor.as_deref() {
         Some(c) => match db::PageCursor::decode(c) {
             Ok(p) => Some(p),
@@ -95,12 +101,21 @@ pub async fn rpc_get_ebooks_page(
         decoded.as_ref(),
         limit,
     )
-    .await?;
+    .await
+    .map_err(|e| internal_rpc_error("list books page", e))?;
 
     let (total, facets) = if decoded.is_none() {
         (
-            Some(db::count_books_for_paths(&pool.0, &paths).await?),
-            Some(db::library_facets(&pool.0, &paths).await?),
+            Some(
+                db::count_books_for_paths(&pool.0, &paths)
+                    .await
+                    .map_err(|e| internal_rpc_error("count books", e))?,
+            ),
+            Some(
+                db::library_facets(&pool.0, &paths)
+                    .await
+                    .map_err(|e| internal_rpc_error("library facets", e))?,
+            ),
         )
     } else {
         (None, None)
@@ -122,7 +137,9 @@ pub async fn rpc_get_ebooks_page(
 /// `/books/:uuid` URLs survive reindexes.
 #[post("/api/rpc/ebook", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_get_ebook(uuid: String) -> Result<Option<EbookMetadata>> {
-    Ok(db::get_book_by_uuid(&pool.0, &uuid).await?)
+    Ok(db::get_book_by_uuid(&pool.0, &uuid)
+        .await
+        .map_err(|e| internal_rpc_error("get ebook", e))?)
 }
 
 /// Admin: merge the book `source_uuid` into `target_uuid` — the target
@@ -133,18 +150,30 @@ pub async fn rpc_get_ebook(uuid: String) -> Result<Option<EbookMetadata>> {
 /// their display strings so the dialog can render them directly.
 #[post("/api/rpc/merge-books", pool: PoolExt, admin: AdminUser)]
 pub async fn rpc_merge_books(source_uuid: String, target_uuid: String) -> Result<MergeBooksResult> {
-    let out = db::merge_books(&pool.0, &source_uuid, &target_uuid, Some(admin.0.id)).await?;
-    Ok(MergeBooksResult {
-        merge_log_id: out.merge_log_id,
-        target_uuid: out.target_uuid,
-    })
+    match db::merge_books(&pool.0, &source_uuid, &target_uuid, Some(admin.0.id)).await {
+        Ok(out) => Ok(MergeBooksResult {
+            merge_log_id: out.merge_log_id,
+            target_uuid: out.target_uuid,
+        }),
+        // Domain failures keep their display string — see the doc comment above.
+        Err(e @ (db::MergeError::SameBook | db::MergeError::BookNotFound(_))) => {
+            Err(ServerFnError::new(e.to_string()).into())
+        }
+        Err(e) => Err(internal_rpc_error("merge books", e).into()),
+    }
 }
 
 /// Admin: reverse a merge recorded in `merge_log`. Returns the restored
 /// (source) book's uuid.
 #[post("/api/rpc/merge-books/undo", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_undo_merge(merge_log_id: i64) -> Result<String> {
-    Ok(db::undo_merge(&pool.0, merge_log_id).await?)
+    match db::undo_merge(&pool.0, merge_log_id).await {
+        Ok(uuid) => Ok(uuid),
+        Err(e @ (db::MergeError::LogNotFound | db::MergeError::AlreadyUndone)) => {
+            Err(ServerFnError::new(e.to_string()).into())
+        }
+        Err(e) => Err(internal_rpc_error("undo merge", e).into()),
+    }
 }
 
 /// Admin: candidate search for the merge dialog. Same FTS5 query as
@@ -154,13 +183,19 @@ pub async fn rpc_undo_merge(merge_log_id: i64) -> Result<String> {
 /// case; capped small (the dialog shows a handful of rows).
 #[post("/api/rpc/merge-books/candidates", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_merge_candidates(q: String) -> Result<Vec<EbookMetadata>> {
-    let settings = db::get_settings(&pool.0).await?;
+    let settings = db::get_settings(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get settings", e))?;
     let mut out: Vec<EbookMetadata> = Vec::new();
     for path in [settings.ebook_library_path, settings.audiobook_library_path]
         .into_iter()
         .flatten()
     {
-        out.extend(db::search_books(&pool.0, &path, &q).await?);
+        out.extend(
+            db::search_books(&pool.0, &path, &q)
+                .await
+                .map_err(|e| internal_rpc_error("search books", e))?,
+        );
     }
     let mut seen = std::collections::HashSet::new();
     out.retain(|b| seen.insert(b.unique_identifier.clone()));
@@ -182,12 +217,16 @@ pub async fn rpc_merge_candidates(q: String) -> Result<Vec<EbookMetadata>> {
 /// when the vec is truncated.
 #[post("/api/rpc/search", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_search(q: String) -> Result<EbookLibrary> {
-    let settings = db::get_settings(&pool.0).await?;
+    let settings = db::get_settings(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get settings", e))?;
     let Some(path) = settings.ebook_library_path else {
         return Ok(EbookLibrary::default());
     };
     // Issue #241: single FTS5 pass returns the capped vec and the full count.
-    let (books, total) = db::search_books_with_total(&pool.0, &path, &q).await?;
+    let (books, total) = db::search_books_with_total(&pool.0, &path, &q)
+        .await
+        .map_err(|e| internal_rpc_error("search books", e))?;
     Ok(EbookLibrary {
         path: Some(path),
         books,
@@ -203,24 +242,33 @@ pub async fn rpc_search(q: String) -> Result<EbookLibrary> {
 /// concurrent viewers never re-hits Hardcover. POST because it carries `uuid`.
 #[post("/api/rpc/ebook-suggestions", pool: PoolExt, worker: WorkerExt, _user: AuthUser)]
 pub async fn rpc_get_suggestions(uuid: String) -> Result<SuggestionsResponse> {
-    if db::effective_hardcover_api_key(&pool.0).await?.is_none() {
+    let hardcover_key = db::effective_hardcover_api_key(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get hardcover key", e))?;
+    if hardcover_key.is_none() {
         return Ok(SuggestionsResponse::NotConfigured);
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    let decision = db::decide(db::suggestion_state(&pool.0, &uuid).await?, now);
+    let state = db::suggestion_state(&pool.0, &uuid)
+        .await
+        .map_err(|e| internal_rpc_error("suggestion state", e))?;
+    let decision = db::decide(state, now);
     if decision.enqueue {
         // Mark pending before posting so concurrent callers can't each enqueue.
-        db::mark_pending(&pool.0, &uuid).await?;
+        db::mark_pending(&pool.0, &uuid)
+            .await
+            .map_err(|e| internal_rpc_error("mark suggestions pending", e))?;
         worker.0.post(db::worker::Task::ResolveSuggestions {
             book_uuid: uuid.clone(),
         });
     }
     if decision.serve {
         let items = db::get_suggestions(&pool.0, &uuid)
-            .await?
+            .await
+            .map_err(|e| internal_rpc_error("get suggestions", e))?
             .into_iter()
             .map(|c| {
                 BookSuggestion::new(

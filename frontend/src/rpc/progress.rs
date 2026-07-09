@@ -43,7 +43,9 @@ pub async fn rpc_get_progress(
     uuid: String,
     format: ProgressFormat,
 ) -> Result<Option<ProgressRecord>> {
-    Ok(db::progress::get_progress(&pool.0, user.id, &uuid, format).await?)
+    Ok(db::progress::get_progress(&pool.0, user.id, &uuid, format)
+        .await
+        .map_err(|e| internal_rpc_error("get progress", e))?)
 }
 
 /// Reject over-cap session batches at the RPC boundary, mirroring the mobile
@@ -85,7 +87,10 @@ pub async fn rpc_record_sessions(reports: Vec<SessionReport>) -> Result<u64> {
     }
     let mut inserted = 0u64;
     for r in &reports {
-        if db::progress::record_session(&pool.0, user.id, r).await? {
+        if db::progress::record_session(&pool.0, user.id, r)
+            .await
+            .map_err(|e| internal_rpc_error("record session", e))?
+        {
             inserted += 1;
         }
     }
