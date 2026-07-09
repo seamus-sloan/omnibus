@@ -1,7 +1,7 @@
 # Omnibus — self-hosted ebook/audiobook library.
 #
 # Quick start:
-#   1. Edit the two `:ro` library bind mounts below to point at your books.
+#   1. Edit the two library bind mounts below to point at your books.
 #   2. Set OMNIBUS_PUBLIC_ORIGIN to the URL you'll actually open in a browser.
 #   3. `docker compose up -d --build`
 #   4. Open the app and register — the FIRST account created becomes admin.
@@ -9,7 +9,7 @@
 # Volume model (Jellyfin-style):
 #   /config      durable state — SQLite DB + cover images (back this up)
 #   /cache       regenerable — WebP thumbnails + HLS transcode segments
-#   /books       your ebook library      (read-only)
+#   /books       your ebook library      (read-write for uploads)
 #   /audiobooks  your audiobook library  (read-only)
 
 services:
@@ -29,8 +29,8 @@ services:
       # Persistent app state and regenerable cache. Created on first run.
       - ./config:/config
       - ./cache:/cache
-      # Your media. Edit the left side; keep `:ro` so Omnibus never writes here.
-      - /path/to/your/ebooks:/books:ro
+      # Your media. Edit the left side.
+      - /path/to/your/ebooks:/books
       - /path/to/your/audiobooks:/audiobooks:ro
 
     environment:
