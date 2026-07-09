@@ -51,11 +51,17 @@ mod tests {
     /// `test_data/audiobooks/`. `CARGO_MANIFEST_DIR` is the `db/` crate dir,
     /// so `..` climbs to the workspace root where the fixtures live.
     fn fixture(rel: &str) -> std::path::PathBuf {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("test_data")
             .join("audiobooks")
-            .join(rel)
+            .join(rel);
+        // public_domain/ isn't in git — fetched via scripts/fetch-fixtures.sh.
+        assert!(
+            path.exists(),
+            "audiobook fixture {rel} missing — run `just fixtures` from the repo root"
+        );
+        path
     }
 
     #[test]

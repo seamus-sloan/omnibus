@@ -10,10 +10,32 @@ path and waits for the indexer to surface the same number of books listed in
 ```
 generated/    — synthetic EPUBs produced by tools/make_epub.ts (committed)
 public_domain/ — real EPUBs from Project Gutenberg / Standard Ebooks
+                 (NOT committed — fetched, see below)
 ```
 
 The seeder points the server at `test-data/epubs/` (this directory). The
 scanner recurses, so both subdirectories load in a single seed call.
+
+## Fetching the public-domain fixtures
+
+`public_domain/` is not tracked in git — 156 MB of binaries there made
+every `nix develop` copy the whole tree into /nix/store. The files live as
+a GitHub release asset (`fixtures-vN` tag) instead:
+
+```bash
+just fixtures    # one-time ~156 MB download, then an instant no-op
+```
+
+`just test` runs this automatically; Playwright's `globalSetup` and the
+`db` regression tests fail with a "run `just fixtures`" message when the
+files are missing. CI fetches (and caches) them explicitly.
+
+To add or update a public-domain fixture: drop the file into
+`public_domain/` on disk, run `scripts/publish-fixtures.sh v<N+1>`, then
+commit the pin bumps it prints (fetch script + CI cache keys) along with
+the expected-metadata updates in `db/tests/public_domain_epubs.rs` and
+`ui_tests/playwright/tests/fixtures/epubs.ts`. Old release tags are never
+deleted, so old commits keep fetching their pinned version.
 
 ## Synthetic vs. public-domain
 

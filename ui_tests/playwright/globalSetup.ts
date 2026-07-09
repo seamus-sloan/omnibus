@@ -1,5 +1,5 @@
 import { request as apiRequest, type FullConfig } from "@playwright/test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 import { ensureLoggedIn, loginBearer } from "./tests/utils/auth";
@@ -8,6 +8,23 @@ export const STORAGE_STATE_PATH = resolve(__dirname, ".auth", "storage.json");
 export const BEARER_TOKEN_PATH = resolve(__dirname, ".auth", "bearer.txt");
 
 export default async function globalSetup(config: FullConfig): Promise<void> {
+  // The public-domain fixtures are not in git (they're a release asset —
+  // see scripts/fetch-fixtures.sh). Fail fast with instructions instead of
+  // letting seedLibrary poll forever against a half-empty library.
+  const fixtureSentinel = resolve(
+    __dirname,
+    "..",
+    "..",
+    "test_data",
+    "epubs",
+    "public_domain",
+    "count_of_monte_cristo.epub",
+  );
+  if (!existsSync(fixtureSentinel)) {
+    throw new Error(
+      "Public-domain test fixtures are missing. Run `just fixtures` from the repo root.",
+    );
+  }
   // Pull `baseURL`, `extraHTTPHeaders`, and `storageState` from the merged
   // project `use` so the writer here can't drift from what the rest of the
   // suite reads. `extraHTTPHeaders` matters because `ensureLoggedIn` makes

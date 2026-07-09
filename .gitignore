@@ -73,3 +73,9 @@ test_data/epubs/**/*.webp
 # Agent worktree scratch directories created by `isolation: worktree` runs.
 .claude/worktrees/
 sample-library/
+
+# Public-domain test fixtures — large binaries hosted as a GitHub release
+# asset (fixtures-vN), fetched by scripts/fetch-fixtures.sh (`just fixtures`).
+test_data/epubs/public_domain/
+test_data/audiobooks/public_domain/
+test_data/.fixtures-version
