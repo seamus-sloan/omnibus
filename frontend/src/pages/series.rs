@@ -96,6 +96,16 @@ fn series_header(
     };
     rsx! {
         div { class: "disc-series-header",
+            // Mobile-only (CSS-gated via `.screen`) back affordance to the
+            // series index; web keeps the breadcrumb. Same markup on every
+            // target so the web SSR/WASM trees stay identical (rule 07).
+            Link {
+                to: Route::SeriesIndex {},
+                class: "m-icon-btn disc-back",
+                "aria-label": "Back to series",
+                "data-testid": "series-back",
+                "\u{2190}"
+            }
             nav { class: "breadcrumb", aria_label: "breadcrumb",
                 Link { to: Route::Landing {}, "Library" }
                 span { class: "breadcrumb-sep", " › " }
