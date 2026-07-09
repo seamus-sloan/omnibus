@@ -83,17 +83,18 @@ jobs:
       - name: Boot iOS simulator and install app
         run: |
           set -euo pipefail
-          # Pick the newest *available* iOS runtime and pair it explicitly with
-          # a real iPhone device type. Two gotchas this avoids: simctl files the
-          # iPod touch under the "iPhone" productFamily (so a family filter can
-          # select a device with no installed runtime), and letting `create`
-          # infer the runtime fails with "no available runtime" when the chosen
-          # device type's default runtime isn't installed. Match on the name
-          # prefix (excludes iPod/iPad) and pin the runtime we know exists.
-          runtime=$(xcrun simctl list runtimes -j \
+          # Pick the newest available iOS runtime, then choose an iPhone from
+          # THAT runtime's own supportedDeviceTypes — guarantees a compatible
+          # pair. Selecting a device type from the global list instead lands on
+          # traps: the iPod touch is filed under the iPhone family, and an old
+          # iPhone (e.g. 6s) paired with a current runtime fails with
+          # "Incompatible device". The name prefix drops iPod/iPad.
+          runtimes=$(xcrun simctl list runtimes -j)
+          runtime=$(echo "$runtimes" \
             | jq -r '[.runtimes[] | select(.isAvailable and (.identifier | test("iOS")))] | last | .identifier')
-          device_type=$(xcrun simctl list devicetypes -j \
-            | jq -r '[.devicetypes[] | select(.name | test("^iPhone"))] | last | .identifier')
+          device_type=$(echo "$runtimes" | jq -r --arg rt "$runtime" \
+            '.runtimes[] | select(.identifier==$rt) | .supportedDeviceTypes
+             | map(select(.name | test("^iPhone"))) | last | .identifier')
           echo "creating sim: device_type=$device_type runtime=$runtime"
           udid=$(xcrun simctl create maestro-ci "$device_type" "$runtime")
           xcrun simctl boot "$udid"
@@ -193,18 +194,20 @@ jobs:
       # preinstalled SDK/NDK are picked up by the flake's shellHook
       # (ANDROID_HOME is preset; the hook fills ANDROID_NDK_HOME from
       # $ANDROID_HOME/ndk).
-      # Build twice on failure to work around dioxus#3068: on a clean tree
-      # wry's build script canonicalizes WRY_ANDROID_KOTLIN_FILES_OUT_DIR
-      # before dx has written that kotlin scaffold dir, and panics. The failed
-      # first pass leaves the scaffold behind, so the retry finds the dir and
-      # links cleanly (cargo already cross-compiled the x86_64 ABI fine — the
-      # target std is present; only the wry dir race bites).
+      # Work around dioxus#3068: dx exports WRY_ANDROID_KOTLIN_FILES_OUT_DIR but
+      # never creates that dir before wry's build script runs, so wry
+      # canonicalizes a missing path and panics — deterministically, on every
+      # attempt (it's not a race; the dir is only created after a build that
+      # can't complete). Pre-create it and dx writes its kotlin glue there and
+      # bundles the APK. Verified locally: the resulting APK carries the
+      # lib/x86_64 .so the emulator needs. Path lives under $CARGO_TARGET_DIR
+      # (=./target here).
       - name: Build Android emulator app
         run: |
           nix develop .#mobile --command bash -c '
             set -euo pipefail
-            build() { dx build --platform android --package omnibus-mobile --target x86_64-linux-android; }
-            build || { echo "::warning::retrying android build (dioxus#3068 kotlin-dir race)"; build; }
+            mkdir -p "${CARGO_TARGET_DIR:-target}/dx/omnibus-mobile/debug/android/app/app/src/main/kotlin/dev/dioxus/main"
+            dx build --platform android --package omnibus-mobile --target x86_64-linux-android
           '
 
       - name: Start server
