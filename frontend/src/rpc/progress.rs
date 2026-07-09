@@ -2,7 +2,7 @@
 
 use dioxus::fullstack::post;
 use dioxus::prelude::*;
-use omnibus_shared::{ProgressFormat, ProgressRecord, ProgressUpdate, SessionReport};
+use omnibus_shared::{ProgressFormat, ProgressRecord, ProgressUpdate, ResumePoint, SessionReport};
 
 #[cfg(feature = "server")]
 use omnibus_db as db;
@@ -46,6 +46,17 @@ pub async fn rpc_get_progress(
     Ok(db::progress::get_progress(&pool.0, user.id, &uuid, format)
         .await
         .map_err(|e| internal_rpc_error("get progress", e))?)
+}
+
+/// The user's most recent progress rows joined with their books — the
+/// "pick up where you left off" feed. Mirrors the mobile REST route
+/// `GET /api/progress/recent`; `limit` is clamped to the same 1..=20 range.
+#[post("/api/rpc/progress/recent", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_recent_progress(limit: i64) -> Result<Vec<ResumePoint>> {
+    let limit = limit.clamp(1, 20);
+    Ok(db::progress::resume_points(&pool.0, user.id, limit)
+        .await
+        .map_err(|e| internal_rpc_error("recent progress", e))?)
 }
 
 /// Reject over-cap session batches at the RPC boundary, mirroring the mobile

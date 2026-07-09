@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::highlight::CreateHighlight;
+use crate::EbookMetadata;
 
 #[cfg(test)]
 mod tests;
@@ -108,6 +109,25 @@ pub struct ProgressRecord {
     pub epub_cfi: Option<String>,
     pub audio_position_seconds: Option<f64>,
     pub updated_at: i64,
+}
+
+/// One "pick up where you left off" entry: a recent progress row joined
+/// with its book and, for audio rows, whole-book playback totals. Returned
+/// by `GET /api/progress/recent` (mobile) and `rpc_recent_progress` (web),
+/// newest first.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResumePoint {
+    pub record: ProgressRecord,
+    pub book: EbookMetadata,
+    /// Whole-book audio duration (sum of parts). `None` for epub rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_duration_seconds: Option<f64>,
+    /// 1-based chapter number at the saved position. `None` for epub rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapter_number: Option<i64>,
+    /// Total chapter count, for a "Ch. 3 of 12" readout. `None` for epub rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapter_count: Option<i64>,
 }
 
 /// Batched session row (reader / audio open-to-close span). Mobile

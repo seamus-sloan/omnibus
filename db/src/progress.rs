@@ -6,10 +6,12 @@
 //! same merged-uuid-aware canonical resolver so a format-merged uuid stores
 //! the surviving book's identity.
 
-use omnibus_shared::{ProgressFormat, ProgressRecord, ProgressUpdate, SessionReport};
+use omnibus_shared::{
+    ChapterInfo, ProgressFormat, ProgressRecord, ProgressUpdate, ResumePoint, SessionReport,
+};
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
-use crate::{resolve_canonical_book_uuid, resolve_canonical_book_uuid_exec};
+use crate::{hls, resolve_canonical_book_uuid, resolve_canonical_book_uuid_exec};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProgressError {
@@ -17,6 +19,14 @@ pub enum ProgressError {
     BookNotFound,
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
+}
+
+impl From<hls::HlsError> for ProgressError {
+    fn from(e: hls::HlsError) -> Self {
+        match e {
+            hls::HlsError::Db(inner) => ProgressError::Sqlx(inner),
+        }
+    }
 }
 
 impl From<crate::books::BooksError> for ProgressError {
@@ -134,6 +144,104 @@ pub async fn get_progress(
         audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
         updated_at: row.try_get::<i64, _>("updated_at")?,
     }))
+}
+
+/// The user's most recent progress rows across both formats, newest first.
+/// Feeds the "pick up where you left off" surfaces via [`resume_points`].
+pub async fn recent_progress(
+    pool: &SqlitePool,
+    user_id: i64,
+    limit: i64,
+) -> Result<Vec<ProgressRecord>, ProgressError> {
+    let rows = sqlx::query(
+        "SELECT book_uuid, format, epub_cfi, audio_position_seconds, updated_at
+         FROM reading_progress
+         WHERE user_id = ?
+         ORDER BY updated_at DESC, book_uuid
+         LIMIT ?",
+    )
+    .bind(user_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(ProgressRecord {
+                book_uuid: row.try_get::<String, _>("book_uuid")?,
+                format: parse_format(row.try_get::<String, _>("format")?.as_str()),
+                epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
+                audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
+                updated_at: row.try_get::<i64, _>("updated_at")?,
+            })
+        })
+        .collect()
+}
+
+/// [`recent_progress`] joined with book metadata and, for audio rows, the
+/// whole-book duration + chapter position. Rows whose book has since been
+/// deleted (progress soft-references `books.uuid` — no cascade) are skipped
+/// rather than erroring, so one ghosted book can't blank the landing card.
+pub async fn resume_points(
+    pool: &SqlitePool,
+    user_id: i64,
+    limit: i64,
+) -> Result<Vec<ResumePoint>, ProgressError> {
+    let records = recent_progress(pool, user_id, limit).await?;
+    let mut points = Vec::with_capacity(records.len());
+    for record in records {
+        let Some(book) = crate::get_book_by_uuid(pool, &record.book_uuid).await? else {
+            continue;
+        };
+        let audio = match record.format {
+            ProgressFormat::Audio => audio_totals(pool, &record.book_uuid, &record).await?,
+            ProgressFormat::Epub => None,
+        };
+        let (total_duration_seconds, chapter_number, chapter_count) = match audio {
+            Some((dur, ch_no, ch_count)) => (Some(dur), ch_no, ch_count),
+            None => (None, None, None),
+        };
+        points.push(ResumePoint {
+            record,
+            book,
+            total_duration_seconds,
+            chapter_number,
+            chapter_count,
+        });
+    }
+    Ok(points)
+}
+
+/// Whole-book duration and chapter position for an audio progress row.
+/// `None` when the book has no resolvable audio file (e.g. the file was
+/// removed after the position was saved).
+async fn audio_totals(
+    pool: &SqlitePool,
+    uuid: &str,
+    record: &ProgressRecord,
+) -> Result<Option<(f64, Option<i64>, Option<i64>)>, ProgressError> {
+    let Some(resolved) = hls::resolve_audiobook(pool, uuid).await? else {
+        return Ok(None);
+    };
+    let parts = hls::get_parts(pool, resolved.book_file_id).await?;
+    let total: f64 = parts.iter().map(|p| p.duration_seconds).sum();
+    let chapters = hls::get_chapters(pool, resolved.book_file_id).await?;
+    let position = record.audio_position_seconds.unwrap_or(0.0);
+    let number = chapter_number_at(&chapters, position);
+    let count = (!chapters.is_empty()).then_some(chapters.len() as i64);
+    Ok(Some((total, number, count)))
+}
+
+/// 1-based chapter number at `elapsed` seconds, mirroring the player's
+/// index-plus-one display (not the stored `file_chapters.ordinal`, which is
+/// container-supplied and not guaranteed dense).
+fn chapter_number_at(chapters: &[ChapterInfo], elapsed: f64) -> Option<i64> {
+    if chapters.is_empty() {
+        return None;
+    }
+    let idx = chapters
+        .partition_point(|c| c.start_seconds <= elapsed)
+        .saturating_sub(1);
+    Some(idx as i64 + 1)
 }
 
 /// Append one session row inside an existing transaction. Returns `Ok(true)`
