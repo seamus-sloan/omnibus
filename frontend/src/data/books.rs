@@ -65,18 +65,19 @@ pub async fn get_ebooks(server_url: &str) -> Result<EbookLibrary, DataError> {
     Ok(response.json::<EbookLibrary>().await?)
 }
 
-/// GET `/api/ebooks?sort=&dir=&cursor=&limit=` — one keyset page (F5b).
+/// GET `/api/ebooks?sort=&dir=&cursor=&limit=&formats=` — one keyset page
+/// (F5b).
 ///
-/// Mobile REST keyset is sort+cursor only: `filters` is ignored and `facets`
-/// comes back `None` (the sidebar facets are a web concern). `total` is read
-/// from `X-Total-Count` on the first page only; `next_cursor` from
-/// `X-Next-Cursor`.
+/// Of the sidebar facets only `filters.formats` rides the REST query (the
+/// mobile Sort & filter sheet's chips); the rest are ignored and `facets`
+/// comes back `None` (a web concern). `total` is read from `X-Total-Count`
+/// on the first page only; `next_cursor` from `X-Next-Cursor`.
 #[cfg(feature = "mobile")]
 pub async fn get_ebooks_page(
     server_url: &str,
     sort_key: SortKey,
     sort_dir: SortDir,
-    _filters: ViewFilters,
+    filters: ViewFilters,
     cursor: Option<String>,
     limit: i64,
 ) -> Result<LibraryPage, DataError> {
@@ -85,6 +86,12 @@ pub async fn get_ebooks_page(
         sort_key.as_wire(),
         sort_dir.as_wire(),
     );
+    if !filters.formats.is_empty() {
+        // Format keys are plain lowercase tokens (`epub`, `m4b`) — no
+        // URL-encoding needed.
+        url.push_str("&formats=");
+        url.push_str(&filters.formats.join(","));
+    }
     if let Some(c) = &cursor {
         url.push_str("&cursor=");
         url.push_str(c);

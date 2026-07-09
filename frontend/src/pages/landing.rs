@@ -29,6 +29,13 @@ mod toolbar;
 
 #[cfg(feature = "mobile")]
 mod mobile;
+#[cfg(feature = "mobile")]
+mod mobile_filter_sheet;
+
+// The mobile shelf-detail grid reuses the landing grid's cover cell so the
+// two surfaces stay visually identical.
+#[cfg(feature = "mobile")]
+pub(crate) use mobile::cover_cell as mobile_cover_cell;
 
 #[cfg(feature = "web")]
 use effects::spawn_load_more_observer;
@@ -317,12 +324,12 @@ pub fn LandingPage() -> Element {
     let view = derive_view_state(&sigs, query);
     let handlers = build_handlers(&sigs);
 
-    // Mobile renders a dedicated "Your shelf" surface; web keeps the
+    // Mobile renders a dedicated "All Books" surface; web keeps the
     // rail + toolbar layout. Both consume the shared data pipeline above —
     // only the presentation branches. (Mobile is a separate build, so this
     // cfg split doesn't affect web SSR/WASM hydration parity — rule 07.)
     #[cfg(feature = "mobile")]
-    let body = mobile_landing_body(view, handlers, server_url);
+    let body = mobile_landing_body(&sigs, view, handlers, server_url);
 
     #[cfg(not(feature = "mobile"))]
     let body = web_landing_body(&sigs, view, handlers, server_url);
@@ -330,10 +337,12 @@ pub fn LandingPage() -> Element {
     body
 }
 
-/// Mobile presentation branch of [`LandingPage`]: a single compact grid, no
-/// admin table or suggestion pools.
+/// Mobile presentation branch of [`LandingPage`]: a single compact grid plus
+/// the continue card and sort & filter sheet — no admin table or suggestion
+/// pools.
 #[cfg(feature = "mobile")]
 fn mobile_landing_body(
+    sigs: &LandingSignals,
     view: LandingViewState,
     handlers: LandingHandlers,
     server_url: String,
@@ -346,6 +355,8 @@ fn mobile_landing_body(
             has_more: view.has_more,
             is_loading_more: view.is_loading_more,
             on_load_more: handlers.on_load_more,
+            prefs: (sigs.prefs)(),
+            on_prefs_change: handlers.on_prefs_change_header,
             server_url,
         }
     }

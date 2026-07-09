@@ -45,12 +45,25 @@ pub fn ShelvesIndexPage() -> Element {
     let refetch = move || load(refetch_url.clone());
 
     let count = shelves.read().len();
+    let count_label = if count == 1 {
+        "1 shelf".to_string()
+    } else {
+        format!("{count} shelves")
+    };
 
     rsx! {
         div { class: "m-shelves", "data-testid": "shelves-index",
             header { class: "m-head",
                 div { class: "m-head-top",
-                    span { class: "label", "{count} shelves" }
+                    div { class: "m-head-lead",
+                        Link {
+                            to: Route::Landing {},
+                            class: "m-icon-btn m-head-back",
+                            "aria-label": "Back to library",
+                            "\u{2190}"
+                        }
+                        span { class: "label", "{count_label}" }
+                    }
                     button {
                         r#type: "button",
                         class: "btn primary sm",
@@ -76,6 +89,8 @@ pub fn ShelvesIndexPage() -> Element {
                 p { class: "subtitle", "Loading\u{2026}" }
             } else {
                 div { class: "m-shelf-list",
+                    // Always-present "All Books" — the whole library as a shelf.
+                    {all_books_row()}
                     for s in shelves.read().iter() {
                         {shelf_row(s)}
                     }
@@ -91,6 +106,25 @@ pub fn ShelvesIndexPage() -> Element {
                     refetch();
                 },
             }
+        }
+    }
+}
+
+/// Pinned "All Books" row — the whole library as a shelf, linking home.
+fn all_books_row() -> Element {
+    rsx! {
+        Link {
+            to: Route::Landing {},
+            class: "m-shelf-row",
+            "data-testid": "shelf-row-all",
+            span { class: "m-shelf-icon", style: "--shelf-accent: var(--accent);",
+                {manual_glyph()}
+            }
+            span { class: "m-shelf-row-body",
+                span { class: "m-shelf-row-name", "All Books" }
+                span { class: "m-shelf-row-sub", "Everything in your library" }
+            }
+            span { class: "m-shelf-row-chevron", {chevron()} }
         }
     }
 }

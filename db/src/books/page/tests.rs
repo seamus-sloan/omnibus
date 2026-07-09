@@ -557,3 +557,32 @@ fn page_cursor_decode_rejects_malformed() {
         Err(CursorError::Malformed)
     ));
 }
+
+#[tokio::test]
+async fn count_books_page_matches_unfiltered_count_and_applies_format_filter() {
+    let (pool, _guard) = seed_discovery_fixture().await; // all EPUB
+    let all = count_books_page(&pool, &["/lib"], &ViewFilters::default())
+        .await
+        .unwrap();
+    assert_eq!(all, 4, "empty filters count the whole library");
+
+    let epub = ViewFilters {
+        formats: vec!["epub".into()],
+        ..Default::default()
+    };
+    assert_eq!(count_books_page(&pool, &["/lib"], &epub).await.unwrap(), 4);
+
+    let m4b = ViewFilters {
+        formats: vec!["m4b".into()],
+        ..Default::default()
+    };
+    assert_eq!(count_books_page(&pool, &["/lib"], &m4b).await.unwrap(), 0);
+
+    // No library paths → zero without touching the db.
+    assert_eq!(
+        count_books_page(&pool, &[], &ViewFilters::default())
+            .await
+            .unwrap(),
+        0
+    );
+}

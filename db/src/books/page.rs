@@ -349,6 +349,44 @@ fn strict_present(col: &str, asc: bool) -> String {
     }
 }
 
+/// Count the library rows matching `filters` — the filtered-total companion
+/// to [`list_books_page`], sharing its predicates. With empty filters this
+/// matches `count_books_for_paths`: fileless (ghosted) books are excluded
+/// either way.
+pub async fn count_books_page(
+    pool: &SqlitePool,
+    library_paths: &[&str],
+    filters: &ViewFilters,
+) -> Result<i64, super::BooksError> {
+    if library_paths.is_empty() {
+        return Ok(0);
+    }
+    let mut binds: Vec<SqlVal> = library_paths
+        .iter()
+        .map(|p| SqlVal::Text((*p).to_string()))
+        .collect();
+    let path_ph = placeholders(library_paths.len());
+    let filter_sql = filter_predicates(filters, &mut binds);
+    let sql = format!(
+        r"
+        SELECT COUNT(*)
+          FROM books b
+          JOIN scan_roots l ON l.id = b.library_id
+         WHERE l.path IN ({path_ph})
+           AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id){filter_sql}
+        "
+    );
+    let mut q = sqlx::query_scalar::<_, i64>(&sql);
+    for v in &binds {
+        q = match v {
+            SqlVal::Text(s) => q.bind(s.as_str()),
+            SqlVal::Real(r) => q.bind(*r),
+            SqlVal::Int(i) => q.bind(*i),
+        };
+    }
+    Ok(q.fetch_one(pool).await?)
+}
+
 /// Build the ` AND EXISTS(…)` server-side filter conjuncts. Each non-empty
 /// facet group ANDs across groups and ORs within (an `IN (…)` list), matching
 /// the former client-side `matches_filters`.
