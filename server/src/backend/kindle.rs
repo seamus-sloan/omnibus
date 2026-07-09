@@ -181,7 +181,13 @@ pub(super) async fn post_smtp_test(admin: AdminUser, State(state): State<AppStat
             "email delivery is not configured on this server",
         )
             .into_response(),
-        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        // `NoEpub`/`Timeout` carry a safe, specific message; the remaining
+        // variants (`Io`/`Address`/`Build`/`Smtp`/`Settings`/`Books`) wrap
+        // opaque transport/DB internals and must not reach the client.
+        Err(e @ (db::kindle::KindleError::NoEpub | db::kindle::KindleError::Timeout)) => {
+            (StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+        }
+        Err(e) => internal("send test email", e),
     }
 }
 
