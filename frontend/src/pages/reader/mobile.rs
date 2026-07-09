@@ -132,6 +132,11 @@ fn init_opts(prefs: ReaderPrefs, cfi: Option<String>) -> serde_json::Value {
         "maxWidth": prefs.margins.peek().to_css(),
         "justify": *prefs.justify.peek(),
         "spread": prefs.spread.peek().to_css(),
+        // WKWebView dispatches no events to listeners inside a sandboxed
+        // iframe without `allow-scripts` — swipe/tap page turns and the
+        // `selected` relay never fire without this. Mobile-only; the web
+        // build keeps the stricter sandbox.
+        "allowScriptedContent": true,
     })
 }
 

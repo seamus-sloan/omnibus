@@ -18,7 +18,8 @@
  * Public surface: window.OmnibusReader
  *   init(elementId, fileUrl, opts)  opts = { cfi?, fontSize?, theme?,
  *                                           fontFamily?, lineHeight?,
- *                                           maxWidth?, justify? }
+ *                                           maxWidth?, justify?,
+ *                                           allowScriptedContent? }
  *   next()
  *   prev()
  *   setFontSize(px)
@@ -150,7 +151,12 @@
         height: "100%",
         flow: "paginated",
         spread: "auto",
-        allowScriptedContent: false,
+        // Without `allow-scripts` on the section iframe, WebKit dispatches NO
+        // events to listeners inside it — gestures AND text selection are dead
+        // on iOS. The mobile shell opts in (its books are the user's own
+        // library); the web build keeps the stricter sandbox since desktop
+        // engines still fire parent-attached listeners.
+        allowScriptedContent: !!opts.allowScriptedContent,
       });
 
       installGestureNav();
@@ -286,16 +292,25 @@
         if (sel && String(sel).length > 0) return;
         var t = e.changedTouches[0];
         var dx = t.clientX - sx, dy = t.clientY - sy, dt = Date.now() - st;
-        var w = win.innerWidth || 360;
         // A dominant horizontal swipe turns a page (swipe left = forward).
         if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.5) {
           if (dx < 0) next(); else prev();
           return;
         }
         // Otherwise a stationary tap in the outer 20% gutters turns the page.
+        // The section iframe is the whole multi-column spine item translated
+        // as you page, so `clientX`/`innerWidth` are content coordinates —
+        // map the tap into the app viewport through the iframe's rect and
+        // compare against the app window's width instead.
         if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 500) {
-          if (t.clientX > w * 0.8) next();
-          else if (t.clientX < w * 0.2) prev();
+          var x = t.clientX;
+          try {
+            var fe = win.frameElement;
+            if (fe) x += fe.getBoundingClientRect().left;
+          } catch (err) { /* cross-origin safety */ }
+          var w = window.innerWidth || 360;
+          if (x > w * 0.8) next();
+          else if (x < w * 0.2) prev();
         }
       }, { passive: true });
     });
