@@ -51,6 +51,7 @@ pub(super) fn install_surface_js(
   window.__omnibusOnRelocate=function(j){{dioxus.send({{kind:"Relocate",json:j}});}};
   window.__omnibusOnStatus=function(s){{dioxus.send({{kind:"Status",state:s}});}};
   window.__omnibusOnSelection=function(j){{dioxus.send({{kind:"Selection",json:j}});}};
+  window.__omnibusOnSelectionCleared=function(){{dioxus.send({{kind:"SelectionCleared"}});}};
   window.__omnibusOnToc=function(j){{dioxus.send({{kind:"Toc",json:j}});}};
   window.__omnibusOnSearchResults=function(j){{dioxus.send({{kind:"Search",json:j}});}};
   function load(src){{return new Promise(function(res,rej){{
@@ -114,6 +115,7 @@ mod tests {
             "__omnibusOnRelocate",
             "__omnibusOnStatus",
             "__omnibusOnSelection",
+            "__omnibusOnSelectionCleared",
             "__omnibusOnToc",
             "__omnibusOnSearchResults",
         ] {

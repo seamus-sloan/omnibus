@@ -156,6 +156,13 @@ fn register_window_callbacks(
             selection.set(Some(data));
         }
     });
+    // Glue reports the selection collapsed (tap-away / handle drag ended
+    // empty): dismiss the popover. On phone widths this is the only dismiss
+    // path — the click-scrim is hidden there so native selection-handle
+    // drags reach the prose.
+    let on_selection_cleared = Closure::<dyn FnMut(String)>::new(move |_: String| {
+        selection.set(None);
+    });
     let on_toc = Closure::<dyn FnMut(String)>::new(move |json: String| {
         if let Ok(entries) = serde_json::from_str::<Vec<TocEntry>>(&json) {
             toc.set(entries);
@@ -170,6 +177,7 @@ fn register_window_callbacks(
         ("__omnibusOnRelocate", &relocate),
         ("__omnibusOnStatus", &on_status),
         ("__omnibusOnSelection", &on_selection),
+        ("__omnibusOnSelectionCleared", &on_selection_cleared),
         ("__omnibusOnToc", &on_toc),
         ("__omnibusOnSearchResults", &on_search),
     ] {
@@ -179,7 +187,14 @@ fn register_window_callbacks(
             cb.as_ref().unchecked_ref(),
         );
     }
-    vec![relocate, on_status, on_selection, on_toc, on_search]
+    vec![
+        relocate,
+        on_status,
+        on_selection,
+        on_selection_cleared,
+        on_toc,
+        on_search,
+    ]
 }
 
 /// The pre-serialized JS literals + scalars the bootstrap IIFE needs, bundled
