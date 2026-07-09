@@ -1,7 +1,7 @@
 //! Unit tests for the `thumbs` module — `thumbs_dir` env-var resolution,
-//! `thumb_path_for` formatting, `is_stale` mtime comparison,
-//! `ThumbSize` FromStr roundtrip, `generate_thumbnail` WebP output, and
-//! FIFO-by-mtime `evict_if_over_cap` cap enforcement.
+//! `thumb_path_for` formatting, `is_stale` mtime comparison (incl. the
+//! same-second tie case), `ThumbSize` FromStr roundtrip, `generate_thumbnail`
+//! WebP output, and LRU-on-read `evict_if_over_cap` cap enforcement.
 
 use super::*;
 use crate::test_support::EnvVarGuard;
@@ -44,6 +44,24 @@ fn is_stale_returns_false_when_mtime_is_newer() {
         .unwrap()
         .as_secs() as i64;
     assert!(!is_stale(1, ThumbSize::Sm, mtime - 1));
+}
+
+#[test]
+fn is_stale_returns_true_when_mtime_ties_last_modified() {
+    // Regression for #832 item 2: a thumb regenerated in the same
+    // wall-clock second as the triggering cover rewrite must not be
+    // mistaken for fresh, or it never regenerates.
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
+    std::fs::write(tmp.path().join("3_sm.webp"), b"x").unwrap();
+    let mtime = std::fs::metadata(tmp.path().join("3_sm.webp"))
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    assert!(is_stale(3, ThumbSize::Sm, mtime));
 }
 
 #[test]
@@ -112,6 +130,62 @@ fn evict_if_over_cap_removes_oldest_files() {
 
     let remaining: Vec<_> = std::fs::read_dir(tmp.path()).unwrap().flatten().collect();
     assert_eq!(remaining.len(), 2, "should have evicted 1 oldest file");
+}
+
+#[test]
+fn touch_thumb_bumps_mtime_to_now() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
+    std::fs::write(tmp.path().join("5_sm.webp"), b"x").unwrap();
+    // Rewind the mtime so a bump is observable rather than a no-op.
+    let old = SystemTime::now() - std::time::Duration::from_secs(60);
+    std::fs::File::open(tmp.path().join("5_sm.webp"))
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+
+    touch_thumb(5, ThumbSize::Sm);
+
+    let mtime = std::fs::metadata(tmp.path().join("5_sm.webp"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    assert!(mtime > old, "touch_thumb should bump mtime forward");
+}
+
+#[test]
+fn evict_if_over_cap_keeps_recently_touched_file_over_an_older_untouched_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
+
+    // Explicit `set_modified` timestamps (rather than real-clock sleeps
+    // between writes) keep this deterministic on filesystems with coarse
+    // (e.g. whole-second) mtime resolution.
+    let now = SystemTime::now();
+    std::fs::write(tmp.path().join("0_sm.webp"), vec![0u8; 100]).unwrap();
+    std::fs::File::open(tmp.path().join("0_sm.webp"))
+        .unwrap()
+        .set_modified(now - std::time::Duration::from_secs(120))
+        .unwrap();
+    std::fs::write(tmp.path().join("1_sm.webp"), vec![0u8; 100]).unwrap();
+    std::fs::File::open(tmp.path().join("1_sm.webp"))
+        .unwrap()
+        .set_modified(now - std::time::Duration::from_secs(60))
+        .unwrap();
+    // "0" is the older-by-creation file; touching it after "1" was written
+    // marks it recently-used, so eviction should take "1" instead.
+    touch_thumb(0, ThumbSize::Sm);
+
+    evict_if_over_cap(100).unwrap();
+
+    assert!(
+        tmp.path().join("0_sm.webp").exists(),
+        "recently-touched file should survive eviction"
+    );
+    assert!(
+        !tmp.path().join("1_sm.webp").exists(),
+        "untouched older-relative-use file should be evicted"
+    );
 }
 
 // ---------- ThumbError variants ----------

@@ -97,15 +97,20 @@ fn mtime_epoch(meta: &std::fs::Metadata) -> i64 {
         .unwrap_or(0)
 }
 
-/// True if the cached thumbnail is absent or older than `last_modified_epoch`
-/// (Unix seconds). Synchronous variant — call from `spawn_blocking` contexts
-/// (the worker's encode loop). For the async request path, use
-/// [`is_stale_async`] so the metadata syscall doesn't pin a tokio worker.
+/// True if the cached thumbnail is absent or no newer than
+/// `last_modified_epoch` (Unix seconds). Synchronous variant — call from
+/// `spawn_blocking` contexts (the worker's encode loop). For the async
+/// request path, use [`is_stale_async`] so the metadata syscall doesn't pin a
+/// tokio worker.
+///
+/// Uses `<=` rather than `<`: both timestamps are whole-second Unix epochs,
+/// so a thumb regenerated in the same wall-clock second as a cover rewrite
+/// would otherwise tie and be treated as fresh.
 pub fn is_stale(book_id: i64, size: ThumbSize, last_modified_epoch: i64) -> bool {
     let path = thumb_path_for(book_id, size);
     match std::fs::metadata(&path) {
         Err(_) => true,
-        Ok(meta) => mtime_epoch(&meta) < last_modified_epoch,
+        Ok(meta) => mtime_epoch(&meta) <= last_modified_epoch,
     }
 }
 
@@ -114,7 +119,7 @@ pub async fn is_stale_async(book_id: i64, size: ThumbSize, last_modified_epoch: 
     let path = thumb_path_for(book_id, size);
     match tokio::fs::metadata(&path).await {
         Err(_) => true,
-        Ok(meta) => mtime_epoch(&meta) < last_modified_epoch,
+        Ok(meta) => mtime_epoch(&meta) <= last_modified_epoch,
     }
 }
 
@@ -212,9 +217,21 @@ pub fn invalidate_thumbs(book_id: i64) {
     }
 }
 
+/// Bump a cached thumbnail's mtime to now, marking it recently-used for
+/// [`evict_if_over_cap`]'s LRU ordering. Call on every cache-hit read (the
+/// request path calls this via `spawn_blocking`, fire-and-forget, so it
+/// never adds latency to the response). Best-effort: a failure (e.g. the
+/// file was evicted between the freshness check and this call) is not worth
+/// surfacing — the file is simply gone, so there's nothing left to touch.
+pub fn touch_thumb(book_id: i64, size: ThumbSize) {
+    if let Ok(file) = std::fs::File::open(thumb_path_for(book_id, size)) {
+        let _ = file.set_modified(SystemTime::now());
+    }
+}
+
 /// Walk `thumbs_dir()` and delete files in oldest-mtime-first order until the
-/// total cache size is under `cap_bytes`. This is FIFO by file modification
-/// time — not true LRU, since we don't bump `mtime` on read.
+/// total cache size is under `cap_bytes`. [`touch_thumb`] bumps mtime on
+/// every cache-hit read, so this is LRU in effect, not pure FIFO-by-creation.
 ///
 /// Must be called inside `tokio::task::spawn_blocking`.
 pub fn evict_if_over_cap(cap_bytes: u64) -> Result<(), std::io::Error> {
