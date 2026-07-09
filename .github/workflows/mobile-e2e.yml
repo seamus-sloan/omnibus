@@ -152,7 +152,12 @@ jobs:
       contents: read
       actions: write
     env:
-      CARGO_TARGET_DIR: ./target
+      # ABSOLUTE, unlike the iOS job's ./target. dx resolves a relative
+      # CARGO_TARGET_DIR against the package dir (mobile/) when building the
+      # Android app, so a relative path makes wry's WRY_ANDROID_KOTLIN_FILES_OUT_DIR
+      # relative too — and the pre-created dir (see the build step) lands in the
+      # wrong place. An absolute base removes the CWD ambiguity.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
       OMNIBUS_DEV_SEED_USER: "admin:omnibus-dev"
     steps:
       - uses: actions/checkout@v4
@@ -196,17 +201,17 @@ jobs:
       # $ANDROID_HOME/ndk).
       # Work around dioxus#3068: dx exports WRY_ANDROID_KOTLIN_FILES_OUT_DIR but
       # never creates that dir before wry's build script runs, so wry
-      # canonicalizes a missing path and panics — deterministically, on every
-      # attempt (it's not a race; the dir is only created after a build that
-      # can't complete). Pre-create it and dx writes its kotlin glue there and
-      # bundles the APK. Verified locally: the resulting APK carries the
-      # lib/x86_64 .so the emulator needs. Path lives under $CARGO_TARGET_DIR
-      # (=./target here).
+      # canonicalizes a missing path and panics — deterministically (it's not a
+      # race; the dir is only created after a build that can't complete).
+      # Pre-create it and dx writes its kotlin glue there and bundles the APK
+      # (verified locally: the resulting APK carries the lib/x86_64 .so the
+      # emulator needs). CARGO_TARGET_DIR is absolute (job env) so this path is
+      # the exact one dx hands wry — see the note there.
       - name: Build Android emulator app
         run: |
           nix develop .#mobile --command bash -c '
             set -euo pipefail
-            mkdir -p "${CARGO_TARGET_DIR:-target}/dx/omnibus-mobile/debug/android/app/app/src/main/kotlin/dev/dioxus/main"
+            mkdir -p "$CARGO_TARGET_DIR/dx/omnibus-mobile/debug/android/app/app/src/main/kotlin/dev/dioxus/main"
             dx build --platform android --package omnibus-mobile --target x86_64-linux-android
           '
 
