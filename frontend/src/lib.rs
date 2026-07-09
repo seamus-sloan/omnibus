@@ -11,6 +11,8 @@ pub mod audiobook_progress;
 pub mod components;
 pub mod contexts;
 pub mod data;
+#[cfg(feature = "mobile")]
+pub(crate) mod native_share;
 pub mod pages;
 pub mod reader_progress;
 pub mod routes;

@@ -43,8 +43,18 @@ enum ReaderEvent {
     Status { state: String },
     Selection { json: String },
     SelectionCleared,
+    ShareText { text: String },
+    ShareImage { json: String },
     Toc { json: String },
     Search { json: String },
+}
+
+/// Payload of a [`ReaderEvent::ShareImage`] — the glue's rendered quote card.
+#[derive(serde::Deserialize)]
+struct ShareImagePayload {
+    name: String,
+    #[serde(rename = "dataUrl")]
+    data_url: String,
 }
 
 /// Install the mobile reader interop: on every `uuid` change, mount epub.js
@@ -110,7 +120,12 @@ async fn mount_and_drain(
         epub: super::EPUBJS_JS.to_string(),
         glue: super::READER_GLUE_JS.to_string(),
     };
-    let eval = interop::install_reader_surface(&file_url, &init_opts(prefs, cfi), &scripts);
+    let eval = interop::install_reader_surface(
+        &file_url,
+        &init_opts(prefs, cfi),
+        &scripts,
+        crate::native_share::supported(),
+    );
 
     // Fetch the saved highlights up front; they're replayed into the viewer
     // once the glue reports `ready` (annotations need a live rendition).
@@ -200,6 +215,15 @@ async fn drain_reader_events(
             // dismiss the popover. This is the only dismiss path on mobile —
             // no scrim overlays the prose, so native handle drags get through.
             Ok(ReaderEvent::SelectionCleared) => selection.set(None),
+            // Native share bridge: the glue routes Share actions here (instead
+            // of the Web Share API, absent in WKWebView) and iOS presents the
+            // real sheet. Shims are only installed when `supported()`.
+            Ok(ReaderEvent::ShareText { text }) => crate::native_share::share_text(&text),
+            Ok(ReaderEvent::ShareImage { json }) => {
+                if let Ok(p) = serde_json::from_str::<ShareImagePayload>(&json) {
+                    crate::native_share::share_png_data_url(&p.name, &p.data_url);
+                }
+            }
             Ok(ReaderEvent::Toc { json }) => {
                 if let Ok(entries) = serde_json::from_str::<Vec<TocEntry>>(&json) {
                     toc.set(entries);
