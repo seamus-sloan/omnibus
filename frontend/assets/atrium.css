@@ -3559,6 +3559,23 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   font-size: 16px;
 }
 .m-icon-btn:hover { border-color: var(--accent); color: var(--ink-0); }
+
+/* Discovery pages (/authors, /series + details) inside the native shell.
+   `.screen` (mobile-only wrapper) already carries the safe-area top padding,
+   so the web-sized hero/header paddings stack into a large blank band —
+   collapse them to the library screen's rhythm. The `.disc-back` button is
+   rendered on every target (rule 07) but only shown here, where the web
+   breadcrumb is hidden in its favor. Declared after `.m-icon-btn` so the
+   hidden-by-default rule wins their specificity tie. */
+.disc-back { display: none; }
+.screen .disc-back { display: grid; margin-bottom: 12px; }
+.screen .disc-hero .breadcrumb,
+.screen .disc-series-header .breadcrumb { display: none; }
+.screen .idx-header { padding: 4px 0 16px; }
+.screen .disc-hero { padding: 4px 0 20px; }
+.screen .disc-hero-grid { margin-top: 12px; }
+.screen .disc-series-header { padding: 4px 0 20px; }
+
 .m-head { padding: 4px 2px 8px; }
 .m-head-top { display: flex; align-items: center; justify-content: space-between; min-height: 32px; }
 .m-head-title {
