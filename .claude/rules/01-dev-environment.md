@@ -16,7 +16,7 @@ The flake exposes five purpose-built shells so daily cargo work doesn't pay for 
 | `default` (slim) | rust core + sqlite + openssl + just + zellij + process-compose + stylelint | Daily `cargo test`/`clippy`/`fmt`, editor, rust-analyzer, `just lint-css` — this is what direnv auto-loads via `.envrc` |
 | `web` | default + dioxus-cli + matched `wasm-bindgen` + node | `dx serve --platform web`, `just dev-up`, anything that bundles the WASM client |
 | `e2e` | web + Playwright Chromium bundle | `npx playwright test`, the `playwright` pane in the multiplexer, CI's E2E job |
-| `mobile` | default + dioxus-cli (`dx`) + Android + iOS rust-std targets + JDK 21 + Xcode/Android SDK auto-detect (+ GTK 3 / WebKitGTK on Linux) | `dx serve --platform ios`/`android`, `cargo build -p omnibus-mobile`; CI's `cargo clippy (mobile)` host-target lint |
+| `mobile` | default + dioxus-cli (`dx`) + maestro + Android + iOS rust-std targets + JDK 21 + Xcode/Android SDK auto-detect (+ GTK 3 / WebKitGTK on Linux) | `dx serve --platform ios`/`android`, `cargo build -p omnibus-mobile`, `just e2e-mobile` (Maestro mobile E2E); CI's `cargo clippy (mobile)` host-target lint |
 | `audit` | default + cargo-audit + cargo-deny | Local `cargo audit` / `cargo deny`, mirrors CI's security job |
 
 One-shot pattern for any non-default shell:

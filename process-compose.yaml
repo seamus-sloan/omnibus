@@ -20,3 +20,13 @@ processes:
     command: nix develop ../..#e2e --command npx playwright test --ui
     working_dir: ui_tests/playwright
     disabled: true
+
+  maestro:
+    # Mobile E2E suite, one run per F7. Prereqs: the ios process's app
+    # installed on a booted simulator, and the server process running —
+    # OMNIBUS_PORT pins the flows at its fixed :3000 (the e2e-mobile recipe
+    # would otherwise read a stale dev-up env.sh).
+    command: just e2e-mobile
+    environment:
+      - OMNIBUS_PORT=3000
+    disabled: true

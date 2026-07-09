@@ -1,0 +1,28 @@
+# Error path: unreachable server URL surfaces the error banner and stays put.
+#
+# Runs alphabetically AFTER connect.yaml, which just persisted a working
+# server URL to disk — so the first assertion here doubles as the state-model
+# proof: `clearState: true` wiped that URL and we're back on the first-run
+# Connect screen, not auto-advanced to login. No backend needed: the target
+# port is closed, so the health probe fails with connection-refused.
+appId: com.omnibus.mobile
+tags:
+  - smoke
+---
+- launchApp:
+    clearState: true
+
+# Fresh install state despite the previous flow having saved a URL.
+- assertVisible: "Connect to your server to get started."
+
+# Port 1 is never listening — connection refused, fast. (The probe's own
+# timeout is 10s for URLs that connect but never answer.)
+- tapOn: "https://omnibus.local:3000"
+- inputText: http://127.0.0.1:1
+- tapOn: "Connect"
+
+# The probe failure surfaces the banner and we remain on the Connect screen.
+- extendedWaitUntil:
+    visible: "Can't reach that server. Check the address and that it's running."
+    timeout: 15000
+- assertVisible: "Connect to your server to get started."

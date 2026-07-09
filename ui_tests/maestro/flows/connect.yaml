@@ -1,0 +1,36 @@
+# Happy path: first-run Connect screen → enter server URL → login screen.
+#
+# Requires a live omnibus server reachable from the simulator — the Connect
+# button probes `GET {SERVER_URL}/api/_health` before advancing. Locally,
+# `just dev-up` provides one and `just e2e-mobile` injects its port; the flow
+# defaults to :3000 for a bare `maestro test`.
+#
+# `clearState: true` wipes the app data container (persisted server URL +
+# bearer token), so this flow always starts from the first-run Connect screen
+# no matter what ran before it. Every flow in this suite starts hermetic the
+# same way — see the README's "State model" section.
+appId: com.omnibus.mobile
+env:
+  SERVER_URL: http://127.0.0.1:3000
+tags:
+  - smoke
+---
+- launchApp:
+    clearState: true
+
+- assertVisible: "Connect to your server to get started."
+
+# Focus the URL field (matched by its placeholder — HTML ids don't surface
+# as iOS accessibility identifiers through the WebView) and type the URL.
+# No `hideKeyboard` — it's unreliable on iOS; the Connect button sits above
+# the keyboard, so tap it directly.
+- tapOn: "https://omnibus.local:3000"
+- inputText: ${SERVER_URL}
+- tapOn: "Connect"
+
+# Login screen: connected-to bar + credentials form prove the health probe
+# passed, the URL was persisted, and the router advanced to /login.
+- extendedWaitUntil:
+    visible: "Email or username"
+    timeout: 15000
+- assertVisible: "Sign in"
