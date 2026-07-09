@@ -29,6 +29,10 @@ nix develop .#mobile                  # interactive shell with Android NDK + iOS
 
 `.envrc` resolves `use flake` to `default`, so the editor stays on the slim shell at all times. `just serve` works from default because zellij + process-compose live there; each multiplexer pane internally wraps its command in the right `.#shell` (server → `.#web`, mobile → `.#mobile`, playwright → `.#e2e`), so only the panes you actually start realize their extras. `just dev-up` and `just dev-bounce` self-wrap in `.#web`, so they work straight from default too.
 
+## Cached dev-env for hot recipes
+
+Each `nix develop` invocation re-copies the flake source into `/nix/store` and re-evaluates the flake. To avoid paying that on every `just` run, the hot recipes (`dev-up`, `dev-bounce`, `lint`, `lint-css`, `test`) go through [`scripts/with-dev-env.sh`](../../scripts/with-dev-env.sh) `<shell> <cmd…>` instead: it captures `nix print-dev-env .#<shell>` once, cached under `.claude/runtime/nix-env-cache/` keyed on `sha256(flake.nix + flake.lock + shell)`, then sources it (re-running the shellHook, so per-workspace `PORT`/`.env`/sccache stay live) and execs the command. On a cache hit this skips Nix entirely; only a flake edit — or a `nix store gc` collecting a referenced path (the wrapper spot-checks and self-heals) — forces a rebuild. Interactive shells and the cold `.#mobile`/multiplexer paths stay on plain `nix develop`. Escape hatches: `OMNIBUS_NO_ENV_CACHE=1` bypasses the cache; `just env-clear` deletes it.
+
 ## Test fixtures
 
 The public-domain test fixtures (`test_data/{epubs,audiobooks}/public_domain/`, ~156 MB of binaries) are **not in git** — they live as a GitHub release asset (`fixtures-vN`) so `nix develop`'s tree-copy into /nix/store stays small. Fresh checkout bootstrap:
