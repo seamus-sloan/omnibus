@@ -158,13 +158,22 @@ fn evict_if_over_cap_keeps_recently_touched_file_over_an_older_untouched_one() {
     let tmp = tempfile::tempdir().unwrap();
     let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
 
-    // "0" is written first (oldest mtime), then "1". Without a touch, plain
-    // FIFO-by-mtime would evict "0". Touching "0" after "1" was written
-    // marks it recently-used, so eviction should take "1" instead.
+    // Explicit `set_modified` timestamps (rather than real-clock sleeps
+    // between writes) keep this deterministic on filesystems with coarse
+    // (e.g. whole-second) mtime resolution.
+    let now = SystemTime::now();
     std::fs::write(tmp.path().join("0_sm.webp"), vec![0u8; 100]).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    std::fs::File::open(tmp.path().join("0_sm.webp"))
+        .unwrap()
+        .set_modified(now - std::time::Duration::from_secs(120))
+        .unwrap();
     std::fs::write(tmp.path().join("1_sm.webp"), vec![0u8; 100]).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    std::fs::File::open(tmp.path().join("1_sm.webp"))
+        .unwrap()
+        .set_modified(now - std::time::Duration::from_secs(60))
+        .unwrap();
+    // "0" is the older-by-creation file; touching it after "1" was written
+    // marks it recently-used, so eviction should take "1" instead.
     touch_thumb(0, ThumbSize::Sm);
 
     evict_if_over_cap(100).unwrap();

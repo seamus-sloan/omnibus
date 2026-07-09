@@ -204,7 +204,10 @@ pub(super) fn EbookRowCoverCell(
     alt_title: String,
 ) -> Element {
     // A transient thumb-fetch failure otherwise renders the browser's
-    // broken-image icon with no self-heal until a full reload.
+    // broken-image icon with no self-heal until a full reload. Thumb URLs
+    // aren't content-versioned (same uuid+size url before and after a
+    // regeneration — see #832 item 4), so there's no signal to reset this
+    // on besides a remount; a keyed row already remounts on book change.
     let mut thumb_broken = use_signal(|| false);
     rsx! {
         td { class: "ebook-col-cover", "data-testid": "ebook-cell-cover",

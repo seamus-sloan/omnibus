@@ -150,7 +150,10 @@ pub fn Cover(
     let sizes_attr = sizes.unwrap_or_default();
     // Broken/expired cover URLs otherwise render the browser's broken-image
     // icon with no self-heal until a full reload; fall back to the
-    // typographic plate on a load error instead.
+    // typographic plate on a load error instead. Cover/thumb URLs aren't
+    // content-versioned (same uuid+size url before and after a
+    // regeneration — see #832 item 4), so there's no signal to reset this
+    // on besides a remount; a keyed list already remounts on book change.
     let mut cover_broken = use_signal(|| false);
 
     rsx! {

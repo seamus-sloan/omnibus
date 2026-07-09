@@ -147,7 +147,10 @@ fn SpBookRow(book: PaletteBookHit, selected: bool, on_click: EventHandler<MouseE
     };
     let server_url = use_server_url();
     // A transient thumb-fetch failure otherwise renders the browser's
-    // broken-image icon with no self-heal until a full reload.
+    // broken-image icon with no self-heal until a full reload. Thumb URLs
+    // aren't content-versioned (same uuid+size url before and after a
+    // regeneration — see #832 item 4), so there's no signal to reset this
+    // on besides a remount; a keyed row already remounts on book change.
     let mut cover_broken = use_signal(|| false);
     let cover = if book.cover_url.is_some() && !cover_broken() {
         let url = book_thumb_url(&server_url, &book);

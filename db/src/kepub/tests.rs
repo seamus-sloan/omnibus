@@ -116,6 +116,24 @@ fn is_stale_returns_false_when_cache_newer_than_last_modified() {
 }
 
 #[test]
+fn is_stale_returns_true_when_cache_ties_last_modified() {
+    // Mirrors the thumbs cache fix for #832 item 2: a cache regenerated in
+    // the same wall-clock second as the triggering edit must not be
+    // mistaken for fresh.
+    let (_g, dir) = data_dir_guard();
+    std::fs::create_dir_all(dir.path().join("kepub")).unwrap();
+    std::fs::write(kepub_path(3), b"cached").unwrap();
+    let mtime = std::fs::metadata(kepub_path(3))
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    assert!(is_stale(3, mtime));
+}
+
+#[test]
 fn is_stale_returns_true_when_cache_older_than_last_modified() {
     let (_g, dir) = data_dir_guard();
     std::fs::create_dir_all(dir.path().join("kepub")).unwrap();

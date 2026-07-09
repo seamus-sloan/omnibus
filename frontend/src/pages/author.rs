@@ -226,7 +226,11 @@ fn author_avatar(
     initial: &str,
 ) -> Element {
     // A transient photo-fetch failure otherwise renders the browser's
-    // broken-image icon with no self-heal until a full reload.
+    // broken-image icon with no self-heal until a full reload. The photo
+    // URL is keyed only by author id (not content-versioned), so unlike a
+    // remount there's no prop change to reset this on — `on_change` is the
+    // one point that reliably signals "the photo may now be different",
+    // since it fires exactly when the edit overlay just replaced it.
     let mut photo_broken = use_signal(|| false);
     rsx! {
         AuthorPhotoEditOverlay {
@@ -238,6 +242,7 @@ fn author_avatar(
                 let author_id = a.id;
                 move |_| {
                     let server_url = server_url.clone();
+                    photo_broken.set(false);
                     spawn(async move {
                         if let Ok(a2) = data::get_author(&server_url, author_id).await {
                             author.set(a2);
