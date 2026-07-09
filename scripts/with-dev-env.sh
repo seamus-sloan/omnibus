@@ -24,6 +24,17 @@ fi
 shell="$1"
 shift
 
+# Validate against the flake's devShells. `shell` is interpolated into the
+# cache path and a `rm -f "$cache_dir/$shell-"*` glob, so an unconstrained
+# value (`/`, `..`) could read/delete outside the cache dir.
+case "$shell" in
+  default | web | e2e | mobile | audit) ;;
+  *)
+    echo "with-dev-env: unknown shell '$shell' (expected: default|web|e2e|mobile|audit)" >&2
+    exit 2
+    ;;
+esac
+
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Bypass: straight to nix develop.
@@ -52,11 +63,14 @@ cache_is_stale() {
 if cache_is_stale; then
   mkdir -p "$cache_dir"
   rm -f "$cache_dir/$shell-"*.env.bash   # drop superseded keys for this shell
-  if ! nix print-dev-env "$repo_root#$shell" > "$cache_file.tmp" 2>/dev/null; then
-    # Flake eval failed (dirty tree, network, etc.) — fall back to nix develop.
-    rm -f "$cache_file.tmp"
+  if ! nix print-dev-env "$repo_root#$shell" > "$cache_file.tmp" 2>"$cache_file.err"; then
+    # Flake eval failed (dirty tree, network, etc.) — surface why, then fall
+    # back to nix develop (which re-runs the same eval and would re-emit it).
+    cat "$cache_file.err" >&2
+    rm -f "$cache_file.tmp" "$cache_file.err"
     exec nix develop "$repo_root#$shell" --command "$@"
   fi
+  rm -f "$cache_file.err"
   mv "$cache_file.tmp" "$cache_file"
 fi
 
