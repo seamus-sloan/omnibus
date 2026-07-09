@@ -44,16 +44,31 @@ pub(crate) fn share_png_data_url(name: &str, data_url: &str) {
     );
 }
 
+/// Upper bound on the base64 payload (~12 MiB → ~9 MiB PNG). A rendered
+/// quote card is a few hundred KiB; the cap only exists because the reader
+/// mounts book content with `allowScriptedContent`, so a hostile EPUB could
+/// otherwise call the share shim with an arbitrarily large data URL and buy
+/// an OOM / disk-fill for free.
+const MAX_PNG_B64_LEN: usize = 12 * 1024 * 1024;
+
 /// Extract the raw bytes from a base64 PNG data URL; `None` when the string
-/// isn't one.
+/// isn't one or exceeds [`MAX_PNG_B64_LEN`].
 fn decode_png_data_url(data_url: &str) -> Option<Vec<u8>> {
     use base64::Engine as _;
     let b64 = data_url.strip_prefix("data:image/png;base64,")?;
+    if b64.len() > MAX_PNG_B64_LEN {
+        return None;
+    }
     base64::engine::general_purpose::STANDARD.decode(b64).ok()
 }
 
-/// Keep the staged temp filename to a safe charset (the quote-card name is
-/// derived from the book title, which can hold path separators).
+/// Longest sanitized filename we stage (chars); beyond book-title reason and
+/// under every filesystem's component limit.
+const MAX_FILENAME_LEN: usize = 80;
+
+/// Keep the staged temp filename to a safe charset and length (the quote-card
+/// name is derived from the book title, which can hold path separators and
+/// run arbitrarily long). Truncation preserves the `.png` suffix.
 fn sanitize_filename(name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -66,10 +81,16 @@ fn sanitize_filename(name: &str) -> String {
         })
         .collect();
     if cleaned.is_empty() {
-        "quote.png".into()
-    } else {
-        cleaned
+        return "quote.png".into();
     }
+    if cleaned.chars().count() <= MAX_FILENAME_LEN {
+        return cleaned;
+    }
+    let stem: String = cleaned
+        .chars()
+        .take(MAX_FILENAME_LEN.saturating_sub(4))
+        .collect();
+    format!("{}.png", stem.trim_end_matches('.'))
 }
 
 #[cfg(target_os = "ios")]
@@ -158,8 +179,22 @@ mod tests {
     }
 
     #[test]
+    fn decode_png_data_url_rejects_oversized_payloads() {
+        let big = format!("data:image/png;base64,{}", "A".repeat(MAX_PNG_B64_LEN + 4));
+        assert_eq!(decode_png_data_url(&big), None);
+    }
+
+    #[test]
     fn sanitize_filename_strips_path_separators_and_defaults() {
         assert_eq!(sanitize_filename("a/b\\c quote.png"), "a-b-c-quote.png");
         assert_eq!(sanitize_filename(""), "quote.png");
+    }
+
+    #[test]
+    fn sanitize_filename_truncates_long_names_keeping_png_suffix() {
+        let long = format!("{}.png", "x".repeat(300));
+        let out = sanitize_filename(&long);
+        assert!(out.chars().count() <= MAX_FILENAME_LEN);
+        assert!(out.ends_with(".png"));
     }
 }
