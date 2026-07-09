@@ -14,20 +14,26 @@ pub(crate) struct TocEntry {
     pub level: u32,
 }
 
-/// Right-side contents drawer. `current_title` highlights the entry matching
-/// the reader's current chapter.
+/// Right-side contents drawer (bottom sheet on phones). `current_title`
+/// highlights the entry matching the reader's current chapter;
+/// `progress_label` is the phone sheet's "184 / 272 · 68%" line.
 #[component]
 pub(super) fn TocDrawer(
     entries: Vec<TocEntry>,
     current_title: String,
+    progress_label: String,
     on_navigate: EventHandler<String>,
     on_close: EventHandler<()>,
 ) -> Element {
     rsx! {
         div { class: "rd-scrim", onclick: move |_| on_close.call(()) }
         div { class: "rd-drawer", "data-testid": "reader-toc-drawer",
+            div { class: "rd-grabber" }
             div { class: "rd-drawer-head",
                 h4 { class: "rd-drawer-title", "Contents" }
+                if !progress_label.is_empty() {
+                    span { class: "rd-drawer-sub", "{progress_label}" }
+                }
                 button {
                     class: "rd-x",
                     r#type: "button",

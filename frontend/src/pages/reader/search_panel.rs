@@ -27,7 +27,10 @@ pub(super) fn SearchPanel(
 
     rsx! {
         div { class: "rd-scrim", onclick: move |_| on_close.call(()) }
-        div { class: "rd-drawer", "data-testid": "reader-search-drawer",
+        // `rd-search-drawer` lets the phone breakpoint take this one drawer
+        // full-screen while the rest stay bottom sheets.
+        div { class: "rd-drawer rd-search-drawer", "data-testid": "reader-search-drawer",
+            div { class: "rd-grabber" }
             div { class: "rd-drawer-head",
                 h4 { class: "rd-drawer-title", "Search" }
                 button {
@@ -53,6 +56,9 @@ pub(super) fn SearchPanel(
                         }
                     },
                 }
+            }
+            if !hits.is_empty() {
+                div { class: "rd-search-count", "{hits.len()} matches \u{b7} in this book" }
             }
             div { class: "rd-drawer-body",
                 if hits.is_empty() {

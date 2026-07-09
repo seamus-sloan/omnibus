@@ -110,7 +110,13 @@ pub(crate) fn SelectionPopover(anchor: SelectionAnchor, actions: SelectionAction
                         let text = sel_text.clone();
                         move |_| on_note.call((cfi.clone(), text.clone()))
                     },
-                    "Note"
+                    svg {
+                        width: "15", height: "15", view_box: "0 0 24 24",
+                        fill: "none", stroke: "currentColor",
+                        stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                        path { d: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" }
+                    }
+                    span { "Note" }
                 }
                 button {
                     class: "rd-act",
@@ -120,10 +126,19 @@ pub(crate) fn SelectionPopover(anchor: SelectionAnchor, actions: SelectionAction
                         let text = sel_text.clone();
                         move |_| on_copy.call(text.clone())
                     },
-                    "Copy"
+                    svg {
+                        width: "15", height: "15", view_box: "0 0 24 24",
+                        fill: "none", stroke: "currentColor",
+                        stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                        rect { x: "9", y: "9", width: "12", height: "12", rx: "2" }
+                        path { d: "M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" }
+                    }
+                    span { "Copy" }
                 }
                 button {
-                    class: "rd-act",
+                    // `rd-act-accent`: the phone popover tints Quote as the
+                    // primary action, per the mobile design.
+                    class: "rd-act rd-act-accent",
                     r#type: "button",
                     "data-testid": "selection-quote",
                     onclick: {
@@ -131,7 +146,12 @@ pub(crate) fn SelectionPopover(anchor: SelectionAnchor, actions: SelectionAction
                         let text = sel_text.clone();
                         move |_| on_quote.call((cfi.clone(), text.clone()))
                     },
-                    "Quote"
+                    svg {
+                        width: "15", height: "15", view_box: "0 0 24 24",
+                        fill: "currentColor", stroke: "none",
+                        path { d: "M10 8c0 3.5-2 6-5 7l-.8-1.6c1.7-.8 2.7-2 3-3.4H4V4h6v4zm10 0c0 3.5-2 6-5 7l-.8-1.6c1.7-.8 2.7-2 3-3.4H14V4h6v4z" }
+                    }
+                    span { "Quote" }
                 }
                 button {
                     class: "rd-act",
@@ -141,7 +161,13 @@ pub(crate) fn SelectionPopover(anchor: SelectionAnchor, actions: SelectionAction
                         let text = sel_text.clone();
                         move |_| on_share.call(text.clone())
                     },
-                    "Share"
+                    svg {
+                        width: "15", height: "15", view_box: "0 0 24 24",
+                        fill: "none", stroke: "currentColor",
+                        stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                        path { d: "M12 3v13M7 8l5-5 5 5M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5" }
+                    }
+                    span { "Share" }
                 }
             }
         }

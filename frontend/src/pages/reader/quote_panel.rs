@@ -105,6 +105,7 @@ pub(super) fn QuotePanel(
     rsx! {
         div { class: "rd-scrim", onclick: move |_| on_close.call(()) }
         div { class: "rd-drawer rd-quote-drawer", "data-testid": "reader-quote-drawer",
+            div { class: "rd-grabber" }
             div { class: "rd-drawer-head",
                 div {
                     div { class: "rd-quote-kicker", "From your highlight" }

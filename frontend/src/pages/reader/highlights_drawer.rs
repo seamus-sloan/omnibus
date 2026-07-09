@@ -108,6 +108,7 @@ pub(super) fn HighlightsDrawer(
     rsx! {
         div { class: "rd-scrim", onclick: move |_| on_close.call(()) }
         div { class: "rd-drawer", "data-testid": "reader-highlights-drawer",
+            div { class: "rd-grabber" }
             div { class: "rd-drawer-head",
                 h4 { class: "rd-drawer-title",
                     "Highlights & notes "

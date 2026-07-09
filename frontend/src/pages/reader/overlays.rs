@@ -110,6 +110,8 @@ pub(super) struct OverlayMeta {
     pub book_accent: String,
     pub chapter_title: String,
     pub current_cfi: String,
+    /// Contents-drawer progress line ("184 / 272 · 68%").
+    pub contents_progress: String,
 }
 
 /// The toggleable reader overlays: contents, highlights, search, bookmarks
@@ -124,6 +126,7 @@ pub(super) fn ReaderOverlays(meta: OverlayMeta, panels: ReaderPanelSignals) -> E
         book_accent,
         chapter_title,
         current_cfi,
+        contents_progress,
     } = meta;
     let ReaderPanelSignals {
         highlights,
@@ -143,6 +146,7 @@ pub(super) fn ReaderOverlays(meta: OverlayMeta, panels: ReaderPanelSignals) -> E
             TocDrawer {
                 entries: toc.read().clone(),
                 current_title: chapter_title.clone(),
+                progress_label: contents_progress.clone(),
                 on_navigate: move |href: String| {
                     #[cfg(any(feature = "web", feature = "mobile"))]
                     super::reader_call_json("display", &href);
