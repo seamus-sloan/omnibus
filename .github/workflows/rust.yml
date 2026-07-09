@@ -56,6 +56,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Public-domain fixtures aren't in git — they're the fixtures-vN
+      # release asset. Needed by `cargo test -p omnibus-db` (the
+      # public_domain_epubs regression suite + audiobook cover tests).
+      - name: Cache test fixtures
+        uses: actions/cache@v4
+        with:
+          path: |
+            test_data/epubs/public_domain
+            test_data/audiobooks/public_domain
+            test_data/.fixtures-version
+          # Key on the fetch script's content: bumping the pinned sha256/URL
+          # changes the hash, so a corrected tarball can't be shadowed by a
+          # stale cache entry saved under a static key.
+          key: fixtures-${{ hashFiles('scripts/fetch-fixtures.sh') }}
+
+      - name: Fetch test fixtures
+        run: scripts/fetch-fixtures.sh
+
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v22
 

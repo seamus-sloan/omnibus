@@ -38,6 +38,13 @@ dev-down:
 dev-bounce:
     nix develop .#web --command scripts/dev-server-bounce.sh
 
+# Ensure the public-domain test fixtures are present (one-time ~156 MB
+# download from the fixtures-vN release asset, then an instant no-op).
+# Runs outside the nix shell on purpose — curl + tar only. Auto-run by
+# `just test`; Playwright's globalSetup fails loudly if they're missing.
+fixtures:
+    scripts/fetch-fixtures.sh
+
 # Run the full unit/integration test matrix. `cargo test --workspace` is a
 # trap here — it silently skips the frontend rpc/page tests (they need
 # --features server) — so run each crate explicitly. The frontend runs twice
@@ -47,7 +54,7 @@ dev-bounce:
 # The `omnibus-mobile` shell crate itself has no tests (lint covers it via
 # `just lint`).
 # Self-wraps in the slim nix shell so it works from a bare checkout too.
-test:
+test: fixtures
     nix develop --command bash -ec '\
         cargo test -p omnibus-db && \
         cargo test -p omnibus && \
