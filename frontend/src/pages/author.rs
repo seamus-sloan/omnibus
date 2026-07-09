@@ -189,6 +189,16 @@ fn author_hero(
     } = text;
     rsx! {
         div { class: "disc-hero", style: "background: {bg_style}",
+            // Mobile-only (CSS-gated via `.screen`) back affordance to the
+            // authors index; web keeps the breadcrumb. Same markup on every
+            // target so the web SSR/WASM trees stay identical (rule 07).
+            Link {
+                to: Route::AuthorsIndex {},
+                class: "m-icon-btn disc-back",
+                "aria-label": "Back to authors",
+                "data-testid": "author-back",
+                "\u{2190}"
+            }
             nav { class: "breadcrumb",
                 Link { to: Route::Landing {}, "Library" }
                 span { class: "breadcrumb-sep", " › " }
