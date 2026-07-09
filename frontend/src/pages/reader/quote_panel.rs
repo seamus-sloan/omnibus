@@ -219,7 +219,7 @@ pub(super) fn QuotePanel(
                             "Download PNG"
                         }
                         button {
-                            class: "btn",
+                            class: "btn rd-phone-only",
                             r#type: "button",
                             "data-testid": "quote-copy-image",
                             onclick: copy_image,
