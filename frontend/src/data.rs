@@ -109,8 +109,9 @@ pub mod app_dirs {
     //! which is read-only — only its `Library`/`Documents`/`tmp` subdirs are
     //! writable — so every write silently failed and nothing survived a cold
     //! start. We now target `Library/Application Support/omnibus` on iOS (the
-    //! Apple-sanctioned, backed-up location for app-managed data) and
-    //! `$HOME/.omnibus` on desktop/dev.
+    //! Apple-sanctioned, backed-up location for app-managed data),
+    //! `$HOME/.omnibus` on desktop/dev, and the app's private files dir
+    //! (`Context.getFilesDir()`, resolved via JNI) on Android.
     use std::path::{Path, PathBuf};
 
     /// Pure per-platform base-dir resolution from a home dir. No I/O, so it's
@@ -128,15 +129,13 @@ pub mod app_dirs {
 
     /// Resolve and create the writable data dir. `None` → the caller keeps
     /// its in-memory-only behavior (unchanged from before): no home dir, an
-    /// unwritable location, or Android (persistence not yet wired — see the
-    /// GH issue tracking the JNI `Context.getFilesDir()` resolver).
+    /// unwritable location, or a failed Android JNI call.
     pub fn data_dir() -> Option<PathBuf> {
-        // Android's `$HOME` under tao/wry isn't the app files dir; resolving
-        // it needs JNI. Until that lands, stay memory-only (no regression).
+        // Android's `$HOME` under tao/wry isn't the app files dir; it's
+        // resolved via JNI instead of the home-relative logic below.
         #[cfg(target_os = "android")]
         {
-            // TODO(#837): resolve Context.getFilesDir() via JNI, then persist.
-            return None;
+            android_files_dir()
         }
         #[cfg(not(target_os = "android"))]
         {
@@ -150,6 +149,55 @@ pub mod app_dirs {
             }
             Some(dir)
         }
+    }
+
+    /// Resolve `Context.getFilesDir()` — the app-private, already-writable
+    /// internal storage dir Android grants every app — via JNI, using the
+    /// ambient `AndroidContext` that tao (dioxus's `mobile` windowing
+    /// backend) registers with `ndk-context` before any app code runs. No
+    /// `create_dir_all` needed: unlike the home-relative dirs above, Android
+    /// guarantees this directory already exists.
+    ///
+    /// Logs and falls back to memory-only on any JNI failure, mirroring the
+    /// `create_dir_all` failure path above — a silent `None` here would be
+    /// exactly the class of bug this module exists to fix.
+    #[cfg(target_os = "android")]
+    fn android_files_dir() -> Option<PathBuf> {
+        match android_files_dir_via_jni() {
+            Ok(dir) => Some(dir),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "could not resolve Android files dir via JNI; persistence disabled this launch"
+                );
+                None
+            }
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    fn android_files_dir_via_jni() -> jni::errors::Result<PathBuf> {
+        let ctx = ndk_context::android_context();
+        // SAFETY: `ctx.vm()` is the JavaVM pointer `ndk-context` was
+        // initialized with at process start (before `main`), so it is valid
+        // for the lifetime of the process.
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }?;
+        let mut env = vm.attach_current_thread()?;
+        // SAFETY: `ctx.context()` is the `Activity`/`Context` jobject
+        // registered alongside the JavaVM above, so it is a valid local JNI
+        // reference for the duration of this call.
+        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+
+        let files_dir = env
+            .call_method(&activity, "getFilesDir", "()Ljava/io/File;", &[])?
+            .l()?;
+        let path_obj = env
+            .call_method(&files_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])?
+            .l()?;
+        let path: String = env
+            .get_string(&jni::objects::JString::from(path_obj))?
+            .into();
+        Ok(PathBuf::from(path))
     }
 
     #[cfg(test)]
@@ -179,9 +227,9 @@ pub mod server_url_store {
     //! channel — the reactive [`super::ServerUrl`] context signal is the
     //! in-memory source of truth, while this module only reads it once at
     //! launch and writes it back when the user connects. Persistence is
-    //! conditional on a writable dir (see [`super::app_dirs::data_dir`]):
-    //! available on iOS/desktop, but currently `None` on Android, which stays
-    //! memory-only.
+    //! conditional on a writable dir (see [`super::app_dirs::data_dir`]),
+    //! available on iOS/desktop/Android; a `None` (e.g. a failed Android JNI
+    //! call) falls back to memory-only for that launch.
     use std::path::PathBuf;
 
     /// On-disk path for the persisted server URL, or `None` when no writable
@@ -334,11 +382,11 @@ pub mod token_store {
     /// gated on `debug_assertions` — release builds persist too, so users stay
     /// signed in across a cold start and are only logged out when the server
     /// rejects the bearer (expiry/revoke). The actual write still depends on a
-    /// writable dir: on iOS/desktop the token lands in the sandboxed app data
-    /// dir (see [`super::app_dirs`]) with `0o600` perms (protected at rest by
-    /// the iOS sandbox + Data Protection); on Android [`token_path`] is `None`,
-    /// so persistence is a no-op there until the JNI resolver lands. iOS
-    /// Keychain / Android Keystore remains a future hardening step.
+    /// writable dir: on iOS/desktop/Android the token lands in the sandboxed
+    /// app data dir (see [`super::app_dirs`]) with `0o600` perms (protected at
+    /// rest by the iOS sandbox + Data Protection, or Android's per-app UID
+    /// sandbox). Neither is encryption-at-rest; iOS Keychain / Android
+    /// Keystore remains a future hardening step.
     fn persistence_enabled() -> bool {
         true
     }

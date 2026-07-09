@@ -43,6 +43,14 @@ tokio = { workspace = true, optional = true }
 # pull tracing into the bundle.
 tracing = { workspace = true, optional = true }
 
+[target.'cfg(target_os = "android")'.dependencies]
+# Resolves `Context.getFilesDir()` via JNI so `data::app_dirs::data_dir()` can
+# persist the server URL / auth token on Android (#837), mirroring the iOS
+# fix. Versions match what tao (dioxus's `mobile` windowing backend) already
+# resolves, so this doesn't pull in a second copy of either crate.
+jni = { version = "0.21", optional = true }
+ndk-context = { version = "0.1", optional = true }
+
 [dev-dependencies]
 # Sandboxed temp dirs for the mobile `token_store` / `app_dirs` file tests.
 tempfile.workspace = true
@@ -71,7 +79,16 @@ web = [
 # without a polling loop. `tokio/time` backs the debounce sleep in the
 # mobile search screen (`pages::search_mobile`); reqwest's runtime already
 # drives the timer, so no extra runtime/macro features are needed.
-mobile = ["dep:reqwest", "dep:serde_json", "dep:tokio", "tokio/sync", "tokio/time", "dep:tracing"]
+mobile = [
+    "dep:reqwest",
+    "dep:serde_json",
+    "dep:tokio",
+    "tokio/sync",
+    "tokio/time",
+    "dep:tracing",
+    "dep:jni",
+    "dep:ndk-context",
+]
 # Server-function bodies: compiles the server-side halves of the #[get]/#[post]
 # functions in rpc.rs against the real DB layer. Used by `server/` when
 # building the fullstack native binary. The DB work lives in `omnibus-db`;
