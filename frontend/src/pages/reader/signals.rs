@@ -58,6 +58,30 @@ pub(crate) fn format_progress_labels(loc: &RelocateData) -> (String, String) {
     (page, chapter)
 }
 
+/// Format the phone top-bar sub-line under the book title: "Ch. 3 · 14%".
+/// Falls back to the percent alone before the TOC resolves; empty until
+/// epub.js has produced a relocation. Rendered on every target (rule 07);
+/// only the phone breakpoint displays it.
+pub(crate) fn format_title_sub(loc: &RelocateData) -> String {
+    if loc.chapter > 0 {
+        format!("Ch.\u{a0}{} \u{b7} {}%", loc.chapter, loc.pct)
+    } else if loc.pct > 0 {
+        format!("{}%", loc.pct)
+    } else {
+        String::new()
+    }
+}
+
+/// Format the contents-drawer progress line: "184 / 272 · 68%". Empty until
+/// epub.js has paginated the book.
+pub(crate) fn format_contents_progress(loc: &RelocateData) -> String {
+    if loc.total_pages > 0 {
+        format!("{} / {} \u{b7} {}%", loc.page, loc.total_pages, loc.pct)
+    } else {
+        String::new()
+    }
+}
+
 /// Drop the previous book's title and kick off a fresh `get_ebook` fetch
 /// whenever `uuid` changes. SPA navigations between books would otherwise
 /// flash the previous title while the request is in flight, and an epoch
@@ -128,6 +152,31 @@ mod tests {
         assert!(chapter.contains("Ch"));
         assert!(chapter.contains("3"));
         assert!(chapter.contains("24"));
+    }
+
+    #[test]
+    fn format_title_sub_formats_chapter_and_pct_and_falls_back() {
+        let mut data = RelocateData {
+            chapter: 14,
+            pct: 68,
+            ..Default::default()
+        };
+        assert_eq!(format_title_sub(&data), "Ch.\u{a0}14 \u{b7} 68%");
+        data.chapter = 0;
+        assert_eq!(format_title_sub(&data), "68%");
+        assert_eq!(format_title_sub(&RelocateData::default()), "");
+    }
+
+    #[test]
+    fn format_contents_progress_formats_pages_and_is_empty_before_pagination() {
+        let data = RelocateData {
+            page: 184,
+            total_pages: 272,
+            pct: 68,
+            ..Default::default()
+        };
+        assert_eq!(format_contents_progress(&data), "184 / 272 \u{b7} 68%");
+        assert_eq!(format_contents_progress(&RelocateData::default()), "");
     }
 
     #[test]

@@ -65,6 +65,7 @@ pub(super) fn ReaderBookmarksDrawer(
     rsx! {
         div { class: "rd-scrim", onclick: move |_| on_close.call(()) }
         div { class: "rd-drawer", "data-testid": "reader-bookmarks-drawer",
+            div { class: "rd-grabber" }
             div { class: "rd-drawer-head",
                 h4 { class: "rd-drawer-title",
                     "Bookmarks "
