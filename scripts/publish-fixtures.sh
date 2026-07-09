@@ -50,9 +50,13 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 echo "Building $asset from on-disk public_domain dirs..." >&2
+# COPYFILE_DISABLE=1: stop macOS tar from embedding `._*` AppleDouble
+# sidecars (from file xattrs) — Linux CI extracts them as literal
+# `._foo.epub` files that the ebook scanner miscounts as fixtures.
 # -print0 | tar --null: audiobook paths contain spaces.
+export COPYFILE_DISABLE=1
 find test_data/epubs/public_domain test_data/audiobooks/public_domain \
-    -type f ! -name '.DS_Store' -print0 | sort -z \
+    -type f ! -name '.DS_Store' ! -name '._*' -print0 | sort -z \
   | tar -czf "$tmp/$asset" --null -T - --no-recursion
 
 echo "Round-trip check..." >&2
@@ -61,7 +65,18 @@ tar -xzf "$tmp/$asset" -C "$tmp/rt"
 while IFS= read -r -d '' f; do
   cmp -s "$f" "$tmp/rt/$f" || { echo "publish-fixtures: round-trip mismatch: $f" >&2; exit 1; }
 done < <(find test_data/epubs/public_domain test_data/audiobooks/public_domain \
-             -type f ! -name '.DS_Store' -print0)
+             -type f ! -name '.DS_Store' ! -name '._*' -print0)
+
+# Guard against AppleDouble leakage. macOS bsdtar HIDES `._*` entries from
+# `tar -t`, so a shell listing can't catch them — use python, which lists
+# every member. This is the exact bug COPYFILE_DISABLE=1 prevents; verify it.
+if command -v python3 >/dev/null 2>&1; then
+  shadows="$(python3 -c 'import tarfile,sys; print(sum(1 for m in tarfile.open(sys.argv[1]).getmembers() if m.name.rsplit("/",1)[-1].startswith("._") or m.name.endswith(".DS_Store")))' "$tmp/$asset")"
+  if [ "$shadows" -ne 0 ]; then
+    echo "publish-fixtures: $shadows AppleDouble/.DS_Store members leaked into the tarball — aborting." >&2
+    exit 1
+  fi
+fi
 
 local_sha="$(sha256_of "$tmp/$asset")"
 echo "Uploading $version ($(du -h "$tmp/$asset" | cut -f1 | tr -d ' '))..." >&2

@@ -17,7 +17,7 @@ set -euo pipefail
 
 FIXTURES_VERSION="fixtures-v1"
 FIXTURES_URL="https://github.com/seamus-sloan/omnibus/releases/download/${FIXTURES_VERSION}/omnibus-fixtures-v1.tar.gz"
-FIXTURES_SHA256="41279ceef287ccc91108bc36c0507abbc776dadb838f92ac0545205fbe111b74"
+FIXTURES_SHA256="8e58b6c1c363e248115338d356841bf90536574c69474a2a8f7b538f107d7bbf"
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 marker="$repo_root/test_data/.fixtures-version"
@@ -47,7 +47,10 @@ sha256_check "$FIXTURES_SHA256" "$tmp/fixtures.tar.gz" || {
   echo "fetch-fixtures: sha256 mismatch for $FIXTURES_URL" >&2
   exit 1
 }
-# Paths inside the tarball are repo-relative (test_data/...).
-tar -xzf "$tmp/fixtures.tar.gz" -C "$repo_root"
+# Paths inside the tarball are repo-relative (test_data/...). Exclude macOS
+# AppleDouble sidecars / .DS_Store defensively: a tarball built on macOS
+# without COPYFILE_DISABLE=1 carries `._foo.epub` files that Linux tar
+# extracts literally, and the ebook scanner would count them as fixtures.
+tar -xzf "$tmp/fixtures.tar.gz" -C "$repo_root" --exclude='._*' --exclude='.DS_Store'
 echo "$FIXTURES_VERSION" > "$marker"
 echo "Fixtures ready ($FIXTURES_VERSION)." >&2
