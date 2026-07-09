@@ -15,3 +15,15 @@ identifier = "com.omnibus.mobile"
 
 [android]
 uses_cleartext_traffic = true
+
+[ios.raw]
+# Omnibus is a self-hosted app; users connect over HTTP on their LAN or via
+# Tailscale. WKWebView enforces ATS and would otherwise block <img> loads from
+# http:// origins even though reqwest (which uses its own TCP stack) is exempt.
+info_plist = """
+<key>NSAppTransportSecurity</key>
+<dict>
+	<key>NSAllowsArbitraryLoads</key>
+	<true/>
+</dict>
+"""
