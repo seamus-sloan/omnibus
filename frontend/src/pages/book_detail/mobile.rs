@@ -48,7 +48,22 @@ pub(super) fn render_loaded_mobile(b: EbookMetadata, server_url: String) -> Elem
             // Hero — accent glow, top actions, centered cover.
             div { class: "m-bd-hero",
                 div { class: "m-bd-hero-bar",
-                    Link { to: Route::Landing {}, class: "m-icon-btn", "aria-label": "Back", "\u{2190}" }
+                    // History-aware back; Landing is only the deep-link fallback.
+                    button {
+                        r#type: "button",
+                        class: "m-icon-btn",
+                        "aria-label": "Back",
+                        "data-testid": "mobile-bd-back",
+                        onclick: move |_| {
+                            let nav = dioxus_router::navigator();
+                            if nav.can_go_back() {
+                                nav.go_back();
+                            } else {
+                                nav.replace(Route::Landing {});
+                            }
+                        },
+                        "\u{2190}"
+                    }
                     Link {
                         to: Route::MetadataEdit { uuid: uuid.clone() },
                         class: "m-icon-btn",
