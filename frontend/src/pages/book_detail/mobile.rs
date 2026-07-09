@@ -48,9 +48,7 @@ pub(super) fn render_loaded_mobile(b: EbookMetadata, server_url: String) -> Elem
             // Hero — accent glow, top actions, centered cover.
             div { class: "m-bd-hero",
                 div { class: "m-bd-hero-bar",
-                    // History-aware back: a book opened from Authors/Series/etc.
-                    // returns there, not to the library. Landing is only the
-                    // deep-link fallback (fresh stack, nothing to pop).
+                    // History-aware back; Landing is only the deep-link fallback.
                     button {
                         r#type: "button",
                         class: "m-icon-btn",
@@ -61,7 +59,7 @@ pub(super) fn render_loaded_mobile(b: EbookMetadata, server_url: String) -> Elem
                             if nav.can_go_back() {
                                 nav.go_back();
                             } else {
-                                nav.push(Route::Landing {});
+                                nav.replace(Route::Landing {});
                             }
                         },
                         "\u{2190}"
