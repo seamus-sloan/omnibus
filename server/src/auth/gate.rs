@@ -61,10 +61,23 @@ pub async fn require_auth(State(state): State<AppState>, req: Request, next: Nex
     }
     // Header/cookie is the norm; a GET on a media read path may instead carry
     // the session as `?token=` so a mobile WebView `<img>` fetch authenticates.
-    let token = extract_token(req.headers()).map(|(t, _)| t).or_else(|| {
-        (req.method() == Method::GET && is_media_read_path(path))
-            .then(|| query_token(req.uri().query()))
-            .flatten()
+    let is_media = req.method() == Method::GET && is_media_read_path(path);
+    let header_token = extract_token(req.headers()).map(|(t, _)| t);
+    let token = header_token.or_else(|| {
+        if is_media {
+            let qt = query_token(req.uri().query());
+            if qt.is_some() {
+                tracing::debug!(path, "media auth: using ?token= query param");
+            } else {
+                tracing::warn!(
+                    path,
+                    "media auth: no bearer header, cookie, or ?token= — will 401"
+                );
+            }
+            qt
+        } else {
+            None
+        }
     });
     let Some(token) = token else {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
@@ -72,6 +85,12 @@ pub async fn require_auth(State(state): State<AppState>, req: Request, next: Nex
     match auth_db::lookup_session(state.pool(), &token).await {
         Ok(_) => next.run(req).await,
         Err(auth_db::AuthError::SessionNotFound) => {
+            if is_media {
+                tracing::warn!(
+                    path,
+                    "media auth: token not found in session store — will 401"
+                );
+            }
             (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
         }
         Err(e) => {

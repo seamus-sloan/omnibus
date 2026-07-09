@@ -21,6 +21,7 @@ pub(super) async fn get_cover(
     State(state): State<AppState>,
     Path(uuid): Path<String>,
 ) -> Response {
+    tracing::debug!(uuid, "cover: request received");
     // Resolve uuid → id so the existing id-keyed `db::get_cover` (which
     // reads cover bytes from `<covers_dir>/<uuid>.<ext>` by way of the
     // books row) stays unchanged. The route surface is uuid-keyed so
@@ -28,27 +29,42 @@ pub(super) async fn get_cover(
     // the autoincrement id internally for join performance.
     let id = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
         Ok(Some(id)) => id,
-        Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            tracing::warn!(uuid, "cover: book not found (404)");
+            return axum::http::StatusCode::NOT_FOUND.into_response();
+        }
         Err(e) => return internal("resolve_book_id_by_uuid", e),
     };
     match db::get_cover(&state.pool, id).await {
-        Ok(Some((mime, bytes))) => (
-            [
-                (header::CONTENT_TYPE, mime.as_str()),
-                // Covers are static per-book (new id on reindex). Cached on
-                // the client only — `private` + `Vary: Cookie` keep a shared
-                // proxy from serving one user's covers to an unauthenticated
-                // request on the same URL now that the endpoint is gated.
-                (header::CACHE_CONTROL, "private, max-age=86400"),
-                (header::VARY, "Cookie"),
-                // Prevent browsers from MIME-sniffing a cover into an
-                // executable type (e.g. an SVG disguised as JPEG).
-                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            ],
-            bytes,
-        )
-            .into_response(),
-        Ok(None) => axum::http::StatusCode::NOT_FOUND.into_response(),
+        Ok(Some((mime, bytes))) => {
+            tracing::debug!(
+                uuid,
+                book_id = id,
+                mime,
+                bytes = bytes.len(),
+                "cover: serving"
+            );
+            (
+                [
+                    (header::CONTENT_TYPE, mime.as_str()),
+                    // Covers are static per-book (new id on reindex). Cached on
+                    // the client only — `private` + `Vary: Cookie` keep a shared
+                    // proxy from serving one user's covers to an unauthenticated
+                    // request on the same URL now that the endpoint is gated.
+                    (header::CACHE_CONTROL, "private, max-age=86400"),
+                    (header::VARY, "Cookie"),
+                    // Prevent browsers from MIME-sniffing a cover into an
+                    // executable type (e.g. an SVG disguised as JPEG).
+                    (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
+        Ok(None) => {
+            tracing::warn!(uuid, book_id = id, "cover: no cover image on record (404)");
+            axum::http::StatusCode::NOT_FOUND.into_response()
+        }
         Err(error) => internal("read cover", error),
     }
 }
@@ -58,9 +74,11 @@ pub(super) async fn get_thumb(
     State(state): State<AppState>,
     Path((uuid, size_str)): Path<(String, String)>,
 ) -> Response {
+    tracing::debug!(uuid, size = %size_str, "thumb: request received");
     let size: db::ThumbSize = match size_str.parse() {
         Ok(s) => s,
         Err(_) => {
+            tracing::warn!(uuid, size = %size_str, "thumb: invalid size parameter (400)");
             return (
                 axum::http::StatusCode::BAD_REQUEST,
                 "invalid size; use sm, md, or lg",
@@ -73,13 +91,23 @@ pub(super) async fn get_thumb(
     // to be uuid-keyed end-to-end.
     let id = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
         Ok(Some(id)) => id,
-        Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            tracing::warn!(uuid, "thumb: book not found (404)");
+            return axum::http::StatusCode::NOT_FOUND.into_response();
+        }
         Err(e) => return internal("resolve_book_id_by_uuid", e),
     };
 
     let last_modified_epoch = match db::get_last_modified_epoch(&state.pool, id).await {
         Ok(Some(ts)) => ts,
-        Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => {
+            tracing::warn!(
+                uuid,
+                book_id = id,
+                "thumb: book has no last_modified_epoch (404)"
+            );
+            return axum::http::StatusCode::NOT_FOUND.into_response();
+        }
         Err(e) => return internal("read last_modified_epoch", e),
     };
 
@@ -88,6 +116,13 @@ pub(super) async fn get_thumb(
     let thumb_path = db::thumb_path_for(id, size);
     if !db::thumbs::is_stale_async(id, size, last_modified_epoch).await {
         if let Ok(bytes) = tokio::fs::read(&thumb_path).await {
+            tracing::debug!(
+                uuid,
+                book_id = id,
+                ?size,
+                bytes = bytes.len(),
+                "thumb: cache hit"
+            );
             // Fire-and-forget mtime bump so `evict_if_over_cap` treats this
             // as recently-used (LRU) instead of evicting frequently-viewed
             // thumbs just because they're old. Detached via `tokio::spawn`
@@ -127,6 +162,12 @@ pub(super) async fn get_thumb(
     // worker error on every request, polluting the log.
     match db::get_cover(&state.pool, id).await {
         Ok(Some((mime, bytes))) => {
+            tracing::debug!(
+                uuid,
+                book_id = id,
+                ?size,
+                "thumb: cache miss — queuing generation, serving original cover"
+            );
             state.worker.post(db::worker::Task::GenerateThumbs {
                 book_id: id,
                 last_modified_epoch,
@@ -143,7 +184,14 @@ pub(super) async fn get_thumb(
             )
                 .into_response()
         }
-        Ok(None) => axum::http::StatusCode::ACCEPTED.into_response(),
+        Ok(None) => {
+            tracing::debug!(
+                uuid,
+                book_id = id,
+                "thumb: cache miss and no cover image — returning 202"
+            );
+            axum::http::StatusCode::ACCEPTED.into_response()
+        }
         Err(e) => internal("cover fetch for thumb", e),
     }
 }
