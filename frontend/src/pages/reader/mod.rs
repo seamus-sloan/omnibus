@@ -108,6 +108,7 @@ pub fn BookReadPage(uuid: String) -> Element {
         book_meta,
     } = use_reader_signals(&uuid, theme);
     let (on_back, on_prev, on_next, on_keydown) = chrome_handlers::install_chrome_handlers(
+        uuid.clone(),
         selection,
         chrome_handlers::OverlaySignals {
             show_aa,
