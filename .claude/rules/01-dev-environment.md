@@ -29,6 +29,16 @@ nix develop .#mobile                  # interactive shell with Android NDK + iOS
 
 `.envrc` resolves `use flake` to `default`, so the editor stays on the slim shell at all times. `just serve` works from default because zellij + process-compose live there; each multiplexer pane internally wraps its command in the right `.#shell` (server → `.#web`, mobile → `.#mobile`, playwright → `.#e2e`), so only the panes you actually start realize their extras. `just dev-up` and `just dev-bounce` self-wrap in `.#web`, so they work straight from default too.
 
+## Test fixtures
+
+The public-domain test fixtures (`test_data/{epubs,audiobooks}/public_domain/`, ~156 MB of binaries) are **not in git** — they live as a GitHub release asset (`fixtures-vN`) so `nix develop`'s tree-copy into /nix/store stays small. Fresh checkout bootstrap:
+
+```bash
+just fixtures    # one-time download; instant no-op thereafter
+```
+
+`just test` runs it automatically; Playwright's `globalSetup` and the `db` public-domain tests fail with a "run `just fixtures`" pointer when missing. Publishing a new fixture set: `scripts/publish-fixtures.sh v<N>` (see [test_data/epubs/README.md](../../test_data/epubs/README.md)).
+
 ## CSS structural lint
 
 `stylelint` lives in the slim shell so `just lint` (which runs `just lint-css`) and the `css-lint.yml` CI job both guard `frontend/assets/**.css` against structural errors — chiefly an unclosed `}`, which under CSS nesting silently reparents every following rule as a descendant of the unclosed selector and breaks layouts the Rust/web build never exercises. The ruleset ([`.stylelintrc.json`](../../.stylelintrc.json)) is parse/structural-only, so it errors on broken CSS but never nags about pre-existing style. Run `just lint-css` to check just the CSS.

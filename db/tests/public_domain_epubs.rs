@@ -9,11 +9,17 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("test_data")
         .join("epubs")
-        .join("public_domain")
+        .join("public_domain");
+    // Not in git — fetched from a release asset (scripts/fetch-fixtures.sh).
+    assert!(
+        dir.is_dir(),
+        "public-domain fixtures not fetched — run `just fixtures` from the repo root"
+    );
+    dir
 }
 
 /// One row per file in `test_data/epubs/public_domain/`. Mirrors the

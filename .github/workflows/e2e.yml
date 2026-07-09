@@ -24,6 +24,7 @@ on:
       - "**/Dioxus.toml"
       - "flake.lock"
       - "flake.nix"
+      - "scripts/fetch-fixtures.sh"
       - ".github/workflows/e2e.yml"
   workflow_dispatch:
 
@@ -129,6 +130,24 @@ jobs:
       TOTAL_SHARDS: "2"
     steps:
       - uses: actions/checkout@v4
+
+      # Public-domain fixtures aren't in git — they're the fixtures-vN
+      # release asset. Cache them so shards/pushes don't re-download 156 MB;
+      # the fetch script no-ops on a cache hit (marker + sentinel check).
+      - name: Cache test fixtures
+        uses: actions/cache@v4
+        with:
+          path: |
+            test_data/epubs/public_domain
+            test_data/audiobooks/public_domain
+            test_data/.fixtures-version
+          # Key on the fetch script's content: bumping the pinned sha256/URL
+          # changes the hash, so a corrected tarball can't be shadowed by a
+          # stale cache entry saved under a static key.
+          key: fixtures-${{ hashFiles('scripts/fetch-fixtures.sh') }}
+
+      - name: Fetch test fixtures
+        run: scripts/fetch-fixtures.sh
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v22

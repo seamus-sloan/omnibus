@@ -10,11 +10,16 @@ expected number of books listed in
 
 ```
 generated/          — synthetic silent MP3s produced by tools/make_audiobook.ts (committed)
-public_domain/      — real audiobooks from LibriVox (committed)
+public_domain/      — real audiobooks from LibriVox (NOT committed — fetched)
 ```
 
 The seeder points the server at `test_data/audiobooks/` (this directory).
 The scanner recurses, so both subdirectories load in a single seed call.
+
+`public_domain/` is not tracked in git — it ships in the same `fixtures-vN`
+release asset as the public-domain EPUBs. Run `just fixtures` to populate
+it; see [test_data/epubs/README.md](../epubs/README.md) for the full fetch
+and publish workflow.
 
 ## Synthetic vs. public-domain
 
@@ -44,7 +49,8 @@ npx tsx tools/make_audiobook.ts
 ## Public-domain M4B provenance
 
 The M4B (`Arthur Conan Doyle/A Womans Love.m4b`) was converted from
-three LibriVox MP3 tracks via ffmpeg and is committed as-is:
+three LibriVox MP3 tracks via ffmpeg and ships in the fixtures release
+as-is:
 
 ```bash
 # Sources: https://archive.org/details/womanslove_2605.poem_librivox
