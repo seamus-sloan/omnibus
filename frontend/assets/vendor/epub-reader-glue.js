@@ -435,6 +435,41 @@
   }
 
   // Navigate to a TOC href or a CFI (highlight / bookmark target).
+  // Display `target`, then re-display it once the section's fonts/theme have
+  // settled. The first pass measures the target's column in a freshly
+  // rendered iframe whose metrics can still shift (webfont swap, theme
+  // injection) — the reflow leaves the viewport pages past the target, and
+  // the follow-up display corrects it against the final layout.
+  function displaySettled(target) {
+    if (!rendition) return;
+    rendition
+      .display(target)
+      .then(function () {
+        var doc = null;
+        try {
+          var contents = rendition.getContents();
+          var c = contents && contents[0];
+          doc = c && c.document;
+        } catch (e) {
+          /* best effort */
+        }
+        var ready =
+          doc && doc.fonts && doc.fonts.ready ? doc.fonts.ready : Promise.resolve();
+        return ready
+          .then(function () {
+            return new Promise(function (res) {
+              setTimeout(res, 80);
+            });
+          })
+          .then(function () {
+            if (rendition) return rendition.display(target);
+          });
+      })
+      .catch(function () {
+        /* target may be gone after a teardown */
+      });
+  }
+
   function display(target) {
     if (!rendition || !target) return;
     var t = String(target);
@@ -461,15 +496,15 @@
             } catch (e) {
               /* fall back to the raw href below */
             }
-            return rendition.display(cfi || t);
+            displaySettled(cfi || t);
           })
           .catch(function () {
-            if (rendition) rendition.display(t);
+            displaySettled(t);
           });
         return;
       }
     }
-    rendition.display(t);
+    displaySettled(t);
   }
 
   function copyText(text) {
