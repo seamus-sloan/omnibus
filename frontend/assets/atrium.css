@@ -4714,7 +4714,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 
   /* Search is the one full-screen surface (keyboard + result list want the
      height); it drops the sheet radius and grabber. */
-  .rd-search-drawer { top: 0; max-height: none; border-radius: 0; border-top: 0; }
+  .rd-search-drawer { top: 0; max-height: none; border-radius: 0; border-top: 0;
+    padding-top: env(safe-area-inset-top); }
   .rd-search-drawer .rd-grabber { display: none; }
   .rd-search-box { padding: 10px 14px; }
   .rd-search-input { height: 38px; border-radius: 10px; font-family: var(--sans); }
