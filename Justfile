@@ -17,7 +17,7 @@ serve-pc:
 # Use `source .claude/runtime/env.sh` afterwards to pick up OMNIBUS_PORT
 # and PLAYWRIGHT_BASE_URL for follow-on commands (Playwright, preview).
 dev-up:
-    nix develop .#web --command scripts/dev-server-up.sh
+    scripts/with-dev-env.sh web scripts/dev-server-up.sh
 
 # Peek at THIS workspace's dev server without mutating anything.
 # Exit 0 + emit OMNIBUS_DEV_READY when healthy; exit 1 if no server is
@@ -32,11 +32,17 @@ dev-status:
 dev-down:
     scripts/dev-server-down.sh
 
+# Drop the cached Nix dev-env captured by scripts/with-dev-env.sh. Use if a
+# `nix store gc` or a weird env issue makes `just dev-up`/`lint`/`test`
+# misbehave; the next run repopulates from a fresh `nix print-dev-env`.
+env-clear:
+    rm -rf .claude/runtime/nix-env-cache
+
 # Restart THIS workspace's dev server cleanly. Use after adding a sqlx
 # migration (the running server boots its migrations at startup) or when
 # `dx serve` has wedged on a compile error and `dev-up` exits 2.
 dev-bounce:
-    nix develop .#web --command scripts/dev-server-bounce.sh
+    scripts/with-dev-env.sh web scripts/dev-server-bounce.sh
 
 # Ensure the public-domain test fixtures are present (one-time ~156 MB
 # download from the fixtures-vN release asset, then an instant no-op).
@@ -55,7 +61,7 @@ fixtures:
 # `just lint`).
 # Self-wraps in the slim nix shell so it works from a bare checkout too.
 test: fixtures
-    nix develop --command bash -ec '\
+    scripts/with-dev-env.sh default bash -ec '\
         cargo test -p omnibus-db && \
         cargo test -p omnibus && \
         cargo test -p omnibus-frontend --features server && \
@@ -67,13 +73,13 @@ test: fixtures
 # An unclosed `}` silently reparents later rules under CSS nesting, so a
 # missing brace must fail the build. stylelint is Nix-pinned in slimPackages.
 lint-css:
-    nix develop --command stylelint 'frontend/assets/**/*.css'
+    scripts/with-dev-env.sh default stylelint 'frontend/assets/**/*.css'
 
 # Format check + clippy, including the crate/feature combos a bare
 # `cargo clippy` (default-members, default features) misses. Depends on
 # `lint-css` so the CSS structural guard rides the same gate as fmt/clippy.
 lint: lint-css
-    nix develop --command bash -ec '\
+    scripts/with-dev-env.sh default bash -ec '\
         cargo fmt --check && \
         cargo clippy --all-targets && \
         cargo clippy -p omnibus-frontend --features server --all-targets && \
