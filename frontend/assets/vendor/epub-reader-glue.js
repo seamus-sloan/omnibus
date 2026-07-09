@@ -437,7 +437,39 @@
   // Navigate to a TOC href or a CFI (highlight / bookmark target).
   function display(target) {
     if (!rendition || !target) return;
-    rendition.display(target);
+    var t = String(target);
+    var hash = t.indexOf("#");
+    // CFIs and bare hrefs pass straight through. Fragment hrefs resolve to
+    // the anchor's first *rendered* element first — Gutenberg-style TOCs
+    // point at zero-size <a id> markers, and epub.js rounds an empty box to
+    // the next column, landing a page past the chapter heading.
+    if (hash > 0 && t.indexOf("epubcfi(") !== 0 && book && book.spine) {
+      var section = book.spine.get(t.slice(0, hash));
+      var id = t.slice(hash + 1);
+      if (section) {
+        section
+          .load(book.load.bind(book))
+          .then(function (doc) {
+            var el = doc.getElementById(id);
+            var probe = el;
+            while (probe && !probe.childNodes.length) {
+              probe = probe.nextElementSibling;
+            }
+            var cfi = null;
+            try {
+              cfi = section.cfiFromElement(probe || el);
+            } catch (e) {
+              /* fall back to the raw href below */
+            }
+            return rendition.display(cfi || t);
+          })
+          .catch(function () {
+            if (rendition) rendition.display(t);
+          });
+        return;
+      }
+    }
+    rendition.display(t);
   }
 
   function copyText(text) {
