@@ -59,8 +59,8 @@ Built with Rust ([Axum](https://github.com/tokio-rs/axum) + [Dioxus](https://dio
 The fastest way to run Omnibus. The image is published to
 [Docker Hub as `sesloan/omnibus`](https://hub.docker.com/r/sesloan/omnibus/tags),
 and the repo ships a Jellyfin-style [`docker-compose.yml`](docker-compose.yml):
-bind-mount your library read-only, durable state in `/config`, regenerable cache
-in `/cache`.
+bind-mount your ebook library read-write (in-UI uploads file into it; use `:ro`
+if you never upload), durable state in `/config`, regenerable cache in `/cache`.
 
 ```bash
 # 1. Point the library mounts at your books and set your access URL.

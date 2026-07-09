@@ -50,6 +50,9 @@ pub(super) enum UploadError {
     Forbidden,
     /// No ebook library path configured → 400.
     NotConfigured,
+    /// Library root exists but rejects writes (read-only mount / bad
+    /// permissions) → 400 with a remediation hint instead of an opaque 500.
+    LibraryNotWritable,
     /// File field absent from the multipart body → 400.
     MissingFile,
     /// Title/author missing, so the file can't be placed → 400.
@@ -87,6 +90,12 @@ impl IntoResponse for UploadError {
             UploadError::NotConfigured => (
                 StatusCode::BAD_REQUEST,
                 "Configure an ebook library path in Settings first",
+            )
+                .into_response(),
+            UploadError::LibraryNotWritable => (
+                StatusCode::BAD_REQUEST,
+                "The ebook library is not writable — uploads need a read-write \
+                 library mount (remove `:ro` from the books volume)",
             )
                 .into_response(),
             UploadError::MissingFile => {
@@ -310,7 +319,13 @@ pub(super) async fn post_upload_ebook(
     })
     .await
     .map_err(|e| UploadError::internal("spawn_blocking(file ebook)", e))?
-    .map_err(|e| UploadError::internal("file uploaded ebook", e))?;
+    .map_err(|e| match e.kind() {
+        std::io::ErrorKind::ReadOnlyFilesystem | std::io::ErrorKind::PermissionDenied => {
+            tracing::warn!(error = %e, dest = %dest.display(), "ebook library is not writable");
+            UploadError::LibraryNotWritable
+        }
+        _ => UploadError::internal("file uploaded ebook", e),
+    })?;
 
     // Reindex so the indexer mints the uuid, extracts the cover, and updates
     // FTS — the single source of truth for inserting books.

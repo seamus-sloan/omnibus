@@ -270,6 +270,54 @@ async fn commit_requires_configured_library_path() {
 }
 
 #[tokio::test]
+async fn commit_rejects_read_only_library_with_400() {
+    let (app, _state, pool) = fixture().await;
+    let library = tempfile::tempdir().expect("temp library dir");
+    let library_path = library.path().to_string_lossy().to_string();
+    db::set_settings(
+        &pool,
+        &Settings {
+            ebook_library_path: Some(library_path),
+            audiobook_library_path: None,
+        },
+    )
+    .await
+    .expect("set library path");
+
+    // Strip the write bit so filing the book hits PermissionDenied — the same
+    // failure class as a `:ro` bind mount in the deployed container.
+    let mut perms = std::fs::metadata(library.path()).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o555);
+    std::fs::set_permissions(library.path(), perms).expect("chmod library read-only");
+
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let (ct, body) = multipart_body(&[
+        ("title", None, b"Some Title"),
+        ("author", None, b"Some Author"),
+        ("file", Some("book.epub"), &fixture_epub()),
+    ]);
+    let res = app
+        .oneshot(post_multipart("/api/uploads/ebooks", &token, &ct, body))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let msg = String::from_utf8_lossy(&bytes);
+    assert!(
+        msg.contains("not writable"),
+        "error should name the read-only library, got: {msg}"
+    );
+
+    // Restore the write bit so the tempdir can be cleaned up.
+    let mut perms = std::fs::metadata(library.path()).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+    std::fs::set_permissions(library.path(), perms).expect("chmod library back");
+}
+
+#[tokio::test]
 async fn commit_rejects_non_epub_with_415() {
     let (app, _state, pool) = fixture().await;
     let admin = auth_test_support::create_admin(&pool, "admin").await;
