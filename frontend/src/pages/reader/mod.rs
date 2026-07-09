@@ -7,6 +7,7 @@
 //! `dioxus.send` event channel + tokened cross-origin fetch).
 
 mod aa_panel;
+mod annotations_sheet;
 mod bootstrap;
 mod chrome;
 mod chrome_handlers;
@@ -102,6 +103,7 @@ pub fn BookReadPage(uuid: String) -> Element {
         show_search,
         search_results,
         show_bookmarks,
+        show_annotations,
         loc,
         book_meta,
     } = use_reader_signals(&uuid, theme);
@@ -113,6 +115,7 @@ pub fn BookReadPage(uuid: String) -> Element {
             show_search,
             show_highlights,
             show_bookmarks,
+            show_annotations,
             note_target,
             quote_target,
         },
@@ -160,6 +163,7 @@ pub fn BookReadPage(uuid: String) -> Element {
                 show_search,
                 search_results,
                 show_bookmarks,
+                show_annotations,
             },
             nav: ReaderNavHandlers {
                 on_keydown,
@@ -187,6 +191,7 @@ struct ReaderSignals {
     show_search: Signal<bool>,
     search_results: Signal<Vec<SearchResult>>,
     show_bookmarks: Signal<bool>,
+    show_annotations: Signal<bool>,
     loc: Signal<RelocateData>,
     book_meta: Signal<Option<omnibus_shared::EbookMetadata>>,
 }
@@ -218,6 +223,7 @@ fn use_reader_signals(uuid: &str, theme: Signal<Theme>) -> ReaderSignals {
     let show_search = use_signal(|| false);
     let search_results: Signal<Vec<SearchResult>> = use_signal(Vec::new);
     let show_bookmarks = use_signal(|| false);
+    let show_annotations = use_signal(|| false);
     let loc = use_signal(RelocateData::default);
     let book_meta = use_book_metadata(uuid.to_string());
 
@@ -272,6 +278,7 @@ fn use_reader_signals(uuid: &str, theme: Signal<Theme>) -> ReaderSignals {
         show_search,
         search_results,
         show_bookmarks,
+        show_annotations,
         loc,
         book_meta,
     }
@@ -372,6 +379,7 @@ pub(super) struct ReaderPanelSignals {
     pub show_search: Signal<bool>,
     pub search_results: Signal<Vec<SearchResult>>,
     pub show_bookmarks: Signal<bool>,
+    pub show_annotations: Signal<bool>,
 }
 
 /// Navigation + keyboard handlers for the top bar, page-turn gutters, and surface keydown.

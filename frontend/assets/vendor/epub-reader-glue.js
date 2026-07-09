@@ -34,6 +34,10 @@
  *   display(target)                 navigate to a TOC href or CFI
  *   copyText(text)                  clipboard write
  *   shareText(text)                 navigator.share, clipboard fallback
+ *   exportQuoteCard(json)           canvas PNG → <a download>
+ *   shareQuoteCard(json)            canvas PNG → navigator.share(files),
+ *                                   download fallback
+ *   copyQuoteCardImage(json)        canvas PNG → clipboard, download fallback
  *   destroy()
  *
  * Selection callback:
@@ -489,12 +493,14 @@
   // (rather than rasterizing DOM) because the card is a fixed, bespoke layout —
   // a solid background, an italic serif quote, and an attribution footer — so
   // hand-drawing yields crisp output with no heavyweight DOM-capture dependency.
-  function exportQuoteCard(json) {
+  // Draw the quote card onto an offscreen canvas — the shared renderer behind
+  // the export / share / copy actions. Returns null on a bad payload.
+  function renderQuoteCanvas(json) {
     var o;
     try {
       o = JSON.parse(json);
     } catch (e) {
-      return;
+      return null;
     }
     var ratios = { "1:1": [1080, 1080], "4:5": [1080, 1350], "9:16": [1080, 1920], "3:4": [1080, 1440] };
     var dim = ratios[o.ratio] || ratios["1:1"];
@@ -503,7 +509,7 @@
     canvas.width = W;
     canvas.height = H;
     var ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) return null;
     var pad = Math.round(W * 0.1);
     ctx.fillStyle = o.bg || "#1a1a1a";
     ctx.fillRect(0, 0, W, H);
@@ -550,19 +556,74 @@
     ctx.font = "italic " + Math.round(W * 0.026) + "px Georgia, serif";
     ctx.fillText(o.subtitle || "", pad, footY + Math.round(W * 0.035));
     ctx.globalAlpha = 1;
+    return { canvas: canvas, name: (o.filename || "omnibus-quote") + ".png", title: o.subtitle || "Quote" };
+  }
 
-    canvas.toBlob(function (blob) {
+  function downloadBlob(blob, name) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 1000);
+  }
+
+  function exportQuoteCard(json) {
+    var r = renderQuoteCanvas(json);
+    if (!r) return;
+    r.canvas.toBlob(function (blob) {
       if (!blob) return;
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement("a");
-      a.href = url;
-      a.download = (o.filename || "omnibus-quote") + ".png";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(function () {
-        URL.revokeObjectURL(url);
-      }, 1000);
+      downloadBlob(blob, r.name);
+    }, "image/png");
+  }
+
+  // Native share sheet with the rendered PNG. Falls back to a plain download
+  // where Web Share can't take files (desktop browsers, older WebViews) —
+  // WKWebView's programmatic `<a download>` is spotty, which is exactly why
+  // the phone design routes through the share sheet instead.
+  function shareQuoteCard(json) {
+    var r = renderQuoteCanvas(json);
+    if (!r) return;
+    r.canvas.toBlob(function (blob) {
+      if (!blob) return;
+      try {
+        var f = new File([blob], r.name, { type: "image/png" });
+        if (navigator.canShare && navigator.canShare({ files: [f] })) {
+          navigator.share({ files: [f], title: r.title }).catch(function () {
+            /* user dismissed the sheet */
+          });
+          return;
+        }
+      } catch (e) {
+        /* File/Web Share unsupported */
+      }
+      downloadBlob(blob, r.name);
+    }, "image/png");
+  }
+
+  // Copy the rendered PNG to the clipboard; falls back to a download when
+  // ClipboardItem is unavailable.
+  function copyQuoteCardImage(json) {
+    var r = renderQuoteCanvas(json);
+    if (!r) return;
+    r.canvas.toBlob(function (blob) {
+      if (!blob) return;
+      try {
+        if (navigator.clipboard && window.ClipboardItem) {
+          var item = new ClipboardItem({ "image/png": blob });
+          navigator.clipboard.write([item]).catch(function () {
+            downloadBlob(blob, r.name);
+          });
+          return;
+        }
+      } catch (e) {
+        /* ClipboardItem unsupported */
+      }
+      downloadBlob(blob, r.name);
     }, "image/png");
   }
 
@@ -586,6 +647,8 @@
     shareText: shareText,
     search: search,
     exportQuoteCard: exportQuoteCard,
+    shareQuoteCard: shareQuoteCard,
+    copyQuoteCardImage: copyQuoteCardImage,
     destroy: destroy,
   };
 })();

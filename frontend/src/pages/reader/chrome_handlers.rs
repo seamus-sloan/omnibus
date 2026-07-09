@@ -21,6 +21,7 @@ pub(super) struct OverlaySignals {
     pub show_search: Signal<bool>,
     pub show_highlights: Signal<bool>,
     pub show_bookmarks: Signal<bool>,
+    pub show_annotations: Signal<bool>,
     pub note_target: Signal<Option<Highlight>>,
     pub quote_target: Signal<Option<Highlight>>,
 }
@@ -106,6 +107,7 @@ fn handle_keydown(
             let mut show_search = overlays.show_search;
             let mut show_highlights = overlays.show_highlights;
             let mut show_bookmarks = overlays.show_bookmarks;
+            let mut show_annotations = overlays.show_annotations;
             let mut note_target = overlays.note_target;
             let mut quote_target = overlays.quote_target;
             if selection.read().is_some() {
@@ -122,6 +124,8 @@ fn handle_keydown(
                 show_highlights.set(false);
             } else if *show_bookmarks.read() {
                 show_bookmarks.set(false);
+            } else if *show_annotations.read() {
+                show_annotations.set(false);
             } else if *show_aa.read() {
                 show_aa.set(false);
             } else {
