@@ -176,6 +176,7 @@ pub async fn preview_shelf_rule(
 
 // Web / SSR (RPC server functions).
 
+/// The caller's visible shelves.
 #[cfg(not(feature = "mobile"))]
 pub async fn list_shelves(_server_url: &str) -> Result<Vec<ShelfSummary>, DataError> {
     crate::rpc::rpc_list_shelves()
@@ -183,6 +184,7 @@ pub async fn list_shelves(_server_url: &str) -> Result<Vec<ShelfSummary>, DataEr
         .map_err(note_server_fn_err)
 }
 
+/// One shelf's detail.
 #[cfg(not(feature = "mobile"))]
 pub async fn get_shelf(_server_url: &str, id: i64) -> Result<Shelf, DataError> {
     crate::rpc::rpc_get_shelf(id)
@@ -190,6 +192,7 @@ pub async fn get_shelf(_server_url: &str, id: i64) -> Result<Shelf, DataError> {
         .map_err(note_server_fn_err)
 }
 
+/// Create a shelf.
 #[cfg(not(feature = "mobile"))]
 pub async fn create_shelf(_server_url: &str, req: CreateShelfRequest) -> Result<Shelf, DataError> {
     crate::rpc::rpc_create_shelf(req)
@@ -197,6 +200,7 @@ pub async fn create_shelf(_server_url: &str, req: CreateShelfRequest) -> Result<
         .map_err(note_server_fn_err)
 }
 
+/// Partially update a shelf.
 #[cfg(not(feature = "mobile"))]
 pub async fn update_shelf(
     _server_url: &str,
@@ -208,6 +212,7 @@ pub async fn update_shelf(
         .map_err(note_server_fn_err)
 }
 
+/// Delete a shelf.
 #[cfg(not(feature = "mobile"))]
 pub async fn delete_shelf(_server_url: &str, id: i64) -> Result<(), DataError> {
     crate::rpc::rpc_delete_shelf(id)
@@ -215,6 +220,7 @@ pub async fn delete_shelf(_server_url: &str, id: i64) -> Result<(), DataError> {
         .map_err(note_server_fn_err)
 }
 
+/// The shelf's member books, sorted per `sort_key`/`sort_dir`.
 #[cfg(not(feature = "mobile"))]
 pub async fn shelf_page(
     _server_url: &str,
@@ -227,6 +233,7 @@ pub async fn shelf_page(
         .map_err(note_server_fn_err)
 }
 
+/// Append books to a hand-picked shelf.
 #[cfg(not(feature = "mobile"))]
 pub async fn add_shelf_books(
     _server_url: &str,
@@ -238,6 +245,7 @@ pub async fn add_shelf_books(
         .map_err(note_server_fn_err)
 }
 
+/// Remove a book from a shelf.
 #[cfg(not(feature = "mobile"))]
 pub async fn remove_shelf_book(
     _server_url: &str,
@@ -249,6 +257,7 @@ pub async fn remove_shelf_book(
         .map_err(note_server_fn_err)
 }
 
+/// Evaluate an unsaved smart-shelf rule.
 #[cfg(not(feature = "mobile"))]
 pub async fn preview_shelf_rule(
     _server_url: &str,

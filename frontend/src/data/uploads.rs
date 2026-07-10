@@ -49,6 +49,7 @@ async fn web_error(res: gloo_net::http::Response) -> DataError {
     DataError::Http { status, body }
 }
 
+/// Upload the file for server-side inspection ahead of the confirm step.
 #[cfg(feature = "web")]
 pub async fn inspect_ebook(
     _server_url: &str,
@@ -78,6 +79,7 @@ pub async fn inspect_ebook(
         .map_err(|e| DataError::Other(e.to_string()))
 }
 
+/// Commit a previously-inspected ebook to the library with the confirmed metadata.
 #[cfg(feature = "web")]
 pub async fn upload_ebook(
     _server_url: &str,
@@ -122,6 +124,7 @@ pub async fn upload_ebook(
 
 // Mobile (reqwest multipart).
 
+/// Upload the file for server-side inspection ahead of the confirm step.
 #[cfg(feature = "mobile")]
 pub async fn inspect_ebook(
     server_url: &str,
@@ -144,6 +147,7 @@ pub async fn inspect_ebook(
     Ok(response.json::<UploadInspection>().await?)
 }
 
+/// Commit a previously-inspected ebook to the library with the confirmed metadata.
 #[cfg(feature = "mobile")]
 pub async fn upload_ebook(
     server_url: &str,
@@ -178,6 +182,7 @@ pub async fn upload_ebook(
 
 // Fallback stub (SSR / no platform feature).
 
+/// Unavailable in this build — neither `web` nor `mobile` is enabled.
 #[cfg(not(any(feature = "web", feature = "mobile")))]
 pub async fn inspect_ebook(
     _server_url: &str,
@@ -189,6 +194,7 @@ pub async fn inspect_ebook(
     ))
 }
 
+/// Unavailable in this build — neither `web` nor `mobile` is enabled.
 #[cfg(not(any(feature = "web", feature = "mobile")))]
 pub async fn upload_ebook(
     _server_url: &str,

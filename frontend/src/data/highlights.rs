@@ -12,6 +12,7 @@ use super::DataError;
 #[cfg(feature = "mobile")]
 use super::{drain_error, http_client, note_status, with_bearer};
 
+/// Create a highlight for the book with the given uuid.
 #[cfg(feature = "mobile")]
 pub async fn create_highlight(
     server_url: &str,
@@ -28,6 +29,7 @@ pub async fn create_highlight(
     Ok(response.json::<Highlight>().await?)
 }
 
+/// List highlights for the book with the given uuid.
 #[cfg(feature = "mobile")]
 pub async fn list_highlights(
     server_url: &str,
@@ -42,6 +44,7 @@ pub async fn list_highlights(
     Ok(response.json::<Vec<Highlight>>().await?)
 }
 
+/// Update a highlight's color.
 #[cfg(feature = "mobile")]
 pub async fn update_highlight_color(
     server_url: &str,
@@ -60,6 +63,7 @@ pub async fn update_highlight_color(
     Ok(())
 }
 
+/// Update a highlight's note text.
 #[cfg(feature = "mobile")]
 pub async fn update_highlight_note(
     server_url: &str,
@@ -78,6 +82,7 @@ pub async fn update_highlight_note(
     Ok(())
 }
 
+/// Delete a highlight.
 #[cfg(feature = "mobile")]
 pub async fn delete_highlight(server_url: &str, id: i64) -> Result<(), DataError> {
     let url = format!("{server_url}/api/highlights/{id}");
@@ -89,6 +94,7 @@ pub async fn delete_highlight(server_url: &str, id: i64) -> Result<(), DataError
     Ok(())
 }
 
+/// Create a highlight for the book with the given uuid.
 #[cfg(not(feature = "mobile"))]
 pub async fn create_highlight(
     _server_url: &str,
@@ -99,6 +105,7 @@ pub async fn create_highlight(
         .map_err(note_server_fn_err)
 }
 
+/// List highlights for the book with the given uuid.
 #[cfg(not(feature = "mobile"))]
 pub async fn list_highlights(
     _server_url: &str,
@@ -109,6 +116,7 @@ pub async fn list_highlights(
         .map_err(note_server_fn_err)
 }
 
+/// Update a highlight's color.
 #[cfg(not(feature = "mobile"))]
 pub async fn update_highlight_color(
     _server_url: &str,
@@ -120,6 +128,7 @@ pub async fn update_highlight_color(
         .map_err(note_server_fn_err)
 }
 
+/// Update a highlight's note text.
 #[cfg(not(feature = "mobile"))]
 pub async fn update_highlight_note(
     _server_url: &str,
@@ -131,6 +140,7 @@ pub async fn update_highlight_note(
         .map_err(note_server_fn_err)
 }
 
+/// Delete a highlight.
 #[cfg(not(feature = "mobile"))]
 pub async fn delete_highlight(_server_url: &str, id: i64) -> Result<(), DataError> {
     crate::rpc::rpc_delete_highlight(id)
