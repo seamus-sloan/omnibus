@@ -727,3 +727,13 @@ fn chapter_number_at_tracks_boundaries_and_empty_list() {
     assert_eq!(chapter_number_at(&chs, 400.0), Some(2));
     assert_eq!(chapter_number_at(&chs, 9000.0), Some(2));
 }
+
+#[tokio::test]
+async fn get_progress_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = get_progress(&pool, 1, "any-uuid", ProgressFormat::Epub)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProgressError::Sqlx(_)));
+}

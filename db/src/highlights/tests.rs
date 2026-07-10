@@ -333,3 +333,22 @@ async fn list_highlights_query_plan_uses_covering_index() {
         "expected index-only sort — plan still uses a temp b-tree:\n{plan}",
     );
 }
+
+#[tokio::test]
+async fn create_highlight_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = create_highlight(
+        &pool,
+        1,
+        &CreateHighlight {
+            book_uuid: "any-uuid".into(),
+            epub_cfi_range: "epubcfi(/6/2!/4/2)".into(),
+            color: HighlightColor::Amber,
+            text: None,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, HighlightError::Sqlx(_)));
+}

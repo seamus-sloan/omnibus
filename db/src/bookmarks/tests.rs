@@ -263,3 +263,21 @@ async fn list_bookmarks_query_plan_uses_covering_index() {
         "expected index-only sort — plan still uses a temp b-tree:\n{plan}",
     );
 }
+
+#[tokio::test]
+async fn create_bookmark_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = create_bookmark(
+        &pool,
+        1,
+        &CreateBookmark {
+            book_uuid: "any-uuid".into(),
+            position: "0".into(),
+            title: None,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, BookmarkError::Sqlx(_)));
+}

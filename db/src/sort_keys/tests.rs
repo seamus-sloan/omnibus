@@ -133,3 +133,11 @@ async fn backfill_series_sort_fills_linked_books_and_skips_seriesless() {
         .unwrap();
     assert_eq!(again.as_deref(), Some("Dune"));
 }
+
+#[tokio::test]
+async fn backfill_series_sort_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = backfill_series_sort(&pool).await.unwrap_err();
+    assert!(matches!(err, SortKeysError::Db(_)));
+}

@@ -955,3 +955,11 @@ async fn forced_full_rescan_with_unreadable_files_does_not_wipe_or_resurrect() {
 
     let _ = std::fs::remove_dir_all(&lib);
 }
+
+#[tokio::test]
+async fn is_stale_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = is_stale(&pool, "/lib").await.unwrap_err();
+    assert!(matches!(err, IndexerError::Db(_)));
+}

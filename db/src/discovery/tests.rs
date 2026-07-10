@@ -956,3 +956,11 @@ async fn get_author_populates_has_photo() {
     let ada = get_author(&pool, ada_id).await.unwrap().unwrap();
     assert!(ada.has_photo, "manual upload should yield has_photo = true");
 }
+
+#[tokio::test]
+async fn get_tag_cloud_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = get_tag_cloud(&pool).await.unwrap_err();
+    assert!(matches!(err, DiscoveryError::Db(_)));
+}

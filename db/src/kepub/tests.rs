@@ -264,6 +264,16 @@ async fn convert_book_returns_non_zero_when_kepubify_exits_non_zero() {
     assert!(!kepub_path(book_id).exists());
 }
 
+#[tokio::test]
+async fn convert_book_propagates_db_error_when_pool_is_closed() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    // `convert_book` reads `last_modified` via `crate::covers::CoversError`
+    // first, so a closed pool surfaces as the wrapped `Covers` variant.
+    let err = convert_book(&pool, 1).await.unwrap_err();
+    assert!(matches!(err, KepubError::Covers(_)));
+}
+
 /// Write a fake `kepubify` at `path` that answers `--version` (so detection
 /// passes) but for any real invocation writes to stderr and exits non-zero,
 /// driving the `NonZero` branch in `run_kepubify`.

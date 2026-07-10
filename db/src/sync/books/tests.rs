@@ -408,3 +408,30 @@ async fn insert_book_row_writes_books_and_book_files_and_mints_uuid() {
         "exactly one book_files row"
     );
 }
+
+#[tokio::test]
+async fn insert_chapters_propagates_db_error_when_table_missing() {
+    // `SyncError` (crate-internal, shared by the ebook and audiobook sync
+    // writers) has no direct pool-level entry point of its own — it's
+    // produced deep inside the audiobook chapter writer. Dropping the
+    // target table mid-transaction forces the same `sqlx::Error` passthrough
+    // a closed pool would, without needing a second in-memory DB handle.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("DROP TABLE file_chapters")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let part = crate::audiobook::AudiobookPart {
+        ordinal: 0,
+        filename: "01.mp3".into(),
+        size_bytes: 100,
+        mtime_epoch: 0,
+        duration_seconds: 10.0,
+    };
+    let err =
+        crate::sync::audiobooks::insert_chapters(&mut tx, 1, &[], std::slice::from_ref(&part))
+            .await
+            .unwrap_err();
+    assert!(matches!(err, super::SyncError::Db(_)));
+}

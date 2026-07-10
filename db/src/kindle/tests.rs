@@ -109,3 +109,15 @@ fn kindle_error_build_wraps_lettre_message_error() {
         "got {err}"
     );
 }
+
+#[tokio::test]
+async fn send_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    // `send` reads the SMTP config via `crate::settings::SettingsError`
+    // first, so a closed pool surfaces as the wrapped `Settings` variant.
+    let err = send(&pool, 1, None, "reader@example.com")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, KindleError::Settings(_)));
+}

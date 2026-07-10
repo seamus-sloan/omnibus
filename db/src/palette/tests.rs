@@ -1321,3 +1321,11 @@ async fn count_tags_counts_visible_matches_scoped() {
     assert_eq!(count_tags(&pool, "/lib", "%match-%").await.unwrap(), 2);
     assert_eq!(count_tags(&pool, "/lib", "%zzznope%").await.unwrap(), 0);
 }
+
+#[tokio::test]
+async fn search_palette_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = search_palette(&pool, "/lib", "query").await.unwrap_err();
+    assert!(matches!(err, PaletteError::Db(_)));
+}

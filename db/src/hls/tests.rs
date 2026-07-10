@@ -416,3 +416,11 @@ async fn transcode_book_clears_orphan_progress_on_restart() {
         "orphan 0.1 sentinel must have been cleared; got {observed}"
     );
 }
+
+#[tokio::test]
+async fn get_parts_propagates_db_error_when_pool_is_closed() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = get_parts(&pool, 1).await.unwrap_err();
+    assert!(matches!(err, HlsError::Db(_)));
+}
