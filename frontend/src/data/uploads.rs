@@ -49,8 +49,7 @@ async fn web_error(res: gloo_net::http::Response) -> DataError {
     DataError::Http { status, body }
 }
 
-/// Upload the file for server-side inspection, returning parsed metadata for
-/// the confirm step without committing anything to the library.
+/// Upload the file for server-side inspection ahead of the confirm step.
 #[cfg(feature = "web")]
 pub async fn inspect_ebook(
     _server_url: &str,
@@ -125,8 +124,7 @@ pub async fn upload_ebook(
 
 // Mobile (reqwest multipart).
 
-/// Upload the file for server-side inspection, returning parsed metadata for
-/// the confirm step without committing anything to the library.
+/// Upload the file for server-side inspection ahead of the confirm step.
 #[cfg(feature = "mobile")]
 pub async fn inspect_ebook(
     server_url: &str,
