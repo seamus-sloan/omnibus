@@ -219,3 +219,11 @@ fn gif_cover_bytes_decode_via_load_from_memory() {
         image::load_from_memory(GIF_1X1).expect("GIF must decode once the gif codec is enabled");
     assert_eq!((img.width(), img.height()), (1, 1));
 }
+
+#[tokio::test]
+async fn get_last_modified_epoch_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = get_last_modified_epoch(&pool, 1).await.unwrap_err();
+    assert!(matches!(err, CoversError::Db(_)));
+}

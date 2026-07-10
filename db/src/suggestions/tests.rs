@@ -11,14 +11,15 @@ use crate::pool::init_db;
 use crate::suggestions::cascade::resolve_with;
 use crate::suggestions::data::{
     decide, delete_suggestions, get_suggestion_cover, get_suggestions, mark_pending,
-    replace_suggestions, suggestion_state, NewSuggestion, SuggestionState, PENDING_DEBOUNCE_SECS,
-    SUGGESTIONS_TTL_SECS,
+    replace_suggestions, suggestion_state, NewSuggestion, SuggestionState, SuggestionsDataError,
+    PENDING_DEBOUNCE_SECS, SUGGESTIONS_TTL_SECS,
 };
 use crate::suggestions::filter::{
     filter_candidates, is_entry_point, is_same_author, is_same_series, Candidate,
 };
 use crate::suggestions::hardcover::{
     co_listed_counts, curated_list_ids, fetch_candidates, resolve_book, HardcoverConfig,
+    HardcoverError,
 };
 use crate::test_support::seed_synced_ebook;
 
@@ -504,4 +505,29 @@ async fn resolve_with_caches_filtered_survivors_end_to_end() {
 
     let (state, _) = suggestion_state(&pool, &uuid).await.unwrap().unwrap();
     assert_eq!(state, SuggestionState::Resolved);
+}
+
+#[tokio::test]
+async fn mark_pending_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = mark_pending(&pool, "any-uuid").await.unwrap_err();
+    assert!(matches!(err, SuggestionsDataError::Db(_)));
+}
+
+#[tokio::test]
+async fn resolve_book_propagates_http_error_when_endpoint_unreachable() {
+    // Port 1 (tcpmux) has nothing listening in any dev/CI sandbox, so the
+    // connection is refused immediately — a deterministic way to force
+    // `reqwest`'s transport-error path (as opposed to a mocked HTTP status)
+    // without a real network dependency.
+    let cfg = HardcoverConfig {
+        base_url: "http://127.0.0.1:1/graphql".to_string(),
+        api_key: "test-key".to_string(),
+        timeout: std::time::Duration::from_secs(5),
+    };
+    let err = resolve_book(&cfg, &["9780000000000".to_string()], "Some Title", None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, HardcoverError::Http(_)));
 }

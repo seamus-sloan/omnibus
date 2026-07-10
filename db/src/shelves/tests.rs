@@ -768,3 +768,11 @@ async fn can_view_and_can_edit_enforce_visibility() {
     assert!(!can_edit(&full, owner + 1, false));
     assert!(can_edit(&full, owner + 1, true)); // admin
 }
+
+#[tokio::test]
+async fn get_shelf_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = get_shelf(&pool, 1).await.unwrap_err();
+    assert!(matches!(err, ShelfError::Sqlx(_)));
+}

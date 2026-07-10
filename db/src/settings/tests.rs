@@ -705,3 +705,11 @@ async fn seed_smtp_from_env_only_seeds_when_unset() {
     let c = get_smtp_config(&pool).await.unwrap().unwrap();
     assert_eq!(c.host, "smtp.example.com");
 }
+
+#[tokio::test]
+async fn get_settings_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = get_settings(&pool).await.unwrap_err();
+    assert!(matches!(err, SettingsError::Db(_)));
+}

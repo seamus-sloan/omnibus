@@ -293,3 +293,11 @@ async fn delete_author_rebuilds_fts_for_all_affected_books_in_batch() {
         "deleted author must not appear in any FTS row"
     );
 }
+
+#[tokio::test]
+async fn get_author_photo_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = get_author_photo(&pool, 1).await.unwrap_err();
+    assert!(matches!(err, AuthorPhotosDataError::Db(_)));
+}
