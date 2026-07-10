@@ -516,16 +516,19 @@ async fn mark_pending_propagates_db_error_when_pool_is_closed() {
 }
 
 #[tokio::test]
-async fn resolve_book_propagates_http_error_when_endpoint_unreachable() {
-    // Port 1 (tcpmux) has nothing listening in any dev/CI sandbox, so the
-    // connection is refused immediately — a deterministic way to force
-    // `reqwest`'s transport-error path (as opposed to a mocked HTTP status)
-    // without a real network dependency.
-    let cfg = HardcoverConfig {
-        base_url: "http://127.0.0.1:1/graphql".to_string(),
-        api_key: "test-key".to_string(),
-        timeout: std::time::Duration::from_secs(5),
-    };
+async fn resolve_book_propagates_http_error_when_server_returns_500() {
+    // `error_for_status()` turns a 5xx response into a `reqwest::Error`,
+    // which `#[from]` maps to `HardcoverError::Http` — the same variant a
+    // transport-level failure would produce, but deterministic and
+    // instant via the existing `wiremock` harness instead of depending on
+    // a specific port being unreachable.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let cfg = config_for(&server);
     let err = resolve_book(&cfg, &["9780000000000".to_string()], "Some Title", None)
         .await
         .unwrap_err();
