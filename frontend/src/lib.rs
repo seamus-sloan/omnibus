@@ -154,6 +154,11 @@ fn ScreenLayout(children: Element) -> Element {
     rsx! {
         div { class: "screen",
             {children}
+            // Persistent mini-player. Lives in `ScreenLayout` (not the
+            // immersive `/listen` / `/read` routes, which render bare) so it
+            // shows on every main page while an audiobook is loaded and is
+            // absent on the full player. Renders nothing until a book plays.
+            pages::MobileMiniPlayer {}
             Nav {}
         }
     }
@@ -207,9 +212,13 @@ fn use_user_and_playback_contexts() {
     use_context_provider(PlaybackState::new);
 }
 
-/// Mobile stub: no `/me` cache, no playback context.
+/// Mobile: no `/me` cache (bearer tokens via `token_store`), but an app-wide
+/// playback context — the analogue of web's `PlaybackState` — so the full
+/// player, the mini-player, and the app-root audio host share one state.
 #[cfg(feature = "mobile")]
-fn use_user_and_playback_contexts() {}
+fn use_user_and_playback_contexts() {
+    use_context_provider(pages::MobilePlayback::new);
+}
 
 /// Install the app-root playback shim and the single boot-time `/me` fetch.
 ///
@@ -311,11 +320,12 @@ pub fn App() -> Element {
     // The single `<audio>` element, mounted at the App root (sibling of the
     // Router) so it never unmounts on navigation — the persistence anchor for
     // cross-page playback. Rendered on not(mobile) for SSR/WASM hydration
-    // parity; empty on mobile.
+    // parity; mobile mounts its render-less audio host (which installs the
+    // JS-owned element into `document.body`) at the same anchor instead.
     #[cfg(not(feature = "mobile"))]
     let audio_host = rsx! { pages::AudioElement {} };
     #[cfg(feature = "mobile")]
-    let audio_host = rsx! {};
+    let audio_host = rsx! { pages::MobileAudioHost {} };
 
     rsx! {
         document::Title { "Omnibus" }
