@@ -1,11 +1,7 @@
 //! Persistent mobile mini-player.
 //!
-//! Docked just above the bottom tab bar by the mobile `ScreenLayout`, so it
-//! shows on every main page while an audiobook is loaded — and is absent on
-//! the full-screen `/listen` route, which renders bare. Reads the app-wide
-//! [`super::state::MobilePlayback`] context; the backing `<audio>` element
-//! and event drain live at the App root, so playback keeps running while
-//! this is the only visible transport.
+//! Docked above the tab bar via `ScreenLayout`; reads [`super::state::MobilePlayback`]
+//! to render transport controls while an audiobook is loaded.
 
 use dioxus::prelude::*;
 use dioxus_router::Link;

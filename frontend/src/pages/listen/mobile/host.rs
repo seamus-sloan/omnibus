@@ -1,11 +1,8 @@
 //! App-root playback driver for mobile.
 //!
-//! Mounted once by [`crate::App`] (a render-less component), so the manifest
-//! load, the JS `<audio>` surface install, and the event-drain loop all live
-//! in a scope that never unmounts — playback and position tracking survive
-//! navigating away from `/listen/:uuid`. The mobile analogue of the web
-//! `bootstrap::install_audio_bootstrap` driver. Reacts to the listen page
-//! retargeting [`MobilePlayback::uuid`]; also owns the wall-clock sleep tick.
+//! Mounted once by [`crate::App`]; reacts to [`MobilePlayback::uuid`] by
+//! loading the manifest, installing the JS `<audio>` surface, and draining
+//! events into [`MobilePlayback`].
 
 use dioxus::dioxus_core::Task;
 use dioxus::prelude::*;
