@@ -115,6 +115,12 @@ jobs:
       - name: Clippy frontend (web)
         run: nix develop --command cargo clippy -p omnibus-frontend --features web --all-targets --target wasm32-unknown-unknown -- -D warnings
 
+      # Lints the same cfg-split mobile code path the test step below covers.
+      # Only needs reqwest/tokio (no GTK/wry — that's `omnibus-mobile` below),
+      # so this runs in the default shell like the other frontend variants.
+      - name: Clippy frontend (mobile)
+        run: nix develop --command cargo clippy -p omnibus-frontend --features mobile --all-targets -- -D warnings
+
       - name: Clippy shared
         run: nix develop --command cargo clippy -p omnibus-shared --all-targets -- -D warnings
 
