@@ -111,10 +111,7 @@ pub struct ProgressRecord {
     pub updated_at: i64,
 }
 
-/// One "pick up where you left off" entry: a recent progress row joined
-/// with its book and, for audio rows, whole-book playback totals. Returned
-/// by `GET /api/progress/recent` (mobile) and `rpc_recent_progress` (web),
-/// newest first.
+/// "Pick up where you left off" entry returned by `GET /api/progress/recent` and `rpc_recent_progress`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResumePoint {
     pub record: ProgressRecord,

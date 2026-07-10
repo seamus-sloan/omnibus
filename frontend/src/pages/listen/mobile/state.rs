@@ -1,12 +1,7 @@
-//! App-wide mobile playback context.
+//! App-wide mobile audiobook playback context.
 //!
-//! Owned by [`crate::App`] via `use_context_provider` (see
-//! `use_user_and_playback_contexts`) so the full player, the persistent
-//! mini-player, and the app-root audio host share one set of signals —
-//! the mobile analogue of `contexts::PlaybackState` on web. The backing
-//! `<audio>` element lives in `document.body` (installed by
-//! [`super::interop`]), so playback survives route changes; these signals
-//! are what let the UI keep tracking it after the player unmounts.
+//! Provided by [`crate::App`] so the full player, mini-player, and
+//! [`super::host::MobileAudioHost`] share one set of `Signal`s.
 
 use dioxus::prelude::*;
 
