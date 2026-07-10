@@ -461,3 +461,69 @@ async fn api_post_sessions_rollback_on_second_insert_error() {
         "rolled-back transaction must leave no reading_sessions rows"
     );
 }
+
+#[tokio::test]
+async fn api_get_recent_progress_requires_auth() {
+    let (app, _state, _pool) = fixture().await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/progress/recent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn api_get_recent_progress_returns_resume_points_newest_first() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (_, uuid_a) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
+    let (_, uuid_b) = seed_book_with_uuid(&pool, "/lib", "Book B").await;
+    for uuid in [&uuid_a, &uuid_b] {
+        omnibus_db::progress::upsert_progress(
+            &pool,
+            user.id,
+            &omnibus_shared::ProgressUpdate {
+                book_uuid: uuid.clone(),
+                format: omnibus_shared::ProgressFormat::Epub,
+                epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
+                audio_position_seconds: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    // Same-second upserts tie on updated_at; force Book B newest.
+    sqlx::query("UPDATE reading_progress SET updated_at = 200 WHERE book_uuid = ?")
+        .bind(&uuid_b)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE reading_progress SET updated_at = 100 WHERE book_uuid = ?")
+        .bind(&uuid_a)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/progress/recent?limit=1")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let points: Vec<omnibus_shared::ResumePoint> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(points.len(), 1);
+    assert_eq!(points[0].record.book_uuid, uuid_b);
+    assert_eq!(points[0].book.title.as_deref(), Some("Book B"));
+}

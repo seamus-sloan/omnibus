@@ -3,7 +3,7 @@
 //! functions on web/SSR. Public signatures are identical across the
 //! `#[cfg]` split so callers stay platform-agnostic.
 
-use omnibus_shared::{ProgressFormat, ProgressRecord, ProgressUpdate, SessionReport};
+use omnibus_shared::{ProgressFormat, ProgressRecord, ProgressUpdate, ResumePoint, SessionReport};
 
 #[cfg(not(feature = "mobile"))]
 use super::note_server_fn_err;
@@ -66,6 +66,18 @@ pub async fn record_sessions(
     Ok(body.get("recorded").and_then(|v| v.as_u64()).unwrap_or(0))
 }
 
+/// GET `/api/progress/recent?limit=…` — the "pick up where you left off" feed.
+#[cfg(feature = "mobile")]
+pub async fn recent_progress(server_url: &str, limit: i64) -> Result<Vec<ResumePoint>, DataError> {
+    let url = format!("{server_url}/api/progress/recent?limit={limit}");
+    let response = with_bearer(http_client().get(&url)).send().await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(response.json::<Vec<ResumePoint>>().await?)
+}
+
 /// Web/SSR `save_progress` — server-function wrapper that proxies to `rpc_save_progress`.
 #[cfg(not(feature = "mobile"))]
 pub async fn save_progress(
@@ -85,6 +97,14 @@ pub async fn get_progress(
     format: ProgressFormat,
 ) -> Result<Option<ProgressRecord>, DataError> {
     crate::rpc::rpc_get_progress(uuid.to_string(), format)
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Web/SSR `recent_progress` — server-function wrapper that proxies to `rpc_recent_progress`.
+#[cfg(not(feature = "mobile"))]
+pub async fn recent_progress(_server_url: &str, limit: i64) -> Result<Vec<ResumePoint>, DataError> {
+    crate::rpc::rpc_recent_progress(limit)
         .await
         .map_err(note_server_fn_err)
 }

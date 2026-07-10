@@ -302,6 +302,7 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
         // `/api/rpc/progress*` server functions defined in `omnibus_frontend::rpc`.
         .route("/api/progress", post(progress::post_progress))
         .route("/api/progress/sessions", post(progress::post_sessions))
+        .route("/api/progress/recent", get(progress::get_recent_progress))
         .route("/api/progress/{uuid}", get(progress::get_progress))
         // F2.4b highlight annotations — mobile-facing REST. Web hits the
         // analogous `/api/rpc/highlights/*` server functions.

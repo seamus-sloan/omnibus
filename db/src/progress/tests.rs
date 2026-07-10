@@ -546,3 +546,184 @@ async fn progress_survives_hard_delete_of_book() {
         "reading_progress must survive a hard delete of its book (no cascade)"
     );
 }
+
+/// Seed an audiobook (books + book_files + parts + chapters) with two 600 s
+/// parts and three chapters, returning its uuid.
+async fn seed_audiobook(pool: &SqlitePool, uuid: &str) -> i64 {
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/ab', 'ab')")
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let book_id =
+        sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, '/ab', 'A')")
+            .bind(uuid)
+            .bind(lib_id)
+            .execute(pool)
+            .await
+            .unwrap()
+            .last_insert_rowid();
+    let file_id = sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'M4B', 'a', 1)",
+    )
+    .bind(book_id)
+    .execute(pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    for (ordinal, dur) in [(0i64, 600.0f64), (1, 600.0)] {
+        sqlx::query(
+            "INSERT INTO book_file_parts \
+                (book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds) \
+             VALUES (?, ?, 'p', 1, 0, ?)",
+        )
+        .bind(file_id)
+        .bind(ordinal)
+        .bind(dur)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    for (ordinal, start, dur) in [
+        (1i64, 0.0f64, 400.0f64),
+        (2, 400.0, 400.0),
+        (3, 800.0, 400.0),
+    ] {
+        sqlx::query(
+            "INSERT INTO file_chapters \
+                (book_file_id, ordinal, title, start_seconds, duration_seconds) \
+             VALUES (?, ?, 'ch', ?, ?)",
+        )
+        .bind(file_id)
+        .bind(ordinal)
+        .bind(start)
+        .bind(dur)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    book_id
+}
+
+#[tokio::test]
+async fn recent_progress_returns_rows_newest_first_within_limit() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid_a) = seed(&pool, "/lib", "Book A").await;
+    let (_, uuid_b) = seed(&pool, "/lib", "Book B").await;
+    for uuid in [&uuid_a, &uuid_b] {
+        upsert_progress(
+            &pool,
+            user,
+            &ProgressUpdate {
+                book_uuid: uuid.clone(),
+                format: ProgressFormat::Epub,
+                epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
+                audio_position_seconds: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    // upserts land in the same wall-clock second; force a strict order.
+    sqlx::query("UPDATE reading_progress SET updated_at = 100 WHERE book_uuid = ?")
+        .bind(&uuid_a)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE reading_progress SET updated_at = 200 WHERE book_uuid = ?")
+        .bind(&uuid_b)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let rows = recent_progress(&pool, user, 10).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].book_uuid, uuid_b, "newest row first");
+    assert_eq!(rows[1].book_uuid, uuid_a);
+
+    let capped = recent_progress(&pool, user, 1).await.unwrap();
+    assert_eq!(capped.len(), 1);
+    assert_eq!(capped[0].book_uuid, uuid_b);
+}
+
+#[tokio::test]
+async fn resume_points_enrich_audio_rows_with_duration_and_chapter() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    seed_audiobook(&pool, uuid).await;
+    upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.into(),
+            format: ProgressFormat::Audio,
+            epub_cfi: None,
+            // 450 s → inside chapter 2 (starts at 400 s).
+            audio_position_seconds: Some(450.0),
+        },
+    )
+    .await
+    .unwrap();
+
+    let points = resume_points(&pool, user, 5).await.unwrap();
+    assert_eq!(points.len(), 1);
+    let p = &points[0];
+    assert_eq!(p.book.title.as_deref(), Some("A"));
+    assert_eq!(p.total_duration_seconds, Some(1200.0));
+    assert_eq!(p.chapter_number, Some(2));
+    assert_eq!(p.chapter_count, Some(3));
+}
+
+#[tokio::test]
+async fn resume_points_skip_rows_whose_book_is_gone_and_leave_epub_totals_empty() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (ghost_id, ghost_uuid) = seed(&pool, "/lib", "Ghost").await;
+    let (_, kept_uuid) = seed(&pool, "/lib", "Kept").await;
+    for uuid in [&ghost_uuid, &kept_uuid] {
+        upsert_progress(
+            &pool,
+            user,
+            &ProgressUpdate {
+                book_uuid: uuid.clone(),
+                format: ProgressFormat::Epub,
+                epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
+                audio_position_seconds: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    sqlx::query("DELETE FROM books WHERE id = ?")
+        .bind(ghost_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let points = resume_points(&pool, user, 5).await.unwrap();
+    assert_eq!(points.len(), 1, "ghosted book's row is skipped");
+    let p = &points[0];
+    assert_eq!(p.record.book_uuid, kept_uuid);
+    assert_eq!(p.total_duration_seconds, None);
+    assert_eq!(p.chapter_number, None);
+    assert_eq!(p.chapter_count, None);
+}
+
+#[test]
+fn chapter_number_at_tracks_boundaries_and_empty_list() {
+    let ch = |start: f64, dur: f64| ChapterInfo {
+        ordinal: 1,
+        title: "x".into(),
+        start_seconds: start,
+        duration_seconds: dur,
+    };
+    assert_eq!(chapter_number_at(&[], 10.0), None);
+    let chs = vec![ch(0.0, 400.0), ch(400.0, 400.0)];
+    assert_eq!(chapter_number_at(&chs, 0.0), Some(1));
+    assert_eq!(chapter_number_at(&chs, 399.9), Some(1));
+    assert_eq!(chapter_number_at(&chs, 400.0), Some(2));
+    assert_eq!(chapter_number_at(&chs, 9000.0), Some(2));
+}

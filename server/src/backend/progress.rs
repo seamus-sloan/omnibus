@@ -26,6 +26,20 @@ fn default_format() -> ProgressFormat {
     ProgressFormat::Epub
 }
 
+#[derive(Debug, Deserialize)]
+pub(super) struct RecentQuery {
+    #[serde(default = "default_recent_limit")]
+    limit: i64,
+}
+
+fn default_recent_limit() -> i64 {
+    1
+}
+
+/// Ceiling on `?limit=` for `GET /api/progress/recent` — the surface is a
+/// small "pick up where you left off" strip, not a history browser.
+const RECENT_LIMIT_CAP: i64 = 20;
+
 /// Persist a new reading/listening position. Last-write-wins on
 /// `(user, book, format)`; returns the server-authoritative record so the
 /// caller can sync forward.
@@ -58,6 +72,22 @@ pub(super) async fn get_progress(
     match db::progress::get_progress(&state.pool, user.id, &uuid, q.format).await {
         Ok(rec) => Json(rec).into_response(),
         Err(e) => internal("get_progress", e),
+    }
+}
+
+/// The user's most recent progress rows joined with their books — the
+/// mobile "pick up where you left off" feed. `limit` defaults to 1 and is
+/// capped at [`RECENT_LIMIT_CAP`]. Rows whose book has vanished are skipped
+/// in the db layer.
+pub(super) async fn get_recent_progress(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Query(q): Query<RecentQuery>,
+) -> Response {
+    let limit = q.limit.clamp(1, RECENT_LIMIT_CAP);
+    match db::progress::resume_points(&state.pool, user.id, limit).await {
+        Ok(points) => Json(points).into_response(),
+        Err(e) => internal("resume_points", e),
     }
 }
 
