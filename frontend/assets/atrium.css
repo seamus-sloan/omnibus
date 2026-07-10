@@ -3086,8 +3086,23 @@ body {
   /* Bottom padding must clear the fixed .m-tabbar (~60px of bar chrome plus
      the OS home-indicator inset, which the bar adds to its own padding) or
      the tail of every scrolling page — e.g. the library's "Load more"
-     button — sits unreachable behind it. */
-  padding: var(--screen-pad-top) 1rem calc(5rem + env(safe-area-inset-bottom));
+     button — sits unreachable behind it. Defaults to the larger reserve
+     below (enough to also clear `.m-mini`, docked above the tab bar) since
+     the project's iOS 14 floor predates `:has()` support (Safari 15.4+) —
+     browsers that support it shrink back down when no mini-player is
+     mounted, via the `@supports` rule below. */
+  padding: var(--screen-pad-top) 1rem calc(9rem + env(safe-area-inset-bottom));
+}
+
+/* `.m-mini` docks at `bottom: calc(64px + safe-area)` with ~60px of its own
+   chrome, stacking well past the tabbar-only reserve (its top edge lands
+   around 124px up) — the default padding above already covers that. Shrink
+   back to the tabbar-only reserve when no mini-player is mounted, on
+   browsers new enough to detect it. */
+@supports selector(:has(a)) {
+  .screen:not(:has(.m-mini)) {
+    padding-bottom: calc(5rem + env(safe-area-inset-bottom));
+  }
 }
 
 .sr-only {
