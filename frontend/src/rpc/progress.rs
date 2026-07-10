@@ -53,11 +53,11 @@ pub async fn rpc_get_progress(
 /// `GET /api/progress/recent`; `limit` is clamped to the same 1..=20 range.
 #[post("/api/rpc/progress/recent", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_recent_progress(limit: i64) -> Result<Vec<ResumePoint>> {
-    let limit = limit.clamp(1, 20);
+    const LIMIT_CAP: i64 = 20;
+    let limit = limit.clamp(1, LIMIT_CAP);
     Ok(db::progress::resume_points(&pool.0, user.id, limit)
         .await
         .map_err(|e| internal_rpc_error("recent progress", e))?)
-}
 
 /// Reject over-cap session batches at the RPC boundary, mirroring the mobile
 /// REST route's 422 rejection in `server::backend::progress::post_sessions`.

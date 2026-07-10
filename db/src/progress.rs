@@ -224,7 +224,8 @@ async fn audio_totals(
     };
     let parts = hls::get_parts(pool, resolved.book_file_id).await?;
     let total: f64 = parts.iter().map(|p| p.duration_seconds).sum();
-    let chapters = hls::get_chapters(pool, resolved.book_file_id).await?;
+    let mut chapters = hls::get_chapters(pool, resolved.book_file_id).await?;
+    chapters.sort_by(|a, b| a.start_seconds.total_cmp(&b.start_seconds));
     let position = record.audio_position_seconds.unwrap_or(0.0);
     let number = chapter_number_at(&chapters, position);
     let count = (!chapters.is_empty()).then_some(chapters.len() as i64);
