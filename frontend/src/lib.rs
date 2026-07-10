@@ -169,6 +169,10 @@ fn ScreenLayout(children: Element) -> Element {
 /// the WASM bundle.
 const ATRIUM_CSS: Asset = asset!("/assets/atrium.css");
 
+/// Browser-tab favicon — the Omnibus brand mark, served as a hashed static
+/// asset via Manganis. 128² PNG; browsers downscale it to the tab size.
+const FAVICON: Asset = asset!("/assets/omnibus-stoat.png");
+
 /// Install the search-palette context and the global `⌘K` shortcut.
 ///
 /// Called unconditionally from [`App`] so the call site has no
@@ -304,6 +308,10 @@ fn use_mobile_viewport_fix() {}
 #[component]
 pub fn App() -> Element {
     use_context_provider(|| SearchQuery(Signal::new(String::new())));
+    // Browser-tab title, defaulting to the bare app name. Each route refines it
+    // via `use_page_title`; rendered once as `document::Title` below.
+    let page_title = use_signal(|| "Omnibus".to_string());
+    use_context_provider(|| PageTitle(page_title));
     // Hook calls in App() are unconditional — the feature gates live inside
     // the helper bodies (mobile compiles them to no-op stubs). This keeps
     // rule 07's SSR-vs-WASM hydration parity within the not(mobile) build,
@@ -328,7 +336,8 @@ pub fn App() -> Element {
     let audio_host = rsx! { pages::MobileAudioHost {} };
 
     rsx! {
-        document::Title { "Omnibus" }
+        document::Title { "{page_title}" }
+        document::Link { rel: "icon", href: FAVICON }
         document::Stylesheet { href: ATRIUM_CSS }
         components::atrium::AtriumRoot {
             {audio_host}

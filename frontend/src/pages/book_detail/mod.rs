@@ -37,6 +37,8 @@ use hero::BdHeroSection;
 pub fn BookDetailPage(uuid: String) -> Element {
     let server_url = use_server_url();
     let book: Signal<Option<EbookMetadata>> = use_signal(|| None);
+    // Reflect the loaded book title in the browser tab (e.g. "Omnibus | Dracula").
+    crate::use_page_title(move || book.read().as_ref().and_then(|b| b.title.clone()));
     let author_books: Signal<Vec<EbookMetadata>> = use_signal(Vec::new);
     // F3.3 suggestions. Starts `None` on both SSR and the first WASM paint so
     // hydration markup matches (rule 07); the client effect below populates it.
