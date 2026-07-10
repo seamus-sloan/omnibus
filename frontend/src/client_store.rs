@@ -1,18 +1,14 @@
-//! Durable client-local key→value store — a small `localStorage`-shaped
-//! primitive shared by [`crate::view_prefs`] and [`crate::index_prefs`]. Web
-//! reads/writes `localStorage`; mobile mirrors an in-memory map to a JSON file
-//! under the app data dir so values survive a cold launch; the SSR/server
-//! build is inert so first-hydration markup keeps its defaults. Kept flat:
-//! each impl is a `#[cfg]` variant of one signature.
+//! Durable client-local key→value store shared by [`crate::view_prefs`] and
+//! [`crate::index_prefs`]: `localStorage` on web, an in-memory map mirrored to
+//! a JSON file under the app data dir on mobile (survives cold launch), inert
+//! on SSR so first-hydration markup keeps its defaults.
 
-/// Read the string stored under `key`, or `None` when it is absent or storage
-/// is unavailable.
+/// Read the string stored under `key`, or `None` if absent/unavailable.
 pub fn get(key: &str) -> Option<String> {
     get_impl(key)
 }
 
-/// Persist `value` under `key`, best-effort. Failures (private mode, quota, an
-/// unwritable data dir) are silently ignored — callers keep their in-memory copy.
+/// Persist `value` under `key`, best-effort (storage failures are ignored).
 pub fn set(key: &str, value: &str) {
     set_impl(key, value);
 }
@@ -76,6 +72,10 @@ mod mobile_store {
     /// Insert/overwrite `key` and flush the whole map to disk (best-effort). A
     /// write failure is logged and ignored — the in-memory copy still serves
     /// this session, so the only cost is losing the value on next launch.
+    ///
+    /// The flush is atomic (write a sibling temp file, then rename over the
+    /// target) so a crash mid-write can't leave a half-written `prefs.json`
+    /// that fails to parse on next launch and drops every stored pref.
     pub fn set(key: &str, value: &str) {
         let snapshot = {
             let Ok(mut m) = map().write() else {
@@ -85,7 +85,9 @@ mod mobile_store {
             serde_json::to_string(&*m).ok()
         };
         if let (Some(json), Some(path)) = (snapshot, prefs_path()) {
-            if let Err(e) = std::fs::write(&path, json) {
+            let tmp = path.with_extension("json.tmp");
+            let flush = std::fs::write(&tmp, json).and_then(|()| std::fs::rename(&tmp, &path));
+            if let Err(e) = flush {
                 tracing::warn!(error = %e, path = %path.display(), "could not persist client prefs");
             }
         }

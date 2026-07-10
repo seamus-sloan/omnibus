@@ -1,17 +1,8 @@
 //! Session-scoped scroll-position restoration across route navigations.
-//!
-//! `dioxus_router` has no keep-alive: navigating to a detail route unmounts
-//! the index page, and going back re-mounts it fresh, dropping its scroll
-//! offset. This module keeps a per-path scroll map on a `window`-level JS
-//! singleton (the SPA `window` survives route changes, so the map does too)
-//! and restores the offset once a page's content has painted. In-memory only —
-//! restoring after a full reload / cold start is a non-goal.
-//!
-//! The document/`window` is the scroll container app-wide (no inner `overflow`
-//! scroller), so `window.scrollY` / `window.scrollTo` is the axis on both web
-//! and the mobile WebView. Interop goes through `dioxus::document::eval`, the
-//! shared web+mobile seam — mirroring the load-more `IntersectionObserver` in
-//! `pages/landing/effects.rs`.
+//! `dioxus_router` remounts a page fresh on back-nav, dropping its scroll
+//! offset; a `window`-level JS singleton (installed via `document::eval`)
+//! records `scrollY` per path and restores it once content has painted.
+//! In-memory only; scrolling is on the document/window (web + mobile WebView).
 
 use dioxus::prelude::*;
 
