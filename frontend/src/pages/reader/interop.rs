@@ -25,6 +25,7 @@ pub(crate) struct InteropSignals {
     pub highlights: Signal<Vec<Highlight>>,
     pub toc: Signal<Vec<TocEntry>>,
     pub search_results: Signal<Vec<SearchResult>>,
+    pub chrome_hidden: Signal<bool>,
 }
 
 /// Boxed list of the `__omnibusOn*` window callbacks. Held on the heap
@@ -117,6 +118,7 @@ fn register_window_callbacks(
         mut selection,
         mut toc,
         mut search_results,
+        mut chrome_hidden,
         ..
     } = sigs;
 
@@ -173,6 +175,12 @@ fn register_window_callbacks(
             search_results.set(rs);
         }
     });
+    // Centre-tap toggle from the glue: flip the chrome-visibility signal (the
+    // arg is unused — the glue calls it with "").
+    let on_toggle_chrome = Closure::<dyn FnMut(String)>::new(move |_: String| {
+        let hidden = *chrome_hidden.peek();
+        chrome_hidden.set(!hidden);
+    });
     for (name, cb) in [
         ("__omnibusOnRelocate", &relocate),
         ("__omnibusOnStatus", &on_status),
@@ -180,6 +188,7 @@ fn register_window_callbacks(
         ("__omnibusOnSelectionCleared", &on_selection_cleared),
         ("__omnibusOnToc", &on_toc),
         ("__omnibusOnSearchResults", &on_search),
+        ("__omnibusOnToggleChrome", &on_toggle_chrome),
     ] {
         let _ = js_sys::Reflect::set(
             window,
@@ -194,6 +203,7 @@ fn register_window_callbacks(
         on_selection_cleared,
         on_toc,
         on_search,
+        on_toggle_chrome,
     ]
 }
 

@@ -31,6 +31,7 @@ pub(super) struct InteropSignals {
     pub highlights: Signal<Vec<Highlight>>,
     pub toc: Signal<Vec<TocEntry>>,
     pub search_results: Signal<Vec<SearchResult>>,
+    pub chrome_hidden: Signal<bool>,
 }
 
 /// JS→Rust reader events, forwarded by the shims the install script defines in
@@ -47,6 +48,7 @@ enum ReaderEvent {
     ShareImage { json: String },
     Toc { json: String },
     Search { json: String },
+    ToggleChrome,
 }
 
 /// Payload of a [`ReaderEvent::ShareImage`] — the glue's rendered quote card.
@@ -173,6 +175,7 @@ async fn drain_reader_events(
         mut highlights,
         mut toc,
         mut search_results,
+        mut chrome_hidden,
     } = sigs;
     let mut last_cfi: Option<String> = None;
     loop {
@@ -233,6 +236,13 @@ async fn drain_reader_events(
                 if let Ok(rs) = serde_json::from_str::<Vec<SearchResult>>(&json) {
                     search_results.set(rs);
                 }
+            }
+            // Centre tap: flip chrome visibility. The signal is the single
+            // source of truth (the glue signals rather than mutating the
+            // Dioxus-owned bar DOM directly); the class drives the CSS.
+            Ok(ReaderEvent::ToggleChrome) => {
+                let hidden = *chrome_hidden.peek();
+                chrome_hidden.set(!hidden);
             }
             Err(_) => return,
         }
