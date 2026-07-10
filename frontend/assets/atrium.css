@@ -3839,6 +3839,9 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .m-shelf-desc { margin-top: 10px; font-size: 13px; color: var(--ink-2); }
 .m-shelf-detail .m-shelf-grid { margin-top: 10px; }
 .m-shelf-add { margin: 20px auto 0; display: flex; }
+/* Anchor for the shelf-detail ⋯ actions dropdown (`.shelf-actions-menu` is
+   absolute); sits alongside the search button in the mobile header. */
+.m-shelf-menu-wrap { position: relative; display: flex; align-items: center; }
 
 /* Mobile auth */
 .m-auth {
