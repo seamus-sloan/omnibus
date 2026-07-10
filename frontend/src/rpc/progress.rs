@@ -58,6 +58,7 @@ pub async fn rpc_recent_progress(limit: i64) -> Result<Vec<ResumePoint>> {
     Ok(db::progress::resume_points(&pool.0, user.id, limit)
         .await
         .map_err(|e| internal_rpc_error("recent progress", e))?)
+}
 
 /// Reject over-cap session batches at the RPC boundary, mirroring the mobile
 /// REST route's 422 rejection in `server::backend::progress::post_sessions`.
