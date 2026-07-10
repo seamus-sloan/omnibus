@@ -1019,3 +1019,72 @@ async fn api_get_ebooks_without_pagination_params_omits_next_cursor() {
     let lib: omnibus_shared::EbookLibrary = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(lib.books.len(), 3);
 }
+
+#[tokio::test]
+async fn api_get_ebooks_formats_param_filters_page_and_total() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    db::set_settings(
+        &pool,
+        &Settings {
+            ebook_library_path: Some("/lib".into()),
+            audiobook_library_path: None,
+        },
+    )
+    .await
+    .unwrap();
+    db::replace_books(
+        &pool,
+        "/lib",
+        vec![
+            db::ebook::IndexedBook {
+                metadata: omnibus_shared::EbookMetadata {
+                    filename: "alpha.epub".into(),
+                    title: Some("A".into()),
+                    ..Default::default()
+                },
+                cover: None,
+                mtime_epoch: 0,
+                size_bytes: 0,
+            },
+            db::ebook::IndexedBook {
+                metadata: omnibus_shared::EbookMetadata {
+                    filename: "beta.m4b".into(),
+                    title: Some("B".into()),
+                    ..Default::default()
+                },
+                cover: None,
+                mtime_epoch: 0,
+                size_bytes: 0,
+            },
+        ],
+    )
+    .await
+    .unwrap();
+
+    // `?formats=` alone switches to the keyset path and filters both the
+    // page and the X-Total-Count. The stored format is uppercase (M4B);
+    // the lowercase wire value must match case-insensitively.
+    let response = app
+        .oneshot(get_with_bearer(
+            "/api/ebooks?formats=m4b,m4a,mp3&limit=50",
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("X-Total-Count")
+            .and_then(|v| v.to_str().ok()),
+        Some("1"),
+        "X-Total-Count must reflect the filtered row count"
+    );
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let lib: omnibus_shared::EbookLibrary = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(lib.books.len(), 1);
+    assert_eq!(lib.books[0].title.as_deref(), Some("B"));
+}

@@ -27,7 +27,7 @@ pub use list::{
     list_books_for_paths, list_indexed_rows, list_indexed_rows_for_formats,
     list_merged_rows_for_formats, IndexedRow,
 };
-pub use page::{list_books_page, BookPage, CursorError, PageCursor};
+pub use page::{count_books_page, list_books_page, BookPage, CursorError, PageCursor};
 pub use projection::MAX_BOOKS_RETURNED;
 pub use search::{count_search_books, search_books, search_books_with_total};
 

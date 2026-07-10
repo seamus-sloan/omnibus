@@ -43,6 +43,19 @@ pub(super) struct EbooksQuery {
     dir: Option<SortDir>,
     cursor: Option<String>,
     limit: Option<i64>,
+    /// Comma-separated `book_files.format` filter values (lowercase wire
+    /// form, e.g. `?formats=m4b,m4a,mp3`). The mobile Sort & filter sheet's
+    /// format chips; the other web sidebar facets stay RPC-only.
+    formats: Option<String>,
+}
+
+/// Split the `?formats=` wire value into filter entries, dropping empties.
+fn parse_formats(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_lowercase)
+        .collect()
 }
 
 /// Query parameters for `GET /api/ebooks/{uuid}/file`.
@@ -66,7 +79,12 @@ pub(super) async fn get_ebooks(
     // Backward-compatible default: with no pagination params the response is
     // byte-identical to the pre-F5b full (capped) library, so existing mobile
     // clients keep working untouched.
-    if q.sort.is_none() && q.dir.is_none() && q.cursor.is_none() && q.limit.is_none() {
+    if q.sort.is_none()
+        && q.dir.is_none()
+        && q.cursor.is_none()
+        && q.limit.is_none()
+        && q.formats.is_none()
+    {
         return respond_full_library(&state, ebook.as_deref(), audiobook.as_deref()).await;
     }
 
@@ -114,13 +132,18 @@ async fn respond_keyset_page(
     };
     let path = ebook.or(audiobook).map(str::to_string);
     let paths = db::collect_paths(ebook, audiobook);
+    // Format chips are the only REST-exposed facet (the mobile sheet); the
+    // remaining sidebar facets stay a web/RPC concern.
+    let filters = ViewFilters {
+        formats: q.formats.as_deref().map(parse_formats).unwrap_or_default(),
+        ..ViewFilters::default()
+    };
     let page = match db::list_books_page(
         &state.pool,
         &paths,
         q.sort.unwrap_or_default(),
         q.dir.unwrap_or_default(),
-        // REST keyset is sort+cursor only; sidebar filters are a web concern.
-        &ViewFilters::default(),
+        &filters,
         cursor.as_ref(),
         q.limit.unwrap_or(DEFAULT_PAGE_LIMIT),
     )
@@ -129,7 +152,9 @@ async fn respond_keyset_page(
         Ok(p) => p,
         Err(error) => return internal("read books page", error),
     };
-    let total = match db::count_books_for_paths(&state.pool, &paths).await {
+    // Filtered total, so the client's "Show N books" reflects the active
+    // chips; identical to the unfiltered count when no filter is set.
+    let total = match db::count_books_page(&state.pool, &paths, &filters).await {
         Ok(t) => t,
         Err(error) => return internal("count books", error),
     };

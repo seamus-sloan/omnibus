@@ -3582,6 +3582,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 
 .m-head { padding: 4px 2px 8px; }
 .m-head-top { display: flex; align-items: center; justify-content: space-between; min-height: 32px; }
+.m-head-lead { display: flex; align-items: center; gap: 10px; }
+.m-head-back { width: 32px; height: 32px; flex: 0 0 32px; font-size: 14px; text-decoration: none; }
 .m-head-title {
   font-family: var(--serif); font-weight: 400; font-size: 30px; line-height: 1.02;
   letter-spacing: -0.015em; margin-top: 4px;
@@ -3592,7 +3594,89 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .m-lib-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .m-lib-brand { font-family: var(--serif); font-style: italic; font-size: 24px; letter-spacing: -0.02em; }
 .m-lib-head-actions { display: flex; align-items: center; gap: 8px; }
-.m-lib-title { margin-bottom: 14px; }
+.m-lib-title {
+  margin-bottom: 14px;
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;
+}
+.m-lib-title-text { min-width: 0; }
+
+/* Sort & filter pill (opens the bottom sheet). */
+.m-sort-pill {
+  display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto;
+  height: 32px; padding: 0 11px; cursor: pointer;
+  background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 999px;
+  color: var(--ink-1); font: inherit;
+}
+.m-sort-pill-label { font-size: 12.5px; color: var(--ink-0); }
+.m-sort-pill-arrow { font-size: 10px; color: var(--ink-3); }
+.m-sort-pill-badge {
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
+  display: grid; place-items: center; font-size: 10px;
+  background: var(--accent); color: var(--accent-ink);
+}
+
+/* "Pick up where you left off" card. */
+.m-resume { display: block; margin-bottom: 16px; text-decoration: none; color: inherit; }
+.m-resume-kicker { display: block; margin-bottom: 8px; }
+.m-resume-card {
+  display: flex; align-items: stretch; gap: 14px; padding: 12px;
+  background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 14px;
+}
+.m-resume:active .m-resume-card { background: var(--bg-2); }
+.m-resume-cover { width: 54px; flex: 0 0 54px; }
+.m-resume-cover .cover-caption { display: none; }
+.m-resume-body {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center;
+}
+.m-resume-title {
+  font-size: 15px; font-weight: 500; color: var(--ink-0);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.m-resume-author {
+  margin-top: 1px; font-size: 12px; color: var(--ink-2);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.m-resume-meta { margin-top: 7px; font-size: 10px; color: var(--ink-3); }
+.m-resume-bar {
+  margin-top: 6px; height: 3px; border-radius: 999px; background: var(--bg-3);
+  position: relative; overflow: hidden;
+}
+.m-resume-bar i { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--accent); }
+.m-resume-play {
+  align-self: center; width: 40px; height: 40px; flex: 0 0 40px; border-radius: 999px;
+  display: grid; place-items: center;
+  background: var(--accent); color: var(--accent-ink);
+}
+
+/* Sort & filter sheet internals. */
+.m-sheet-reset {
+  border: 0; background: transparent; color: var(--ink-3);
+  font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.m-filter-label { margin: 14px 2px 10px; }
+.m-sort-list { display: flex; flex-direction: column; }
+.m-sort-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 11px 4px; cursor: pointer; font: inherit; text-align: left;
+  background: transparent; border: 0; border-bottom: 1px solid var(--line-2);
+  color: var(--ink-1);
+}
+.m-sort-row.on { color: var(--ink-0); }
+.m-sort-row-label { font-size: 14.5px; }
+.m-sort-row.on .m-sort-row-label { font-weight: 500; }
+.m-sort-row-dir { display: flex; align-items: center; gap: 8px; color: var(--accent); font-size: 11px; }
+.m-filter-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.m-filter-chip {
+  padding: 6px 12px; border-radius: 999px; cursor: pointer; font: inherit;
+  font-size: 12.5px; background: var(--bg-2); color: var(--ink-1);
+  border: 1px solid var(--line-2);
+}
+.m-filter-chip.on {
+  border-color: var(--accent); color: var(--ink-0);
+  background: color-mix(in oklch, var(--accent) 12%, transparent);
+}
+.m-sheet-foot { flex: 0 0 auto; padding: 12px 2px 4px; border-top: 1px solid var(--line-2); margin-top: 8px; }
+.m-sheet-show { width: 100%; height: 46px; justify-content: center; font-size: 14px; }
 .m-shelves-entry {
   display: flex; align-items: center; gap: 12px; width: 100%;
   padding: 11px 13px; margin-bottom: 16px; text-decoration: none; color: inherit;
@@ -3720,6 +3804,26 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .m-shelf-row-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; color: var(--ink-3); }
 .m-shelf-row-count { font-size: 11px; color: var(--ink-1); }
 .m-shelf-row-vis, .m-shelf-row-chevron { display: grid; place-items: center; color: var(--ink-3); }
+
+/* Shelf detail (mobile) — home-style header with a facet row, then the same
+   three-column cover grid as the library home. */
+.m-shelf-facets {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px;
+}
+.m-shelf-facet-kind {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11.5px; color: var(--accent);
+}
+.m-shelf-facet-dot { color: var(--ink-3); }
+.m-shelf-facet-vis { font-size: 11.5px; color: var(--ink-2); }
+.m-shelf-facet-chip {
+  padding: 4px 10px; border-radius: 999px; font-size: 11px; color: var(--ink-1);
+  background: var(--bg-1);
+  border: 1px solid color-mix(in oklch, var(--accent) 50%, transparent);
+}
+.m-shelf-desc { margin-top: 10px; font-size: 13px; color: var(--ink-2); }
+.m-shelf-detail .m-shelf-grid { margin-top: 10px; }
+.m-shelf-add { margin: 20px auto 0; display: flex; }
 
 /* Mobile auth */
 .m-auth {
