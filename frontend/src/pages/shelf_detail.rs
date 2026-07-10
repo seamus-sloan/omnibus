@@ -9,11 +9,11 @@ use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]
 use dioxus_router::use_navigator;
 use dioxus_router::Link;
+// `ShelfKind` / `Visibility` are consumed only by the web rail/header path;
+// the mobile branch renders `mobile::MobileShelfDetail`, which imports its own.
+use omnibus_shared::{EbookMetadata, RuleField, RuleOp, Shelf, ShelfRule, SortDir, SortKey};
 #[cfg(not(feature = "mobile"))]
-use omnibus_shared::UpdateShelfRequest;
-use omnibus_shared::{
-    EbookMetadata, RuleField, RuleOp, Shelf, ShelfKind, ShelfRule, SortDir, SortKey, Visibility,
-};
+use omnibus_shared::{ShelfKind, UpdateShelfRequest, Visibility};
 
 #[cfg(not(feature = "mobile"))]
 use crate::components::atrium::fallback_title;
@@ -24,7 +24,7 @@ use crate::components::{RailActive, ShelvesRail};
 use crate::{data, use_server_url, Route};
 
 #[cfg(feature = "mobile")]
-use super::landing::mobile_cover_cell;
+mod mobile;
 
 /// Shelf detail page — see the module doc for the smart/manual split.
 #[component]
@@ -97,7 +97,15 @@ pub fn ShelfDetailPage(id: i64) -> Element {
     // full-screen surface. Both consume the shared fetch pipeline above.
     // (Mobile is a separate build — rule 07 hydration parity is unaffected.)
     #[cfg(feature = "mobile")]
-    let body = mobile_shelf_body(&current, &books.read(), &server_url, show_add);
+    let body = rsx! {
+        mobile::MobileShelfDetail {
+            shelf: current.clone(),
+            books: books.read().clone(),
+            server_url: server_url.clone(),
+            on_add: move |_| show_add.set(true),
+            on_changed: move |_| reload.with_mut(|n| *n += 1),
+        }
+    };
 
     #[cfg(not(feature = "mobile"))]
     let body = web_shelf_body(
@@ -198,110 +206,6 @@ fn web_shelf_body(
 
                 {member_grid(books, server_url, is_smart, move |_| show_add.set(true))}
             }
-        }
-    }
-}
-
-/// Mobile presentation: home-style header (back + kicker + title), a facet
-/// row (kind, visibility, rule chips), and the same three-column cover grid
-/// as the library home. Shelf management (rename / visibility / delete)
-/// stays on web for now.
-#[cfg(feature = "mobile")]
-fn mobile_shelf_body(
-    current: &Shelf,
-    books: &[EbookMetadata],
-    server_url: &str,
-    mut show_add: Signal<bool>,
-) -> Element {
-    let is_smart = current.kind == ShelfKind::Smart;
-    let accent = current
-        .accent
-        .clone()
-        .unwrap_or_else(|| "var(--accent)".into());
-    let kicker = format!(
-        "{} {} \u{00b7} {}",
-        current.book_count,
-        if current.book_count == 1 {
-            "book"
-        } else {
-            "books"
-        },
-        if is_smart {
-            "auto-filled"
-        } else {
-            "hand-picked"
-        }
-    );
-    let kind_label = if is_smart { "Smart" } else { "Hand-picked" };
-    let vis_label = match current.visibility {
-        Visibility::Private => "Private",
-        Visibility::Public => "Shared",
-    };
-    rsx! {
-        div {
-            class: "m-shelves m-shelf-detail",
-            style: "--accent: {accent};",
-            "data-testid": "shelf-detail",
-            header { class: "m-head",
-                div { class: "m-head-top",
-                    div { class: "m-head-lead",
-                        Link {
-                            to: Route::Shelves {},
-                            class: "m-icon-btn m-head-back",
-                            "aria-label": "Back to shelves",
-                            "\u{2190}"
-                        }
-                        span { class: "label", "{kicker}" }
-                    }
-                }
-                h2 { class: "m-head-title", span { class: "m-em", "{current.name}" } }
-                div { class: "m-shelf-facets",
-                    span { class: "m-shelf-facet-kind",
-                        if is_smart {
-                            {smart_facet_glyph()}
-                        }
-                        "{kind_label}"
-                    }
-                    span { class: "m-shelf-facet-dot", "\u{00b7}" }
-                    span { class: "m-shelf-facet-vis", "{vis_label}" }
-                    if is_smart {
-                        for (i, rule) in current.rules.iter().enumerate() {
-                            span { key: "{i}", class: "m-shelf-facet-chip", "{rule_text(rule)}" }
-                        }
-                    }
-                }
-                if let Some(desc) = current.description.as_ref() {
-                    p { class: "m-shelf-desc", "{desc}" }
-                }
-            }
-
-            div { class: "m-cover-grid m-shelf-grid", "data-testid": "shelf-grid", role: "list",
-                for book in books.iter().cloned() {
-                    {mobile_cover_cell(book, server_url)}
-                }
-            }
-            if !is_smart {
-                button {
-                    r#type: "button",
-                    class: "btn m-shelf-add",
-                    "data-testid": "shelf-add-books",
-                    onclick: move |_| show_add.set(true),
-                    "\u{FF0B} Add books"
-                }
-            }
-        }
-    }
-}
-
-/// Small accent cog rendered before "Smart" in the mobile facet row.
-#[cfg(feature = "mobile")]
-fn smart_facet_glyph() -> Element {
-    rsx! {
-        svg {
-            width: "12", height: "12", view_box: "0 0 24 24", fill: "none",
-            stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", stroke_linejoin: "round",
-            path { d: "M5 3v4M3 5h4M6 17v4M4 19h4" }
-            path { d: "M13 3l2.5 6.5L22 12l-6.5 2.5L13 21l-2.5-6.5L4 12l6.5-2.5z" }
         }
     }
 }
