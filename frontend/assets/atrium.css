@@ -3090,6 +3090,14 @@ body {
   padding: var(--screen-pad-top) 1rem calc(5rem + env(safe-area-inset-bottom));
 }
 
+/* `.m-mini` docks at `bottom: calc(64px + safe-area)` with ~60px of its own
+   chrome, stacking well past the tabbar-only reserve above (its top edge
+   lands around 124px up) — without extra room, scrolled-to-bottom content
+   (e.g. the book-detail footer button) sits behind it while a book plays. */
+.screen:has(.m-mini) {
+  padding-bottom: calc(9rem + env(safe-area-inset-bottom));
+}
+
 .sr-only {
   position: absolute;
   width: 1px; height: 1px;
