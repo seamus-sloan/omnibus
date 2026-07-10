@@ -178,8 +178,7 @@ fn register_window_callbacks(
     // Centre-tap toggle from the glue: flip the chrome-visibility signal (the
     // arg is unused — the glue calls it with "").
     let on_toggle_chrome = Closure::<dyn FnMut(String)>::new(move |_: String| {
-        let hidden = *chrome_hidden.peek();
-        chrome_hidden.set(!hidden);
+        chrome_hidden.toggle();
     });
     for (name, cb) in [
         ("__omnibusOnRelocate", &relocate),

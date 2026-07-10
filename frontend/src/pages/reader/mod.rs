@@ -231,7 +231,8 @@ fn use_reader_signals(uuid: &str, theme: Signal<Theme>) -> ReaderSignals {
     let loc = use_signal(RelocateData::default);
     let book_meta = use_book_metadata(uuid.to_string());
     // Chrome starts visible; a centre tap (glue → `__omnibusOnToggleChrome`)
-    // flips this. Seeded identically on SSR/WASM for hydration parity (rule 07).
+    // flips this. Seeded identically so SSR and the first WASM paint match,
+    // keeping hydration stable — the class only appears after a post-mount tap.
     let chrome_hidden = use_signal(|| false);
 
     #[cfg(feature = "web")]

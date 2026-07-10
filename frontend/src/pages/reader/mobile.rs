@@ -240,10 +240,7 @@ async fn drain_reader_events(
             // Centre tap: flip chrome visibility. The signal is the single
             // source of truth (the glue signals rather than mutating the
             // Dioxus-owned bar DOM directly); the class drives the CSS.
-            Ok(ReaderEvent::ToggleChrome) => {
-                let hidden = *chrome_hidden.peek();
-                chrome_hidden.set(!hidden);
-            }
+            Ok(ReaderEvent::ToggleChrome) => chrome_hidden.toggle(),
             Err(_) => return,
         }
     }
