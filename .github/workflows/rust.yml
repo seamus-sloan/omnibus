@@ -142,6 +142,16 @@ jobs:
       - name: cargo test (frontend)
         run: nix develop --command cargo test -p omnibus-frontend --features server
 
+      # `--features mobile` exercises a distinct cfg-split code path from
+      # `server` above (`data::token_store` / `app_dirs` native token
+      # persistence) that was previously untested in CI, even though
+      # `just test` has run it locally all along. Only needs reqwest/tokio
+      # (no GTK/wry), so it runs in the default shell like the other test
+      # steps rather than `.#mobile` (that shell is for `omnibus-mobile`'s
+      # desktop GTK backend, a different crate).
+      - name: cargo test (frontend mobile)
+        run: nix develop --command cargo test -p omnibus-frontend --features mobile
+
       - name: cargo test (shared)
         run: nix develop --command cargo test -p omnibus-shared
 
