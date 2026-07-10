@@ -12,6 +12,7 @@ use super::DataError;
 #[cfg(feature = "mobile")]
 use super::{drain_error, http_client, note_status, with_bearer};
 
+/// Create a bookmark for the book with the given uuid.
 #[cfg(feature = "mobile")]
 pub async fn create_bookmark(
     server_url: &str,
@@ -28,6 +29,7 @@ pub async fn create_bookmark(
     Ok(response.json::<Bookmark>().await?)
 }
 
+/// List bookmarks for the book with the given uuid.
 #[cfg(feature = "mobile")]
 pub async fn list_bookmarks(server_url: &str, book_uuid: &str) -> Result<Vec<Bookmark>, DataError> {
     let url = format!("{server_url}/api/bookmarks/book/{book_uuid}");
@@ -39,6 +41,7 @@ pub async fn list_bookmarks(server_url: &str, book_uuid: &str) -> Result<Vec<Boo
     Ok(response.json::<Vec<Bookmark>>().await?)
 }
 
+/// Update a bookmark's title.
 #[cfg(feature = "mobile")]
 pub async fn update_bookmark(
     server_url: &str,
@@ -57,6 +60,7 @@ pub async fn update_bookmark(
     Ok(())
 }
 
+/// Delete a bookmark.
 #[cfg(feature = "mobile")]
 pub async fn delete_bookmark(server_url: &str, id: i64) -> Result<(), DataError> {
     let url = format!("{server_url}/api/bookmarks/{id}");
@@ -68,6 +72,7 @@ pub async fn delete_bookmark(server_url: &str, id: i64) -> Result<(), DataError>
     Ok(())
 }
 
+/// Create a bookmark for the book with the given uuid.
 #[cfg(not(feature = "mobile"))]
 pub async fn create_bookmark(
     _server_url: &str,
@@ -78,6 +83,7 @@ pub async fn create_bookmark(
         .map_err(note_server_fn_err)
 }
 
+/// List bookmarks for the book with the given uuid.
 #[cfg(not(feature = "mobile"))]
 pub async fn list_bookmarks(
     _server_url: &str,
@@ -88,6 +94,7 @@ pub async fn list_bookmarks(
         .map_err(note_server_fn_err)
 }
 
+/// Update a bookmark's title.
 #[cfg(not(feature = "mobile"))]
 pub async fn update_bookmark(
     _server_url: &str,
@@ -99,6 +106,7 @@ pub async fn update_bookmark(
         .map_err(note_server_fn_err)
 }
 
+/// Delete a bookmark.
 #[cfg(not(feature = "mobile"))]
 pub async fn delete_bookmark(_server_url: &str, id: i64) -> Result<(), DataError> {
     crate::rpc::rpc_delete_bookmark(id)
