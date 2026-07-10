@@ -95,3 +95,33 @@ fn view_filters_is_empty_false_when_any_facet_has_a_value() {
     };
     assert!(!with_tag.is_empty());
 }
+
+#[test]
+fn index_sort_default_is_name() {
+    assert_eq!(IndexSort::default(), IndexSort::Name);
+}
+
+#[test]
+fn discovery_prefs_round_trips_through_json() {
+    let prefs = DiscoveryPrefs {
+        authors_sort: IndexSort::BookCount,
+        series_sort: IndexSort::Name,
+    };
+    let raw = serde_json::to_string(&prefs).expect("serialize");
+    assert_eq!(
+        serde_json::from_str::<DiscoveryPrefs>(&raw).expect("deserialize"),
+        prefs
+    );
+    // snake_case tokens, so a hand-written payload parses.
+    assert_eq!(
+        serde_json::from_str::<IndexSort>("\"book_count\"").expect("parse token"),
+        IndexSort::BookCount
+    );
+}
+
+#[test]
+fn discovery_prefs_defaults_when_fields_absent() {
+    // `#[serde(default)]` on each field keeps old/partial payloads parseable.
+    let prefs: DiscoveryPrefs = serde_json::from_str("{}").expect("parse empty object");
+    assert_eq!(prefs, DiscoveryPrefs::default());
+}

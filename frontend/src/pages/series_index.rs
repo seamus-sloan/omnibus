@@ -6,24 +6,34 @@ use std::cmp::Reverse;
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::SeriesSummary;
+use omnibus_shared::{IndexSort, SeriesSummary};
 
 use crate::components::{PageError, PageLoading};
-use crate::{data, use_server_url, Route};
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum Sort {
-    Name,
-    BookCount,
-}
+use crate::scroll_restore::use_scroll_restore;
+use crate::{data, index_prefs, use_server_url, Route};
 
 /// Series index page — browse all series in the library.
 #[component]
 pub fn SeriesIndexPage() -> Element {
     let server_url = use_server_url();
     let mut filter = use_signal(String::new);
-    let mut sort = use_signal(|| Sort::Name);
+    let mut sort = use_signal(IndexSort::default);
     let (series, loading, error) = use_series_data(server_url);
+
+    // Reconcile the sort axis from persisted prefs after mount (seeded to the
+    // default above for hydration parity — rule 07; the sort toolbar renders
+    // only post-fetch, so this can't flash).
+    use_effect(move || {
+        let stored = index_prefs::load().series_sort;
+        if stored != *sort.peek() {
+            sort.set(stored);
+        }
+    });
+
+    // Restore scroll once the (full) list has painted, so returning from a
+    // series detail lands back where the reader left off.
+    let ready = use_memo(move || !loading());
+    use_scroll_restore(ready);
 
     if loading() {
         return rsx! { PageLoading {} };
@@ -53,7 +63,12 @@ pub fn SeriesIndexPage() -> Element {
                     sort: current_sort,
                 },
                 on_filter: move |v| filter.set(v),
-                on_sort: move |s| sort.set(s),
+                on_sort: move |s: IndexSort| {
+                    sort.set(s);
+                    let mut prefs = index_prefs::load();
+                    prefs.series_sort = s;
+                    index_prefs::save(&prefs);
+                },
             }
             {render_series_body(&filtered, all.is_empty())}
         }
@@ -94,7 +109,7 @@ fn use_series_data(
 fn apply_filter_and_sort<'a>(
     items: &'a [SeriesSummary],
     query: &str,
-    sort: Sort,
+    sort: IndexSort,
 ) -> Vec<&'a SeriesSummary> {
     let q = query.to_lowercase();
     let mut filtered: Vec<&SeriesSummary> = if q.is_empty() {
@@ -114,8 +129,8 @@ fn apply_filter_and_sort<'a>(
     // `sort_by_cached_key` evaluates the key once per element instead of
     // re-running `to_lowercase()` on every comparison.
     match sort {
-        Sort::Name => filtered.sort_by_cached_key(|a| sort_key(a).to_lowercase()),
-        Sort::BookCount => {
+        IndexSort::Name => filtered.sort_by_cached_key(|a| sort_key(a).to_lowercase()),
+        IndexSort::BookCount => {
             filtered.sort_by_cached_key(|a| (Reverse(a.book_count), sort_key(a).to_lowercase()))
         }
     }
@@ -152,7 +167,7 @@ struct SeriesHeaderView {
     total_series: usize,
     total_books: usize,
     filter: String,
-    sort: Sort,
+    sort: IndexSort,
 }
 
 /// Header: breadcrumb, hero heading + subtitle, filter input, sort toggles.
@@ -160,7 +175,7 @@ struct SeriesHeaderView {
 fn SeriesIndexHeader(
     view: SeriesHeaderView,
     on_filter: EventHandler<String>,
-    on_sort: EventHandler<Sort>,
+    on_sort: EventHandler<IndexSort>,
 ) -> Element {
     let SeriesHeaderView {
         total_series,
@@ -205,16 +220,16 @@ fn SeriesIndexHeader(
                     span { class: "label", "Sort" }
                     button {
                         class: "idx-btn",
-                        "aria-pressed": if sort == Sort::Name { "true" } else { "false" },
+                        "aria-pressed": if sort == IndexSort::Name { "true" } else { "false" },
                         "data-testid": "series-sort-name",
-                        onclick: move |_| on_sort.call(Sort::Name),
+                        onclick: move |_| on_sort.call(IndexSort::Name),
                         "A\u{2013}Z"
                     }
                     button {
                         class: "idx-btn",
-                        "aria-pressed": if sort == Sort::BookCount { "true" } else { "false" },
+                        "aria-pressed": if sort == IndexSort::BookCount { "true" } else { "false" },
                         "data-testid": "series-sort-count",
-                        onclick: move |_| on_sort.call(Sort::BookCount),
+                        onclick: move |_| on_sort.call(IndexSort::BookCount),
                         "Most books"
                     }
                 }
@@ -328,9 +343,9 @@ mod tests {
             summary_full("Foundation", Some("Asimov"), 7),
             summary_full("Dune", Some("Herbert"), 6),
         ];
-        let out = apply_filter_and_sort(&items, "", Sort::Name);
+        let out = apply_filter_and_sort(&items, "", IndexSort::Name);
         assert_eq!(out.len(), 2);
-        // Sort::Name orders alphabetically by sort_key.
+        // IndexSort::Name orders alphabetically by sort_key.
         assert_eq!(out[0].name, "Dune");
         assert_eq!(out[1].name, "Foundation");
     }
@@ -341,7 +356,7 @@ mod tests {
             summary_full("Foundation", Some("Asimov"), 7),
             summary_full("Dune", Some("Herbert"), 6),
         ];
-        let out = apply_filter_and_sort(&items, "FOUND", Sort::Name);
+        let out = apply_filter_and_sort(&items, "FOUND", IndexSort::Name);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].name, "Foundation");
     }
@@ -352,7 +367,7 @@ mod tests {
             summary_full("Foundation", Some("Asimov"), 7),
             summary_full("Dune", Some("Herbert"), 6),
         ];
-        let out = apply_filter_and_sort(&items, "herbert", Sort::Name);
+        let out = apply_filter_and_sort(&items, "herbert", IndexSort::Name);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].name, "Dune");
     }
@@ -364,7 +379,7 @@ mod tests {
             summary_full("Bravo", None, 7),
             summary_full("Charlie", None, 7),
         ];
-        let out = apply_filter_and_sort(&items, "", Sort::BookCount);
+        let out = apply_filter_and_sort(&items, "", IndexSort::BookCount);
         assert_eq!(out[0].name, "Bravo");
         assert_eq!(out[1].name, "Charlie");
         assert_eq!(out[2].name, "Alpha");

@@ -8,15 +8,18 @@
 use dioxus::prelude::*;
 
 pub mod audiobook_progress;
+pub mod client_store;
 pub mod components;
 pub mod contexts;
 pub mod data;
+pub mod index_prefs;
 #[cfg(feature = "mobile")]
 pub(crate) mod native_share;
 pub mod pages;
 pub mod reader_progress;
 pub mod routes;
 pub mod rpc;
+pub mod scroll_restore;
 pub mod view_prefs;
 
 pub use components::Nav;

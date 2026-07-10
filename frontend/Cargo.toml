@@ -10,7 +10,10 @@ dioxus-router = "0.7"
 omnibus-shared = { path = "../shared" }
 omnibus-db = { path = "../db", optional = true }
 serde.workspace = true
-serde_json = { workspace = true, optional = true }
+# Non-optional: `view_prefs` / `index_prefs` serialize prefs to JSON on every
+# target (the SSR build must compile the code path even though `client_store`
+# makes it a no-op there).
+serde_json.workspace = true
 # Typed transport errors for the feature-gated `data` layer (#96). Always on:
 # `data::DataError` is referenced by callers under every platform feature, so
 # the derive must be available in all builds (including the no-feature
@@ -92,7 +95,6 @@ web = [
     "dioxus/web",
     "dep:gloo-net",
     "dep:gloo-timers",
-    "dep:serde_json",
     "dep:web-sys",
     "dep:wasm-bindgen",
     "dep:wasm-bindgen-futures",
@@ -108,7 +110,6 @@ web = [
 # drives the timer, so no extra runtime/macro features are needed.
 mobile = [
     "dep:reqwest",
-    "dep:serde_json",
     "dep:tokio",
     "tokio/sync",
     "tokio/time",

@@ -122,3 +122,24 @@ pub struct ViewPrefs {
     #[serde(default)]
     pub filters_open: bool,
 }
+
+/// Sort axis for the Authors / Series discovery indexes. Both pages expose the
+/// same two axes ("A–Z" by name, or most-books-first), so they share one enum.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexSort {
+    #[default]
+    Name,
+    BookCount,
+}
+
+/// Persisted sort choices for the discovery index pages. Library-wide (not
+/// per library path) and client-local — the Authors and Series indexes each
+/// keep their own axis so switching between them doesn't clobber the other.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscoveryPrefs {
+    #[serde(default)]
+    pub authors_sort: IndexSort,
+    #[serde(default)]
+    pub series_sort: IndexSort,
+}

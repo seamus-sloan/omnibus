@@ -7,3 +7,7 @@ license.workspace = true
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# Serde round-trip assertions for the wire types (e.g. `DiscoveryPrefs`).
+serde_json.workspace = true
