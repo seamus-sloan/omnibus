@@ -71,7 +71,7 @@ dx serve --platform web -p omnibus
 cargo run -p omnibus                                        # start at http://0.0.0.0:3000
 
 # Tests & lint — aggregate targets cover the full crate matrix in one go
-just test                                                   # db + server + frontend(--features server) + shared
+just test                                                   # db + server + frontend(server + mobile features) + shared
 just lint                                                   # cargo fmt --check + clippy (incl. mobile + frontend-server) + stylelint
 just lint-css                                               # structural CSS lint only (stylelint; catches unclosed rules in frontend/assets)
 just check                                                  # lint then test

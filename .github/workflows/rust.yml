@@ -115,6 +115,12 @@ jobs:
       - name: Clippy frontend (web)
         run: nix develop --command cargo clippy -p omnibus-frontend --features web --all-targets --target wasm32-unknown-unknown -- -D warnings
 
+      # Lints the same cfg-split mobile code path the test step below covers.
+      # Only needs reqwest/tokio (no GTK/wry — that's `omnibus-mobile` below),
+      # so this runs in the default shell like the other frontend variants.
+      - name: Clippy frontend (mobile)
+        run: nix develop --command cargo clippy -p omnibus-frontend --features mobile --all-targets -- -D warnings
+
       - name: Clippy shared
         run: nix develop --command cargo clippy -p omnibus-shared --all-targets -- -D warnings
 
@@ -141,6 +147,16 @@ jobs:
 
       - name: cargo test (frontend)
         run: nix develop --command cargo test -p omnibus-frontend --features server
+
+      # `--features mobile` exercises a distinct cfg-split code path from
+      # `server` above (`data::token_store` / `app_dirs` native token
+      # persistence) that was previously untested in CI, even though
+      # `just test` has run it locally all along. Only needs reqwest/tokio
+      # (no GTK/wry), so it runs in the default shell like the other test
+      # steps rather than `.#mobile` (that shell is for `omnibus-mobile`'s
+      # desktop GTK backend, a different crate).
+      - name: cargo test (frontend mobile)
+        run: nix develop --command cargo test -p omnibus-frontend --features mobile
 
       - name: cargo test (shared)
         run: nix develop --command cargo test -p omnibus-shared
