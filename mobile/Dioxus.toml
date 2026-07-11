@@ -20,10 +20,11 @@ uses_cleartext_traffic = true
 # Omnibus is a self-hosted app; users connect over HTTP on their LAN or via
 # Tailscale. WKWebView enforces ATS and would otherwise block <img> loads from
 # http:// origins even though reqwest (which uses its own TCP stack) is exempt.
+# InWebContent scopes the exception to WKWebView loads only (iOS 10+).
 info_plist = """
 <key>NSAppTransportSecurity</key>
 <dict>
-	<key>NSAllowsArbitraryLoads</key>
+	<key>NSAllowsArbitraryLoadsInWebContent</key>
 	<true/>
 </dict>
 """
