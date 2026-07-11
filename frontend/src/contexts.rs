@@ -151,12 +151,13 @@ pub fn use_is_admin() -> Signal<bool> {
     is_admin
 }
 
-/// Derive the resolved current user from the app-wide [`CurrentUser`]
-/// context instead of an independent per-mount `/api/auth/me` fetch,
-/// flattening "not yet resolved" and "unauthenticated" alike to `None`.
-/// Starts `None` so SSR and the first WASM paint agree (rule 07); only the
-/// web build wires the effect that fills it in once the context resolves.
-#[cfg_attr(not(feature = "web"), allow(unused_mut))]
+/// Derive the resolved current user: on web, from the app-wide
+/// [`CurrentUser`] context instead of an independent per-mount
+/// `/api/auth/me` fetch; on mobile (which has no `CurrentUser` context,
+/// only a bearer token), via a direct `data::get_me` call mirroring the
+/// Account screen's mobile identity fetch. Starts `None` so SSR and the
+/// first WASM paint agree (rule 07); the post-mount effect fills it in.
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(unused_mut))]
 pub fn use_current_user_summary() -> Signal<Option<omnibus_shared::UserSummary>> {
     let mut current = use_signal(|| None);
     #[cfg(feature = "web")]
@@ -164,6 +165,18 @@ pub fn use_current_user_summary() -> Signal<Option<omnibus_shared::UserSummary>>
         let user_ctx = use_current_user().0;
         use_effect(move || {
             current.set(user_ctx().flatten());
+        });
+    }
+    #[cfg(feature = "mobile")]
+    {
+        let server_url = use_server_url();
+        use_effect(move || {
+            let server_url = server_url.clone();
+            spawn(async move {
+                if let Ok(user) = data::get_me(&server_url).await {
+                    current.set(Some(user));
+                }
+            });
         });
     }
     current
