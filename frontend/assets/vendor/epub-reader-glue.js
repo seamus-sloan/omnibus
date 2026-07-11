@@ -172,6 +172,7 @@
 
       installGestureNav();
       installSelectionClearWatch();
+      installContentEnhancements();
 
       rendition.themes.register("light", {
         body: { background: "#fcfbfa", color: "#2a2725" },
@@ -312,6 +313,104 @@
           }
         }, 300);
       });
+    });
+  }
+
+  // Google Fonts stylesheet for the app's reading typefaces. The parent
+  // document loads these via atrium.css, but webfonts don't cascade into the
+  // section iframe — so `themes.font("'Instrument Serif'…")` renders as the
+  // Times fallback unless the face is also declared inside the iframe.
+  var READER_FONTS_HREF =
+    "https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&" +
+    "family=EB+Garamond:ital,wght@0,400;0,500;1,400;1,500&display=swap";
+
+  // Inject the book's own stylesheets as inline <style>. epub.js rewrites each
+  // section `<link>` to a `blob:` URL, but the sandboxed iframe's opaque origin
+  // can't load a parent-minted blob (and the app CSP blocks fetching it too),
+  // so the publisher CSS silently drops and prose renders as UA defaults. We
+  // instead read the CSS straight out of epub.js's in-memory archive (JSZip)
+  // and inline it — an inline <style> the iframe honours. Fire-and-forget and
+  // fully guarded so a parsing hiccup can never stall or break the render.
+  function inlineBookStylesheets(doc) {
+    try {
+      if (!book || !book.archive || !book.packaging || doc.__omnibusBookCss) {
+        return;
+      }
+      doc.__omnibusBookCss = true;
+      var manifest = book.packaging.manifest || {};
+      var paths = [];
+      Object.keys(manifest).forEach(function (id) {
+        var item = manifest[id];
+        if (item && item.type === "text/css" && item.href) {
+          try {
+            paths.push(book.resolve(item.href));
+          } catch (e) {
+            /* unresolvable href — skip */
+          }
+        }
+      });
+      paths.forEach(function (path) {
+        book.archive
+          .getText(path)
+          .then(function (css) {
+            if (!css || !doc.head) return;
+            var style = doc.createElement("style");
+            style.setAttribute("data-omnibus-book-css", "");
+            style.textContent = css;
+            // Prepend so book CSS sits ahead of the reader baseline, which
+            // only touches html/body and should win any tie (e.g. hyphens).
+            doc.head.insertBefore(style, doc.head.firstChild);
+          })
+          .catch(function () {
+            /* unreadable asset — leave prose on UA defaults */
+          });
+      });
+    } catch (e) {
+      /* never let styling break rendering */
+    }
+  }
+
+  // Per-section content enhancement, registered on epub.js's content hook so it
+  // runs for every rendered spine item. Three Apple/Kindle-parity fixes the
+  // sandboxed iframe would otherwise drop: the book's own stylesheet, then
+  // hyphenation for justified prose (off by CSS default), and the app typeface
+  // loaded *inside* the iframe.
+  function installContentEnhancements() {
+    if (!rendition || !rendition.hooks || !rendition.hooks.content) return;
+    rendition.hooks.content.register(function (contents) {
+      var doc = contents.document;
+      if (!doc || !doc.head) return;
+
+      inlineBookStylesheets(doc);
+
+      // Hyphenation needs a language for its dictionary; inherit the book's,
+      // defaulting to English, without clobbering a per-document `lang`.
+      var meta = book && book.packaging && book.packaging.metadata;
+      var lang = (meta && meta.language) || "en";
+      if (doc.documentElement && !doc.documentElement.getAttribute("lang")) {
+        doc.documentElement.setAttribute("lang", lang);
+      }
+
+      if (!doc.getElementById("__omnibus_fonts")) {
+        var link = doc.createElement("link");
+        link.id = "__omnibus_fonts";
+        link.rel = "stylesheet";
+        link.href = READER_FONTS_HREF;
+        doc.head.appendChild(link);
+      }
+
+      // Reader baseline. Kept intentionally thin (html/body selectors the book
+      // rarely targets) so the publisher's own CSS still drives layout: just
+      // hyphenate justified text and drop the UA underline on structural
+      // anchors (chapter-heading links), matching Apple/Kindle.
+      if (!doc.getElementById("__omnibus_baseline")) {
+        var style = doc.createElement("style");
+        style.id = "__omnibus_baseline";
+        style.textContent =
+          "html,body{-webkit-hyphens:auto;-ms-hyphens:auto;hyphens:auto;}" +
+          "a:link,a:visited{text-decoration:none;}";
+        doc.head.appendChild(style);
+      }
     });
   }
 

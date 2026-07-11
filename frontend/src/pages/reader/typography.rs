@@ -15,9 +15,11 @@ pub(crate) enum Typeface {
 #[cfg_attr(not(feature = "web"), allow(dead_code))]
 impl Typeface {
     pub(crate) fn to_css(self) -> &'static str {
+        // Georgia sits ahead of the generic `serif` so a webfont that fails to
+        // load in the section iframe degrades to a real book serif, not Times.
         match self {
-            Self::Editorial => "'Instrument Serif',serif",
-            Self::Classic => "'EB Garamond',serif",
+            Self::Editorial => "'Instrument Serif',Georgia,serif",
+            Self::Classic => "'EB Garamond',Georgia,serif",
             Self::Modern => "Georgia,serif",
         }
     }
