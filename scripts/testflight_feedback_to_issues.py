@@ -88,10 +88,14 @@ def resolve_app_id(token):
 
 
 def fetch_submissions(token, app_id):
-    """Yield (submission, included-index) across up to MAX_PAGES pages, newest first."""
-    url = "/v1/betaFeedbackScreenshotSubmissions"
-    params = {"filter[app]": app_id, "include": "build,tester",
-              "sort": "-createdDate", "limit": 50}
+    """Yield (submission, included-index) across up to MAX_PAGES pages, newest first.
+
+    Listed via the app relationship — the top-level
+    `/v1/betaFeedbackScreenshotSubmissions` collection does not allow
+    GET_COLLECTION (403), only per-app/per-build listing does.
+    """
+    url = f"/v1/apps/{app_id}/betaFeedbackScreenshotSubmissions"
+    params = {"include": "build,tester", "sort": "-createdDate", "limit": 50}
     for _ in range(MAX_PAGES):
         page = asc_get(url, token, params)
         included = {(i["type"], i["id"]): i.get("attributes", {}) for i in page.get("included", [])}
