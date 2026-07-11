@@ -101,6 +101,13 @@ impl CreateJournalEntry {
     }
 }
 
+/// Response for a journal image upload: the serving URL to embed in the
+/// entry's markdown (`![caption](url)`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JournalImageUpload {
+    pub url: String,
+}
+
 /// Write payload: edit an existing journal entry's body and/or progress.
 /// `status: Some(_)` transitions the entry (publish a draft); `None` — the
 /// default, so pre-drafts clients are unaffected — keeps the stored status.

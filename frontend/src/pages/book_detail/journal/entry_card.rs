@@ -233,11 +233,20 @@ pub(super) fn BdJournalEntryCard(
 /// `BdJournalEditorBody` in [`super::composer`]), keyed per entry id so
 /// multiple open editors don't collide.
 #[component]
-fn BdJournalEntryEditor(entry_id: i64, edit_body: Signal<String>) -> Element {
+fn BdJournalEntryEditor(
+    entry_id: i64,
+    edit_body: Signal<String>,
+    server_url: String,
+    error: Signal<Option<String>>,
+) -> Element {
     let mut edit_body = edit_body;
     rsx! {
         div { class: "bd-journal-toolbar-row",
-            BdJournalToolbar { target_id: format!("journal-edit-editor-{entry_id}") }
+            BdJournalToolbar {
+                target_id: format!("journal-edit-editor-{entry_id}"),
+                server_url,
+                error,
+            }
         }
         div { class: "bd-journal-editor-wrap",
             textarea {
@@ -287,7 +296,12 @@ fn BdJournalEntryEditForm(
     let mut reload = reload;
 
     rsx! {
-        BdJournalEntryEditor { entry_id, edit_body }
+        BdJournalEntryEditor {
+            entry_id,
+            edit_body,
+            server_url: server_url.clone(),
+            error,
+        }
         div { class: "bd-journal-entry-foot",
             if let Some(msg) = error() {
                 span { class: "mono bd-journal-error", role: "alert", "{msg}" }

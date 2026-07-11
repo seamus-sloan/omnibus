@@ -16,6 +16,7 @@ async fn app() -> (Router, sqlx::SqlitePool) {
             get(|| async { "part ok" }),
         )
         .route("/api/ebooks/{uuid}/file", get(|| async { "file ok" }))
+        .route("/api/journals/images/{name}", get(|| async { "image ok" }))
         .route("/api/auth/login", get(|| async { "login ok" }))
         .route("/api/_health", get(|| async { "health ok" }))
         .route("/", get(|| async { "home" }))
@@ -237,6 +238,24 @@ async fn media_get_with_invalid_query_token_is_401() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn journal_image_get_with_query_token_passes() {
+    // Embedded journal images render into the mobile WebView's `<img src>`,
+    // which can only carry the session as `?token=` (same as covers/thumbs).
+    let (app, pool) = app().await;
+    let token = seed_bearer_token(&pool).await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/journals/images/some-name.png?token={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
 }
 
 #[tokio::test]

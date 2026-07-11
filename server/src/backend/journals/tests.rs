@@ -330,3 +330,125 @@ async fn entries_one(res: axum::response::Response) -> JournalEntry {
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
+
+/// Build a multipart body carrying one `image` field.
+fn build_image_multipart(content_type: &str, bytes: &[u8]) -> (String, Vec<u8>) {
+    let boundary = "----omnibus-test-boundary-XYZ123";
+    let mut body: Vec<u8> = Vec::with_capacity(bytes.len() + 256);
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"image\"; filename=\"figure.png\"\r\n",
+    );
+    body.extend_from_slice(format!("Content-Type: {content_type}\r\n\r\n").as_bytes());
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={boundary}"), body)
+}
+
+fn post_image_req(token: &str, content_type: &str, bytes: &[u8]) -> Request<Body> {
+    let (mime, body) = build_image_multipart(content_type, bytes);
+    Request::builder()
+        .uri("/api/journals/images")
+        .method("POST")
+        .header("content-type", mime)
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(body))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn api_journal_image_upload_then_get_round_trips() {
+    let _dir = DataDirGuard::new("journal_images");
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let res = app
+        .clone()
+        .oneshot(post_image_req(&token, "image/png", TINY_PNG))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let upload: omnibus_shared::JournalImageUpload = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        upload.url.starts_with("/api/journals/images/"),
+        "got: {}",
+        upload.url
+    );
+    assert!(upload.url.ends_with(".png"), "got: {}", upload.url);
+
+    let res = app
+        .oneshot(get_with_bearer(&upload.url, &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get("content-type").unwrap(),
+        "image/png",
+        "served with the sniffed mime"
+    );
+    let served = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(served.as_ref(), TINY_PNG);
+}
+
+#[tokio::test]
+async fn api_journal_image_upload_requires_auth() {
+    let _dir = DataDirGuard::new("journal_images_auth");
+    let (app, _state, _pool) = fixture().await;
+    let (mime, body) = build_image_multipart("image/png", TINY_PNG);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/journals/images")
+                .method("POST")
+                .header("content-type", mime)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn api_journal_image_upload_rejects_non_image_payload() {
+    let _dir = DataDirGuard::new("journal_images_reject");
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    // Wrong content-type is a 400; image content-type with non-image magic
+    // bytes is a 415 (the shared validation pipeline's contract).
+    let res = app
+        .clone()
+        .oneshot(post_image_req(&token, "text/plain", b"not an image"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let res = app
+        .oneshot(post_image_req(&token, "image/png", b"not really png"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
+
+#[tokio::test]
+async fn api_journal_image_get_returns_404_for_malformed_or_missing_names() {
+    let _dir = DataDirGuard::new("journal_images_404");
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    for name in ["..%2F..%2Fetc%2Fpasswd", "nope.png", "x.svg"] {
+        let res = app
+            .clone()
+            .oneshot(get_with_bearer(
+                &format!("/api/journals/images/{name}"),
+                &token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "name: {name}");
+    }
+}

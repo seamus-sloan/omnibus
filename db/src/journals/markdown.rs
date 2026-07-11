@@ -10,6 +10,11 @@
 
 use pulldown_cmark::{html, Options, Parser};
 
+/// Path prefix every embedded journal image must be served from. The
+/// sanitizer drops any `<img>` whose `src` points elsewhere, so entries can't
+/// embed cross-origin trackers or arbitrary remote content.
+pub const IMAGE_URL_PREFIX: &str = "/api/journals/images/";
+
 /// Render a journal body's markdown to sanitized HTML safe for
 /// `dangerous_inner_html`.
 pub fn render(md: &str) -> String {
@@ -23,7 +28,7 @@ pub fn render(md: &str) -> String {
     let parser = Parser::new_ext(&with_spoilers, opts);
     let mut raw_html = String::new();
     html::push_html(&mut raw_html, parser);
-    sanitize(&raw_html)
+    wrap_figures(&sanitize(&raw_html))
 }
 
 /// Sanitize rendered HTML, additionally permitting the spoiler `<button>` the
@@ -32,6 +37,17 @@ pub fn render(md: &str) -> String {
 fn sanitize(html: &str) -> String {
     let cleaned = ammonia::Builder::default()
         .add_tags(["input", "button"])
+        // Embedded journal images: relative `src` values must survive (the
+        // default policy strips them), but only ones under our own serving
+        // prefix — anything else (absolute URLs included) loses its `src` and
+        // the bare `<img>` is dropped wholesale by `drop_srcless_imgs`.
+        .url_relative(ammonia::UrlRelative::PassThrough)
+        .attribute_filter(|element, attribute, value| {
+            if element == "img" && attribute == "src" && !value.starts_with(IMAGE_URL_PREFIX) {
+                return None;
+            }
+            Some(value.into())
+        })
         // Spoiler wrapper: only the `spoiler` class, `type="button"` (pinned via
         // value allowlist so an arbitrary type like `submit` can't leak in),
         // and `aria-expanded` (kept in sync by the client-side toggle handler).
@@ -46,7 +62,78 @@ fn sanitize(html: &str) -> String {
         .add_allowed_classes("input", ["task-list-item-checkbox"])
         .clean(html)
         .to_string();
-    drop_non_checkbox_inputs(&cleaned)
+    drop_srcless_imgs(&drop_non_checkbox_inputs(&cleaned))
+}
+
+/// Remove every `<img>` without a `src` attribute. The `attribute_filter` in
+/// [`sanitize`] strips off-prefix `src` values but ammonia keeps the (now
+/// useless) tag, which would render as a broken-image placeholder. Runs on
+/// already-sanitized HTML, so scanning to the next `>` bounds each tag (no
+/// allowlisted attribute can contain one).
+fn drop_srcless_imgs(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(start) = rest.find("<img") {
+        out.push_str(&rest[..start]);
+        let tag_rest = &rest[start..];
+        let Some(end) = tag_rest.find('>').map(|i| i + 1) else {
+            // No closing `>` — malformed; drop the remainder rather than emit it.
+            return out;
+        };
+        let tag = &tag_rest[..end];
+        if tag.contains(" src=\"") {
+            out.push_str(tag);
+        }
+        rest = &tag_rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Upgrade a paragraph that contains exactly one image (and nothing else)
+/// into `<figure><img …><figcaption>alt</figcaption></figure>` so embedded
+/// images render as captioned figures — the alt text doubles as the caption.
+/// Inline images (an `<img>` amid other paragraph content) are left as-is.
+/// Runs after [`sanitize`], so the only `<p><img…></p>` shapes seen here are
+/// ones the sanitizer produced.
+fn wrap_figures(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(start) = rest.find("<p><img ") {
+        let after_p = &rest[start + 3..]; // keep `<img …` at the head
+        let Some(img_end) = after_p.find('>').map(|i| i + 1) else {
+            break;
+        };
+        // Only a lone image directly followed by the paragraph close counts.
+        if !after_p[img_end..].starts_with("</p>") {
+            out.push_str(&rest[..start + 3]);
+            rest = after_p;
+            continue;
+        }
+        let img = &after_p[..img_end];
+        out.push_str(&rest[..start]);
+        out.push_str("<figure class=\"journal-figure\">");
+        out.push_str(img);
+        if let Some(alt) = attr_value(img, "alt").filter(|a| !a.trim().is_empty()) {
+            // The attribute value is already HTML-escaped, which is equally
+            // valid as element text — copy it through verbatim.
+            out.push_str("<figcaption>");
+            out.push_str(alt);
+            out.push_str("</figcaption>");
+        }
+        out.push_str("</figure>");
+        rest = &after_p[img_end + 4..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The raw (still-escaped) value of `name="…"` in `tag`, if present.
+fn attr_value<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let needle = format!(" {name}=\"");
+    let start = tag.find(&needle)? + needle.len();
+    let end = tag[start..].find('"')? + start;
+    Some(&tag[start..end])
 }
 
 /// Remove every `<input>` that isn't a disabled task-list checkbox.
@@ -251,6 +338,66 @@ mod tests {
                 "lookalike disabled attr rejected: {tag}"
             );
         }
+    }
+
+    #[test]
+    fn renders_lone_image_as_captioned_figure() {
+        let html = render("![A sunset over the bay](/api/journals/images/abc.png)");
+        assert!(
+            html.contains("<figure class=\"journal-figure\">"),
+            "got: {html}"
+        );
+        assert!(
+            html.contains("src=\"/api/journals/images/abc.png\""),
+            "got: {html}"
+        );
+        assert!(
+            html.contains("<figcaption>A sunset over the bay</figcaption>"),
+            "got: {html}"
+        );
+    }
+
+    #[test]
+    fn lone_image_without_alt_gets_no_figcaption() {
+        let html = render("![](/api/journals/images/abc.png)");
+        assert!(html.contains("<figure"), "got: {html}");
+        assert!(!html.contains("<figcaption>"), "got: {html}");
+    }
+
+    #[test]
+    fn inline_image_amid_text_stays_unwrapped() {
+        let html = render("before ![tiny](/api/journals/images/abc.png) after");
+        assert!(html.contains("<img"), "got: {html}");
+        assert!(
+            !html.contains("<figure"),
+            "inline images stay plain: {html}"
+        );
+    }
+
+    #[test]
+    fn strips_images_with_offsite_or_off_prefix_src() {
+        for md in [
+            "![x](https://evil.example/track.png)",
+            "![x](/covers/1.png)",
+            "![x](//evil.example/t.png)",
+            "<img src=\"https://evil.example/t.png\">",
+        ] {
+            let html = render(md);
+            assert!(
+                !html.contains("<img"),
+                "img from {md:?} must be dropped: {html}"
+            );
+        }
+    }
+
+    #[test]
+    fn hand_authored_figure_cannot_carry_the_journal_figure_class() {
+        // ammonia's defaults keep bare `<figure>`/`<figcaption>` (harmless
+        // semantic markup), but the styled class only comes from our own
+        // `wrap_figures` pass — a hand-authored one is stripped.
+        let html =
+            render("<figure class=\"journal-figure\"><figcaption>fake</figcaption></figure>");
+        assert!(!html.contains("journal-figure"), "got: {html}");
     }
 
     #[test]

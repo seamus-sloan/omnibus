@@ -351,6 +351,58 @@ test("autosaves the draft while typing and discards it on cancel", async ({ page
 });
 
 // ---------------------------------------------------------------------------
+// Action — embed an image via the toolbar upload
+// ---------------------------------------------------------------------------
+
+// A valid 1x1 transparent PNG — the upload endpoint sniffs magic bytes, so the
+// payload must be a real image.
+const TINY_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQAB" +
+    "pfZFQAAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+test("uploads an image from the toolbar and renders it as a captioned figure", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  const marker = `e2e-image-${Date.now()}`;
+  await page.getByTestId("journal-open-composer").click();
+  await editor(page).fill(`figure test ${marker}`);
+
+  // Picking a file uploads it and inserts markdown image syntax at the caret,
+  // pointing at the returned serving URL.
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/journals/images", expectedStatus: 200 },
+    async () =>
+      page
+        .getByTestId("journal-image-input")
+        .first()
+        .setInputFiles({ name: "figure.png", mimeType: "image/png", buffer: TINY_PNG }),
+  );
+  await expect(editorMarkdown(page)).toHaveValue(
+    new RegExp(`figure test ${marker}[\\s\\S]*!\\[Add a caption\\]\\(/api/journals/images/`),
+  );
+
+  // Published, the lone image renders as a captioned <figure> (the alt text
+  // is the caption).
+  await expectMutation(
+    page,
+    { method: "POST", url: SAVE_URL, expectedStatus: 200 },
+    async () => page.getByTestId("journal-publish").click(),
+  );
+  const card = page.getByTestId("journal-entry").filter({ hasText: marker });
+  await expect(card.locator(".journal-figure img")).toBeVisible();
+  await expect(card.locator(".journal-figure figcaption")).toHaveText("Add a caption");
+
+  await deleteEntry(page, marker);
+});
+
+// ---------------------------------------------------------------------------
 // Error path — failed publish surfaces an error, composer stays open
 // ---------------------------------------------------------------------------
 

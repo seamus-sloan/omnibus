@@ -374,6 +374,13 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/journals/{id}",
             patch(journals::patch_journal).delete(journals::delete_journal),
         )
+        // Embedded-image reads are media-gated like covers/thumbs; the
+        // matching upload POST lives in `upload_router` (rate-limited, image
+        // body cap).
+        .route(
+            "/api/journals/images/{name}",
+            get(journals::get_journal_image),
+        )
         // GET/DELETE for author photos carry no upload body (DELETE mutates,
         // but cheaply — it clears photo state, it doesn't ingest one), so
         // they stay outside the rate-limited `upload_router`. Only the binary
@@ -472,6 +479,7 @@ fn upload_router() -> Router<AppState> {
             "/api/ebooks/{uuid}/cover",
             post(overrides::post_ebook_cover),
         )
+        .route("/api/journals/images", post(journals::post_journal_image))
         .route(
             "/api/authors/{id}/photo",
             put(author_photos::put_author_photo),
