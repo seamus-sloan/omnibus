@@ -68,6 +68,7 @@
   var relocateTimer = null;
   var locationsReady = false;
   var tocFlat = [];
+  var currentTheme = "dark";
 
   function emitStatus(state) {
     if (typeof window.__omnibusOnStatus === "function") {
@@ -184,6 +185,7 @@
         body: { background: "#ede4d0", color: "#3b3029" },
       });
       rendition.themes.select(opts.theme || "dark");
+      currentTheme = opts.theme || "dark";
 
       if (opts.fontSize) {
         rendition.themes.fontSize(opts.fontSize + "px");
@@ -370,6 +372,31 @@
     }
   }
 
+  // Reader-owned hyperlink colour. Apple/Kindle paint links with their own
+  // accent and ignore the publisher's — so links stay a consistent, legible
+  // colour instead of whatever hue (or `:hover` red) a given book's CSS ships.
+  // Theme-aware: a dark-ground blue would wash out on the light/sepia grounds.
+  function linkColorForTheme(name) {
+    switch (name) {
+      case "light":
+      case "sepia":
+        return "#2f6fd0";
+      default:
+        return "#6fa8e6";
+    }
+  }
+
+  // Push the current theme's link colour into a section as a CSS var the
+  // baseline stylesheet reads. Runs per section and again on every theme swap.
+  function applyLinkColor(doc) {
+    if (doc && doc.documentElement) {
+      doc.documentElement.style.setProperty(
+        "--omn-link",
+        linkColorForTheme(currentTheme)
+      );
+    }
+  }
+
   // Per-section content enhancement, registered on epub.js's content hook so it
   // runs for every rendered spine item. Three Apple/Kindle-parity fixes the
   // sandboxed iframe would otherwise drop: the book's own stylesheet, then
@@ -399,21 +426,25 @@
         doc.head.appendChild(link);
       }
 
+      applyLinkColor(doc);
+
       // Reader baseline / override layer. The split mirrors Apple Books and
       // Kindle: the reading system owns colour (and font, size, spacing,
       // margins, justification — set elsewhere), while the publisher keeps
       // structure — weight, style, headings, alignment, indents, small-caps.
       // Appended last so it wins, and `!important` on colour so a publisher
-      // hue can't override the theme: this both kills clashes (e.g. Project
-      // Gutenberg's `a:hover{color:red}`) and keeps dark/sepia legible when a
-      // book hard-codes its own text colour.
+      // hue can't override the theme: body text inherits the theme foreground
+      // (killing clashes like Project Gutenberg's `a:hover{color:red}` and
+      // keeping dark/sepia legible), while links get the reader's own accent
+      // in every state — the `a` rule outranks `body *` on specificity.
       if (!doc.getElementById("__omnibus_baseline")) {
         var style = doc.createElement("style");
         style.id = "__omnibus_baseline";
         style.textContent =
           "html,body{-webkit-hyphens:auto;-ms-hyphens:auto;hyphens:auto;}" +
           "body *{color:inherit!important;}" +
-          "a:link,a:visited,a:hover,a:active{text-decoration:none;}";
+          "a:link,a:visited,a:hover,a:active{" +
+          "color:var(--omn-link,#4a86d8)!important;text-decoration:none;}";
         doc.head.appendChild(style);
       }
     });
@@ -491,6 +522,15 @@
   function setTheme(name) {
     if (!rendition) return;
     rendition.themes.select(name);
+    currentTheme = name;
+    // Re-tint links in every already-rendered section for the new ground.
+    try {
+      rendition.getContents().forEach(function (c) {
+        applyLinkColor(c.document);
+      });
+    } catch (e) {
+      /* no rendered sections yet */
+    }
   }
 
   function setFont(family) {
