@@ -324,6 +324,14 @@ pub fn LandingPage() -> Element {
     let view = derive_view_state(&sigs, query);
     let handlers = build_handlers(&sigs);
 
+    // Restore scroll on back-navigation once page 1 has loaded. The paginated
+    // list is short on a fresh remount, so the restore retries across frames
+    // while the load-more observer streams pages in toward the saved offset
+    // (see `crate::scroll_restore`).
+    let loading = sigs.loading;
+    let content_ready = use_memo(move || !loading());
+    crate::scroll_restore::use_scroll_restore(content_ready);
+
     // Mobile renders a dedicated "All Books" surface; web keeps the
     // rail + toolbar layout. Both consume the shared data pipeline above —
     // only the presentation branches. (Mobile is a separate build, so this

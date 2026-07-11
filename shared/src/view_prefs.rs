@@ -122,3 +122,21 @@ pub struct ViewPrefs {
     #[serde(default)]
     pub filters_open: bool,
 }
+
+/// Sort axis for the Authors / Series discovery indexes (name A–Z or most books first).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexSort {
+    #[default]
+    Name,
+    BookCount,
+}
+
+/// Persisted, library-wide sort choices for the discovery index pages (Authors + Series).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscoveryPrefs {
+    #[serde(default)]
+    pub authors_sort: IndexSort,
+    #[serde(default)]
+    pub series_sort: IndexSort,
+}

@@ -4,20 +4,11 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::AuthorSummary;
+use omnibus_shared::{AuthorSummary, IndexSort};
 
 use crate::components::{PageError, PageLoading};
-use crate::{data, use_server_url, Route};
-
-/// Sort axes exposed in the toolbar. Mirrors the design's "Last name A–Z /
-/// Most books" toggle. "Recently added" and "Highest rated" from the comp
-/// require fields the v1 summary doesn't carry — deferred to a follow-up
-/// once `AuthorSummary` grows.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum Sort {
-    Name,
-    BookCount,
-}
+use crate::scroll_restore::use_scroll_restore;
+use crate::{data, index_prefs, use_server_url, Route};
 
 /// Library-wide totals rendered in the header's subtitle. Grouped so the
 /// header doesn't grow a long `total_*` prop list.
@@ -33,7 +24,7 @@ struct AuthorIndexCounts {
 #[derive(Clone, PartialEq, Eq)]
 struct AuthorIndexFilter {
     filter: String,
-    sort: Sort,
+    sort: IndexSort,
     show_letters: bool,
     alphabet: Vec<char>,
     present_letters: std::collections::HashSet<char>,
@@ -50,9 +41,24 @@ pub fn AuthorsIndexPage() -> Element {
     let loading = use_signal(|| true);
     let error: Signal<Option<String>> = use_signal(|| None);
     let mut filter = use_signal(String::new);
-    let mut sort = use_signal(|| Sort::Name);
+    let mut sort = use_signal(IndexSort::default);
 
     use_authors_fetch_effect(server_url.clone(), authors, loading, error);
+
+    // Reconcile the sort axis from persisted prefs after mount. Seeded to the
+    // default above so SSR and first-hydration markup match (rule 07); the sort
+    // toolbar only renders post-fetch, so this reconcile can't cause a flash.
+    use_effect(move || {
+        let stored = index_prefs::load().authors_sort;
+        if stored != *sort.peek() {
+            sort.set(stored);
+        }
+    });
+
+    // Restore scroll once the (full) list has painted, so returning from an
+    // author detail lands back where the reader left off.
+    let ready = use_memo(move || !loading());
+    use_scroll_restore(ready);
 
     if loading() {
         return rsx! { PageLoading {} };
@@ -76,7 +82,7 @@ pub fn AuthorsIndexPage() -> Element {
 
     // Group by first letter of sort key (last name when available, else name).
     // Only meaningful when sorting by name.
-    let show_letters = matches!(sort(), Sort::Name);
+    let show_letters = matches!(sort(), IndexSort::Name);
     let letters = group_by_letter(&filtered, show_letters);
 
     // Alphabet strip: A–Z followed by a single '#' bucket for any
@@ -110,7 +116,12 @@ pub fn AuthorsIndexPage() -> Element {
                 counts,
                 filter_state,
                 on_filter: move |v| filter.set(v),
-                on_sort: move |s| sort.set(s),
+                on_sort: move |s: IndexSort| {
+                    sort.set(s);
+                    let mut prefs = index_prefs::load();
+                    prefs.authors_sort = s;
+                    index_prefs::save(&prefs);
+                },
             }
             {authors_index_body(&filtered, &letters, show_letters, any_in_library, &server_url_for_cards)}
         }
@@ -152,22 +163,22 @@ fn filter_authors<'a>(all: &'a [AuthorSummary], query: &str) -> Vec<&'a AuthorSu
 }
 
 /// Sorts `filtered` in place along the selected axis.
-fn sort_authors(filtered: &mut [&AuthorSummary], sort: Sort) {
+fn sort_authors(filtered: &mut [&AuthorSummary], sort: IndexSort) {
     match sort {
-        // Within Sort::Name the primary axis is the sort_key bucket:
+        // Within IndexSort::Name the primary axis is the sort_key bucket:
         // alpha first (`is_alpha_bucket` → false sorts before true),
         // non-alpha (digits, punctuation, accented mononyms, etc.)
         // trail at the end under the '#' section. Secondary axis is
         // the lowercased key itself so cards stay alphabetical within
         // their letter group.
-        Sort::Name => filtered.sort_by(|a, b| {
+        IndexSort::Name => filtered.sort_by(|a, b| {
             let ka = sort_key(a);
             let kb = sort_key(b);
             is_non_alpha_key(&ka)
                 .cmp(&is_non_alpha_key(&kb))
                 .then_with(|| ka.to_lowercase().cmp(&kb.to_lowercase()))
         }),
-        Sort::BookCount => filtered.sort_by(|a, b| {
+        IndexSort::BookCount => filtered.sort_by(|a, b| {
             b.book_count
                 .cmp(&a.book_count)
                 .then_with(|| sort_key(a).to_lowercase().cmp(&sort_key(b).to_lowercase()))
@@ -246,7 +257,7 @@ fn AuthorsIndexHeader(
     counts: AuthorIndexCounts,
     filter_state: AuthorIndexFilter,
     on_filter: EventHandler<String>,
-    on_sort: EventHandler<Sort>,
+    on_sort: EventHandler<IndexSort>,
 ) -> Element {
     let AuthorIndexCounts {
         total_authors,
@@ -318,22 +329,22 @@ fn FilterInput(filter: String, on_filter: EventHandler<String>) -> Element {
 
 /// Two-button toolbar that picks between surname A–Z and most-books sort axes.
 #[component]
-fn SortSelector(sort: Sort, on_sort: EventHandler<Sort>) -> Element {
+fn SortSelector(sort: IndexSort, on_sort: EventHandler<IndexSort>) -> Element {
     rsx! {
         div { class: "idx-sort",
             span { class: "label", "Sort" }
             button {
                 class: "idx-btn",
-                "aria-pressed": if sort == Sort::Name { "true" } else { "false" },
+                "aria-pressed": if sort == IndexSort::Name { "true" } else { "false" },
                 "data-testid": "authors-sort-name",
-                onclick: move |_| on_sort.call(Sort::Name),
+                onclick: move |_| on_sort.call(IndexSort::Name),
                 "Last name A\u{2013}Z"
             }
             button {
                 class: "idx-btn",
-                "aria-pressed": if sort == Sort::BookCount { "true" } else { "false" },
+                "aria-pressed": if sort == IndexSort::BookCount { "true" } else { "false" },
                 "data-testid": "authors-sort-count",
-                onclick: move |_| on_sort.call(Sort::BookCount),
+                onclick: move |_| on_sort.call(IndexSort::BookCount),
                 "Most books"
             }
         }
@@ -472,7 +483,7 @@ fn first_letter(a: &AuthorSummary) -> char {
 }
 
 /// Whether the given sort key would land in the `#` bucket rather
-/// than under A–Z. Used as the primary sort axis for `Sort::Name` so
+/// than under A–Z. Used as the primary sort axis for `IndexSort::Name` so
 /// the non-alpha tail trails the alphabet.
 fn is_non_alpha_key(key: &str) -> bool {
     !key.chars()
