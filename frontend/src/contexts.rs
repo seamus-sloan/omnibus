@@ -154,11 +154,12 @@ pub fn use_is_admin() -> Signal<bool> {
 /// Derive the resolved current user from the app-wide [`CurrentUser`]
 /// context instead of an independent per-mount `/api/auth/me` fetch,
 /// flattening "not yet resolved" and "unauthenticated" alike to `None`.
-/// Starts `None` so SSR and the first WASM paint agree (rule 07); only the
-/// web build wires the effect that fills it in once the context resolves.
-/// Mobile has no `CurrentUser` context (bearer auth, not cookies), so it
-/// resolves the user directly via `/api/auth/me` — this is what lets
-/// owner-only affordances (e.g. journal edit/delete) light up on mobile.
+/// Starts `None` so SSR and the first WASM paint agree (rule 07); an effect
+/// then fills it in post-mount. The web build reads it from the resolved
+/// [`CurrentUser`] context; mobile has no such context (bearer auth, not
+/// cookies), so it resolves the user directly via `/api/auth/me` — this is
+/// what lets owner-only affordances (e.g. journal edit/delete) light up on
+/// mobile. SSR (neither feature) stays at the `None` default.
 #[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(unused_mut))]
 pub fn use_current_user_summary() -> Signal<Option<omnibus_shared::UserSummary>> {
     let mut current = use_signal(|| None);
