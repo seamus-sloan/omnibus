@@ -403,6 +403,38 @@ test("uploads an image from the toolbar and renders it as a captioned figure", a
 });
 
 // ---------------------------------------------------------------------------
+// Action — markers are revealed only on the caret's line (editor-only)
+// ---------------------------------------------------------------------------
+
+test("hides markdown markers on lines away from the caret", async ({ page, request }) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  await page.getByTestId("journal-open-composer").click();
+  await editor(page).fill("# Heading line\n**bold line**");
+
+  const lines = editor(page).locator(".cm-line");
+  await expect(lines).toHaveCount(2);
+
+  // Put the caret on line 2 — its markers show at the dimmed opacity while
+  // line 1's are fully faded (the characters stay in the layout either way).
+  await lines.nth(1).click();
+  await expect(lines.nth(1)).toHaveClass(/cm-active/);
+  await expect(lines.nth(0)).not.toHaveClass(/cm-active/);
+  await expect(lines.nth(1).locator(".cm-mark").first()).toHaveCSS("opacity", "0.38");
+  await expect(lines.nth(0).locator(".cm-mark").first()).toHaveCSS("opacity", "0");
+
+  // Moving the caret to line 1 swaps which line's markers are revealed, and
+  // the mirrored markdown is untouched by the class toggling.
+  await lines.nth(0).click();
+  await expect(lines.nth(0)).toHaveClass(/cm-active/);
+  await expect(lines.nth(1)).not.toHaveClass(/cm-active/);
+  await expect(editorMarkdown(page)).toHaveValue("# Heading line\n**bold line**");
+
+  await cancelComposerDiscardingDraft(page);
+});
+
+// ---------------------------------------------------------------------------
 // Error path — failed publish surfaces an error, composer stays open
 // ---------------------------------------------------------------------------
 

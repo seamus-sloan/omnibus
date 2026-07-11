@@ -988,8 +988,11 @@ html, body { overscroll-behavior: none; }
   color: var(--ink-3);
   pointer-events: none;
 }
-/* Markdown markers stay in the text but recede. */
-.cm-mark { opacity: 0.38; }
+/* Markdown markers stay in the text (the caret math depends on every source
+   character keeping its geometry) but are fully faded except on the line the
+   caret is on — `journal_editor.js` toggles `.cm-active` per line. */
+.cm-mark { opacity: 0; transition: opacity 120ms ease; }
+.cm-line.cm-active .cm-mark { opacity: 0.38; }
 .cm-strong { font-weight: 700; color: var(--ink-0); }
 .cm-em { font-style: italic; }
 .cm-strike { text-decoration: line-through; }
@@ -1008,8 +1011,10 @@ html, body { overscroll-behavior: none; }
   border-left: 3px solid var(--accent);
   padding-left: 8px;
 }
-.cm-list .cm-mark { color: var(--accent); opacity: 0.7; }
-.cm-task .cm-mark { color: var(--accent); opacity: 0.7; }
+.cm-list .cm-mark,
+.cm-task .cm-mark { color: var(--accent); }
+.cm-line.cm-active .cm-list .cm-mark,
+.cm-line.cm-active .cm-task .cm-mark { opacity: 0.7; }
 .cm-link { color: var(--accent); }
 .cm-spoiler {
   background: color-mix(in oklch, var(--accent) 14%, transparent);
