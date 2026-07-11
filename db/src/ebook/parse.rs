@@ -104,6 +104,7 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
             error: None,
             has_override: false,
             book_files: Vec::new(),
+            epub_size_bytes: None,
         },
         cover,
         // Stat values get overwritten by `parse_ebook_targets` before the

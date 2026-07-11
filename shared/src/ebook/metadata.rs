@@ -100,6 +100,12 @@ pub struct EbookMetadata {
     /// single-file-per-format books — the `formats` vec is sufficient.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub book_files: Vec<BookFileInfo>,
+
+    /// On-disk size of the EPUB the hero "Send to Kindle" would deliver (the
+    /// lowest-ordinal EPUB). `None` when the book has no EPUB. Drives the
+    /// oversized-file gate on the email button — see `kindle_email_oversize`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epub_size_bytes: Option<i64>,
 }
 
 /// One `book_files` row — a single physical file on disk. Exposed to the
@@ -112,4 +118,8 @@ pub struct BookFileInfo {
     pub ordinal: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// On-disk size of this file. Lets the per-file Send-to-Kindle rows gate
+    /// oversized EPUBs the same way the hero export menu does.
+    #[serde(default)]
+    pub size_bytes: i64,
 }

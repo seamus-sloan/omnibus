@@ -48,6 +48,51 @@ async fn send_returns_no_epub_when_config_present_but_book_missing() {
 }
 
 #[tokio::test]
+async fn send_returns_too_large_when_epub_exceeds_email_cap() {
+    let _env = EnvVarGuard::set("SMTP_HOST", None).also_set("SMTP_FROM_EMAIL", None);
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_smtp(&pool).await;
+
+    // Point a scan root at a temp dir holding a sparse EPUB one byte over the
+    // email cap, so `send` reaches the size guard after resolving the path.
+    let dir = tempfile::TempDir::new().unwrap();
+    let lib = dir.path().to_str().unwrap();
+    let epub = dir.path().join("big.epub");
+    std::fs::File::create(&epub)
+        .unwrap()
+        .set_len(omnibus_shared::KINDLE_EMAIL_MAX_BYTES + 1)
+        .unwrap();
+
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(lib)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let book_id = sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title) VALUES ('uuid-big', ?, '', 'Big')",
+    )
+    .bind(lib_id)
+    .execute(&pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'EPUB', 'big', 0)",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let err = send(&pool, book_id, None, "reader@kindle.com")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, KindleError::TooLarge), "got {err:?}");
+}
+
+#[tokio::test]
 async fn send_test_returns_not_configured_when_unset() {
     let _env = EnvVarGuard::set("SMTP_HOST", None).also_set("SMTP_FROM_EMAIL", None);
     let pool = init_db("sqlite::memory:").await.unwrap();

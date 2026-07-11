@@ -391,6 +391,7 @@ pub(super) fn BdRailSection(
                     // folder layout on the device.
                     book_author: b.creators.first().map(|c| c.name.clone()).unwrap_or_default(),
                     book_title: title.clone(),
+                    epub_size_bytes: b.epub_size_bytes,
                 }
                 Link {
                     to: Route::MetadataEdit { uuid: uuid.clone() },

@@ -53,6 +53,14 @@ pub async fn get_book(
     backfill_creator_ids(pool, std::slice::from_mut(&mut book)).await?;
 
     let files = get_book_files(pool, id).await?;
+    // Size of the EPUB the hero send would deliver (file_id None resolves the
+    // lowest-ordinal EPUB, same as `book_file_path`), so the export menu can
+    // gate the email button on Kindle's size cap.
+    book.epub_size_bytes = files
+        .iter()
+        .filter(|f| f.format.eq_ignore_ascii_case("EPUB"))
+        .min_by_key(|f| f.ordinal)
+        .map(|f| f.size_bytes);
     let has_multipart = files.iter().any(|f| {
         files
             .iter()
@@ -386,8 +394,8 @@ pub async fn get_book_files(
     pool: &SqlitePool,
     book_id: i64,
 ) -> Result<Vec<omnibus_shared::BookFileInfo>, super::BooksError> {
-    let rows = sqlx::query_as::<_, (i64, String, String, i64, Option<String>)>(
-        "SELECT id, format, filename, ordinal, label FROM book_files \
+    let rows = sqlx::query_as::<_, (i64, String, String, i64, Option<String>, i64)>(
+        "SELECT id, format, filename, ordinal, label, size_bytes FROM book_files \
          WHERE book_id = ? ORDER BY format, ordinal",
     )
     .bind(book_id)
@@ -396,12 +404,13 @@ pub async fn get_book_files(
     Ok(rows
         .into_iter()
         .map(
-            |(id, format, filename, ordinal, label)| omnibus_shared::BookFileInfo {
+            |(id, format, filename, ordinal, label, size_bytes)| omnibus_shared::BookFileInfo {
                 id,
                 format,
                 filename,
                 ordinal,
                 label,
+                size_bytes,
             },
         )
         .collect())
