@@ -1,5 +1,6 @@
 import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { expectNavVisible, gotoReady } from "../utils/nav";
 import { expectMutation } from "../utils/api";
 import { fixturesDir, seedLibrary } from "../utils/seed";
@@ -64,4 +65,54 @@ test("surfaces an error when shelf creation fails", async ({ page }) => {
   );
 
   await expect(page.getByTestId("shelf-create-error")).toBeVisible();
+});
+
+test("switches shelves via the rail without a full reload", async ({ page, request }) => {
+  // Two hand-picked shelves, each holding one distinct fixture book, so the
+  // header and grid content can only match if the rail switch actually
+  // re-fetched.
+  const alphaUuid = await fetchBookUuidByTitle(request, "Alpha");
+  const betaUuid = await fetchBookUuidByTitle(request, "Beta in the Series");
+
+  const nameA = `E2E Rail A ${Date.now()}`;
+  const nameB = `E2E Rail B ${Date.now()}`;
+
+  const createManualShelf = async (name: string, bookUuid: string) => {
+    const resp = await request.post("/api/rpc/shelves/create", {
+      data: {
+        req: {
+          kind: "manual",
+          name,
+          description: null,
+          visibility: "private",
+          match_mode: null,
+          rules: [],
+          book_uuids: [bookUuid],
+        },
+      },
+    });
+    expect(resp.status(), `POST /api/rpc/shelves/create failed for ${name}`).toBe(200);
+    const shelf = (await resp.json()) as { id: number };
+    return shelf.id;
+  };
+
+  const shelfAId = await createManualShelf(nameA, alphaUuid);
+  const shelfBId = await createManualShelf(nameB, betaUuid);
+
+  await gotoReady(page, `/shelves/${shelfAId}`);
+  await expect(page.getByTestId("shelf-detail-header")).toContainText(nameA);
+  await expect(page.getByTestId("shelf-grid")).toContainText("Alpha");
+
+  await page.getByTestId(`rail-shelf-${shelfBId}`).click();
+
+  await expect(page.getByTestId("shelf-detail-header")).toContainText(nameB);
+  await expect(page.getByTestId("shelf-grid")).toContainText("Beta in the Series");
+  await expect(page.getByTestId("shelf-grid")).not.toContainText("Alpha");
+
+  // And back the other way, confirming both directions re-fetch.
+  await page.getByTestId(`rail-shelf-${shelfAId}`).click();
+
+  await expect(page.getByTestId("shelf-detail-header")).toContainText(nameA);
+  await expect(page.getByTestId("shelf-grid")).toContainText("Alpha");
+  await expect(page.getByTestId("shelf-grid")).not.toContainText("Beta in the Series");
 });

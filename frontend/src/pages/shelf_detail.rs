@@ -40,9 +40,11 @@ pub fn ShelfDetailPage(id: i64) -> Element {
     // Bumped to force a refetch after a membership edit.
     let mut reload = use_signal(|| 0u32);
 
-    // Fetch the shelf detail whenever the id changes.
+    // Fetch the shelf detail whenever the id changes. `id` is a plain prop
+    // (not a signal), so it must be wrapped in `use_reactive!` to re-arm this
+    // effect on navigation between shelves — see `BookDetailPage` for why.
     let shelf_url = server_url.clone();
-    use_effect(move || {
+    use_effect(use_reactive!(|id| {
         let url = shelf_url.clone();
         let _ = reload();
         spawn(async move {
@@ -59,11 +61,13 @@ pub fn ShelfDetailPage(id: i64) -> Element {
             }
             loading.set(false);
         });
-    });
+    }));
 
-    // Fetch the member books, re-running on sort change or a membership edit.
+    // Fetch the member books, re-running on id/sort change or a membership
+    // edit. `sort_key()` is a signal read, already tracked; `id` needs the
+    // same `use_reactive!` wrapping as above.
     let page_url = server_url.clone();
-    use_effect(move || {
+    use_effect(use_reactive!(|id| {
         let url = page_url.clone();
         let key = sort_key();
         let _ = reload();
@@ -76,7 +80,7 @@ pub fn ShelfDetailPage(id: i64) -> Element {
                 Err(_) => books.set(Vec::new()),
             }
         });
-    });
+    }));
 
     if loading() && shelf.read().is_none() {
         return render_page_state(id, rsx! { p { class: "subtitle", "Loading\u{2026}" } });
