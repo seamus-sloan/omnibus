@@ -376,19 +376,31 @@ fn BdJournalProgressToggle(track_progress: Signal<bool>, progress: Signal<i64>) 
             }
             span { class: "label", "Progress" }
             if track_progress() {
-                input {
-                    r#type: "range",
-                    min: "0",
-                    max: "100",
-                    value: "{progress}",
-                    "data-testid": "journal-progress",
-                    oninput: move |e| {
-                        if let Ok(v) = e.value().parse::<i64>() {
-                            progress.set(v);
+                {
+                    let pct = progress();
+                    rsx! {
+                        div { class: "bd-journal-progress-slider",
+                            input {
+                                r#type: "range",
+                                class: "bd-journal-progress-range",
+                                min: "0",
+                                max: "100",
+                                value: "{progress}",
+                                // Paints the played portion directly (Chrome/Safari drop
+                                // native fill once `appearance: none` is set), so drag
+                                // affordance stays visible on touch, not just the thumb.
+                                style: "background: linear-gradient(to right, var(--accent) 0%, var(--accent) {pct}%, var(--bg-3) {pct}%, var(--bg-3) 100%);",
+                                "data-testid": "journal-progress",
+                                oninput: move |e| {
+                                    if let Ok(v) = e.value().parse::<i64>() {
+                                        progress.set(v);
+                                    }
+                                },
+                            }
+                            span { class: "mono bd-journal-progress-val", "{progress}%" }
                         }
-                    },
+                    }
                 }
-                span { class: "mono bd-journal-progress-val", "{progress}%" }
             }
         }
     }
