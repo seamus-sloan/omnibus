@@ -20,6 +20,7 @@ pub fn AuthorPage(id: i64) -> Element {
     let mut author: Signal<Option<AuthorDetail>> = use_signal(|| None);
     let mut loading = use_signal(|| true);
     let mut error: Signal<Option<String>> = use_signal(|| None);
+    crate::use_page_title(move || author.read().as_ref().map(|a| a.name.clone()));
 
     // F5.9-lite admin gating for the Delete button — derived from the
     // app-wide `CurrentUser` context (`crate::use_is_admin`) instead of an

@@ -79,6 +79,32 @@ pub fn use_search_query() -> SearchQuery {
     use_context::<SearchQuery>()
 }
 
+/// Browser-tab title. Owned by [`crate::App`] via `use_context_provider` and
+/// rendered once as the App-level `document::Title`; each route sets its own
+/// subtitle through [`use_page_title`]. Kept target-agnostic (mobile's WebView
+/// has no visible tab, but the write is harmless and avoids a `cfg` gate).
+#[derive(Copy, Clone)]
+pub struct PageTitle(pub Signal<String>);
+
+/// Set the browser-tab title to `Omnibus | {subtitle}` — or the bare app name
+/// when `subtitle()` returns `None` (the landing page). `subtitle` is read
+/// inside the effect, so a page whose name arrives asynchronously (book /
+/// author / series detail) can pass a signal-backed closure and the title
+/// re-renders once its data lands. Post-mount only, so SSR and the first WASM
+/// paint keep the default title and hydration parity holds (rule 07).
+pub fn use_page_title(subtitle: impl Fn() -> Option<String> + 'static) {
+    let PageTitle(mut title) = use_context::<PageTitle>();
+    use_effect(move || title.set(format_page_title(subtitle().as_deref())));
+}
+
+/// Compose the browser-tab title from an optional page subtitle.
+fn format_page_title(subtitle: Option<&str>) -> String {
+    match subtitle {
+        Some(sub) => format!("Omnibus | {sub}"),
+        None => "Omnibus".to_string(),
+    }
+}
+
 /// App-wide cached `/api/auth/me` result. Owned by [`App`] via
 /// `use_context_provider` so every component that needs to gate on
 /// `is_admin` (top nav avatar, landing inline edits, author Delete) reads
@@ -201,4 +227,15 @@ impl Default for PlaybackState {
 #[cfg(not(feature = "mobile"))]
 pub fn use_playback() -> PlaybackState {
     use_context::<PlaybackState>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_page_title;
+
+    #[test]
+    fn format_page_title_prefixes_subtitle_and_omits_when_none() {
+        assert_eq!(format_page_title(Some("Settings")), "Omnibus | Settings");
+        assert_eq!(format_page_title(None), "Omnibus");
+    }
 }

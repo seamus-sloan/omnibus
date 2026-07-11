@@ -8,7 +8,7 @@ use dioxus::prelude::*;
 use dioxus_router::Routable;
 
 use crate::pages::*;
-use crate::ScreenLayout;
+use crate::{use_page_title, ScreenLayout};
 
 /// Top-level router for every omnibus frontend target.
 #[derive(Clone, Debug, PartialEq, Eq, Routable)]
@@ -58,6 +58,7 @@ pub enum Route {
 /// Route target for `/` — wraps [`LandingPage`] in the platform screen layout.
 #[component]
 pub fn Landing() -> Element {
+    use_page_title(|| None);
     rsx! {
         ScreenLayout { LandingPage {} }
     }
@@ -66,6 +67,7 @@ pub fn Landing() -> Element {
 /// Route target for `/settings` — wraps [`SettingsPage`] in the platform screen layout.
 #[component]
 pub fn Settings() -> Element {
+    use_page_title(|| Some("Settings".into()));
     rsx! {
         ScreenLayout { SettingsPage {} }
     }
@@ -76,6 +78,7 @@ pub fn Settings() -> Element {
 /// renders the mobile "You" tab.
 #[component]
 pub fn Account() -> Element {
+    use_page_title(|| Some("Account".into()));
     rsx! {
         ScreenLayout { AccountPage {} }
     }
@@ -84,6 +87,7 @@ pub fn Account() -> Element {
 /// Route target for `/add-books` — wraps [`AddBooksPage`] in the platform screen layout.
 #[component]
 pub fn AddBooks() -> Element {
+    use_page_title(|| Some("Add Books".into()));
     rsx! {
         ScreenLayout { AddBooksPage {} }
     }
@@ -105,6 +109,7 @@ pub fn BookDetail(uuid: String) -> Element {
 /// stability rationale as [`BookDetail`].
 #[component]
 pub fn MetadataEdit(uuid: String) -> Element {
+    use_page_title(|| Some("Edit Metadata".into()));
     rsx! {
         ScreenLayout { MetadataEditPage { uuid } }
     }
@@ -116,6 +121,7 @@ pub fn MetadataEdit(uuid: String) -> Element {
 /// nav is suppressed. Same uuid-keyed stability rationale as [`BookDetail`].
 #[component]
 pub fn BookRead(uuid: String) -> Element {
+    use_page_title(|| Some("Reader".into()));
     rsx! {
         BookReadPage { uuid }
     }
@@ -126,6 +132,7 @@ pub fn BookRead(uuid: String) -> Element {
 /// player owns its own slim top bar.
 #[component]
 pub fn BookListen(uuid: String) -> Element {
+    use_page_title(|| Some("Player".into()));
     rsx! {
         BookListenPage { uuid }
     }
@@ -136,6 +143,7 @@ pub fn BookListen(uuid: String) -> Element {
 /// reachable before authentication; on web it redirects to `/`.
 #[component]
 pub fn ServerConnect() -> Element {
+    use_page_title(|| Some("Connect".into()));
     rsx! { ServerConnectPage {} }
 }
 
@@ -144,6 +152,7 @@ pub fn ServerConnect() -> Element {
 /// own full-page chrome via [`crate::components::auth::AuthShell`].
 #[component]
 pub fn Login() -> Element {
+    use_page_title(|| Some("Log in".into()));
     rsx! { LoginPage {} }
 }
 
@@ -158,6 +167,7 @@ pub fn AuthorDetail(id: i64) -> Element {
 /// Route target for `/authors` — browse-all authors index.
 #[component]
 pub fn AuthorsIndex() -> Element {
+    use_page_title(|| Some("Authors".into()));
     rsx! {
         ScreenLayout { AuthorsIndexPage {} }
     }
@@ -174,6 +184,7 @@ pub fn SeriesDetail(id: i64) -> Element {
 /// Route target for `/series` — browse-all series index.
 #[component]
 pub fn SeriesIndex() -> Element {
+    use_page_title(|| Some("Series".into()));
     rsx! {
         ScreenLayout { SeriesIndexPage {} }
     }
@@ -182,6 +193,7 @@ pub fn SeriesIndex() -> Element {
 /// Route target for `/tags` — tag cloud discovery page.
 #[component]
 pub fn TagCloud() -> Element {
+    use_page_title(|| Some("Tags".into()));
     rsx! {
         ScreenLayout { TagCloudPage {} }
     }
@@ -190,6 +202,7 @@ pub fn TagCloud() -> Element {
 /// Route target for `/shelves` — the shelves index (mobile-first; web renders a plain list).
 #[component]
 pub fn Shelves() -> Element {
+    use_page_title(|| Some("Shelves".into()));
     rsx! {
         ScreenLayout { ShelvesIndexPage {} }
     }
@@ -211,6 +224,7 @@ pub fn ShelfDetail(id: i64) -> Element {
 #[cfg(feature = "mobile")]
 #[component]
 pub fn MobileSearch() -> Element {
+    use_page_title(|| Some("Search".into()));
     rsx! {
         ScreenLayout { MobileSearchPage {} }
     }
@@ -231,6 +245,8 @@ pub fn MobileSearch() -> Element {
 /// Route target for `/search/:query` — full-page search results.
 #[component]
 pub fn Search(query: String) -> Element {
+    let heading = query.clone();
+    use_page_title(move || Some(format!("Search: {heading}")));
     rsx! {
         ScreenLayout { SearchPage { query } }
     }
@@ -240,5 +256,6 @@ pub fn Search(query: String) -> Element {
 /// [`Login`] so the two pages feel like one flow.
 #[component]
 pub fn Register() -> Element {
+    use_page_title(|| Some("Register".into()));
     rsx! { RegisterPage {} }
 }

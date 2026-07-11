@@ -34,6 +34,7 @@ pub fn ShelfDetailPage(id: i64) -> Element {
     let mut books = use_signal(Vec::<EbookMetadata>::new);
     let mut loading = use_signal(|| true);
     let mut error = use_signal(|| None::<String>);
+    crate::use_page_title(move || shelf.read().as_ref().map(|s| s.name.clone()));
     let sort_key = use_signal(|| SortKey::Title);
     let mut show_add = use_signal(|| false);
     // Bumped to force a refetch after a membership edit.

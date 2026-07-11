@@ -16,6 +16,7 @@ pub fn SeriesPage(id: i64) -> Element {
     let mut series: Signal<Option<SeriesDetail>> = use_signal(|| None);
     let mut loading = use_signal(|| true);
     let mut error: Signal<Option<String>> = use_signal(|| None);
+    crate::use_page_title(move || series.read().as_ref().map(|s| s.name.clone()));
 
     // See `BookDetailPage` for why `id` needs `use_reactive!`.
     let url = server_url.clone();
