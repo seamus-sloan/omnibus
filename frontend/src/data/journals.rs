@@ -93,6 +93,96 @@ pub async fn preview_journal_markdown(
     Ok(response.json::<String>().await?)
 }
 
+/// POST `/api/journals/images` (mobile) — upload an image to embed in an
+/// entry, returning its serving URL. Multipart, so it bypasses the
+/// server-function transport like the author-photo/book uploads.
+#[cfg(feature = "mobile")]
+pub async fn upload_journal_image(
+    server_url: &str,
+    filename: String,
+    mime: String,
+    bytes: Vec<u8>,
+) -> Result<String, DataError> {
+    let endpoint = format!("{server_url}/api/journals/images");
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(filename)
+        .mime_str(&mime)?;
+    let form = reqwest::multipart::Form::new().part("image", part);
+    let response = with_bearer(http_client().post(&endpoint))
+        .multipart(form)
+        .send()
+        .await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(response
+        .json::<omnibus_shared::JournalImageUpload>()
+        .await?
+        .url)
+}
+
+/// POST `/api/journals/images` (web) — upload an image to embed in an entry,
+/// returning its serving URL. `gloo-net` + `FormData`, mirroring
+/// `upload_author_photo`.
+#[cfg(all(not(feature = "mobile"), feature = "web"))]
+pub async fn upload_journal_image(
+    _server_url: &str,
+    filename: String,
+    mime: String,
+    bytes: Vec<u8>,
+) -> Result<String, DataError> {
+    use gloo_net::http::Request;
+    use wasm_bindgen::JsCast;
+
+    let form =
+        web_sys::FormData::new().map_err(|e| DataError::Other(format!("FormData::new: {e:?}")))?;
+    let u8 = js_sys::Uint8Array::from(bytes.as_slice());
+    let parts = js_sys::Array::new();
+    parts.push(&u8);
+    let opts = web_sys::BlobPropertyBag::new();
+    opts.set_type(&mime);
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts)
+        .map_err(|e| DataError::Other(format!("Blob::new: {e:?}")))?;
+    form.append_with_blob_and_filename("image", &blob, &filename)
+        .map_err(|e| DataError::Other(format!("FormData::append: {e:?}")))?;
+
+    let res = Request::post("/api/journals/images")
+        .body(form.unchecked_into::<wasm_bindgen::JsValue>())
+        .map_err(|e| DataError::Other(e.to_string()))?
+        .send()
+        .await
+        .map_err(|e| DataError::Other(e.to_string()))?;
+    if !res.ok() {
+        if res.status() == 401 {
+            super::web_auth_state::notify_unauthorized();
+            return Err(DataError::Unauthorized);
+        }
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        return Err(DataError::Http { status, body });
+    }
+    Ok(res
+        .json::<omnibus_shared::JournalImageUpload>()
+        .await
+        .map_err(|e| DataError::Other(e.to_string()))?
+        .url)
+}
+
+/// Unavailable in this build — neither `web` nor `mobile` is enabled (SSR
+/// never drives the composer's upload control).
+#[cfg(not(any(feature = "web", feature = "mobile")))]
+pub async fn upload_journal_image(
+    _server_url: &str,
+    _filename: String,
+    _mime: String,
+    _bytes: Vec<u8>,
+) -> Result<String, DataError> {
+    Err(DataError::Other(
+        "journal image upload not available in this build".into(),
+    ))
+}
+
 // Web / SSR (RPC).
 
 /// Web/SSR `create_journal_entry` — proxies to `rpc_create_journal_entry`.

@@ -6,6 +6,8 @@
 
 use dioxus::prelude::*;
 
+use crate::data;
+
 /// The live-editor JS module (defines `window.OmnibusJournalEditor`, then
 /// dispatches one action read from the Dioxus eval channel). Included as a
 /// string and evaluated on demand; the module guards against re-definition so
@@ -88,9 +90,12 @@ struct ToolbarButton {
 /// on. Buttons `prevent_default` on mousedown so clicking one doesn't move
 /// focus out of the editor and collapse the selection.
 #[component]
-pub(crate) fn BdJournalToolbar(target_id: String) -> Element {
-    // Order mirrors the design's `InlineJournalEditor` toolbar. The image
-    // button is omitted — embedded uploads (F5.3) haven't shipped.
+pub(crate) fn BdJournalToolbar(
+    target_id: String,
+    server_url: String,
+    error: Signal<Option<String>>,
+) -> Element {
+    // Order mirrors the design's `InlineJournalEditor` toolbar.
     const BUTTONS: &[ToolbarButton] = &[
         ToolbarButton {
             label: "B",
@@ -195,6 +200,72 @@ pub(crate) fn BdJournalToolbar(target_id: String) -> Element {
                     "{btn.label}"
                 }
             }
+            BdJournalImageButton { target_id, server_url, error }
+        }
+    }
+}
+
+/// Placeholder caption inserted with an embedded image — the author edits it
+/// in place (the alt text doubles as the rendered figcaption).
+const IMAGE_CAPTION_PLACEHOLDER: &str = "Add a caption";
+
+/// The toolbar's embedded-image control: a file-picker `label` styled like
+/// the other tool buttons. Choosing a file uploads it to
+/// `/api/journals/images` and inserts the returned URL at the caret as
+/// markdown image syntax, whose alt text is the editable caption.
+#[component]
+fn BdJournalImageButton(
+    target_id: String,
+    server_url: String,
+    error: Signal<Option<String>>,
+) -> Element {
+    let mut error = error;
+    let mut uploading = use_signal(|| false);
+    let input_id = format!("{target_id}-image-input");
+
+    rsx! {
+        label {
+            class: "btn ghost sm bd-journal-tool bd-journal-image-tool",
+            r#for: "{input_id}",
+            title: "Insert image",
+            "aria-label": "Insert image",
+            if uploading() { "\u{2026}" } else { "\u{1F5BC}" }
+        }
+        input {
+            id: "{input_id}",
+            r#type: "file",
+            class: "bd-journal-image-input",
+            accept: "image/jpeg,image/png,image/webp,image/gif",
+            "data-testid": "journal-image-input",
+            disabled: uploading(),
+            onchange: move |evt| {
+                let Some(file) = evt.files().into_iter().next() else { return };
+                let filename = file.name();
+                let mime = file
+                    .content_type()
+                    .unwrap_or_else(|| "application/octet-stream".into());
+                let url = server_url.clone();
+                let target = target_id.clone();
+                uploading.set(true);
+                error.set(None);
+                spawn(async move {
+                    match file.read_bytes().await {
+                        Ok(bytes) => {
+                            match data::upload_journal_image(&url, filename, mime, bytes.to_vec())
+                                .await
+                            {
+                                Ok(image_url) => editor_insert(
+                                    &target,
+                                    &format!("\n![{IMAGE_CAPTION_PLACEHOLDER}]({image_url})\n"),
+                                ),
+                                Err(e) => error.set(Some(format!("Image upload failed: {e}"))),
+                            }
+                        }
+                        Err(e) => error.set(Some(format!("Could not read image: {e:?}"))),
+                    }
+                    uploading.set(false);
+                });
+            },
         }
     }
 }

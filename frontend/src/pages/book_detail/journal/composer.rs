@@ -151,7 +151,11 @@ pub(super) fn BdJournalComposer(uuid: String, server_url: String, reload: Signal
             }
             if !show_preview() {
                 div { class: "bd-journal-toolbar-row",
-                    BdJournalToolbar { target_id: "journal-composer-editor".to_string() }
+                    BdJournalToolbar {
+                        target_id: "journal-composer-editor".to_string(),
+                        server_url: server_url.clone(),
+                        error,
+                    }
                     BdJournalHighlightsPopover {
                         uuid: uuid.clone(),
                         server_url: server_url.clone(),

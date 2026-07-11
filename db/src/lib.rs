@@ -19,6 +19,7 @@ pub mod highlights;
 pub mod hls;
 pub mod identity;
 pub mod indexer;
+pub mod journal_images;
 pub mod journals;
 pub mod kepub;
 pub mod kindle;
