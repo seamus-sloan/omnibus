@@ -228,7 +228,21 @@ fn BdJournalImageButton(
             class: "btn ghost sm bd-journal-tool bd-journal-image-tool",
             r#for: "{input_id}",
             title: "Insert image",
+            role: "button",
+            tabindex: "0",
             "aria-label": "Insert image",
+            // Labels aren't keyboard-activatable by default — forward
+            // Enter/Space to the hidden input's file picker.
+            onkeydown: {
+                let input_id = input_id.clone();
+                move |e: KeyboardEvent| {
+                    let key = e.key();
+                    if key == Key::Enter || key == Key::Character(" ".to_string()) {
+                        e.prevent_default();
+                        open_file_picker(&input_id);
+                    }
+                }
+            },
             if uploading() { "\u{2026}" } else { "\u{1F5BC}" }
         }
         input {
@@ -256,7 +270,7 @@ fn BdJournalImageButton(
                             {
                                 Ok(image_url) => editor_insert(
                                     &target,
-                                    &format!("\n![{IMAGE_CAPTION_PLACEHOLDER}]({image_url})\n"),
+                                    &format!("\n\n![{IMAGE_CAPTION_PLACEHOLDER}]({image_url})\n"),
                                 ),
                                 Err(e) => error.set(Some(format!("Image upload failed: {e}"))),
                             }
@@ -269,6 +283,17 @@ fn BdJournalImageButton(
         }
     }
 }
+
+/// Open the hidden file input's picker — the keyboard path for the
+/// Insert-image label (labels aren't keyboard-activatable natively). Web-only:
+/// the eval channel is unavailable on SSR/native, where the toolbar is inert.
+#[cfg(feature = "web")]
+fn open_file_picker(input_id: &str) {
+    let _ = dioxus::document::eval(&format!("document.getElementById({input_id:?})?.click();"));
+}
+
+#[cfg(not(feature = "web"))]
+fn open_file_picker(_input_id: &str) {}
 
 /// Build the markdown blockquote inserted when a saved highlight is chosen:
 /// every line of the passage is `> `-prefixed, followed by an attribution line.
