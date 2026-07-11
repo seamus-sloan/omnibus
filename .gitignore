@@ -79,3 +79,7 @@ sample-library/
 test_data/epubs/public_domain/
 test_data/audiobooks/public_domain/
 test_data/.fixtures-version
+
+# Python bytecode (scripts/*.py)
+__pycache__/
+*.pyc
