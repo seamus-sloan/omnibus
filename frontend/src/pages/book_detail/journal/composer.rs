@@ -538,17 +538,23 @@ fn BdJournalComposerFoot(
             button {
                 r#type: "button",
                 class: "btn ghost sm",
+                disabled: saving(),
                 onclick: move |_| {
-                    // Discard: an autosaved draft row is deleted (best-effort)
-                    // so cancelling leaves nothing behind in the owner's feed.
-                    let discarded = draft_id();
                     let url = server_url.clone();
-                    state.reset_and_close();
-                    if let Some(id) = discarded {
-                        spawn(async move {
-                            let _ = data::delete_journal_entry(&url, id).await;
-                        });
+                    if let Some(t) = state.autosave_task.write().take() {
+                        t.cancel();
                     }
+                    saving.set(true);
+                    spawn(async move {
+                        // Discard any autosaved draft row (best-effort) BEFORE
+                        // closing — reset_and_close() unmounts this scope, and
+                        // a task spawned after unmount is dropped unpolled.
+                        if let Some(id) = draft_id() {
+                            let _ = data::delete_journal_entry(&url, id).await;
+                        }
+                        saving.set(false);
+                        state.reset_and_close();
+                    });
                 },
                 "Cancel"
             }

@@ -33,9 +33,8 @@ fn validate_body(body_md: &str, progress: Option<u8>) -> Result<(), String> {
     Ok(())
 }
 
-/// Publication state of a journal entry. Drafts are visible only to their
-/// owner and excluded from the shared feed until published. Defaults to
-/// `Published` so pre-drafts clients and rows keep their old behaviour.
+/// Publication state of a journal entry: owner-private `Draft` vs shared-feed
+/// `Published` (the default, so pre-drafts clients/rows keep their behaviour).
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum JournalStatus {

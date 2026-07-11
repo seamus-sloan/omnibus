@@ -43,6 +43,24 @@ async function publish(page: Page, body: string) {
   );
 }
 
+/**
+ * Discard the open composer deterministically: wait for the debounced
+ * autosave to land (so the draft row definitely exists), then Cancel and
+ * assert the discard DELETE — every mutation stays `expectMutation`-asserted
+ * and no draft leaks into later tests' feeds.
+ */
+async function cancelComposerDiscardingDraft(page: Page) {
+  await expect(page.getByTestId("journal-autosaved")).toContainText("Auto-saved", {
+    timeout: 10_000,
+  });
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/journals/delete", expectedStatus: 200 },
+    async () => page.getByRole("button", { name: "Cancel" }).click(),
+  );
+  await expect(page.getByTestId("journal-composer")).toHaveCount(0);
+}
+
 /** Delete the entry whose rendered body contains `marker`. */
 async function deleteEntry(page: import("@playwright/test").Page, marker: string) {
   const card = page.getByTestId("journal-entry").filter({ hasText: marker });
@@ -108,10 +126,7 @@ test("wraps the selected text in markdown when a toolbar button is clicked", asy
   await page.getByTestId("journal-toolbar").getByRole("button", { name: "Quote" }).click();
   await expect(editorMarkdown(page)).toHaveValue("> a thought");
 
-  // Cancel so an autosaved draft (the debounce may have fired mid-test) is
-  // discarded rather than leaking into later tests' feeds.
-  await page.getByRole("button", { name: "Cancel" }).click();
-  await expect(page.getByTestId("journal-composer")).toHaveCount(0);
+  await cancelComposerDiscardingDraft(page);
 });
 
 // ---------------------------------------------------------------------------
@@ -148,10 +163,7 @@ test("inserts a saved highlight into the draft as a blockquote", async ({ page, 
   );
   await expect(page.getByTestId("journal-highlights-pop")).toHaveCount(0);
 
-  // Cancel so an autosaved draft (the debounce may have fired mid-test) is
-  // discarded rather than leaking into later tests' feeds.
-  await page.getByRole("button", { name: "Cancel" }).click();
-  await expect(page.getByTestId("journal-composer")).toHaveCount(0);
+  await cancelComposerDiscardingDraft(page);
 });
 
 // ---------------------------------------------------------------------------
