@@ -105,17 +105,6 @@ fn format_page_title(subtitle: Option<&str>) -> String {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::format_page_title;
-
-    #[test]
-    fn format_page_title_prefixes_subtitle_and_bares_none() {
-        assert_eq!(format_page_title(Some("Settings")), "Omnibus | Settings");
-        assert_eq!(format_page_title(None), "Omnibus");
-    }
-}
-
 /// App-wide cached `/api/auth/me` result. Owned by [`App`] via
 /// `use_context_provider` so every component that needs to gate on
 /// `is_admin` (top nav avatar, landing inline edits, author Delete) reads
@@ -238,4 +227,15 @@ impl Default for PlaybackState {
 #[cfg(not(feature = "mobile"))]
 pub fn use_playback() -> PlaybackState {
     use_context::<PlaybackState>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_page_title;
+
+    #[test]
+    fn format_page_title_prefixes_subtitle_and_omits_when_none() {
+        assert_eq!(format_page_title(Some("Settings")), "Omnibus | Settings");
+        assert_eq!(format_page_title(None), "Omnibus");
+    }
 }
