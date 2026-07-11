@@ -1,6 +1,7 @@
 //! Tests for the OMNIBUS_INITIAL_ADMIN recovery hook.
-use super::*;
 use omnibus_db as db;
+
+use super::*;
 
 // std::env is global so these tests can't be parallelised safely; we
 // serialize on a static mutex. `EnvGuard` acquires this lock itself in

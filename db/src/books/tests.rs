@@ -2,6 +2,8 @@
 //! many cross-cutting helpers (`seed_minimal_books`, etc.) and the tests that
 //! drive `list_books` + `search_books` + `get_book` together stay co-located.
 
+use omnibus_shared::{Contributor, EbookMetadata, Identifier, MetadataOverrides};
+
 use super::*;
 use crate::ebook::IndexedBook;
 use crate::helpers::MAX_QUERY_LEN;
@@ -12,7 +14,6 @@ use crate::test_support::{
     author_id_by_name, indexed, seed_discovery_fixture, seed_minimal_books, series_id_by_name,
     CoversTempDir,
 };
-use omnibus_shared::{Contributor, EbookMetadata, Identifier, MetadataOverrides};
 
 // ---------- Server-side cap (issue #81) ----------
 //

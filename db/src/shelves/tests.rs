@@ -1,11 +1,11 @@
-use super::*;
-use crate::pool::init_db;
-use crate::test_support::{seed_discovery_fixture, seed_minimal_books};
-
 use omnibus_shared::{
     CreateShelfRequest, MatchMode, RuleField, RuleOp, ShelfKind, ShelfRule, SortDir, SortKey,
     UpdateShelfRequest, Visibility,
 };
+
+use super::*;
+use crate::pool::init_db;
+use crate::test_support::{seed_discovery_fixture, seed_minimal_books};
 
 async fn make_user(pool: &sqlx::SqlitePool, username: &str, is_admin: bool) -> i64 {
     sqlx::query_scalar::<_, i64>(

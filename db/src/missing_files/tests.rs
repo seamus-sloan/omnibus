@@ -3,11 +3,10 @@
 //! backfill, and the sync-wired lifecycle (a removed file flags the row, a
 //! returning file clears it, identity + overrides survive a repoint).
 
-use super::*;
-
 use omnibus_shared::{MetadataOverrides, Settings};
 use sqlx::SqlitePool;
 
+use super::*;
 use crate::auth::create_user;
 use crate::covers::find_override_cover_file;
 use crate::list_books;

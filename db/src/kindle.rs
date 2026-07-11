@@ -49,6 +49,8 @@ pub enum KindleError {
     Build(#[from] lettre::error::Error),
     #[error("SMTP delivery failed: {0}")]
     Smtp(#[from] lettre::transport::smtp::Error),
+    #[error("invalid content type: {0}")]
+    ContentType(#[from] lettre::message::header::ContentTypeErr),
     #[error("SMTP delivery timed out after {}s", SEND_TIMEOUT.as_secs())]
     Timeout,
     #[error(transparent)]
@@ -132,10 +134,8 @@ fn build_epub_email(
     filename: &str,
     bytes: Vec<u8>,
 ) -> Result<Message, KindleError> {
-    let attachment = Attachment::new(filename.to_string()).body(
-        bytes,
-        ContentType::parse("application/epub+zip").expect("static content type parses"),
-    );
+    let attachment = Attachment::new(filename.to_string())
+        .body(bytes, ContentType::parse("application/epub+zip")?);
     let message = Message::builder()
         .from(from.parse()?)
         .to(to.parse()?)

@@ -1,5 +1,4 @@
 //! Tests for auth register/login/logout/me handlers.
-use super::*;
 use axum::{
     body::Body,
     http::{header, Request},
@@ -7,6 +6,8 @@ use axum::{
 use omnibus_db as db;
 use serde_json::json;
 use tower::ServiceExt;
+
+use super::*;
 
 async fn app() -> (Router, sqlx::SqlitePool) {
     let pool = db::init_db("sqlite::memory:").await.unwrap();

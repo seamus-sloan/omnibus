@@ -4,12 +4,13 @@
 //! rejection). Validation tests are pure unit; register/list and pre-insert
 //! rejection tests share an in-memory pool via `auth::test_support::pool`.
 
+use sqlx::Row;
+
 use super::*;
 use crate::auth::session::create_session;
 use crate::auth::test_support::pool;
 use crate::auth::users::create_user;
 use crate::auth::SessionKind;
-use sqlx::Row;
 
 #[tokio::test]
 async fn device_register_and_list() {

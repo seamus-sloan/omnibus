@@ -3,9 +3,10 @@
 //! update/delete (with non-owner `NotFound`), and merged-uuid canonical
 //! resolution.
 
+use omnibus_shared::{CreateJournalEntry, EbookMetadata, JournalStatus, UpdateJournalEntry};
+
 use super::*;
 use crate::{init_db, replace_books};
-use omnibus_shared::{CreateJournalEntry, EbookMetadata, JournalStatus, UpdateJournalEntry};
 
 async fn seed(pool: &SqlitePool, library: &str, title: &str) -> String {
     replace_books(

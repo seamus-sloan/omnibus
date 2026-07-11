@@ -1,3 +1,5 @@
+use omnibus_shared::{Contributor, EbookMetadata, Identifier, MetadataOverrides};
+
 use super::*;
 use crate::books::{get_book, list_books, list_indexed_rows, search_books};
 use crate::covers::get_cover;
@@ -6,7 +8,6 @@ use crate::metadata_overrides::upsert_metadata_overrides;
 use crate::pool::init_db;
 use crate::settings::last_indexed_at;
 use crate::test_support::{indexed, indexed_audiobook, indexed_with_stat, CoversTempDir};
-use omnibus_shared::{Contributor, EbookMetadata, Identifier, MetadataOverrides};
 
 #[tokio::test]
 async fn replace_books_inserts_metadata_and_covers() {

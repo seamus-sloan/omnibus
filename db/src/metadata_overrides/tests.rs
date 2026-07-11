@@ -2,13 +2,14 @@
 //! its FTS rebuild, and the series-link materialization. Mirrors the
 //! pre-split inline `#[cfg(test)] mod tests` block.
 
+use omnibus_shared::MetadataOverrides;
+
 use super::*;
 use crate::books::{get_book, list_books, search_books};
 use crate::palette::search_palette;
 use crate::pool::init_db;
 use crate::sync::replace_books;
 use crate::test_support::{indexed, CoversTempDir};
-use omnibus_shared::MetadataOverrides;
 
 // -----------------------------------------------------------------
 // F5.1 Metadata overrides

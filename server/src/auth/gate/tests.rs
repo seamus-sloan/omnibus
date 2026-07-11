@@ -1,9 +1,10 @@
 //! Tests for the auth gate middleware.
-use super::*;
 use axum::{body::Body, http::Request, middleware::from_fn_with_state, routing::get, Router};
 use omnibus_db as db;
 use omnibus_db::auth::SessionKind;
 use tower::ServiceExt;
+
+use super::*;
 
 async fn app() -> (Router, sqlx::SqlitePool) {
     let pool = db::init_db("sqlite::memory:").await.unwrap();

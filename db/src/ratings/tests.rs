@@ -3,9 +3,10 @@
 //! `get_rating` empty-state, `delete_rating` clear + absent no-op, and
 //! merged-uuid canonical resolution.
 
+use omnibus_shared::EbookMetadata;
+
 use super::*;
 use crate::{init_db, replace_books};
-use omnibus_shared::EbookMetadata;
 
 async fn seed(pool: &SqlitePool, library: &str, title: &str) -> (i64, String) {
     replace_books(

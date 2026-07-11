@@ -2,14 +2,15 @@
 //! library scoping, override-aware counts, and `EXPLAIN QUERY PLAN`
 //! guards against full-scan regressions on the link tables.
 
+use omnibus_shared::{Contributor, MetadataOverrides};
+use sqlx::{Row, SqlitePool};
+
 use super::*;
 use crate::books::list_books;
 use crate::metadata_overrides::upsert_metadata_overrides;
 use crate::pool::init_db;
 use crate::sync::replace_books;
 use crate::test_support::{indexed, CoversTempDir};
-use omnibus_shared::{Contributor, MetadataOverrides};
-use sqlx::{Row, SqlitePool};
 
 // ── search_palette ───────────────────────────────────────────────
 #[tokio::test]

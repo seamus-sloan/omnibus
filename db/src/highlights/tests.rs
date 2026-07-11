@@ -2,9 +2,10 @@
 //! BookNotFound / NotFound variants, list isolation, color + note
 //! updates, and delete behaviour.
 
+use omnibus_shared::EbookMetadata;
+
 use super::*;
 use crate::{init_db, replace_books};
-use omnibus_shared::EbookMetadata;
 
 async fn seed(pool: &SqlitePool, library: &str, title: &str) -> (i64, String) {
     replace_books(
