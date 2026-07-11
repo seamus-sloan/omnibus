@@ -154,9 +154,13 @@ pub fn use_is_admin() -> Signal<bool> {
 /// Derive the resolved current user from the app-wide [`CurrentUser`]
 /// context instead of an independent per-mount `/api/auth/me` fetch,
 /// flattening "not yet resolved" and "unauthenticated" alike to `None`.
-/// Starts `None` so SSR and the first WASM paint agree (rule 07); only the
-/// web build wires the effect that fills it in once the context resolves.
-#[cfg_attr(not(feature = "web"), allow(unused_mut))]
+/// Starts `None` so SSR and the first WASM paint agree (rule 07); an effect
+/// then fills it in post-mount. The web build reads it from the resolved
+/// [`CurrentUser`] context; mobile has no such context (bearer auth, not
+/// cookies), so it resolves the user directly via `/api/auth/me` — this is
+/// what lets owner-only affordances (e.g. journal edit/delete) light up on
+/// mobile. SSR (neither feature) stays at the `None` default.
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(unused_mut))]
 pub fn use_current_user_summary() -> Signal<Option<omnibus_shared::UserSummary>> {
     let mut current = use_signal(|| None);
     #[cfg(feature = "web")]
@@ -164,6 +168,18 @@ pub fn use_current_user_summary() -> Signal<Option<omnibus_shared::UserSummary>>
         let user_ctx = use_current_user().0;
         use_effect(move || {
             current.set(user_ctx().flatten());
+        });
+    }
+    #[cfg(feature = "mobile")]
+    {
+        let server_url = use_server_url();
+        use_effect(move || {
+            let server_url = server_url.clone();
+            spawn(async move {
+                if let Ok(user) = data::get_me(&server_url).await {
+                    current.set(Some(user));
+                }
+            });
         });
     }
     current
