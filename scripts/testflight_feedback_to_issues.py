@@ -38,7 +38,7 @@ DRY_RUN = os.environ.get("DRY_RUN") == "1"
 BUNDLE_ID = os.environ.get("BUNDLE_ID", "com.omnibus.mobile")
 ASSET_BRANCH = os.environ.get("ASSET_BRANCH", "testflight-feedback")
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "5"))
-LABELS = ["mobile", "bug"]
+LABELS = ["testflight", "mobile", "bug"]
 
 
 def die(msg):
