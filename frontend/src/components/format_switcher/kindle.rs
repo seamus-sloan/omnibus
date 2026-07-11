@@ -13,18 +13,38 @@ use omnibus_shared::KindleSendStatus;
 use super::async_sleep_ms;
 
 /// "Send to Kindle" CTA (F4.3). Web/SSR renders the interactive
-/// [`SendToKindleButton`]; mobile renders a disabled placeholder. The cfg gate
-/// lives at the helper definition (rule 07: keep cfg out of rsx bodies), and
-/// SSR + first WASM paint emit the same enabled button so hydration holds.
+/// [`SendToKindleButton`]; when the EPUB is over Kindle's email cap
+/// (`size_bytes` provided by the server, so SSR + first WASM paint agree) the
+/// email path can't work, so it becomes a link to Amazon's Send to Kindle page
+/// (up to 200 MB) instead — a real action, not a dead disabled button. Mobile
+/// renders a disabled placeholder. The cfg gate lives at the helper definition
+/// (rule 07: keep cfg out of rsx bodies).
 #[cfg(not(feature = "mobile"))]
-pub(super) fn send_to_kindle_action(uuid: &str, file_id: Option<i64>) -> Element {
+pub(super) fn send_to_kindle_action(uuid: &str, file_id: Option<i64>, size_bytes: i64) -> Element {
+    if omnibus_shared::kindle_email_oversize(size_bytes as u64) {
+        return rsx! {
+            a {
+                class: "btn",
+                href: omnibus_shared::KINDLE_WEB_UPLOAD_URL,
+                target: "_blank",
+                rel: "noopener noreferrer",
+                title: "This EPUB is larger than the 50 MB limit for emailing files to a Kindle. Amazon's Send to Kindle page (opens in a new tab) accepts files up to 200 MB.",
+                "data-testid": "action-kindle-oversize",
+                "Send to Kindle\u{2026}"
+            }
+        };
+    }
     rsx! {
         SendToKindleButton { uuid: uuid.to_string(), file_id }
     }
 }
 
 #[cfg(feature = "mobile")]
-pub(super) fn send_to_kindle_action(_uuid: &str, _file_id: Option<i64>) -> Element {
+pub(super) fn send_to_kindle_action(
+    _uuid: &str,
+    _file_id: Option<i64>,
+    _size_bytes: i64,
+) -> Element {
     rsx! {
         button {
             class: "btn",

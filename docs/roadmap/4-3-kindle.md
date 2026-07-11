@@ -15,6 +15,7 @@ Kindle is the dominant e-reader; the send-to-email flow is how most users load b
 ## Technical considerations
 
 - **EPUB direct — no conversion.** Amazon has accepted `.epub` via send-to-Kindle email since 2024 ([assumption A4](0-0-summary.md#assumptions)). The v1 implication that we'd need MOBI/AZW3 conversion is outdated.
+- **Kindle size cap.** Amazon rejects send-to-Kindle *email* over 50 MB (`KINDLE_EMAIL_MAX_BYTES` in `shared`); its web/app uploader takes up to 200 MB. We gate only Kindle's own limits, not per-SMTP-provider caps. Over-cap EPUBs disable the email button (export dropdown shows a greyed row + a link to the web uploader) and the worker guards with `KindleError::TooLarge`.
 - SMTP config lives in admin settings ([F5.4](5-4-admin-panel.md)). Single SMTP config shared with registration/password-reset email once those ship.
 - Send job runs on the [F0.5 worker](0-5-background-worker.md); failures log to [F5.2 observability](5-2-observability.md).
 

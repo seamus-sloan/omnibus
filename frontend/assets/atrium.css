@@ -774,6 +774,17 @@ html, body { overscroll-behavior: none; }
 .bd-export-item:hover:not([disabled]) { background: var(--bg-2); color: var(--ink-0); }
 .bd-export-item[disabled] { opacity: .5; cursor: not-allowed; pointer-events: none; }
 .bd-export-item-label { flex: 1 1 auto; }
+/* Oversized Send-to-Kindle: greyed but still hoverable (keep the title tip),
+   so no `pointer-events: none` here — it's inert markup, not a real button. */
+.bd-export-item-muted { color: var(--ink-2); cursor: not-allowed; }
+.bd-export-item-muted:hover { background: transparent; color: var(--ink-2); }
+/* Scope to the panel so the accent color beats the app's base anchor color
+   (equal single-class specificity would otherwise lose to it). */
+.bd-export-panel .bd-export-subnote {
+  display: block; padding: 0 10px 8px;
+  font-size: 11px; line-height: 1.35; color: var(--accent); text-decoration: none;
+}
+.bd-export-panel .bd-export-subnote:hover { text-decoration: underline; }
 
 .bd-progress-meta { margin-top: 22px; max-width: 460px; }
 .bd-progress-line {

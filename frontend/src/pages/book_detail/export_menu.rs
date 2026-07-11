@@ -4,6 +4,7 @@
 //! menu. Web/server only; the book-detail hero isn't compiled on mobile.
 
 use dioxus::prelude::*;
+use omnibus_shared::{kindle_email_oversize, KINDLE_WEB_UPLOAD_URL};
 
 use crate::components::{SendToKindleButton, SendToKoboButton};
 
@@ -17,6 +18,7 @@ pub(super) fn BdExportMenu(
     has_audio: bool,
     #[props(default)] book_author: String,
     #[props(default)] book_title: String,
+    #[props(default)] epub_size_bytes: Option<i64>,
 ) -> Element {
     let mut open = use_signal(|| false);
     rsx! {
@@ -40,7 +42,7 @@ pub(super) fn BdExportMenu(
                     "data-testid": "hero-export-scrim",
                     onclick: move |_| open.set(false),
                 }
-                BdExportPanel { uuid, has_ebook, has_audio, book_author, book_title, open }
+                BdExportPanel { uuid, has_ebook, has_audio, book_author, book_title, epub_size_bytes, open }
             }
         }
     }
@@ -59,6 +61,7 @@ fn BdExportPanel(
     has_audio: bool,
     book_author: String,
     book_title: String,
+    epub_size_bytes: Option<i64>,
     open: Signal<bool>,
 ) -> Element {
     let mut open = open;
@@ -104,13 +107,19 @@ fn BdExportPanel(
             // Send-to-Kindle only applies to books with an EPUB (the backend
             // errors with `NoEpub` otherwise). Reuses the interactive button,
             // styled as a menu row; the menu stays open while it reports
-            // "Sending…" and raises its own toast.
+            // "Sending…" and raises its own toast. When the EPUB exceeds
+            // Kindle's email cap, the button can't work — swap in a disabled
+            // row that explains why and links to the web uploader instead.
             if has_ebook {
-                SendToKindleButton {
-                    uuid: uuid.clone(),
-                    file_id: None,
-                    class: "bd-export-item".to_string(),
-                    testid: "hero-send-kindle".to_string(),
+                if epub_size_bytes.is_some_and(|n| kindle_email_oversize(n as u64)) {
+                    KindleOversizeItem { open }
+                } else {
+                    SendToKindleButton {
+                        uuid: uuid.clone(),
+                        file_id: None,
+                        class: "bd-export-item".to_string(),
+                        testid: "hero-send-kindle".to_string(),
+                    }
                 }
             }
             // Send-to-Kobo writes the KEPUB straight onto a plugged-in Kobo
@@ -127,6 +136,33 @@ fn BdExportPanel(
                     testid: "hero-send-kobo".to_string(),
                 }
             }
+        }
+    }
+}
+
+/// Disabled Send-to-Kindle row for an EPUB over Kindle's 50 MB email cap. The
+/// greyed row reads as unavailable; the visible sub-note below it links to
+/// Amazon's Send to Kindle page (up to 200 MB), which the email path can't
+/// match. Rendered as inert markup (no button/handler) since there is nothing
+/// to send — the sub-note carries the reason and the way forward.
+#[component]
+fn KindleOversizeItem(open: Signal<bool>) -> Element {
+    let mut open = open;
+    rsx! {
+        div {
+            class: "bd-export-item bd-export-item-muted",
+            "data-testid": "hero-send-kindle-oversize",
+            aria_disabled: "true",
+            span { class: "bd-export-item-label", "Send to Kindle" }
+        }
+        a {
+            class: "bd-export-subnote",
+            "data-testid": "hero-send-kindle-web-link",
+            href: KINDLE_WEB_UPLOAD_URL,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            onclick: move |_| open.set(false),
+            "Too large to email. Upload it on Amazon's Send to Kindle page (up to 200 MB) \u{2192}"
         }
     }
 }

@@ -82,6 +82,27 @@ fn settings_validate_rejects_audiobook_path_over_max_len() {
 }
 
 #[test]
+fn kindle_email_oversize_is_false_at_and_below_the_cap() {
+    // The cap itself fits (strictly-greater comparison), as does a small file.
+    assert!(!kindle_email_oversize(0));
+    assert!(!kindle_email_oversize(KINDLE_EMAIL_MAX_BYTES));
+}
+
+#[test]
+fn kindle_email_oversize_is_true_one_byte_over_the_cap() {
+    assert!(kindle_email_oversize(KINDLE_EMAIL_MAX_BYTES + 1));
+}
+
+#[test]
+fn kindle_size_limits_match_amazons_documented_figures() {
+    // Email = 50 MB, web uploader = 200 MB. Guards against an accidental
+    // unit slip (MB vs MiB or a wrong multiplier) since both feed user-facing
+    // copy and the send guard.
+    assert_eq!(KINDLE_EMAIL_MAX_BYTES, 50 * 1024 * 1024);
+    assert_eq!(KINDLE_WEB_MAX_BYTES, 200 * 1024 * 1024);
+}
+
+#[test]
 fn settings_validate_reports_ebook_field_when_both_are_over_max_len() {
     // Ebook is checked first; the error must name it rather than the
     // audiobook field so the caller surfaces the right form field.

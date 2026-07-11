@@ -131,6 +131,33 @@ pub struct SmtpConfigStatus {
     pub source: String,
 }
 
+/// Amazon Send-to-Kindle size limits — Kindle-imposed and provider-independent.
+/// We deliberately don't model per-SMTP-provider caps (e.g. Gmail's 25 MB),
+/// only Amazon's own: email delivery of a personal document rejects messages
+/// over 50 MB, while the web / app uploader at [`KINDLE_WEB_UPLOAD_URL`] accepts
+/// up to 200 MB. An EPUB over the email cap disables the email button and points
+/// the user at the uploader instead.
+pub const KINDLE_EMAIL_MAX_BYTES: u64 = 50 * 1024 * 1024;
+
+/// Upper bound of the Send-to-Kindle web / app uploader, surfaced in the UI hint
+/// so the user knows the larger path exists.
+pub const KINDLE_WEB_MAX_BYTES: u64 = 200 * 1024 * 1024;
+
+/// Amazon's Send-to-Kindle web uploader. Linked from the disabled email button
+/// as the fallback for oversized files.
+pub const KINDLE_WEB_UPLOAD_URL: &str = "https://www.amazon.com/sendtokindle";
+
+/// Whether an EPUB of `size_bytes` is too large to email to Kindle (strictly
+/// over [`KINDLE_EMAIL_MAX_BYTES`]). Shared so the disabled-button gate in the
+/// UI and the worker-side send guard agree on one threshold. Compares the raw
+/// file size against Amazon's documented 50 MB figure — base64 transfer
+/// encoding inflates the on-wire message further, so a file just under the cap
+/// can still bounce; those rare boundary failures fall through to the normal
+/// send-error toast.
+pub fn kindle_email_oversize(size_bytes: u64) -> bool {
+    size_bytes > KINDLE_EMAIL_MAX_BYTES
+}
+
 /// Terminal-or-pending status of a Send-to-Kindle job, returned by the
 /// `kindle/send/status` poll endpoint keyed on the `task_id` that the enqueue
 /// call handed back. The send runs on the background worker; the client posts

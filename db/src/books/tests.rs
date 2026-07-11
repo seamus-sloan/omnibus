@@ -55,6 +55,64 @@ async fn get_book_formats_machine_timestamps_as_fixed_width_iso() {
 }
 
 #[tokio::test]
+async fn get_book_reports_epub_size_from_lowest_ordinal_epub() {
+    // `epub_size_bytes` drives the export menu's Kindle size gate. It must
+    // mirror what the hero send delivers — the lowest-ordinal EPUB — and ignore
+    // non-EPUB files entirely.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sqlx::query("INSERT INTO scan_roots (id, path, display_name) VALUES (1, '/lib', 'Lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title) \
+         VALUES ('bk', 'b', 1, '/lib/bk', 'Book') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    // Two EPUB editions (ordinal 0 wins) plus an audiobook that must be ignored.
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, ordinal) VALUES \
+         (?1, 'EPUB', 'a', 111, 0), (?1, 'EPUB', 'b', 222, 1), (?1, 'M4B', 'c', 999, 0)",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let book = get_book(&pool, id).await.unwrap().unwrap();
+    assert_eq!(book.epub_size_bytes, Some(111));
+}
+
+#[tokio::test]
+async fn get_book_reports_no_epub_size_for_audio_only_book() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sqlx::query("INSERT INTO scan_roots (id, path, display_name) VALUES (1, '/lib', 'Lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title) \
+         VALUES ('bk', 'b', 1, '/lib/bk', 'Book') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, ordinal) \
+         VALUES (?, 'M4B', 'c', 999, 0)",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let book = get_book(&pool, id).await.unwrap().unwrap();
+    assert_eq!(book.epub_size_bytes, None);
+}
+
+#[tokio::test]
 async fn library_from_db_returns_empty_for_none_path() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let lib = library_from_db(&pool, None).await.unwrap();

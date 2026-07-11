@@ -231,6 +231,9 @@ pub(crate) fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata,
         error: None,
         has_override: false,
         book_files: Vec::new(),
+        // Populated by `get_book` from the resolved EPUB; list/projection rows
+        // don't carry it (no per-book export menu in list contexts).
+        epub_size_bytes: None,
     })
 }
 

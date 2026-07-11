@@ -36,6 +36,11 @@ pub enum KindleError {
     NotConfigured,
     #[error("this book has no EPUB file to send")]
     NoEpub,
+    #[error(
+        "this EPUB is larger than the 50 MB limit for emailing files to a Kindle; upload it on \
+         Amazon's Send to Kindle page (amazon.com/sendtokindle), which accepts files up to 200 MB"
+    )]
+    TooLarge,
     #[error("failed to read the EPUB file: {0}")]
     Io(#[from] std::io::Error),
     #[error("invalid email address: {0}")]
@@ -73,6 +78,13 @@ pub async fn send(
     .ok_or(KindleError::NoEpub)?;
 
     let bytes = tokio::fs::read(&path).await?;
+    // Defense in depth: the UI disables the button for oversized EPUBs, but the
+    // REST/RPC endpoints (and mobile) can still enqueue a send. Reject here so a
+    // doomed 150 MB delivery never reaches the relay — surfaced to the poller as
+    // a clear Failed message via `TooLarge`'s display text.
+    if omnibus_shared::kindle_email_oversize(bytes.len() as u64) {
+        return Err(KindleError::TooLarge);
+    }
     let filename = path
         .file_name()
         .and_then(|s| s.to_str())

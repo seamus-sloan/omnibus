@@ -38,6 +38,9 @@ pub fn FormatSwitcher(
     // (see [`SendToKoboButton`]). Default empty → write at the drive root.
     #[props(default)] book_author: String,
     #[props(default)] book_title: String,
+    // Size of the single-file EPUB, so the Send-to-Kindle action can gate on
+    // Kindle's email cap. Multi-EPUB books carry per-file sizes on `book_files`.
+    #[props(default)] epub_size_bytes: Option<i64>,
 ) -> Element {
     let rows = prepare_rows(&formats);
     if rows.is_empty() {
@@ -74,6 +77,7 @@ pub fn FormatSwitcher(
                                 uuid: uuid.clone(),
                                 book_author: book_author.clone(),
                                 book_title: book_title.clone(),
+                                epub_size_bytes,
                             }
                         }
                     }
@@ -89,6 +93,7 @@ fn FormatRow(
     uuid: String,
     #[props(default)] book_author: String,
     #[props(default)] book_title: String,
+    #[props(default)] epub_size_bytes: Option<i64>,
 ) -> Element {
     let label = kind.label();
     let testid = format!("format-row-{}", label.to_ascii_lowercase());
@@ -106,7 +111,7 @@ fn FormatRow(
                         // The cfg lives at the helper definition (rule 07:
                         // hydration parity — keep cfg gates out of rsx).
                         {read_book_action(&uuid)}
-                        {send_to_kindle_action(&uuid, None)}
+                        {send_to_kindle_action(&uuid, None, epub_size_bytes.unwrap_or_default())}
                         {send_to_kobo_action(&uuid, &book_author, &book_title)}
                     },
                     FormatKind::M4b | FormatKind::Mp3 => rsx! {
@@ -160,6 +165,7 @@ fn MultiFileRow(
                     .unwrap_or_else(|| format!("Part {}", file.ordinal + 1));
                 let file_testid = format!("format-file-{}", file.id);
                 let file_id = file.id;
+                let file_size = file.size_bytes;
                 rsx! {
                     div {
                         key: "{file_id}",
@@ -173,7 +179,7 @@ fn MultiFileRow(
                                 // cfg gates out of rsx bodies).
                                 FormatKind::Epub => rsx! {
                                     {read_file_action(&uuid, file_id)}
-                                    {send_to_kindle_action(&uuid, Some(file_id))}
+                                    {send_to_kindle_action(&uuid, Some(file_id), file_size)}
                                 },
                                 FormatKind::M4b | FormatKind::Mp3 => rsx! {
                                     {listen_file_action(&uuid, file_id)}

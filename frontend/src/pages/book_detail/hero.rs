@@ -143,6 +143,7 @@ fn BdTitleCol(
                 has_audio,
                 book_author: b.creators.first().map(|c| c.name.clone()).unwrap_or_default(),
                 book_title: title.clone(),
+                epub_size_bytes: b.epub_size_bytes,
             }
             div { class: "bd-progress-meta", aria_hidden: "true",
                 div { class: "bd-progress-line",
@@ -171,6 +172,7 @@ fn BdCtaRow(
     has_audio: bool,
     #[props(default)] book_author: String,
     #[props(default)] book_title: String,
+    #[props(default)] epub_size_bytes: Option<i64>,
 ) -> Element {
     rsx! {
         div { class: "bd-cta-row",
@@ -211,6 +213,7 @@ fn BdCtaRow(
                 has_audio,
                 book_author: book_author.clone(),
                 book_title: book_title.clone(),
+                epub_size_bytes,
             }
         }
     }
