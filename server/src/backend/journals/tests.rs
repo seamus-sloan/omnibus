@@ -245,6 +245,86 @@ async fn api_journal_preview_rejects_body_over_max_len() {
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
 
+#[tokio::test]
+async fn api_journal_draft_is_owner_private_until_published() {
+    let (app, _state, pool) = fixture().await;
+    let (_, uuid) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
+    let alice = auth_test_support::create_user(&pool, "alice").await;
+    let alice_token = auth_test_support::bearer_token(&pool, alice.id).await;
+    let bob = auth_test_support::create_user(&pool, "bob").await;
+    let bob_token = auth_test_support::bearer_token(&pool, bob.id).await;
+
+    let res = app
+        .clone()
+        .oneshot(post_journal_req(
+            &alice_token,
+            serde_json::json!({
+                "book_uuid": uuid, "body_md": "wip", "progress": null, "status": "draft"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let draft = entries_one(res).await;
+    assert_eq!(draft.status, omnibus_shared::JournalStatus::Draft);
+
+    // Bob's feed excludes the draft; Alice's includes it.
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer(
+            &format!("/api/journals/book/{uuid}"),
+            &bob_token,
+        ))
+        .await
+        .unwrap();
+    assert!(entries(res).await.is_empty(), "draft hidden from bob");
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer(
+            &format!("/api/journals/book/{uuid}"),
+            &alice_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(entries(res).await.len(), 1, "owner sees own draft");
+
+    // Publishing via PATCH surfaces it to everyone.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/journals/{}", draft.id))
+                .method("PATCH")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {alice_token}"))
+                .body(Body::from(
+                    serde_json::json!({
+                        "body_md": "wip", "progress": null, "status": "published"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let published = entries_one(res).await;
+    assert_eq!(published.status, omnibus_shared::JournalStatus::Published);
+
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/api/journals/book/{uuid}"),
+            &bob_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        entries(res).await.len(),
+        1,
+        "published entry visible to bob"
+    );
+}
+
 /// Decode a single created/updated entry from a handler response.
 async fn entries_one(res: axum::response::Response) -> JournalEntry {
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();

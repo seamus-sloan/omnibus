@@ -27,13 +27,18 @@ type Page = import("@playwright/test").Page;
 const editor = (page: Page) => page.getByTestId("journal-editor");
 const editorMarkdown = (page: Page) => page.getByTestId("journal-body");
 
-/** Open the inline composer and publish `body`, asserting the create POST. */
+// Publishing rides `create` normally, but if the debounced autosave already
+// created the draft row the publish click lands as an `update` instead —
+// match either so the assertion is deterministic.
+const SAVE_URL = /\/api\/rpc\/journals\/(create|update)/;
+
+/** Open the inline composer and publish `body`, asserting the save POST. */
 async function publish(page: Page, body: string) {
   await page.getByTestId("journal-open-composer").click();
   await editor(page).fill(body);
   await expectMutation(
     page,
-    { method: "POST", url: "/api/rpc/journals/create", expectedStatus: 200 },
+    { method: "POST", url: SAVE_URL, expectedStatus: 200 },
     async () => page.getByTestId("journal-publish").click(),
   );
 }
@@ -102,6 +107,11 @@ test("wraps the selected text in markdown when a toolbar button is clicked", asy
   await editor(page).selectText();
   await page.getByTestId("journal-toolbar").getByRole("button", { name: "Quote" }).click();
   await expect(editorMarkdown(page)).toHaveValue("> a thought");
+
+  // Cancel so an autosaved draft (the debounce may have fired mid-test) is
+  // discarded rather than leaking into later tests' feeds.
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByTestId("journal-composer")).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------
@@ -137,6 +147,11 @@ test("inserts a saved highlight into the draft as a blockquote", async ({ page, 
     new RegExp(`> ${quote}[\\s\\S]*saved from highlights`),
   );
   await expect(page.getByTestId("journal-highlights-pop")).toHaveCount(0);
+
+  // Cancel so an autosaved draft (the debounce may have fired mid-test) is
+  // discarded rather than leaking into later tests' feeds.
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByTestId("journal-composer")).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------
@@ -201,7 +216,7 @@ test("renders a markdown preview and blurs spoilers until clicked", async ({ pag
   await editor(page).fill(`reveal ${marker}: ||the secret||`);
   await expectMutation(
     page,
-    { method: "POST", url: "/api/rpc/journals/create", expectedStatus: 200 },
+    { method: "POST", url: SAVE_URL, expectedStatus: 200 },
     async () => page.getByTestId("journal-publish").click(),
   );
 
@@ -256,6 +271,74 @@ test("reveals a spoiler with Enter and toggles it back with Space", async ({ pag
 });
 
 // ---------------------------------------------------------------------------
+// Action — save a draft, publish it from its card
+// ---------------------------------------------------------------------------
+
+test("saves a draft that stays marked Draft until published from its card", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  const marker = `e2e-draft-${Date.now()}`;
+  await page.getByTestId("journal-open-composer").click();
+  await editor(page).fill(`Draft thoughts ${marker}`);
+  await expectMutation(
+    page,
+    { method: "POST", url: SAVE_URL, expectedStatus: 200 },
+    async () => page.getByTestId("journal-save-draft").click(),
+  );
+
+  // The composer closes and the entry renders with a Draft chip + a Publish
+  // action (drafts are owner-private, so only this user sees it).
+  const card = page.getByTestId("journal-entry").filter({ hasText: marker });
+  await expect(card).toBeVisible();
+  await expect(card.getByTestId("journal-draft-chip")).toBeVisible();
+
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/journals/update", expectedStatus: 200 },
+    async () => card.getByTestId("journal-publish-draft").click(),
+  );
+  await expect(card.getByTestId("journal-draft-chip")).toHaveCount(0);
+  await expect(card.getByTestId("journal-publish-draft")).toHaveCount(0);
+
+  await deleteEntry(page, marker);
+});
+
+// ---------------------------------------------------------------------------
+// Action — debounced autosave while typing, discarded on cancel
+// ---------------------------------------------------------------------------
+
+test("autosaves the draft while typing and discards it on cancel", async ({ page, request }) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  const marker = `e2e-autosave-${Date.now()}`;
+  await page.getByTestId("journal-open-composer").click();
+
+  // Typing arms the 2s debounce; the autosave create fires without any click
+  // and the footer surfaces the "Auto-saved" indicator.
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/journals/create", expectedStatus: 200 },
+    async () => editor(page).fill(`Autosaved thoughts ${marker}`),
+  );
+  await expect(page.getByTestId("journal-autosaved")).toContainText("Auto-saved");
+
+  // Cancel discards the autosaved draft row and closes the composer; nothing
+  // is left behind in the feed.
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/journals/delete", expectedStatus: 200 },
+    async () => page.getByRole("button", { name: "Cancel" }).click(),
+  );
+  await expect(page.getByTestId("journal-composer")).toHaveCount(0);
+  await expect(page.getByTestId("journal-entry").filter({ hasText: marker })).toHaveCount(0);
+});
+
+// ---------------------------------------------------------------------------
 // Error path — failed publish surfaces an error, composer stays open
 // ---------------------------------------------------------------------------
 
@@ -263,7 +346,12 @@ test("surfaces an error and keeps the draft when publishing fails", async ({ pag
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${uuid}`);
 
+  // Fail both save routes — the debounced autosave may have already created
+  // the draft row, turning the publish click into an update.
   await page.route("**/api/rpc/journals/create", (route) =>
+    route.fulfill({ status: 500, contentType: "text/plain", body: "journal exploded" }),
+  );
+  await page.route("**/api/rpc/journals/update", (route) =>
     route.fulfill({ status: 500, contentType: "text/plain", body: "journal exploded" }),
   );
 
@@ -271,7 +359,7 @@ test("surfaces an error and keeps the draft when publishing fails", async ({ pag
   await editor(page).fill("this will fail");
   await expectMutation(
     page,
-    { method: "POST", url: "/api/rpc/journals/create", expectedStatus: 500 },
+    { method: "POST", url: SAVE_URL, expectedStatus: 500 },
     async () => page.getByTestId("journal-publish").click(),
   );
 

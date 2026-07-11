@@ -7,6 +7,7 @@ fn create(body: &str) -> CreateJournalEntry {
         book_uuid: "book-1".into(),
         body_md: body.into(),
         progress: None,
+        status: JournalStatus::default(),
     }
 }
 
@@ -67,14 +68,43 @@ fn create_accepts_progress_at_bounds() {
 fn update_validates_body_and_progress() {
     assert!(UpdateJournalEntry {
         body_md: "ok".into(),
-        progress: Some(100)
+        progress: Some(100),
+        status: None,
     }
     .validate()
     .is_ok());
     assert!(UpdateJournalEntry {
         body_md: " ".into(),
-        progress: None
+        progress: None,
+        status: None,
     }
     .validate()
     .is_err());
+}
+
+#[test]
+fn status_defaults_keep_pre_drafts_payloads_compatible() {
+    // A pre-drafts client omits `status` entirely: creates default to
+    // `published`, updates default to `None` (keep the stored status).
+    let c: CreateJournalEntry =
+        serde_json::from_str(r#"{"book_uuid":"b","body_md":"x","progress":null}"#)
+            .expect("create without status deserializes");
+    assert_eq!(c.status, JournalStatus::Published);
+    let u: UpdateJournalEntry = serde_json::from_str(r#"{"body_md":"x","progress":null}"#)
+        .expect("update without status deserializes");
+    assert_eq!(u.status, None);
+}
+
+#[test]
+fn status_serializes_lowercase() {
+    assert_eq!(
+        serde_json::to_string(&JournalStatus::Draft).expect("serializes"),
+        r#""draft""#
+    );
+    assert_eq!(JournalStatus::from_db("draft"), JournalStatus::Draft);
+    assert_eq!(
+        JournalStatus::from_db("published"),
+        JournalStatus::Published
+    );
+    assert_eq!(JournalStatus::from_db("bogus"), JournalStatus::Published);
 }

@@ -40,13 +40,14 @@ pub(super) async fn post_journal(
     }
 }
 
-/// List every user's journal entries for a book, newest first.
+/// List every user's published journal entries for a book — plus the caller's
+/// own drafts — newest first.
 pub(super) async fn get_journal_entries(
-    _user: AuthUser,
+    user: AuthUser,
     State(state): State<AppState>,
     Path(book_uuid): Path<String>,
 ) -> Response {
-    match db::journals::list_journal_entries(&state.pool, &book_uuid).await {
+    match db::journals::list_journal_entries(&state.pool, user.id, &book_uuid).await {
         Ok(list) => Json(list).into_response(),
         Err(e) => internal("list_journal_entries", e),
     }

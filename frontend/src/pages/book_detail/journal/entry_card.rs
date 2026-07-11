@@ -3,7 +3,7 @@
 //! same progressive-enhancement editor as the composer.
 
 use dioxus::prelude::*;
-use omnibus_shared::{JournalEntry, UpdateJournalEntry, UserSummary};
+use omnibus_shared::{JournalEntry, JournalStatus, UpdateJournalEntry, UserSummary};
 
 use crate::data;
 use crate::pages::book_detail::journal_editor::*;
@@ -26,9 +26,11 @@ struct JournalEntryHeaderView {
     author_name: String,
     initial: String,
     is_owner: bool,
+    is_draft: bool,
     meta_line: String,
     entry_id: i64,
     body_for_edit: String,
+    entry_progress: Option<u8>,
     server_url: String,
 }
 
@@ -42,9 +44,11 @@ fn BdJournalEntryHeader(view: JournalEntryHeaderView, edit: JournalEntryEditStat
         author_name,
         initial,
         is_owner,
+        is_draft,
         meta_line,
         entry_id,
         body_for_edit,
+        entry_progress,
         server_url,
     } = view;
     let JournalEntryEditState {
@@ -69,11 +73,50 @@ fn BdJournalEntryHeader(view: JournalEntryHeaderView, edit: JournalEntryEditStat
                     if is_owner {
                         span { class: "chip bd-journal-you", "you" }
                     }
+                    if is_draft {
+                        span {
+                            class: "chip bd-journal-draft",
+                            "data-testid": "journal-draft-chip",
+                            "Draft"
+                        }
+                    }
                 }
                 div { class: "mono bd-journal-entry-date", "{meta_line}" }
             }
             if is_owner && !editing() {
                 div { class: "bd-journal-entry-actions",
+                    if is_draft {
+                        button {
+                            r#type: "button",
+                            class: "btn primary sm",
+                            "data-testid": "journal-publish-draft",
+                            disabled: saving(),
+                            onclick: {
+                                let url = server_url.clone();
+                                let body_md = body_for_edit.clone();
+                                move |_| {
+                                    let url = url.clone();
+                                    let input = UpdateJournalEntry {
+                                        body_md: body_md.clone(),
+                                        progress: entry_progress,
+                                        status: Some(JournalStatus::Published),
+                                    };
+                                    saving.set(true);
+                                    error.set(None);
+                                    spawn(async move {
+                                        match data::update_journal_entry(&url, entry_id, input)
+                                            .await
+                                        {
+                                            Ok(_) => reload.set(reload() + 1),
+                                            Err(e) => error.set(Some(e.to_string())),
+                                        }
+                                        saving.set(false);
+                                    });
+                                }
+                            },
+                            "Publish"
+                        }
+                    }
                     button {
                         r#type: "button",
                         class: "btn ghost sm",
@@ -154,9 +197,11 @@ pub(super) fn BdJournalEntryCard(
                     author_name: entry.author_name.clone(),
                     initial,
                     is_owner,
+                    is_draft: entry.status == JournalStatus::Draft,
                     meta_line,
                     entry_id,
                     body_for_edit: entry.body_md.clone(),
+                    entry_progress,
                     server_url: server_url.clone(),
                 },
                 edit,
@@ -264,6 +309,9 @@ fn BdJournalEntryEditForm(
                     let input = UpdateJournalEntry {
                         body_md: edit_body(),
                         progress: entry_progress,
+                        // Editing never flips draft/published — the card's
+                        // Publish action owns that transition.
+                        status: None,
                     };
                     saving.set(true);
                     error.set(None);
