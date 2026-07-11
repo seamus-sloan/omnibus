@@ -399,16 +399,21 @@
         doc.head.appendChild(link);
       }
 
-      // Reader baseline. Kept intentionally thin (html/body selectors the book
-      // rarely targets) so the publisher's own CSS still drives layout: just
-      // hyphenate justified text and drop the UA underline on structural
-      // anchors (chapter-heading links), matching Apple/Kindle.
+      // Reader baseline / override layer. The split mirrors Apple Books and
+      // Kindle: the reading system owns colour (and font, size, spacing,
+      // margins, justification — set elsewhere), while the publisher keeps
+      // structure — weight, style, headings, alignment, indents, small-caps.
+      // Appended last so it wins, and `!important` on colour so a publisher
+      // hue can't override the theme: this both kills clashes (e.g. Project
+      // Gutenberg's `a:hover{color:red}`) and keeps dark/sepia legible when a
+      // book hard-codes its own text colour.
       if (!doc.getElementById("__omnibus_baseline")) {
         var style = doc.createElement("style");
         style.id = "__omnibus_baseline";
         style.textContent =
           "html,body{-webkit-hyphens:auto;-ms-hyphens:auto;hyphens:auto;}" +
-          "a:link,a:visited{text-decoration:none;}";
+          "body *{color:inherit!important;}" +
+          "a:link,a:visited,a:hover,a:active{text-decoration:none;}";
         doc.head.appendChild(style);
       }
     });
