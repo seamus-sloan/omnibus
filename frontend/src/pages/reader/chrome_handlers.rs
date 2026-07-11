@@ -5,7 +5,6 @@
 
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
-
 use omnibus_shared::Highlight;
 
 use super::selection::SelectionData;

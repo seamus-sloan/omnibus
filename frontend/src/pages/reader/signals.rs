@@ -4,11 +4,10 @@
 //! reads as plain component wiring.
 
 use dioxus::prelude::*;
+use omnibus_shared::EbookMetadata;
 
 use crate::contexts::use_server_url;
 use crate::data;
-
-use omnibus_shared::EbookMetadata;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]

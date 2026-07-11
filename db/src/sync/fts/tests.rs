@@ -3,12 +3,13 @@
 //! regression (a newly-attached format's ISBN must become searchable),
 //! and `rebuild_all_fts` reconstructing a corrupted index.
 
+use omnibus_shared::{Contributor, EbookMetadata, Identifier};
+
 use super::*;
 use crate::ebook::IndexedBook;
 use crate::pool::init_db;
 use crate::sync::{sync_audiobooks, sync_books, AudiobookSyncPlan, SyncPlan};
 use crate::test_support::{count_rows, indexed, indexed_audiobook, CoversTempDir};
-use omnibus_shared::{Contributor, EbookMetadata, Identifier};
 
 /// Build an `IndexedBook` with a single ISBN identifier so attach/union
 /// paths have an ISBN to carry into the target's FTS row.

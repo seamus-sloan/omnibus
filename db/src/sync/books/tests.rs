@@ -4,6 +4,7 @@
 //! the happy path end-to-end, not the per-helper contracts asserted here
 //! (fileless ghosting, per-book link wipe, in-place update, insert).
 
+use omnibus_shared::{Contributor, EbookMetadata, Identifier};
 use sqlx::SqlitePool;
 
 use super::shared::{insert_book_row, insert_metadata_links};
@@ -11,7 +12,6 @@ use super::{sync_changed, sync_new, sync_removed, wipe_per_book_link_rows};
 use crate::ebook::IndexedBook;
 use crate::pool::init_db;
 use crate::test_support::{count_rows, indexed, CoversTempDir};
-use omnibus_shared::{Contributor, EbookMetadata, Identifier};
 
 /// Insert a `scan_roots` row for `/lib` and return its id — the
 /// `library_id` every bucket helper needs.

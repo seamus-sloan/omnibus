@@ -1,10 +1,11 @@
 //! Tests for AuthUser, AdminUser, and MediaAuthUser extractors.
-use super::*;
-use crate::auth::handlers::auth_router;
-use crate::backend::AppState;
 use axum::{body::Body, http::Request, routing::get, Extension, Router};
 use omnibus_db as db;
 use tower::ServiceExt;
+
+use super::*;
+use crate::auth::handlers::auth_router;
+use crate::backend::AppState;
 
 async fn app() -> (axum::Router, sqlx::SqlitePool) {
     let pool = db::init_db("sqlite::memory:").await.unwrap();

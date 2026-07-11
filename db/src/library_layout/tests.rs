@@ -1,7 +1,8 @@
 //! Unit tests for the `library_layout` module.
 
-use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use super::*;
 
 fn temp_dir(suffix: &str) -> PathBuf {
     static COUNTER: AtomicUsize = AtomicUsize::new(0);

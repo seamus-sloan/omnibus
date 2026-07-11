@@ -1,7 +1,8 @@
 //! Tests for CSRF origin-check middleware.
-use super::*;
 use axum::{body::Body, http::Request, middleware, routing::post, Router};
 use tower::ServiceExt;
+
+use super::*;
 
 fn guarded_router() -> Router {
     Router::new()

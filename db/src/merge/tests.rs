@@ -1,3 +1,8 @@
+//! Unit tests for `merge_books`: file/link/log relocation to the target
+//! book, taxonomy and user-data transfer, and the same-book rejection.
+
+use omnibus_shared::MetadataOverrides;
+
 use super::*;
 use crate::books::list_merged_rows_for_formats;
 use crate::indexer::diff_library;
@@ -7,7 +12,6 @@ use crate::test_support::{
     count_rows as count, indexed_audiobook, seed_synced_audiobook as seed_audiobook,
     seed_synced_ebook as seed_ebook,
 };
-use omnibus_shared::MetadataOverrides;
 
 async fn seed_user(pool: &sqlx::SqlitePool) -> i64 {
     sqlx::query_scalar(

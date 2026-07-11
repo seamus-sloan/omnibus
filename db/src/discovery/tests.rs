@@ -1,3 +1,8 @@
+//! Unit tests for the author/series discovery-page queries: book
+//! ordering, series-id population, and missing-id handling.
+
+use omnibus_shared::{Contributor, MetadataOverrides};
+
 use super::*;
 use crate::author_photos_data::{upsert_author_photo, AuthorPhotoSource};
 use crate::books::list_books;
@@ -8,7 +13,6 @@ use crate::test_support::{
     author_id_by_name, indexed, seed_books_for_one_author_and_series, seed_discovery_fixture,
     series_id_by_name, CoversTempDir,
 };
-use omnibus_shared::{Contributor, MetadataOverrides};
 
 #[tokio::test]
 async fn get_author_returns_author_with_all_books_ordered_by_series_index() {

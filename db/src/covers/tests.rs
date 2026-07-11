@@ -1,10 +1,14 @@
+//! Unit tests for cover resolution: last-modified fallback, missing-file
+//! handling, and override-vs-original cover selection.
+
+use omnibus_shared::MetadataOverrides;
+
 use super::*;
 use crate::books::list_books;
 use crate::metadata_overrides::{upsert_metadata_overrides, write_override_cover};
 use crate::pool::init_db;
 use crate::sync::replace_books;
 use crate::test_support::{indexed, CoversTempDir};
-use omnibus_shared::MetadataOverrides;
 
 #[tokio::test]
 async fn get_last_modified_epoch_falls_back_to_now_when_column_null() {

@@ -155,6 +155,21 @@ fn kindle_error_build_wraps_lettre_message_error() {
     );
 }
 
+#[test]
+fn kindle_error_content_type_wraps_lettre_header_error() {
+    // `build_epub_email` parses the attachment's MIME type via
+    // `ContentType::parse`, surfaced through `#[from] ContentTypeErr` as
+    // `KindleError::ContentType`. Feeding a malformed MIME string through the
+    // `From` bridge asserts that mapping without needing a live SMTP relay.
+    let src = ContentType::parse("not a mime type").unwrap_err();
+    let err: KindleError = src.into();
+    assert!(matches!(err, KindleError::ContentType(_)), "got {err:?}");
+    assert!(
+        err.to_string().starts_with("invalid content type"),
+        "got {err}"
+    );
+}
+
 #[tokio::test]
 async fn send_propagates_db_error_when_pool_is_closed() {
     let pool = init_db("sqlite::memory:").await.unwrap();

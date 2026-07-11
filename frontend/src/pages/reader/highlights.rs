@@ -4,10 +4,9 @@
 //! panel on the created row. Extracted from `BookReadPage`.
 
 use dioxus::prelude::*;
+use omnibus_shared::{Highlight, HighlightColor};
 
 use crate::data;
-
-use omnibus_shared::{Highlight, HighlightColor};
 
 /// What to open on the created highlight after the swatch/Note/Quote actions.
 #[derive(Clone, Copy)]

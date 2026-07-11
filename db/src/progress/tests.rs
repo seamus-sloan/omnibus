@@ -4,9 +4,10 @@
 //! unknown-uuid skip, merged-uuid resolution, and `record_session_tx`
 //! rollback.
 
+use omnibus_shared::EbookMetadata;
+
 use super::*;
 use crate::{init_db, replace_books};
-use omnibus_shared::EbookMetadata;
 
 /// Map a merged/auto-attached `uuid` onto an existing `book_id` the way the
 /// merge transaction does (`db/src/merge/transaction.rs`), so the session path

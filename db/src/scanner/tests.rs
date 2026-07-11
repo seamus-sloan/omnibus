@@ -1,6 +1,10 @@
+//! Unit tests for the filesystem scanner: empty/missing-path handling,
+//! extension counting, and recursive directory walks.
+
+use std::fs;
+
 use super::*;
 use crate::test_support::make_test_dir;
-use std::fs;
 
 #[test]
 fn list_files_with_no_path_returns_empty() {

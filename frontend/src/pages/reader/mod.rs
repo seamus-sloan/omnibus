@@ -29,10 +29,9 @@ mod toc_drawer;
 mod typography;
 
 use dioxus::prelude::*;
+use omnibus_shared::Highlight;
 
 use crate::components::atrium::Theme;
-
-use omnibus_shared::Highlight;
 
 use aa_panel::ReaderAaPanel;
 use chrome::{ReaderPageTurnButtons, ReaderTopBar, ReaderViewerStage};
