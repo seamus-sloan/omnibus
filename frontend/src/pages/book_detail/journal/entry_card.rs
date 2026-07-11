@@ -218,10 +218,8 @@ pub(super) fn BdJournalEntryCard(
                     class: "bd-journal-entry-body",
                     dangerous_inner_html: "{entry.body_html}",
                 }
-                if !is_owner {
-                    if let Some(msg) = error() {
-                        span { class: "mono bd-journal-error", role: "alert", "{msg}" }
-                    }
+                if let Some(msg) = error() {
+                    span { class: "mono bd-journal-error", role: "alert", "{msg}" }
                 }
             }
         }
