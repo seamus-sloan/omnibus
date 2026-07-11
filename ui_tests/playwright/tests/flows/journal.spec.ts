@@ -281,3 +281,37 @@ test("surfaces an error and keeps the draft when publishing fails", async ({ pag
   await expect(editorMarkdown(page)).toHaveValue("this will fail");
   await expect(page.getByTestId("journal-composer").getByRole("alert")).toBeVisible();
 });
+
+// ---------------------------------------------------------------------------
+// Error path — failed delete surfaces an error for the owner (#901: the error
+// span was gated on `!is_owner`, so an owner never saw a failed Delete)
+// ---------------------------------------------------------------------------
+
+test("surfaces an error on the entry card when the owner's delete fails", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  const marker = `e2e-journal-delete-fail-${Date.now()}`;
+  await publish(page, `Doomed thoughts ${marker}`);
+  const card = page.getByTestId("journal-entry").filter({ hasText: marker });
+  await expect(card).toBeVisible();
+
+  await page.route("**/api/rpc/journals/delete", (route) =>
+    route.fulfill({ status: 500, contentType: "text/plain", body: "delete exploded" }),
+  );
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/journals/delete", expectedStatus: 500 },
+    async () => card.getByTestId("journal-delete").click(),
+  );
+
+  // The card stays put and the owner sees the inline error (previously hidden).
+  await expect(card).toBeVisible();
+  await expect(card.getByRole("alert")).toBeVisible();
+
+  await page.unroute("**/api/rpc/journals/delete");
+  await deleteEntry(page, marker);
+});
