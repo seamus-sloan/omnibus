@@ -21,7 +21,10 @@ use super::async_sleep_ms;
 /// (rule 07: keep cfg out of rsx bodies).
 #[cfg(not(feature = "mobile"))]
 pub(super) fn send_to_kindle_action(uuid: &str, file_id: Option<i64>, size_bytes: i64) -> Element {
-    if omnibus_shared::kindle_email_oversize(size_bytes as u64) {
+    // `u64::try_from` over an `as` cast so a negative size can't wrap into a
+    // huge value; a bad size just falls through to the normal email button (the
+    // backend still enforces the real cap).
+    if u64::try_from(size_bytes).is_ok_and(omnibus_shared::kindle_email_oversize) {
         return rsx! {
             a {
                 class: "btn",

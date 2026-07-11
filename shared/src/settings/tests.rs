@@ -95,11 +95,12 @@ fn kindle_email_oversize_is_true_one_byte_over_the_cap() {
 
 #[test]
 fn kindle_size_limits_match_amazons_documented_figures() {
-    // Email = 50 MB, web uploader = 200 MB. Guards against an accidental
-    // unit slip (MB vs MiB or a wrong multiplier) since both feed user-facing
-    // copy and the send guard.
-    assert_eq!(KINDLE_EMAIL_MAX_BYTES, 50 * 1024 * 1024);
-    assert_eq!(KINDLE_WEB_MAX_BYTES, 200 * 1024 * 1024);
+    // Email = 50 MB, web uploader = 200 MB, expressed as decimal megabytes to
+    // match Amazon's user-facing figures and the UI copy. Guards against an
+    // accidental unit slip (decimal MB vs binary MiB, or a wrong multiplier)
+    // since both feed user-facing copy and the send guard.
+    assert_eq!(KINDLE_EMAIL_MAX_BYTES, 50_000_000);
+    assert_eq!(KINDLE_WEB_MAX_BYTES, 200_000_000);
 }
 
 #[test]

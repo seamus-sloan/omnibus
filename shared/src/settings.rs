@@ -137,11 +137,16 @@ pub struct SmtpConfigStatus {
 /// over 50 MB, while the web / app uploader at [`KINDLE_WEB_UPLOAD_URL`] accepts
 /// up to 200 MB. An EPUB over the email cap disables the email button and points
 /// the user at the uploader instead.
-pub const KINDLE_EMAIL_MAX_BYTES: u64 = 50 * 1024 * 1024;
+///
+/// Expressed as **decimal** megabytes (50 * 10^6) to match Amazon's documented
+/// "50 MB" / "200 MB" figures and the UI copy — not binary MiB. The decimal
+/// value is also the slightly stricter cap, so we never pass a file the email
+/// path would then reject.
+pub const KINDLE_EMAIL_MAX_BYTES: u64 = 50_000_000;
 
 /// Upper bound of the Send-to-Kindle web / app uploader, surfaced in the UI hint
-/// so the user knows the larger path exists.
-pub const KINDLE_WEB_MAX_BYTES: u64 = 200 * 1024 * 1024;
+/// so the user knows the larger path exists. Decimal MB, as with the email cap.
+pub const KINDLE_WEB_MAX_BYTES: u64 = 200_000_000;
 
 /// Amazon's Send-to-Kindle web uploader. Linked from the disabled email button
 /// as the fallback for oversized files.

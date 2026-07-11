@@ -111,7 +111,13 @@ fn BdExportPanel(
             // Kindle's email cap, the button can't work — swap in a disabled
             // row that explains why and links to the web uploader instead.
             if has_ebook {
-                if epub_size_bytes.is_some_and(|n| kindle_email_oversize(n as u64)) {
+                // `u64::try_from` over an `as` cast so a negative size (corrupt
+                // DB row / sentinel) can't wrap into a huge value and wrongly
+                // hide the email button.
+                if epub_size_bytes
+                    .and_then(|n| u64::try_from(n).ok())
+                    .is_some_and(kindle_email_oversize)
+                {
                     KindleOversizeItem { open }
                 } else {
                     SendToKindleButton {
