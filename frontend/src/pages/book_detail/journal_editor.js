@@ -2,7 +2,8 @@
 //
 // A `contenteditable` surface whose `textContent` always stays exactly equal to
 // the markdown source — we never add or remove characters, we only wrap
-// constructs in decoration spans (markers kept but dimmed via `.cm-mark`). On
+// constructs in decoration spans (`.cm-mark` markers are kept in the text but
+// fully faded except on the caret's `.cm-active` line, Obsidian-style). On
 // every input we re-render those decorations and restore the caret by absolute
 // character offset (offsets are stable because the text length never changes).
 //
@@ -118,7 +119,46 @@ if (!window.OmnibusJournalEditor) {
     }
 
     // Newlines kept as literal text so textContent === the markdown source.
-    const render = (md) => md.split("\n").map(blockLine).join("\n");
+    // Each line is wrapped in a `.cm-line` span (adds no text) so the
+    // active-line pass below can reveal markers per line.
+    const render = (md) =>
+      md
+        .split("\n")
+        .map((line) => `<span class="cm-line">${blockLine(line)}</span>`)
+        .join("\n");
+
+    // --- active-line marker reveal (Obsidian-style) ---------------------------
+    // Markers are fully faded by CSS except on the `.cm-active` line. The
+    // characters stay in the layout either way, so caret-by-offset math and
+    // the mirrored markdown are untouched.
+    function markActive(editor) {
+      const sel = caret(editor);
+      const active =
+        sel === null ? -1 : editor.textContent.slice(0, sel.start).split("\n").length - 1;
+      editor.querySelectorAll(":scope > .cm-line").forEach((line, i) => {
+        line.classList.toggle("cm-active", i === active);
+      });
+    }
+
+    // Caret moves that don't change the text (arrow keys, clicks, blur) never
+    // re-render, so one document-level selectionchange listener drives the
+    // active-line class across every attached editor. Disconnected editors
+    // (unmounted entry edit forms) are dropped as they're encountered.
+    const editors = new Set();
+    function trackActiveLine(editor) {
+      editors.add(editor);
+      if (window.__omnibusJournalSelChange) return;
+      window.__omnibusJournalSelChange = true;
+      document.addEventListener("selectionchange", () => {
+        editors.forEach((ed) => {
+          if (!ed.isConnected) {
+            editors.delete(ed);
+            return;
+          }
+          markActive(ed);
+        });
+      });
+    }
 
     function sync(editor) {
       const mirror = byId(editor.getAttribute("data-mirror"));
@@ -131,6 +171,7 @@ if (!window.OmnibusJournalEditor) {
       const sel = caret(editor);
       editor.innerHTML = render(editor.textContent);
       if (sel) place(editor, sel.start, sel.end);
+      markActive(editor);
     }
     function onInput(editor) {
       highlight(editor);
@@ -161,6 +202,7 @@ if (!window.OmnibusJournalEditor) {
       const mirror = byId(mirrorId);
       if (mirror && mirror.value) editor.textContent = mirror.value;
       highlight(editor);
+      trackActiveLine(editor);
 
       editor.addEventListener("compositionstart", () => { editor.__composing = true; });
       editor.addEventListener("compositionend", () => {
