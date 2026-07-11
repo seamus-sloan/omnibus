@@ -64,7 +64,8 @@ pub(super) fn install_surface_js(
   window.__omnibusOnSelection=function(j){{dioxus.send({{kind:"Selection",json:j}});}};
   window.__omnibusOnSelectionCleared=function(){{dioxus.send({{kind:"SelectionCleared"}});}};
   window.__omnibusOnToc=function(j){{dioxus.send({{kind:"Toc",json:j}});}};
-  window.__omnibusOnSearchResults=function(j){{dioxus.send({{kind:"Search",json:j}});}};{share_shims}
+  window.__omnibusOnSearchResults=function(j){{dioxus.send({{kind:"Search",json:j}});}};
+  window.__omnibusOnToggleChrome=function(){{dioxus.send({{kind:"ToggleChrome"}});}};{share_shims}
   function load(src){{return new Promise(function(res,rej){{
     var s=document.createElement("script");s.src=src;s.async=false;
     var t=setTimeout(function(){{rej();}},10000);
@@ -132,6 +133,7 @@ mod tests {
             "__omnibusOnShareImage",
             "__omnibusOnToc",
             "__omnibusOnSearchResults",
+            "__omnibusOnToggleChrome",
         ] {
             assert!(js.contains(cb), "missing shim for {cb}");
         }

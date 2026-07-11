@@ -360,9 +360,23 @@
           var w = window.innerWidth || 360;
           if (x > w * 0.8) next();
           else if (x < w * 0.2) prev();
+          // A tap in the centre 60% toggles the reader chrome (top/bottom bars)
+          // for a distraction-free page view.
+          else emitToggleChrome();
         }
       }, { passive: true });
     });
+  }
+
+  // Ask the host to toggle the reader chrome (top/bottom bars). The bars are
+  // Dioxus-owned DOM; rather than mutate their class from here (the reconciler
+  // could clobber it, and it splits state across two owners), we signal through
+  // the same `__omnibusOn*` bridge the rest of the glue uses and let the host
+  // flip a `chrome_hidden` signal — the single source of truth on both targets.
+  function emitToggleChrome() {
+    if (typeof window.__omnibusOnToggleChrome === "function") {
+      window.__omnibusOnToggleChrome("");
+    }
   }
 
   function setFontSize(px) {

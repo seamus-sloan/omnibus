@@ -106,6 +106,7 @@ pub fn BookReadPage(uuid: String) -> Element {
         show_annotations,
         loc,
         book_meta,
+        chrome_hidden,
     } = use_reader_signals(&uuid, theme);
     let (on_back, on_prev, on_next, on_keydown) = chrome_handlers::install_chrome_handlers(
         uuid.clone(),
@@ -172,6 +173,7 @@ pub fn BookReadPage(uuid: String) -> Element {
                 on_prev,
                 on_next,
             },
+            chrome_hidden,
         }
     }
 }
@@ -195,6 +197,7 @@ struct ReaderSignals {
     show_annotations: Signal<bool>,
     loc: Signal<RelocateData>,
     book_meta: Signal<Option<omnibus_shared::EbookMetadata>>,
+    chrome_hidden: Signal<bool>,
 }
 
 /// Construct every signal `BookReadPage` owns, publish `prefs` to context,
@@ -227,6 +230,10 @@ fn use_reader_signals(uuid: &str, theme: Signal<Theme>) -> ReaderSignals {
     let show_annotations = use_signal(|| false);
     let loc = use_signal(RelocateData::default);
     let book_meta = use_book_metadata(uuid.to_string());
+    // Chrome starts visible; a centre tap (glue → `__omnibusOnToggleChrome`)
+    // flips this. Seeded identically so SSR and the first WASM paint match,
+    // keeping hydration stable — the class only appears after a post-mount tap.
+    let chrome_hidden = use_signal(|| false);
 
     #[cfg(feature = "web")]
     install_reader_web_interop(
@@ -239,6 +246,7 @@ fn use_reader_signals(uuid: &str, theme: Signal<Theme>) -> ReaderSignals {
             highlights,
             toc,
             search_results,
+            chrome_hidden,
         },
     );
 
@@ -256,6 +264,7 @@ fn use_reader_signals(uuid: &str, theme: Signal<Theme>) -> ReaderSignals {
             highlights,
             toc,
             search_results,
+            chrome_hidden,
         },
         crate::contexts::use_server_url(),
     );
@@ -282,6 +291,7 @@ fn use_reader_signals(uuid: &str, theme: Signal<Theme>) -> ReaderSignals {
         show_annotations,
         loc,
         book_meta,
+        chrome_hidden,
     }
 }
 
@@ -399,6 +409,7 @@ fn ReaderLayout(
     progress: ReaderProgress,
     panels: ReaderPanelSignals,
     nav: ReaderNavHandlers,
+    chrome_hidden: Signal<bool>,
 ) -> Element {
     let ReaderMeta {
         uuid,
@@ -445,7 +456,7 @@ fn ReaderLayout(
         {reader_scripts}
 
         div {
-            class: "rd-surface",
+            class: if chrome_hidden() { "rd-surface rd-chrome-hidden" } else { "rd-surface" },
             tabindex: "0",
             autofocus: true,
             onkeydown: move |evt| on_keydown.call(evt),

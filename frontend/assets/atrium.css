@@ -4560,6 +4560,20 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-turn:hover { color: var(--ink-0); background: var(--bg-2); border-color: var(--line); }
 .rd-turn-l { left: 22px; }
 .rd-turn-r { right: 22px; }
+/* Touch devices turn pages by swipe/tap via the glue's `installGestureNav`; the
+   gutter buttons would sit over the prose and never get used. Hidden on EITHER a
+   phone-narrow viewport OR a coarse pointer — the pointer arm covers iPad (wider
+   than the phone breakpoint), while the width arm covers phones and viewport-only
+   emulators (Playwright's desktop Chromium reports a fine pointer even at a phone
+   size). */
+@media (max-width: 480px), (hover: none) and (pointer: coarse) { .rd-turn { display: none; } }
+/* Tap-center hides the chrome for a distraction-free page view — a centre tap
+   flips the host's `chrome_hidden` signal, which adds `rd-chrome-hidden` to the
+   surface; the bars slide out and the progress ribbon fades. */
+.rd-top, .rd-bottom { transition: transform .22s ease; }
+.rd-chrome-hidden .rd-top { transform: translateY(-100%); }
+.rd-chrome-hidden .rd-bottom { transform: translateY(100%); }
+.rd-chrome-hidden .rd-ribbon { opacity: 0; transition: opacity .22s ease; }
 .rd-ribbon { position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
   background: var(--bg-2); z-index: 7; }
 .rd-ribbon > i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
@@ -4842,9 +4856,6 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
      div is the desktop layout). */
   .rd-bottom > div { display: none; }
   .rd-bottom-ch { display: inline; }
-  /* Mobile turns pages by swipe/tap (the glue's `installGestureNav`); the
-     circular gutter buttons would sit over the prose on a phone column. */
-  .rd-turn { display: none; }
 
   /* Drawers (contents / highlights / bookmarks / quote card) become bottom
      sheets: grabber, top-rounded, content-capped. Search opts out below. */
