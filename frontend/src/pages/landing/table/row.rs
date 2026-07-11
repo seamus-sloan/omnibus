@@ -152,7 +152,7 @@ fn derive_row_display(book: &EbookMetadata, server_url: &str, uuid: &str) -> Row
 /// derived; this component does no signal seeding of its own.
 #[component]
 fn EbookRowMarkup(display: RowDisplay, uuid: String, ctx: RowContext) -> Element {
-    let editing = ctx.editing;
+    let mut editing = ctx.editing;
     let nav = use_navigator();
     let uuid_click = uuid.clone();
     let uuid_key = uuid;
@@ -182,6 +182,16 @@ fn EbookRowMarkup(display: RowDisplay, uuid: String, ctx: RowContext) -> Element
             },
             onkeydown: move |evt: Event<KeyboardData>| {
                 if editing().is_some() {
+                    // Fallback close: the open cell's own input handles
+                    // Escape (and stops propagation) when it holds focus,
+                    // but focus can end up elsewhere in the row — a chip's
+                    // remove button, or a fresh editor whose autofocus
+                    // didn't land — leaving `editing` stuck with no input
+                    // listening for Escape. Catch it here so the amber
+                    // highlight can always be dismissed.
+                    if evt.key() == Key::Escape {
+                        editing.set(None);
+                    }
                     return;
                 }
                 let key = evt.key();

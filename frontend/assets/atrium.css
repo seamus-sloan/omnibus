@@ -1816,9 +1816,17 @@ a.idx-letter-on:focus-visible {
 }
 .me-tag-input:focus { border-color: var(--accent); }
 
-/* ChipEditor (F5.9-lite) — input + suggestion dropdown. The wrap is
+/* ChipEditor (F5.9-lite) — input + suggestion dropdown. The root wraps the
+   whole component (chips + input + dropdown) purely so blur handling can
+   check DOM containment (#992); `display: contents` keeps it invisible to
+   the host's flex layout so chips/input stay direct flex items of whatever
+   container the consumer wraps ChipEditor in (`.ebook-cell-chip-host`,
+   `.me-chip-row`, `.me-tag-chips`). The input-wrap below is
    position:relative so the absolute dropdown anchors to it; flex 1 lets
    the input grow inside the parent's chip row. */
+.chip-editor-root {
+  display: contents;
+}
 .chip-editor-input-wrap {
   position: relative;
   flex: 1;

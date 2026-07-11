@@ -145,3 +145,95 @@ test("clicking the Authors cell renders the chip editor inline", async ({ page }
   await chipInput.press("Escape");
   await expect(chipInput).toHaveCount(0);
 });
+
+// #992 — the Authors cell's ChipEditor only closed on Escape; blurring away
+// (clicking elsewhere) left the amber `ebook-cell-editing` highlight stuck.
+
+test("clicking away from an open Authors cell editor closes it", async ({ page }) => {
+  await gotoReady(page, "/");
+
+  const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
+  const authorsCell = row.getByTestId("ebook-cell-author");
+  await authorsCell.click();
+
+  const chipInput = authorsCell.getByTestId("ebook-cell-author-input");
+  await expect(chipInput).toBeVisible();
+  await expect(authorsCell).toHaveClass(/ebook-cell-editing/);
+
+  // Click a neutral, always-present element well outside the row/table —
+  // a genuine click-away, not a suggestion pick.
+  await page.getByRole("heading", { level: 1, name: "Your Library" }).click();
+
+  await expect(chipInput).toHaveCount(0);
+  await expect(authorsCell).not.toHaveClass(/ebook-cell-editing/);
+});
+
+test("Tab from the chip input reaches a chip's Remove button without closing the editor", async ({
+  page,
+}) => {
+  await gotoReady(page, "/");
+
+  const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
+  const authorsCell = row.getByTestId("ebook-cell-author");
+  await authorsCell.click();
+
+  const chipInput = authorsCell.getByTestId("ebook-cell-author-input");
+  await expect(chipInput).toBeVisible();
+
+  // ChipList (chips + Remove buttons) renders before the input in DOM
+  // order, so Shift+Tab moves focus backward onto the preceding chip's
+  // Remove button — the exact keyboard path the #992 follow-up fix
+  // protects (blur must not close the editor when the newly-focused
+  // element is still inside it).
+  await chipInput.press("Shift+Tab");
+
+  const removeButton = authorsCell.getByRole("button", {
+    name: `Remove ${TARGET.authors[0]}`,
+  });
+  await expect(removeButton).toBeFocused();
+  await expect(chipInput).toBeVisible();
+  await expect(authorsCell).toHaveClass(/ebook-cell-editing/);
+});
+
+test("selecting an author suggestion keeps the editor open; a later click away closes it", async ({
+  page,
+  request,
+}) => {
+  await gotoReady(page, "/");
+
+  const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
+  const authorsCell = row.getByTestId("ebook-cell-author");
+  await authorsCell.click();
+
+  const chipInput = authorsCell.getByTestId("ebook-cell-author-input");
+  await chipInput.fill("Grace");
+
+  const dropdown = authorsCell.getByTestId("ebook-cell-author-suggestions");
+  const suggestion = dropdown.getByRole("option", { name: /Grace Hopper/ });
+  await expect(suggestion).toBeVisible();
+
+  // AC1: picking a suggestion commits the chip via `onmousedown` +
+  // `preventDefault` (so the input never blurs) and must NOT close the
+  // editor — the admin can keep adding authors.
+  await expectMutation(
+    page,
+    { method: "POST", url: /\/api\/rpc\/ebook\/overrides$/, expectedStatus: 200 },
+    async () => suggestion.click(),
+  );
+  await expect(authorsCell.getByText("Grace Hopper", { exact: true })).toBeVisible();
+  await expect(chipInput).toBeVisible();
+  await expect(authorsCell).toHaveClass(/ebook-cell-editing/);
+
+  // AC2 (regression, chained): a genuine click-away after the pick still
+  // closes the editor and clears the highlight.
+  await page.getByRole("heading", { level: 1, name: "Your Library" }).click();
+  await expect(chipInput).toHaveCount(0);
+  await expect(authorsCell).not.toHaveClass(/ebook-cell-editing/);
+
+  // Cleanup: revert the accumulated authors override.
+  const uuid = await fetchBookIdByTitle(request, TARGET.title);
+  const revertResp = await request.post(`/api/rpc/ebook/overrides/delete`, {
+    data: { uuid },
+  });
+  expect(revertResp.status(), "cleanup revert must succeed").toBe(200);
+});
