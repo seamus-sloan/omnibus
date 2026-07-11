@@ -1,7 +1,8 @@
 //! Public per-book journal CRUD.
 //!
-//! Entries are public: [`list_journal_entries`] returns every user's entries for
-//! a book (a shared reading log), attributed by author. Create/update/delete are
+//! Published entries are public: [`list_journal_entries`] returns every user's
+//! published entries for a book (a shared reading log), attributed by author,
+//! plus the viewer's own drafts. Create/update/delete are
 //! owner-scoped — a non-owner edit/delete is indistinguishable from a missing
 //! row (`NotFound`). Bodies soft-reference the durable `books.uuid` (no
 //! FK/cascade) through the merged-uuid-aware canonical resolver. Markdown is
@@ -20,7 +21,8 @@ mod tests;
 /// Columns + author join shared by every entry read. `user_id` surfaces as
 /// `author_id`; `users.username` as `author_name`.
 const SELECT_ENTRY: &str = "SELECT je.id, je.book_uuid, je.user_id AS author_id,
-        u.username AS author_name, je.body_md, je.progress, je.created_at, je.updated_at
+        u.username AS author_name, je.body_md, je.progress, je.status,
+        je.created_at, je.updated_at
    FROM journal_entries je
    JOIN users u ON u.id = je.user_id";
 
@@ -67,32 +69,39 @@ pub async fn create_journal_entry(
         .await?
         .ok_or(JournalError::BookNotFound)?;
     let id = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO journal_entries (user_id, book_uuid, body_md, progress)
-         VALUES (?, ?, ?, ?) RETURNING id",
+        "INSERT INTO journal_entries (user_id, book_uuid, body_md, progress, status)
+         VALUES (?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(user_id)
     .bind(&book_uuid)
     .bind(&input.body_md)
     .bind(input.progress.map(|p| p as i64))
+    .bind(input.status.as_str())
     .fetch_one(pool)
     .await?;
 
     get_entry_by_id(pool, id).await
 }
 
-/// List every user's entries for a book, newest first. Returns an empty list —
-/// not an error — for an unknown uuid or a book with no entries yet.
+/// List a book's entries for `viewer_id`, newest first: every user's published
+/// entries plus the viewer's own drafts (drafts stay per-user-private until
+/// published). Returns an empty list — not an error — for an unknown uuid or a
+/// book with no entries yet.
 pub async fn list_journal_entries(
     pool: &SqlitePool,
+    viewer_id: i64,
     book_uuid: &str,
 ) -> Result<Vec<JournalEntry>, JournalError> {
     let Some(canonical) = resolve_canonical_book_uuid(pool, book_uuid).await? else {
         return Ok(vec![]);
     };
     let rows = sqlx::query(&format!(
-        "{SELECT_ENTRY} WHERE je.book_uuid = ? ORDER BY je.created_at DESC, je.id DESC LIMIT ?"
+        "{SELECT_ENTRY} WHERE je.book_uuid = ?
+            AND (je.status = 'published' OR je.user_id = ?)
+          ORDER BY je.created_at DESC, je.id DESC LIMIT ?"
     ))
     .bind(&canonical)
+    .bind(viewer_id)
     .bind(LIST_JOURNAL_ENTRIES_LIMIT)
     .fetch_all(pool)
     .await?;
@@ -110,11 +119,13 @@ pub async fn update_journal_entry(
 ) -> Result<JournalEntry, JournalError> {
     let result = sqlx::query(
         "UPDATE journal_entries
-            SET body_md = ?, progress = ?, updated_at = strftime('%s','now')
+            SET body_md = ?, progress = ?, status = COALESCE(?, status),
+                updated_at = strftime('%s','now')
           WHERE id = ? AND user_id = ?",
     )
     .bind(&input.body_md)
     .bind(input.progress.map(|p| p as i64))
+    .bind(input.status.map(|s| s.as_str()))
     .bind(entry_id)
     .bind(user_id)
     .execute(pool)
@@ -158,6 +169,7 @@ fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> Result<JournalEntry, JournalEr
     let body_md: String = row.try_get("body_md")?;
     let body_html = markdown::render(&body_md);
     let progress: Option<i64> = row.try_get("progress")?;
+    let status: String = row.try_get("status")?;
     Ok(JournalEntry {
         id: row.try_get("id")?,
         book_uuid: row.try_get("book_uuid")?,
@@ -166,6 +178,7 @@ fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> Result<JournalEntry, JournalEr
         body_md,
         body_html,
         progress: progress.map(|p| p as u8),
+        status: omnibus_shared::JournalStatus::from_db(&status),
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

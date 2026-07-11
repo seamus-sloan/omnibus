@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::{init_db, replace_books};
-use omnibus_shared::{CreateJournalEntry, EbookMetadata, UpdateJournalEntry};
+use omnibus_shared::{CreateJournalEntry, EbookMetadata, JournalStatus, UpdateJournalEntry};
 
 async fn seed(pool: &SqlitePool, library: &str, title: &str) -> String {
     replace_books(
@@ -67,6 +67,14 @@ fn create(uuid: &str, body: &str, progress: Option<u8>) -> CreateJournalEntry {
         book_uuid: uuid.to_string(),
         body_md: body.to_string(),
         progress,
+        status: JournalStatus::default(),
+    }
+}
+
+fn create_draft(uuid: &str, body: &str) -> CreateJournalEntry {
+    CreateJournalEntry {
+        status: JournalStatus::Draft,
+        ..create(uuid, body, None)
     }
 }
 
@@ -111,8 +119,12 @@ async fn list_returns_all_users_entries_newest_first() {
         .await
         .unwrap();
 
-    let entries = list_journal_entries(&pool, &uuid).await.unwrap();
-    assert_eq!(entries.len(), 2, "every user's entries are public");
+    let entries = list_journal_entries(&pool, alice, &uuid).await.unwrap();
+    assert_eq!(
+        entries.len(),
+        2,
+        "every user's published entries are public"
+    );
     // Newest first (created_at DESC, id DESC) — bob inserted last.
     assert_eq!(entries[0].author_name, "bob");
     assert_eq!(entries[0].body_md, "bob second");
@@ -122,7 +134,7 @@ async fn list_returns_all_users_entries_newest_first() {
 #[tokio::test]
 async fn list_returns_empty_for_unknown_uuid() {
     let pool = init_db("sqlite::memory:").await.unwrap();
-    assert!(list_journal_entries(&pool, "no-such-book")
+    assert!(list_journal_entries(&pool, 1, "no-such-book")
         .await
         .unwrap()
         .is_empty());
@@ -144,6 +156,7 @@ async fn update_by_owner_changes_body() {
         &UpdateJournalEntry {
             body_md: "*revised*".into(),
             progress: Some(90),
+            status: None,
         },
     )
     .await
@@ -170,13 +183,14 @@ async fn update_by_non_owner_returns_not_found() {
         &UpdateJournalEntry {
             body_md: "hijack".into(),
             progress: None,
+            status: None,
         },
     )
     .await
     .unwrap_err();
     assert!(matches!(err, JournalError::NotFound));
     // Untouched.
-    let entries = list_journal_entries(&pool, &uuid).await.unwrap();
+    let entries = list_journal_entries(&pool, alice, &uuid).await.unwrap();
     assert_eq!(entries[0].body_md, "mine");
 }
 
@@ -190,7 +204,10 @@ async fn delete_by_owner_removes_row() {
         .unwrap();
 
     delete_journal_entry(&pool, user, entry.id).await.unwrap();
-    assert!(list_journal_entries(&pool, &uuid).await.unwrap().is_empty());
+    assert!(list_journal_entries(&pool, user, &uuid)
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]
@@ -207,7 +224,13 @@ async fn delete_by_non_owner_returns_not_found() {
         .await
         .unwrap_err();
     assert!(matches!(err, JournalError::NotFound));
-    assert_eq!(list_journal_entries(&pool, &uuid).await.unwrap().len(), 1);
+    assert_eq!(
+        list_journal_entries(&pool, alice, &uuid)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -223,14 +246,17 @@ async fn create_resolves_merged_uuid_to_surviving_book() {
     assert_eq!(saved.book_uuid, canonical);
     // Readable via both the merged and the canonical uuid.
     assert_eq!(
-        list_journal_entries(&pool, "attached-uuid")
+        list_journal_entries(&pool, user, "attached-uuid")
             .await
             .unwrap()
             .len(),
         1
     );
     assert_eq!(
-        list_journal_entries(&pool, &canonical).await.unwrap().len(),
+        list_journal_entries(&pool, user, &canonical)
+            .await
+            .unwrap()
+            .len(),
         1
     );
 }
@@ -263,12 +289,86 @@ async fn list_journal_entries_caps_response_at_hard_limit() {
     let over_cap = LIST_JOURNAL_ENTRIES_LIMIT + 500;
     seed_entries_raw(&pool, user, &uuid, over_cap).await;
 
-    let list = list_journal_entries(&pool, &uuid).await.unwrap();
+    let list = list_journal_entries(&pool, user, &uuid).await.unwrap();
     assert_eq!(
         list.len() as i64,
         LIST_JOURNAL_ENTRIES_LIMIT,
         "list_journal_entries must not return more than LIST_JOURNAL_ENTRIES_LIMIT rows",
     );
+}
+
+#[tokio::test]
+async fn list_hides_drafts_from_other_viewers_but_shows_them_to_the_owner() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let bob = seed_user(&pool, "bob").await;
+    let uuid = seed(&pool, "/lib", "Book A").await;
+
+    create_journal_entry(&pool, alice, &create(&uuid, "published note", None))
+        .await
+        .unwrap();
+    let draft = create_journal_entry(&pool, alice, &create_draft(&uuid, "secret draft"))
+        .await
+        .unwrap();
+    assert_eq!(draft.status, JournalStatus::Draft);
+
+    let for_bob = list_journal_entries(&pool, bob, &uuid).await.unwrap();
+    assert_eq!(for_bob.len(), 1, "bob must not see alice's draft");
+    assert_eq!(for_bob[0].body_md, "published note");
+
+    let for_alice = list_journal_entries(&pool, alice, &uuid).await.unwrap();
+    assert_eq!(for_alice.len(), 2, "alice sees her own draft");
+    assert!(for_alice
+        .iter()
+        .any(|e| e.status == JournalStatus::Draft && e.body_md == "secret draft"));
+}
+
+#[tokio::test]
+async fn update_publishes_a_draft_and_none_keeps_the_stored_status() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let bob = seed_user(&pool, "bob").await;
+    let uuid = seed(&pool, "/lib", "Book A").await;
+    let draft = create_journal_entry(&pool, alice, &create_draft(&uuid, "wip"))
+        .await
+        .unwrap();
+
+    // `status: None` keeps the entry a draft.
+    let still_draft = update_journal_entry(
+        &pool,
+        alice,
+        draft.id,
+        &UpdateJournalEntry {
+            body_md: "wip more".into(),
+            progress: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(still_draft.status, JournalStatus::Draft);
+    assert!(list_journal_entries(&pool, bob, &uuid)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // Publishing flips the status and surfaces the entry to everyone.
+    let published = update_journal_entry(
+        &pool,
+        alice,
+        draft.id,
+        &UpdateJournalEntry {
+            body_md: "done".into(),
+            progress: None,
+            status: Some(JournalStatus::Published),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(published.status, JournalStatus::Published);
+    let for_bob = list_journal_entries(&pool, bob, &uuid).await.unwrap();
+    assert_eq!(for_bob.len(), 1);
+    assert_eq!(for_bob[0].body_md, "done");
 }
 
 #[tokio::test]

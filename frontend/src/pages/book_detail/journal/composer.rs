@@ -2,8 +2,9 @@
 //! editor with a Write/Preview toggle, a "from highlights" insert popover, an
 //! optional reading-progress slider, and the Publish/Cancel footer.
 
+use dioxus::core::Task;
 use dioxus::prelude::*;
-use omnibus_shared::{CreateJournalEntry, Highlight};
+use omnibus_shared::{CreateJournalEntry, Highlight, JournalStatus, UpdateJournalEntry};
 
 use crate::data;
 use crate::pages::book_detail::journal_editor::*;
@@ -19,6 +20,47 @@ struct JournalComposerState {
     saving: Signal<bool>,
     error: Signal<Option<String>>,
     show_preview: Signal<bool>,
+    /// Id of the server-side draft row the composer is riding (created by the
+    /// first autosave or Save-draft click); publish/cancel resolve it.
+    draft_id: Signal<Option<i64>>,
+    /// In-flight debounced autosave, cancelled per keystroke (search-palette
+    /// pattern) and before any explicit save/publish/cancel.
+    autosave_task: Signal<Option<Task>>,
+    /// Seconds since the last successful autosave — `Some(0)` right after a
+    /// save, bumped by [`JournalComposerState::autosaved_ticker`]; `None`
+    /// until the first autosave lands.
+    autosaved_secs: Signal<Option<u64>>,
+    /// The ticking task behind the "Auto-saved Ns ago" indicator.
+    autosaved_ticker: Signal<Option<Task>>,
+}
+
+impl JournalComposerState {
+    /// Cancel pending autosave work and reset every composer signal back to
+    /// the collapsed-prompt state.
+    fn reset_and_close(mut self) {
+        if let Some(t) = self.autosave_task.write().take() {
+            t.cancel();
+        }
+        if let Some(t) = self.autosaved_ticker.write().take() {
+            t.cancel();
+        }
+        self.draft_id.set(None);
+        self.autosaved_secs.set(None);
+        self.body.set(String::new());
+        self.show_preview.set(false);
+        self.track_progress.set(false);
+        self.error.set(None);
+        self.open.set(false);
+    }
+
+    /// The optional progress payload derived from the footer toggle/slider.
+    fn progress_payload(&self) -> Option<u8> {
+        if (self.track_progress)() {
+            Some((self.progress)() as u8)
+        } else {
+            None
+        }
+    }
 }
 
 /// Collapsed prompt → expanded markdown composer with a Write/Preview toggle, an
@@ -44,6 +86,46 @@ pub(super) fn BdJournalComposer(uuid: String, server_url: String, reload: Signal
     let highlights = use_signal(Vec::<Highlight>::new);
     let highlights_open = use_signal(|| false);
     let highlights_loaded = use_signal(|| false);
+    let draft_id = use_signal(|| None::<i64>);
+    let mut autosave_task = use_signal(|| None::<Task>);
+    let autosaved_secs = use_signal(|| None::<u64>);
+    let autosaved_ticker = use_signal(|| None::<Task>);
+
+    let state = JournalComposerState {
+        open,
+        body,
+        track_progress,
+        progress,
+        saving,
+        error,
+        show_preview,
+        draft_id,
+        autosave_task,
+        autosaved_secs,
+        autosaved_ticker,
+    };
+
+    // Debounced autosave: each body change cancels the pending task and arms a
+    // fresh one (search-palette pattern), so at most one save is queued and a
+    // typing burst produces a single write once the user pauses.
+    let autosave_url = server_url.clone();
+    let autosave_uuid = uuid.clone();
+    use_effect(move || {
+        let text = body();
+        if !open() || saving() || text.trim().is_empty() {
+            return;
+        }
+        if let Some(prev) = autosave_task.write().take() {
+            prev.cancel();
+        }
+        let url = autosave_url.clone();
+        let uuid = autosave_uuid.clone();
+        let task = spawn(async move {
+            async_sleep_ms(AUTOSAVE_DEBOUNCE_MS).await;
+            autosave_draft(&url, &uuid, text, state).await;
+        });
+        autosave_task.set(Some(task));
+    });
 
     if !open() {
         return rsx! {
@@ -84,15 +166,7 @@ pub(super) fn BdJournalComposer(uuid: String, server_url: String, reload: Signal
                 uuid,
                 server_url,
                 reload,
-                state: JournalComposerState {
-                    open,
-                    body,
-                    track_progress,
-                    progress,
-                    saving,
-                    error,
-                    show_preview,
-                },
+                state,
             }
         }
     }
@@ -316,8 +390,65 @@ fn BdJournalProgressToggle(track_progress: Signal<bool>, progress: Signal<i64>) 
     }
 }
 
-/// Composer footer: reading-progress toggle/slider, inline error, cancel, and
-/// publish. Publishing posts the entry, then resets and closes the composer.
+/// Debounce window between the last keystroke and the autosave write.
+const AUTOSAVE_DEBOUNCE_MS: u32 = 2_000;
+
+/// How often the "Auto-saved Ns ago" indicator ticks forward.
+const AUTOSAVE_TICK_MS: u32 = 5_000;
+
+/// Persist the composer body as a per-user draft: the first save creates the
+/// draft row (and starts the indicator ticker), later saves update it in
+/// place. Failures are silent — the explicit Save-draft/Publish paths surface
+/// errors, and the next keystroke re-arms the autosave anyway.
+async fn autosave_draft(url: &str, uuid: &str, body_md: String, state: JournalComposerState) {
+    let mut state = state;
+    let saved_id = match (state.draft_id)() {
+        Some(id) => data::update_journal_entry(
+            url,
+            id,
+            UpdateJournalEntry {
+                body_md,
+                progress: state.progress_payload(),
+                status: None,
+            },
+        )
+        .await
+        .map(|e| e.id),
+        None => data::create_journal_entry(
+            url,
+            CreateJournalEntry {
+                book_uuid: uuid.to_string(),
+                body_md,
+                progress: state.progress_payload(),
+                status: JournalStatus::Draft,
+            },
+        )
+        .await
+        .map(|e| e.id),
+    };
+    let Ok(id) = saved_id else { return };
+    state.draft_id.set(Some(id));
+    state.autosaved_secs.set(Some(0));
+    if state.autosaved_ticker.peek().is_none() {
+        let mut secs = state.autosaved_secs;
+        let ticker = spawn(async move {
+            loop {
+                async_sleep_ms(AUTOSAVE_TICK_MS).await;
+                let current = *secs.peek();
+                if let Some(s) = current {
+                    secs.set(Some(s + u64::from(AUTOSAVE_TICK_MS / 1_000)));
+                }
+            }
+        });
+        state.autosaved_ticker.set(Some(ticker));
+    }
+}
+
+/// Composer footer: reading-progress toggle/slider, the "Auto-saved Ns ago"
+/// indicator, inline error, cancel, save-draft, and publish. Save draft keeps
+/// the entry owner-private; publish surfaces it in the shared feed. Both
+/// reset and close the composer; cancel additionally discards any autosaved
+/// draft.
 #[component]
 fn BdJournalComposerFoot(
     uuid: String,
@@ -326,69 +457,139 @@ fn BdJournalComposerFoot(
     state: JournalComposerState,
 ) -> Element {
     let JournalComposerState {
-        open,
         body,
-        mut track_progress,
-        progress,
         saving,
         error,
-        show_preview,
+        autosaved_secs,
+        draft_id,
+        ..
     } = state;
     let mut reload = reload;
-    let mut open = open;
-    let mut body = body;
     let mut saving = saving;
     let mut error = error;
-    let mut show_preview = show_preview;
+
+    // Save the current body as `status`, then reset/close/reload. Shared by
+    // the Save-draft and Publish buttons — the only difference is the status
+    // the entry ends up in (an existing autosaved draft row is reused).
+    let save_url = server_url.clone();
+    let save_uuid = uuid.clone();
+    let mut save_as = move |status: JournalStatus| {
+        let url = save_url.clone();
+        let uuid = save_uuid.clone();
+        let mut state = state;
+        if let Some(t) = state.autosave_task.write().take() {
+            t.cancel();
+        }
+        saving.set(true);
+        error.set(None);
+        spawn(async move {
+            let result = match draft_id() {
+                Some(id) => data::update_journal_entry(
+                    &url,
+                    id,
+                    UpdateJournalEntry {
+                        body_md: body(),
+                        progress: state.progress_payload(),
+                        status: Some(status),
+                    },
+                )
+                .await
+                .map(|_| ()),
+                None => data::create_journal_entry(
+                    &url,
+                    CreateJournalEntry {
+                        book_uuid: uuid,
+                        body_md: body(),
+                        progress: state.progress_payload(),
+                        status,
+                    },
+                )
+                .await
+                .map(|_| ()),
+            };
+            match result {
+                Ok(()) => {
+                    state.reset_and_close();
+                    reload.set(reload() + 1);
+                }
+                Err(e) => error.set(Some(e.to_string())),
+            }
+            saving.set(false);
+        });
+    };
 
     rsx! {
         div { class: "bd-journal-composer-foot",
-            BdJournalProgressToggle { track_progress, progress }
+            BdJournalProgressToggle {
+                track_progress: state.track_progress,
+                progress: state.progress,
+            }
             span { class: "bd-journal-foot-spacer" }
+            if let Some(secs) = autosaved_secs() {
+                span {
+                    class: "mono bd-journal-autosaved",
+                    "data-testid": "journal-autosaved",
+                    if secs == 0 { "Auto-saved just now" } else { "Auto-saved {secs}s ago" }
+                }
+            }
             if let Some(msg) = error() {
                 span { class: "mono bd-journal-error", role: "alert", "{msg}" }
             }
             button {
                 r#type: "button",
                 class: "btn ghost sm",
+                disabled: saving(),
                 onclick: move |_| {
-                    open.set(false);
-                    body.set(String::new());
-                    show_preview.set(false);
-                    error.set(None);
+                    let url = server_url.clone();
+                    if let Some(t) = state.autosave_task.write().take() {
+                        t.cancel();
+                    }
+                    saving.set(true);
+                    spawn(async move {
+                        // Discard any autosaved draft row (best-effort) BEFORE
+                        // closing — reset_and_close() unmounts this scope, and
+                        // a task spawned after unmount is dropped unpolled.
+                        if let Some(id) = draft_id() {
+                            let _ = data::delete_journal_entry(&url, id).await;
+                        }
+                        saving.set(false);
+                        state.reset_and_close();
+                    });
                 },
                 "Cancel"
+            }
+            button {
+                r#type: "button",
+                class: "btn ghost sm",
+                "data-testid": "journal-save-draft",
+                disabled: saving() || body().trim().is_empty(),
+                onclick: {
+                    let mut save_as = save_as.clone();
+                    move |_| save_as(JournalStatus::Draft)
+                },
+                if saving() { "Saving\u{2026}" } else { "Save draft" }
             }
             button {
                 r#type: "button",
                 class: "btn primary sm",
                 "data-testid": "journal-publish",
                 disabled: saving() || body().trim().is_empty(),
-                onclick: move |_| {
-                    let url = server_url.clone();
-                    let input = CreateJournalEntry {
-                        book_uuid: uuid.clone(),
-                        body_md: body(),
-                        progress: if track_progress() { Some(progress() as u8) } else { None },
-                    };
-                    saving.set(true);
-                    error.set(None);
-                    spawn(async move {
-                        match data::create_journal_entry(&url, input).await {
-                            Ok(_) => {
-                                body.set(String::new());
-                                show_preview.set(false);
-                                track_progress.set(false);
-                                open.set(false);
-                                reload.set(reload() + 1);
-                            }
-                            Err(e) => error.set(Some(e.to_string())),
-                        }
-                        saving.set(false);
-                    });
-                },
+                onclick: move |_| save_as(JournalStatus::Published),
                 if saving() { "Publishing\u{2026}" } else { "Publish entry" }
             }
         }
     }
+}
+
+// Platform-gated async sleep for the autosave debounce + indicator ticker:
+// web uses `gloo_timers`; mobile and the SSR/server build use `tokio::time`
+// (mirrors `search_palette::overlay`).
+#[cfg(feature = "web")]
+async fn async_sleep_ms(ms: u32) {
+    gloo_timers::future::TimeoutFuture::new(ms).await;
+}
+
+#[cfg(not(feature = "web"))]
+async fn async_sleep_ms(ms: u32) {
+    tokio::time::sleep(std::time::Duration::from_millis(u64::from(ms))).await;
 }

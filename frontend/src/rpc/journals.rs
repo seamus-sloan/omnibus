@@ -32,12 +32,12 @@ pub async fn rpc_create_journal_entry(input: CreateJournalEntry) -> Result<Journ
     }
 }
 
-/// List all journal entries for a book (every user's — journals are public),
-/// newest first. Returns an empty list when the uuid is unknown or has no
-/// entries yet.
-#[post("/api/rpc/journals/list", pool: PoolExt, _user: AuthUser)]
+/// List a book's journal entries, newest first: every user's published entries
+/// (journals are public) plus the caller's own drafts. Returns an empty list
+/// when the uuid is unknown or has no entries yet.
+#[post("/api/rpc/journals/list", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_list_journal_entries(book_uuid: String) -> Result<Vec<JournalEntry>> {
-    match db::journals::list_journal_entries(&pool.0, &book_uuid).await {
+    match db::journals::list_journal_entries(&pool.0, user.id, &book_uuid).await {
         Ok(list) => Ok(list),
         Err(e) => Err(internal_rpc_error("list journal entries", e).into()),
     }

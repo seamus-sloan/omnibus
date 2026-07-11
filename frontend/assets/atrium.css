@@ -1027,6 +1027,7 @@ html, body { overscroll-behavior: none; }
 .bd-journal-progress input[type="range"] { accent-color: var(--accent); cursor: pointer; }
 .bd-journal-progress-val { font-size: 12px; color: var(--ink-1); width: 36px; text-align: right; }
 .bd-journal-error { color: var(--bad); font-size: 12px; }
+.bd-journal-autosaved { color: var(--ink-3); font-size: 11px; }
 
 /* Entry feed */
 .bd-journal-list {
@@ -1053,6 +1054,11 @@ html, body { overscroll-behavior: none; }
 .bd-journal-you {
   padding: 1px 8px; font-size: 10px;
   border-color: var(--accent); color: var(--accent);
+}
+.bd-journal-draft {
+  padding: 1px 8px; font-size: 10px;
+  border-color: var(--ink-3); color: var(--ink-2);
+  text-transform: uppercase; letter-spacing: 0.06em;
 }
 .bd-journal-entry-date { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
 .bd-journal-entry-actions { display: flex; gap: 6px; }
