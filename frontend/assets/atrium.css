@@ -1024,8 +1024,49 @@ html, body { overscroll-behavior: none; }
 .bd-journal-progress {
   display: flex; align-items: center; gap: 8px;
 }
-.bd-journal-progress input[type="range"] { accent-color: var(--accent); cursor: pointer; }
-.bd-journal-progress-val { font-size: 12px; color: var(--ink-1); width: 36px; text-align: right; }
+.bd-journal-progress-slider {
+  display: flex; align-items: center; gap: 8px;
+  flex: 1; min-width: 0;
+}
+/* Custom track/thumb (appearance: none) so the fill gradient set inline from
+   Rust is visible on touch — the unstyled native control is what issue #979
+   reported as glitchy inside the iOS WebView. */
+.bd-journal-progress-range {
+  -webkit-appearance: none; -moz-appearance: none; appearance: none;
+  flex: 1; min-width: 60px; height: 6px;
+  border-radius: 999px; cursor: pointer; outline: none;
+}
+.bd-journal-progress-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--accent) 22%, transparent);
+  cursor: pointer;
+}
+.bd-journal-progress-range::-moz-range-track {
+  height: 6px; border-radius: 999px; background: var(--bg-3);
+}
+.bd-journal-progress-range::-moz-range-progress {
+  background: var(--accent); height: 6px; border-radius: 999px;
+}
+.bd-journal-progress-range::-moz-range-thumb {
+  width: 20px; height: 20px; border: none; border-radius: 50%;
+  background: var(--accent); cursor: pointer;
+}
+.bd-journal-progress-val {
+  font-size: 12px; color: var(--ink-1); width: 36px; text-align: right;
+  flex-shrink: 0; font-variant-numeric: tabular-nums;
+}
+/* Coarse pointers (touch) get a bigger thumb + taller track so dragging the
+   reading-progress slider on iOS WebView doesn't need pixel-precise contact. */
+@media (pointer: coarse) {
+  .bd-journal-progress-range { height: 8px; }
+  .bd-journal-progress-range::-webkit-slider-thumb {
+    width: 30px; height: 30px;
+    box-shadow: 0 0 0 6px color-mix(in oklch, var(--accent) 22%, transparent);
+  }
+  .bd-journal-progress-range::-moz-range-thumb { width: 30px; height: 30px; }
+}
 .bd-journal-error { color: var(--bad); font-size: 12px; }
 
 /* Entry feed */
