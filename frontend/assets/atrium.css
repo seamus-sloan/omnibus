@@ -1043,6 +1043,10 @@ html, body { overscroll-behavior: none; }
   box-shadow: 0 0 0 4px color-mix(in oklch, var(--accent) 22%, transparent);
   cursor: pointer;
 }
+.bd-journal-progress-range::-webkit-slider-runnable-track {
+  height: 6px; border-radius: 999px;
+  background: transparent; /* let the inline fill gradient on the input show through */
+}
 .bd-journal-progress-range::-moz-range-track {
   height: 6px; border-radius: 999px; background: var(--bg-3);
 }
@@ -1065,6 +1069,7 @@ html, body { overscroll-behavior: none; }
     width: 30px; height: 30px;
     box-shadow: 0 0 0 6px color-mix(in oklch, var(--accent) 22%, transparent);
   }
+  .bd-journal-progress-range::-webkit-slider-runnable-track { height: 8px; }
   .bd-journal-progress-range::-moz-range-thumb { width: 30px; height: 30px; }
 }
 .bd-journal-error { color: var(--bad); font-size: 12px; }
