@@ -1,3 +1,6 @@
+//! Unit tests for `merge_books`: file/link/log relocation to the target
+//! book, taxonomy and user-data transfer, and the same-book rejection.
+
 use omnibus_shared::MetadataOverrides;
 
 use super::*;

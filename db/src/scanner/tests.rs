@@ -1,3 +1,6 @@
+//! Unit tests for the filesystem scanner: empty/missing-path handling,
+//! extension counting, and recursive directory walks.
+
 use std::fs;
 
 use super::*;

@@ -1,3 +1,6 @@
+//! Unit tests for cover resolution: last-modified fallback, missing-file
+//! handling, and override-vs-original cover selection.
+
 use omnibus_shared::MetadataOverrides;
 
 use super::*;

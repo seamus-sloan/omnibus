@@ -1,3 +1,7 @@
+//! Unit tests for `replace_books` and the full-library sync entry point:
+//! metadata + cover insertion, accent-color validation, and book-id
+//! preservation across an unchanged re-sync.
+
 use omnibus_shared::{Contributor, EbookMetadata, Identifier, MetadataOverrides};
 
 use super::*;

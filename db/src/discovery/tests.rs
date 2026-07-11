@@ -1,3 +1,6 @@
+//! Unit tests for the author/series discovery-page queries: book
+//! ordering, series-id population, and missing-id handling.
+
 use omnibus_shared::{Contributor, MetadataOverrides};
 
 use super::*;

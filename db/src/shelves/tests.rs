@@ -1,3 +1,6 @@
+//! Unit tests for shelves: smart-shelf rule matching, manual membership,
+//! and create/update/delete behavior.
+
 use omnibus_shared::{
     CreateShelfRequest, MatchMode, RuleField, RuleOp, ShelfKind, ShelfRule, SortDir, SortKey,
     UpdateShelfRequest, Visibility,
