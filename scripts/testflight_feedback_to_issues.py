@@ -24,10 +24,10 @@ Env:
   DRY_RUN=1                              Print instead of creating issues/assets.
 """
 import base64
+import binascii
 import os
 import sys
 import time
-from datetime import datetime, timezone
 
 import jwt  # PyJWT[crypto]
 import requests
@@ -47,12 +47,16 @@ def die(msg):
 
 
 def private_key():
-    if os.environ.get("ASC_PRIVATE_KEY"):
-        return os.environ["ASC_PRIVATE_KEY"]
+    raw = os.environ.get("ASC_PRIVATE_KEY")
+    if raw:
+        return raw
     b64 = os.environ.get("ASC_API_KEY_BASE64")
     if not b64:
         die("set ASC_PRIVATE_KEY or ASC_API_KEY_BASE64")
-    return base64.b64decode(b64).decode()
+    try:  # secrets often arrive with stray whitespace/newlines
+        return base64.b64decode(b64.strip(), validate=True).decode()
+    except (binascii.Error, ValueError, UnicodeDecodeError) as e:
+        die(f"ASC_API_KEY_BASE64 is not valid base64: {e}")
 
 
 def asc_jwt():
@@ -126,18 +130,35 @@ def already_filed(token, sub_id):
 
 
 def ensure_asset_branch(token):
-    if gh("GET", f"/repos/{repo()}/branches/{ASSET_BRANCH}", token).status_code == 200:
+    r = gh("GET", f"/repos/{repo()}/branches/{ASSET_BRANCH}", token)
+    if r.status_code == 200:
         return
-    default = gh("GET", f"/repos/{repo()}", token).json()["default_branch"]
-    sha = gh("GET", f"/repos/{repo()}/git/ref/heads/{default}", token).json()["object"]["sha"]
-    gh("POST", f"/repos/{repo()}/git/refs", token,
-       json={"ref": f"refs/heads/{ASSET_BRANCH}", "sha": sha})
+    if r.status_code != 404:
+        die(f"checking asset branch failed ({r.status_code}): {r.text[:200]}")
+    info = gh("GET", f"/repos/{repo()}", token)
+    if info.status_code != 200:
+        die(f"repo lookup failed ({info.status_code}): {info.text[:200]}")
+    default = info.json()["default_branch"]
+    ref = gh("GET", f"/repos/{repo()}/git/ref/heads/{default}", token)
+    if ref.status_code != 200:
+        die(f"default-branch ref lookup failed ({ref.status_code}): {ref.text[:200]}")
+    sha = ref.json()["object"]["sha"]
+    created = gh("POST", f"/repos/{repo()}/git/refs", token,
+                 json={"ref": f"refs/heads/{ASSET_BRANCH}", "sha": sha})
+    # 422 == ref already exists (another run raced us here) — treat as success.
+    if created.status_code not in (201, 422):
+        die(f"creating asset branch failed ({created.status_code}): {created.text[:200]}")
 
 
 def upload_asset(token, path, content, message):
-    r = gh("PUT", f"/repos/{repo()}/contents/{path}", token,
-           json={"message": message, "branch": ASSET_BRANCH,
-                 "content": base64.b64encode(content).decode()})
+    payload = {"message": message, "branch": ASSET_BRANCH,
+               "content": base64.b64encode(content).decode()}
+    # If the path already exists on the branch (e.g. a retry after a partial run),
+    # the Contents API requires the current blob sha to overwrite it.
+    existing = gh("GET", f"/repos/{repo()}/contents/{path}", token, params={"ref": ASSET_BRANCH})
+    if existing.status_code == 200:
+        payload["sha"] = existing.json()["sha"]
+    r = gh("PUT", f"/repos/{repo()}/contents/{path}", token, json=payload)
     if r.status_code not in (200, 201):
         print(f"  warn: asset upload failed ({r.status_code}): {r.text[:200]}", file=sys.stderr)
         return None
@@ -240,17 +261,17 @@ def main():
 
         image_urls = []
         for n, url in enumerate(screenshot_urls(sub)):
+            if DRY_RUN:
+                image_urls.append(url)  # temporary ASC URL — fine for preview, no upload
+                continue
             img = requests.get(url, timeout=60)
             if img.status_code != 200:
                 print(f"  warn: screenshot {n} for {sub_id} -> {img.status_code}", file=sys.stderr)
                 continue
-            if DRY_RUN:
-                image_urls.append(f"(would upload {len(img.content)} bytes)")
-            else:
-                raw = upload_asset(gh_token, f"assets/{sub_id}-{n}.png", img.content,
-                                   f"testflight feedback asset {sub_id}-{n}")
-                if raw:
-                    image_urls.append(raw)
+            raw = upload_asset(gh_token, f"assets/{sub_id}-{n}.png", img.content,
+                               f"testflight feedback asset {sub_id}-{n}")
+            if raw:
+                image_urls.append(raw)
 
         title, body = render(sub, included, app_id, image_urls)
         if DRY_RUN:
