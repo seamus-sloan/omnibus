@@ -70,7 +70,7 @@ test("surfaces an error when shelf creation fails", async ({ page }) => {
 test("switches shelves via the rail without a full reload", async ({ page, request }) => {
   // Two hand-picked shelves, each holding one distinct fixture book, so the
   // header and grid content can only match if the rail switch actually
-  // re-fetched — see issue #993 (missing `use_reactive!` on the id prop).
+  // re-fetched.
   const alphaUuid = await fetchBookUuidByTitle(request, "Alpha");
   const betaUuid = await fetchBookUuidByTitle(request, "Beta in the Series");
 
