@@ -38,7 +38,7 @@ Do not use Chrome DevTools MCP or Claude in Chrome for routine agent verificatio
 
 Five-crate Cargo workspace: `shared/` (serde types), `db/` (data layer + indexer), `frontend/` (Dioxus UI + server functions), `server/` (fullstack binary + REST router), `mobile/` (thin native shell).
 
-Full crate descriptions, per-crate module maps, request flow diagrams, and mobile-auth details live in [.claude/architecture.md](.claude/architecture.md).
+Full crate descriptions, per-crate module maps, request flow diagrams, and mobile-auth details live in [docs/architecture.md](docs/architecture.md).
 
 ## Version control
 

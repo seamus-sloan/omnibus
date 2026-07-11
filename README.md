@@ -199,7 +199,7 @@ Five-crate Cargo workspace:
 | `mobile/` | thin native shell |
 
 Deeper architecture — module maps, request-flow diagrams, mobile-auth — is in
-[.claude/architecture.md](.claude/architecture.md). Contributor conventions live
+[docs/architecture.md](docs/architecture.md). Contributor conventions live
 under [.claude/](.claude/) (dev environment, error handling, testing, migrations,
 style).
 
