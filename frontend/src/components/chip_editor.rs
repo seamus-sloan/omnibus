@@ -11,6 +11,16 @@ use dioxus::prelude::*;
 /// user requirement.
 const MAX_SUGGESTIONS: usize = 5;
 
+/// Per-instance handle to the editor's own root DOM node, captured on mount
+/// so a later blur can check whether focus is still somewhere inside this
+/// subtree (see [`close_unless_focus_stayed_inside`]). `()` off the web
+/// target: SSR never fires real DOM events, and mobile's WebView renderer
+/// doesn't route through `dioxus::web`'s `WebEventExt`.
+#[cfg(feature = "web")]
+type ChipEditorRoot = web_sys::Element;
+#[cfg(not(feature = "web"))]
+type ChipEditorRoot = ();
+
 /// One entry in the autocomplete pool. Carries the canonical name plus
 /// the number of books currently linked to it, both of which the
 /// dropdown row renders. Counts are display-only — the component never
@@ -103,9 +113,12 @@ pub struct ChipEditorProps {
     /// the wrapping `ReadSignal`; an empty signal suppresses the
     /// dropdown entirely.
     pub suggestions: ReadSignal<Vec<SuggestionItem>>,
-    /// Fired when the user presses Escape inside the input. Useful for
-    /// host components that want to exit a wrapping edit mode in
-    /// addition to clearing the dropdown highlight. Default no-op.
+    /// Fired when the user presses Escape inside the input, or blurs away
+    /// from the editor entirely (a genuine click-away, or Tab past the
+    /// whole subtree — but not Tab onto a chip's own Remove button, nor a
+    /// suggestion-row pick; see [`ChipEditor`]'s blur handling). Useful for
+    /// host components that want to exit a wrapping edit mode in addition
+    /// to clearing the dropdown highlight. Default no-op.
     #[props(default)]
     pub on_close: EventHandler<()>,
     /// Presentational knobs (placeholder, avatar, testids, …).
@@ -126,6 +139,9 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
     let mut highlight = use_signal::<Option<usize>>(|| None);
     let mut focused = use_signal(|| props.options.autofocus);
     let mut suppress_open = use_signal(|| false);
+    // Captured by the wrapper's `onmounted` below; read by
+    // `close_unless_focus_stayed_inside` on blur.
+    let mut root_el = use_signal(|| None::<ChipEditorRoot>);
 
     let selection = compute_selection(&props, input(), focused(), suppress_open());
     let selection_kd = selection.clone();
@@ -156,7 +172,14 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
     };
 
     rsx! {
-        Fragment {
+        // `display: contents` (atrium.css) keeps this wrapper invisible to
+        // the host's flex layout — it exists only so blur handling can tell
+        // "focus left the whole editor" (chips + input + dropdown) apart
+        // from "focus moved to another focusable element inside it" (e.g. a
+        // chip's Remove button reached via Tab).
+        div {
+            class: "chip-editor-root",
+            onmounted: move |evt: Event<MountedData>| capture_chip_editor_root(evt, &mut root_el),
             ChipList {
                 values: values_sig,
                 show_avatar: props.options.show_avatar,
@@ -179,9 +202,21 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                     focused.set(true);
                     suppress_open.set(false);
                 },
-                on_blur: move |_| {
+                on_blur: move |evt: Event<FocusData>| {
                     focused.set(false);
                     highlight.set(None);
+                    // Mirrors `EditableCell`'s onblur: a genuine click-away
+                    // (or Tab past the whole editor) exits the host's
+                    // wrapping edit mode the same way Escape does — but Tab
+                    // *within* the editor (e.g. onto a chip's Remove
+                    // button) must not, so this only closes when the
+                    // element gaining focus falls outside `root_el`.
+                    // Suggestion-row picks never reach here at all:
+                    // `SuggestionDropdown`'s `onmousedown` calls
+                    // `prevent_default()`, suppressing the browser's
+                    // default focus-shift so the input never blurs during
+                    // a pick.
+                    close_unless_focus_stayed_inside(evt, root_el, on_close);
                 },
                 on_input: move |value: String| {
                     input.set(value);
@@ -193,6 +228,65 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
             }
         }
     }
+}
+
+/// Store a handle to the editor's own root DOM node the first time it
+/// mounts. No-op off the web target — see [`ChipEditorRoot`].
+#[cfg(feature = "web")]
+fn capture_chip_editor_root(evt: Event<MountedData>, root_el: &mut Signal<Option<ChipEditorRoot>>) {
+    use dioxus::web::WebEventExt;
+    if let Some(el) = evt.try_as_web_event() {
+        root_el.set(Some(el));
+    }
+}
+
+#[cfg(not(feature = "web"))]
+fn capture_chip_editor_root(
+    _evt: Event<MountedData>,
+    _root_el: &mut Signal<Option<ChipEditorRoot>>,
+) {
+}
+
+/// Close the host's wrapping edit mode unless the element gaining focus (the
+/// blur event's `relatedTarget`) is still inside the editor's own root — see
+/// the call site in [`ChipEditor`] for why that distinction matters. A
+/// `relatedTarget` of `None` (focus landed on nothing focusable — the usual
+/// case for clicking a plain heading or block of text) counts as "left the
+/// editor" and closes it, matching real click-away behavior.
+///
+/// Off the web target, there is no `relatedTarget` to inspect, so this
+/// always closes — reproducing the simple pre-fix behavior for mobile's
+/// touch-first interaction model, where a physical Tab key isn't in play.
+#[cfg(feature = "web")]
+fn close_unless_focus_stayed_inside(
+    evt: Event<FocusData>,
+    root_el: Signal<Option<ChipEditorRoot>>,
+    on_close: EventHandler<()>,
+) {
+    use dioxus::web::WebEventExt;
+    use wasm_bindgen::JsCast;
+
+    let stayed_inside = root_el
+        .read()
+        .as_ref()
+        .zip(evt.try_as_web_event().and_then(|e| e.related_target()))
+        .is_some_and(|(root, related)| {
+            related
+                .dyn_ref::<web_sys::Node>()
+                .is_some_and(|node| root.contains(Some(node)))
+        });
+    if !stayed_inside {
+        on_close.call(());
+    }
+}
+
+#[cfg(not(feature = "web"))]
+fn close_unless_focus_stayed_inside(
+    _evt: Event<FocusData>,
+    _root_el: Signal<Option<ChipEditorRoot>>,
+    on_close: EventHandler<()>,
+) {
+    on_close.call(());
 }
 
 /// Props for the [`ChipInputArea`] sub-component.
@@ -207,7 +301,7 @@ struct ChipInputAreaProps {
     selection: SelectionView,
     highlight: Option<usize>,
     on_focus: EventHandler<()>,
-    on_blur: EventHandler<()>,
+    on_blur: EventHandler<Event<FocusData>>,
     on_input: EventHandler<String>,
     on_keydown: EventHandler<Event<KeyboardData>>,
     on_pick: EventHandler<String>,
@@ -431,7 +525,7 @@ struct ChipInputProps {
     testid: String,
     autofocus: bool,
     on_focus: EventHandler<()>,
-    on_blur: EventHandler<()>,
+    on_blur: EventHandler<Event<FocusData>>,
     on_input: EventHandler<String>,
     on_keydown: EventHandler<Event<KeyboardData>>,
 }
@@ -457,13 +551,53 @@ fn ChipInput(props: ChipInputProps) -> Element {
             placeholder: "{placeholder}",
             value: "{input}",
             autofocus,
+            // The `autofocus` attribute alone does not reliably move real
+            // DOM focus onto a node mounted post-hydration by a click
+            // handler (as opposed to one present at initial page load) —
+            // without this, blur-based close-on-click-away silently never
+            // fires because the input was never actually focused to begin
+            // with. Deferred to the next frame: calling `.focus()`
+            // synchronously inside `onmounted` lands before layout
+            // finishes and no-ops (same pattern as
+            // `search_palette::focus_palette_input`).
+            onmounted: move |evt: Event<MountedData>| {
+                if autofocus {
+                    focus_chip_input(evt);
+                }
+            },
             onfocus: move |_| on_focus.call(()),
-            onblur: move |_| on_blur.call(()),
+            onblur: move |evt: Event<FocusData>| on_blur.call(evt),
             oninput: move |e| on_input.call(e.value()),
             onkeydown: move |e| on_keydown.call(e),
         }
     }
 }
+
+#[cfg(feature = "web")]
+fn focus_chip_input(evt: Event<MountedData>) {
+    use dioxus::web::WebEventExt;
+    use wasm_bindgen::prelude::*;
+
+    let Some(element) = evt.try_as_web_event() else {
+        return;
+    };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let cb = Closure::once_into_js(move || {
+        if let Some(html_el) = element.dyn_ref::<web_sys::HtmlElement>() {
+            let _ = html_el.focus();
+        }
+    });
+    let _ = window.request_animation_frame(cb.unchecked_ref());
+}
+
+/// Non-web stub: SSR never paints an interactive input and mobile's touch
+/// keyboard doesn't need the same rAF-deferred focus nudge. Defined so the
+/// `onmounted` handler can call `focus_chip_input` unconditionally (rule
+/// 07: hydration parity — keep cfg gates out of rsx bodies).
+#[cfg(not(feature = "web"))]
+fn focus_chip_input(_evt: Event<MountedData>) {}
 
 /// Rendered chip row — one chip per value with an avatar (optional) and
 /// remove button. Fires `on_remove` with the new full list after each removal.
@@ -496,6 +630,12 @@ fn ChipList(
                 button {
                     class: "me-chip-remove",
                     "aria-label": "{aria_remove_prefix} {value}",
+                    // Same reasoning as the suggestion rows' onmousedown:
+                    // without prevent_default, clicking Remove blurs the
+                    // input first, and (now that blur closes the editor)
+                    // that unmounts this very button before its click event
+                    // fires, so the chip never actually gets removed.
+                    onmousedown: move |e: Event<MouseData>| e.prevent_default(),
                     onclick: move |_| {
                         let mut new_values = values.read().clone();
                         if i < new_values.len() {

@@ -27,7 +27,11 @@ gloo-timers = { version = "0.4", features = ["futures"], optional = true }
 # F1.11: FormData/Blob/BlobPropertyBag are used by `data::upload_author_photo`
 # to build a multipart body for the author profile photo upload — the only
 # path that needs to ship raw bytes from the web client.
-web-sys = { version = "0.3", features = ["Window", "Storage", "KeyboardEvent", "FormData", "Blob", "BlobPropertyBag"], optional = true }
+# Element/HtmlElement/FocusEvent/EventTarget/Node (#992): ChipEditor's blur
+# handler downcasts to the raw `web_sys::FocusEvent` to read `related_target`
+# and check DOM containment against the editor's own root, so Tab moving
+# focus to a chip's Remove button doesn't close the editor.
+web-sys = { version = "0.3", features = ["Window", "Storage", "KeyboardEvent", "FormData", "Blob", "BlobPropertyBag", "Element", "HtmlElement", "FocusEvent", "EventTarget", "Node"], optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 js-sys = { version = "0.3", optional = true }
