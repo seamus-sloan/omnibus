@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Inject the Omnibus app icon into a dx-built iOS `.app` bundle.
+# Brand a dx-built iOS `.app` bundle: inject the Omnibus launcher icon and set
+# the home-screen display name to "Omnibus".
 #
 # dx 0.7.x installs no iOS launcher icon, and `Dioxus.toml`'s `[bundle] icon`
 # only feeds the desktop bundlers (upstream bug DioxusLabs/dioxus#3685). So we
@@ -17,7 +18,7 @@ APP="${1:?usage: apply-ios-icon.sh <path/to/App.app> [iphonesimulator|iphoneos]}
 SDK="${2:-iphonesimulator}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ICON="$REPO_ROOT/mobile/assets/app-icon.png"
+ICON="$REPO_ROOT/mobile/assets/Assets.xcassets/AppIcon.appiconset/app-icon.png"
 PLIST="$APP/Info.plist"
 
 [ -d "$APP" ] || { echo "error: no .app at $APP" >&2; exit 1; }
@@ -55,4 +56,12 @@ xcrun actool "$work/AppIcon.xcassets" \
 /usr/libexec/PlistBuddy -c "Delete :CFBundleIcons~ipad" "$PLIST" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Merge $work/partial.plist" "$PLIST"
 
-echo "injected app icon into $APP (sdk=$SDK)"
+# dx names the bundle after the Cargo package (omnibus-mobile), title-cased to
+# "OmnibusMobile" — the home-screen label. dx ignores Dioxus.toml's
+# `[application] name`, so override both bundle-name keys here to read "Omnibus".
+for key in CFBundleDisplayName CFBundleName; do
+  /usr/libexec/PlistBuddy -c "Set :$key Omnibus" "$PLIST" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :$key string Omnibus" "$PLIST"
+done
+
+echo "injected app icon and name into $APP (sdk=$SDK)"

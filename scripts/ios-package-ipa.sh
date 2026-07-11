@@ -68,6 +68,12 @@ plist_set DTPlatformName string iphoneos
 # App Store validation rejects the bundle without CFBundlePackageType=APPL
 # ("Invalid Bundle OS Type code"); dx omits it like DTPlatformName.
 plist_set CFBundlePackageType string APPL
+# dx names the bundle after the Cargo package (omnibus-mobile), title-cased to
+# "OmnibusMobile" — the home-screen label — and ignores Dioxus.toml's
+# `[application] name`. Override both name keys so the installed app reads
+# "Omnibus". (The local install paths do the same in scripts/apply-ios-icon.sh.)
+plist_set CFBundleDisplayName string Omnibus
+plist_set CFBundleName string Omnibus
 # Pre-declare export-compliance exemption (HTTPS/TLS to our own server is
 # Apple-exempt) so ASC skips the "Missing Compliance" gate that blocks
 # TestFlight auto-distribution. Set via PlistBuddy directly, unquoted, so the
