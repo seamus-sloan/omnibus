@@ -6,11 +6,13 @@ A WYSIWYG editing experience layered on top of F3.2's plain-markdown journals.
 
 ## Status
 
-**Partially shipped.** The composer's Write surface is now a **live editor** —
+**Shipped.** The composer's Write surface is a **live editor** —
 a `contenteditable` whose `textContent` stays exactly equal to the markdown
 source: formatting is applied in place as you type (bold/italic/strikethrough,
 H1/H2, quote, bullet/numbered/checklist, inline code, link, spoiler), with the
-markdown markers kept but dimmed (Obsidian source-mode style). It is hand-rolled
+markdown markers hidden except on the caret's line (Obsidian/Slack
+live-preview style — each rendered line is wrapped in a `.cm-line` span and a
+`selectionchange` listener toggles `.cm-active`). It is hand-rolled
 (no editor framework) in [`journal_editor.js`](../../frontend/src/pages/book_detail/journal_editor.js):
 on each input it re-renders decoration spans and restores the caret by character
 offset, mirrors the markdown into a hidden `<textarea>` (which keeps the `body`
@@ -22,16 +24,24 @@ highlights API. Checklist rendering required enabling `pulldown-cmark` task
 lists in `db::journals::markdown::render` (sanitizer pinned to a read-only
 `<input type="checkbox">`).
 
+**Drafts + autosave** landed with a `status` column (`draft`|`published`,
+default `published`) on `journal_entries` — the feed returns published entries
+plus the viewer's own drafts, the composer footer offers Save draft vs Publish
+with a debounced autosave and an "Auto-saved Ns ago" indicator, and draft
+cards carry a Draft chip + Publish action. **Embedded images** landed once
+F5.3 shipped: the toolbar's insert-image control uploads to
+`POST /api/journals/images` (shared image-validation pipeline, stored under
+`db::journal_images`), and a lone-image paragraph renders as a captioned
+`<figure>`; the sanitizer only admits `img src` under the journal-images
+serving prefix.
+
 The editor is web-only (it rides the `dioxus::document::eval` channel); SSR and
 native mobile fall back to the plain markdown textarea. The composer is only
 mounted after a click, so it never participates in first-paint hydration
 (rule 07).
 
-Still deferred: **drafts + autosave** (the `status` column), **embedded images**
-(blocked on [F5.3 Uploads](5-3-uploads.md)), and the standalone **full-page
-editor** screen. A future polish pass could hide markers entirely when the caret
-leaves a span (full Obsidian/Slack live-preview), which a hand-rolled editor
-can't do without atomic ranges.
+The standalone **full-page editor** screen was closed out separately without a
+dedicated screen (#914) — the inline composer covers the authoring flows.
 
 ## Objective
 
