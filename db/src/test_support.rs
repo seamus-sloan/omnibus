@@ -12,10 +12,10 @@ use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use omnibus_shared::{Contributor, EbookMetadata};
 use sqlx::SqlitePool;
 
 use crate::ebook::IndexedBook;
-use omnibus_shared::{Contributor, EbookMetadata};
 
 // ---------------------------------------------------------------------------
 // Filesystem helpers
