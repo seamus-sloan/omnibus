@@ -28,10 +28,28 @@ fn is_empty_is_true_only_without_sessions_or_finishes() {
 }
 
 #[test]
-fn range_defaults_to_year_and_serializes_snake_case() {
-    assert_eq!(StatsRange::default(), StatsRange::Year);
+fn range_defaults_to_month_and_serializes_snake_case() {
+    assert_eq!(StatsRange::default(), StatsRange::Month);
     assert_eq!(
-        serde_json::to_string(&StatsRange::SixMonths).unwrap(),
-        "\"six_months\""
+        serde_json::to_string(&StatsRange::AllTime).unwrap(),
+        "\"all_time\""
     );
+    assert_eq!(
+        serde_json::from_str::<StatsRange>("\"week\"").unwrap(),
+        StatsRange::Week
+    );
+}
+
+#[test]
+fn as_query_matches_the_serde_wire_name() {
+    for range in StatsRange::ALL {
+        let wire = serde_json::to_string(&range).unwrap();
+        assert_eq!(wire, format!("\"{}\"", range.as_query()));
+    }
+}
+
+#[test]
+fn range_labels_render_all_time_as_lifetime() {
+    let labels: Vec<&str> = StatsRange::ALL.iter().map(|r| r.label()).collect();
+    assert_eq!(labels, ["Week", "Month", "Year", "Lifetime"]);
 }

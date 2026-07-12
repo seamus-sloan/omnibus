@@ -6125,3 +6125,108 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   /* Metadata edit: single-column fields at phone width. */
   .me-field-grid { grid-template-columns: 1fr; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Stats page (/stats)
+
+   Period-scoped modules driven by the Week / Month / Year / Lifetime
+   switcher, then an "All-time" section that never re-queries. Desktop
+   shows the segmented control; the phone breakpoint swaps it for a
+   trigger that opens the shared `.m-sheet-*` bottom sheet.
+   ═══════════════════════════════════════════════════════════════════ */
+
+.st-page {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 24px 0 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* ── Editorial header ─────────────────────────────────────────────── */
+.st-head { display: flex; flex-direction: column; gap: 8px; }
+.st-title { margin: 0; }
+.st-period-word {
+  font-style: italic;
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 2px;
+}
+.st-sub { margin: 0; color: var(--ink-2); }
+
+/* ── Period switcher: desktop segmented control ───────────────────── */
+.st-seg {
+  display: flex;
+  gap: 4px;
+  align-self: flex-start;
+  margin-top: 6px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  padding: 4px;
+}
+.st-seg-btn {
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 14px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.st-seg-btn.on { background: var(--bg-3); color: var(--ink-0); }
+
+/* ── Period switcher: mobile sheet trigger (hidden on desktop) ────── */
+.st-range-trigger {
+  display: none;
+  align-self: flex-start;
+  align-items: center;
+  gap: 7px;
+  margin-top: 6px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  padding: 6px 14px;
+  background: var(--bg-1);
+  color: var(--ink-0);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.st-range-chevron { color: var(--accent); }
+.st-range-rows { display: flex; flex-direction: column; gap: 4px; }
+.st-range-row {
+  border: 0;
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: transparent;
+  color: var(--ink-1);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.st-range-row.on { background: var(--bg-2); color: var(--ink-0); }
+
+/* ── Sections ─────────────────────────────────────────────────────── */
+.st-period, .st-alltime { display: flex; flex-direction: column; gap: 16px; }
+
+.st-divider { border-top: 1px solid var(--line-2); padding-top: 16px; }
+.st-divider-title { margin: 0 0 4px; font-family: var(--serif); font-size: 22px; }
+.st-divider-em { font-style: italic; }
+.st-divider-sub { margin: 0; font-size: 12.5px; color: var(--ink-3); }
+
+/* ── Scaffold cards (replaced by tiles / heatmap as modules land) ─── */
+.st-summary-card { display: flex; flex-direction: column; gap: 8px; }
+.st-summary-line { font-size: 14px; color: var(--ink-1); }
+.st-card-placeholder { min-height: 84px; }
+
+/* ── Empty state ──────────────────────────────────────────────────── */
+.st-empty { padding: 40px 24px; text-align: center; }
+.st-empty-title { margin: 0 0 6px; font-family: var(--serif); }
+.st-empty-sub { margin: 0; color: var(--ink-2); }
+
+@media (max-width: 720px) {
+  .st-page { padding-top: 8px; }
+  .st-seg { display: none; }
+  .st-range-trigger { display: inline-flex; }
+}

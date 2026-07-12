@@ -39,6 +39,8 @@ pub enum Route {
     SeriesDetail { id: i64 },
     #[route("/tags")]
     TagCloud {},
+    #[route("/stats")]
+    Stats {},
     #[route("/shelves")]
     Shelves {},
     #[route("/shelves/:id")]
@@ -196,6 +198,15 @@ pub fn TagCloud() -> Element {
     use_page_title(|| Some("Tags".into()));
     rsx! {
         ScreenLayout { TagCloudPage {} }
+    }
+}
+
+/// Route target for `/stats` — the reading-stats page.
+#[component]
+pub fn Stats() -> Element {
+    use_page_title(|| Some("Stats".into()));
+    rsx! {
+        ScreenLayout { StatsPage {} }
     }
 }
 

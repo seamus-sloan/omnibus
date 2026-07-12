@@ -14,13 +14,45 @@ mod tests;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StatsRange {
-    /// The current calendar year (Jan 1 UTC .. now).
+    /// The rolling last 7 days (start of day, 6 days ago .. now).
+    Week,
+    /// The current calendar month (1st UTC .. now).
     #[default]
+    Month,
+    /// The current calendar year (Jan 1 UTC .. now).
     Year,
-    /// The trailing six months.
-    SixMonths,
-    /// Every session on record.
+    /// Every session on record. Rendered as "Lifetime".
     AllTime,
+}
+
+impl StatsRange {
+    /// Every range in switcher order.
+    pub const ALL: [StatsRange; 4] = [
+        StatsRange::Week,
+        StatsRange::Month,
+        StatsRange::Year,
+        StatsRange::AllTime,
+    ];
+
+    /// Wire name matching the serde snake_case rename, for query strings.
+    pub fn as_query(&self) -> &'static str {
+        match self {
+            StatsRange::Week => "week",
+            StatsRange::Month => "month",
+            StatsRange::Year => "year",
+            StatsRange::AllTime => "all_time",
+        }
+    }
+
+    /// Human label for the period switcher.
+    pub fn label(&self) -> &'static str {
+        match self {
+            StatsRange::Week => "Week",
+            StatsRange::Month => "Month",
+            StatsRange::Year => "Year",
+            StatsRange::AllTime => "Lifetime",
+        }
+    }
 }
 
 /// One heatmap cell: a calendar day (UTC `YYYY-MM-DD`) and the total active

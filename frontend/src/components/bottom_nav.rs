@@ -1,7 +1,7 @@
 //! Mobile bottom tab bar.
 //!
 //! Pinned to the bottom of the viewport — a row of icon tabs (Library,
-//! Authors, Series, You) matching the imported Atrium mobile design. It is
+//! Authors, Series, Stats, You) matching the imported Atrium mobile design. It is
 //! the native shell's primary `Nav`, and also mounts on web via
 //! [`crate::ScreenLayout`], where CSS reveals it only below the phone
 //! breakpoint so desktop keeps its top-bar section links.
@@ -11,13 +11,14 @@ use dioxus_router::{use_route, Link};
 
 use crate::Route;
 
-/// The four bottom-tab destinations. `You` routes to the Account screen; the
+/// The five bottom-tab destinations. `You` routes to the Account screen; the
 /// Settings page is reachable from within it and keeps the You tab lit.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TabKind {
     Library,
     Authors,
     Series,
+    Stats,
     You,
 }
 
@@ -37,6 +38,7 @@ fn is_active(current: &Route, tab: TabKind) -> bool {
         ),
         TabKind::Authors => matches!(current, Route::AuthorsIndex {} | Route::AuthorDetail { .. }),
         TabKind::Series => matches!(current, Route::SeriesIndex {} | Route::SeriesDetail { .. }),
+        TabKind::Stats => matches!(current, Route::Stats {}),
         TabKind::You => matches!(
             current,
             Route::Account {} | Route::Settings {} | Route::AddBooks {}
@@ -53,6 +55,7 @@ pub fn BottomNav() -> Element {
             MTab { to: Route::Landing {}, label: "Library", on: is_active(&current, TabKind::Library), glyph: tab_glyph_library() }
             MTab { to: Route::AuthorsIndex {}, label: "Authors", on: is_active(&current, TabKind::Authors), glyph: tab_glyph_authors() }
             MTab { to: Route::SeriesIndex {}, label: "Series", on: is_active(&current, TabKind::Series), glyph: tab_glyph_series() }
+            MTab { to: Route::Stats {}, label: "Stats", on: is_active(&current, TabKind::Stats), glyph: tab_glyph_stats() }
             MTab { to: Route::Account {}, label: "You", on: is_active(&current, TabKind::You), glyph: tab_glyph_you() }
         }
     }
@@ -105,6 +108,19 @@ fn tab_glyph_series() -> Element {
             stroke: "currentColor", stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round",
             rect { x: "3", y: "3", width: "13", height: "13", rx: "2" }
             path { d: "M21 8v11a2 2 0 0 1-2 2H8" }
+        }
+    }
+}
+
+fn tab_glyph_stats() -> Element {
+    rsx! {
+        svg {
+            width: "22", height: "22", view_box: "0 0 24 24", fill: "none",
+            stroke: "currentColor", stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round",
+            path { d: "M4 20V10" }
+            path { d: "M10 20V4" }
+            path { d: "M16 20v-6" }
+            path { d: "M22 20H2" }
         }
     }
 }
@@ -162,11 +178,19 @@ mod tests {
     }
 
     #[test]
+    fn stats_tab_lights_only_on_the_stats_route() {
+        assert!(is_active(&Route::Stats {}, TabKind::Stats));
+        assert!(!is_active(&Route::Landing {}, TabKind::Stats));
+        assert!(!is_active(&Route::Stats {}, TabKind::Library));
+    }
+
+    #[test]
     fn tabs_are_mutually_exclusive_on_landing() {
         let here = Route::Landing {};
         assert!(is_active(&here, TabKind::Library));
         assert!(!is_active(&here, TabKind::Authors));
         assert!(!is_active(&here, TabKind::Series));
+        assert!(!is_active(&here, TabKind::Stats));
         assert!(!is_active(&here, TabKind::You));
     }
 
