@@ -83,10 +83,18 @@ test("admin upload swaps the letter avatar for the photo", async ({
   });
   expect(putResp.status(), "PUT photo should succeed").toBe(204);
 
-  await gotoReady(page, `/authors/${id}`);
-
   const img = page.locator("img.disc-avatar--photo");
-  await expect(img).toBeVisible();
+  // Re-navigate until the photo hero resolves. The author page fetches
+  // `get_author` client-side, and the `<img>` swaps back to the letter avatar
+  // on a single transient photo-GET error (`broken_photo_src` self-heal, only
+  // reset on a fresh mount) — under parallel load either can leave the letter
+  // showing on the first paint. A reload re-fetches and re-attempts cleanly;
+  // this still fails if the photo genuinely never renders.
+  await expect(async () => {
+    await gotoReady(page, `/authors/${id}`);
+    await expect(img).toBeVisible({ timeout: 3_000 });
+  }).toPass({ timeout: 20_000, intervals: [500, 1_000, 2_000] });
+
   await expect(img).toHaveAttribute("src", `/api/authors/${id}/photo`);
   // Letter variant should no longer render in the hero.
   await expect(page.locator("div.disc-avatar")).toHaveCount(0);

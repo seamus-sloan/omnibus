@@ -4020,6 +4020,39 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .m-bd-file-path { font-size: 10px; color: var(--ink-3); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .m-bd-footer { padding: 22px 0 8px; }
 
+/* Mobile discovery strips — from-the-same-hand + Hardcover suggestions.
+   Horizontal cover strips suited to a narrow viewport (vs the desktop
+   hover-fan). */
+.m-section-head {
+  display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px;
+}
+.m-section-link { font-size: 12px; color: var(--ink-2); text-decoration: none; white-space: nowrap; }
+.m-strip {
+  display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; margin: 0 -2px;
+  scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch;
+}
+.m-strip-cell {
+  flex: 0 0 92px; min-width: 0; scroll-snap-align: start;
+  text-decoration: none; color: inherit;
+}
+.m-strip-cover { position: relative; }
+.m-strip-badge {
+  position: absolute; left: 4px; bottom: 4px;
+  padding: 2px 6px; border-radius: 999px;
+  font-size: 10px; color: var(--ink-0);
+  background: color-mix(in oklch, var(--bg-0) 78%, transparent);
+  backdrop-filter: blur(4px);
+}
+.m-strip-title {
+  margin-top: 6px; font-size: 11.5px; font-weight: 500; color: var(--ink-0);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.m-strip-sub {
+  font-size: 10.5px; color: var(--ink-3);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.m-strip-note { font-size: 13px; color: var(--ink-2); line-height: 1.5; }
+
 /* Shelf detail: at phone widths the shared markup (rail hidden) reads as a
    mobile screen — tighten the grid to three columns to match the design. */
 @media (max-width: 560px) {

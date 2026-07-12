@@ -35,18 +35,35 @@ if (!window.OmnibusJournalEditor) {
       const start = pre.toString().length;
       return { start, end: start + r.toString().length };
     }
+    // Resolve a character offset to a DOM (node, offset) caret position.
+    // Walks `.cm-line` spans so a boundary offset lands *inside* the target
+    // line rather than at the end of the previous inline span (which the
+    // browser would collapse a bare join-text-node caret to). An empty line
+    // has no text node, so we return its span at offset 0 — the caret sits
+    // before the placeholder `<br>`, keeping typed text on the right line.
     function locate(root, offset) {
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-      let n, acc = 0;
-      while ((n = walker.nextNode())) {
-        const len = n.nodeValue.length;
-        if (offset <= acc + len) return { node: n, offset: offset - acc };
-        acc += len;
+      const lines = root.querySelectorAll(":scope > .cm-line");
+      let acc = 0;
+      for (const line of lines) {
+        const len = line.textContent.length;
+        if (offset <= acc + len) {
+          const local = offset - acc;
+          const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT, null);
+          let n, a = 0;
+          while ((n = walker.nextNode())) {
+            if (local <= a + n.nodeValue.length) return { node: n, offset: local - a };
+            a += n.nodeValue.length;
+          }
+          return { node: line, offset: 0 };
+        }
+        acc += len + 1; // + the literal "\n" joining this line to the next
       }
-      let last = null;
-      const w2 = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-      while ((n = w2.nextNode())) last = n;
-      return last ? { node: last, offset: last.nodeValue.length } : { node: root, offset: 0 };
+      const last = lines[lines.length - 1];
+      if (!last) return { node: root, offset: 0 };
+      const walker = document.createTreeWalker(last, NodeFilter.SHOW_TEXT, null);
+      let n, tail = null;
+      while ((n = walker.nextNode())) tail = n;
+      return tail ? { node: tail, offset: tail.nodeValue.length } : { node: last, offset: 0 };
     }
     function place(root, start, end) {
       const a = locate(root, start), b = locate(root, end);
@@ -124,7 +141,11 @@ if (!window.OmnibusJournalEditor) {
     const render = (md) =>
       md
         .split("\n")
-        .map((line) => `<span class="cm-line">${blockLine(line)}</span>`)
+        // Empty lines get a `<br>` placeholder so they have layout height (a
+        // bare empty inline span collapses to zero and can't be clicked) and a
+        // caret landing spot. It contributes no text, so textContent still
+        // equals the markdown source exactly.
+        .map((line) => `<span class="cm-line">${blockLine(line) || "<br>"}</span>`)
         .join("\n");
 
     // --- active-line marker reveal (Obsidian-style) ---------------------------
@@ -211,18 +232,25 @@ if (!window.OmnibusJournalEditor) {
       });
       editor.addEventListener("input", () => onInput(editor));
       editor.addEventListener("keydown", (e) => {
-        // Insert a literal newline (contenteditable would otherwise add a <br>
-        // or <div>, breaking the textContent === markdown invariant).
+        // Insert a literal newline. `execCommand("insertText", "\n")` is a
+        // no-op in Chromium (insertText silently drops newlines), and the raw
+        // contenteditable default would add a <br>/<div> that breaks the
+        // textContent === markdown invariant. Splice it through the editor's
+        // own model instead so textContent gets the real "\n" and re-renders
+        // into a fresh `.cm-line`.
         if (e.key === "Enter") {
           e.preventDefault();
-          document.execCommand("insertText", false, "\n");
+          insert(editor.id, "\n");
         }
       });
       editor.addEventListener("paste", (e) => {
-        // Plain text only — keep the source clean markdown, never pasted markup.
+        // Plain text only — keep the source clean markdown, never pasted
+        // markup. Route through the model (not `execCommand("insertText")`,
+        // which drops embedded newlines) so multi-line pastes keep their line
+        // breaks.
         e.preventDefault();
         const t = (e.clipboardData || window.clipboardData).getData("text/plain");
-        document.execCommand("insertText", false, t);
+        insert(editor.id, t);
       });
     }
 

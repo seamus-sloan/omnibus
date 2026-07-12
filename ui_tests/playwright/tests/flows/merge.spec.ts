@@ -11,6 +11,7 @@ import { AUDIOBOOK_BOOKS, AUDIOBOOK_BOOK_COUNT } from "../fixtures/audiobooks";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
+import { withLock } from "../utils/lock";
 import { expectNavVisible, gotoReady } from "../utils/nav";
 import {
   audiobookFixturesDir,
@@ -114,32 +115,39 @@ test("merges an audiobook into the ebook and undoes it from the toast", async ({
   page,
   request,
 }) => {
-  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
-  await gotoReady(page, `/books/${uuid}`);
+  // Serialize against book_detail.spec's file-picker test: both mutate the
+  // same audiobook ("The Analytical Audiobook") on the shared per-shard server,
+  // so parallel workers would corrupt each other's merge state. The lock spans
+  // merge→undo so the fixture is restored before release. See utils/lock.ts.
+  test.slow();
+  await withLock("audiobook-merge", async () => {
+    const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+    await gotoReady(page, `/books/${uuid}`);
 
-  await openDialogAndPickSource(page);
-  const { response } = await expectMutation(
-    page,
-    { method: "POST", url: "/api/rpc/merge-books", expectedStatus: 200 },
-    async () => page.getByTestId("merge-confirm").click(),
-  );
-  expect(response.status()).toBe(200);
+    await openDialogAndPickSource(page);
+    const { response } = await expectMutation(
+      page,
+      { method: "POST", url: "/api/rpc/merge-books", expectedStatus: 200 },
+      async () => page.getByTestId("merge-confirm").click(),
+    );
+    expect(response.status()).toBe(200);
 
-  // Refetch lands: both format badges, both CTAs, and the undo toast.
-  await expect(page.getByTestId("bd-format-badge")).toHaveCount(2);
-  await expect(page.getByTestId("bd-format-badge").filter({ hasText: SOURCE.format })).toBeVisible();
-  await expect(page.getByTestId("start-reading")).toBeVisible();
-  await expect(page.getByTestId("listen-secondary")).toBeVisible();
-  const toast = page.getByRole("status").filter({ hasText: "Books merged." });
-  await expect(toast).toBeVisible();
+    // Refetch lands: both format badges, both CTAs, and the undo toast.
+    await expect(page.getByTestId("bd-format-badge")).toHaveCount(2);
+    await expect(page.getByTestId("bd-format-badge").filter({ hasText: SOURCE.format })).toBeVisible();
+    await expect(page.getByTestId("start-reading")).toBeVisible();
+    await expect(page.getByTestId("listen-secondary")).toBeVisible();
+    const toast = page.getByRole("status").filter({ hasText: "Books merged." });
+    await expect(toast).toBeVisible();
 
-  // Undo from the toast restores the split (and cleans up shared state).
-  await expectMutation(
-    page,
-    { method: "POST", url: "/api/rpc/merge-books/undo", expectedStatus: 200 },
-    async () => page.getByTestId("merge-undo").click(),
-  );
-  await expect(page.getByTestId("bd-format-badge")).toHaveCount(1);
-  await expect(page.getByTestId("bd-format-badge")).toHaveText("EPUB");
-  await expect(page.getByTestId("listen-secondary")).not.toBeVisible();
+    // Undo from the toast restores the split (and cleans up shared state).
+    await expectMutation(
+      page,
+      { method: "POST", url: "/api/rpc/merge-books/undo", expectedStatus: 200 },
+      async () => page.getByTestId("merge-undo").click(),
+    );
+    await expect(page.getByTestId("bd-format-badge")).toHaveCount(1);
+    await expect(page.getByTestId("bd-format-badge")).toHaveText("EPUB");
+    await expect(page.getByTestId("listen-secondary")).not.toBeVisible();
+  });
 });

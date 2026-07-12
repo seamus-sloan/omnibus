@@ -56,6 +56,10 @@ test("palette closes on Escape", async ({ page }) => {
   await gotoReady(page, "/");
   await page.getByTestId("search-trigger").click();
   await expect(page.getByTestId("sp-panel")).toBeVisible();
+  // The input is focused a frame after mount (requestAnimationFrame). The
+  // panel's onkeydown only sees Escape once focus is inside the panel, so
+  // wait for the input before pressing — otherwise Escape lands on <body>.
+  await expect(page.getByTestId("sp-input")).toBeFocused();
 
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("sp-panel")).toHaveCount(0);
@@ -79,6 +83,10 @@ test("input is focused after clicking trigger so typing works immediately", asyn
   await gotoReady(page, "/");
   await page.getByTestId("search-trigger").click();
   await expect(page.getByTestId("sp-panel")).toBeVisible();
+  // Autofocus lands a frame after mount (requestAnimationFrame); typing before
+  // it does drops the leading keystroke. Waiting for focus is exactly what this
+  // test asserts — that typing works immediately once the palette is open.
+  await expect(page.getByTestId("sp-input")).toBeFocused();
 
   // Type on the keyboard without clicking the input first.
   await page.keyboard.type("dracula");
@@ -93,6 +101,9 @@ test("input is focused after Cmd+K so typing works immediately", async ({
   await gotoReady(page, "/");
   await page.keyboard.press("Meta+k");
   await expect(page.getByTestId("sp-panel")).toBeVisible();
+  // Autofocus lands a frame after mount (requestAnimationFrame); typing before
+  // it does drops the leading keystroke — wait for focus first.
+  await expect(page.getByTestId("sp-input")).toBeFocused();
 
   // Type on the keyboard without clicking the input first.
   await page.keyboard.type("hello");

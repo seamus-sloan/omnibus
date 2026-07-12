@@ -247,11 +247,13 @@ jobs:
     if: ${{ always() && needs.playwright.result != 'skipped' && needs.playwright.result != 'cancelled' }}
     runs-on: ubuntu-latest
     # `contents: write` to push the report to gh-pages; `actions: read` for
-    # download-artifact@v4. Declaring `permissions` zeroes every unlisted
-    # scope, so both must be listed explicitly.
+    # download-artifact@v4; `pull-requests: write` for the sticky report-URL
+    # comment. Declaring `permissions` zeroes every unlisted scope, so all
+    # three must be listed explicitly.
     permissions:
       contents: write
       actions: read
+      pull-requests: write
     # Serialize gh-pages pushes across all runs: each publish fetches the live
     # branch, adds its folder, and pushes, so two in-flight jobs would race and
     # one push would reject. A single-slot group (no cancel) queues them.
@@ -259,6 +261,21 @@ jobs:
       group: gh-pages-publish
       cancel-in-progress: false
     steps:
+      # Post the report URL as a sticky PR comment up front so reviewers have a
+      # one-click link. The page goes live once the publish step below pushes to
+      # gh-pages, but the URL is deterministic from the branch + head sha, so
+      # posting it first is safe. PR-only — push builds (main) have no PR.
+      - name: Comment report URL on the PR
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: playwright-report
+          message: |
+            ### 📊 Playwright report
+
+            - **This run:** https://seamus-sloan.github.io/omnibus/${{ github.head_ref }}/${{ github.event.pull_request.head.sha }}/test-results/
+            - **Latest for `${{ github.head_ref }}`:** https://seamus-sloan.github.io/omnibus/${{ github.head_ref }}/
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
