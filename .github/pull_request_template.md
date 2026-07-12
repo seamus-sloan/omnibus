@@ -6,7 +6,7 @@
 
 <!--
 Generally, patch versions are sufficient. Minor versions should only be used in
-two different cases:
+one of the following different cases:
 1. There was a change that will not allow older versions of the mobile app to 
 work with the new server version.
 2. There was a fairly large UX change (i.e. a roadmap feature was complete).

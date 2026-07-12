@@ -26,8 +26,7 @@ Built with Rust ([Axum](https://github.com/tokio-rs/axum) + [Dioxus](https://dio
 > **This is in active development.** Foundations and browse/discovery have shipped;
 > reading/listening is in progress. The landing grid/table, EPUB reader,
 > audiobook player, command-palette search, auth, and author/series/tag
-> discovery are live. See the [roadmap](https://github.com/users/seamus-sloan/projects/2) for what's
-> next.
+> discovery are live. See the [roadmap](https://github.com/users/seamus-sloan/projects/2/views/9) for what's next.
 
 ## Features
 
@@ -185,7 +184,7 @@ npx playwright test
 ```
 
 Mobile tests are using [Maestro](https://maestro.dev/) to allow for writing a test once
-and being able to validate on both operating systems.
+validating on both operating systems.
 
 ## Project layout
 
