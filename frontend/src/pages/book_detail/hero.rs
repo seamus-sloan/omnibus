@@ -165,13 +165,9 @@ fn BdTitleCol(
     }
 }
 
-/// CTA button row: primary read/listen action, secondary listen, and the
-/// "Export" dropdown that collects the per-device send/download actions.
-///
-/// A book with more than one file of the format a CTA opens (e.g. two
-/// audiobooks merged via F5.10 that both shipped an MP3) gets a small file
-/// picker next to that CTA (#1005) — `BdFilePickerMenu` renders nothing when
-/// fewer than two files match, so a single-file book's row is unaffected.
+/// CTA button row: primary read/listen action, secondary listen, the
+/// per-format file picker, and the "Export" dropdown that collects the
+/// per-device send/download actions.
 #[component]
 fn BdCtaRow(
     uuid: String,

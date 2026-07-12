@@ -1,10 +1,8 @@
 //! File picker dropdown for the hero/mobile Read + Listen CTAs — lets the
 //! reader choose which physical `book_files` row to open when a book has
-//! more than one file of the format the CTA opens (e.g. two audiobooks
-//! merged via F5.10 that both shipped an MP3). Mirrors `export_menu`'s
+//! more than one file of the format the CTA opens. Mirrors `export_menu`'s
 //! trigger + scrim + focus-on-mount dialog pattern; shared between the web
-//! hero (`hero::BdCtaRow`) and the mobile CTA row since neither the markup
-//! nor the behavior is platform-specific.
+//! hero and the mobile CTA row.
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
