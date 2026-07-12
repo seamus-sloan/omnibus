@@ -142,6 +142,15 @@ pub fn remaining_in_chapter(chapters: &[ChapterInfo], idx: usize, elapsed: f64) 
     }
 }
 
+/// Rate-adjusted "time left" for a real (1x) `remaining` duration; falls back
+/// to `remaining` unscaled when `rate` is non-finite or non-positive.
+pub fn remaining_at_rate(remaining: f64, rate: f64) -> f64 {
+    if !rate.is_finite() || rate <= 0.0 {
+        return remaining;
+    }
+    remaining / rate
+}
+
 /// Resolve the "previous chapter" seek target:
 /// - >3s into the current chapter → its start;
 /// - within 3s of the start and not the first → the previous chapter's start;
@@ -256,6 +265,21 @@ mod tests {
         // Past the end clamps to zero, and OOB is zero.
         assert_eq!(remaining_in_chapter(&chs, 0, 400.0), 0.0);
         assert_eq!(remaining_in_chapter(&chs, 9, 0.0), 0.0);
+    }
+
+    #[test]
+    fn remaining_at_rate_divides_by_the_playback_rate() {
+        assert!((remaining_at_rate(600.0, 2.0) - 300.0).abs() < f64::EPSILON);
+        assert!((remaining_at_rate(600.0, 0.5) - 1200.0).abs() < f64::EPSILON);
+        assert!((remaining_at_rate(600.0, 1.0) - 600.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn remaining_at_rate_falls_back_to_unscaled_for_invalid_rate() {
+        assert_eq!(remaining_at_rate(600.0, 0.0), 600.0);
+        assert_eq!(remaining_at_rate(600.0, -1.0), 600.0);
+        assert_eq!(remaining_at_rate(600.0, f64::NAN), 600.0);
+        assert_eq!(remaining_at_rate(600.0, f64::INFINITY), 600.0);
     }
 
     #[test]

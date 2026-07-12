@@ -31,7 +31,7 @@ mod view;
 use bookmarks_sheet::{use_mobile_bookmarks, BookmarksSheet, MobileBookmarks};
 use sheets::{snap_rate, ChaptersSheet, SleepSheet, SpeedSheet};
 use state::{sleep_pill_label, use_mobile_playback, SleepState};
-use view::{chapter_index_for_elapsed, format_hms, format_ms, PlayerView};
+use view::{chapter_index_for_elapsed, format_hms, format_ms, remaining_at_rate, PlayerView};
 
 pub use host::MobileAudioHost;
 pub use mini::MobileMiniPlayer;
@@ -245,8 +245,11 @@ fn render_player(p: PlayerProps) -> Element {
     let chapter_start = current.map(|c| c.start_seconds).unwrap_or(0.0);
     let chapter_dur = current.map(|c| c.duration_seconds).unwrap_or(0.0);
     let within = (elapsed - chapter_start).max(0.0);
-    let chapter_left = view::remaining_in_chapter(&view.chapters, chapter_index, elapsed);
-    let remaining_book = (duration - elapsed).max(0.0);
+    let chapter_left = remaining_at_rate(
+        view::remaining_in_chapter(&view.chapters, chapter_index, elapsed),
+        rate,
+    );
+    let remaining_book = remaining_at_rate((duration - elapsed).max(0.0), rate);
     let scrub_max = if duration > 0.0 { duration } else { 1.0 };
 
     let accent_style = view
