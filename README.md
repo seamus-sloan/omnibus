@@ -23,10 +23,10 @@ Built with Rust ([Axum](https://github.com/tokio-rs/axum) + [Dioxus](https://dio
 </div>
 
 > [!NOTE]
-> **Status: early development.** Foundations and browse/discovery have shipped;
+> **This is in active development.** Foundations and browse/discovery have shipped;
 > reading/listening is in progress. The landing grid/table, EPUB reader,
 > audiobook player, command-palette search, auth, and author/series/tag
-> discovery are live. See the [roadmap](docs/roadmap/0-0-summary.md) for what's
+> discovery are live. See the [roadmap](https://github.com/users/seamus-sloan/projects/2) for what's
 > next.
 
 ## Features
@@ -184,7 +184,8 @@ npm install                 # first time only; do NOT run `npx playwright instal
 npx playwright test
 ```
 
-*Mobile UI tests will land later using [MobileWright](https://mobilewright.dev/).*
+Mobile tests are using [Maestro](https://maestro.dev/) to allow for writing a test once
+and being able to validate on both operating systems.
 
 ## Project layout
 
@@ -203,8 +204,3 @@ Deeper architecture — module maps, request-flow diagrams, mobile-auth — is i
 under [.claude/](.claude/) (dev environment, error handling, testing, migrations,
 style).
 
-## Roadmap
-
-See [docs/roadmap/0-0-summary.md](docs/roadmap/0-0-summary.md) for the phased plan
-— foundations, browse/discovery, reading/listening, personalization, device sync,
-admin, and mobile.

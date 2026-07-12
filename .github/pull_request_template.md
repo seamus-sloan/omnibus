@@ -4,6 +4,15 @@
 ## Test plan
 - [ ] 
 
+<!--
+Generally, patch versions are sufficient. Minor versions should only be used in
+two different cases:
+1. There was a change that will not allow older versions of the mobile app to 
+work with the new server version.
+2. There was a fairly large UX change (i.e. a roadmap feature was complete).
+3. There was a large architectural shift introduced in the PR.
+-->
+
 ## Version
 By default a merge to `main` cuts a patch release. Pick the version update this
 PR should trigger; labels override the default:
