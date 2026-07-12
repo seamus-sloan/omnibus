@@ -36,6 +36,7 @@ pub mod scanner;
 pub mod settings;
 pub mod shelves;
 pub mod sort_keys;
+pub mod stats;
 pub mod suggestions;
 pub mod sync;
 mod taxonomy;
@@ -78,6 +79,7 @@ pub use shelves::{
     preview_rule, remove_book, shelf_page, update_shelf, ShelfError,
 };
 pub use sort_keys::{backfill_series_sort, series_sort_value, SortKeysError};
+pub use stats::{user_stats, StatsError, STATS_TTL_SECS};
 // Flatten the suggestions data layer (cache CRUD + the de-dup state machine).
 // `resolve`/`resolve_with` stay namespaced under `suggestions::` to avoid
 // colliding with `author_photos::resolve`.
