@@ -142,10 +142,8 @@ pub fn remaining_in_chapter(chapters: &[ChapterInfo], idx: usize, elapsed: f64) 
     }
 }
 
-/// Convert a real (1x) remaining-seconds duration into "time left at the
-/// current playback rate" — e.g. 10 real minutes left plays out in 5 minutes
-/// of listening at 2x. Falls back to `remaining` unscaled when `rate` is
-/// non-finite or non-positive (guards a not-yet-loaded rate signal).
+/// Rate-adjusted "time left" for a real (1x) `remaining` duration; falls back
+/// to `remaining` unscaled when `rate` is non-finite or non-positive.
 pub fn remaining_at_rate(remaining: f64, rate: f64) -> f64 {
     if !rate.is_finite() || rate <= 0.0 {
         return remaining;
