@@ -68,6 +68,7 @@
   var relocateTimer = null;
   var locationsReady = false;
   var tocFlat = [];
+  var currentTheme = "dark";
 
   function emitStatus(state) {
     if (typeof window.__omnibusOnStatus === "function") {
@@ -172,6 +173,7 @@
 
       installGestureNav();
       installSelectionClearWatch();
+      installContentEnhancements();
 
       rendition.themes.register("light", {
         body: { background: "#fcfbfa", color: "#2a2725" },
@@ -183,6 +185,7 @@
         body: { background: "#ede4d0", color: "#3b3029" },
       });
       rendition.themes.select(opts.theme || "dark");
+      currentTheme = opts.theme || "dark";
 
       if (opts.fontSize) {
         rendition.themes.fontSize(opts.fontSize + "px");
@@ -315,6 +318,144 @@
     });
   }
 
+  // Google Fonts stylesheet for the app's reading typefaces. The parent
+  // document loads these via atrium.css, but webfonts don't cascade into the
+  // section iframe — so `themes.font("'Instrument Serif'…")` renders as the
+  // Times fallback unless the face is also declared inside the iframe.
+  var READER_FONTS_HREF =
+    "https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&" +
+    "family=EB+Garamond:ital,wght@0,400;0,500;1,400;1,500&display=swap";
+
+  // Inject the book's own stylesheets as inline <style>. epub.js rewrites each
+  // section `<link>` to a `blob:` URL, but the sandboxed iframe's opaque origin
+  // can't load a parent-minted blob (and the app CSP blocks fetching it too),
+  // so the publisher CSS silently drops and prose renders as UA defaults. We
+  // instead read the CSS straight out of epub.js's in-memory archive (JSZip)
+  // and inline it — an inline <style> the iframe honours. Fire-and-forget and
+  // fully guarded so a parsing hiccup can never stall or break the render.
+  function inlineBookStylesheets(doc) {
+    try {
+      if (!book || !book.archive || !book.packaging || doc.__omnibusBookCss) {
+        return;
+      }
+      doc.__omnibusBookCss = true;
+      var manifest = book.packaging.manifest || {};
+      var paths = [];
+      Object.keys(manifest).forEach(function (id) {
+        var item = manifest[id];
+        if (item && item.type === "text/css" && item.href) {
+          try {
+            paths.push(book.resolve(item.href));
+          } catch (e) {
+            /* unresolvable href — skip */
+          }
+        }
+      });
+      paths.forEach(function (path) {
+        book.archive
+          .getText(path)
+          .then(function (css) {
+            if (!css || !doc.head) return;
+            var style = doc.createElement("style");
+            style.setAttribute("data-omnibus-book-css", "");
+            style.textContent = css;
+            // Prepend so book CSS sits ahead of the reader baseline, which
+            // only touches html/body and should win any tie (e.g. hyphens).
+            doc.head.insertBefore(style, doc.head.firstChild);
+          })
+          .catch(function () {
+            /* unreadable asset — leave prose on UA defaults */
+          });
+      });
+    } catch (e) {
+      /* never let styling break rendering */
+    }
+  }
+
+  // Reader-owned hyperlink colour. Apple/Kindle paint links with their own
+  // accent and ignore the publisher's — so links stay a consistent, legible
+  // colour instead of whatever hue (or `:hover` red) a given book's CSS ships.
+  // Theme-aware: a dark-ground blue would wash out on the light/sepia grounds.
+  function linkColorForTheme(name) {
+    switch (name) {
+      case "light":
+      case "sepia":
+        return "#2f6fd0";
+      default:
+        return "#6fa8e6";
+    }
+  }
+
+  // Push the current theme's link colour into a section as a CSS var the
+  // baseline stylesheet reads. Runs per section and again on every theme swap.
+  function applyLinkColor(doc) {
+    if (doc && doc.documentElement) {
+      doc.documentElement.style.setProperty(
+        "--omn-link",
+        linkColorForTheme(currentTheme)
+      );
+    }
+  }
+
+  // Per-section content enhancement, registered on epub.js's content hook so it
+  // runs for every rendered spine item. Three Apple/Kindle-parity fixes the
+  // sandboxed iframe would otherwise drop: the book's own stylesheet, then
+  // hyphenation for justified prose (off by CSS default), and the app typeface
+  // loaded *inside* the iframe.
+  function installContentEnhancements() {
+    if (!rendition || !rendition.hooks || !rendition.hooks.content) return;
+    rendition.hooks.content.register(function (contents) {
+      var doc = contents.document;
+      if (!doc || !doc.head) return;
+
+      inlineBookStylesheets(doc);
+
+      // Hyphenation needs a language for its dictionary; inherit the book's,
+      // defaulting to English, without clobbering a per-document `lang`.
+      var meta = book && book.packaging && book.packaging.metadata;
+      var lang = (meta && meta.language) || "en";
+      if (doc.documentElement && !doc.documentElement.getAttribute("lang")) {
+        doc.documentElement.setAttribute("lang", lang);
+      }
+
+      if (!doc.getElementById("__omnibus_fonts")) {
+        var link = doc.createElement("link");
+        link.id = "__omnibus_fonts";
+        link.rel = "stylesheet";
+        link.href = READER_FONTS_HREF;
+        doc.head.appendChild(link);
+      }
+
+      applyLinkColor(doc);
+
+      // Reader baseline / override layer. The split mirrors Apple Books and
+      // Kindle: the reading system owns colour (and font, size, spacing,
+      // margins, justification — set elsewhere), while the publisher keeps
+      // structure — weight, style, headings, alignment, indents, small-caps.
+      //
+      // Appended last, and `!important` on colour so a publisher hue can't
+      // override the theme: `body *` forces every element to the theme
+      // foreground (killing clashes like Project Gutenberg's `a:hover{color:
+      // red}` and keeping dark/sepia legible), and only *real* links — `a`
+      // with an `href` — get the reader's accent. Confirmed against Apple
+      // Books: it styles/hovers only real links, ignoring publisher `:hover`
+      // on ordinary elements. Scoping to `[href]` also spares body text that
+      // Gutenberg wraps in a self-closing *named* anchor (`<a id="chapN"/>`,
+      // no href) which the HTML parser leaves open across the chapter — that
+      // text stays inert, theme-coloured prose (cursor included).
+      if (!doc.getElementById("__omnibus_baseline")) {
+        var style = doc.createElement("style");
+        style.id = "__omnibus_baseline";
+        style.textContent =
+          "html,body{-webkit-hyphens:auto;-ms-hyphens:auto;hyphens:auto;}" +
+          "body *{color:inherit!important;}" +
+          "a:not([href]){cursor:auto;}" +
+          "a[href]{color:var(--omn-link,#4a86d8)!important;text-decoration:none;}";
+        doc.head.appendChild(style);
+      }
+    });
+  }
+
   // Touch page-turn for mobile: a horizontal swipe turns the page, and a tap in
   // the outer 20% gutters pages forward (right) / back (left). Registered on
   // every rendered section's iframe document via epub.js's content hook, so it
@@ -387,6 +528,15 @@
   function setTheme(name) {
     if (!rendition) return;
     rendition.themes.select(name);
+    currentTheme = name;
+    // Re-tint links in every already-rendered section for the new ground.
+    try {
+      rendition.getContents().forEach(function (c) {
+        applyLinkColor(c.document);
+      });
+    } catch (e) {
+      /* no rendered sections yet */
+    }
   }
 
   function setFont(family) {
