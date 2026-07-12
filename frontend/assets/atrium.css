@@ -1385,6 +1385,7 @@ button.spoiler {
   gap: 20px;
   align-items: flex-start;
   padding: 22px;
+  position: relative;
 }
 @media (max-width: 480px) {
   .series-card { grid-template-columns: 80px 1fr; gap: 12px; padding: 14px; }
@@ -1403,6 +1404,11 @@ button.spoiler {
   text-decoration: none;
 }
 .series-card-title a:hover { text-decoration: underline; }
+.series-card-hit::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+}
 .series-card-desc {
   margin-top: 12px;
   font-size: 13.5px;

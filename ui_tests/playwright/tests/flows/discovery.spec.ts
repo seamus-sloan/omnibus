@@ -165,6 +165,23 @@ test("series page shows books in order", async ({ page, request }) => {
   await expect(cards.first().getByText("Book #1")).toBeVisible();
 });
 
+test("clicking a non-linked area of a series book card navigates to the book", async ({
+  page,
+  request,
+}) => {
+  const seriesName = "Pioneers";
+  const seriesId = await fetchSeriesIdByName(request, seriesName);
+
+  await gotoReady(page, `/series/${seriesId}`);
+
+  // "Book #1" is plain label text, not the cover or title link — clicking it
+  // exercises the full-card stretched-link hit area, not the anchors.
+  const firstCard = page.locator("article.series-card").first();
+  await firstCard.getByText("Book #1").click();
+
+  await expect(page).toHaveURL(/\/books\/[^/]+$/);
+});
+
 // ---------------------------------------------------------------------------
 // Tag cloud page
 // ---------------------------------------------------------------------------

@@ -164,6 +164,7 @@ fn series_book_row(book: &EbookMetadata) -> Element {
                 h3 { class: "series-card-title",
                     Link {
                         to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
+                        class: "series-card-hit",
                         "{book.title.as_deref().unwrap_or(&book.filename)}"
                     }
                 }
