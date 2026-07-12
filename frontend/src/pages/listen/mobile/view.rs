@@ -142,6 +142,17 @@ pub fn remaining_in_chapter(chapters: &[ChapterInfo], idx: usize, elapsed: f64) 
     }
 }
 
+/// Wall-clock time left to reach `remaining_seconds` of audio content at the
+/// given playback `rate` — e.g. half the content-time remains at 2x speed.
+/// Falls back to the raw remaining time for a non-positive rate.
+pub fn time_left_at_rate(remaining_seconds: f64, rate: f64) -> f64 {
+    if rate > 0.0 {
+        remaining_seconds / rate
+    } else {
+        remaining_seconds
+    }
+}
+
 /// Resolve the "previous chapter" seek target:
 /// - >3s into the current chapter → its start;
 /// - within 3s of the start and not the first → the previous chapter's start;
@@ -256,6 +267,19 @@ mod tests {
         // Past the end clamps to zero, and OOB is zero.
         assert_eq!(remaining_in_chapter(&chs, 0, 400.0), 0.0);
         assert_eq!(remaining_in_chapter(&chs, 9, 0.0), 0.0);
+    }
+
+    #[test]
+    fn time_left_at_rate_scales_inversely_with_speed() {
+        assert!((time_left_at_rate(600.0, 1.0) - 600.0).abs() < f64::EPSILON);
+        assert!((time_left_at_rate(600.0, 1.5) - 400.0).abs() < f64::EPSILON);
+        assert!((time_left_at_rate(600.0, 0.5) - 1200.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn time_left_at_rate_falls_back_to_raw_for_non_positive_rate() {
+        assert_eq!(time_left_at_rate(600.0, 0.0), 600.0);
+        assert_eq!(time_left_at_rate(600.0, -1.0), 600.0);
     }
 
     #[test]

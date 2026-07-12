@@ -31,7 +31,7 @@ mod view;
 use bookmarks_sheet::{use_mobile_bookmarks, BookmarksSheet, MobileBookmarks};
 use sheets::{snap_rate, ChaptersSheet, SleepSheet, SpeedSheet};
 use state::{sleep_pill_label, use_mobile_playback, SleepState};
-use view::{chapter_index_for_elapsed, format_hms, format_ms, PlayerView};
+use view::{chapter_index_for_elapsed, format_hms, format_ms, time_left_at_rate, PlayerView};
 
 pub use host::MobileAudioHost;
 pub use mini::MobileMiniPlayer;
@@ -364,10 +364,10 @@ fn render_player(p: PlayerProps) -> Element {
                     span { "{format_hms(elapsed)}" }
                     if has_chapters {
                         span { class: "m-player-chtime",
-                            "{format_ms(within)} / {format_ms(chapter_dur)} \u{00b7} {format_ms(chapter_left)} left"
+                            "{format_ms(within)} / {format_ms(chapter_dur)} \u{00b7} {format_ms(time_left_at_rate(chapter_left, rate))} left"
                         }
                     }
-                    span { "-{format_hms(remaining_book)}" }
+                    span { "-{format_hms(time_left_at_rate(remaining_book, rate))}" }
                 }
             }
 
