@@ -540,6 +540,18 @@ test.describe("audiobook-only seed", () => {
     );
   });
 
+  // Both generated MP3s ("The Analytical Audiobook" by Ada Lovelace and "The
+  // Compiled Tales" by Grace Hopper) — the only same-format pair in the
+  // audiobook fixtures, so merging them (F5.10 allows same-format merges) is
+  // the only way to produce a real multi-file `book_files` group for #1005's
+  // file-picker coverage below.
+  const PRIMARY_MP3 = AUDIOBOOK_BOOKS.find(
+    (b) => b.format === "MP3" && b.source === "generated",
+  )!;
+  const SECOND_MP3 = AUDIOBOOK_BOOKS.find(
+    (b) => b.format === "MP3" && b.source === "generated" && b.title !== PRIMARY_MP3.title,
+  )!;
+
   test("Start listening navigates to /listen/:uuid for audio-only books", async ({
     page,
     request,
@@ -548,10 +560,7 @@ test.describe("audiobook-only seed", () => {
     // and has_ebook is false, so the hero renders "Start listening" as
     // the primary CTA (the secondary "Listen" button only appears when
     // both formats coexist).
-    const mp3Book = AUDIOBOOK_BOOKS.find(
-      (b) => b.format === "MP3" && b.source === "generated",
-    )!;
-    const uuid = await fetchBookUuidByTitle(request, mp3Book.title);
+    const uuid = await fetchBookUuidByTitle(request, PRIMARY_MP3.title);
     await gotoReady(page, `/books/${uuid}`);
 
     const startListening = page.getByTestId("start-listening");
@@ -561,8 +570,74 @@ test.describe("audiobook-only seed", () => {
       new RegExp(`/listen/${uuid}$`),
     );
 
+    // AC2 (#1005): a single-file audiobook shows no file picker next to
+    // the CTA — the picker only appears once a book has >1 file of the
+    // format that CTA opens (see the merge-based test below).
+    await expect(page.getByTestId("listen-file-picker-trigger")).toHaveCount(0);
+
     // Clicking the primary CTA must SPA-navigate to the listen page.
     await startListening.click();
     await expect(page).toHaveURL(new RegExp(`/listen/${uuid}$`));
+  });
+
+  // ---------------------------------------------------------------------------
+  // #1005 — Listen file picker for a multi-file (duplicate-format) audiobook
+  // ---------------------------------------------------------------------------
+
+  test("shows a Listen file picker after merging two same-format audiobooks, and picking a file navigates with its file_id", async ({
+    page,
+    request,
+  }) => {
+    const primaryUuid = await fetchBookUuidByTitle(request, PRIMARY_MP3.title);
+    const secondUuid = await fetchBookUuidByTitle(request, SECOND_MP3.title);
+
+    // Arrange: merge SECOND into PRIMARY via the RPC directly (the merge
+    // dialog UI itself is covered by merge.spec.ts) so PRIMARY ends up with
+    // two MP3 `book_files` rows — the duplicate-format scenario #1005's
+    // picker targets. `merge_log_id` is the undo handle used in `finally`.
+    const mergeResp = await request.post("/api/rpc/merge-books", {
+      data: { source_uuid: secondUuid, target_uuid: primaryUuid },
+    });
+    expect(mergeResp.status(), "POST /api/rpc/merge-books failed").toBe(200);
+    const { merge_log_id: mergeLogId } = (await mergeResp.json()) as {
+      merge_log_id: number;
+    };
+
+    try {
+      await gotoReady(page, `/books/${primaryUuid}`);
+
+      // AC1: a book with >1 file of the format the CTA opens shows a way
+      // to pick which file to open before listening.
+      const trigger = page.getByTestId("listen-file-picker-trigger");
+      await expect(trigger).toBeVisible();
+      await expect(page.getByTestId("listen-file-picker-panel")).toHaveCount(0);
+      await trigger.click();
+      const panel = page.getByTestId("listen-file-picker-panel");
+      await expect(panel).toBeVisible();
+      await expect(panel.getByRole("link")).toHaveCount(2);
+
+      // Picking the second (non-default) file navigates to /listen/:uuid
+      // with that file's id, and the manifest fetch carries the same id.
+      const [manifestReq] = await Promise.all([
+        page.waitForRequest((req) =>
+          req.url().includes(`/api/audiobooks/${primaryUuid}/manifest?file_id=`),
+        ),
+        panel.getByRole("link").nth(1).click(),
+      ]);
+      expect(manifestReq.url()).toMatch(
+        new RegExp(`/api/audiobooks/${primaryUuid}/manifest\\?file_id=\\d+$`),
+      );
+      await expect(page).toHaveURL(
+        new RegExp(`/listen/${primaryUuid}\\?file_id=\\d+$`),
+      );
+    } finally {
+      // Undo — restores SECOND as its own book so later specs (and re-runs
+      // of this one) see the pre-merge fixture state, mirroring
+      // merge.spec.ts's own undo-as-cleanup pattern.
+      const undoResp = await request.post("/api/rpc/merge-books/undo", {
+        data: { merge_log_id: mergeLogId },
+      });
+      expect(undoResp.status(), "POST /api/rpc/merge-books/undo failed").toBe(200);
+    }
   });
 });
