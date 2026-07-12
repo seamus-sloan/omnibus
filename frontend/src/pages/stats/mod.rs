@@ -9,6 +9,10 @@ use omnibus_shared::{StatsRange, StatsSummary};
 use crate::components::{PageError, PageLoading};
 use crate::{data, use_server_url, Route};
 
+mod tiles;
+
+use tiles::HeadlineTiles;
+
 /// The italicized period word in the page title.
 fn period_word(range: StatsRange) -> &'static str {
     match range {
@@ -16,17 +20,6 @@ fn period_word(range: StatsRange) -> &'static str {
         StatsRange::Month => "month",
         StatsRange::Year => "year",
         StatsRange::AllTime => "lifetime",
-    }
-}
-
-/// Compact duration for summary strips: "42 m", "3 h", "3 h 20 m".
-fn format_active_time(secs: i64) -> String {
-    let hours = secs / 3600;
-    let minutes = (secs % 3600) / 60;
-    match (hours, minutes) {
-        (0, m) => format!("{m} m"),
-        (h, 0) => format!("{h} h"),
-        (h, m) => format!("{h} h {m} m"),
     }
 }
 
@@ -82,20 +75,37 @@ pub fn StatsPage() -> Element {
 
 /// Refetch the period-scoped summary whenever the switcher changes. The
 /// signal read inside the effect subscribes it to `range`.
+///
+/// A monotonic `epoch` ticket guards against out-of-order completion: rapid
+/// switcher changes fan out concurrent fetches, and a slower earlier request
+/// must not overwrite a newer range's data. Only the fetch holding the current
+/// ticket applies its result, and a success clears any prior error so a
+/// transient failure can't stick the page in the error state.
 fn use_period_fetch_effect(
     server_url: String,
     range: Signal<StatsRange>,
     period: Signal<Option<StatsSummary>>,
     error: Signal<Option<String>>,
 ) {
+    let mut epoch = use_signal(|| 0u64);
     use_effect(move || {
         let r = range();
+        let ticket = *epoch.peek() + 1;
+        epoch.set(ticket);
         let url = server_url.clone();
         let mut period = period;
         let mut error = error;
         spawn(async move {
-            match data::fetch_stats(&url, r).await {
-                Ok(summary) => period.set(Some(summary)),
+            let result = data::fetch_stats(&url, r).await;
+            // A newer switcher change superseded this fetch — drop the stale result.
+            if *epoch.peek() != ticket {
+                return;
+            }
+            match result {
+                Ok(summary) => {
+                    period.set(Some(summary));
+                    error.set(None);
+                }
                 Err(e) => error.set(Some(e.to_string())),
             }
         });
@@ -195,19 +205,19 @@ fn RangeSheet(range: Signal<StatsRange>, sheet_open: Signal<bool>) -> Element {
     }
 }
 
-/// Period-scoped summary strip — scaffold the metric tiles replace next.
+/// The period-scoped module stack: the headline tile row (a placeholder card
+/// until the first fetch lands).
 #[component]
 fn PeriodSummary(period: Signal<Option<StatsSummary>>) -> Element {
     let guard = period.read();
     let Some(summary) = guard.as_ref() else {
         return rsx! { div { class: "card st-card-placeholder", aria_hidden: "true" } };
     };
-    let sessions = summary.sessions;
-    let time = format_active_time(summary.total_seconds());
     rsx! {
-        div { class: "card st-summary-card", "data-testid": "stats-period-summary",
-            div { class: "label", "This period" }
-            div { class: "st-summary-line mono", "{sessions} sessions \u{00B7} {time}" }
+        HeadlineTiles {
+            books_finished: summary.books_finished,
+            avg_stars: summary.avg_stars,
+            listening_seconds: summary.listening_seconds,
         }
     }
 }
@@ -254,14 +264,5 @@ mod tests {
         assert_eq!(period_word(StatsRange::Month), "month");
         assert_eq!(period_word(StatsRange::Year), "year");
         assert_eq!(period_word(StatsRange::AllTime), "lifetime");
-    }
-
-    #[test]
-    fn format_active_time_covers_minute_hour_and_mixed_spans() {
-        assert_eq!(format_active_time(0), "0 m");
-        assert_eq!(format_active_time(59), "0 m");
-        assert_eq!(format_active_time(42 * 60), "42 m");
-        assert_eq!(format_active_time(3 * 3600), "3 h");
-        assert_eq!(format_active_time(3 * 3600 + 20 * 60), "3 h 20 m");
     }
 }

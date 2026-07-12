@@ -129,6 +129,7 @@ async fn compute(
     )
     .await?;
     let sessions = session_count(pool, user_id, start).await?;
+    let avg_stars = avg_stars(pool, user_id, start).await?;
     let heatmap = heatmap(pool, user_id, start).await?;
     let (active_days, longest_streak_days) = streak(pool, user_id, start).await?;
     let (busiest_week_start, busiest_week_seconds) = busiest_week(pool, user_id, start).await?;
@@ -140,6 +141,7 @@ async fn compute(
         range,
         reading_seconds,
         listening_seconds,
+        avg_stars,
         sessions,
         active_days,
         longest_streak_days,
@@ -188,6 +190,20 @@ async fn sum_seconds(
         .bind(start)
         .fetch_one(pool)
         .await?)
+}
+
+/// Mean star rating over books the user rated within the window (keyed on
+/// `user_ratings.updated_at`), in stars — `half_stars` is 1..=10, so the
+/// SQL mean halves it. `None` when nothing was rated in the window.
+async fn avg_stars(pool: &SqlitePool, user_id: i64, start: i64) -> Result<Option<f64>, StatsError> {
+    Ok(sqlx::query_scalar(
+        "SELECT AVG(half_stars) / 2.0 FROM user_ratings
+         WHERE user_id = ? AND updated_at >= ?",
+    )
+    .bind(user_id)
+    .bind(start)
+    .fetch_one(pool)
+    .await?)
 }
 
 async fn session_count(pool: &SqlitePool, user_id: i64, start: i64) -> Result<i64, StatsError> {

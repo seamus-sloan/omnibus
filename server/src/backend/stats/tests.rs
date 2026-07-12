@@ -1,9 +1,7 @@
-//! Tests for the reading-stats REST handler.
-//!
-//! The `db::stats` cache is process-wide and keyed on `(user_id, range)`,
-//! and every fixture pool restarts user ids at 1 — so each content-asserting
-//! test here must use a distinct range to keep its cache key unique across
-//! the test binary.
+//! Tests for the reading-stats REST handler. The `db::stats` cache is
+//! process-wide and keyed on `(user_id, range)`, and every fixture pool
+//! restarts user ids at 1 — so each content-asserting test uses a distinct
+//! range to keep its cache key unique across the test binary.
 
 use axum::{
     body::{to_bytes, Body},

@@ -86,11 +86,16 @@ pub struct FinishedBook {
 /// progress fraction persisted today) rather than the session tables, which
 /// carry duration but no progress; a first-class read/unread state (#980)
 /// feeds the same field once it lands.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct StatsSummary {
     pub range: StatsRange,
     pub reading_seconds: i64,
     pub listening_seconds: i64,
+    /// Mean of the user's star ratings (0.5..=5.0) over books rated within
+    /// the window; `None` when nothing was rated. `f64` keeps the struct
+    /// `PartialEq`-only.
+    #[serde(default)]
+    pub avg_stars: Option<f64>,
     pub sessions: i64,
     pub active_days: i64,
     pub longest_streak_days: i64,
