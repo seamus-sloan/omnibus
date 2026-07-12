@@ -279,10 +279,19 @@ jobs:
           npm ci
           npx playwright merge-reports --reporter html ../../all-blob-reports
 
+      # GitHub Pages serves a single site per repo and each deploy replaces it
+      # wholesale, so we can't publish to an independent URL — instead we nest
+      # the report under a `test-results/` folder in the Pages artifact so it
+      # lands at <pages-url>/test-results/ rather than the site root.
+      - name: Stage report under /test-results
+        run: |
+          mkdir -p site/test-results
+          mv ui_tests/playwright/playwright-report/* site/test-results/
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ui_tests/playwright/playwright-report
+          path: site
 
       - name: Deploy to GitHub Pages
         id: deploy
