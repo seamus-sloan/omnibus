@@ -786,6 +786,15 @@ html, body { overscroll-behavior: none; }
 }
 .bd-export-panel .bd-export-subnote:hover { text-decoration: underline; }
 
+/* Read/Listen file picker (#1005) — a compact trigger beside the CTA it
+   applies to, reusing the `.bd-export-*` scrim/panel/item look so the two
+   dropdowns read as one family. Only rendered when a book has >1 file of
+   the format that CTA opens. */
+.bd-file-picker { position: relative; display: inline-flex; }
+.bd-file-picker-trigger { padding: 0 12px; }
+.bd-file-picker-caret { font-size: 10px; line-height: 1; color: var(--ink-2); }
+.bd-file-picker-panel { min-width: 200px; }
+
 .bd-progress-meta { margin-top: 22px; max-width: 460px; }
 .bd-progress-line {
   display: flex; justify-content: space-between;
