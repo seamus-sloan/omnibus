@@ -238,7 +238,12 @@ jobs:
     needs: playwright
     if: ${{ always() && needs.playwright.result != 'skipped' && needs.playwright.result != 'cancelled' }}
     runs-on: ubuntu-latest
+    # Declaring `permissions` zeroes every unlisted scope, so the reads that
+    # `actions/checkout` (contents) and `download-artifact@v4` (actions) rely
+    # on must be listed explicitly alongside the Pages write scopes.
     permissions:
+      contents: read
+      actions: read
       pages: write
       id-token: write
     # GitHub Pages allows one in-flight deployment at a time; a dedicated
@@ -266,6 +271,10 @@ jobs:
 
       - name: Merge blob reports into one HTML report
         working-directory: ui_tests/playwright
+        env:
+          # merge-reports needs @playwright/test but no browser binaries;
+          # skip the ~150 MB Chromium download the postinstall would run.
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: |
           npm ci
           npx playwright merge-reports --reporter html ../../all-blob-reports
