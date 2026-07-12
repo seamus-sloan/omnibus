@@ -26,9 +26,18 @@ test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
   const uuid = await fetchBookUuidByTitle(request, FIXTURE_BOOKS[0].title);
 
+  // Dracula is a tagged public-domain fixture — its session feeds the genre
+  // donut, which shares by book count over *tagged* active books.
+  const taggedUuid = await fetchBookUuidByTitle(request, "Dracula");
+
   const now = Math.floor(Date.now() / 1000);
-  const session = (startedAt: number, secs: number, format: "epub" | "audio") => ({
-    book_uuid: uuid,
+  const session = (
+    bookUuid: string,
+    startedAt: number,
+    secs: number,
+    format: "epub" | "audio",
+  ) => ({
+    book_uuid: bookUuid,
     format,
     started_at: startedAt,
     ended_at: startedAt + secs,
@@ -36,14 +45,15 @@ test.beforeAll(async ({ request }) => {
   });
   const resp = await request.post("/api/progress/sessions", {
     data: [
-      session(now - 60, 600, "epub"),
-      session(OLD_SESSION_AT, 900, "epub"),
-      session(now - 120, 900, "audio"),
+      session(uuid, now - 60, 600, "epub"),
+      session(uuid, OLD_SESSION_AT, 900, "epub"),
+      session(uuid, now - 120, 900, "audio"),
+      session(taggedUuid, now - 300, 300, "epub"),
     ],
   });
   expect(resp.status(), "seeding stats sessions failed").toBe(200);
   const body = (await resp.json()) as { recorded: number };
-  expect(body.recorded, "session seeds were skipped").toBe(3);
+  expect(body.recorded, "session seeds were skipped").toBe(4);
 
   // Feed the headline tiles: a star rating and a finished (100%) journal.
   const rating = await request.post("/api/ratings", {
@@ -112,9 +122,33 @@ test("switching the period re-queries and updates the period section", async ({ 
   await expect(page.getByRole("heading", { name: "Your reading week" })).toBeVisible();
 });
 
+test("the heatmap and genre donut render from seeded activity", async ({ page }) => {
+  await gotoReady(page, "/stats");
+
+  // Heatmap: trailing-year grid with the streak figure in the card header and
+  // at least one active cell — keyed off the cell tooltip ("… on YYYY-MM-DD",
+  // which only active cells carry) rather than the intensity CSS classes.
+  const heatmap = page.getByTestId("stats-heatmap");
+  await expect(heatmap).toBeVisible();
+  await expect(heatmap).toContainText("Longest streak");
+  expect(await heatmap.locator('[title*=" on "]').count()).toBeGreaterThan(0);
+
+  // Donut: the fixture book carries tags, so the legend lists at least one
+  // genre with a percentage; the center shows the active-book count.
+  const donut = page.getByTestId("stats-genre-donut");
+  await expect(donut).toBeVisible();
+  await expect(donut).toContainText("%");
+  await expect(donut).toContainText("books");
+
+  // Format split: both seeded formats appear with percentages.
+  const split = page.getByTestId("stats-format-split");
+  await expect(split).toContainText("Read");
+  await expect(split).toContainText("Listened");
+});
+
 test("the all-time section does not change with the switcher", async ({ page }) => {
   await gotoReady(page, "/stats");
-  const allTime = page.getByTestId("stats-alltime-summary");
+  const allTime = page.getByTestId("stats-heatmap");
   await expect(allTime).toBeVisible();
   const before = await allTime.textContent();
 

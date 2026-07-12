@@ -9,8 +9,12 @@ use omnibus_shared::{StatsRange, StatsSummary};
 use crate::components::{PageError, PageLoading};
 use crate::{data, use_server_url, Route};
 
+mod donut;
+mod heatmap;
 mod tiles;
 
+use donut::{FormatSplit, GenreDonut};
+use heatmap::HeatmapCard;
 use tiles::HeadlineTiles;
 
 /// The italicized period word in the page title.
@@ -205,8 +209,9 @@ fn RangeSheet(range: Signal<StatsRange>, sheet_open: Signal<bool>) -> Element {
     }
 }
 
-/// The period-scoped module stack: the headline tile row (a placeholder card
-/// until the first fetch lands).
+/// The period-scoped module stack: headline tiles, then the composition row
+/// (genre donut + format split). A placeholder card until the first fetch
+/// lands.
 #[component]
 fn PeriodSummary(period: Signal<Option<StatsSummary>>) -> Element {
     let guard = period.read();
@@ -219,25 +224,23 @@ fn PeriodSummary(period: Signal<Option<StatsSummary>>) -> Element {
             avg_stars: summary.avg_stars,
             listening_seconds: summary.listening_seconds,
         }
+        div { class: "st-compose",
+            GenreDonut { summary: summary.clone() }
+            FormatSplit { summary: summary.clone() }
+        }
     }
 }
 
-/// All-time summary strip — scaffold the heatmap card replaces next.
+/// The all-time module stack: the reading-days heatmap card (with the
+/// longest-streak figure in its header).
 #[component]
 fn AllTimeSummary(all_time: Signal<Option<StatsSummary>>) -> Element {
     let guard = all_time.read();
     let Some(summary) = guard.as_ref() else {
         return rsx! { div { class: "card st-card-placeholder", aria_hidden: "true" } };
     };
-    let active = summary.active_days;
-    let streak = summary.longest_streak_days;
     rsx! {
-        div { class: "card st-summary-card", "data-testid": "stats-alltime-summary",
-            div { class: "label", "Reading days" }
-            div { class: "st-summary-line mono",
-                "{active} active days \u{00B7} {streak}-day longest streak"
-            }
-        }
+        HeatmapCard { summary: summary.clone() }
     }
 }
 

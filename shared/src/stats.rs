@@ -70,6 +70,14 @@ pub struct RankedEntity {
     pub seconds: i64,
 }
 
+/// One genre-donut slice: a tag and how many distinct books carrying it had
+/// session activity in the window (share by book count, not seconds).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GenreShare {
+    pub name: String,
+    pub books: i64,
+}
+
 /// A book completed within the window — a journal entry recorded 100% progress
 /// on it. `finished_at` is the most recent such entry's timestamp (unix secs).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,9 +111,20 @@ pub struct StatsSummary {
     pub busiest_week_start: Option<String>,
     pub busiest_week_seconds: i64,
     pub books_finished: i64,
+    /// Distinct books with any session activity in the window — the genre
+    /// donut's center count.
+    #[serde(default)]
+    pub books_active: i64,
+    /// The server's current UTC day (`YYYY-MM-DD`) when the summary was
+    /// computed. Anchors the heatmap's trailing-year grid so the client
+    /// never bakes its own clock into render (rule 07).
+    #[serde(default)]
+    pub as_of_day: String,
     pub heatmap: Vec<DayActivity>,
     pub top_authors: Vec<RankedEntity>,
     pub top_tags: Vec<RankedEntity>,
+    #[serde(default)]
+    pub genre_share: Vec<GenreShare>,
     pub finished_books: Vec<FinishedBook>,
 }
 

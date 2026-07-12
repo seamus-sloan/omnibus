@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use omnibus_shared::{DayActivity, FinishedBook, RankedEntity, StatsRange, StatsSummary};
+use omnibus_shared::{
+    DayActivity, FinishedBook, GenreShare, RankedEntity, StatsRange, StatsSummary,
+};
 use sqlx::{Row, SqlitePool};
 
 #[cfg(test)]
@@ -135,6 +137,9 @@ async fn compute(
     let (busiest_week_start, busiest_week_seconds) = busiest_week(pool, user_id, start).await?;
     let top_authors = top_authors(pool, user_id, start).await?;
     let top_tags = top_tags(pool, user_id, start).await?;
+    let genre_share = genre_share(pool, user_id, start).await?;
+    let books_active = books_active(pool, user_id, start).await?;
+    let as_of_day = as_of_day(pool).await?;
     let finished_books = finished_books(pool, user_id, start).await?;
 
     Ok(StatsSummary {
@@ -148,9 +153,12 @@ async fn compute(
         busiest_week_start,
         busiest_week_seconds,
         books_finished: finished_books.len() as i64,
+        books_active,
+        as_of_day,
         heatmap,
         top_authors,
         top_tags,
+        genre_share,
         finished_books,
     })
 }
@@ -359,6 +367,64 @@ async fn ranked(
             seconds: r.get("seconds"),
         })
         .collect())
+}
+
+/// Genre share by distinct book count: for each tag, how many distinct books
+/// carrying it had session activity in the window. Count-based (not
+/// seconds) so a multi-tag book counts once per tag but never twice per tag.
+async fn genre_share(
+    pool: &SqlitePool,
+    user_id: i64,
+    start: i64,
+) -> Result<Vec<GenreShare>, StatsError> {
+    // Collapse the per-session union to distinct active books *before* the
+    // tag join, so the intermediate is bounded by book count, not session
+    // count — keeps the join small on a 10k-event library.
+    let sql = format!(
+        "SELECT t.name AS name, COUNT(DISTINCT b.uuid) AS books
+             FROM (SELECT DISTINCT book_uuid FROM ({SESSION_BOOK_SECS})) x
+             JOIN books b ON b.uuid = x.book_uuid
+             JOIN books_tags_link btl ON btl.book = b.id
+             JOIN tags t ON t.id = btl.tag
+         GROUP BY t.id ORDER BY books DESC, t.name ASC LIMIT ?"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(user_id)
+        .bind(start)
+        .bind(user_id)
+        .bind(start)
+        .bind(TOP_N)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| GenreShare {
+            name: r.get("name"),
+            books: r.get("books"),
+        })
+        .collect())
+}
+
+/// Distinct books with any session activity in the window — the genre
+/// donut's center count.
+async fn books_active(pool: &SqlitePool, user_id: i64, start: i64) -> Result<i64, StatsError> {
+    let sql = format!("SELECT COUNT(DISTINCT book_uuid) FROM ({SESSION_BOOK_SECS})");
+    Ok(sqlx::query_scalar(&sql)
+        .bind(user_id)
+        .bind(start)
+        .bind(user_id)
+        .bind(start)
+        .fetch_one(pool)
+        .await?)
+}
+
+/// The server's current UTC day, stamped on the summary so the heatmap grid
+/// anchors to the server clock instead of the client's.
+async fn as_of_day(pool: &SqlitePool) -> Result<String, StatsError> {
+    Ok(sqlx::query_scalar("SELECT date('now')")
+        .fetch_one(pool)
+        .await?)
 }
 
 /// Books completed in the window — sourced from `journal_entries.progress = 100`
