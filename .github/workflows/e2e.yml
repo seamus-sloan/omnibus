@@ -227,34 +227,37 @@ jobs:
           retention-days: 7
 
   # Stitch the per-shard blob reports into one browsable HTML report and
-  # deploy it to GitHub Pages, so failures (and passes) are inspectable at a
-  # stable URL without downloading an artifact and running
-  # `npx playwright show-report` locally. Runs whether or not the shards
-  # passed (but skips if a shard was cancelled or never ran), so the hosted
-  # report tracks the latest run. `merge-reports` needs @playwright/test but
-  # no browser, so this job stays on plain setup-node — no Nix.
+  # publish it to the `gh-pages` branch (which GitHub Pages serves), so
+  # failures and passes are inspectable at a URL without downloading an
+  # artifact and running `npx playwright show-report` locally. Runs whether or
+  # not the shards passed (but skips if a shard was cancelled or never ran).
+  # `merge-reports` needs @playwright/test but no browser, so this job stays on
+  # plain setup-node — no Nix.
+  #
+  # Each run adds a NEW `<branch>/<sha>/test-results/` directory and preserves
+  # every prior one (we fetch the live gh-pages tree and only replace this
+  # run's own folder), so historical reports stay addressable. The root
+  # `index.html` redirect is rewritten only on `main` deploys, so `/` always
+  # points at the latest `main` report (the stable target the README badge
+  # links to); feature-branch reports are reachable at their own URL but never
+  # hijack the root.
   publish-report:
     name: publish report
     needs: playwright
     if: ${{ always() && needs.playwright.result != 'skipped' && needs.playwright.result != 'cancelled' }}
     runs-on: ubuntu-latest
-    # Declaring `permissions` zeroes every unlisted scope, so the reads that
-    # `actions/checkout` (contents) and `download-artifact@v4` (actions) rely
-    # on must be listed explicitly alongside the Pages write scopes.
+    # `contents: write` to push the report to gh-pages; `actions: read` for
+    # download-artifact@v4. Declaring `permissions` zeroes every unlisted
+    # scope, so both must be listed explicitly.
     permissions:
-      contents: read
+      contents: write
       actions: read
-      pages: write
-      id-token: write
-    # GitHub Pages allows one in-flight deployment at a time; a dedicated
-    # group (distinct from the workflow's ref-keyed cancel group above) keeps
-    # concurrent main/PR runs from cancelling each other mid-deploy.
+    # Serialize gh-pages pushes across all runs: each publish fetches the live
+    # branch, adds its folder, and pushes, so two in-flight jobs would race and
+    # one push would reject. A single-slot group (no cancel) queues them.
     concurrency:
-      group: pages
+      group: gh-pages-publish
       cancel-in-progress: false
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -270,29 +273,58 @@ jobs:
           merge-multiple: true
 
       - name: Merge blob reports into one HTML report
-        working-directory: ui_tests/playwright
         env:
           # merge-reports needs @playwright/test but no browser binaries;
           # skip the ~150 MB Chromium download the postinstall would run.
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: |
+          cd ui_tests/playwright
           npm ci
           npx playwright merge-reports --reporter html ../../all-blob-reports
 
-      # GitHub Pages serves a single site per repo and each deploy replaces it
-      # wholesale, so we can't publish to an independent URL — instead we nest
-      # the report under a `test-results/` folder in the Pages artifact so it
-      # lands at <pages-url>/test-results/ rather than the site root.
-      - name: Stage report under /test-results
+      # Publish into gh-pages at <branch>/<sha>/test-results/, preserving every
+      # other report already there, and point the root redirect at this one.
+      - name: Publish report to gh-pages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          # head_ref is set on pull_request events (the PR branch); ref_name is
+          # the branch on push events. head.sha is the PR's real head; on push,
+          # github.sha is the pushed commit (not a synthetic merge commit).
+          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          mkdir -p site/test-results
-          mv ui_tests/playwright/playwright-report/* site/test-results/
+          set -euo pipefail
+          DEST="${BRANCH_NAME}/${COMMIT_SHA}/test-results"
+          AUTH_URL="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
+          # Clone the existing gh-pages tree; create an orphan branch if it's
+          # the first run and the branch doesn't exist yet.
+          if git clone --depth 1 --branch gh-pages "$AUTH_URL" gh-pages 2>/dev/null; then
+            cd gh-pages
+          else
+            git clone --depth 1 "$AUTH_URL" gh-pages
+            cd gh-pages
+            git checkout --orphan gh-pages
+            git rm -rfq . || true
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Deploy to GitHub Pages
-        id: deploy
-        uses: actions/deploy-pages@v4
+          # Replace only this run's folder; leave all other reports intact.
+          rm -rf "$DEST"
+          mkdir -p "$DEST"
+          cp -R "${GITHUB_WORKSPACE}/ui_tests/playwright/playwright-report/." "$DEST/"
+
+          # Point the root redirect at this report only on `main`, so `/` keeps
+          # tracking the latest main report and PR runs don't move it. Relative
+          # URL so it works under the /omnibus/ project-pages base path.
+          if [ "$BRANCH_NAME" = "main" ]; then
+            printf '<!doctype html>\n<meta charset="utf-8">\n<meta http-equiv="refresh" content="0; url=./%s/">\n<title>Omnibus — Playwright report</title>\n<a href="./%s/">Latest Playwright report →</a>\n' "$DEST" "$DEST" > index.html
+          fi
+          # Serve the report assets verbatim (no Jekyll processing of _ paths).
+          touch .nojekyll
+
+          git add -A
+          git commit -q -m "test report: ${BRANCH_NAME}@${COMMIT_SHA:0:9}" || { echo "no changes to publish"; exit 0; }
+          git push "$AUTH_URL" HEAD:gh-pages
