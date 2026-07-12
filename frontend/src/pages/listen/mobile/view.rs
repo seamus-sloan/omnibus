@@ -142,9 +142,10 @@ pub fn remaining_in_chapter(chapters: &[ChapterInfo], idx: usize, elapsed: f64) 
     }
 }
 
-/// Wall-clock time left to reach `remaining_seconds` of audio content at the
-/// given playback `rate` — e.g. half the content-time remains at 2x speed.
-/// Falls back to the raw remaining time for a non-positive rate.
+/// Wall-clock time left to play `remaining_seconds` of audio content at the
+/// given playback `rate` — e.g. it takes half as long to play at 2x speed,
+/// even though the content-time remaining is unchanged. Falls back to the
+/// raw remaining time for a non-positive rate.
 pub fn time_left_at_rate(remaining_seconds: f64, rate: f64) -> f64 {
     if rate > 0.0 {
         remaining_seconds / rate
