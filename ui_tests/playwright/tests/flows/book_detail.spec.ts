@@ -3,6 +3,7 @@ import { expectMutation } from "../utils/api";
 import { AUDIOBOOK_BOOKS, AUDIOBOOK_BOOK_COUNT } from "../fixtures/audiobooks";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { fetchBookUuidByTitle, getRow } from "../utils/ebooks";
+import { withLock } from "../utils/lock";
 import { gotoReady } from "../utils/nav";
 import {
   audiobookFixturesDir,
@@ -157,10 +158,15 @@ test("From the same hand shows empty state for single-book authors", async ({
   page,
   request,
 }) => {
-  // Ada Lovelace is the only author of `alpha` in the fixture set — so the
-  // author-fetch returns one book, filtering it out yields an empty list,
-  // and the page renders `from-same-hand-empty` instead of the row.
-  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  // Hedy Lamarr authors exactly one work across the *entire* fixture set —
+  // the standalone `gamma` ebook, and (unlike Ada Lovelace) no audiobook. So
+  // even when a parallel spec has seeded the audiobook library, her
+  // author-fetch stays single-book: the row filters to empty and the page
+  // renders `from-same-hand-empty`. `alpha`/Ada can't be used here — Ada also
+  // authors "The Analytical Audiobook", which flips her to multi-book the
+  // moment audiobooks are indexed, so this assertion raced audiobook seeding.
+  const SOLO = FIXTURE_BOOKS.find((b) => b.slug === "gamma")!;
+  const uuid = await fetchBookUuidByTitle(request, SOLO.title);
   await gotoReady(page, `/books/${uuid}`);
 
   // Wait for the heading to confirm the section rendered.
@@ -588,56 +594,64 @@ test.describe("audiobook-only seed", () => {
     page,
     request,
   }) => {
-    const primaryUuid = await fetchBookUuidByTitle(request, PRIMARY_MP3.title);
-    const secondUuid = await fetchBookUuidByTitle(request, SECOND_MP3.title);
+    // Serialize against merge.spec's audiobook merge: both mutate "The
+    // Analytical Audiobook" on the shared per-shard server, so running them in
+    // parallel workers corrupts this test's two-file state. The lock leaves the
+    // fixture restored (via the finally undo) before releasing. `test.slow()`
+    // covers the worst case of waiting out the other holder plus this run.
+    test.slow();
+    await withLock("audiobook-merge", async () => {
+      const primaryUuid = await fetchBookUuidByTitle(request, PRIMARY_MP3.title);
+      const secondUuid = await fetchBookUuidByTitle(request, SECOND_MP3.title);
 
-    // Arrange: merge SECOND into PRIMARY via the RPC directly (the merge
-    // dialog UI itself is covered by merge.spec.ts) so PRIMARY ends up with
-    // two MP3 `book_files` rows — the duplicate-format scenario #1005's
-    // picker targets. `merge_log_id` is the undo handle used in `finally`.
-    const mergeResp = await request.post("/api/rpc/merge-books", {
-      data: { source_uuid: secondUuid, target_uuid: primaryUuid },
-    });
-    expect(mergeResp.status(), "POST /api/rpc/merge-books failed").toBe(200);
-    const { merge_log_id: mergeLogId } = (await mergeResp.json()) as {
-      merge_log_id: number;
-    };
-
-    try {
-      await gotoReady(page, `/books/${primaryUuid}`);
-
-      // AC1: a book with >1 file of the format the CTA opens shows a way
-      // to pick which file to open before listening.
-      const trigger = page.getByTestId("listen-file-picker-trigger");
-      await expect(trigger).toBeVisible();
-      await expect(page.getByTestId("listen-file-picker-panel")).toHaveCount(0);
-      await trigger.click();
-      const panel = page.getByTestId("listen-file-picker-panel");
-      await expect(panel).toBeVisible();
-      await expect(panel.getByRole("link")).toHaveCount(2);
-
-      // Picking the second (non-default) file navigates to /listen/:uuid
-      // with that file's id, and the manifest fetch carries the same id.
-      const [manifestReq] = await Promise.all([
-        page.waitForRequest((req) =>
-          req.url().includes(`/api/audiobooks/${primaryUuid}/manifest?file_id=`),
-        ),
-        panel.getByRole("link").nth(1).click(),
-      ]);
-      expect(manifestReq.url()).toMatch(
-        new RegExp(`/api/audiobooks/${primaryUuid}/manifest\\?file_id=\\d+$`),
-      );
-      await expect(page).toHaveURL(
-        new RegExp(`/listen/${primaryUuid}\\?file_id=\\d+$`),
-      );
-    } finally {
-      // Undo — restores SECOND as its own book so later specs (and re-runs
-      // of this one) see the pre-merge fixture state, mirroring
-      // merge.spec.ts's own undo-as-cleanup pattern.
-      const undoResp = await request.post("/api/rpc/merge-books/undo", {
-        data: { merge_log_id: mergeLogId },
+      // Arrange: merge SECOND into PRIMARY via the RPC directly (the merge
+      // dialog UI itself is covered by merge.spec.ts) so PRIMARY ends up with
+      // two MP3 `book_files` rows — the duplicate-format scenario #1005's
+      // picker targets. `merge_log_id` is the undo handle used in `finally`.
+      const mergeResp = await request.post("/api/rpc/merge-books", {
+        data: { source_uuid: secondUuid, target_uuid: primaryUuid },
       });
-      expect(undoResp.status(), "POST /api/rpc/merge-books/undo failed").toBe(200);
-    }
+      expect(mergeResp.status(), "POST /api/rpc/merge-books failed").toBe(200);
+      const { merge_log_id: mergeLogId } = (await mergeResp.json()) as {
+        merge_log_id: number;
+      };
+
+      try {
+        await gotoReady(page, `/books/${primaryUuid}`);
+
+        // AC1: a book with >1 file of the format the CTA opens shows a way
+        // to pick which file to open before listening.
+        const trigger = page.getByTestId("listen-file-picker-trigger");
+        await expect(trigger).toBeVisible();
+        await expect(page.getByTestId("listen-file-picker-panel")).toHaveCount(0);
+        await trigger.click();
+        const panel = page.getByTestId("listen-file-picker-panel");
+        await expect(panel).toBeVisible();
+        await expect(panel.getByRole("link")).toHaveCount(2);
+
+        // Picking the second (non-default) file navigates to /listen/:uuid
+        // with that file's id, and the manifest fetch carries the same id.
+        const [manifestReq] = await Promise.all([
+          page.waitForRequest((req) =>
+            req.url().includes(`/api/audiobooks/${primaryUuid}/manifest?file_id=`),
+          ),
+          panel.getByRole("link").nth(1).click(),
+        ]);
+        expect(manifestReq.url()).toMatch(
+          new RegExp(`/api/audiobooks/${primaryUuid}/manifest\\?file_id=\\d+$`),
+        );
+        await expect(page).toHaveURL(
+          new RegExp(`/listen/${primaryUuid}\\?file_id=\\d+$`),
+        );
+      } finally {
+        // Undo — restores SECOND as its own book so later specs (and re-runs
+        // of this one) see the pre-merge fixture state, mirroring
+        // merge.spec.ts's own undo-as-cleanup pattern.
+        const undoResp = await request.post("/api/rpc/merge-books/undo", {
+          data: { merge_log_id: mergeLogId },
+        });
+        expect(undoResp.status(), "POST /api/rpc/merge-books/undo failed").toBe(200);
+      }
+    });
   });
 });
