@@ -47,6 +47,14 @@ pub fn TagCloudPage() -> Element {
         div { class: "disc-page",
             // Header
             div { class: "disc-tag-header",
+                // Mobile-only (CSS-gated) back to search; rendered on all targets for SSR/WASM parity (rule 07).
+                Link {
+                    to: Route::MobileSearch {},
+                    class: "m-icon-btn disc-back",
+                    "aria-label": "Back to search",
+                    "data-testid": "tags-back",
+                    "\u{2190}"
+                }
                 span { class: "label", "Library lens" }
                 h1 { class: "disc-hero-title",
                     "By "

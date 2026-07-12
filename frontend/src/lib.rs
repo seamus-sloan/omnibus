@@ -151,6 +151,11 @@ fn ScreenLayout(children: Element) -> Element {
         }
     });
 
+    // Synthesized left-edge back-swipe (the native WKWebView gesture can't
+    // reach the router). Unconditional — before the auth early-return — so the
+    // hook order stays stable across renders.
+    use_mobile_edge_swipe_back(nav);
+
     if use_server_url().is_empty() || !authed() {
         return rsx! { div { class: "screen" } };
     }
@@ -306,6 +311,103 @@ fn use_mobile_viewport_fix() {
 /// Non-mobile stub: the viewport meta is already correct.
 #[cfg(not(feature = "mobile"))]
 fn use_mobile_viewport_fix() {}
+
+/// Capture-phase left-edge back-swipe listener for the mobile WebView.
+///
+/// The wry/WKWebView native edge gesture can't drive app navigation on the
+/// native target: the WebView's back-forward list is only fed by
+/// `history.pushState`, but `dioxus-router` uses an in-memory history off-WASM
+/// that the WebView never sees. So we synthesize the gesture — detect a
+/// left-edge horizontal swipe and go back — rebinding on every screen mount so
+/// the listener targets the live `eval` channel. `id` tags the install so the
+/// matching unmount cleanup only removes its own listener (see
+/// [`edge_swipe_cleanup_js`]).
+#[cfg(feature = "mobile")]
+fn edge_swipe_install_js(id: u64) -> String {
+    format!(
+        r#"
+(function(){{
+  var prev = window.__omnibusEdgeSwipe;
+  if (prev) {{
+    document.removeEventListener('touchstart', prev.onStart, true);
+    document.removeEventListener('touchend', prev.onEnd, true);
+  }}
+  var startX = 0, startY = 0, startT = 0, tracking = false;
+  var EDGE = 24, MIN_DX = 64, MAX_SLOPE = 0.5, MAX_MS = 600;
+  function onStart(e){{
+    if (!e.touches || e.touches.length !== 1) {{ tracking = false; return; }}
+    var t = e.touches[0];
+    if (t.clientX <= EDGE) {{ startX = t.clientX; startY = t.clientY; startT = Date.now(); tracking = true; }}
+    else {{ tracking = false; }}
+  }}
+  function onEnd(e){{
+    if (!tracking) return;
+    tracking = false;
+    var t = e.changedTouches && e.changedTouches[0];
+    if (!t) return;
+    var dx = t.clientX - startX, dy = t.clientY - startY, dt = Date.now() - startT;
+    // Left-edge start, mostly-horizontal, far enough, fast enough.
+    if (dx >= MIN_DX && Math.abs(dy) <= dx * MAX_SLOPE && dt <= MAX_MS) {{
+      try {{ dioxus.send(1); }} catch (_e) {{}}
+    }}
+  }}
+  // Passive capture listeners: we only read coordinates, never preventDefault,
+  // so the immersive reader/player keep their own page-turn / scrub gestures.
+  document.addEventListener('touchstart', onStart, {{ capture: true, passive: true }});
+  document.addEventListener('touchend', onEnd, {{ capture: true, passive: true }});
+  window.__omnibusEdgeSwipe = {{ onStart: onStart, onEnd: onEnd, id: {id} }};
+}})();
+"#
+    )
+}
+
+/// Remove this screen's edge-swipe listener on unmount — but only when it's
+/// still the installed one (`id` match). A `ScreenLayout` → `ScreenLayout` nav
+/// reinstalls with a new id first, so the outgoing screen's cleanup no-ops and
+/// leaves the live listener alone; a `ScreenLayout` → immersive nav has no
+/// reinstall, so this tears the listener down and `/read` + `/listen` stay free
+/// of it.
+#[cfg(feature = "mobile")]
+fn edge_swipe_cleanup_js(id: u64) -> String {
+    format!(
+        r#"
+(function(){{
+  var s = window.__omnibusEdgeSwipe;
+  if (s && s.id === {id}) {{
+    document.removeEventListener('touchstart', s.onStart, true);
+    document.removeEventListener('touchend', s.onEnd, true);
+    window.__omnibusEdgeSwipe = null;
+  }}
+}})();
+"#
+    )
+}
+
+/// Install the edge-swipe → router-back bridge. Drains the `eval` channel the
+/// injected listener sends on and asks `nav` to go back (when there's history
+/// to unwind), and removes the listener on unmount. Called from the mobile
+/// [`ScreenLayout`], so it rides that component's mount lifecycle.
+#[cfg(feature = "mobile")]
+fn use_mobile_edge_swipe_back(nav: dioxus_router::Navigator) {
+    // Per-mount id so the unmount cleanup only removes its own listener, not
+    // one a later screen already rebound.
+    let id = use_hook(|| {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    });
+    let mut eval = use_hook(|| dioxus::document::eval(&edge_swipe_install_js(id)));
+    use_future(move || async move {
+        // Loop ends when the channel closes (this screen unmounted).
+        while eval.recv::<i32>().await.is_ok() {
+            if nav.can_go_back() {
+                nav.go_back();
+            }
+        }
+    });
+    use_drop(move || {
+        dioxus::document::eval(&edge_swipe_cleanup_js(id));
+    });
+}
 
 /// Root app component. Renders global styles and the router.
 #[component]

@@ -152,16 +152,30 @@ async fn load_and_drain(ctx: MobilePlayback, uuid: String, server_url: String) {
             chapters,
         } => {
             let resume = resolve_resume(&server_url, &uuid).await;
-            view.set(Some(PlayerView::from_direct(
-                &book,
-                chapters,
-                total_duration_seconds,
-                parts.clone(),
-            )));
+            let pv =
+                PlayerView::from_direct(&book, chapters, total_duration_seconds, parts.clone());
+            // Cover artwork for the lock screen: the same tokened thumbnail the
+            // hero uses. WebKit fetches it itself, so it must carry `?token=`.
+            let artwork = book
+                .cover_url
+                .as_ref()
+                .map(|_| crate::thumb_url(&server_url, &uuid, "lg"));
+            let now_playing = interop::NowPlaying {
+                title: &pv.title,
+                author: &pv.author,
+                artwork_url: artwork.as_deref(),
+            };
             duration.set(total_duration_seconds);
             elapsed.set(resume);
             loading.set(false);
-            let eval = interop::install_direct_surface(&server_url, &parts, resume, *rate.peek());
+            let eval = interop::install_direct_surface(
+                &server_url,
+                &parts,
+                resume,
+                *rate.peek(),
+                &now_playing,
+            );
+            view.set(Some(pv));
             drain_audio_events(eval, ctx, uuid, server_url).await;
         }
         AudiobookManifest::Hls { .. } => {

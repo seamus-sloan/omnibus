@@ -1,10 +1,10 @@
-//! Omnibus mobile — thin Dioxus Native shell.
+//! Omnibus mobile — thin native shell hosting a wry WebView.
 //!
-//! All UI lives in the `omnibus_frontend` crate under `features = ["mobile"]`.
-//! This binary only wires platform launch, seeds the reactive server-URL
-//! context from persisted state (empty on first run → the pre-login Connect
-//! screen), hydrates the bearer-token store from disk on launch, and
-//! delegates to the shared `App` component.
+//! Dioxus `features = ["mobile"]` renders the shared `omnibus_frontend` rsx into
+//! a system WebView (WKWebView on iOS, Android System WebView) via wry — not a
+//! Blitz/native renderer. This binary only wires platform launch: seed the
+//! persisted server-URL context, hydrate the bearer token from disk, and
+//! delegate to the shared `App`.
 
 use dioxus::prelude::*;
 use omnibus_frontend::{
