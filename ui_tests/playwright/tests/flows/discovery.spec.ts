@@ -174,10 +174,28 @@ test("clicking a non-linked area of a series book card navigates to the book", a
 
   await gotoReady(page, `/series/${seriesId}`);
 
-  // "Book #1" is plain label text, not the cover or title link — clicking it
-  // exercises the full-card stretched-link hit area, not the anchors.
+  // "Book #1" is plain label text, not the cover or title link, and it's a
+  // sibling (not an ancestor/descendant) of the stretched-link overlay — so
+  // Playwright's actionability check correctly refuses a direct `.click()`
+  // on the label itself (a different element receives the pointer event).
+  // Click through the card, an ancestor of the overlay, at the label's
+  // position instead, so the browser's real hit-testing routes the click to
+  // the full-card overlay.
   const firstCard = page.locator("article.series-card").first();
-  await firstCard.getByText("Book #1").click();
+  const label = firstCard.getByText("Book #1");
+  await expect(label).toBeVisible();
+
+  const cardBox = await firstCard.boundingBox();
+  const labelBox = await label.boundingBox();
+  if (!cardBox || !labelBox) {
+    throw new Error("expected the card and label to have a bounding box");
+  }
+  await firstCard.click({
+    position: {
+      x: labelBox.x + labelBox.width / 2 - cardBox.x,
+      y: labelBox.y + labelBox.height / 2 - cardBox.y,
+    },
+  });
 
   await expect(page).toHaveURL(/\/books\/[^/]+$/);
 });
