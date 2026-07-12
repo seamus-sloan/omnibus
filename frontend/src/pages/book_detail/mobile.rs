@@ -5,11 +5,12 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::EbookMetadata;
+use omnibus_shared::{BookFileInfo, EbookMetadata};
 
 use crate::components::atrium::Cover;
 use crate::Route;
 
+use super::file_picker::{is_audio_book_file, BdFilePickerMenu, FilePickerKind};
 use super::journal::BdJournalSection;
 use super::rating::BdRatingWidget;
 use super::{derive_loaded_view, BdFormatBadge, BdMetaRow, LoadedBookView};
@@ -42,6 +43,18 @@ pub(super) fn render_loaded_mobile(b: EbookMetadata, server_url: String) -> Elem
         (true, true) => String::new(),
     };
     let (cover_src, cover_srcset) = thumb_srcs(&b, &uuid, &server_url);
+    let epub_files: Vec<BookFileInfo> = b
+        .book_files
+        .iter()
+        .filter(|f| f.format.eq_ignore_ascii_case("EPUB"))
+        .cloned()
+        .collect();
+    let audio_files: Vec<BookFileInfo> = b
+        .book_files
+        .iter()
+        .filter(|f| is_audio_book_file(f))
+        .cloned()
+        .collect();
 
     rsx! {
         div { class: "m-bd", style: "{accent_style}", "data-testid": "mobile-book-detail",
@@ -95,7 +108,10 @@ pub(super) fn render_loaded_mobile(b: EbookMetadata, server_url: String) -> Elem
                 }
             }
 
-            // Primary CTAs — reading opens the in-app reader; listening opens the player.
+            // Primary CTAs — reading opens the in-app reader; listening opens
+            // the player. A book with more than one file of the format a CTA
+            // opens gets a picker alongside it (#1005); `BdFilePickerMenu`
+            // renders nothing for a single-file book (AC2).
             div { class: "m-bd-cta",
                 if has_ebook {
                     Link {
@@ -103,6 +119,7 @@ pub(super) fn render_loaded_mobile(b: EbookMetadata, server_url: String) -> Elem
                         class: "btn primary lg",
                         "Read"
                     }
+                    BdFilePickerMenu { uuid: uuid.clone(), kind: FilePickerKind::Read, files: epub_files.clone() }
                 }
                 if has_audio {
                     Link {
@@ -110,6 +127,7 @@ pub(super) fn render_loaded_mobile(b: EbookMetadata, server_url: String) -> Elem
                         class: "btn lg",
                         "Listen"
                     }
+                    BdFilePickerMenu { uuid: uuid.clone(), kind: FilePickerKind::Listen, files: audio_files.clone() }
                 }
             }
 

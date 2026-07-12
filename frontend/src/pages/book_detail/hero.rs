@@ -2,12 +2,13 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::EbookMetadata;
+use omnibus_shared::{BookFileInfo, EbookMetadata};
 
 use crate::components::atrium::Cover;
 use crate::Route;
 
 use super::export_menu::BdExportMenu;
+use super::file_picker::{is_audio_book_file, BdFilePickerMenu, FilePickerKind};
 use super::rating::BdRatingWidget;
 use super::{BdCrumb, BdCrumbItem, BdFormatBadge};
 
@@ -144,6 +145,7 @@ fn BdTitleCol(
                 book_author: b.creators.first().map(|c| c.name.clone()).unwrap_or_default(),
                 book_title: title.clone(),
                 epub_size_bytes: b.epub_size_bytes,
+                book_files: b.book_files.clone(),
             }
             div { class: "bd-progress-meta", aria_hidden: "true",
                 div { class: "bd-progress-line",
@@ -165,6 +167,11 @@ fn BdTitleCol(
 
 /// CTA button row: primary read/listen action, secondary listen, and the
 /// "Export" dropdown that collects the per-device send/download actions.
+///
+/// A book with more than one file of the format a CTA opens (e.g. two
+/// audiobooks merged via F5.10 that both shipped an MP3) gets a small file
+/// picker next to that CTA (#1005) — `BdFilePickerMenu` renders nothing when
+/// fewer than two files match, so a single-file book's row is unaffected.
 #[component]
 fn BdCtaRow(
     uuid: String,
@@ -173,16 +180,30 @@ fn BdCtaRow(
     #[props(default)] book_author: String,
     #[props(default)] book_title: String,
     #[props(default)] epub_size_bytes: Option<i64>,
+    #[props(default)] book_files: Vec<BookFileInfo>,
 ) -> Element {
+    let epub_files: Vec<BookFileInfo> = book_files
+        .iter()
+        .filter(|f| f.format.eq_ignore_ascii_case("EPUB"))
+        .cloned()
+        .collect();
+    let audio_files: Vec<BookFileInfo> = book_files
+        .iter()
+        .filter(|f| is_audio_book_file(f))
+        .cloned()
+        .collect();
+
     rsx! {
         div { class: "bd-cta-row",
             if has_ebook {
                 Link { to: Route::BookRead { uuid: uuid.clone() }, class: "btn primary lg", "data-testid": "start-reading", "Start reading" }
+                BdFilePickerMenu { uuid: uuid.clone(), kind: FilePickerKind::Read, files: epub_files.clone() }
             } else if has_audio {
                 {
                     #[cfg(not(feature = "mobile"))]
                     let start_listening = rsx! {
                         Link { to: Route::BookListen { uuid: uuid.clone() }, class: "btn primary lg", "data-testid": "start-listening", "Start listening" }
+                        BdFilePickerMenu { uuid: uuid.clone(), kind: FilePickerKind::Listen, files: audio_files.clone() }
                     };
                     #[cfg(feature = "mobile")]
                     let start_listening = rsx! {
@@ -196,6 +217,7 @@ fn BdCtaRow(
                     #[cfg(not(feature = "mobile"))]
                     let listen_btn = rsx! {
                         Link { to: Route::BookListen { uuid: uuid.clone() }, class: "btn lg", "data-testid": "listen-secondary", "Listen" }
+                        BdFilePickerMenu { uuid: uuid.clone(), kind: FilePickerKind::Listen, files: audio_files.clone() }
                     };
                     #[cfg(feature = "mobile")]
                     let listen_btn = rsx! {

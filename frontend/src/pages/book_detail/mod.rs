@@ -10,6 +10,7 @@ use omnibus_shared::{EbookMetadata, MergeBooksResult, SuggestionsResponse};
 use crate::components::{PageError, PageLoading, PageNotFound};
 use crate::{data, use_server_url, Route};
 
+mod file_picker;
 mod journal;
 mod journal_editor;
 mod merge;

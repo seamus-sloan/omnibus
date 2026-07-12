@@ -1,0 +1,217 @@
+//! File picker dropdown for the hero/mobile Read + Listen CTAs — lets the
+//! reader choose which physical `book_files` row to open when a book has
+//! more than one file of the format the CTA opens (e.g. two audiobooks
+//! merged via F5.10 that both shipped an MP3). Mirrors `export_menu`'s
+//! trigger + scrim + focus-on-mount dialog pattern; shared between the web
+//! hero (`hero::BdCtaRow`) and the mobile CTA row since neither the markup
+//! nor the behavior is platform-specific.
+
+use dioxus::prelude::*;
+use dioxus_router::Link;
+use omnibus_shared::BookFileInfo;
+
+/// Which action the picker's rows perform — drives the route prefix, the
+/// dialog's accessible label, and the stable testids.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum FilePickerKind {
+    Read,
+    Listen,
+}
+
+impl FilePickerKind {
+    fn route_prefix(self) -> &'static str {
+        match self {
+            FilePickerKind::Read => "read",
+            FilePickerKind::Listen => "listen",
+        }
+    }
+
+    fn testid(self) -> &'static str {
+        match self {
+            FilePickerKind::Read => "read-file-picker",
+            FilePickerKind::Listen => "listen-file-picker",
+        }
+    }
+
+    fn aria_label(self) -> &'static str {
+        match self {
+            FilePickerKind::Read => "Choose which file to read",
+            FilePickerKind::Listen => "Choose which file to listen to",
+        }
+    }
+}
+
+/// True for the audio `book_files.format` values the listen path resolves
+/// (mirrors `db::hls::resolve_audiobook_file`'s `format IN ('M4B', 'M4A',
+/// 'MP3')` filter, since M4A shares the M4B container/code path).
+pub(super) fn is_audio_book_file(f: &BookFileInfo) -> bool {
+    f.format.eq_ignore_ascii_case("M4B")
+        || f.format.eq_ignore_ascii_case("M4A")
+        || f.format.eq_ignore_ascii_case("MP3")
+}
+
+/// Trigger + dropdown for picking a specific `book_files` row before
+/// reading/listening. Renders nothing when `files` has fewer than two
+/// entries — callers pass only the files matching the format the CTA
+/// opens (`format == "EPUB"` for [`FilePickerKind::Read`], one of
+/// M4B/M4A/MP3 for [`FilePickerKind::Listen`]), so a single-file book's CTA
+/// row is unaffected (AC2 of #1005).
+#[component]
+pub(super) fn BdFilePickerMenu(
+    uuid: String,
+    kind: FilePickerKind,
+    files: Vec<BookFileInfo>,
+) -> Element {
+    if files.len() < 2 {
+        return rsx! {};
+    }
+    let mut open = use_signal(|| false);
+    let testid = kind.testid();
+    rsx! {
+        div { class: "bd-file-picker",
+            button {
+                class: "btn ghost lg bd-file-picker-trigger",
+                "data-testid": "{testid}-trigger",
+                r#type: "button",
+                "aria-haspopup": "dialog",
+                "aria-expanded": "{open()}",
+                "aria-label": kind.aria_label(),
+                onclick: move |_| {
+                    let next = !open();
+                    open.set(next);
+                },
+                span { class: "bd-file-picker-caret", aria_hidden: "true", "\u{25be}" }
+            }
+            if open() {
+                div {
+                    class: "bd-export-scrim",
+                    "data-testid": "{testid}-scrim",
+                    onclick: move |_| open.set(false),
+                }
+                BdFilePickerPanel { uuid: uuid.clone(), kind, files: files.clone(), open }
+            }
+        }
+    }
+}
+
+/// The open dropdown body. Split out (same reason as `BdExportPanel`) so
+/// `onmounted` can focus it and ESC reaches the panel-level `onkeydown`.
+#[component]
+fn BdFilePickerPanel(
+    uuid: String,
+    kind: FilePickerKind,
+    files: Vec<BookFileInfo>,
+    open: Signal<bool>,
+) -> Element {
+    let mut open = open;
+    let on_keydown = move |evt: Event<KeyboardData>| {
+        if evt.key() == Key::Escape {
+            evt.prevent_default();
+            open.set(false);
+        }
+    };
+    let testid = kind.testid();
+    let prefix = kind.route_prefix();
+    rsx! {
+        div {
+            class: "bd-export-panel bd-file-picker-panel card",
+            role: "dialog",
+            "aria-label": kind.aria_label(),
+            "data-testid": "{testid}-panel",
+            tabindex: "-1",
+            onkeydown: on_keydown,
+            onmounted: move |evt: MountedEvent| focus_file_picker_panel(&evt),
+
+            for file in files.iter() {
+                {
+                    let label = file
+                        .label
+                        .clone()
+                        .unwrap_or_else(|| format!("Part {}", file.ordinal + 1));
+                    let href = format!("/{prefix}/{uuid}?file_id={}", file.id);
+                    let item_testid = format!("{testid}-item-{}", file.id);
+                    rsx! {
+                        Link {
+                            key: "{file.id}",
+                            to: "{href}",
+                            class: "bd-export-item bd-file-picker-item",
+                            "data-testid": "{item_testid}",
+                            onclick: move |_| open.set(false),
+                            span { class: "bd-export-item-label", "{label}" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Focus the panel after paint so its `onkeydown` receives ESC — same
+/// requestAnimationFrame timing as `export_menu::focus_export_panel` and
+/// `user_menu::focus_user_menu_panel`.
+#[cfg(feature = "web")]
+fn focus_file_picker_panel(evt: &MountedEvent) {
+    use dioxus::web::WebEventExt;
+    use wasm_bindgen::prelude::*;
+
+    let Some(element) = evt.try_as_web_event() else {
+        return;
+    };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let cb = Closure::once_into_js(move || {
+        if let Some(html_el) = element.dyn_ref::<web_sys::HtmlElement>() {
+            let _ = html_el.focus();
+        }
+    });
+    let _ = window.request_animation_frame(cb.unchecked_ref());
+}
+
+/// Non-web stub: SSR never paints the panel, and the mobile native shell has
+/// no `web_sys` to focus through, so there is nothing to focus. Defined so
+/// the `onmounted` handler can call `focus_file_picker_panel` unconditionally
+/// (rule 07: hydration parity — keep cfg gates out of rsx bodies).
+#[cfg(not(feature = "web"))]
+fn focus_file_picker_panel(_evt: &MountedEvent) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(format: &str, id: i64, ordinal: i64) -> BookFileInfo {
+        BookFileInfo {
+            id,
+            format: format.to_string(),
+            filename: format!("part-{ordinal}.{}", format.to_lowercase()),
+            ordinal,
+            label: None,
+            size_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn is_audio_book_file_matches_every_hls_audio_format_case_insensitively() {
+        for fmt in ["M4B", "m4b", "M4A", "m4a", "MP3", "mp3"] {
+            assert!(is_audio_book_file(&file(fmt, 1, 0)));
+        }
+    }
+
+    #[test]
+    fn is_audio_book_file_rejects_non_audio_formats() {
+        assert!(!is_audio_book_file(&file("EPUB", 1, 0)));
+        assert!(!is_audio_book_file(&file("PDF", 1, 0)));
+    }
+
+    #[test]
+    fn file_picker_kind_read_uses_the_read_route_prefix_and_testid() {
+        assert_eq!(FilePickerKind::Read.route_prefix(), "read");
+        assert_eq!(FilePickerKind::Read.testid(), "read-file-picker");
+    }
+
+    #[test]
+    fn file_picker_kind_listen_uses_the_listen_route_prefix_and_testid() {
+        assert_eq!(FilePickerKind::Listen.route_prefix(), "listen");
+        assert_eq!(FilePickerKind::Listen.testid(), "listen-file-picker");
+    }
+}
