@@ -411,7 +411,15 @@ test("hides markdown markers on lines away from the caret", async ({ page, reque
   await gotoReady(page, `/books/${uuid}`);
 
   await page.getByTestId("journal-open-composer").click();
-  await editor(page).fill("# Heading line\n**bold line**");
+  // Type the two lines rather than `.fill()`: the live editor only inserts a
+  // literal newline via its Enter keydown handler (a raw multi-line fill lands
+  // the `\n` as a block split that `textContent` drops, collapsing to one
+  // `.cm-line`). `press("Enter")` drives the real handler.
+  const ed = editor(page);
+  await ed.click();
+  await ed.pressSequentially("# Heading line");
+  await ed.press("Enter");
+  await ed.pressSequentially("**bold line**");
 
   const lines = editor(page).locator(".cm-line");
   await expect(lines).toHaveCount(2);
