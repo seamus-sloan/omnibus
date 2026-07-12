@@ -316,14 +316,35 @@ jobs:
           mkdir -p "$DEST"
           cp -R "${GITHUB_WORKSPACE}/ui_tests/playwright/playwright-report/." "$DEST/"
 
-          # Point the root redirect at this report only on `main`, so `/` keeps
-          # tracking the latest main report and PR runs don't move it. Relative
-          # URL so it works under the /omnibus/ project-pages base path.
+          # Write a meta-refresh redirect page. $1 = relative target URL,
+          # $2 = output file. Relative URLs so they work under the /omnibus/
+          # project-pages base path.
+          write_redirect() {
+            printf '<!doctype html>\n<meta charset="utf-8">\n<meta http-equiv="refresh" content="0; url=%s">\n<title>Omnibus — Playwright report</title>\n<a href="%s">Latest Playwright report →</a>\n' "$1" "$1" > "$2"
+          }
+
+          # Per-branch pointer: /omnibus/<branch>/ → this branch's newest report.
+          # Updated every run, so a branch's latest report is reachable without
+          # knowing the sha.
+          write_redirect "./${COMMIT_SHA}/test-results/" "${BRANCH_NAME}/index.html"
+
+          # Root pointer, main only: /omnibus/ → latest main report. PR runs
+          # never touch it, so the README badge stays pinned to main.
           if [ "$BRANCH_NAME" = "main" ]; then
-            printf '<!doctype html>\n<meta charset="utf-8">\n<meta http-equiv="refresh" content="0; url=./%s/">\n<title>Omnibus — Playwright report</title>\n<a href="./%s/">Latest Playwright report →</a>\n' "$DEST" "$DEST" > index.html
+            write_redirect "./${DEST}/" "index.html"
           fi
+
           # Serve the report assets verbatim (no Jekyll processing of _ paths).
           touch .nojekyll
+
+          # Link both URLs from the run's summary so the report is one click from
+          # the Actions page — no sha-hunting.
+          {
+            echo "### 📊 Playwright report"
+            echo ""
+            echo "- **This run:** https://seamus-sloan.github.io/omnibus/${DEST}/"
+            echo "- **Latest for \`${BRANCH_NAME}\`:** https://seamus-sloan.github.io/omnibus/${BRANCH_NAME}/"
+          } >> "$GITHUB_STEP_SUMMARY"
 
           git add -A
           git commit -q -m "test report: ${BRANCH_NAME}@${COMMIT_SHA:0:9}" || { echo "no changes to publish"; exit 0; }
