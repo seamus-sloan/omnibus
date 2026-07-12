@@ -328,10 +328,19 @@ jobs:
           # knowing the sha.
           write_redirect "./${COMMIT_SHA}/test-results/" "${BRANCH_NAME}/index.html"
 
-          # Root pointer, main only: /omnibus/ → latest main report. PR runs
-          # never touch it, so the README badge stays pinned to main.
+          # Track the latest main report in a sentinel file so the root can
+          # always point at it — even on a PR run, which must not move the root
+          # off main. Only main runs advance the sentinel.
           if [ "$BRANCH_NAME" = "main" ]; then
-            write_redirect "./${DEST}/" "index.html"
+            printf '%s\n' "$DEST" > .main-latest
+          fi
+          # Keep a root index every run so `/omnibus/` never 404s: redirect to
+          # the latest main report if one exists, else a small landing page
+          # until the first main run publishes.
+          if [ -f .main-latest ]; then
+            write_redirect "./$(cat .main-latest)/" "index.html"
+          else
+            printf '<!doctype html>\n<meta charset="utf-8">\n<title>Omnibus — Playwright reports</title>\n<h1>Omnibus — Playwright reports</h1>\n<p>No <code>main</code> report has been published yet. Reports are published per branch at <code>/omnibus/&lt;branch&gt;/</code>; this page will redirect to the latest <code>main</code> report once one exists.</p>\n' > "index.html"
           fi
 
           # Serve the report assets verbatim (no Jekyll processing of _ paths).
