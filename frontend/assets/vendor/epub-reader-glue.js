@@ -432,19 +432,25 @@
       // Kindle: the reading system owns colour (and font, size, spacing,
       // margins, justification — set elsewhere), while the publisher keeps
       // structure — weight, style, headings, alignment, indents, small-caps.
-      // Appended last so it wins, and `!important` on colour so a publisher
-      // hue can't override the theme: body text inherits the theme foreground
-      // (killing clashes like Project Gutenberg's `a:hover{color:red}` and
-      // keeping dark/sepia legible), while links get the reader's own accent
-      // in every state — the `a` rule outranks `body *` on specificity.
+      //
+      // Appended last, and `!important` on colour so a publisher hue can't
+      // override the theme: `body *` forces every element to the theme
+      // foreground (killing clashes like Project Gutenberg's `a:hover{color:
+      // red}` and keeping dark/sepia legible), and only *real* links — `a`
+      // with an `href` — get the reader's accent. Confirmed against Apple
+      // Books: it styles/hovers only real links, ignoring publisher `:hover`
+      // on ordinary elements. Scoping to `[href]` also spares body text that
+      // Gutenberg wraps in a self-closing *named* anchor (`<a id="chapN"/>`,
+      // no href) which the HTML parser leaves open across the chapter — that
+      // text stays inert, theme-coloured prose (cursor included).
       if (!doc.getElementById("__omnibus_baseline")) {
         var style = doc.createElement("style");
         style.id = "__omnibus_baseline";
         style.textContent =
           "html,body{-webkit-hyphens:auto;-ms-hyphens:auto;hyphens:auto;}" +
           "body *{color:inherit!important;}" +
-          "a:link,a:visited,a:hover,a:active{" +
-          "color:var(--omn-link,#4a86d8)!important;text-decoration:none;}";
+          "a:not([href]){cursor:auto;}" +
+          "a[href]{color:var(--omn-link,#4a86d8)!important;text-decoration:none;}";
         doc.head.appendChild(style);
       }
     });
