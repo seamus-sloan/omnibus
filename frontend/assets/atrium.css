@@ -1398,11 +1398,6 @@ button.spoiler {
   color: var(--ink-0);
   line-height: 1.2;
 }
-.series-card-title a {
-  color: inherit;
-  text-decoration: none;
-}
-.series-card-title a:hover { text-decoration: underline; }
 .series-card-desc {
   margin-top: 12px;
   font-size: 13.5px;

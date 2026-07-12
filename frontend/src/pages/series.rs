@@ -139,18 +139,17 @@ fn series_header(
     }
 }
 
-/// One book card in the series grid: cover, index/year label, title link, and
-/// an optional description.
+/// One book card in the series grid: cover, index/year label, title, and an
+/// optional description, all wrapped in a single card-spanning link so the
+/// whole card — not just the cover and title text — navigates to the book.
 fn series_book_row(book: &EbookMetadata) -> Element {
     rsx! {
-        article {
+        Link {
             key: "{book.id}",
+            to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
             class: "card series-card",
             div { class: "series-card-cover",
-                Link {
-                    to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
-                    Cover { book: book.clone() }
-                }
+                Cover { book: book.clone() }
             }
             div { class: "series-card-info",
                 span { class: "label",
@@ -162,10 +161,7 @@ fn series_book_row(book: &EbookMetadata) -> Element {
                     }
                 }
                 h3 { class: "series-card-title",
-                    Link {
-                        to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
-                        "{book.title.as_deref().unwrap_or(&book.filename)}"
-                    }
+                    "{book.title.as_deref().unwrap_or(&book.filename)}"
                 }
                 if let Some(ref desc) = book.description {
                     div { class: "series-card-desc",

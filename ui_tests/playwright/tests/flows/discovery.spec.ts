@@ -158,11 +158,28 @@ test("series page shows books in order", async ({ page, request }) => {
   await gotoReady(page, `/series/${seriesId}`);
 
   // Should have multiple book cards — "Pioneers" has 5 books in fixtures
-  const cards = page.locator("article.series-card");
+  const cards = page.locator(".series-card");
   await expect(cards).toHaveCount(5);
 
   // First book should show "Book #1"
   await expect(cards.first().getByText("Book #1")).toBeVisible();
+});
+
+test("clicking a non-text area of a series book card navigates to the book", async ({
+  page,
+  request,
+}) => {
+  // The whole card — cover, title, index/year label, and surrounding
+  // whitespace — is one link (issue #1004). Click near the card's edge,
+  // away from the cover image and title text, to prove the click target
+  // isn't limited to those two elements.
+  const seriesId = await fetchSeriesIdByName(request, "Pioneers");
+  await gotoReady(page, `/series/${seriesId}`);
+
+  const firstCard = page.locator(".series-card").first();
+  await firstCard.click({ position: { x: 5, y: 5 } });
+
+  await expect(page).toHaveURL(/\/books\/[\w-]+$/);
 });
 
 // ---------------------------------------------------------------------------
