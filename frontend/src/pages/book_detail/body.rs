@@ -2,12 +2,16 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::{BookSuggestion, Contributor, EbookMetadata, Identifier, SuggestionsResponse};
+use omnibus_shared::{BookSuggestion, EbookMetadata, Identifier, SuggestionsResponse};
 
 use crate::components::atrium::Cover;
 use crate::components::FormatSwitcher;
 use crate::Route;
 
+use super::discovery::{
+    cover_src, list_count_label, same_hand_author_label, same_hand_title, same_hand_year,
+    suggestion_cover_book,
+};
 use super::journal::BdJournalSection;
 use super::{BdInsightCell, BdMetaRow, BdSectionHead};
 
@@ -171,33 +175,6 @@ fn AuthorLead(author: String, owned: usize, rest: usize, author_route: Option<Ro
     }
 }
 
-/// Display title for a same-hand tile — the book title, falling back to the
-/// on-disk filename (mirrors the shared `Cover` plate fallback).
-fn same_hand_title(b: &EbookMetadata) -> String {
-    match b.title.as_deref() {
-        Some(t) if !t.trim().is_empty() => t.to_string(),
-        _ => b.filename.clone(),
-    }
-}
-
-/// Author surname for the empty-state note, falling back to a generic label
-/// when the author name is unknown so the sentence stays well-formed.
-fn same_hand_author_label(primary_author: &str) -> String {
-    match primary_author.split_whitespace().last() {
-        Some(last) => last.to_string(),
-        None => "this author".to_string(),
-    }
-}
-
-/// Four-digit publication year for the tile subline, or `None` when absent.
-fn same_hand_year(b: &EbookMetadata) -> Option<String> {
-    b.published
-        .as_deref()
-        .and_then(|p| p.get(0..4))
-        .filter(|y| !y.is_empty())
-        .map(str::to_string)
-}
-
 /// "Readers also enjoyed" — Hardcover read-alikes below the metadata. Renders
 /// its own divider + section head, then one of: a connect message (no key), a
 /// quiet placeholder (resolving), the cover strip (results), or an empty note.
@@ -316,36 +293,6 @@ fn SuggestionsConnectCard(is_admin: bool) -> Element {
                 span { class: "mono bd-stub-hint", "Ask your server admin to connect Hardcover." }
             }
         }
-    }
-}
-
-/// Build a minimal [`EbookMetadata`] so the shared [`Cover`] can render a
-/// suggestion's title/author plate when no cover image is available.
-fn suggestion_cover_book(s: &BookSuggestion) -> EbookMetadata {
-    EbookMetadata {
-        title: Some(s.title.clone()),
-        creators: vec![Contributor {
-            name: s.author.clone(),
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
-}
-
-/// Absolute cover URL (server base + relative path), or `None` when the
-/// suggestion has no cached cover (the plate fallback then applies).
-fn cover_src(server_url: &str, s: &BookSuggestion) -> Option<String> {
-    s.cover_url
-        .as_deref()
-        .map(|path| crate::media_url(server_url, path))
-}
-
-/// "on N lists" relevance label (singular-aware).
-fn list_count_label(n: i64) -> String {
-    if n == 1 {
-        "on 1 list".to_string()
-    } else {
-        format!("on {n} lists")
     }
 }
 
@@ -503,62 +450,5 @@ mod tests {
             bd_identifier_key(&split_scheme),
             bd_identifier_key(&split_value)
         );
-    }
-
-    #[test]
-    fn same_hand_title_prefers_title_over_filename() {
-        let b = EbookMetadata {
-            title: Some("Piranesi".into()),
-            filename: "piranesi.epub".into(),
-            ..Default::default()
-        };
-        assert_eq!(same_hand_title(&b), "Piranesi");
-    }
-
-    #[test]
-    fn same_hand_title_falls_back_to_filename_when_title_blank() {
-        // `None`, empty, and whitespace-only titles all fall back so a tile
-        // never renders a blank caption.
-        for title in [None, Some("".into()), Some("   ".into())] {
-            let b = EbookMetadata {
-                title,
-                filename: "dune.epub".into(),
-                ..Default::default()
-            };
-            assert_eq!(same_hand_title(&b), "dune.epub");
-        }
-    }
-
-    #[test]
-    fn same_hand_year_extracts_four_digit_prefix() {
-        let b = EbookMetadata {
-            published: Some("2020-09-15".into()),
-            ..Default::default()
-        };
-        assert_eq!(same_hand_year(&b), Some("2020".to_string()));
-    }
-
-    #[test]
-    fn same_hand_year_is_none_when_missing_or_too_short() {
-        let missing = EbookMetadata::default();
-        assert_eq!(same_hand_year(&missing), None);
-        let short = EbookMetadata {
-            published: Some("20".into()),
-            ..Default::default()
-        };
-        // `get(0..4)` returns `None` for a string shorter than four bytes.
-        assert_eq!(same_hand_year(&short), None);
-    }
-
-    #[test]
-    fn same_hand_author_label_uses_surname_when_present() {
-        assert_eq!(same_hand_author_label("Ada Lovelace"), "Lovelace");
-        assert_eq!(same_hand_author_label("Homer"), "Homer");
-    }
-
-    #[test]
-    fn same_hand_author_label_falls_back_when_author_blank() {
-        assert_eq!(same_hand_author_label(""), "this author");
-        assert_eq!(same_hand_author_label("   "), "this author");
     }
 }

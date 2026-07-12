@@ -10,6 +10,7 @@ use omnibus_shared::{EbookMetadata, MergeBooksResult, SuggestionsResponse};
 use crate::components::{PageError, PageLoading, PageNotFound};
 use crate::{data, use_server_url, Route};
 
+mod discovery;
 mod file_picker;
 mod journal;
 mod journal_editor;
@@ -477,8 +478,16 @@ fn render_loaded(
     // (hero + rail + suggestions + merge UI) isn't rendered there.
     #[cfg(feature = "mobile")]
     let out = {
-        let _ = (author_books, merge_button, suggestions, is_admin);
-        mobile::render_loaded_mobile(b, server_url)
+        // The merge affordance stays web-only; the discovery blocks (author
+        // cluster + suggestions) now render on mobile too.
+        let _ = merge_button;
+        mobile::render_loaded_mobile(mobile::MobileBookView {
+            b,
+            author_books,
+            suggestions,
+            is_admin,
+            server_url,
+        })
     };
 
     #[cfg(not(feature = "mobile"))]
