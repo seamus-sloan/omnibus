@@ -11,7 +11,7 @@ use crate::contexts::use_server_url;
 use crate::Route;
 
 use super::state::use_mobile_playback;
-use super::view::{chapter_index_for_elapsed, format_hms};
+use super::view::{chapter_index_for_elapsed, format_hms, remaining_at_rate};
 use super::{cover_src, interop};
 
 /// Renders the docked mini-player, or nothing when no audiobook is loaded.
@@ -41,7 +41,7 @@ pub fn MobileMiniPlayer() -> Element {
     } else {
         0.0
     };
-    let remaining = (duration - elapsed).max(0.0);
+    let remaining = remaining_at_rate((duration - elapsed).max(0.0), (ctx.rate)());
     let subtitle = if view.chapters.is_empty() {
         format!("{} left", format_hms(remaining))
     } else {
