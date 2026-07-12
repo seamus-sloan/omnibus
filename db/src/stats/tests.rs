@@ -256,9 +256,11 @@ async fn stats_are_scoped_to_the_requesting_user() {
 
 #[tokio::test]
 async fn cache_serves_within_ttl_and_refreshes_after_expiry() {
+    // The cache is a process-wide static; clear it so this test is
+    // order-independent regardless of what other tests primed.
+    clear_cache();
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 1).await;
-    // Unique user id keeps this test's cache key isolated from siblings.
     let user = seed_user(&pool, "cache-user").await;
 
     reading_session(&pool, user, "uuid-1", T0, 600).await;

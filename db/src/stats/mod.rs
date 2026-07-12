@@ -1,11 +1,8 @@
-//! F3.4 reading-stats aggregation over the F2.1 session tables.
-//!
-//! Every metric is computed in SQL over `reading_sessions` /
-//! `listening_sessions` (migration `0013`, windowed by the
-//! `0020_session_stats_indexes.sql` indexes) plus `journal_entries` for book
-//! completion; no new schema. Results are wrapped in a process-wide per-user
-//! cache with a 60s TTL so a fresh reload reflects a just-finished session
-//! while signal-poll refreshes inside the window skip the SQL.
+//! Reading-stats aggregation over the `reading_sessions` /
+//! `listening_sessions` tables plus `journal_entries` for completion; no new
+//! schema. Every metric is computed in SQL. Results sit behind a process-wide
+//! per-user cache with a 60s TTL so a reload reflects a just-finished session
+//! while poll-driven refreshes inside the window skip the SQL.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -103,6 +100,15 @@ fn cache_get(user_id: i64, range: StatsRange, now: i64) -> Option<StatsSummary> 
 fn cache_put(user_id: i64, range: StatsRange, now: i64, summary: StatsSummary) {
     if let Ok(mut guard) = cache().lock() {
         guard.insert((user_id, range), (now, summary));
+    }
+}
+
+/// Drop every cached entry. Test-only: the cache is a process-wide `static`, so
+/// a test exercising the cached path clears it first to stay order-independent.
+#[cfg(test)]
+pub(crate) fn clear_cache() {
+    if let Ok(mut guard) = cache().lock() {
+        guard.clear();
     }
 }
 

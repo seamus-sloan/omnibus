@@ -1,9 +1,8 @@
-//! Reading-stats aggregate wire types (F3.4).
+//! Reading-stats aggregate wire types.
 //!
-//! Produced by `db::stats` and served through the stats RPC to the `/stats`
-//! page. One [`StatsSummary`] carries every headline number, the daily-activity
-//! heatmap, the top-authors/top-tags rankings, and the finished-books rail for
-//! a single user over a selected [`StatsRange`].
+//! Produced by `db::stats` and served to the `/stats` page. One
+//! [`StatsSummary`] carries the headline numbers, daily-activity heatmap,
+//! top-authors/top-tags rankings, and finished-books rail for one user.
 
 use serde::{Deserialize, Serialize};
 
