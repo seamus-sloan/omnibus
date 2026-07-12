@@ -38,6 +38,7 @@ mod search;
 mod series;
 mod settings;
 mod shelves;
+mod stats;
 mod suggestions;
 mod tags;
 mod uploads;
@@ -332,6 +333,9 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/bookmarks/{id}",
             put(bookmarks::put_bookmark).delete(bookmarks::delete_bookmark),
         )
+        // Reading stats — mobile-facing REST. Web hits the analogous
+        // `/api/rpc/stats` server function.
+        .route("/api/stats", get(stats::get_stats))
         // F3.2 star ratings — mobile-facing REST. Web hits the analogous
         // `/api/rpc/ratings/*` server functions.
         .route("/api/ratings", post(ratings::post_rating))

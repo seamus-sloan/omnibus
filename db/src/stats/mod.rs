@@ -158,8 +158,11 @@ async fn compute(
 /// stays out of Rust. The `expr` is a fixed literal per range — no user input.
 async fn window_start(pool: &SqlitePool, range: StatsRange) -> Result<i64, StatsError> {
     let expr = match range {
+        // Rolling 7 calendar days ending today — deliberately not aligned
+        // to a weekday, per the converged stats design.
+        StatsRange::Week => "strftime('%s', 'now', '-6 days', 'start of day')",
+        StatsRange::Month => "strftime('%s', strftime('%Y-%m-01 00:00:00', 'now'))",
         StatsRange::Year => "strftime('%s', strftime('%Y-01-01 00:00:00', 'now'))",
-        StatsRange::SixMonths => "strftime('%s', 'now', '-6 months')",
         StatsRange::AllTime => "0",
     };
     Ok(

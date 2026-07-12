@@ -27,6 +27,7 @@ pub fn TopNav() -> Element {
     let is_library = matches!(route, Route::Landing {});
     let is_authors = matches!(route, Route::AuthorsIndex {} | Route::AuthorDetail { .. });
     let is_series = matches!(route, Route::SeriesIndex {} | Route::SeriesDetail { .. });
+    let is_stats = matches!(route, Route::Stats {});
 
     rsx! {
         nav { class: "atrium-topbar", aria_label: "Primary",
@@ -52,9 +53,11 @@ pub fn TopNav() -> Element {
                     class: if is_series { "on" } else { "" },
                     "Series"
                 }
-                // Inert placeholder until the Stats page lands. `<span>` (not
-                // `<a>`) so assistive tech doesn't announce it as a link.
-                span { class: "disabled", aria_disabled: "true", "Stats" }
+                Link {
+                    to: Route::Stats {},
+                    class: if is_stats { "on" } else { "" },
+                    "Stats"
+                }
             }
             if !on_settings {
                 SearchPaletteHost {}

@@ -286,6 +286,40 @@ async fn cache_serves_within_ttl_and_refreshes_after_expiry() {
 }
 
 #[tokio::test]
+async fn week_window_keeps_only_the_rolling_last_seven_days() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+
+    // 8 days back is outside the rolling window even at start-of-day
+    // granularity; a just-now session is inside it.
+    let now = now_secs();
+    reading_session(&pool, user, "uuid-1", now - 8 * DAY, 600).await;
+    reading_session(&pool, user, "uuid-1", now, 300).await;
+
+    let s = compute(&pool, user, StatsRange::Week).await.unwrap();
+    assert_eq!(s.reading_seconds, 300);
+    assert_eq!(s.sessions, 1);
+}
+
+#[tokio::test]
+async fn month_window_starts_at_the_first_of_the_current_month() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+
+    // 32 days back always lands in a previous month; a just-now session is in
+    // the current one.
+    let now = now_secs();
+    reading_session(&pool, user, "uuid-1", now - 32 * DAY, 600).await;
+    reading_session(&pool, user, "uuid-1", now, 300).await;
+
+    let s = compute(&pool, user, StatsRange::Month).await.unwrap();
+    assert_eq!(s.reading_seconds, 300);
+    assert_eq!(s.sessions, 1);
+}
+
+#[tokio::test]
 async fn year_window_excludes_old_sessions() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 1).await;

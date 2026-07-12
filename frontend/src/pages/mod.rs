@@ -23,6 +23,7 @@ mod server_connect;
 mod settings;
 mod shelf_detail;
 mod shelves_index;
+mod stats;
 mod tag_cloud;
 
 pub use account::AccountPage;
@@ -50,4 +51,5 @@ pub use server_connect::ServerConnectPage;
 pub use settings::SettingsPage;
 pub use shelf_detail::ShelfDetailPage;
 pub use shelves_index::ShelvesIndexPage;
+pub use stats::StatsPage;
 pub use tag_cloud::TagCloudPage;
