@@ -229,6 +229,16 @@ fn same_hand_section(
     server_url: &str,
 ) -> Element {
     let author_route = author_id.map(|id| Route::AuthorDetail { id });
+    // Only books with a real uuid can be linked; drop the rest so a tile never
+    // emits a `/books/` route or an empty-uuid thumbnail URL.
+    let linkable: Vec<&EbookMetadata> = author_books
+        .iter()
+        .filter(|ab| {
+            ab.unique_identifier
+                .as_deref()
+                .is_some_and(|u| !u.is_empty())
+        })
+        .collect();
     rsx! {
         section { class: "m-section", "data-testid": "mobile-from-same-hand",
             div { class: "m-section-head",
@@ -237,13 +247,13 @@ fn same_hand_section(
                     Link { to: route, class: "m-section-link", "Author \u{2192}" }
                 }
             }
-            if author_books.is_empty() {
+            if linkable.is_empty() {
                 p { class: "m-strip-note",
                     "This is the only book by {same_hand_author_label(primary_author)} in your library so far."
                 }
             } else {
                 div { class: "m-strip",
-                    for ab in author_books.iter() {
+                    for ab in linkable {
                         {same_hand_tile(ab, server_url)}
                     }
                 }

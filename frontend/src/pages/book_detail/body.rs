@@ -72,6 +72,16 @@ pub(super) fn BdSameHand(author: BdAuthorCluster) -> Element {
         author_id,
         author_books,
     } = author;
+    // Only books with a real uuid can be linked; drop the rest so a tile never
+    // emits a `/books/` route or an empty-uuid thumbnail URL.
+    let author_books: Vec<EbookMetadata> = author_books
+        .into_iter()
+        .filter(|ab| {
+            ab.unique_identifier
+                .as_deref()
+                .is_some_and(|u| !u.is_empty())
+        })
+        .collect();
     let owned = author_books.len() + 1;
     let shown = author_books.len().min(4);
     let rest = author_books.len() - shown;
