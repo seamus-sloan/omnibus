@@ -47,6 +47,17 @@ pub fn TagCloudPage() -> Element {
         div { class: "disc-page",
             // Header
             div { class: "disc-tag-header",
+                // Mobile-only (CSS-gated via `.screen`) back affordance to
+                // search, where this lens is reached from; web keeps its own
+                // nav. Same markup on every target so the web SSR/WASM trees
+                // stay identical (rule 07).
+                Link {
+                    to: Route::MobileSearch {},
+                    class: "m-icon-btn disc-back",
+                    "aria-label": "Back to search",
+                    "data-testid": "tags-back",
+                    "\u{2190}"
+                }
                 span { class: "label", "Library lens" }
                 h1 { class: "disc-hero-title",
                     "By "

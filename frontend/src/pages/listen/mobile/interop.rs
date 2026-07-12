@@ -28,14 +28,43 @@ pub enum AudioEvent {
     Pause { seconds: f64 },
 }
 
+/// Now-playing metadata for the iOS lock screen / Control Center, pushed
+/// through the Media Session API. WKWebView mirrors `navigator.mediaSession`
+/// into `MPNowPlayingInfoCenter`, so this is what surfaces the book cover +
+/// "Omnibus" branding during background playback instead of a blank widget.
+pub struct NowPlaying<'a> {
+    pub title: &'a str,
+    pub author: &'a str,
+    /// Absolute, token-bearing cover URL. WebKit fetches the artwork itself,
+    /// so it must carry the `?token=` query — a system fetch can't send a
+    /// bearer header. `None` when the book has no cover.
+    pub artwork_url: Option<&'a str>,
+}
+
+impl NowPlaying<'_> {
+    /// Serialize to the `{title, artist, album, artwork}` JS literal the
+    /// surface script feeds to `MediaMetadata`.
+    fn to_json_lit(&self) -> String {
+        serde_json::to_string(&serde_json::json!({
+            "title": self.title,
+            "artist": self.author,
+            "album": "Omnibus",
+            "artwork": self.artwork_url,
+        }))
+        .unwrap_or_else(|_| "null".into())
+    }
+}
+
 /// Install the direct-play control surface and return the persistent [`Eval`]
 /// the caller drains for [`AudioEvent`]s. Part URLs are tokened here so the
-/// `<audio src>` fetch authenticates on mobile.
+/// `<audio src>` fetch authenticates on mobile; `now_playing` seeds the
+/// lock-screen Media Session metadata.
 pub fn install_direct_surface(
     server_url: &str,
     parts: &[ManifestPart],
     resume_seconds: f64,
     rate: f64,
+    now_playing: &NowPlaying,
 ) -> Eval {
     let token = crate::data::token_store::get();
     let tokened: Vec<serde_json::Value> = parts
@@ -50,7 +79,8 @@ pub fn install_direct_surface(
     let parts_json = serde_json::to_string(&tokened).unwrap_or_else(|_| "[]".into());
     let resume_lit = serde_json::to_string(&resume_seconds).unwrap_or_else(|_| "0".into());
     let rate_lit = serde_json::to_string(&rate).unwrap_or_else(|_| "1".into());
-    dioxus::document::eval(&surface_js(&parts_json, &resume_lit, &rate_lit))
+    let meta_lit = now_playing.to_json_lit();
+    dioxus::document::eval(&surface_js(&parts_json, &resume_lit, &rate_lit, &meta_lit))
 }
 
 /// Toggle play/pause on the installed surface.
@@ -86,7 +116,16 @@ pub fn teardown() {
     fire(
         "var el = document.getElementById('m-omnibus-audio'); \
          if (el) { try { el.pause(); } catch(_e) {} el.remove(); } \
-         window.OmnibusMobileAudio = null;",
+         window.OmnibusMobileAudio = null; \
+         if ('mediaSession' in navigator) { \
+           try { \
+             navigator.mediaSession.metadata = null; \
+             navigator.mediaSession.playbackState = 'none'; \
+             ['play','pause','seekbackward','seekforward','seekto'].forEach(function(a){ \
+               try { navigator.mediaSession.setActionHandler(a, null); } catch(_e) {} \
+             }); \
+           } catch(_e) {} \
+         }",
     );
 }
 
@@ -103,16 +142,17 @@ fn fire(js: &str) {
     let _ = dioxus::document::eval(js);
 }
 
-/// Build the `window.OmnibusMobileAudio` install script. Only the three
-/// interpolation points (`parts_json`, `resume_lit`, `rate_lit`) use
-/// `format!`; the rest is literal JS.
-fn surface_js(parts_json: &str, resume_lit: &str, rate_lit: &str) -> String {
+/// Build the `window.OmnibusMobileAudio` install script. Only the four
+/// interpolation points (`parts_json`, `resume_lit`, `rate_lit`, `meta_lit`)
+/// use `format!`; the rest is literal JS.
+fn surface_js(parts_json: &str, resume_lit: &str, rate_lit: &str, meta_lit: &str) -> String {
     format!(
         r#"
 (function(){{
   var parts = {parts_json};
   var resume = {resume_lit};
   var rate = {rate_lit};
+  var meta = {meta_lit};
 
   // Cumulative per-part offsets for the absolute (cross-part) timeline.
   var offsets = [];
@@ -167,9 +207,46 @@ fn surface_js(parts_json: &str, resume_lit: &str, rate_lit: &str) -> String {
     skip: function(d){{ this.seek(absTime() + d); }},
   }};
 
-  el.addEventListener('timeupdate', function(){{ dioxus.send({{ kind: 'Time', seconds: absTime() }}); }});
-  el.addEventListener('play',  function(){{ dioxus.send({{ kind: 'Play' }}); }});
-  el.addEventListener('pause', function(){{ dioxus.send({{ kind: 'Pause', seconds: absTime() }}); }});
+  // iOS lock-screen / Control Center now-playing via the Media Session API.
+  // WKWebView mirrors this into MPNowPlayingInfoCenter, so it's what shows the
+  // book cover + "Omnibus" instead of blank branding. Guarded — older WebViews
+  // lack the API.
+  var hasMediaSession = ('mediaSession' in navigator);
+  function updatePositionState() {{
+    if (!hasMediaSession || !navigator.mediaSession.setPositionState) return;
+    if (!(acc > 0) || !isFinite(acc)) return;
+    try {{
+      navigator.mediaSession.setPositionState({{
+        duration: acc,
+        playbackRate: el.playbackRate || 1,
+        position: Math.max(0, Math.min(absTime(), acc)),
+      }});
+    }} catch(_e) {{}}
+  }}
+  if (hasMediaSession) {{
+    try {{
+      var art = (meta && meta.artwork)
+        ? [{{ src: meta.artwork, sizes: '512x512', type: 'image/webp' }}]
+        : [];
+      navigator.mediaSession.metadata = new MediaMetadata({{
+        title: (meta && meta.title) || '',
+        artist: (meta && meta.artist) || '',
+        album: (meta && meta.album) || 'Omnibus',
+        artwork: art,
+      }});
+    }} catch(_e) {{}}
+    var oa = window.OmnibusMobileAudio;
+    var setH = function(a, fn){{ try {{ navigator.mediaSession.setActionHandler(a, fn); }} catch(_e) {{}} }};
+    setH('play', function(){{ oa.play(); }});
+    setH('pause', function(){{ oa.pause(); }});
+    setH('seekbackward', function(d){{ oa.skip(-((d && d.seekOffset) || 30)); }});
+    setH('seekforward', function(d){{ oa.skip((d && d.seekOffset) || 30); }});
+    setH('seekto', function(d){{ if (d && d.seekTime != null) oa.seek(d.seekTime); }});
+  }}
+
+  el.addEventListener('timeupdate', function(){{ dioxus.send({{ kind: 'Time', seconds: absTime() }}); updatePositionState(); }});
+  el.addEventListener('play',  function(){{ dioxus.send({{ kind: 'Play' }}); if (hasMediaSession) navigator.mediaSession.playbackState = 'playing'; updatePositionState(); }});
+  el.addEventListener('pause', function(){{ dioxus.send({{ kind: 'Pause', seconds: absTime() }}); if (hasMediaSession) navigator.mediaSession.playbackState = 'paused'; }});
   // Cross-part auto-advance: chain to the next part on natural end.
   el.addEventListener('ended', function(){{
     var oa = window.OmnibusMobileAudio;
@@ -206,13 +283,54 @@ mod tests {
 
     #[test]
     fn surface_js_interpolates_and_has_no_leaked_escapes() {
-        let js = surface_js("[{\"url\":\"u\",\"duration\":1}]", "12.5", "1.2");
+        let meta = NowPlaying {
+            title: "A Sea of Glass",
+            author: "Jane Doe",
+            artwork_url: Some("http://host/api/thumbs/x/lg?token=t"),
+        }
+        .to_json_lit();
+        let js = surface_js("[{\"url\":\"u\",\"duration\":1}]", "12.5", "1.2", &meta);
         assert!(js.contains("var resume = 12.5;"));
         assert!(js.contains("el.playbackRate = rate;"));
         assert!(js.contains("window.OmnibusMobileAudio"));
         assert!(js.contains("dioxus.send"));
+        // Media Session wiring landed.
+        assert!(js.contains("new MediaMetadata"), "media session missing");
+        assert!(js.contains("setActionHandler"), "action handlers missing");
+        assert!(js.contains("setPositionState"), "position state missing");
+        assert!(
+            js.contains("playbackState = 'playing'"),
+            "playback state missing"
+        );
         // No stray `format!` escape pairs leaked into the emitted JS.
         assert!(!js.contains("{{"), "literal {{ leaked into JS");
         assert!(!js.contains("}}"), "literal }} leaked into JS");
+    }
+
+    #[test]
+    fn now_playing_json_lit_sets_album_omnibus_and_artwork() {
+        let lit = NowPlaying {
+            title: "T",
+            author: "A",
+            artwork_url: Some("http://h/c?token=t"),
+        }
+        .to_json_lit();
+        let v: serde_json::Value = serde_json::from_str(&lit).unwrap();
+        assert_eq!(v["title"], "T");
+        assert_eq!(v["artist"], "A");
+        assert_eq!(v["album"], "Omnibus");
+        assert_eq!(v["artwork"], "http://h/c?token=t");
+    }
+
+    #[test]
+    fn now_playing_json_lit_null_artwork_when_absent() {
+        let lit = NowPlaying {
+            title: "T",
+            author: "A",
+            artwork_url: None,
+        }
+        .to_json_lit();
+        let v: serde_json::Value = serde_json::from_str(&lit).unwrap();
+        assert!(v["artwork"].is_null());
     }
 }

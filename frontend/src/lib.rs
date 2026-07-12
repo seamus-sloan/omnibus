@@ -151,6 +151,11 @@ fn ScreenLayout(children: Element) -> Element {
         }
     });
 
+    // Synthesized left-edge back-swipe (the native WKWebView gesture can't
+    // reach the router). Unconditional — before the auth early-return — so the
+    // hook order stays stable across renders.
+    use_mobile_edge_swipe_back(nav);
+
     if use_server_url().is_empty() || !authed() {
         return rsx! { div { class: "screen" } };
     }
@@ -306,6 +311,69 @@ fn use_mobile_viewport_fix() {
 /// Non-mobile stub: the viewport meta is already correct.
 #[cfg(not(feature = "mobile"))]
 fn use_mobile_viewport_fix() {}
+
+/// Capture-phase left-edge back-swipe listener for the mobile WebView.
+///
+/// The wry/WKWebView native edge gesture can't drive app navigation on the
+/// native target: the WebView's back-forward list is only fed by
+/// `history.pushState`, but `dioxus-router` uses an in-memory history off-WASM
+/// that the WebView never sees. So we synthesize the gesture — detect a
+/// left-edge horizontal swipe and go back — and rebind on every screen mount
+/// so the listener always targets the live `eval` channel.
+#[cfg(feature = "mobile")]
+const MOBILE_EDGE_SWIPE_JS: &str = r#"
+(function(){
+  // Rebind the single edge-swipe listener to the current eval channel. The
+  // previous screen's channel closes on unmount, so reinstalling on each mount
+  // keeps `dioxus.send` pointed at a live receiver.
+  var prev = window.__omnibusEdgeSwipe;
+  if (prev) {
+    document.removeEventListener('touchstart', prev.onStart, true);
+    document.removeEventListener('touchend', prev.onEnd, true);
+  }
+  var startX = 0, startY = 0, startT = 0, tracking = false;
+  var EDGE = 24, MIN_DX = 64, MAX_SLOPE = 0.5, MAX_MS = 600;
+  function onStart(e){
+    if (!e.touches || e.touches.length !== 1) { tracking = false; return; }
+    var t = e.touches[0];
+    if (t.clientX <= EDGE) { startX = t.clientX; startY = t.clientY; startT = Date.now(); tracking = true; }
+    else { tracking = false; }
+  }
+  function onEnd(e){
+    if (!tracking) return;
+    tracking = false;
+    var t = e.changedTouches && e.changedTouches[0];
+    if (!t) return;
+    var dx = t.clientX - startX, dy = t.clientY - startY, dt = Date.now() - startT;
+    // Left-edge start, mostly-horizontal, far enough, fast enough.
+    if (dx >= MIN_DX && Math.abs(dy) <= dx * MAX_SLOPE && dt <= MAX_MS) {
+      try { dioxus.send(1); } catch (_e) {}
+    }
+  }
+  // Passive capture listeners: we only read coordinates, never preventDefault,
+  // so the immersive reader/player keep their own page-turn / scrub gestures.
+  document.addEventListener('touchstart', onStart, { capture: true, passive: true });
+  document.addEventListener('touchend', onEnd, { capture: true, passive: true });
+  window.__omnibusEdgeSwipe = { onStart: onStart, onEnd: onEnd };
+})();
+"#;
+
+/// Install the edge-swipe → router-back bridge. Drains the `eval` channel the
+/// injected listener sends on and asks `nav` to go back (when there's history
+/// to unwind). Called from the mobile [`ScreenLayout`], so it rides that
+/// component's mount lifecycle.
+#[cfg(feature = "mobile")]
+fn use_mobile_edge_swipe_back(nav: dioxus_router::Navigator) {
+    let mut eval = use_hook(|| dioxus::document::eval(MOBILE_EDGE_SWIPE_JS));
+    use_future(move || async move {
+        // Loop ends when the channel closes (this screen unmounted).
+        while eval.recv::<i32>().await.is_ok() {
+            if nav.can_go_back() {
+                nav.go_back();
+            }
+        }
+    });
+}
 
 /// Root app component. Renders global styles and the router.
 #[component]
