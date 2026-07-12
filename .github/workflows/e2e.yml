@@ -203,17 +203,19 @@ jobs:
           nix develop .#e2e --command bash -c '
             set -euo pipefail
             cd ui_tests/playwright
-            npx playwright test --shard=${{ matrix.shard }}/${{ env.TOTAL_SHARDS }}
+            npx playwright test --shard=${{ matrix.shard }}/${{ env.TOTAL_SHARDS }} --reporter=list,blob
           '
 
-      - name: Upload Playwright report
-        if: failure()
+      # Blob reports (one per shard, attachments embedded) are the input the
+      # `publish-report` job stitches into a single hosted HTML report.
+      # Uploaded on every run — pass and fail — so the Pages report always
+      # reflects the latest run, not just failures.
+      - name: Upload blob report
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-shard-${{ matrix.shard }}
-          path: |
-            ui_tests/playwright/playwright-report
-            ui_tests/playwright/test-results
+          name: blob-report-${{ matrix.shard }}
+          path: ui_tests/playwright/blob-report
           retention-days: 7
 
       - name: Upload server log
@@ -223,3 +225,56 @@ jobs:
           name: server-log-shard-${{ matrix.shard }}
           path: server.log
           retention-days: 7
+
+  # Stitch the per-shard blob reports into one browsable HTML report and
+  # deploy it to GitHub Pages, so failures (and passes) are inspectable at a
+  # stable URL without downloading an artifact and running
+  # `npx playwright show-report` locally. Runs whether or not the shards
+  # passed (but skips if a shard was cancelled or never ran), so the hosted
+  # report tracks the latest run. `merge-reports` needs @playwright/test but
+  # no browser, so this job stays on plain setup-node — no Nix.
+  publish-report:
+    name: publish report
+    needs: playwright
+    if: ${{ always() && needs.playwright.result != 'skipped' && needs.playwright.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    # GitHub Pages allows one in-flight deployment at a time; a dedicated
+    # group (distinct from the workflow's ref-keyed cancel group above) keeps
+    # concurrent main/PR runs from cancelling each other mid-deploy.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download all blob reports
+        uses: actions/download-artifact@v4
+        with:
+          path: all-blob-reports
+          pattern: blob-report-*
+          merge-multiple: true
+
+      - name: Merge blob reports into one HTML report
+        working-directory: ui_tests/playwright
+        run: |
+          npm ci
+          npx playwright merge-reports --reporter html ../../all-blob-reports
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ui_tests/playwright/playwright-report
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
