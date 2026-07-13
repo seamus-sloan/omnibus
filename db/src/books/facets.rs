@@ -11,7 +11,7 @@ use sqlx::SqlitePool;
 
 /// Per-facet book counts for `library_paths`, ordered by count descending then
 /// value ascending (the order the sidebar renders). Empty `library_paths`
-/// returns empty facets. Books with no backing file (fileless, F2) are excluded,
+/// returns empty facets. Books with no backing file (fileless) are excluded,
 /// matching the list/count read paths.
 pub async fn library_facets(
     pool: &SqlitePool,

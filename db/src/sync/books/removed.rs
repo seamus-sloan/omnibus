@@ -10,7 +10,7 @@
 
 use sqlx::Transaction;
 
-/// Mark a batch of removed books' files missing (F2). The file is gone, but the
+/// Mark a batch of removed books' files missing. The file is gone, but the
 /// `books` row — its metadata, taxonomy links, FTS row, and every soft-ref
 /// user-data row — is **retained** (only `book_files` is dropped, parts and
 /// chapters cascading), so the book stays in author/series/tag browse and

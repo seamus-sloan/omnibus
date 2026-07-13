@@ -10,7 +10,7 @@ use omnibus_shared::{SmtpConfigStatus, SmtpConfigUpdate, SmtpSecurity};
 
 use crate::{data, use_server_url};
 
-/// Admin field to configure the server-wide SMTP relay (F4.3) used by
+/// Admin field to configure the server-wide SMTP relay used by
 /// Send-to-Kindle. Loads the masked status on mount; the password is never read
 /// back to the client. A blank password on Save preserves the stored secret.
 #[component]

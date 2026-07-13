@@ -196,7 +196,7 @@ impl Worker {
     }
 
     /// Record that `user_id` owns the task `id`. Call right after
-    /// [`post`](Worker::post) for user-initiated, pollable jobs (F4.3
+    /// [`post`](Worker::post) for user-initiated, pollable jobs (e.g.
     /// Send-to-Kindle) so [`owned_task_state`](Worker::owned_task_state) can
     /// scope status reads to the owner. A no-op if the entry was already
     /// evicted (it won't have been this soon after `post`).

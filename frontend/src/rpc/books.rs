@@ -52,7 +52,7 @@ pub async fn rpc_get_ebooks() -> Result<EbookLibrary> {
     .map_err(|e| internal_rpc_error("list ebooks", e))?)
 }
 
-/// F5b keyset-paginated landing read (the web path's Option-B replacement for
+/// Keyset-paginated landing read (the web path's Option-B replacement for
 /// the full-library `rpc_get_ebooks`). POST — like `rpc_search` — so the sort /
 /// filter / cursor arguments ride in the JSON body that Dioxus `#[get]` server
 /// functions can't carry.
@@ -235,7 +235,7 @@ pub async fn rpc_search(q: String) -> Result<EbookLibrary> {
     })
 }
 
-/// F3.3 "Readers also enjoyed" for one book. Drives the cache de-duplication
+/// "Readers also enjoyed" for one book. Drives the cache de-duplication
 /// state machine: returns `NotConfigured` when no Hardcover key is set, serves
 /// the fresh/sticky cache when present, and enqueues a single background
 /// resolution (marking `pending` *before* posting) so a refresh or a burst of

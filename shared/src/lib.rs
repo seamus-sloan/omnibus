@@ -29,14 +29,14 @@ pub const AUTHOR_PHOTO_URL_MAX_LEN: usize = 2048;
 /// Maximum byte length of a stored Hardcover API key (Bearer token).
 pub const HARDCOVER_API_KEY_MAX_LEN: usize = 2048;
 
-/// Maximum byte length of an SMTP host / username field (F4.3).
+/// Maximum byte length of an SMTP host / username field.
 pub const SMTP_FIELD_MAX_LEN: usize = 255;
 
-/// Maximum byte length of an SMTP password (F4.3).
+/// Maximum byte length of an SMTP password.
 pub const SMTP_PASSWORD_MAX_LEN: usize = 1024;
 
 /// Maximum byte length of an email address field — an SMTP `from` or a user's
-/// Kindle destination (F4.3). RFC 5321 caps a path at 256 bytes; 320 is the
+/// Kindle destination. RFC 5321 caps a path at 256 bytes; 320 is the
 /// commonly-cited practical upper bound for `local@domain`.
 pub const EMAIL_MAX_LEN: usize = 320;
 

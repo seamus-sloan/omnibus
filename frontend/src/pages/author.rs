@@ -225,7 +225,7 @@ fn author_hero(
     }
 }
 
-/// Avatar — letter fallback by default; F1.11 swaps in the cached profile
+/// Avatar — letter fallback by default; swaps in the cached profile
 /// photo when `has_photo` is set. Wrapped in `AuthorPhotoEditOverlay` so a
 /// hover-revealed pencil opens the URL/upload/scan modal. The `on_change`
 /// callback re-fetches the author payload so the new photo (or restored

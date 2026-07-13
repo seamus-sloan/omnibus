@@ -123,7 +123,7 @@ struct BookDataSignals {
 }
 
 /// Install the two `uuid`-reactive fetch effects: the book + author-books load
-/// (also re-armed by `refresh` after a merge/undo) and the F3.3 suggestions
+/// (also re-armed by `refresh` after a merge/undo) and the suggestions
 /// poll. Called unconditionally from [`BookDetailPage`] so the hook sequence
 /// stays fixed; both effects re-run when `uuid` changes.
 fn use_book_data_effects(uuid: String, server_url: String, sig: BookDataSignals) {
@@ -283,7 +283,7 @@ fn fetch_book_and_author_books(
     });
 }
 
-/// Fetch F3.3 suggestions for `uuid` and, on web, poll a few times while the
+/// Fetch suggestions for `uuid` and, on web, poll a few times while the
 /// result is `Pending`. `suggestions_epoch` is bumped once per call and
 /// captured as the run's identity, so a stale poll left over from a previous
 /// book (fast SPA navigation) drops its result instead of overwriting the

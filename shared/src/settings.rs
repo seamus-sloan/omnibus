@@ -67,7 +67,7 @@ pub fn is_plausible_email(s: &str) -> bool {
     }
 }
 
-/// Transport security for the outbound SMTP connection (F4.3).
+/// Transport security for the outbound SMTP connection.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SmtpSecurity {

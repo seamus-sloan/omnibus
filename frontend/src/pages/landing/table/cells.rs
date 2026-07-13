@@ -137,7 +137,7 @@ pub(super) fn RowTitleCell(title: String, error: Option<String>, ctx: CellEditCt
     }
 }
 
-/// Series cell wrapper — display shows "Name #Index" (F1.3), edit input
+/// Series cell wrapper — display shows "Name #Index", edit input
 /// seeds with just the series name (the index lives on the full edit page).
 #[component]
 pub(super) fn RowSeriesCell(series_line: String, series_text: String, ctx: CellEditCtx) -> Element {

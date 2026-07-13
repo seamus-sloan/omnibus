@@ -151,7 +151,7 @@ pub(super) async fn post_ebook_cover(
 ///
 /// The prior overrides row is read BEFORE touching disk: `write_override_cover`
 /// deletes any existing `override-<uuid>.*` before writing, so fetching first
-/// keeps the disk-write/cleanup decision race-free (#529). If the upsert fails,
+/// keeps the disk-write/cleanup decision race-free. If the upsert fails,
 /// the just-written file is cleaned up ONLY when no prior override cover existed
 /// — otherwise the write step already replaced the user's previous valid cover
 /// and cleanup would compound the loss (#516, #529).
@@ -196,7 +196,7 @@ async fn persist_cover(
 /// Best-effort delete of the on-disk override cover after a DB failure in
 /// `post_ebook_cover`. `delete_override_cover` is a synchronous `std::fs`
 /// call (matches the neighbouring delete-handler pattern) so it runs on
-/// the blocking pool to keep the axum runtime responsive (#106). The inner
+/// the blocking pool to keep the axum runtime responsive. The inner
 /// call swallows its own filesystem errors; a `JoinError` here is logged
 /// but ignored — the caller is already returning the original DB error,
 /// and a missing cover file is preferred over a dangling file with no row

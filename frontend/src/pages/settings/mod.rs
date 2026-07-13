@@ -326,7 +326,7 @@ fn MaintenanceActions(
     }
 }
 
-/// Admin field to set/clear the server-wide Hardcover API key (F3.3). Loads the
+/// Admin field to set/clear the server-wide Hardcover API key. Loads the
 /// masked status on mount; the raw key is never read back to the client.
 #[component]
 fn HardcoverKeyField() -> Element {

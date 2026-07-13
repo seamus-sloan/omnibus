@@ -18,11 +18,11 @@ pub use omnibus_shared::{
 /// indexer, settings handlers, and tests all reference the same identifier.
 const EBOOK_LIBRARY_PATH_KEY: &str = "ebook_library_path";
 const AUDIOBOOK_LIBRARY_PATH_KEY: &str = "audiobook_library_path";
-/// `settings` KV key for the F3.3 Hardcover API token. Stored directly (not via
+/// `settings` KV key for the Hardcover API token. Stored directly (not via
 /// the [`Settings`] struct) so saving it never triggers the scan-root
 /// reconciliation `set_settings` runs.
 const HARDCOVER_API_KEY_KEY: &str = "hardcover_api_key";
-/// `settings` KV keys for the F4.3 server-wide SMTP config. Stored as discrete
+/// `settings` KV keys for the server-wide SMTP config. Stored as discrete
 /// rows (not via the [`Settings`] struct) so saving them never triggers the
 /// scan-root reconciliation `set_settings` runs. The password is masked before
 /// it ever crosses the wire (see [`smtp_status`]).
@@ -401,7 +401,7 @@ pub async fn seed_hardcover_key_from_env(pool: &SqlitePool) -> Result<(), Settin
     Ok(())
 }
 
-/// Fully-resolved SMTP config used by the F4.3 send path (`crate::kindle`).
+/// Fully-resolved SMTP config used by the send path (`crate::kindle`).
 /// Server-only — carries the raw password, so it never crosses the wire; the
 /// UI sees the masked [`SmtpConfigStatus`] instead.
 #[derive(Clone)]

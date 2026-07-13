@@ -119,7 +119,7 @@ pub fn AccountPage() -> Element {
     }
 }
 
-/// Web/SSR page body — the F4.3 Send-to-Kindle destination form. Hydrates the
+/// Web/SSR page body — the Send-to-Kindle destination form. Hydrates the
 /// saved address from `/api/auth/me`; saving/clearing round-trips through
 /// `data::set_kindle_email`.
 #[cfg(not(feature = "mobile"))]
