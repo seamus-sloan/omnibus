@@ -26,6 +26,9 @@ serde_json = { workspace = true, optional = true }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros"], optional = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"], optional = true }
 tracing = { workspace = true, optional = true }
+# Owns the global subscriber (RUST_LOG-driven console logs); installed before
+# `dioxus::serve` so dioxus-logger's default subscriber never takes over.
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 time = { version = "0.3", optional = true }
 # Re-exported by dioxus::serve as the return error type, and used by the
 # native startup helpers in main.rs that previously lived inside an inline
@@ -70,6 +73,7 @@ server = [
     "dep:sqlx",
     "dep:tokio",
     "dep:tracing",
+    "dep:tracing-subscriber",
     "dep:time",
     "dep:anyhow",
     "dep:tempfile",
