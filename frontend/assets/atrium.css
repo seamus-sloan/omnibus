@@ -5788,12 +5788,16 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .atrium .m-player-title {
   font-family: var(--serif); font-weight: 400; font-size: 26px;
   line-height: 1.05; margin-top: 10px;
-  overflow: hidden; white-space: nowrap;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
 /* `.m-marquee-track` is always the same size as its text; `--m-marquee-distance`
    (set in JS from the measured overflow) is only consumed once `.m-marquee-active`
-   is toggled on, so a title that fits never animates. */
+   is toggled on, so a title that fits never animates and stays centered like the
+   rest of `.m-player-now`. Active titles switch to left-aligned so the resting
+   (`translateX(0)`) frame actually shows the start of the title instead of the
+   browser's default centering clipping an equal slice off each edge. */
 .m-player-title .m-marquee-track { display: inline-block; }
+.m-player-title.m-marquee-active { text-align: left; }
 .m-player-title.m-marquee-active .m-marquee-track {
   animation: m-marquee-scroll 7s ease-in-out infinite alternate;
 }

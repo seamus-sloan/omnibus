@@ -173,10 +173,12 @@ fn persist_position(uuid: &str, server_url: &str, seconds: f64) {
 /// fits the header width, a slow back-and-forth scroll when it doesn't
 /// (issue #1001 AC1/AC2). The actual overflow check runs in JS on mount
 /// since it needs a real layout measurement (`scrollWidth` vs `clientWidth`)
-/// that isn't available at render time.
+/// that isn't available at render time. `id` gives the eval a stable,
+/// single-element lookup instead of a page-wide class scan.
 fn player_title(title: &str) -> Element {
     rsx! {
         h1 {
+            id: "m-player-title",
             class: "m-player-title",
             onmounted: move |_| check_title_marquee(),
             span { class: "m-marquee-track", span { class: "m-em", "{title}" } }
@@ -184,24 +186,36 @@ fn player_title(title: &str) -> Element {
     }
 }
 
-/// Toggle `.m-marquee-active` (and the scroll distance custom property) on
-/// every `.m-player-title` whose track overflows its header width; a title
-/// that already fits is left untouched. Fire-and-forget, mirroring the
-/// `fire()` evals in `mobile::interop`.
+/// Arm the marquee on `#m-player-title` if its track overflows the header
+/// width, else leave it static. Installs `window.OmnibusMarqueeCheck` once
+/// (idempotent — `eval` reruns on every mount) so a `resize`/rotation event
+/// re-evaluates the same element instead of going stale, and re-checks after
+/// `document.fonts.ready` since the serif webfont can still be swapping in
+/// when the first (mount-time) measurement runs. The 12px pad keeps the
+/// last character from sitting exactly flush against the clipped edge.
 fn check_title_marquee() {
-    let _ = dioxus::document::eval(
-        "document.querySelectorAll('.m-player-title').forEach(function (el) { \
-           var track = el.querySelector('.m-marquee-track'); \
-           if (!track) return; \
-           var overflow = track.scrollWidth - el.clientWidth; \
-           if (overflow > 1) { \
-             el.style.setProperty('--m-marquee-distance', (-overflow - 12) + 'px'); \
-             el.classList.add('m-marquee-active'); \
-           } else { \
-             el.classList.remove('m-marquee-active'); \
-             el.style.removeProperty('--m-marquee-distance'); \
-           } \
-         });",
+    interop::fire(
+        "if (!window.OmnibusMarqueeCheck) { \
+           window.OmnibusMarqueeCheck = function () { \
+             var el = document.getElementById('m-player-title'); \
+             if (!el) return; \
+             var track = el.querySelector('.m-marquee-track'); \
+             if (!track) return; \
+             var overflow = track.scrollWidth - el.clientWidth; \
+             if (overflow > 1) { \
+               el.style.setProperty('--m-marquee-distance', (-overflow - 12) + 'px'); \
+               el.classList.add('m-marquee-active'); \
+             } else { \
+               el.classList.remove('m-marquee-active'); \
+               el.style.removeProperty('--m-marquee-distance'); \
+             } \
+           }; \
+           window.addEventListener('resize', window.OmnibusMarqueeCheck); \
+         } \
+         window.OmnibusMarqueeCheck(); \
+         if (document.fonts && document.fonts.ready) { \
+           document.fonts.ready.then(window.OmnibusMarqueeCheck); \
+         }",
     );
 }
 

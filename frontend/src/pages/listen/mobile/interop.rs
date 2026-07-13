@@ -138,7 +138,7 @@ pub fn set_rate(rate: f64) {
 }
 
 /// Fire-and-forget control eval (no event stream).
-fn fire(js: &str) {
+pub(crate) fn fire(js: &str) {
     let _ = dioxus::document::eval(js);
 }
 
