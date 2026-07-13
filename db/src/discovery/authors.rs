@@ -188,7 +188,7 @@ async fn merge_overrides_into_author_books(
     Ok(())
 }
 
-/// Whether a usable profile photo is cached for `author_id`. F1.11 — the
+/// Whether a usable profile photo is cached for `author_id`. The
 /// frontend uses this to render `<img>` vs the typographic letter avatar
 /// in one round trip. `'letter'` rows are the negative-cache marker and
 /// do not count as a usable photo.

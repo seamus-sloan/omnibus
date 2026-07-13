@@ -1,6 +1,6 @@
 //! Unit tests for the `indexer` module — `diff_library` classifiers,
 //! `is_stale` window logic, `reindex` preservation-on-failure, the
-//! incomplete-enumeration data-loss guard (#819), and the shared-path
+//! incomplete-enumeration data-loss guard, and the shared-path
 //! cross-format deletion guard.
 
 use super::*;

@@ -1,7 +1,8 @@
 //! Removed bucket: every uuid whose file disappeared keeps its `books` row.
 //! One chunked DELETE drops only the `book_files` rows, and one chunked UPDATE
-//! flags each book missing for F10 GC — its metadata, taxonomy links, and FTS
-//! row stay, so the book remains in browse/search; the grid and facets hide it
+//! flags each book missing for `missing_files::gc_books_missing_files` — its
+//! metadata, taxonomy links, and FTS row stay, so the book remains in
+//! browse/search; the grid and facets hide it
 //! via their own `EXISTS book_files` filter. Idempotent — a re-run on an
 //! already-fileless row deletes zero `book_files` and the flag UPDATE no-ops
 //! (the `is_missing_files = 0` guard preserves the original

@@ -81,7 +81,7 @@ pub struct User {
     pub can_upload: bool,
     pub can_edit: bool,
     pub can_download: bool,
-    /// F4.3 Send-to-Kindle destination, or `None` when unconfigured.
+    /// Send-to-Kindle destination, or `None` when unconfigured.
     pub kindle_email: Option<String>,
 }
 

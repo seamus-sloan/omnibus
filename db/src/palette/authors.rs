@@ -16,7 +16,7 @@ use super::PaletteError;
 /// and `palette_taxonomy_counts_scoped_per_library`). The join plan is locked
 /// in by `palette_taxonomy_query_plans_use_indexes`.
 ///
-/// F5.1: the count uses the effective (override-aware) creator set, not the
+/// The count uses the effective (override-aware) creator set, not the
 /// raw `books_authors_link` rows — otherwise an author whose books were all
 /// reassigned through the metadata edit form (e.g. "Sanderson, Brandon" →
 /// "Brandon Sanderson") keeps reporting the canonical count even though

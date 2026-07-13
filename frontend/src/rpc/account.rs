@@ -1,4 +1,4 @@
-//! Per-user account server functions. Currently just the F4.3 Send-to-Kindle
+//! Per-user account server functions. Currently just the Send-to-Kindle
 //! destination address, editable from the `/account` page.
 
 use dioxus::fullstack::post;

@@ -60,7 +60,6 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, InitDbError> {
 /// take effect once; running it on every connection is cheap (returns the
 /// current mode) and keeps the logic in one place. It's skipped for
 /// in-memory databases so test output isn't littered with pragma results.
-/// See issue #82 for the rationale on each PRAGMA value.
 async fn connect_pool(database_url: &str, is_memory: bool) -> Result<SqlitePool, sqlx::Error> {
     SqlitePoolOptions::new()
         .max_connections(5)

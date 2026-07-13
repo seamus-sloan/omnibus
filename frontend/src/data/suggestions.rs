@@ -1,4 +1,4 @@
-//! F3.3 suggestions fetchers + Hardcover-key read/write. Each function has a
+//! Suggestions fetchers + Hardcover-key read/write. Each function has a
 //! mobile REST variant (`reqwest`) and a web/SSR server-function wrapper with
 //! identical signatures across the `#[cfg]` split.
 

@@ -1,4 +1,4 @@
-//! F4.3 Send-to-Kindle server functions. `rpc_send_to_kindle` enqueues a
+//! Send-to-Kindle server functions. `rpc_send_to_kindle` enqueues a
 //! `SendToKindle` job on the shared worker and returns its `task_id`
 //! immediately; the client then polls `rpc_kindle_send_status` for the
 //! terminal result. Returning right away keeps the request well under the

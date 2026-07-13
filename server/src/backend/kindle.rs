@@ -1,4 +1,4 @@
-//! F4.3 Send-to-Kindle REST handlers (mobile-facing). Mirrors the web server
+//! Send-to-Kindle REST handlers (mobile-facing). Mirrors the web server
 //! functions in `frontend/src/rpc/{kindle,account}.rs` and the SMTP admin RPCs
 //! in `frontend/src/rpc/settings.rs`: per-user send + Kindle-email, and the
 //! admin-only SMTP config (get / set / clear / test).

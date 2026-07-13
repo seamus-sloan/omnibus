@@ -11,7 +11,7 @@ use super::PaletteError;
 /// Series-arm palette query, bound `?1 = library_path`, `?2 = like_pattern`,
 /// `?3 = limit`.
 ///
-/// F5.1: both the count and the `author_display` line use the effective
+/// Both the count and the `author_display` line use the effective
 /// (override-aware) view, mirroring `get_series` and the palette author
 /// count. `overrides.series` (string) drives membership; if a book's first
 /// creator was renamed through the metadata edit form,

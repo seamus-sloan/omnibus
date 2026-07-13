@@ -1,5 +1,5 @@
 //! Keyset-paginated, server-side-sorted, server-side-filtered landing read
-//! path (F5b). [`list_books_page`] returns one page of the configured
+//! path. [`list_books_page`] returns one page of the configured
 //! library ordered by any of the five [`SortKey`] axes, filtered by the
 //! sidebar [`ViewFilters`], positioned by an opaque [`PageCursor`].
 //!

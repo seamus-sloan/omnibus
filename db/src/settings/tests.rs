@@ -1,6 +1,6 @@
 //! Unit tests for the `settings` module — `get_settings`/`set_settings`
 //! roundtrip, env-var seeding (serialized via a process-global guard),
-//! F2 repoint-in-place identity preservation, and never-prune retention.
+//! repoint-in-place identity preservation, and never-prune retention.
 
 use super::*;
 use crate::books::list_books;

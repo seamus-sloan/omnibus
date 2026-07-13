@@ -1,4 +1,4 @@
-//! Tests for the F4.3 Send-to-Kindle REST handlers: admin gating on the SMTP
+//! Tests for the Send-to-Kindle REST handlers: admin gating on the SMTP
 //! config, per-user Kindle-email set/validate, and the send gates (missing
 //! email → 422, missing book → 404). The happy-path SMTP delivery is not
 //! exercised here — it needs a live relay and belongs to the E2E suite.

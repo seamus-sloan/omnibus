@@ -2,7 +2,7 @@
 //! session reports. Position upserts are last-write-wins on
 //! `(user_id, book_uuid, format)`; session inserts go to the per-format
 //! `reading_sessions` / `listening_sessions` tables. All rows soft-reference
-//! the durable `books.uuid` (F1 — no FK, no cascade), resolved through the
+//! the durable `books.uuid` (no FK, no cascade), resolved through the
 //! same merged-uuid-aware canonical resolver so a format-merged uuid stores
 //! the surviving book's identity.
 

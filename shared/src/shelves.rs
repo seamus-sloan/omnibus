@@ -3,7 +3,7 @@
 //! A shelf is a named library subset: **smart** (membership from a `field op
 //! value` rule over normalized metadata) or **manual** (an explicit, ordered
 //! book list). The condition shape (`RuleField`/`RuleOp`/`ShelfRule`) is defined
-//! once here so F1.5 advanced search can reuse it.
+//! once here so advanced search can reuse it.
 
 use serde::{Deserialize, Serialize};
 
