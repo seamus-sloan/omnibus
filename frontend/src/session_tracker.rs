@@ -1,9 +1,8 @@
-//! Reading/listening session capture. A pure segment state machine
-//! ([`SessionTracker`]) plus the two hooks that drive it — readers count
-//! mounted-and-visible wall-clock time, players count play→pause spans —
-//! and flush [`SessionReport`]s to the `db::stats` session tables via
-//! `data::record_sessions` (web sends `navigator.sendBeacon` so a closing
-//! tab still delivers). These rows feed the `/stats` aggregates.
+//! Reading/listening session capture feeding the `/stats` aggregates: a
+//! pure segment state machine ([`SessionTracker`]) plus the two hooks that
+//! drive it — readers count mounted-and-visible wall-clock time, players
+//! count play→pause spans — flushing [`SessionReport`]s to the session
+//! tables (web via `navigator.sendBeacon`, mobile via the REST layer).
 
 use std::cell::RefCell;
 use std::rc::Rc;
