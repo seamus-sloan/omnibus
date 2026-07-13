@@ -201,6 +201,7 @@ async fn reindex_returns_500_when_worker_fails() {
     let settings = omnibus_shared::Settings {
         ebook_library_path: Some(bogus_path),
         audiobook_library_path: None,
+        scan_interval_hours: None,
     };
     db::set_settings(&pool, &settings)
         .await
@@ -307,6 +308,7 @@ async fn reindex_returns_200_when_scan_succeeds() {
     let settings = omnibus_shared::Settings {
         ebook_library_path: Some(scratch.path().to_string_lossy().to_string()),
         audiobook_library_path: None,
+        scan_interval_hours: None,
     };
     db::set_settings(&pool, &settings)
         .await
@@ -338,6 +340,7 @@ async fn scan_library_returns_200_when_a_path_is_configured() {
     let settings = omnibus_shared::Settings {
         ebook_library_path: Some("/some/library".to_string()),
         audiobook_library_path: None,
+        scan_interval_hours: None,
     };
     db::set_settings(&pool, &settings)
         .await
@@ -606,6 +609,78 @@ async fn api_post_settings_returns_422_when_audiobook_path_exceeds_max_len() {
         msg.contains("audiobook_library_path"),
         "error body should name the offending field: {msg}"
     );
+}
+
+#[tokio::test]
+async fn api_post_settings_returns_422_when_scan_interval_hours_is_zero() {
+    // Validates the `settings.validate()` guard added for the configurable
+    // periodic scan (F): 0 is rejected rather than treated as "disable".
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let body = serde_json::json!({
+        "ebook_library_path": null,
+        "audiobook_library_path": null,
+        "scan_interval_hours": 0,
+    });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/settings")
+                .method("POST")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let msg = std::str::from_utf8(&bytes).unwrap_or("");
+    assert!(
+        msg.contains("scan_interval_hours"),
+        "error body should name the offending field: {msg}"
+    );
+
+    // 422 must short-circuit before `db::set_settings` runs.
+    let stored = db::get_settings(&pool).await.expect("read settings");
+    assert_eq!(stored.scan_interval_hours, None);
+}
+
+#[tokio::test]
+async fn api_post_settings_persists_and_returns_scan_interval_hours() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let body = serde_json::json!({
+        "ebook_library_path": null,
+        "audiobook_library_path": null,
+        "scan_interval_hours": 12,
+    });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/settings")
+                .method("POST")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let settings: Settings = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(settings.scan_interval_hours, Some(12));
+
+    let stored = db::get_settings(&pool).await.expect("read settings");
+    assert_eq!(stored.scan_interval_hours, Some(12));
 }
 
 #[tokio::test]

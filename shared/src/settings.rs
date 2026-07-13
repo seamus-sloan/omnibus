@@ -8,24 +8,43 @@ use serde::{Deserialize, Serialize};
 /// Maximum byte length of a library path field.
 pub const PATH_MAX_LEN: usize = 4096;
 
+/// Minimum allowed periodic-scan interval, in hours. `scan_interval_hours`
+/// is `Option<u32>` — `None` means "disabled" (today's boot-only-scan
+/// behavior), so a `Some` value below this floor (including 0) is rejected
+/// rather than treated as a way to disable the feature.
+pub const SCAN_INTERVAL_MIN_HOURS: u32 = 1;
+
 /// Validation failure modes for [`Settings`].
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum SettingsError {
     /// One of the library-path fields exceeded [`PATH_MAX_LEN`].
     #[error("{field} exceeds {PATH_MAX_LEN} bytes")]
     PathTooLong { field: &'static str },
+    /// `scan_interval_hours` was set below [`SCAN_INTERVAL_MIN_HOURS`].
+    #[error("scan_interval_hours must be at least {SCAN_INTERVAL_MIN_HOURS} (omit to disable)")]
+    ScanIntervalTooSmall,
 }
 
-/// User-configurable paths for the ebook and audiobook libraries.
+/// User-configurable paths for the ebook and audiobook libraries, plus the
+/// optional periodic-rescan cadence.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Settings {
     pub ebook_library_path: Option<String>,
     pub audiobook_library_path: Option<String>,
+    /// Hours between automatic rescans of both libraries. `None` disables
+    /// periodic scanning — the library then only reindexes on server boot
+    /// or a manual "Scan Library" click (today's behavior, unchanged).
+    /// Omitted from the wire payload when unset (rather than serialized as
+    /// `null`) so existing callers that never touch this field see no
+    /// change to the `Settings` JSON shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_interval_hours: Option<u32>,
 }
 
 impl Settings {
-    /// Validate field lengths. Lengths are measured in bytes (filesystem
-    /// `PATH_MAX` semantics), not Unicode scalar values.
+    /// Validate field lengths and the scan-interval floor. Path lengths are
+    /// measured in bytes (filesystem `PATH_MAX` semantics), not Unicode
+    /// scalar values.
     pub fn validate(&self) -> Result<(), SettingsError> {
         if let Some(p) = &self.ebook_library_path {
             if p.len() > PATH_MAX_LEN {
@@ -39,6 +58,11 @@ impl Settings {
                 return Err(SettingsError::PathTooLong {
                     field: "audiobook_library_path",
                 });
+            }
+        }
+        if let Some(hours) = self.scan_interval_hours {
+            if hours < SCAN_INTERVAL_MIN_HOURS {
+                return Err(SettingsError::ScanIntervalTooSmall);
             }
         }
         Ok(())

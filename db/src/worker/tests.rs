@@ -8,10 +8,11 @@ use std::sync::Arc;
 use std::sync::Mutex as TestMutex;
 use std::time::{Duration, Instant};
 
-use omnibus_shared::{ProgressState, TaskKind};
+use omnibus_shared::{ProgressState, Settings, TaskKind};
 use sqlx::SqlitePool;
 
 use super::types::{Task, TaskOutcome, Worker, WorkerConfig};
+use super::{periodic_scan_tick, PERIODIC_SCAN_RECHECK};
 
 async fn pool() -> SqlitePool {
     crate::init_db("sqlite::memory:").await.unwrap()
@@ -754,4 +755,105 @@ async fn owned_task_state_scopes_reads_to_the_owner() {
     assert!(w.owned_task_state(9999, 42).is_none());
 
     let _ = w.await_completion(id).await;
+}
+
+// ── periodic_scan_tick (F: configurable periodic scan interval) ──
+
+/// Find a posted task's progress entry by its `resource_key`, checking both
+/// the active and just-completed buckets so the assertion doesn't race a
+/// fast-failing scan of a nonexistent test path.
+fn find_by_resource(w: &Arc<Worker>, resource_key: &str) -> bool {
+    let snap = w.progress_snapshot();
+    snap.active
+        .iter()
+        .chain(snap.recent_complete.iter())
+        .any(|p| p.resource_key.as_deref() == Some(resource_key))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn periodic_scan_tick_skips_and_recommends_a_recheck_wait_when_interval_unset() {
+    let p = pool().await;
+    crate::settings::set_settings(
+        &p,
+        &Settings {
+            ebook_library_path: Some("/ebooks".into()),
+            audiobook_library_path: Some("/audio".into()),
+            scan_interval_hours: None,
+        },
+    )
+    .await
+    .unwrap();
+    let w = make_worker_default(p.clone());
+
+    let wait = periodic_scan_tick(&p, &w).await;
+
+    assert_eq!(wait, PERIODIC_SCAN_RECHECK);
+    assert!(
+        w.progress_snapshot().active.is_empty(),
+        "no scan should be posted while scan_interval_hours is unset"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn periodic_scan_tick_posts_scan_and_scan_audiobooks_when_due() {
+    let p = pool().await;
+    crate::settings::set_settings(
+        &p,
+        &Settings {
+            ebook_library_path: Some("/ebooks".into()),
+            audiobook_library_path: Some("/audio".into()),
+            scan_interval_hours: Some(6),
+        },
+    )
+    .await
+    .unwrap();
+    let w = make_worker_default(p.clone());
+
+    let wait = periodic_scan_tick(&p, &w).await;
+
+    assert_eq!(wait, Duration::from_secs(6 * 3600));
+    assert!(
+        find_by_resource(&w, "/ebooks"),
+        "a due tick must post Task::Scan for the configured ebook path"
+    );
+    assert!(
+        find_by_resource(&w, "audiobooks:/audio"),
+        "a due tick must post Task::ScanAudiobooks for the configured audiobook path"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn periodic_scan_tick_posts_only_the_configured_library_path() {
+    let p = pool().await;
+    crate::settings::set_settings(
+        &p,
+        &Settings {
+            ebook_library_path: Some("/ebooks".into()),
+            audiobook_library_path: None,
+            scan_interval_hours: Some(2),
+        },
+    )
+    .await
+    .unwrap();
+    let w = make_worker_default(p.clone());
+
+    let _ = periodic_scan_tick(&p, &w).await;
+
+    assert!(find_by_resource(&w, "/ebooks"));
+    assert_eq!(
+        w.progress_snapshot().active.len(),
+        1,
+        "no audiobook path configured, so only one scan should be posted"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn periodic_scan_tick_recommends_a_recheck_wait_when_settings_read_fails() {
+    let p = pool().await;
+    let w = make_worker_default(p.clone());
+    p.close().await;
+
+    let wait = periodic_scan_tick(&p, &w).await;
+
+    assert_eq!(wait, PERIODIC_SCAN_RECHECK);
 }

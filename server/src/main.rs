@@ -73,6 +73,7 @@ mod server {
 
         kick_recovery_scans(&pool, &worker).await;
         spawn_session_pruner(pool.clone());
+        spawn_periodic_scan(pool.clone(), worker.clone());
 
         let router = build_router(state, pool, worker);
         Ok(apply_security_headers(router))
@@ -172,6 +173,22 @@ mod server {
                         tracing::warn!(error = %e, "session prune failed");
                     }
                 }
+            }
+        });
+    }
+
+    /// Spawn the configurable periodic library rescan (F: "Configurable
+    /// Periodic Library Scan Interval"). Mirrors `spawn_session_pruner`'s
+    /// loop-forever shape, but the wait before each tick is *not* fixed at
+    /// spawn time: `periodic_scan_tick` re-reads `scan_interval_hours` from
+    /// settings every iteration and reports how long to sleep next, so a
+    /// settings change (including disabling it) takes effect on the next
+    /// tick without a restart, and the first tick fires immediately.
+    fn spawn_periodic_scan(pool: SqlitePool, worker: Arc<Worker>) {
+        tokio::spawn(async move {
+            loop {
+                let wait = omnibus_db::worker::periodic_scan_tick(&pool, &worker).await;
+                tokio::time::sleep(wait).await;
             }
         });
     }

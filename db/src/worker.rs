@@ -20,9 +20,13 @@
 //! * [`handlers`] — `Worker::execute` per-task-kind handlers.
 //! * [`progress`] — `progress_snapshot` + retention/eviction +
 //!   `report_progress` + the terminal-state writer.
+//! * [`periodic_scan`] — the testable "read settings, decide, post" step
+//!   behind the configurable periodic library rescan; the timer loop that
+//!   drives it lives in `server::main`.
 
 mod exec;
 mod handlers;
+mod periodic_scan;
 mod progress;
 mod queue;
 mod types;
@@ -30,4 +34,5 @@ mod types;
 #[cfg(test)]
 mod tests;
 
+pub use periodic_scan::{periodic_scan_tick, PERIODIC_SCAN_RECHECK};
 pub use types::{Task, TaskId, TaskOutcome, Worker, WorkerConfig};

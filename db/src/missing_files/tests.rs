@@ -474,6 +474,7 @@ async fn library_repoint_round_trip_preserves_identity_and_override() {
     let only = |p: &str| Settings {
         ebook_library_path: Some(p.to_string()),
         audiobook_library_path: None,
+        scan_interval_hours: None,
     };
     // Record the current root, then repoint it to a new directory.
     set_settings(&pool, &only("/lib")).await.unwrap();

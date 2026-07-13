@@ -182,6 +182,7 @@ pub async fn rpc_scan_library() -> Result<()> {
     let Settings {
         ebook_library_path,
         audiobook_library_path,
+        scan_interval_hours: _,
     } = db::get_settings(&pool.0)
         .await
         .map_err(|e| internal_rpc_error("get settings", e))?;
