@@ -47,6 +47,16 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
     let cb_holder: JsCallbackHolder =
         use_hook(|| std::rc::Rc::new(std::cell::RefCell::new(Vec::new())));
 
+    // Seed the session volume from the persisted preference once, post-mount
+    // (not per book — `boot_new_book` never resets this signal). Declared
+    // before the uuid-tracking effect below so it commits first and
+    // `boot_new_book`'s `install_control_surface` call sees the real value
+    // for even the very first book.
+    use_effect(move || {
+        let mut volume = playback.volume;
+        volume.set(super::helpers::load_volume());
+    });
+
     // Record listening time off the play/pause signals — the rows behind
     // the `/stats` aggregates. Web posts same-origin, so no server URL.
     let server_url = use_signal(String::new);
@@ -79,6 +89,10 @@ fn boot_new_book(cb_holder: &JsCallbackHolder, uuid: &str, playback: crate::Play
 
     let initial_position = crate::audiobook_progress::load(uuid).unwrap_or(0.0);
     let initial_rate = crate::audiobook_progress::load_rate(uuid);
+    // Session-wide, not per-book — re-read on every swap so a mid-session
+    // volume change (or the sleep-timer fade's transient dip) doesn't leak
+    // into the freshly-installed control surface.
+    let initial_volume = *playback.volume.peek();
 
     register_js_callbacks(
         cb_holder,
@@ -89,7 +103,7 @@ fn boot_new_book(cb_holder: &JsCallbackHolder, uuid: &str, playback: crate::Play
         playback.playback_failed,
     );
     inject_hls_script();
-    install_control_surface(uuid, initial_rate);
+    install_control_surface(uuid, initial_rate, initial_volume);
 
     // Stale-task guard: the user can switch books while these async tasks
     // are in flight. Each task captures the uuid it was spawned for and
@@ -277,28 +291,30 @@ fn inject_hls_script() {
 /// attaches. The two init paths are responsible for setting their own
 /// initial position (per-part for direct, absolute for hls) via one-shot
 /// `loadedmetadata` listeners.
-fn install_control_surface(uuid: &str, initial_rate: f64) {
+fn install_control_surface(uuid: &str, initial_rate: f64, initial_volume: f64) {
     let rate_lit = serde_json::to_string(&initial_rate).unwrap_or_else(|_| "1".into());
+    let vol_lit = serde_json::to_string(&initial_volume).unwrap_or_else(|_| "1".into());
     let uuid_lit = serde_json::to_string(uuid).unwrap_or_else(|_| "\"\"".into());
-    let _ = dioxus::document::eval(&control_surface_js(&rate_lit, &uuid_lit));
+    let _ = dioxus::document::eval(&control_surface_js(&rate_lit, &vol_lit, &uuid_lit));
 }
 
 /// Build the `window.OmnibusAudio` IIFE script (one self-contained JS module).
 ///
 /// Composes four sub-segments: a DOM-reset/listener block (with the
-/// initial playback rate interpolated in), the in-line OmnibusAudio
-/// object scaffold (controls + state + the book uuid), and the two pure
-/// JS init methods for direct-play and HLS. Mismatched brace escapes in
-/// the `format!` args would silently break audio playback, so each pure
-/// JS segment lives in its own helper as a raw `&'static str` (literal
-/// `{`/`}`, no escaping required) and only `control_surface_js` itself
-/// uses `format!` for the two interpolation points.
-fn control_surface_js(rate_lit: &str, uuid_lit: &str) -> String {
+/// initial playback rate and volume interpolated in), the in-line
+/// OmnibusAudio object scaffold (controls + state + the book uuid), and
+/// the two pure JS init methods for direct-play and HLS. Mismatched brace
+/// escapes in the `format!` args would silently break audio playback, so
+/// each pure JS segment lives in its own helper as a raw `&'static str`
+/// (literal `{`/`}`, no escaping required) and only `control_surface_js`
+/// itself uses `format!` for the three interpolation points.
+fn control_surface_js(rate_lit: &str, vol_lit: &str, uuid_lit: &str) -> String {
     format!(
         r#"
 (function(){{
 {dom_reset}
     el.playbackRate = {rate_lit};
+    el.volume = {vol_lit};
 {listeners}
 
     window.OmnibusAudio = {{
@@ -338,9 +354,14 @@ fn transport_controls_js() -> &'static str {
       pause:   function(){ el.pause(); },
       toggle:  function(){ if (el.paused) { this.play(); } else { this.pause(); } },
       setRate: function(r){ try { el.playbackRate = r; } catch(_) {} },
-      // Sleep-timer volume fade. Clamps to [0,1]; the Rust countdown ramps
-      // this down over the final seconds and restores 1.0 on cancel/expiry.
+      // User volume slider + sleep-timer fade both drive this. Clamps to
+      // [0,1]; the Rust countdown ramps it down over the final seconds and
+      // restores the user's chosen volume (not always 1.0) on cancel/expiry.
       setVolume: function(v){ try { el.volume = Math.max(0, Math.min(1, v)); } catch(_) {} },
+      // Read path for the volume slider's initial-mount sync. The Rust side
+      // tracks the target volume in `PlaybackState.volume`, so this mainly
+      // exists for symmetry with `setVolume`.
+      getVolume: function(){ try { return el.volume; } catch(_) { return 1; } },
 
       // Hard stop for the dock's dismiss: pause, drop the source so a
       // media-key resume can't restart it, and reset direct-mode state.
@@ -744,9 +765,10 @@ mod tests {
 
     #[test]
     fn control_surface_js_contains_expected_segments() {
-        let js = control_surface_js("1.25", "\"abc-123\"");
+        let js = control_surface_js("1.25", "0.6", "\"abc-123\"");
         // Rust-side interpolation points landed.
         assert!(js.contains("el.playbackRate = 1.25;"));
+        assert!(js.contains("el.volume = 0.6;"));
         assert!(js.contains("_uuid: \"abc-123\","));
         // Each pure JS segment contributed its signature substring.
         assert!(

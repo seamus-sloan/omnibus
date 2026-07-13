@@ -79,6 +79,10 @@ pub(super) struct SleepController {
     pub choice: Signal<SleepChoice>,
     pub fade: Signal<bool>,
     token: Signal<u32>,
+    /// The user's target volume — the fade restores to this, not always
+    /// `1.0`, so cancelling/expiring the timer doesn't fight the volume
+    /// slider's chosen level.
+    volume: Signal<f64>,
 }
 
 impl SleepController {
@@ -92,8 +96,10 @@ impl SleepController {
         if secs <= 0 {
             remaining.set(None);
             choice.set(SleepChoice::Off);
+            let restore_to = *self.volume.peek();
             #[cfg(feature = "web")]
-            super::helpers::audio_call("setVolume", "1");
+            super::helpers::audio_call("setVolume", &restore_to.to_string());
+            let _ = restore_to;
         } else {
             remaining.set(Some(secs));
             choice.set(SleepChoice::Preset(secs));
@@ -111,22 +117,27 @@ impl SleepController {
         choice.set(SleepChoice::EndOfChapter);
     }
 
-    /// Toggle the volume-fade preference. Turning it off restores full volume.
+    /// Toggle the volume-fade preference. Turning it off restores the
+    /// user's target volume (not `1.0`).
     pub fn toggle_fade(&self) {
         let mut fade = self.fade;
         let was_on = *fade.peek();
         fade.set(!was_on);
-        #[cfg(feature = "web")]
         if was_on {
-            super::helpers::audio_call("setVolume", "1");
+            let restore_to = *self.volume.peek();
+            #[cfg(feature = "web")]
+            super::helpers::audio_call("setVolume", &restore_to.to_string());
+            let _ = restore_to;
         }
     }
 }
 
 /// Install the sleep-timer signals and the self-re-arming countdown effect.
 /// The effect is declared unconditionally (hook-order parity across SSR and
-/// WASM); only the audio interop and the 1 s tick are web-gated.
-pub(super) fn use_sleep_timer() -> SleepController {
+/// WASM); only the audio interop and the 1 s tick are web-gated. `volume` is
+/// the shared [`crate::PlaybackState::volume`] signal — the fade restores to
+/// it instead of a hardcoded `1.0`.
+pub(super) fn use_sleep_timer(volume: Signal<f64>) -> SleepController {
     let remaining = use_signal(|| None::<i32>);
     let choice = use_signal(|| SleepChoice::Off);
     let fade = use_signal(|| true);
@@ -147,12 +158,15 @@ pub(super) fn use_sleep_timer() -> SleepController {
         let _ = fade_on;
 
         if secs <= 0 {
-            // Expiry: pause playback and restore volume for next time.
+            // Expiry: pause playback and restore the user's target volume
+            // for next time (not always 1.0).
+            let restore_to = *volume.peek();
             #[cfg(feature = "web")]
             {
                 super::helpers::audio_call("pause", "");
-                super::helpers::audio_call("setVolume", "1");
+                super::helpers::audio_call("setVolume", &restore_to.to_string());
             }
+            let _ = restore_to;
             let mut remaining = remaining;
             let mut choice = choice;
             remaining.set(None);
@@ -184,6 +198,7 @@ pub(super) fn use_sleep_timer() -> SleepController {
         choice,
         fade,
         token,
+        volume,
     }
 }
 

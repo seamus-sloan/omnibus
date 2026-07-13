@@ -2770,6 +2770,28 @@ a.idx-letter-on:focus-visible {
 .lp-btn-rate:hover { color: var(--ink-0); background: var(--bg-1); }
 .lp-btn-rate.on { color: var(--accent); background: var(--bg-1); }
 
+/* Volume slider (transport row) */
+.lp-volume {
+  display: flex; align-items: center; gap: 8px;
+  margin-left: 8px; color: var(--ink-2);
+}
+.lp-volume-icon { font-size: 14px; }
+.lp-volume-input {
+  width: 96px; height: 4px; appearance: none;
+  background: var(--line); border-radius: 999px; cursor: pointer;
+}
+.lp-volume-input::-webkit-slider-thumb {
+  appearance: none; width: 14px; height: 14px; border-radius: 999px;
+  background: var(--accent); cursor: pointer;
+}
+.lp-volume-input::-moz-range-thumb {
+  width: 14px; height: 14px; border-radius: 999px; border: 0;
+  background: var(--accent); cursor: pointer;
+}
+.lp-volume-pct {
+  font-family: var(--mono); font-size: 11px; min-width: 32px; text-align: right;
+}
+
 /* Toolbar (Sleep / Bookmark / Chapters) */
 .lp-toolbar {
   display: flex; gap: 10px; margin-top: 28px;
@@ -3123,6 +3145,11 @@ a.idx-letter-on:focus-visible {
 .mini-dock-rate {
   font-family: var(--mono); font-size: 11px; color: var(--ink-2);
 }
+
+.lp-volume.compact {
+  margin-left: 0; gap: 6px;
+}
+.lp-volume.compact .lp-volume-input { width: 64px; }
 
 .mini-dock-actions { display: flex; gap: 6px; }
 .mini-dock-btn.mini-dock-expand-btn,

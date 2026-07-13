@@ -9,6 +9,7 @@
 use dioxus::prelude::*;
 use dioxus_router::Link;
 
+use super::controls::VolumeControl;
 use super::helpers::format_hms;
 use super::ready_player::chapter_index_for_elapsed;
 use super::stage::chapter_sub_text;
@@ -80,9 +81,27 @@ pub fn MiniDock() -> Element {
 
                 MiniDockProgress { elapsed: elapsed, duration: duration }
                 MiniDockControls { playing: playing, rate: rate }
+                MiniDockVolume {}
                 MiniDockActions { uuid: uuid.clone() }
             }
         }
+    }
+}
+
+/// Compact volume slider, rendered as a sibling of the dock's action
+/// buttons so it doesn't crowd the transport cluster in the narrow bar.
+/// Reads/writes the same [`crate::PlaybackState::volume`] signal as the
+/// full player's slider via `helpers::apply_volume`.
+#[component]
+fn MiniDockVolume() -> Element {
+    let playback = use_playback();
+    let volume = (playback.volume)();
+    let on_volume = move |v: f64| {
+        let mut vol_sig = playback.volume;
+        super::helpers::apply_volume(&mut vol_sig, v);
+    };
+    rsx! {
+        VolumeControl { volume, on_volume, compact: true }
     }
 }
 

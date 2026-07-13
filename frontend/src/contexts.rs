@@ -210,6 +210,10 @@ pub struct PlaybackState {
     pub chapters: Signal<Vec<omnibus_shared::ChapterInfo>>,
     pub hls_ready: Signal<bool>,
     pub playback_failed: Signal<bool>,
+    /// User's target volume (0.0–1.0), web-only UI. Session-wide, not reset
+    /// on a book swap — the sleep-timer fade in `pages::listen::sleep`
+    /// restores to this value rather than always `1.0`.
+    pub volume: Signal<f64>,
 }
 
 #[cfg(not(feature = "mobile"))]
@@ -228,6 +232,7 @@ impl PlaybackState {
             chapters: Signal::new(Vec::new()),
             hls_ready: Signal::new(false),
             playback_failed: Signal::new(false),
+            volume: Signal::new(1.0),
         }
     }
 }

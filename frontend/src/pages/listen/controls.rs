@@ -52,7 +52,7 @@ pub(crate) fn AudioElement() -> Element {
     }
 }
 
-/// Transport row: chapter-skip, ±30s seek, play/pause, rate.
+/// Transport row: chapter-skip, ±30s seek, play/pause, rate, volume.
 #[component]
 pub(super) fn TransportButtons(state: TransportState, callbacks: TransportCallbacks) -> Element {
     let TransportState {
@@ -61,6 +61,7 @@ pub(super) fn TransportButtons(state: TransportState, callbacks: TransportCallba
         rate_label,
         rate_active,
         has_chapters,
+        volume,
     } = state;
     let TransportCallbacks {
         on_toggle,
@@ -69,6 +70,7 @@ pub(super) fn TransportButtons(state: TransportState, callbacks: TransportCallba
         on_rate,
         on_chapter_prev,
         on_chapter_next,
+        on_volume,
     } = callbacks;
     let rate_class = rate_btn_class(rate_active);
 
@@ -139,6 +141,51 @@ pub(super) fn TransportButtons(state: TransportState, callbacks: TransportCallba
                 "aria-label": "Playback speed",
                 onclick: move |evt| on_rate.call(evt),
                 "{rate_label}"
+            }
+
+            VolumeControl { volume, on_volume, compact: false }
+        }
+    }
+}
+
+/// Volume slider — updates the shared `<audio>` element's volume in real
+/// time. `compact` selects the mini-dock's narrower sizing and drops the
+/// percentage readout; both variants read/write the same
+/// [`crate::PlaybackState::volume`] signal via `helpers::apply_volume`, so
+/// the full player and the mini-dock always agree.
+#[component]
+pub(super) fn VolumeControl(volume: f64, on_volume: EventHandler<f64>, compact: bool) -> Element {
+    let pct = (volume * 100.0).round();
+    let wrap_class = if compact {
+        "lp-volume compact"
+    } else {
+        "lp-volume"
+    };
+    let testid = if compact {
+        "mini-dock-volume"
+    } else {
+        "listen-volume"
+    };
+
+    rsx! {
+        div { class: wrap_class, "data-testid": "{testid}",
+            span { class: "lp-volume-icon", "\u{1F50A}" }
+            input {
+                r#type: "range",
+                class: "lp-volume-input",
+                min: "0",
+                max: "1",
+                step: "0.05",
+                value: "{volume}",
+                "aria-label": "Volume",
+                oninput: move |evt: Event<FormData>| {
+                    if let Ok(v) = evt.value().parse::<f64>() {
+                        on_volume.call(v);
+                    }
+                },
+            }
+            if !compact {
+                span { class: "lp-volume-pct", "{pct:.0}%" }
             }
         }
     }
