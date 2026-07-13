@@ -5803,7 +5803,13 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   50%, 62% { transform: translateX(var(--marquee-shift, 0)); }
   100% { transform: translateX(0); }
 }
+/* Reduced motion drops the animation but must not trade it for permanently
+   clipped text — let an overflowing title wrap onto multiple lines instead
+   so it's still fully readable without scrolling. */
 @media (prefers-reduced-motion: reduce) {
+  .atrium .m-player-title[data-marquee="true"] {
+    overflow: visible; white-space: normal;
+  }
   .atrium .m-player-title[data-marquee="true"] .m-em { animation: none; }
 }
 .m-player-by { margin-top: 8px; color: var(--ink-1); font-size: 14px; }

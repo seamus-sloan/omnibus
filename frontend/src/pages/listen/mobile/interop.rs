@@ -144,16 +144,16 @@ pub fn set_rate(rate: f64) {
 pub fn measure_title_marquee() {
     fire(
         "var wrap = document.querySelector('.m-player-title'); \
-         if (!wrap) return; \
-         var em = wrap.querySelector('.m-em'); \
-         if (!em) return; \
-         var over = Math.ceil(em.scrollWidth - wrap.clientWidth); \
-         if (over > 4) { \
-           wrap.setAttribute('data-marquee', 'true'); \
-           wrap.style.setProperty('--marquee-shift', (-(over + 12)) + 'px'); \
-         } else { \
-           wrap.removeAttribute('data-marquee'); \
-           wrap.style.removeProperty('--marquee-shift'); \
+         var em = wrap ? wrap.querySelector('.m-em') : null; \
+         if (wrap && em) { \
+           var over = Math.ceil(em.scrollWidth - wrap.clientWidth); \
+           if (over > 4) { \
+             wrap.setAttribute('data-marquee', 'true'); \
+             wrap.style.setProperty('--marquee-shift', (-(over + 12)) + 'px'); \
+           } else { \
+             wrap.removeAttribute('data-marquee'); \
+             wrap.style.removeProperty('--marquee-shift'); \
+           } \
          }",
     );
 }
