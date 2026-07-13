@@ -26,9 +26,60 @@ async fn set_and_get_settings_roundtrips() {
     let input = Settings {
         ebook_library_path: Some("/books/ebooks".into()),
         audiobook_library_path: Some("/books/audio".into()),
+        scan_interval_hours: None,
     };
     set_settings(&pool, &input).await.unwrap();
     assert_eq!(get_settings(&pool).await.unwrap(), input);
+}
+
+#[tokio::test]
+async fn set_and_get_settings_roundtrips_scan_interval_hours() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let input = Settings {
+        ebook_library_path: None,
+        audiobook_library_path: None,
+        scan_interval_hours: Some(6),
+    };
+    set_settings(&pool, &input).await.unwrap();
+    assert_eq!(get_settings(&pool).await.unwrap(), input);
+}
+
+#[tokio::test]
+async fn set_settings_clears_scan_interval_hours_when_set_to_none() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    set_settings(
+        &pool,
+        &Settings {
+            ebook_library_path: None,
+            audiobook_library_path: None,
+            scan_interval_hours: Some(12),
+        },
+    )
+    .await
+    .unwrap();
+    set_settings(
+        &pool,
+        &Settings {
+            ebook_library_path: None,
+            audiobook_library_path: None,
+            scan_interval_hours: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(get_settings(&pool).await.unwrap().scan_interval_hours, None);
+}
+
+#[tokio::test]
+async fn get_settings_treats_an_unparseable_scan_interval_row_as_unset() {
+    // A hand-edited or corrupted `settings` row must not error the whole
+    // read — periodic scanning just stays disabled.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sqlx::query("INSERT INTO settings (key, value) VALUES ('scan_interval_hours', 'not-a-number')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(get_settings(&pool).await.unwrap().scan_interval_hours, None);
 }
 
 #[tokio::test]
@@ -39,6 +90,7 @@ async fn set_settings_updates_existing_values() {
         &Settings {
             ebook_library_path: Some("/old".into()),
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await
@@ -48,6 +100,7 @@ async fn set_settings_updates_existing_values() {
         &Settings {
             ebook_library_path: Some("/new".into()),
             audiobook_library_path: Some("/audio".into()),
+            scan_interval_hours: None,
         },
     )
     .await
@@ -65,6 +118,7 @@ async fn set_settings_none_clears_existing_value() {
         &Settings {
             ebook_library_path: Some("/books".into()),
             audiobook_library_path: Some("/audio".into()),
+            scan_interval_hours: None,
         },
     )
     .await
@@ -74,6 +128,7 @@ async fn set_settings_none_clears_existing_value() {
         &Settings {
             ebook_library_path: None,
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await
@@ -281,6 +336,7 @@ async fn set_settings_repoints_library_in_place_preserving_identity() {
         &Settings {
             ebook_library_path: Some("/old".into()),
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await
@@ -308,6 +364,7 @@ async fn set_settings_repoints_library_in_place_preserving_identity() {
         &Settings {
             ebook_library_path: Some("/new".into()),
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await
@@ -342,6 +399,7 @@ async fn set_settings_keeps_libraries_still_configured() {
         &Settings {
             ebook_library_path: Some("/books".into()),
             audiobook_library_path: Some("/audio".into()),
+            scan_interval_hours: None,
         },
     )
     .await
@@ -359,6 +417,7 @@ async fn set_settings_keeps_libraries_still_configured() {
         &Settings {
             ebook_library_path: Some("/books".into()),
             audiobook_library_path: Some("/audio".into()),
+            scan_interval_hours: None,
         },
     )
     .await
@@ -378,6 +437,7 @@ async fn set_settings_none_retains_library_data() {
         &Settings {
             ebook_library_path: Some("/books".into()),
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await
@@ -395,6 +455,7 @@ async fn set_settings_none_retains_library_data() {
         &Settings {
             ebook_library_path: None,
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await
@@ -420,6 +481,7 @@ async fn set_settings_none_retains_library_data() {
         &Settings {
             ebook_library_path: Some("/books".into()),
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await
@@ -545,6 +607,7 @@ async fn set_settings_does_not_repoint_a_shared_root_for_a_single_slot_change() 
         &Settings {
             ebook_library_path: Some("/lib".into()),
             audiobook_library_path: Some("/lib".into()),
+            scan_interval_hours: None,
         },
     )
     .await
@@ -563,6 +626,7 @@ async fn set_settings_does_not_repoint_a_shared_root_for_a_single_slot_change() 
         &Settings {
             ebook_library_path: Some("/newlib".into()),
             audiobook_library_path: Some("/lib".into()),
+            scan_interval_hours: None,
         },
     )
     .await

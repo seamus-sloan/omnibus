@@ -463,6 +463,7 @@ async fn attachment_survives_a_scan_root_repoint() {
         &omnibus_shared::Settings {
             ebook_library_path: Some("/ebooks".into()),
             audiobook_library_path: Some("/audio".into()),
+            scan_interval_hours: None,
         },
     )
     .await
@@ -478,6 +479,7 @@ async fn attachment_survives_a_scan_root_repoint() {
         &omnibus_shared::Settings {
             ebook_library_path: Some("/ebooks".into()),
             audiobook_library_path: Some("/audio2".into()),
+            scan_interval_hours: None,
         },
     )
     .await

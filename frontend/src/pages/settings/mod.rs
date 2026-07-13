@@ -7,7 +7,9 @@
 mod smtp;
 
 use dioxus::prelude::*;
-use omnibus_shared::{HardcoverKeyStatus, LibraryContents, LibrarySection, Settings};
+use omnibus_shared::{
+    HardcoverKeyStatus, LibraryContents, LibrarySection, Settings, SCAN_INTERVAL_MIN_HOURS,
+};
 
 #[cfg(not(feature = "mobile"))]
 use crate::components::worker_status::WorkerStatusIndicator;
@@ -22,6 +24,7 @@ pub fn SettingsPage() -> Element {
 
     let ebook_path = use_signal(String::new);
     let audiobook_path = use_signal(String::new);
+    let scan_interval_hours = use_signal(String::new);
     let status = use_signal(|| None::<String>);
     let status_is_error = use_signal(|| false);
     let library = use_signal(LibraryContents::default);
@@ -42,6 +45,7 @@ pub fn SettingsPage() -> Element {
         server_url.clone(),
         ebook_path,
         audiobook_path,
+        scan_interval_hours,
         status,
         status_is_error,
     );
@@ -51,6 +55,7 @@ pub fn SettingsPage() -> Element {
         server_url,
         ebook_path,
         audiobook_path,
+        scan_interval_hours,
         status,
         status_is_error,
         library_refresh,
@@ -71,6 +76,7 @@ pub fn SettingsPage() -> Element {
                     audiobook_path,
                     library,
                 }
+                ScanIntervalField { scan_interval_hours }
                 {worker_status_slot()}
 
                 div { class: "settings-actions",
@@ -119,6 +125,7 @@ fn spawn_initial_settings_load(
     url: String,
     mut ebook_path: Signal<String>,
     mut audiobook_path: Signal<String>,
+    mut scan_interval_hours: Signal<String>,
     mut status: Signal<Option<String>>,
     mut status_is_error: Signal<bool>,
 ) {
@@ -129,6 +136,12 @@ fn spawn_initial_settings_load(
                 Ok(settings) => {
                     ebook_path.set(settings.ebook_library_path.unwrap_or_default());
                     audiobook_path.set(settings.audiobook_library_path.unwrap_or_default());
+                    scan_interval_hours.set(
+                        settings
+                            .scan_interval_hours
+                            .map(|h| h.to_string())
+                            .unwrap_or_default(),
+                    );
                 }
                 Err(e) => {
                     status.set(Some(e.to_string()));
@@ -156,11 +169,12 @@ fn spawn_library_refresh(
     });
 }
 
-/// Returns the `<form onsubmit>` handler that POSTs the path inputs.
+/// Returns the `<form onsubmit>` handler that POSTs the path + interval inputs.
 fn save_settings_handler(
     url: String,
     ebook_path: Signal<String>,
     audiobook_path: Signal<String>,
+    scan_interval_hours: Signal<String>,
     mut status: Signal<Option<String>>,
     mut status_is_error: Signal<bool>,
     mut library_refresh: Signal<u32>,
@@ -170,10 +184,30 @@ fn save_settings_handler(
         let url = url.clone();
         let ebook = ebook_path().trim().to_string();
         let audiobook = audiobook_path().trim().to_string();
+        let interval_input = scan_interval_hours().trim().to_string();
+        // Parsed client-side so a non-numeric entry gets an immediate,
+        // specific message instead of a generic save failure; an in-range
+        // numeric value still round-trips through `Settings::validate()`
+        // server-side (e.g. the `>= 1` floor).
+        let interval = if interval_input.is_empty() {
+            None
+        } else {
+            match interval_input.parse::<u32>() {
+                Ok(n) => Some(n),
+                Err(_) => {
+                    status.set(Some(
+                        "Automatic rescan interval must be a whole number of hours.".to_string(),
+                    ));
+                    status_is_error.set(true);
+                    return;
+                }
+            }
+        };
         spawn(async move {
             let payload = Settings {
                 ebook_library_path: (!ebook.is_empty()).then_some(ebook),
                 audiobook_library_path: (!audiobook.is_empty()).then_some(audiobook),
+                scan_interval_hours: interval,
             };
             match data::save_settings(&url, payload).await {
                 Ok(_) => {
@@ -226,6 +260,29 @@ fn LibraryPathFields(
             LibrarySummary {
                 testid: "audiobook-library-summary",
                 section: library().audiobooks,
+            }
+        }
+    }
+}
+
+/// Optional periodic-rescan interval, in hours. Blank disables it — the
+/// server-side `Settings::validate()` rejects 0 or any other value below
+/// [`omnibus_shared::SCAN_INTERVAL_MIN_HOURS`]; a non-numeric entry is
+/// caught client-side by [`save_settings_handler`] before the request fires.
+#[component]
+fn ScanIntervalField(mut scan_interval_hours: Signal<String>) -> Element {
+    rsx! {
+        div { class: "settings-field",
+            label { r#for: "scan-interval-hours", "Automatic Rescan Interval (hours)" }
+            input {
+                r#type: "number",
+                min: "{SCAN_INTERVAL_MIN_HOURS}",
+                id: "scan-interval-hours",
+                name: "scan_interval_hours",
+                "data-testid": "scan-interval-hours",
+                value: "{scan_interval_hours}",
+                placeholder: "Leave blank to disable",
+                oninput: move |evt| scan_interval_hours.set(evt.value()),
             }
         }
     }

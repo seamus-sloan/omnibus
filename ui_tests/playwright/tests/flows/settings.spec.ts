@@ -5,6 +5,7 @@ import { expectNavVisible, gotoReady } from "../utils/nav";
 
 const ebookInput = (page: Page) => page.getByLabel("Ebook Library Path");
 const audiobookInput = (page: Page) => page.getByLabel("Audiobook Library Path");
+const scanIntervalInput = (page: Page) => page.getByLabel("Automatic Rescan Interval (hours)");
 // Scope the Save button to the library-paths form — the page now also has a
 // "Suggestions (Hardcover)" card with its own Save button (F3.3), so an
 // unscoped `name: "Save"` would match both and trip Playwright strict mode.
@@ -30,6 +31,7 @@ test("renders the settings page layout", async ({ page }) => {
   await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
   await expect(ebookInput(page)).toBeVisible();
   await expect(audiobookInput(page)).toBeVisible();
+  await expect(scanIntervalInput(page)).toBeVisible();
   await expect(saveButton(page)).toBeVisible();
   await expect(page.getByTestId("scan-library")).toBeVisible();
   await expect(settingsStatus(page)).toBeAttached();
@@ -111,11 +113,94 @@ test("saves library paths and shows a success status", async ({ page }) => {
   await expect(settingsStatus(page)).toHaveClass(/success/);
 });
 
+test("saves an automatic rescan interval alongside the library paths", async ({ page }) => {
+  await gotoReady(page, "/settings");
+
+  const ebookPath = "/tmp/omnibus-test-ebooks";
+  const audiobookPath = "/tmp/omnibus-test-audiobooks";
+
+  await ebookInput(page).fill(ebookPath);
+  await audiobookInput(page).fill(audiobookPath);
+  await scanIntervalInput(page).fill("24");
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/settings",
+      expectedBody: {
+        settings: {
+          ebook_library_path: ebookPath,
+          audiobook_library_path: audiobookPath,
+          scan_interval_hours: 24,
+        },
+      },
+      expectedStatus: 200,
+    },
+    async () => saveButton(page).click(),
+  );
+
+  await expect(settingsStatus(page)).toHaveText("Settings saved.");
+  await expect(settingsStatus(page)).toHaveClass(/success/);
+});
+
+test("shows an error status when the server rejects an invalid rescan interval", async ({
+  page,
+}) => {
+  await gotoReady(page, "/settings");
+
+  // Fill every field explicitly (rather than relying on whatever an
+  // earlier test left saved) so the expected request body below is
+  // deterministic regardless of test order.
+  await ebookInput(page).fill("/tmp/whatever");
+  await audiobookInput(page).fill("/tmp/whatever-audio");
+  await scanIntervalInput(page).fill("1");
+
+  // Force the validation failure server-side (e.g. a stale client vs. a
+  // future, stricter floor) rather than relying on the browser's own
+  // `min` enforcement, so this exercises the same error-status rendering
+  // path as any other 4xx/5xx save failure.
+  await page.route("**/api/rpc/settings", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({
+        status: 422,
+        contentType: "text/plain",
+        body: "scan_interval_hours must be at least 1 (omit to disable)",
+      });
+    }
+    return route.continue();
+  });
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/settings",
+      expectedBody: {
+        settings: {
+          ebook_library_path: "/tmp/whatever",
+          audiobook_library_path: "/tmp/whatever-audio",
+          scan_interval_hours: 1,
+        },
+      },
+      expectedStatus: 422,
+    },
+    async () => saveButton(page).click(),
+  );
+
+  await expect(settingsStatus(page)).toHaveText("Failed to save settings.");
+  await expect(settingsStatus(page)).toHaveClass(/error/);
+});
+
 test("shows an error status when saving settings fails", async ({ page }) => {
   await gotoReady(page, "/settings");
 
   await ebookInput(page).fill("/tmp/whatever");
   await audiobookInput(page).fill("/tmp/whatever-audio");
+  // Cleared explicitly (rather than left at whatever an earlier test
+  // saved) so the expected request body below omits `scan_interval_hours`
+  // deterministically, regardless of test order.
+  await scanIntervalInput(page).fill("");
 
   await page.route("**/api/rpc/settings", (route) => {
     if (route.request().method() === "POST") {

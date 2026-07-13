@@ -202,6 +202,7 @@ async fn commit_files_book_and_applies_edited_metadata() {
         &Settings {
             ebook_library_path: Some(library_path.clone()),
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await
@@ -279,6 +280,7 @@ async fn commit_rejects_read_only_library_with_400() {
         &Settings {
             ebook_library_path: Some(library_path),
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await

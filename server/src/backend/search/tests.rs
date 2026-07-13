@@ -21,6 +21,7 @@ async fn api_get_search_sets_total_count_header_with_indexed_library() {
         &Settings {
             ebook_library_path: Some("/lib".into()),
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await

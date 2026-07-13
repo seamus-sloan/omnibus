@@ -39,6 +39,7 @@ async fn api_get_library_reports_error_for_nonexistent_path() {
         &Settings {
             ebook_library_path: Some("/does/not/exist/omnibus_test".to_string()),
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await
@@ -91,6 +92,7 @@ async fn api_get_ebooks_returns_empty_library_for_configured_path_without_index(
         &Settings {
             ebook_library_path: Some(path.to_string()),
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await
@@ -127,6 +129,7 @@ async fn api_get_ebooks_sets_total_count_header_with_indexed_library() {
         &Settings {
             ebook_library_path: Some("/lib".into()),
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await
@@ -193,6 +196,7 @@ async fn api_get_ebooks_sets_total_cap_header_when_truncated() {
         &Settings {
             ebook_library_path: Some("/lib".into()),
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await
@@ -863,6 +867,7 @@ async fn api_get_ebooks_paginates_via_cursor_and_emits_next_cursor_header() {
         &Settings {
             ebook_library_path: Some("/lib".into()),
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await
@@ -927,6 +932,7 @@ async fn api_get_ebooks_omits_next_cursor_header_at_end_of_stream() {
         &Settings {
             ebook_library_path: Some("/lib".into()),
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await
@@ -1003,6 +1009,7 @@ async fn api_get_ebooks_without_pagination_params_omits_next_cursor() {
         &Settings {
             ebook_library_path: Some("/lib".into()),
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await
@@ -1031,6 +1038,7 @@ async fn api_get_ebooks_formats_param_filters_page_and_total() {
         &Settings {
             ebook_library_path: Some("/lib".into()),
             audiobook_library_path: None,
+            scan_interval_hours: None,
         },
     )
     .await

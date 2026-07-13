@@ -6,6 +6,7 @@ fn ok_settings() -> Settings {
     Settings {
         ebook_library_path: Some("/lib/ebooks".into()),
         audiobook_library_path: Some("/lib/audio".into()),
+        scan_interval_hours: None,
     }
 }
 
@@ -19,6 +20,7 @@ fn settings_validate_accepts_none_paths() {
     let s = Settings {
         ebook_library_path: None,
         audiobook_library_path: None,
+        scan_interval_hours: None,
     };
     assert!(s.validate().is_ok());
 }
@@ -28,6 +30,7 @@ fn settings_validate_accepts_ebook_path_at_max_len() {
     let s = Settings {
         ebook_library_path: Some("a".repeat(PATH_MAX_LEN)),
         audiobook_library_path: None,
+        scan_interval_hours: None,
     };
     assert!(s.validate().is_ok());
 }
@@ -37,6 +40,7 @@ fn settings_validate_accepts_audiobook_path_at_max_len() {
     let s = Settings {
         ebook_library_path: None,
         audiobook_library_path: Some("a".repeat(PATH_MAX_LEN)),
+        scan_interval_hours: None,
     };
     assert!(s.validate().is_ok());
 }
@@ -46,6 +50,7 @@ fn settings_validate_rejects_ebook_path_over_max_len() {
     let s = Settings {
         ebook_library_path: Some("a".repeat(PATH_MAX_LEN + 1)),
         audiobook_library_path: None,
+        scan_interval_hours: None,
     };
     let err = s
         .validate()
@@ -66,6 +71,7 @@ fn settings_validate_rejects_audiobook_path_over_max_len() {
     let s = Settings {
         ebook_library_path: None,
         audiobook_library_path: Some("a".repeat(PATH_MAX_LEN + 1)),
+        scan_interval_hours: None,
     };
     let err = s
         .validate()
@@ -110,6 +116,7 @@ fn settings_validate_reports_ebook_field_when_both_are_over_max_len() {
     let s = Settings {
         ebook_library_path: Some("a".repeat(PATH_MAX_LEN + 1)),
         audiobook_library_path: Some("b".repeat(PATH_MAX_LEN + 1)),
+        scan_interval_hours: None,
     };
     let err = s.validate().expect_err("over-long path must be rejected");
     assert_eq!(
@@ -117,5 +124,28 @@ fn settings_validate_reports_ebook_field_when_both_are_over_max_len() {
         SettingsError::PathTooLong {
             field: "ebook_library_path"
         }
+    );
+}
+
+#[test]
+fn settings_validate_accepts_scan_interval_at_the_minimum() {
+    let s = Settings {
+        ebook_library_path: None,
+        audiobook_library_path: None,
+        scan_interval_hours: Some(SCAN_INTERVAL_MIN_HOURS),
+    };
+    assert!(s.validate().is_ok());
+}
+
+#[test]
+fn settings_validate_rejects_scan_interval_of_zero() {
+    let s = Settings {
+        ebook_library_path: None,
+        audiobook_library_path: None,
+        scan_interval_hours: Some(0),
+    };
+    assert_eq!(
+        s.validate().expect_err("a zero interval must be rejected"),
+        SettingsError::ScanIntervalTooSmall
     );
 }

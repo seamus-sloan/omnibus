@@ -18,6 +18,10 @@ pub use omnibus_shared::{
 /// indexer, settings handlers, and tests all reference the same identifier.
 const EBOOK_LIBRARY_PATH_KEY: &str = "ebook_library_path";
 const AUDIOBOOK_LIBRARY_PATH_KEY: &str = "audiobook_library_path";
+/// `settings` KV key for the configurable periodic-rescan interval (hours).
+/// Stored as a decimal string; missing or unparseable means "disabled"
+/// (`None`).
+const SCAN_INTERVAL_HOURS_KEY: &str = "scan_interval_hours";
 /// `settings` KV key for the Hardcover API token. Stored directly (not via
 /// the [`Settings`] struct) so saving it never triggers the scan-root
 /// reconciliation `set_settings` runs.
@@ -59,9 +63,18 @@ pub async fn get_settings(pool: &SqlitePool) -> Result<Settings, SettingsError> 
             .bind(AUDIOBOOK_LIBRARY_PATH_KEY)
             .fetch_optional(pool)
             .await?;
+    // A hand-edited or stale row that fails to parse is treated as unset
+    // rather than an error — periodic scanning simply stays disabled.
+    let scan_interval_hours =
+        sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
+            .bind(SCAN_INTERVAL_HOURS_KEY)
+            .fetch_optional(pool)
+            .await?
+            .and_then(|v| v.parse::<u32>().ok());
     Ok(Settings {
         ebook_library_path,
         audiobook_library_path,
+        scan_interval_hours,
     })
 }
 
@@ -103,6 +116,13 @@ pub async fn set_settings(pool: &SqlitePool, settings: &Settings) -> Result<(), 
         &mut tx,
         AUDIOBOOK_LIBRARY_PATH_KEY,
         settings.audiobook_library_path.as_deref(),
+    )
+    .await?;
+    let scan_interval_value = settings.scan_interval_hours.map(|h| h.to_string());
+    upsert_or_clear(
+        &mut tx,
+        SCAN_INTERVAL_HOURS_KEY,
+        scan_interval_value.as_deref(),
     )
     .await?;
     let orphan_uuids = prune_orphan_libraries(
@@ -275,11 +295,17 @@ pub async fn seed_settings_from_env(pool: &SqlitePool) -> Result<(), SettingsErr
     let ebook_library_path = std::env::var("EBOOK_LIBRARY_PATH").ok();
     let audiobook_library_path = std::env::var("AUDIOBOOK_LIBRARY_PATH").ok();
     if ebook_library_path.is_some() || audiobook_library_path.is_some() {
+        // This hook runs on every boot, so carry forward the already-saved
+        // scan interval rather than a fresh struct's `None` — otherwise an
+        // admin-configured interval would be silently wiped on every
+        // restart of a deployment that also sets the library-path env vars.
+        let current = get_settings(pool).await?;
         set_settings(
             pool,
             &Settings {
                 ebook_library_path,
                 audiobook_library_path,
+                scan_interval_hours: current.scan_interval_hours,
             },
         )
         .await?;
