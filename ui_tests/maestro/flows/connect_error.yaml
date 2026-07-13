@@ -10,7 +10,9 @@
 # a janky/CI simulator (mobile-dev-inc/Maestro#395). A mangled URL can land on
 # a *different* state (empty field → "Enter a server URL", or a stray reachable
 # host), so we assert the field holds the exact unreachable URL before tapping
-# Connect, and re-launch clean on any miss.
+# Connect, and re-launch clean on any miss. Same extendedWaitUntil rationale as
+# connect.yaml: a bare assertVisible's 7s default was timing out on a merely
+# slow-to-repaint CI WebView, not just a genuinely dropped-character one (#902).
 appId: com.omnibus.mobile
 tags:
   - smoke
@@ -23,7 +25,9 @@ tags:
       - assertVisible: "Connect to your server to get started."
       - tapOn: "https://omnibus.local:3000"
       - inputText: http://127.0.0.1:1
-      - assertVisible: "http://127.0.0.1:1"
+      - extendedWaitUntil:
+          visible: "http://127.0.0.1:1"
+          timeout: 15000
       - tapOn: "Connect"
       - extendedWaitUntil:
           visible: "Can't reach that server. Check the address and that it's running."

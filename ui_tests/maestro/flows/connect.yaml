@@ -10,8 +10,11 @@
 # (mobile-dev-inc/Maestro#395) — a mangled URL fails the health probe and
 # strands us on the Connect screen. Each attempt re-launches with clearState so
 # it starts from a fresh, empty field (placeholder visible, nothing to erase),
-# then asserts the field actually holds the URL before tapping Connect — a
-# fast fail that triggers another attempt instead of waiting out the nav.
+# then asserts the field actually holds the URL before tapping Connect. That
+# assertion uses extendedWaitUntil (not the 7s assertVisible default) because
+# on a loaded CI simulator the WebView can take longer than 7s to repaint the
+# typed text even when nothing was dropped — a bare assertVisible was timing
+# out and burning a retry on runs that were merely slow, not mangled (#902).
 appId: com.omnibus.mobile
 env:
   SERVER_URL: http://127.0.0.1:3000
@@ -19,8 +22,8 @@ tags:
   - smoke
 ---
 - retry:
-    # Generous count: the assertVisible below fast-fails a dropped-char attempt
-    # (no 15s nav wait), so extra retries are cheap insurance on a janky sim.
+    # Generous count: cheap insurance on a janky sim for the rare attempt that
+    # still mangles the input despite the extendedWaitUntil below.
     maxRetries: 6
     commands:
       - launchApp:
@@ -30,7 +33,9 @@ tags:
       # accessibility identifiers through the WebView) and type the URL.
       - tapOn: "https://omnibus.local:3000"
       - inputText: ${SERVER_URL}
-      - assertVisible: ${SERVER_URL}
+      - extendedWaitUntil:
+          visible: ${SERVER_URL}
+          timeout: 15000
       - tapOn: "Connect"
       # Login screen: connected-to bar + credentials form prove the health
       # probe passed, the URL was persisted, and the router advanced to /login.
