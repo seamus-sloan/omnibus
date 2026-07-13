@@ -26,7 +26,7 @@ pub(super) struct MobileShelfDetailProps {
     pub server_url: String,
     /// Opens the shared add-books modal (manual shelves).
     pub on_add: EventHandler<()>,
-    /// Opens the shared rule-editor modal (smart shelves; issue #987).
+    /// Opens the shared rule-editor modal (smart shelves).
     pub on_edit_rules: EventHandler<()>,
     /// Fired after a rename / visibility change so the parent refetches.
     pub on_changed: EventHandler<()>,

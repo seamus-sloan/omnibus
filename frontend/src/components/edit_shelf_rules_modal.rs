@@ -1,4 +1,4 @@
-//! "Edit rules" modal for an existing smart shelf (issue #987) — reuses
+//! "Edit rules" modal for an existing smart shelf — reuses
 //! [`crate::components::shelf_rule_builder::RuleBuilder`] so create and edit
 //! never duplicate the condition-row markup. Platform-agnostic like
 //! [`crate::components::CreateShelfModal`]; mounted by both the web

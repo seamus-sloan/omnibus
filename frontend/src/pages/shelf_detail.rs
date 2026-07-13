@@ -283,7 +283,7 @@ fn member_grid(
 /// Header: back link, badges, name, and the actions menu. `on_changed` fires
 /// after a successful rename / visibility change so the parent refetches and
 /// the header reflects the new value; `on_edit_rules` opens the smart-shelf
-/// rule editor (issue #987).
+/// rule editor.
 #[cfg(not(feature = "mobile"))]
 #[component]
 fn ShelfHeader(

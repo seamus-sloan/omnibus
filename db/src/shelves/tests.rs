@@ -615,10 +615,6 @@ async fn update_smart_shelf_rejects_emptying_rules() {
 
 #[tokio::test]
 async fn update_shelf_rules_changes_membership_of_an_existing_smart_shelf() {
-    // Issue #987: editing a smart shelf's query used to require delete +
-    // recreate. `update_shelf` already threads `rules`/`match_mode` through
-    // to the same replace-then-reinsert path `create_shelf` uses, but only
-    // create-time rule matching had coverage — this exercises the edit path.
     let (pool, _covers) = seed_discovery_fixture().await;
     let owner = make_user(&pool, "owner", false).await;
     let shelf = create_shelf(

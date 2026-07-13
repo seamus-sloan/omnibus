@@ -121,9 +121,10 @@ test("edits an existing smart shelf's rules and the member grid updates", async 
   page,
   request,
 }) => {
-  // "Ada Lovelace" authors only Alpha; "Grace Hopper" co-authors only Beta —
-  // disjoint single-book matches, so a membership change after save can only
-  // be explained by the edited rule actually taking effect.
+  // "Ada Lovelace" matches the Alpha ebook + its audiobook; "Grace Hopper"
+  // matches the Beta ebook + its audiobook — disjoint two-book matches, so a
+  // membership change after save can only be explained by the edited rule
+  // actually taking effect.
   const name = `E2E Smart Edit ${Date.now()}`;
   const createResp = await request.post("/api/rpc/shelves/create", {
     data: {
@@ -154,10 +155,10 @@ test("edits an existing smart shelf's rules and the member grid updates", async 
   // Prefilled from the shelf's current rule.
   const valueInput = modal.getByTestId("condition-row-0").locator("input");
   await expect(valueInput).toHaveValue("Ada Lovelace");
-  await expect(modal.getByTestId("rule-preview-count")).toContainText("1 of");
+  await expect(modal.getByTestId("rule-preview-count")).toContainText("2 of");
 
   await valueInput.fill("Grace Hopper");
-  await expect(modal.getByTestId("rule-preview-count")).toContainText("1 of");
+  await expect(modal.getByTestId("rule-preview-count")).toContainText("2 of");
 
   await expectMutation(
     page,
