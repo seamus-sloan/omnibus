@@ -179,6 +179,14 @@ pub fn next_part_index(part_count: usize, idx: usize) -> Option<usize> {
     (next < part_count).then_some(next)
 }
 
+/// Padded copy of `title` for one half of the marquee track. The CSS `-50%`
+/// loop only reads seamlessly when both track halves are identical widths,
+/// so the gap between loops rides inside the text (as non-breaking spaces)
+/// rather than as CSS `gap`, which would throw off the halfway point.
+pub fn marquee_segment(title: &str) -> String {
+    format!("{title}\u{a0}\u{a0}\u{a0}\u{a0}\u{a0}\u{a0}\u{a0}\u{a0}")
+}
+
 /// Build the authenticated URL for a manifest part on mobile: prefix the
 /// server origin and append the session token as `?token=` (or `&token=`
 /// when the part URL already carries a query, e.g. `?file_id=`). An `<audio
@@ -330,6 +338,13 @@ mod tests {
             part_token_url("http://h:3000", "/api/audiobooks/x/parts/0", None),
             "http://h:3000/api/audiobooks/x/parts/0"
         );
+    }
+
+    #[test]
+    fn marquee_segment_pads_title_with_trailing_nbsp() {
+        let seg = marquee_segment("A Sea of Glass");
+        assert!(seg.starts_with("A Sea of Glass"));
+        assert_eq!(seg.chars().filter(|&c| c == '\u{a0}').count(), 8);
     }
 
     #[test]
