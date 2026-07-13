@@ -11,10 +11,12 @@ use crate::{data, use_server_url, Route};
 
 mod donut;
 mod heatmap;
+mod monthly;
 mod tiles;
 
 use donut::{FormatSplit, GenreDonut};
 use heatmap::HeatmapCard;
+use monthly::MonthlyChart;
 use tiles::HeadlineTiles;
 
 /// The italicized period word in the page title.
@@ -232,7 +234,8 @@ fn PeriodSummary(period: Signal<Option<StatsSummary>>) -> Element {
 }
 
 /// The all-time module stack: the reading-days heatmap card (with the
-/// longest-streak figure in its header).
+/// longest-streak figure in its header), then the books-per-month trend
+/// chart.
 #[component]
 fn AllTimeSummary(all_time: Signal<Option<StatsSummary>>) -> Element {
     let guard = all_time.read();
@@ -241,6 +244,7 @@ fn AllTimeSummary(all_time: Signal<Option<StatsSummary>>) -> Element {
     };
     rsx! {
         HeatmapCard { summary: summary.clone() }
+        MonthlyChart { summary: summary.clone() }
     }
 }
 

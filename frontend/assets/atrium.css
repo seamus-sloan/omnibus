@@ -5388,6 +5388,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .shelf-modal-head {
   display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
 }
+.shelf-modal-title { margin: 0; font-size: 16px; font-weight: 600; color: var(--ink-0); }
 .shelf-name-input {
   flex: 1 1 220px; min-width: 160px;
   font: inherit; font-size: 15px; color: var(--ink-0);
@@ -6394,6 +6395,39 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .st-hm-legend .st-hm-cell { width: 12px; }
 
+/* ── Books-per-month trend chart ──────────────────────────────────── */
+.st-monthly-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+.st-monthly-avg { font-size: 12.5px; color: var(--ink-3); }
+.st-monthly-bars {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 8px;
+  height: 128px;
+}
+.st-mo-col { display: flex; flex-direction: column; align-items: center; height: 100%; }
+.st-mo-track {
+  flex: 1 1 auto;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.st-mo-bar {
+  width: 60%;
+  min-height: 2px;
+  border-radius: 3px 3px 0 0;
+  background: var(--bg-3);
+}
+.st-mo-current .st-mo-bar { background: var(--accent); }
+.st-mo-label { margin-top: 6px; font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.st-mo-current .st-mo-label { color: var(--accent); font-weight: 600; }
+
 /* ── Scaffold cards (shown while a section's fetch is in flight) ──── */
 .st-summary-card { display: flex; flex-direction: column; gap: 8px; }
 .st-summary-line { font-size: 14px; color: var(--ink-1); }
@@ -6426,4 +6460,6 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   .st-hm-months { display: none; }
   .st-streak-value { font-size: 28px; }
   .st-streak-unit { font-size: 13px; }
+
+  .st-monthly-bars { height: 96px; gap: 4px; }
 }

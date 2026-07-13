@@ -5,8 +5,8 @@
 use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
 
-use super::fields::{MeArea, MeField, MeLabel};
-use crate::components::chip_editor::{ChipEditor, ChipEditorOptions, SuggestionItem};
+use super::fields::{label_to_id, MeArea, MeField, MeLabel};
+use crate::components::chip_editor::{ChipEditor, ChipEditorOptions, SuggestField, SuggestionItem};
 
 /// Per-field editable signals threaded through the form rows from `MetadataEditForm`.
 #[derive(Clone, Copy, PartialEq)]
@@ -24,11 +24,13 @@ pub(super) struct FormFields {
     pub filename: Signal<String>,
 }
 
-/// Suggestion pools backing the author + tag chip-editor dropdowns.
+/// Suggestion pools backing the author + tag chip-editor dropdowns and the
+/// series autocomplete field.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct FormSuggestions {
     pub authors: Signal<Vec<SuggestionItem>>,
     pub tags: Signal<Vec<SuggestionItem>>,
+    pub series: Signal<Vec<SuggestionItem>>,
 }
 
 /// Composed form grid plus the tags + series sections that live in the
@@ -43,7 +45,12 @@ pub(super) fn FormGrid(
         div { class: "me-form",
             FieldGrid { orig, fields, suggestions }
             TagsSection { tags: fields.tags, tag_suggestions: suggestions.tags }
-            SeriesSection { orig, series: fields.series, series_index: fields.series_index }
+            SeriesSection {
+                orig,
+                series: fields.series,
+                series_index: fields.series_index,
+                series_suggestions: suggestions.series,
+            }
         }
     }
 }
@@ -190,25 +197,39 @@ fn TagsSection(tags: Signal<Vec<String>>, tag_suggestions: Signal<Vec<Suggestion
     }
 }
 
-/// Divider + series name and book-number fields for the metadata form.
+/// Divider + series name (autocomplete against the existing series pool) and
+/// book-number fields for the metadata form. Series is a single value (a
+/// book has one series), so unlike the author/tag rows this renders
+/// [`SuggestField`] instead of [`ChipEditor`] — same dropdown, no chip list.
 #[component]
 fn SeriesSection(
     orig: Signal<EbookMetadata>,
     series: Signal<String>,
     series_index: Signal<String>,
+    series_suggestions: Signal<Vec<SuggestionItem>>,
 ) -> Element {
-    let mut series = series;
     let mut series_index = series_index;
+    let series_edited = series() != orig().series.clone().unwrap_or_default();
+    let field_id = label_to_id("Series");
+    let input_class = if series_edited {
+        "me-input me-input-edited"
+    } else {
+        "me-input"
+    };
     rsx! {
         div { class: "divider" }
         div { class: "label", "Series & position" }
         div { class: "me-series-grid",
-            MeField {
-                label: "Series",
-                value: series,
-                on_change: move |v: String| series.set(v),
-                placeholder: "not part of a series",
-                edited: series() != orig().series.clone().unwrap_or_default(),
+            div { class: "me-field",
+                MeLabel { text: "Series", edited: series_edited, target: field_id.clone() }
+                SuggestField {
+                    id: field_id,
+                    class: input_class,
+                    value: series,
+                    suggestions: series_suggestions,
+                    placeholder: "not part of a series",
+                    testid_prefix: "me-series",
+                }
             }
             MeField {
                 label: "Book #",

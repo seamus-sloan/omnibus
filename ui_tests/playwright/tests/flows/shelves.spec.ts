@@ -116,3 +116,71 @@ test("switches shelves via the rail without a full reload", async ({ page, reque
   await expect(page.getByTestId("shelf-grid")).toContainText("Alpha");
   await expect(page.getByTestId("shelf-grid")).not.toContainText("Beta in the Series");
 });
+
+test("edits an existing smart shelf's rules and the member grid updates", async ({
+  page,
+  request,
+}) => {
+  // "Ada Lovelace" matches the Alpha ebook + its audiobook; "Grace Hopper"
+  // matches the Beta ebook + its audiobook — disjoint two-book matches, so a
+  // membership change after save can only be explained by the edited rule
+  // actually taking effect.
+  const name = `E2E Smart Edit ${Date.now()}`;
+  const createResp = await request.post("/api/rpc/shelves/create", {
+    data: {
+      req: {
+        kind: "smart",
+        name,
+        description: null,
+        visibility: "private",
+        match_mode: "any",
+        rules: [{ field: "author", op: "is", value: "Ada Lovelace" }],
+        book_uuids: [],
+      },
+    },
+  });
+  expect(createResp.status(), "POST /api/rpc/shelves/create failed").toBe(200);
+  const shelf = (await createResp.json()) as { id: number };
+
+  await gotoReady(page, `/shelves/${shelf.id}`);
+  await expect(page.getByTestId("shelf-grid")).toContainText("Alpha");
+  await expect(page.getByTestId("shelf-grid")).not.toContainText("Beta in the Series");
+
+  await page.getByTestId("shelf-actions").click();
+  await page.getByTestId("shelf-edit-rules").click();
+
+  const modal = page.getByTestId("edit-shelf-rules-modal");
+  await expect(modal).toBeVisible();
+
+  // Prefilled from the shelf's current rule.
+  const valueInput = modal.getByTestId("condition-row-0").locator("input");
+  await expect(valueInput).toHaveValue("Ada Lovelace");
+  await expect(modal.getByTestId("rule-preview-count")).toContainText("2 of");
+
+  await valueInput.fill("Grace Hopper");
+  await expect(modal.getByTestId("rule-preview-count")).toContainText("2 of");
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/shelves/update",
+      expectedBody: {
+        id: shelf.id,
+        req: {
+          name: null,
+          description: null,
+          visibility: null,
+          match_mode: "any",
+          rules: [{ field: "author", op: "is", value: "Grace Hopper" }],
+        },
+      },
+      expectedStatus: 200,
+    },
+    async () => modal.getByTestId("edit-rules-save").click(),
+  );
+
+  await expect(modal).not.toBeVisible();
+  await expect(page.getByTestId("shelf-grid")).toContainText("Beta in the Series");
+  await expect(page.getByTestId("shelf-grid")).not.toContainText("Alpha");
+});

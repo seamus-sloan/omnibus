@@ -145,11 +145,13 @@ fn header_strings(book: &EbookMetadata) -> (String, String, Option<i64>, String)
     )
 }
 
-/// Fetches the author/tag suggestion pools once on mount for the
-/// `ChipEditor` dropdowns; signals stay empty until the fetches resolve.
+/// Fetches the author/tag/series suggestion pools once on mount for the
+/// `ChipEditor`/`SuggestField` dropdowns; signals stay empty until the
+/// fetches resolve.
 fn use_suggestion_pools(server_url: &str) -> FormSuggestions {
     let mut author_suggestions: Signal<Vec<SuggestionItem>> = use_signal(Vec::new);
     let mut tag_suggestions: Signal<Vec<SuggestionItem>> = use_signal(Vec::new);
+    let mut series_suggestions: Signal<Vec<SuggestionItem>> = use_signal(Vec::new);
 
     let url = server_url.to_string();
     use_effect(move || {
@@ -169,12 +171,20 @@ fn use_suggestion_pools(server_url: &str) -> FormSuggestions {
                     .collect();
                 tag_suggestions.set(collect_suggestions(items));
             }
+            if let Ok(series) = data::list_series(&url).await {
+                let items: Vec<SuggestionItem> = series
+                    .into_iter()
+                    .map(|s| SuggestionItem::new(s.name, s.book_count))
+                    .collect();
+                series_suggestions.set(collect_suggestions(items));
+            }
         });
     });
 
     FormSuggestions {
         authors: author_suggestions,
         tags: tag_suggestions,
+        series: series_suggestions,
     }
 }
 

@@ -9,7 +9,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use omnibus_shared::{
-    DayActivity, FinishedBook, GenreShare, RankedEntity, StatsRange, StatsSummary,
+    DayActivity, FinishedBook, GenreShare, MonthCount, RankedEntity, StatsRange, StatsSummary,
 };
 use sqlx::{Row, SqlitePool};
 
@@ -141,6 +141,7 @@ async fn compute(
     let books_active = books_active(pool, user_id, start).await?;
     let as_of_day = as_of_day(pool).await?;
     let finished_books = finished_books(pool, user_id, start).await?;
+    let books_per_month = books_per_month(pool, user_id).await?;
 
     Ok(StatsSummary {
         range,
@@ -160,6 +161,7 @@ async fn compute(
         top_tags,
         genre_share,
         finished_books,
+        books_per_month,
     })
 }
 
@@ -460,6 +462,44 @@ async fn finished_books(
             title: r.get("title"),
             author: r.get("author"),
             finished_at: r.get("finished_at"),
+        })
+        .collect())
+}
+
+/// Books finished per calendar month over the trailing 12 months (oldest
+/// first, ending at the current month), independent of any windowing —
+/// the all-time trend chart is never scoped to the period switcher. Uses the
+/// same completion definition as [`finished_books`]
+/// (`journal_entries.progress = 100`). A recursive CTE generates the 12-month
+/// spine and `LEFT JOIN`s it against the journal in one query, so a month
+/// with no finishes still comes back as zero rather than being omitted, and
+/// a 10k-event library never pays an N+1.
+async fn books_per_month(pool: &SqlitePool, user_id: i64) -> Result<Vec<MonthCount>, StatsError> {
+    let rows = sqlx::query(
+        "WITH RECURSIVE months(month) AS (
+             SELECT strftime('%Y-%m', 'now', '-11 months')
+             UNION ALL
+             SELECT strftime('%Y-%m', month || '-01', '+1 month')
+             FROM months
+             WHERE month < strftime('%Y-%m', 'now')
+         )
+         SELECT months.month AS month, COUNT(DISTINCT j.book_uuid) AS books
+         FROM months
+         LEFT JOIN journal_entries j
+                ON j.user_id = ? AND j.progress = 100
+               AND strftime('%Y-%m', j.created_at, 'unixepoch') = months.month
+         GROUP BY months.month
+         ORDER BY months.month",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| MonthCount {
+            month: r.get("month"),
+            books: r.get("books"),
         })
         .collect())
 }
