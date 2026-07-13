@@ -36,30 +36,134 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
-  check:
-    name: clippy + test
+  # `clippy` and `test` fan out into independent matrix jobs with no serial
+  # prepass: each variant restores the cargo cache and compiles its own
+  # dependency + workspace closure, so all three distinct closures — native
+  # (default shell), wasm32 (web feature), and the GTK/wry mobile backend
+  # (`.#mobile`) — compile in parallel instead of back-to-back. There is no
+  # "build once" job; deps recompile across variants on a cold cache, but the
+  # shared caches below make steady-state runs cheap and nothing waits on a
+  # blocking prepass.
+  #
+  # Cache buckets (Swatinem/rust-cache `shared-key`; GHA keys are write-once
+  # per lockfile, so the first variant in a bucket populates it and the rest
+  # restore it):
+  #   - `omnibus`        — native host closure, shared with e2e.yml's bundle job
+  #   - `omnibus-wasm`   — wasm32 closure (only `clippy (frontend-web)`)
+  #   - `omnibus-mobile` — GTK/wry closure (only `clippy (mobile)`), kept
+  #                        separate so mobile-only artifacts don't bloat the hot
+  #                        `omnibus` restore that every native variant pays.
+  clippy:
+    name: clippy (${{ matrix.name }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # Required by DeterminateSystems/nix-installer-action so GitHub Actions
-      # provides the OIDC token endpoints it needs to authenticate to FlakeHub.
-      # Without it the installer falls back to anonymous api.github.com fetches
-      # that intermittently 401 ("Bad credentials") during flake evaluation.
       id-token: write
-      # Required by nix-community/cache-nix-action `purge: true` so it can
-      # delete its own expired cache entries via the Actions cache API.
       actions: write
     env:
-      # Match e2e.yml: pin target dir so rust-cache (keyed on `. -> target`)
-      # actually caches anything across runs.
       CARGO_TARGET_DIR: ./target
+    strategy:
+      # One failing variant shouldn't cancel the others — we want every lint
+      # result on the PR, not just the first failure.
+      fail-fast: false
+      matrix:
+        include:
+          - name: server
+            cmd: cargo clippy -p omnibus --all-targets -- -D warnings
+          - name: db
+            cmd: cargo clippy -p omnibus-db --all-targets -- -D warnings
+          - name: frontend
+            cmd: cargo clippy -p omnibus-frontend --features server --all-targets -- -D warnings
+          # Lint the `web` feature on wasm32 so web-only (`#[cfg(feature = "web")]`)
+          # deprecations/warnings are caught — the `server` variant never sees them.
+          # Its own cache bucket — the wasm32 closure is disjoint from native.
+          - name: frontend-web
+            cache_key: omnibus-wasm
+            cmd: cargo clippy -p omnibus-frontend --features web --all-targets --target wasm32-unknown-unknown -- -D warnings
+          # Same cfg-split mobile code path the `test` matrix covers. Only needs
+          # reqwest/tokio (no GTK/wry — that's `omnibus-mobile`), so it runs in
+          # the default shell like the other frontend variants.
+          - name: frontend-mobile
+            cmd: cargo clippy -p omnibus-frontend --features mobile --all-targets -- -D warnings
+          - name: shared
+            cmd: cargo clippy -p omnibus-shared --all-targets -- -D warnings
+          # `omnibus-mobile` is excluded from `default-members` (its `mobile`
+          # feature on `omnibus-frontend` is mutually exclusive with `web`), so
+          # bare clippy skips it. Target it explicitly, host target only — the
+          # iOS/Android cross toolchains aren't on ubuntu-latest. Runs in the
+          # `.#mobile` shell for the GTK 3 + WebKitGTK libs the wry backend needs.
+          # Own cache bucket so the heavy GTK/wry closure stays out of `omnibus`.
+          - name: mobile
+            shell: .#mobile
+            cache_key: omnibus-mobile
+            cmd: cargo clippy -p omnibus-mobile --all-targets -- -D warnings
     steps:
       - uses: actions/checkout@v4
 
-      # Public-domain fixtures aren't in git — they're the fixtures-vN
-      # release asset. Needed by `cargo test -p omnibus-db` (the
-      # public_domain_epubs regression suite + audiobook cover tests).
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-rust-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-prefixes-first-match: nix-rust-${{ runner.os }}-
+          purge: true
+          purge-prefixes: nix-rust-${{ runner.os }}-
+          purge-last-accessed: 604800
+          purge-primary-key: never
+          gc-max-store-size-linux: 5G
+
+      # Per-variant bucket (defaults to `omnibus`). First variant in the bucket
+      # populates it; the rest restore. GHA cache keys are write-once per
+      # lockfile, so concurrent saves on a cold cache dedupe to a single write.
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          shared-key: ${{ matrix.cache_key || 'omnibus' }}
+
+      - name: Clippy
+        run: nix develop ${{ matrix.shell }} --command ${{ matrix.cmd }}
+
+  test:
+    name: test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      actions: write
+    env:
+      CARGO_TARGET_DIR: ./target
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: server
+            cmd: cargo test -p omnibus
+          # `cargo test -p omnibus-db` needs the public-domain fixtures (the
+          # public_domain_epubs regression suite + audiobook cover tests); no
+          # other variant does, so only this one fetches them.
+          - name: db
+            fixtures: true
+            cmd: cargo test -p omnibus-db
+          - name: frontend
+            cmd: cargo test -p omnibus-frontend --features server
+          # `--features mobile` exercises a distinct cfg-split path from
+          # `server` (`data::token_store` / `app_dirs` native token
+          # persistence). Only needs reqwest/tokio (no GTK/wry), so it runs in
+          # the default shell rather than `.#mobile`.
+          - name: frontend-mobile
+            cmd: cargo test -p omnibus-frontend --features mobile
+          - name: shared
+            cmd: cargo test -p omnibus-shared
+    steps:
+      - uses: actions/checkout@v4
+
+      # Public-domain fixtures aren't in git — they're the fixtures-vN release
+      # asset. Only the `db` variant needs them.
       - name: Cache test fixtures
+        if: matrix.fixtures
         uses: actions/cache@v4
         with:
           path: |
@@ -72,15 +176,12 @@ jobs:
           key: fixtures-${{ hashFiles('scripts/fetch-fixtures.sh') }}
 
       - name: Fetch test fixtures
+        if: matrix.fixtures
         run: scripts/fetch-fixtures.sh
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v22
 
-      # Cache the Nix store across runs. Auto-purges caches with the same
-      # prefix that haven't been touched in 7 days so we stay under the 10 GB
-      # per-repo GHA cache quota. Replaces DeterminateSystems/magic-nix-cache-action
-      # (sunset; was uploading unbounded and exceeding the quota).
       - name: Cache Nix store
         uses: nix-community/cache-nix-action@v7
         with:
@@ -92,74 +193,16 @@ jobs:
           purge-primary-key: never
           gc-max-store-size-linux: 5G
 
-      # `shared-key` is identical to the e2e workflow's bundle job so a warm
-      # cargo target dir from one workflow primes the other. Without it each
-      # workflow gets its own cache bucket and they never share intermediates.
+      # All test variants build native crates, so they share the `omnibus`
+      # bucket (also shared with clippy's native variants and e2e.yml's bundle).
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
           shared-key: omnibus
 
-      - name: cargo clippy (server)
-        run: nix develop --command cargo clippy -p omnibus --all-targets -- -D warnings
-
-      - name: cargo clippy (db)
-        run: nix develop --command cargo clippy -p omnibus-db --all-targets -- -D warnings
-
-      - name: Clippy frontend
-        run: nix develop --command cargo clippy -p omnibus-frontend --features server --all-targets -- -D warnings
-
-      # Lint the `web` feature on wasm32 so web-only (`#[cfg(feature = "web")]`)
-      # deprecations/warnings are caught — the `server` step above never sees them.
-      - name: Clippy frontend (web)
-        run: nix develop --command cargo clippy -p omnibus-frontend --features web --all-targets --target wasm32-unknown-unknown -- -D warnings
-
-      # Lints the same cfg-split mobile code path the test step below covers.
-      # Only needs reqwest/tokio (no GTK/wry — that's `omnibus-mobile` below),
-      # so this runs in the default shell like the other frontend variants.
-      - name: Clippy frontend (mobile)
-        run: nix develop --command cargo clippy -p omnibus-frontend --features mobile --all-targets -- -D warnings
-
-      - name: Clippy shared
-        run: nix develop --command cargo clippy -p omnibus-shared --all-targets -- -D warnings
-
-      # `omnibus-mobile` is excluded from `default-members` in the workspace
-      # `Cargo.toml` (its `mobile` feature on `omnibus-frontend` is mutually
-      # exclusive with `web`), so the bare clippy steps above skip it. Target
-      # it explicitly with `-p` so lint regressions in the mobile shell are
-      # gated on every PR. Host target only — the iOS/Android cross toolchains
-      # are not on the ubuntu-latest runner.
-      #
-      # Runs in the `.#mobile` shell (not the default one): the `mobile`
-      # feature compiles the wry/GTK desktop backend for the Linux host, which
-      # needs the GTK 3 + WebKitGTK system libs that only the mobile shell
-      # provides (see flake.nix `mobileExtras`). The default shell lacks them
-      # and `glib-sys` fails at `pkg-config`.
-      - name: cargo clippy (mobile)
-        run: nix develop .#mobile --command cargo clippy -p omnibus-mobile --all-targets -- -D warnings
-
-      - name: cargo test (server)
-        run: nix develop --command cargo test -p omnibus
-
-      - name: cargo test (db)
-        run: nix develop --command cargo test -p omnibus-db
-
-      - name: cargo test (frontend)
-        run: nix develop --command cargo test -p omnibus-frontend --features server
-
-      # `--features mobile` exercises a distinct cfg-split code path from
-      # `server` above (`data::token_store` / `app_dirs` native token
-      # persistence) that was previously untested in CI, even though
-      # `just test` has run it locally all along. Only needs reqwest/tokio
-      # (no GTK/wry), so it runs in the default shell like the other test
-      # steps rather than `.#mobile` (that shell is for `omnibus-mobile`'s
-      # desktop GTK backend, a different crate).
-      - name: cargo test (frontend mobile)
-        run: nix develop --command cargo test -p omnibus-frontend --features mobile
-
-      - name: cargo test (shared)
-        run: nix develop --command cargo test -p omnibus-shared
+      - name: Test
+        run: nix develop --command ${{ matrix.cmd }}
 
   security:
     name: cargo audit
