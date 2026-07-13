@@ -98,3 +98,14 @@ pub mod create_shelf_modal;
 pub mod shelves_rail;
 pub use create_shelf_modal::CreateShelfModal;
 pub use shelves_rail::{RailActive, ShelvesRail};
+
+// The condition-row editor + live-preview pane shared by shelf creation and
+// the "Edit rules" surface (issue #987) — see `shelf_rule_builder.rs` for the
+// `RuleDraft`/`RuleBuilder` split.
+pub mod shelf_rule_builder;
+
+// F3.1 follow-up: editing an existing smart shelf's rules from the shelf
+// detail page (create-only previously required delete+recreate). Reuses
+// `RuleBuilder`, platform-agnostic like `CreateShelfModal`.
+pub mod edit_shelf_rules_modal;
+pub use edit_shelf_rules_modal::EditShelfRulesModal;

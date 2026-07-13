@@ -26,6 +26,8 @@ pub(super) struct MobileShelfDetailProps {
     pub server_url: String,
     /// Opens the shared add-books modal (manual shelves).
     pub on_add: EventHandler<()>,
+    /// Opens the shared rule-editor modal (smart shelves; issue #987).
+    pub on_edit_rules: EventHandler<()>,
     /// Fired after a rename / visibility change so the parent refetches.
     pub on_changed: EventHandler<()>,
 }
@@ -39,6 +41,7 @@ pub(super) fn MobileShelfDetail(props: MobileShelfDetailProps) -> Element {
         books,
         server_url,
         on_add,
+        on_edit_rules,
         on_changed,
     } = props;
 
@@ -82,7 +85,7 @@ pub(super) fn MobileShelfDetail(props: MobileShelfDetailProps) -> Element {
                         "data-testid": "mobile-search-entry",
                         {search_glyph()}
                     }
-                    MobileShelfActions { shelf: shelf.clone(), on_add, on_changed }
+                    MobileShelfActions { shelf: shelf.clone(), on_add, on_edit_rules, on_changed }
                 }
             }
 
@@ -141,12 +144,14 @@ pub(super) fn MobileShelfDetail(props: MobileShelfDetailProps) -> Element {
 }
 
 /// The header actions button + dropdown menu (rename, change visibility,
-/// delete, and — for manual shelves — add books). Owns its own menu / rename
-/// state so [`MobileShelfDetail`] stays a pure presentation shell.
+/// delete, and — for smart shelves — edit rules, or — for manual shelves —
+/// add books). Owns its own menu / rename state so [`MobileShelfDetail`]
+/// stays a pure presentation shell.
 #[component]
 fn MobileShelfActions(
     shelf: Shelf,
     on_add: EventHandler<()>,
+    on_edit_rules: EventHandler<()>,
     on_changed: EventHandler<()>,
 ) -> Element {
     let nav = use_navigator();
@@ -157,6 +162,7 @@ fn MobileShelfActions(
 
     let id = shelf.id;
     let is_manual = shelf.kind == ShelfKind::Manual;
+    let is_smart = shelf.kind == ShelfKind::Smart;
     let next_vis = match shelf.visibility {
         Visibility::Private => Visibility::Public,
         Visibility::Public => Visibility::Private,
@@ -241,6 +247,18 @@ fn MobileShelfActions(
                                     on_add.call(());
                                 },
                                 "Add books"
+                            }
+                        }
+                        if is_smart {
+                            button {
+                                r#type: "button",
+                                class: "shelf-menu-item",
+                                "data-testid": "shelf-edit-rules",
+                                onclick: move |_| {
+                                    menu_open.set(false);
+                                    on_edit_rules.call(());
+                                },
+                                "Edit rules"
                             }
                         }
                         button {

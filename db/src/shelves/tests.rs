@@ -614,6 +614,57 @@ async fn update_smart_shelf_rejects_emptying_rules() {
 }
 
 #[tokio::test]
+async fn update_shelf_rules_changes_membership_of_an_existing_smart_shelf() {
+    // Issue #987: editing a smart shelf's query used to require delete +
+    // recreate. `update_shelf` already threads `rules`/`match_mode` through
+    // to the same replace-then-reinsert path `create_shelf` uses, but only
+    // create-time rule matching had coverage — this exercises the edit path.
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+    let shelf = create_shelf(
+        &pool,
+        owner,
+        &smart_req("Rotating", MatchMode::Any, vec![tag_rule("fiction")]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(shelf.book_count, 2, "starts matching the 'fiction' tag");
+
+    // Retarget the same shelf at a different tag with `all` matching plus a
+    // second condition — an unrelated field so the two together still narrow
+    // to the single "essay"-tagged book.
+    let updated = update_shelf(
+        &pool,
+        shelf.id,
+        &UpdateShelfRequest {
+            match_mode: Some(MatchMode::All),
+            rules: Some(vec![
+                tag_rule("essay"),
+                ShelfRule {
+                    field: RuleField::Author,
+                    op: RuleOp::Is,
+                    value: "ada lovelace".into(),
+                },
+            ]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(updated.match_mode, Some(MatchMode::All));
+    assert_eq!(
+        updated.book_count, 1,
+        "membership must recompute from the new rules, not the old 'fiction' set"
+    );
+
+    let page = shelf_page(&pool, &updated, SortKey::Title, SortDir::Asc)
+        .await
+        .unwrap();
+    assert_eq!(page.books.len(), 1);
+    assert_eq!(page.books[0].title.as_deref(), Some("Standalone"));
+}
+
+#[tokio::test]
 async fn update_and_delete_missing_shelf_return_not_found() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     assert!(matches!(
