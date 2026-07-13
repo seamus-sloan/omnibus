@@ -27,19 +27,33 @@ test.beforeAll(async ({ request }) => {
   const uuid = await fetchBookUuidByTitle(request, FIXTURE_BOOKS[0].title);
 
   const now = Math.floor(Date.now() / 1000);
-  const session = (startedAt: number, secs: number) => ({
+  const session = (startedAt: number, secs: number, format: "epub" | "audio") => ({
     book_uuid: uuid,
-    format: "epub",
+    format,
     started_at: startedAt,
     ended_at: startedAt + secs,
     progress_units: secs,
   });
   const resp = await request.post("/api/progress/sessions", {
-    data: [session(now - 60, 600), session(OLD_SESSION_AT, 900)],
+    data: [
+      session(now - 60, 600, "epub"),
+      session(OLD_SESSION_AT, 900, "epub"),
+      session(now - 120, 900, "audio"),
+    ],
   });
   expect(resp.status(), "seeding stats sessions failed").toBe(200);
   const body = (await resp.json()) as { recorded: number };
-  expect(body.recorded, "session seeds were skipped").toBe(2);
+  expect(body.recorded, "session seeds were skipped").toBe(3);
+
+  // Feed the headline tiles: a star rating and a finished (100%) journal.
+  const rating = await request.post("/api/ratings", {
+    data: { book_uuid: uuid, stars: 4.5 },
+  });
+  expect(rating.status(), "seeding a rating failed").toBe(200);
+  const journal = await request.post("/api/journals", {
+    data: { book_uuid: uuid, body_md: "Finished it — stats spec seed.", progress: 100 },
+  });
+  expect(journal.status(), "seeding a finished journal failed").toBe(200);
 });
 
 test("renders the stats page layout", async ({ page }) => {
@@ -63,6 +77,19 @@ test("renders the stats page layout", async ({ page }) => {
   await expect(page.getByTestId("stats-period-section")).toBeVisible();
   await expect(page.getByText("Not tied to the period above.")).toBeVisible();
   await expect(page.getByTestId("stats-alltime-section")).toBeVisible();
+});
+
+test("headline tiles render finished, avg rating, pages, and listening", async ({ page }) => {
+  await gotoReady(page, "/stats");
+
+  // Values are asserted by shape, not exact numbers — other specs sharing the
+  // test user can add sessions/ratings/journals; the arithmetic is covered by
+  // the db::stats unit tests.
+  await expect(page.getByTestId("stats-tile-finished")).toContainText(/\d/);
+  await expect(page.getByTestId("stats-tile-finished")).toContainText("Finished");
+  await expect(page.getByTestId("stats-tile-avg-rating")).toContainText(/\d\.\d\s*★/);
+  await expect(page.getByTestId("stats-tile-pages")).toContainText("—");
+  await expect(page.getByTestId("stats-tile-listening")).toContainText(/\d+\s*(m|h)/);
 });
 
 test("switching the period re-queries and updates the period section", async ({ page }) => {

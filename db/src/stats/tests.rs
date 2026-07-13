@@ -98,6 +98,20 @@ async fn link_tag(pool: &SqlitePool, book: i64, name: &str) {
         .unwrap();
 }
 
+async fn rate_book(pool: &SqlitePool, user: i64, uuid: &str, half_stars: i64, updated_at: i64) {
+    sqlx::query(
+        "INSERT INTO user_ratings (user_id, book_uuid, half_stars, updated_at)
+         VALUES (?, ?, ?, ?)",
+    )
+    .bind(user)
+    .bind(uuid)
+    .bind(half_stars)
+    .bind(updated_at)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 async fn finish_journal(pool: &SqlitePool, user: i64, uuid: &str, created_at: i64) {
     sqlx::query(
         "INSERT INTO journal_entries (user_id, book_uuid, body_md, progress, created_at)
@@ -283,6 +297,36 @@ async fn cache_serves_within_ttl_and_refreshes_after_expiry() {
         .await
         .unwrap();
     assert_eq!(refreshed.reading_seconds, 1500);
+}
+
+#[tokio::test]
+async fn avg_stars_means_ratings_updated_in_the_window() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 3).await;
+    let user = seed_user(&pool, "alice").await;
+
+    // 8 half-stars (4.0★) and 9 half-stars (4.5★) → mean 4.25★; a rating
+    // updated before the window start must not drag the mean down.
+    rate_book(&pool, user, "uuid-1", 8, T0).await;
+    rate_book(&pool, user, "uuid-2", 9, T0).await;
+    rate_book(&pool, user, "uuid-3", 1, T0 - DAY).await;
+
+    let in_window = avg_stars(&pool, user, T0).await.unwrap();
+    assert_eq!(in_window, Some(4.25));
+
+    let all = avg_stars(&pool, user, 0).await.unwrap();
+    assert_eq!(all, Some(3.0));
+}
+
+#[tokio::test]
+async fn avg_stars_is_none_when_nothing_was_rated() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "loner").await;
+
+    assert_eq!(avg_stars(&pool, user, 0).await.unwrap(), None);
+
+    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    assert_eq!(s.avg_stars, None);
 }
 
 #[tokio::test]

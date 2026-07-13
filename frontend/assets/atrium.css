@@ -6215,6 +6215,24 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .st-divider-em { font-style: italic; }
 .st-divider-sub { margin: 0; font-size: 12.5px; color: var(--ink-3); }
 
+/* ── Headline metric tiles ────────────────────────────────────────── */
+.st-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 18px;
+}
+.st-tile { padding: 16px 16px 14px; }
+.st-tile-value {
+  font-family: var(--serif);
+  font-size: 46px;
+  line-height: 1;
+  color: var(--ink-0);
+}
+.st-tile-accent .st-tile-value { color: var(--accent); }
+.st-tile-unit { font-size: 0.45em; color: var(--ink-3); }
+.st-tile-accent .st-tile-unit { color: var(--accent); }
+.st-tile-label { margin-top: 6px; }
+
 /* ── Scaffold cards (replaced by tiles / heatmap as modules land) ─── */
 .st-summary-card { display: flex; flex-direction: column; gap: 8px; }
 .st-summary-line { font-size: 14px; color: var(--ink-1); }
@@ -6229,4 +6247,10 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   .st-page { padding-top: 8px; }
   .st-seg { display: none; }
   .st-range-trigger { display: inline-flex; }
+
+  /* Tiles collapse to a 2×2 grid; the hero pair (Finished, Avg rating)
+     stays larger, per the converged design. */
+  .st-tiles { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .st-tile-value { font-size: 28px; }
+  .st-tile-hero .st-tile-value { font-size: 40px; }
 }
