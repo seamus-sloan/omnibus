@@ -14,6 +14,7 @@ fn main() {
 
     #[cfg(feature = "server")]
     {
+        server::init_tracing();
         dioxus::serve(server::launch);
     }
 }
@@ -35,6 +36,24 @@ mod server {
     use sqlx::SqlitePool;
 
     use crate::App;
+
+    /// Install the global tracing subscriber. Must run before `dioxus::serve`,
+    /// which otherwise installs dioxus-logger's default subscriber with a
+    /// fixed filter that ignores `RUST_LOG`. `RUST_LOG` wins when set; the
+    /// fallback keeps omnibus events visible without dependency noise.
+    pub(crate) fn init_tracing() {
+        use tracing_subscriber::EnvFilter;
+
+        let filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("info,omnibus=debug"));
+        // try_init over init: a second subscriber (e.g. in tests) is a no-op,
+        // not a panic.
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .compact()
+            .try_init()
+            .ok();
+    }
 
     /// Entry point handed to `dioxus::serve`: boots the stack and returns the wired Axum `Router`.
     pub(crate) async fn launch() -> anyhow::Result<Router> {
@@ -249,17 +268,21 @@ mod server {
         // body-limit guards above. Span logs only the path, never the query
         // string: media reads carry the session as `?token=`, and the default
         // span records the full URI — which would leak live tokens into logs.
+        // The span and the on-response event sit at INFO so the default
+        // filter yields one line per request (method, path, status, latency).
         router.layer(
-            tower_http::trace::TraceLayer::new_for_http().make_span_with(
-                |req: &axum::http::Request<_>| {
-                    tracing::debug_span!(
+            tower_http::trace::TraceLayer::new_for_http()
+                .make_span_with(|req: &axum::http::Request<_>| {
+                    tracing::info_span!(
                         "request",
                         method = %req.method(),
                         path = %req.uri().path(),
                         version = ?req.version(),
                     )
-                },
-            ),
+                })
+                .on_response(
+                    tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO),
+                ),
         )
     }
 }

@@ -78,6 +78,8 @@ Key vars (see `.env.example` for the full annotated list):
 - `HARDCOVER_API_KEY` — account-level Hardcover Bearer token for F3.3 "Readers also enjoyed" suggestions. Unlike the library paths, the **Settings page is the source of truth**: the `seed_hardcover_key_from_env` boot hook seeds this value only when none is saved (settings wins thereafter), and `effective_hardcover_api_key` falls back to it when settings is empty. Server-wide, never per-user; leave unset to keep suggestions disabled.
 - `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURITY` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM_EMAIL` — F4.3 Send-to-Kindle SMTP relay. Same source-of-truth model as the Hardcover key: `seed_smtp_from_env` seeds the config only when no host is saved (Settings page wins thereafter), and `effective_smtp_config` falls back to the env vars when settings is empty. `SMTP_HOST` + `SMTP_FROM_EMAIL` are required; port defaults to 587 and security to `starttls` (`tls` for implicit TLS on 465). Server-wide; leave unset to keep Send-to-Kindle disabled. (A user's own `kindle_email` lives per-account on the `/account` page, not here.)
 
+- `RUST_LOG` — console log filter (tracing `EnvFilter` syntax). The server owns its subscriber (`init_tracing` in `server/src/main.rs`), so this works under both `cargo run -p omnibus` and `dx serve`. Default when unset: `info,omnibus=debug` — one INFO line per HTTP request (method, path, status, latency; query strings never logged).
+
 **Security-sensitive (never set casually in production):**
 
 - `OMNIBUS_INITIAL_ADMIN=username` — promotes the named user to admin on **every** boot while set. One-time account recovery only — UNSET IMMEDIATELY AFTER USE.
