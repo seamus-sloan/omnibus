@@ -5788,6 +5788,23 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .atrium .m-player-title {
   font-family: var(--serif); font-weight: 400; font-size: 26px;
   line-height: 1.05; margin-top: 10px;
+  overflow: hidden; white-space: nowrap;
+}
+.atrium .m-player-title .m-em { display: inline-block; }
+/* Marquee only kicks in once JS (`interop::measure_title_marquee`) confirms
+   the title overflows its header width and sets `--marquee-shift`; a title
+   that fits keeps the default centered, static layout. */
+.atrium .m-player-title[data-marquee="true"] { text-align: left; }
+.atrium .m-player-title[data-marquee="true"] .m-em {
+  animation: m-marquee 9s ease-in-out infinite;
+}
+@keyframes m-marquee {
+  0%, 12% { transform: translateX(0); }
+  50%, 62% { transform: translateX(var(--marquee-shift, 0)); }
+  100% { transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .atrium .m-player-title[data-marquee="true"] .m-em { animation: none; }
 }
 .m-player-by { margin-top: 8px; color: var(--ink-1); font-size: 14px; }
 .m-player-chline {

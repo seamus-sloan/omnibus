@@ -137,6 +137,27 @@ pub fn set_rate(rate: f64) {
     ));
 }
 
+/// Re-measure the now-playing title against its header width and toggle the
+/// marquee animation: `data-marquee` (plus a `--marquee-shift` distance) is
+/// set only when the title actually overflows, so a short title never
+/// animates.
+pub fn measure_title_marquee() {
+    fire(
+        "var wrap = document.querySelector('.m-player-title'); \
+         if (!wrap) return; \
+         var em = wrap.querySelector('.m-em'); \
+         if (!em) return; \
+         var over = Math.ceil(em.scrollWidth - wrap.clientWidth); \
+         if (over > 4) { \
+           wrap.setAttribute('data-marquee', 'true'); \
+           wrap.style.setProperty('--marquee-shift', (-(over + 12)) + 'px'); \
+         } else { \
+           wrap.removeAttribute('data-marquee'); \
+           wrap.style.removeProperty('--marquee-shift'); \
+         }",
+    );
+}
+
 /// Fire-and-forget control eval (no event stream).
 fn fire(js: &str) {
     let _ = dioxus::document::eval(js);

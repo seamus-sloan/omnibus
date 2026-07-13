@@ -86,6 +86,15 @@ pub fn MobilePlayer(uuid: String) -> Element {
         }
     }));
 
+    // Re-measure the marquee whenever the displayed title changes (including
+    // the initial load) — after `ctx.view` updates the DOM already carries
+    // the new title, so the JS-side overflow check reads the right width.
+    use_effect(move || {
+        if (ctx.view)().is_some() {
+            interop::measure_title_marquee();
+        }
+    });
+
     if let Some(msg) = (ctx.error)() {
         return render_error(&msg);
     }
