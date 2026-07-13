@@ -1,4 +1,4 @@
-//! Resolution orchestration for F3.3 suggestions, mirroring
+//! Resolution orchestration for suggestions, mirroring
 //! `author_photos::cascade`: a single [`resolve`] entry point the worker drives
 //! (via [`crate::worker::Task::ResolveSuggestions`]) plus a [`resolve_with`]
 //! that takes injectable Hardcover + image configs for tests.

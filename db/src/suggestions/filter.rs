@@ -1,4 +1,4 @@
-//! Pure candidate-filtering for F3.3 suggestions. Given the source book's
+//! Pure candidate-filtering for suggestions. Given the source book's
 //! authors/series and Hardcover co-listed candidates (already ranked by
 //! co-listing count, descending), trim to the top read-alikes that are genuine
 //! *new* discoveries: different author, different series, and an entry point

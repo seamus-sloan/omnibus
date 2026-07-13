@@ -1,4 +1,4 @@
-//! Cache CRUD + the pure [`decide`] de-duplication state machine for F3.3
+//! Cache CRUD + the pure [`decide`] de-duplication state machine for
 //! suggestions. Two tables back this (migration 0033): `book_suggestion_state`
 //! holds one TTL/`pending`/`resolved`/`empty` marker per source book, and
 //! `book_suggestions` holds its 0..N cached result rows. Read by [`cascade`]

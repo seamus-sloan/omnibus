@@ -1,4 +1,4 @@
-//! Hardcover GraphQL client for F3.3 suggestions. Hardcover has no
+//! Hardcover GraphQL client for suggestions. Hardcover has no
 //! recommendations endpoint, so we resolve the library book to a Hardcover
 //! book, collect the curated lists it sits on, and rank every other book by
 //! how many of those lists it shares. All queries go through [`post_graphql`]
