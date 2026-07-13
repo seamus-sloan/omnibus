@@ -169,12 +169,8 @@ fn persist_position(uuid: &str, server_url: &str, seconds: f64) {
     });
 }
 
-/// Player title with an overflow-triggered marquee: static when the title
-/// fits the header width, a slow back-and-forth scroll when it doesn't
-/// (issue #1001 AC1/AC2). The actual overflow check runs in JS on mount
-/// since it needs a real layout measurement (`scrollWidth` vs `clientWidth`)
-/// that isn't available at render time. `id` gives the eval a stable,
-/// single-element lookup instead of a page-wide class scan.
+/// Player title with an overflow-triggered marquee (static unless the title
+/// overflows its header width). `id` scopes the mount-time JS check.
 fn player_title(title: &str) -> Element {
     rsx! {
         h1 {
@@ -186,13 +182,10 @@ fn player_title(title: &str) -> Element {
     }
 }
 
-/// Arm the marquee on `#m-player-title` if its track overflows the header
-/// width, else leave it static. Installs `window.OmnibusMarqueeCheck` once
-/// (idempotent — `eval` reruns on every mount) so a `resize`/rotation event
-/// re-evaluates the same element instead of going stale, and re-checks after
-/// `document.fonts.ready` since the serif webfont can still be swapping in
-/// when the first (mount-time) measurement runs. The 12px pad keeps the
-/// last character from sitting exactly flush against the clipped edge.
+/// Toggle the marquee on `#m-player-title` by measured overflow. Installs a
+/// guarded `window.OmnibusMarqueeCheck` so `resize` and `document.fonts.ready`
+/// (the serif webfont can still be swapping in at mount) both re-measure
+/// instead of only the initial, possibly-stale layout.
 fn check_title_marquee() {
     interop::fire(
         "if (!window.OmnibusMarqueeCheck) { \

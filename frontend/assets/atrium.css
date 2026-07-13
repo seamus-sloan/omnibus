@@ -5788,17 +5788,25 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .atrium .m-player-title {
   font-family: var(--serif); font-weight: 400; font-size: 26px;
   line-height: 1.05; margin-top: 10px;
-  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  overflow: hidden; white-space: nowrap;
 }
-/* `.m-marquee-track` is always the same size as its text; `--m-marquee-distance`
-   (set in JS from the measured overflow) is only consumed once `.m-marquee-active`
-   is toggled on, so a title that fits never animates and stays centered like the
-   rest of `.m-player-now`. Active titles switch to left-aligned so the resting
-   (`translateX(0)`) frame actually shows the start of the title instead of the
-   browser's default centering clipping an equal slice off each edge. */
-.m-player-title .m-marquee-track { display: inline-block; }
+/* `text-overflow: ellipsis` on the parent doesn't ellipsize an atomic
+   inline-block child, so the track ellipsizes itself, bounded to the
+   parent's width; the active (marquee) state lifts that bound so the track
+   can render its full natural (overflowing) width for the animation.
+   `--m-marquee-distance` (set in JS from the measured overflow) is only
+   consumed once `.m-marquee-active` is toggled on, so a title that fits
+   never animates and stays centered like the rest of `.m-player-now`.
+   Active titles switch to left-aligned so the resting (`translateX(0)`)
+   frame actually shows the start of the title instead of the browser's
+   default centering clipping an equal slice off each edge. */
+.m-player-title .m-marquee-track {
+  display: inline-block; max-width: 100%; overflow: hidden;
+  text-overflow: ellipsis; vertical-align: top;
+}
 .m-player-title.m-marquee-active { text-align: left; }
 .m-player-title.m-marquee-active .m-marquee-track {
+  max-width: none; overflow: visible;
   animation: m-marquee-scroll 7s ease-in-out infinite alternate;
 }
 @keyframes m-marquee-scroll {
