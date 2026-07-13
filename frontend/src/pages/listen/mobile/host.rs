@@ -23,6 +23,10 @@ pub fn MobileAudioHost() -> Element {
     let mut drain_task = use_signal(|| None::<Task>);
     let mut loaded_uuid = use_signal(|| None::<String>);
 
+    // Record listening time off the play/pause signals — the rows behind
+    // the `/stats` aggregates, POSTed to `/api/progress/sessions`.
+    crate::session_tracker::use_listening_session(ctx.uuid, ctx.playing, server_url);
+
     // Loader: reacts to the listen page retargeting `ctx.uuid`.
     use_effect(move || {
         let requested = (ctx.uuid)();

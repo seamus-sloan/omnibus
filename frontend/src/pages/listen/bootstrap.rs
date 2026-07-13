@@ -47,6 +47,11 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
     let cb_holder: JsCallbackHolder =
         use_hook(|| std::rc::Rc::new(std::cell::RefCell::new(Vec::new())));
 
+    // Record listening time off the play/pause signals — the rows behind
+    // the `/stats` aggregates. Web posts same-origin, so no server URL.
+    let server_url = use_signal(String::new);
+    crate::session_tracker::use_listening_session(playback.uuid, playback.playing, server_url);
+
     use_effect(move || {
         // The only reactive dependency — re-run when the active book changes.
         let Some(uuid) = playback.uuid.read().clone() else {

@@ -20,6 +20,7 @@ pub mod reader_progress;
 pub mod routes;
 pub mod rpc;
 pub mod scroll_restore;
+pub mod session_tracker;
 pub mod view_prefs;
 
 pub use components::Nav;

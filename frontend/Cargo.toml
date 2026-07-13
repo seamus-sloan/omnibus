@@ -31,7 +31,10 @@ gloo-timers = { version = "0.4", features = ["futures"], optional = true }
 # handler downcasts to the raw `web_sys::FocusEvent` to read `related_target`
 # and check DOM containment against the editor's own root, so Tab moving
 # focus to a chip's Remove button doesn't close the editor.
-web-sys = { version = "0.3", features = ["Window", "Storage", "KeyboardEvent", "FormData", "Blob", "BlobPropertyBag", "Element", "HtmlElement", "FocusEvent", "EventTarget", "Node"], optional = true }
+# Navigator/Document/VisibilityState: `session_tracker`'s tab-hide flush —
+# `navigator.sendBeacon` delivery plus the visibilitychange/pagehide
+# listeners that end a reading/listening segment on tab hide or close.
+web-sys = { version = "0.3", features = ["Window", "Storage", "KeyboardEvent", "FormData", "Blob", "BlobPropertyBag", "Element", "HtmlElement", "FocusEvent", "EventTarget", "Node", "Navigator", "Document", "VisibilityState"], optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 js-sys = { version = "0.3", optional = true }

@@ -234,6 +234,14 @@ fn use_reader_signals(uuid: &str, theme: Signal<Theme>) -> ReaderSignals {
     // keeping hydration stable — the class only appears after a post-mount tap.
     let chrome_hidden = use_signal(|| false);
 
+    // Record reading time against this book while the reader is open (and,
+    // on web, the tab visible) — the rows behind the `/stats` aggregates.
+    // Effect-only (no rsx), so SSR is a no-op and hydration is unaffected.
+    crate::session_tracker::use_reading_session(
+        uuid.to_string(),
+        crate::contexts::use_server_url(),
+    );
+
     #[cfg(feature = "web")]
     install_reader_web_interop(
         uuid.to_string(),
