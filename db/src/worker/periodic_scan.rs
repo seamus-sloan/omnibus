@@ -1,15 +1,13 @@
-//! Testable core of the periodic library-rescan background task.
-//!
-//! The `tokio::time` loop that calls [`periodic_scan_tick`] on a schedule
-//! lives in `server::main` (`spawn_periodic_scan`), mirroring
-//! `spawn_session_pruner`'s shape. This module owns the "read settings,
-//! decide, post" step in isolation so it can be exercised directly through
-//! the worker test harness instead of waiting on a real timer.
+//! Testable core of the periodic library-rescan background task: reads the
+//! configured interval, posts scan tasks when due, and returns the next sleep.
+//! Called on a schedule by `server::main`'s `spawn_periodic_scan` loop.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::SqlitePool;
+
+use omnibus_shared::settings::SCAN_INTERVAL_MIN_HOURS;
 
 use super::types::{Task, Worker};
 
@@ -19,13 +17,26 @@ use super::types::{Task, Worker};
 pub const PERIODIC_SCAN_RECHECK: Duration = Duration::from_secs(5 * 60);
 
 /// One iteration of the periodic-scan loop: read the configured interval,
-/// and when set, post [`Task::Scan`] / [`Task::ScanAudiobooks`] for each
-/// configured library path via `worker` — the same tasks a manual "Scan
-/// Library" click or a settings save would post. Returns how long the
-/// caller should sleep before the next tick: the full configured interval
-/// (converted to seconds) once a scan has been posted, or
-/// [`PERIODIC_SCAN_RECHECK`] when the interval is unset so a later settings
-/// change takes effect without a restart.
+/// and when it's set and at least [`SCAN_INTERVAL_MIN_HOURS`], post
+/// [`Task::Scan`] / [`Task::ScanAudiobooks`] for each configured library
+/// path via `worker` — the same tasks a manual "Scan Library" click or a
+/// settings save would post. Returns how long the caller should sleep
+/// before the next tick.
+///
+/// The returned duration is [`PERIODIC_SCAN_RECHECK`] — never
+/// [`Duration::ZERO`] or a sub-recheck sleep — in every case where a scan
+/// was *not* posted, so the caller's loop can't busy-spin and a later
+/// settings change is always picked up within the recheck window:
+/// - the settings read failed;
+/// - the interval is unset (disabled);
+/// - the interval is below [`SCAN_INTERVAL_MIN_HOURS`] (defense-in-depth
+///   against a corrupted/hand-edited `settings` row that parses as
+///   `Some(0)` — `Settings::validate` already rejects this on the write
+///   path, but `get_settings` doesn't re-validate on read);
+/// - the interval is valid but no library path is configured yet.
+///
+/// Only when a scan is actually posted does it return the full configured
+/// interval.
 pub async fn periodic_scan_tick(pool: &SqlitePool, worker: &Arc<Worker>) -> Duration {
     let settings = match crate::settings::get_settings(pool).await {
         Ok(s) => s,
@@ -37,11 +48,26 @@ pub async fn periodic_scan_tick(pool: &SqlitePool, worker: &Arc<Worker>) -> Dura
     let Some(hours) = settings.scan_interval_hours else {
         return PERIODIC_SCAN_RECHECK;
     };
+    if hours < SCAN_INTERVAL_MIN_HOURS {
+        tracing::warn!(
+            hours,
+            "periodic scan: interval below minimum, treating as disabled"
+        );
+        return PERIODIC_SCAN_RECHECK;
+    }
+    let mut posted = false;
     if let Some(library_path) = settings.ebook_library_path {
         worker.post(Task::Scan { library_path });
+        posted = true;
     }
     if let Some(library_path) = settings.audiobook_library_path {
         worker.post(Task::ScanAudiobooks { library_path });
+        posted = true;
+    }
+    // Enabled but nothing to scan yet: recheck soon so a path added later
+    // takes effect within the recheck window instead of after a full interval.
+    if !posted {
+        return PERIODIC_SCAN_RECHECK;
     }
     Duration::from_secs(u64::from(hours) * 3600)
 }

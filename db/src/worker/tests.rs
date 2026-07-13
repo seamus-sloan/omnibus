@@ -857,3 +857,63 @@ async fn periodic_scan_tick_recommends_a_recheck_wait_when_settings_read_fails()
 
     assert_eq!(wait, PERIODIC_SCAN_RECHECK);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn periodic_scan_tick_treats_a_sub_minimum_interval_row_as_disabled_without_a_zero_sleep() {
+    // A corrupted/hand-edited "0" row parses as Some(0) — get_settings does
+    // not re-validate — so the tick itself must refuse to busy-spin.
+    let p = pool().await;
+    crate::settings::set_settings(
+        &p,
+        &Settings {
+            ebook_library_path: Some("/ebooks".into()),
+            audiobook_library_path: None,
+            scan_interval_hours: None,
+        },
+    )
+    .await
+    .unwrap();
+    sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES ('scan_interval_hours', '0')")
+        .execute(&p)
+        .await
+        .unwrap();
+    let w = make_worker_default(p.clone());
+
+    let wait = periodic_scan_tick(&p, &w).await;
+
+    assert_eq!(
+        wait, PERIODIC_SCAN_RECHECK,
+        "a sub-minimum interval must recheck, never return a zero/sub-minimum sleep"
+    );
+    assert!(wait > Duration::ZERO);
+    assert!(
+        w.progress_snapshot().active.is_empty(),
+        "no scan should be posted for a sub-minimum interval"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn periodic_scan_tick_recommends_a_recheck_wait_when_enabled_but_no_paths_configured() {
+    // Interval is valid but no library path is set yet: recheck soon so a
+    // path added later isn't stuck behind a full-interval sleep.
+    let p = pool().await;
+    crate::settings::set_settings(
+        &p,
+        &Settings {
+            ebook_library_path: None,
+            audiobook_library_path: None,
+            scan_interval_hours: Some(6),
+        },
+    )
+    .await
+    .unwrap();
+    let w = make_worker_default(p.clone());
+
+    let wait = periodic_scan_tick(&p, &w).await;
+
+    assert_eq!(wait, PERIODIC_SCAN_RECHECK);
+    assert!(
+        w.progress_snapshot().active.is_empty(),
+        "no scan should be posted when no library path is configured"
+    );
+}
