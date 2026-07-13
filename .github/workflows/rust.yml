@@ -111,9 +111,13 @@ jobs:
 
       # `omnibus-mobile`'s wry/GTK backend needs the `.#mobile` shell's GTK 3 +
       # WebKitGTK libs (see flake.nix `mobileExtras`); the default shell lacks
-      # them and `glib-sys` fails at `pkg-config`.
+      # them and `glib-sys` fails at `pkg-config`. Warm via clippy, not build:
+      # its only downstream consumer is `clippy (mobile)`, and a check-build
+      # never links the final binary — a `cargo build` here fails at link with
+      # `-lxdo not found` (libxdo isn't on the CI linker search path; the app
+      # is only ever host-linked via `dx serve`, never plain `cargo build`).
       - name: Warm mobile deps (GTK/wry backend)
-        run: nix develop .#mobile --command cargo build -p omnibus-mobile
+        run: nix develop .#mobile --command cargo clippy -p omnibus-mobile --all-targets
 
   clippy:
     name: clippy (${{ matrix.name }})
