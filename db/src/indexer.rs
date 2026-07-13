@@ -385,7 +385,7 @@ pub async fn reindex_with_progress(
     Ok(())
 }
 
-/// Best-effort F10 GC of books whose files have been missing past the retention
+/// Best-effort GC of books whose files have been missing past the retention
 /// window and that carry no user data. Logged, never surfaced as an error so a
 /// GC failure can never abort a reindex — matches the best-effort cover/FTS
 /// pattern. The sweep is global (not library-scoped), so running it after each

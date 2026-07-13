@@ -96,7 +96,7 @@ async fn run_boot_backfills(pool: &SqlitePool) -> Result<(), InitDbError> {
     Ok(())
 }
 
-/// Run the one-time issue-#94 legacy cover-cache purge on the blocking pool.
+/// Run the one-time legacy cover-cache purge on the blocking pool.
 ///
 /// The previous `stable_uuid` implementation hashed via `DefaultHasher` and
 /// produced toolchain-dependent UUIDs. Switching to UUIDv5 changes every

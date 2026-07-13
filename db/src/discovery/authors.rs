@@ -21,7 +21,7 @@ pub const MAX_DISCOVERY_BOOKS: i64 = 1_000;
 /// `None` if the author ID doesn't exist. The nested `books` vec is
 /// capped at [`MAX_DISCOVERY_BOOKS`]; `book_count` is uncapped.
 ///
-/// Currently returns results across all users (single-tenant). When F4.x
+/// Currently returns results across all users (single-tenant). When
 /// per-user ACL lands, add a `user_id: i64` parameter and scope the query
 /// to books accessible to that user.
 pub async fn get_author(

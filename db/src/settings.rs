@@ -129,7 +129,7 @@ pub async fn set_settings(pool: &SqlitePool, settings: &Settings) -> Result<(), 
 }
 
 /// Repoint a slot's `scan_roots` row in place when its configured path
-/// changes (F2). Updating the existing row's `path` (rather than letting
+/// changes. Updating the existing row's `path` (rather than letting
 /// `upsert_library` insert a new one) keeps the row id — and therefore every
 /// `books.uuid` keyed under that `library_id` — stable, so the next reindex
 /// matches each file by its unchanged relative `scan_key` and preserves its
@@ -196,7 +196,7 @@ async fn repoint_scan_root(
 
 /// Drop **childless** orphan `scan_roots` rows whose `path` is not in `keep`.
 ///
-/// Never-prune (F2): a removed scan root that still owns books is **kept**,
+/// Never-prune: a removed scan root that still owns books is **kept**,
 /// and its books (plus their soft-ref user data) are retained rather than
 /// cascade-deleted — the durable-identity safety net. Books under a cleared
 /// path simply stop being listed (no `list_books` call passes that path) and

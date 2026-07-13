@@ -25,7 +25,7 @@ use super::PaletteError;
 /// string inside override JSON (no navigable id), matching the rest of the
 /// palette's behavior.
 ///
-/// Issue #154: the per-author correlated `COUNT(*)` is replaced with a
+/// The per-author correlated `COUNT(*)` is replaced with a
 /// single-pass `effective` membership CTE (scoped to the library up front) —
 /// the UNION of (1) canonical `books_authors_link` rows whose book has no
 /// `creators` override and (2) override-extracted creator names from

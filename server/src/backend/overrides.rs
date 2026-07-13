@@ -154,7 +154,7 @@ pub(super) async fn post_ebook_cover(
 /// keeps the disk-write/cleanup decision race-free. If the upsert fails,
 /// the just-written file is cleaned up ONLY when no prior override cover existed
 /// — otherwise the write step already replaced the user's previous valid cover
-/// and cleanup would compound the loss (#516, #529).
+/// and cleanup would compound the loss.
 async fn persist_cover(
     state: &AppState,
     uuid: &str,
