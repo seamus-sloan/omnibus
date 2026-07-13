@@ -785,6 +785,135 @@ fn compute_suggestions(
     }
 }
 
+/// Props for the [`SuggestField`] component.
+#[derive(Props, Clone, PartialEq)]
+pub struct SuggestFieldProps {
+    /// The field's bound value — both the input's live text and the
+    /// committed value. Unlike [`ChipEditorProps::values`] this is a single
+    /// value, not a list: there is no separate "commit" step, typing
+    /// directly edits the value and free text is always accepted.
+    pub value: Signal<String>,
+    /// Candidate pool; same shape as [`ChipEditorProps::suggestions`].
+    pub suggestions: ReadSignal<Vec<SuggestionItem>>,
+    /// The `<input>`'s `id`, so a sibling `<label for=...>` associates with it.
+    pub id: String,
+    /// CSS class for the `<input>`.
+    #[props(default)]
+    pub class: String,
+    /// Placeholder shown when the value is empty.
+    #[props(default)]
+    pub placeholder: String,
+    /// Per-instance testid prefix, same convention as
+    /// [`ChipEditorOptions::testid_prefix`]: the input gets
+    /// `<prefix>-input`, the dropdown `<prefix>-suggestions`.
+    pub testid_prefix: String,
+}
+
+/// Single-value counterpart to [`ChipEditor`] for fields that hold one value
+/// rather than a list (e.g. Series): the same substring-match suggestion
+/// dropdown, but picking a row overwrites the field instead of adding a
+/// chip, and there is no "+ Create" row since typing already edits the
+/// value directly (free text is accepted as-is).
+#[component]
+pub fn SuggestField(props: SuggestFieldProps) -> Element {
+    let mut value = props.value;
+    let mut highlight = use_signal::<Option<usize>>(|| None);
+    let mut focused = use_signal(|| false);
+
+    let filtered = {
+        let suggestions = props.suggestions.read();
+        let query_lc = value().trim().to_lowercase();
+        compute_suggestions(&suggestions, &[value()], &query_lc, focused(), false)
+    };
+    let total = filtered.len();
+    let testid_prefix = props.testid_prefix.clone();
+
+    rsx! {
+        div { class: "chip-editor-input-wrap",
+            input {
+                id: props.id.clone(),
+                class: "{props.class}",
+                "data-testid": "{testid_prefix}-input",
+                placeholder: "{props.placeholder}",
+                value: "{value}",
+                onfocus: move |_| focused.set(true),
+                onblur: move |_| {
+                    focused.set(false);
+                    highlight.set(None);
+                },
+                oninput: move |e| {
+                    value.set(e.value());
+                    highlight.set(None);
+                },
+                onkeydown: move |e: Event<KeyboardData>| {
+                    dispatch_suggest_field_keydown(e, &filtered, &mut value, &mut highlight, &mut focused, total);
+                },
+            }
+            if !filtered.is_empty() {
+                SuggestionDropdown {
+                    selection: DropdownSelectionState {
+                        filtered: filtered.clone(),
+                        show_create_row: false,
+                        typed: value(),
+                        highlight: highlight(),
+                    },
+                    dropdown_header: String::new(),
+                    testid: format!("{testid_prefix}-suggestions"),
+                    on_pick: move |name: String| {
+                        value.set(name);
+                        highlight.set(None);
+                    },
+                }
+            }
+        }
+    }
+}
+
+/// Arrow/Enter/Escape handling for [`SuggestField`] — a smaller sibling of
+/// [`dispatch_keydown`] without the chip-list "+ Create" row: ↑/↓ move the
+/// highlight, Enter overwrites `value` with the highlighted row (or leaves
+/// the typed text untouched when nothing is highlighted, since it's already
+/// the live value), Escape drops the highlight and closes the dropdown.
+fn dispatch_suggest_field_keydown(
+    e: Event<KeyboardData>,
+    filtered: &[SuggestionItem],
+    value: &mut Signal<String>,
+    highlight: &mut Signal<Option<usize>>,
+    focused: &mut Signal<bool>,
+    total: usize,
+) {
+    match e.key() {
+        Key::ArrowDown if total > 0 => {
+            e.prevent_default();
+            let next = match highlight() {
+                Some(i) if i + 1 < total => Some(i + 1),
+                _ => Some(0),
+            };
+            highlight.set(next);
+        }
+        Key::ArrowUp if total > 0 => {
+            e.prevent_default();
+            let next = match highlight() {
+                Some(0) | None => Some(total - 1),
+                Some(i) => Some(i - 1),
+            };
+            highlight.set(next);
+        }
+        Key::Enter => {
+            if let Some(item) = highlight().and_then(|idx| filtered.get(idx)) {
+                e.prevent_default();
+                value.set(item.name.clone());
+                highlight.set(None);
+            }
+        }
+        Key::Escape => {
+            highlight.set(None);
+            focused.set(false);
+        }
+        _ => {}
+    }
+}
+
 /// Helper: dedup a list of `(name, count)` pairs into a sorted
 /// suggestion pool. Case-insensitive on the name (first-seen casing
 /// wins); when duplicates collide, the higher count wins so a

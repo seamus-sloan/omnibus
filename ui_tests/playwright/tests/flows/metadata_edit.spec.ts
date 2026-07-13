@@ -340,6 +340,73 @@ test("chip-editor surfaces the +Create row when no suggestion matches and Enter 
   await page.getByTestId("me-discard").click();
 });
 
+// ---------------------------------------------------------------------------
+// Series field autocomplete (#990)
+//
+// Unlike the author/tag chip editors, Series is a single-value field
+// (`SuggestField`) — no chip list, but the same substring-match dropdown:
+// typing surfaces matches, picking one overwrites the field with the exact
+// existing name, and typed text with no match is still accepted as free
+// text (creates a new series on save).
+// ---------------------------------------------------------------------------
+
+test("surfaces existing series as suggestions and fills the field on selection", async ({
+  page,
+  request,
+}) => {
+  const id = await fetchBookIdByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${id}/edit`);
+
+  // Alpha is a standalone fixture (no series), so the field starts empty.
+  const seriesInput = page.getByLabel("Series");
+  await expect(seriesInput).toBeVisible();
+  await expect(seriesInput).toHaveValue("");
+
+  // "Code Quartet" is the fixture series backing the four Code Quartet
+  // books (Niklaus Wirth et al.) — typing a prefix should surface it, same
+  // interaction shape as the Author(s) field's dropdown.
+  await seriesInput.fill("Cod");
+
+  const dropdown = page.getByTestId("me-series-suggestions");
+  await expect(dropdown).toBeVisible();
+  await expect(dropdown.getByRole("option", { name: /Code Quartet/ })).toBeVisible();
+
+  await seriesInput.press("ArrowDown");
+  await seriesInput.press("Enter");
+
+  // Selecting the suggestion fills the field with the exact existing name
+  // and the dropdown closes.
+  await expect(seriesInput).toHaveValue("Code Quartet");
+  await expect(dropdown).toHaveCount(0);
+
+  // Save bar reflects the dirty Series field.
+  await expect(page.getByTestId("me-save")).toBeEnabled();
+
+  // Discard so the test doesn't leak an override into subsequent runs.
+  await page.getByTestId("me-discard").click();
+  await expect(page).toHaveURL(new RegExp(`/books/${id}$`));
+});
+
+test("accepts a series name with no matching suggestion as free text", async ({
+  page,
+  request,
+}) => {
+  const id = await fetchBookIdByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${id}/edit`);
+
+  const seriesInput = page.getByLabel("Series");
+  await seriesInput.fill("ZzzBrandNewSeries");
+
+  // No existing series matches, so no dropdown surfaces — free text is
+  // still accepted directly in the field (no separate "create" row, unlike
+  // the multi-chip author/tag editors, since there's no committed list to
+  // add to).
+  await expect(page.getByTestId("me-series-suggestions")).toHaveCount(0);
+  await expect(seriesInput).toHaveValue("ZzzBrandNewSeries");
+
+  await page.getByTestId("me-discard").click();
+});
+
 test("surfaces error and stays on edit form when revert mutation fails", async ({ page, request }) => {
   // First, create an override on the fixture so the revert button shows up.
   const id = await fetchBookIdByTitle(request, TARGET.title);
