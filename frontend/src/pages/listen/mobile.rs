@@ -31,10 +31,7 @@ mod view;
 use bookmarks_sheet::{use_mobile_bookmarks, BookmarksSheet, MobileBookmarks};
 use sheets::{snap_rate, ChaptersSheet, SleepSheet, SpeedSheet};
 use state::{sleep_pill_label, use_mobile_playback, SleepState};
-use view::{
-    chapter_index_for_elapsed, format_hms, format_ms, marquee_segment, remaining_at_rate,
-    PlayerView,
-};
+use view::{chapter_index_for_elapsed, format_hms, format_ms, remaining_at_rate, PlayerView};
 
 pub use host::MobileAudioHost;
 pub use mini::MobileMiniPlayer;
@@ -184,18 +181,18 @@ fn persist_position(uuid: &str, server_url: &str, seconds: f64) {
 }
 
 /// Marquee-ready title markup: `.m-player-title` is the fixed-width clipping
-/// container; `.m-player-title-track` holds two identical, nbsp-padded
-/// copies of the title so the CSS `-50%` loop reads seamlessly.
-/// [`interop::refresh_title_marquee`] toggles `.is-overflowing` (and reveals
-/// the second copy) only when the title is wider than its container, so a
-/// short title stays static.
+/// container; `.m-player-title-track` holds two identical copies of the
+/// title (CSS hides the second by default). [`interop::refresh_title_marquee`]
+/// measures only the first copy and toggles `.is-overflowing` (which reveals
+/// the second copy and starts the loop) only when the title is wider than
+/// its container, so a short title stays static and never shows duplicated
+/// text before the measurement JS runs.
 fn player_title(title: &str) -> Element {
-    let seg = marquee_segment(title);
     rsx! {
         h1 { class: "m-player-title",
             span { class: "m-player-title-track",
-                span { class: "m-em", "{seg}" }
-                span { class: "m-em", "aria-hidden": "true", "{seg}" }
+                span { class: "m-em", "{title}" }
+                span { class: "m-em", "aria-hidden": "true", "{title}" }
             }
         }
     }

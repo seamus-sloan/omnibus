@@ -145,17 +145,19 @@ pub fn refresh_title_marquee() {
     fire(MARQUEE_JS);
 }
 
-/// Double `requestAnimationFrame` lets layout (webfonts in particular)
-/// settle before measuring `scrollWidth`.
+/// Measures only the primary (first, always-visible) track span — the
+/// second copy exists solely for the animated loop, and CSS gives it a
+/// `gap` for loop spacing, so including it in the measurement would flag a
+/// title that actually fits as overflowing. Double `requestAnimationFrame`
+/// lets layout (webfonts in particular) settle before measuring
+/// `scrollWidth`.
 const MARQUEE_JS: &str = "requestAnimationFrame(function(){ requestAnimationFrame(function(){ \
      document.querySelectorAll('.m-player-title').forEach(function(h1){ \
        var track = h1.querySelector('.m-player-title-track'); \
-       if (!track) return; \
-       var dup = track.children[1]; \
-       if (dup) dup.style.display = 'none'; \
-       var overflowing = track.scrollWidth > h1.clientWidth; \
+       var primary = track && track.children[0]; \
+       if (!primary) return; \
+       var overflowing = primary.scrollWidth > h1.clientWidth; \
        h1.classList.toggle('is-overflowing', overflowing); \
-       if (dup) dup.style.display = overflowing ? '' : 'none'; \
      }); \
    }); });";
 
@@ -330,9 +332,10 @@ mod tests {
     }
 
     #[test]
-    fn marquee_js_measures_scroll_width_and_toggles_only_when_overflowing() {
+    fn marquee_js_measures_only_the_primary_span_and_toggles_the_overflow_class() {
         assert!(MARQUEE_JS.contains(".m-player-title-track"));
-        assert!(MARQUEE_JS.contains("track.scrollWidth > h1.clientWidth"));
+        assert!(MARQUEE_JS.contains("track.children[0]"));
+        assert!(MARQUEE_JS.contains("primary.scrollWidth > h1.clientWidth"));
         assert!(MARQUEE_JS.contains("classList.toggle('is-overflowing', overflowing)"));
     }
 
