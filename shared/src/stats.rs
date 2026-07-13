@@ -88,6 +88,14 @@ pub struct FinishedBook {
     pub finished_at: i64,
 }
 
+/// One month's finished-book count in the trailing-12-month trend chart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MonthCount {
+    /// UTC calendar month, `YYYY-MM`.
+    pub month: String,
+    pub books: i64,
+}
+
 /// The full aggregate payload for one user over one [`StatsRange`].
 ///
 /// Book completion is sourced from `journal_entries.progress = 100` (the only
@@ -126,6 +134,12 @@ pub struct StatsSummary {
     #[serde(default)]
     pub genre_share: Vec<GenreShare>,
     pub finished_books: Vec<FinishedBook>,
+    /// Books finished per month over the trailing 12 calendar months, oldest
+    /// first, ending at the current (possibly partial) month. Independent of
+    /// `range` — the all-time section's trend chart is never tied to the
+    /// period switcher.
+    #[serde(default)]
+    pub books_per_month: Vec<MonthCount>,
 }
 
 impl StatsSummary {

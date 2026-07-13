@@ -146,6 +146,21 @@ test("the heatmap and genre donut render from seeded activity", async ({ page })
   await expect(split).toContainText("Listened");
 });
 
+test("the books-per-month chart renders twelve bars with the current month highlighted", async ({
+  page,
+}) => {
+  await gotoReady(page, "/stats");
+
+  const chart = page.getByTestId("stats-monthly-chart");
+  await expect(chart).toBeVisible();
+  await expect(chart).toContainText("avg");
+
+  const bars = chart.getByTestId("stats-monthly-bar");
+  await expect(bars).toHaveCount(12);
+  // The trailing (current) month is the last bar and carries the highlight.
+  await expect(bars.last()).toHaveClass(/st-mo-current/);
+});
+
 test("the all-time section does not change with the switcher", async ({ page }) => {
   await gotoReady(page, "/stats");
   const allTime = page.getByTestId("stats-heatmap");

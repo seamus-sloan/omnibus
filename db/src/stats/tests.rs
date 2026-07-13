@@ -112,6 +112,18 @@ async fn rate_book(pool: &SqlitePool, user: i64, uuid: &str, half_stars: i64, up
     .unwrap();
 }
 
+/// Unix seconds `months` calendar-months before the DB's `now` — computed by
+/// SQLite itself so it lands in the same calendar month the trailing-12
+/// recursive CTE anchors on, regardless of day-of-month clamping.
+async fn months_ago_secs(pool: &SqlitePool, months: i64) -> i64 {
+    sqlx::query_scalar(&format!(
+        "SELECT CAST(strftime('%s', 'now', '-{months} months') AS INTEGER)"
+    ))
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
 async fn finish_journal(pool: &SqlitePool, user: i64, uuid: &str, created_at: i64) {
     sqlx::query(
         "INSERT INTO journal_entries (user_id, book_uuid, body_md, progress, created_at)
@@ -236,6 +248,9 @@ async fn finished_books_come_from_hundred_percent_journal_entries() {
         s.finished_books[0].author.as_deref(),
         Some("Ursula K. Le Guin")
     );
+    // T0 (2023) predates the trailing-12-month window, so this fixture
+    // finish doesn't land in it — just confirm the shape is always 12.
+    assert_eq!(s.books_per_month.len(), 12);
 }
 
 #[tokio::test]
@@ -424,4 +439,92 @@ async fn year_window_excludes_old_sessions() {
     let s = compute(&pool, user, StatsRange::Year).await.unwrap();
     assert_eq!(s.reading_seconds, 0);
     assert!(s.is_empty());
+}
+
+#[tokio::test]
+async fn books_per_month_returns_twelve_months_with_zeroed_gaps_and_excludes_older_finishes() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 3).await;
+    let user = seed_user(&pool, "alice").await;
+
+    let now = months_ago_secs(&pool, 0).await;
+    let five_back = months_ago_secs(&pool, 5).await;
+    let thirteen_back = months_ago_secs(&pool, 13).await;
+    finish_journal(&pool, user, "uuid-1", now).await;
+    finish_journal(&pool, user, "uuid-2", five_back).await;
+    // Outside the trailing-12 window — must not appear or widen it.
+    finish_journal(&pool, user, "uuid-3", thirteen_back).await;
+
+    let months = books_per_month(&pool, user).await.unwrap();
+
+    assert_eq!(months.len(), 12);
+    assert_eq!(months.iter().map(|m| m.books).sum::<i64>(), 2);
+    assert_eq!(
+        months.last().unwrap().books,
+        1,
+        "current month has 1 finish"
+    );
+    assert!(
+        months.iter().any(|m| m.books == 0),
+        "months without a finish still appear, zeroed: {months:?}"
+    );
+    let mut sorted = months.clone();
+    sorted.sort_by(|a, b| a.month.cmp(&b.month));
+    assert_eq!(months, sorted, "months come back oldest-first");
+}
+
+#[tokio::test]
+async fn books_per_month_never_includes_a_future_month() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+
+    let months = books_per_month(&pool, user).await.unwrap();
+
+    let current: String = sqlx::query_scalar("SELECT strftime('%Y-%m', 'now')")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(months.len(), 12);
+    assert_eq!(
+        months.last().unwrap().month,
+        current,
+        "trailing window ends at the current month"
+    );
+    assert!(
+        months.iter().all(|m| m.month <= current),
+        "no bucket is ahead of the current month: {months:?}"
+    );
+}
+
+#[tokio::test]
+async fn books_per_month_counts_only_hundred_percent_journal_entries() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 2).await;
+    let user = seed_user(&pool, "alice").await;
+    let now = months_ago_secs(&pool, 0).await;
+
+    finish_journal(&pool, user, "uuid-1", now).await;
+    sqlx::query(
+        "INSERT INTO journal_entries (user_id, book_uuid, body_md, progress, created_at)
+         VALUES (?, 'uuid-2', 'partway', 40, ?)",
+    )
+    .bind(user)
+    .bind(now)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let months = books_per_month(&pool, user).await.unwrap();
+    assert_eq!(months.last().unwrap().books, 1);
+}
+
+#[tokio::test]
+async fn books_per_month_is_empty_of_finishes_for_a_user_with_no_activity() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "loner").await;
+
+    let months = books_per_month(&pool, user).await.unwrap();
+    assert_eq!(months.len(), 12);
+    assert_eq!(months.iter().map(|m| m.books).sum::<i64>(), 0);
 }

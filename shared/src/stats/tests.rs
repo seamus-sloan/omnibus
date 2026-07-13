@@ -54,6 +54,30 @@ fn avg_stars_defaults_to_none_when_absent_from_the_wire() {
 }
 
 #[test]
+fn books_per_month_defaults_to_empty_when_absent_from_the_wire() {
+    // Same older-payload contract as avg_stars — the monthly trend chart is a
+    // newer field, so a pre-existing payload without it must still parse.
+    let s: StatsSummary = serde_json::from_str(
+        r#"{"range":"month","reading_seconds":0,"listening_seconds":0,"sessions":0,
+            "active_days":0,"longest_streak_days":0,"busiest_week_start":null,
+            "busiest_week_seconds":0,"books_finished":0,"heatmap":[],
+            "top_authors":[],"top_tags":[],"finished_books":[]}"#,
+    )
+    .unwrap();
+    assert!(s.books_per_month.is_empty());
+}
+
+#[test]
+fn month_count_round_trips_through_json() {
+    let m = MonthCount {
+        month: "2026-07".to_string(),
+        books: 3,
+    };
+    let wire = serde_json::to_string(&m).unwrap();
+    assert_eq!(serde_json::from_str::<MonthCount>(&wire).unwrap(), m);
+}
+
+#[test]
 fn as_query_matches_the_serde_wire_name() {
     for range in StatsRange::ALL {
         let wire = serde_json::to_string(&range).unwrap();
