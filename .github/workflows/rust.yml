@@ -41,9 +41,10 @@ jobs:
   # axum dependency tree. `Swatinem/rust-cache` prunes the workspace crates
   # from the saved cache but keeps every *dependency* artifact — so this job is
   # the single "build once" for deps, and every downstream job restores the
-  # same `omnibus` cache read-only (`save-if: false`). Three compiles cover the
-  # full dependency surface: native (default shell), wasm32 (web feature), and
-  # the GTK/wry mobile backend (`.#mobile` shell).
+  # same `omnibus` cache read-only (`save-if: false`). The warm steps below
+  # cover the full dependency surface: native crates (default shell), the
+  # frontend's server + mobile features, wasm32 (web feature), and the GTK/wry
+  # mobile backend (`.#mobile` shell).
   build:
     name: build (warm deps)
     runs-on: ubuntu-latest
