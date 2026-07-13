@@ -5788,6 +5788,21 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .atrium .m-player-title {
   font-family: var(--serif); font-weight: 400; font-size: 26px;
   line-height: 1.05; margin-top: 10px;
+  overflow: hidden; white-space: nowrap;
+}
+/* `.m-marquee-track` is always the same size as its text; `--m-marquee-distance`
+   (set in JS from the measured overflow) is only consumed once `.m-marquee-active`
+   is toggled on, so a title that fits never animates. */
+.m-player-title .m-marquee-track { display: inline-block; }
+.m-player-title.m-marquee-active .m-marquee-track {
+  animation: m-marquee-scroll 7s ease-in-out infinite alternate;
+}
+@keyframes m-marquee-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(var(--m-marquee-distance, 0px)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .m-player-title.m-marquee-active .m-marquee-track { animation: none; }
 }
 .m-player-by { margin-top: 8px; color: var(--ink-1); font-size: 14px; }
 .m-player-chline {

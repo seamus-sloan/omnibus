@@ -169,6 +169,42 @@ fn persist_position(uuid: &str, server_url: &str, seconds: f64) {
     });
 }
 
+/// Player title with an overflow-triggered marquee: static when the title
+/// fits the header width, a slow back-and-forth scroll when it doesn't
+/// (issue #1001 AC1/AC2). The actual overflow check runs in JS on mount
+/// since it needs a real layout measurement (`scrollWidth` vs `clientWidth`)
+/// that isn't available at render time.
+fn player_title(title: &str) -> Element {
+    rsx! {
+        h1 {
+            class: "m-player-title",
+            onmounted: move |_| check_title_marquee(),
+            span { class: "m-marquee-track", span { class: "m-em", "{title}" } }
+        }
+    }
+}
+
+/// Toggle `.m-marquee-active` (and the scroll distance custom property) on
+/// every `.m-player-title` whose track overflows its header width; a title
+/// that already fits is left untouched. Fire-and-forget, mirroring the
+/// `fire()` evals in `mobile::interop`.
+fn check_title_marquee() {
+    let _ = dioxus::document::eval(
+        "document.querySelectorAll('.m-player-title').forEach(function (el) { \
+           var track = el.querySelector('.m-marquee-track'); \
+           if (!track) return; \
+           var overflow = track.scrollWidth - el.clientWidth; \
+           if (overflow > 1) { \
+             el.style.setProperty('--m-marquee-distance', (-overflow - 12) + 'px'); \
+             el.classList.add('m-marquee-active'); \
+           } else { \
+             el.classList.remove('m-marquee-active'); \
+             el.style.removeProperty('--m-marquee-distance'); \
+           } \
+         });",
+    );
+}
+
 fn render_error(msg: &str) -> Element {
     rsx! {
         div { class: "m-player-msg",
@@ -206,7 +242,7 @@ fn render_unsupported(
                 }
             }
             div { class: "m-player-now",
-                h1 { class: "m-player-title", span { class: "m-em", "{view.title}" } }
+                {player_title(&view.title)}
                 div { class: "m-player-by", "by {view.author}" }
             }
             div { class: "m-player-msg",
@@ -342,7 +378,7 @@ fn render_player(p: PlayerProps) -> Element {
                 div { class: "label m-player-eyebrow",
                     "Now playing \u{00b7} Chapter {chapter_no} of {chapter_count}"
                 }
-                h1 { class: "m-player-title", span { class: "m-em", "{view.title}" } }
+                {player_title(&view.title)}
                 div { class: "m-player-by", "by {view.author}" }
                 if has_chapters {
                     div { class: "m-player-chline", "Ch. {chapter_no} \u{00b7} {chapter_title}" }
