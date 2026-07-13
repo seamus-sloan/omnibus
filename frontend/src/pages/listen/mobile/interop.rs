@@ -137,6 +137,30 @@ pub fn set_rate(rate: f64) {
     ));
 }
 
+/// Re-measure the `.m-player-title` track against its container and toggle
+/// the marquee animation on only when the title actually overflows — a
+/// short title stays static. Fire-and-forget; call after the title text
+/// mounts or changes.
+pub fn refresh_title_marquee() {
+    fire(MARQUEE_JS);
+}
+
+/// Measures only the primary (first, always-visible) track span — the
+/// second copy exists solely for the animated loop, and CSS gives it a
+/// `gap` for loop spacing, so including it in the measurement would flag a
+/// title that actually fits as overflowing. Double `requestAnimationFrame`
+/// lets layout (webfonts in particular) settle before measuring
+/// `scrollWidth`.
+const MARQUEE_JS: &str = "requestAnimationFrame(function(){ requestAnimationFrame(function(){ \
+     document.querySelectorAll('.m-player-title').forEach(function(h1){ \
+       var track = h1.querySelector('.m-player-title-track'); \
+       var primary = track && track.children[0]; \
+       if (!primary) return; \
+       var overflowing = primary.scrollWidth > h1.clientWidth; \
+       h1.classList.toggle('is-overflowing', overflowing); \
+     }); \
+   }); });";
+
 /// Fire-and-forget control eval (no event stream).
 fn fire(js: &str) {
     let _ = dioxus::document::eval(js);
@@ -305,6 +329,14 @@ mod tests {
         // No stray `format!` escape pairs leaked into the emitted JS.
         assert!(!js.contains("{{"), "literal {{ leaked into JS");
         assert!(!js.contains("}}"), "literal }} leaked into JS");
+    }
+
+    #[test]
+    fn marquee_js_measures_only_the_primary_span_and_toggles_the_overflow_class() {
+        assert!(MARQUEE_JS.contains(".m-player-title-track"));
+        assert!(MARQUEE_JS.contains("track.children[0]"));
+        assert!(MARQUEE_JS.contains("primary.scrollWidth > h1.clientWidth"));
+        assert!(MARQUEE_JS.contains("classList.toggle('is-overflowing', overflowing)"));
     }
 
     #[test]

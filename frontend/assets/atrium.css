@@ -5788,6 +5788,27 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .atrium .m-player-title {
   font-family: var(--serif); font-weight: 400; font-size: 26px;
   line-height: 1.05; margin-top: 10px;
+  overflow: hidden; white-space: nowrap;
+}
+.m-player-title-track { display: inline-flex; gap: 48px; }
+/* The second copy exists only for the animated loop — hidden by default so a
+   short title (or a failed measurement eval) never shows duplicated text.
+   Only titles wider than the container get `.is-overflowing` (JS-toggled,
+   see interop::refresh_title_marquee), which reveals it and starts the
+   animation. */
+.m-player-title-track > span:last-child { display: none; }
+.m-player-title.is-overflowing .m-player-title-track > span:last-child {
+  display: inline;
+}
+.m-player-title.is-overflowing .m-player-title-track {
+  animation: m-player-marquee 10s linear infinite;
+}
+@keyframes m-player-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .m-player-title.is-overflowing .m-player-title-track { animation: none; }
 }
 .m-player-by { margin-top: 8px; color: var(--ink-1); font-size: 14px; }
 .m-player-chline {

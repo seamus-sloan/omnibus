@@ -86,10 +86,21 @@ pub fn MobilePlayer(uuid: String) -> Element {
         }
     }));
 
+    // Re-measure the title marquee whenever the displayed title (re)appears —
+    // covers the loading→loaded transition and any book switch. A hook, so it
+    // must run unconditionally ahead of the early returns below.
+    let view_now = (ctx.view)();
+    let marquee_title = view_now.as_ref().map(|v| v.title.clone());
+    use_effect(use_reactive!(|marquee_title| {
+        if marquee_title.is_some() {
+            interop::refresh_title_marquee();
+        }
+    }));
+
     if let Some(msg) = (ctx.error)() {
         return render_error(&msg);
     }
-    let Some(v) = (ctx.view)() else {
+    let Some(v) = view_now else {
         return rsx! {
             div { class: "m-player-loading", p { class: "subtitle", "Loading\u{2026}" } }
         };
@@ -169,6 +180,24 @@ fn persist_position(uuid: &str, server_url: &str, seconds: f64) {
     });
 }
 
+/// Marquee-ready title markup: `.m-player-title` is the fixed-width clipping
+/// container; `.m-player-title-track` holds two identical copies of the
+/// title (CSS hides the second by default). [`interop::refresh_title_marquee`]
+/// measures only the first copy and toggles `.is-overflowing` (which reveals
+/// the second copy and starts the loop) only when the title is wider than
+/// its container, so a short title stays static and never shows duplicated
+/// text before the measurement JS runs.
+fn player_title(title: &str) -> Element {
+    rsx! {
+        h1 { class: "m-player-title",
+            span { class: "m-player-title-track",
+                span { class: "m-em", "{title}" }
+                span { class: "m-em", "aria-hidden": "true", "{title}" }
+            }
+        }
+    }
+}
+
 fn render_error(msg: &str) -> Element {
     rsx! {
         div { class: "m-player-msg",
@@ -206,7 +235,7 @@ fn render_unsupported(
                 }
             }
             div { class: "m-player-now",
-                h1 { class: "m-player-title", span { class: "m-em", "{view.title}" } }
+                {player_title(&view.title)}
                 div { class: "m-player-by", "by {view.author}" }
             }
             div { class: "m-player-msg",
@@ -342,7 +371,7 @@ fn render_player(p: PlayerProps) -> Element {
                 div { class: "label m-player-eyebrow",
                     "Now playing \u{00b7} Chapter {chapter_no} of {chapter_count}"
                 }
-                h1 { class: "m-player-title", span { class: "m-em", "{view.title}" } }
+                {player_title(&view.title)}
                 div { class: "m-player-by", "by {view.author}" }
                 if has_chapters {
                     div { class: "m-player-chline", "Ch. {chapter_no} \u{00b7} {chapter_title}" }
