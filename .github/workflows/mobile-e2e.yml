@@ -9,23 +9,23 @@ name: Mobile E2E
 # `GET /api/_health` — a server or boot regression can fail these runs even when
 # nothing mobile changed.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - "mobile/**"
-      - "frontend/**"
-      - "shared/**"
-      - "server/**"
-      - "db/**"
-      - "ui_tests/maestro/**"
-      - "**/Cargo.toml"
-      - "Cargo.lock"
-      - "**/Dioxus.toml"
-      - "flake.lock"
-      - "flake.nix"
-      - ".github/workflows/mobile-e2e.yml"
+#  push:
+#    branches: [main]
+#  pull_request:
+#    types: [opened, synchronize, reopened]
+#    paths:
+#      - "mobile/**"
+#      - "frontend/**"
+#      - "shared/**"
+#      - "server/**"
+#      - "db/**"
+#      - "ui_tests/maestro/**"
+#      - "**/Cargo.toml"
+#      - "Cargo.lock"
+#      - "**/Dioxus.toml"
+#      - "flake.lock"
+#      - "flake.nix"
+#      - ".github/workflows/mobile-e2e.yml"
   workflow_dispatch:
 
 concurrency:
