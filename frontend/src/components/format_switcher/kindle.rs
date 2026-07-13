@@ -12,7 +12,7 @@ use omnibus_shared::KindleSendStatus;
 #[cfg(not(feature = "mobile"))]
 use super::async_sleep_ms;
 
-/// "Send to Kindle" CTA (F4.3). Web/SSR renders the interactive
+/// "Send to Kindle" CTA. Web/SSR renders the interactive
 /// [`SendToKindleButton`]; when the EPUB is over Kindle's email cap
 /// (`size_bytes` provided by the server, so SSR + first WASM paint agree) the
 /// email path can't work, so it becomes a link to Amazon's Send to Kindle page

@@ -236,7 +236,7 @@ async fn issue_session(
 /// Atomically insert the (optional) device row and the session row inside a
 /// single `sqlx::Transaction`. If either write — or the commit — fails, the
 /// transaction rolls back on drop so a device row never lingers without its
-/// matching session (issue #627).
+/// matching session.
 async fn persist_session(
     state: &AppState,
     user_id: i64,

@@ -1,4 +1,4 @@
-//! Full-library facet-count aggregate (F5b). [`library_facets`] tallies the
+//! Full-library facet-count aggregate. [`library_facets`] tallies the
 //! sidebar facets (authors / series / formats / tags) across the *entire*
 //! configured library in one grouped query each, so the landing sidebar stays
 //! correct even though the list itself is keyset-paginated and the client only
@@ -11,7 +11,7 @@ use sqlx::SqlitePool;
 
 /// Per-facet book counts for `library_paths`, ordered by count descending then
 /// value ascending (the order the sidebar renders). Empty `library_paths`
-/// returns empty facets. Books with no backing file (fileless, F2) are excluded,
+/// returns empty facets. Books with no backing file (fileless) are excluded,
 /// matching the list/count read paths.
 pub async fn library_facets(
     pool: &SqlitePool,

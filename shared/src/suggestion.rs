@@ -1,4 +1,4 @@
-//! Wire types for F3.3 "Readers also enjoyed" suggestions.
+//! Wire types for "Readers also enjoyed" suggestions.
 
 use serde::{Deserialize, Serialize};
 

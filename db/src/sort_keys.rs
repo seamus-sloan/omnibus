@@ -1,4 +1,4 @@
-//! Denormalized sort-key columns carried on `books` for the F5b keyset
+//! Denormalized sort-key columns carried on `books` for the keyset
 //! landing path. Today that is `series_sort` (the primary series name),
 //! computed at index time by the sync writers via [`series_sort_value`] and
 //! backfilled once at boot by [`backfill_series_sort`] for rows indexed

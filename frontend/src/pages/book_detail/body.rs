@@ -31,7 +31,7 @@ pub(super) struct BdAuthorCluster {
 }
 
 /// Main column: public journal feed, highlights stub, from-the-same-hand fan,
-/// and the F3.3 "Readers also enjoyed" suggestions strip.
+/// and the "Readers also enjoyed" suggestions strip.
 #[component]
 pub(super) fn BdBodyMain(
     uuid: String,

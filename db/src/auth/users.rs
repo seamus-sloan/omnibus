@@ -139,7 +139,7 @@ pub async fn get_user_by_id(pool: &SqlitePool, id: i64) -> AuthResult<Option<Use
     Ok(row.as_ref().map(row_to_user))
 }
 
-/// Set (or clear, when `None`/blank) a user's F4.3 Send-to-Kindle destination
+/// Set (or clear, when `None`/blank) a user's Send-to-Kindle destination
 /// address. Rejects a malformed address with [`AuthError::Validation`] before
 /// the write so the book-detail action never targets a garbage recipient.
 pub async fn set_kindle_email(

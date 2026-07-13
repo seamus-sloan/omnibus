@@ -1,4 +1,4 @@
-//! F3.1 shelves — smart + hand-picked library subsets: listing, detail,
+//! Shelves — smart + hand-picked library subsets: listing, detail,
 //! CRUD, member paging, and the smart-rule live preview.
 
 use dioxus::fullstack::{get, post};

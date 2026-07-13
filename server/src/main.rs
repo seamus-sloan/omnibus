@@ -253,7 +253,7 @@ mod server {
             .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024))
     }
 
-    /// Layer global HTTP security response headers (#277) onto `router`, plus
+    /// Layer global HTTP security response headers onto `router`, plus
     /// the optional HSTS layer (only when secure cookies are enabled) and the
     /// outermost trace layer. Separate fold because `SetResponseHeaderLayer`
     /// is one layer per header; placed outside the timeout/body-limit guards

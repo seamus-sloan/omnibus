@@ -1,4 +1,4 @@
-//! F4.3 Send-to-Kindle client wrappers: the per-user send + Kindle-email, and
+//! Send-to-Kindle client wrappers: the per-user send + Kindle-email, and
 //! the admin SMTP config (get/set/clear/test). Each has a web/SSR
 //! server-function wrapper and a mobile `reqwest` variant with identical
 //! signatures across the `#[cfg]` split.

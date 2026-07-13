@@ -85,7 +85,7 @@ pub enum Task {
     /// left by a failed post-commit FTS refresh. Keyed on a fixed resource
     /// so concurrent clicks serialize; does not consume the scan semaphore.
     RebuildFtsIndex,
-    /// Resolve and cache F3.3 "readers also enjoyed" suggestions for one book
+    /// Resolve and cache "readers also enjoyed" suggestions for one book
     /// via Hardcover list co-occurrence. Keyed on `suggestions:{book_uuid}` so
     /// duplicate posts for one book (a burst of viewers) serialize and the
     /// later ones no-op against the fresh cache; does not consume the scan
@@ -96,7 +96,7 @@ pub enum Task {
     /// book collapses onto a single kepubify run; does not consume the scan
     /// semaphore (light single-file work).
     KepubConvert { book_id: i64 },
-    /// F4.3: email a book's EPUB to a user's Kindle address over SMTP. Keyed on
+    /// Email a book's EPUB to a user's Kindle address over SMTP. Keyed on
     /// a fixed `smtp` resource so every send serializes against the single
     /// configured relay (one slow SMTP server can't fan out); does not consume
     /// the scan semaphore. `book_file_id` targets a specific `book_files` row
@@ -290,7 +290,7 @@ pub struct Worker {
 pub(super) struct ProgressEntry {
     pub(super) progress: TaskProgress,
     pub(super) terminal_at: Option<Instant>,
-    /// User who owns this task, for user-initiated pollable jobs (F4.3
+    /// User who owns this task, for user-initiated pollable jobs (e.g.
     /// Send-to-Kindle). `None` for system tasks (scans, transcodes). Gates
     /// [`Worker::owned_task_state`] so the monotonic, guessable task-id space
     /// can't be probed across users. Evicted with the entry.

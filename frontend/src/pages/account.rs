@@ -1,6 +1,6 @@
 //! Account screen (`/account`).
 //!
-//! Web/SSR renders the F4.3 Send-to-Kindle destination form; the native
+//! Web/SSR renders the Send-to-Kindle destination form; the native
 //! shell renders the mobile "You" tab (identity, now-reading, quick links,
 //! account rows, theme). Signals start empty so SSR and the first WASM paint
 //! agree (rule 07); the load effects fill them after mount.
@@ -119,7 +119,7 @@ pub fn AccountPage() -> Element {
     }
 }
 
-/// Web/SSR page body — the F4.3 Send-to-Kindle destination form. Hydrates the
+/// Web/SSR page body — the Send-to-Kindle destination form. Hydrates the
 /// saved address from `/api/auth/me`; saving/clearing round-trips through
 /// `data::set_kindle_email`.
 #[cfg(not(feature = "mobile"))]

@@ -18,11 +18,11 @@ pub use omnibus_shared::{
 /// indexer, settings handlers, and tests all reference the same identifier.
 const EBOOK_LIBRARY_PATH_KEY: &str = "ebook_library_path";
 const AUDIOBOOK_LIBRARY_PATH_KEY: &str = "audiobook_library_path";
-/// `settings` KV key for the F3.3 Hardcover API token. Stored directly (not via
+/// `settings` KV key for the Hardcover API token. Stored directly (not via
 /// the [`Settings`] struct) so saving it never triggers the scan-root
 /// reconciliation `set_settings` runs.
 const HARDCOVER_API_KEY_KEY: &str = "hardcover_api_key";
-/// `settings` KV keys for the F4.3 server-wide SMTP config. Stored as discrete
+/// `settings` KV keys for the server-wide SMTP config. Stored as discrete
 /// rows (not via the [`Settings`] struct) so saving them never triggers the
 /// scan-root reconciliation `set_settings` runs. The password is masked before
 /// it ever crosses the wire (see [`smtp_status`]).
@@ -129,7 +129,7 @@ pub async fn set_settings(pool: &SqlitePool, settings: &Settings) -> Result<(), 
 }
 
 /// Repoint a slot's `scan_roots` row in place when its configured path
-/// changes (F2). Updating the existing row's `path` (rather than letting
+/// changes. Updating the existing row's `path` (rather than letting
 /// `upsert_library` insert a new one) keeps the row id — and therefore every
 /// `books.uuid` keyed under that `library_id` — stable, so the next reindex
 /// matches each file by its unchanged relative `scan_key` and preserves its
@@ -196,7 +196,7 @@ async fn repoint_scan_root(
 
 /// Drop **childless** orphan `scan_roots` rows whose `path` is not in `keep`.
 ///
-/// Never-prune (F2): a removed scan root that still owns books is **kept**,
+/// Never-prune: a removed scan root that still owns books is **kept**,
 /// and its books (plus their soft-ref user data) are retained rather than
 /// cascade-deleted — the durable-identity safety net. Books under a cleared
 /// path simply stop being listed (no `list_books` call passes that path) and
@@ -401,7 +401,7 @@ pub async fn seed_hardcover_key_from_env(pool: &SqlitePool) -> Result<(), Settin
     Ok(())
 }
 
-/// Fully-resolved SMTP config used by the F4.3 send path (`crate::kindle`).
+/// Fully-resolved SMTP config used by the send path (`crate::kindle`).
 /// Server-only — carries the raw password, so it never crosses the wire; the
 /// UI sees the masked [`SmtpConfigStatus`] instead.
 #[derive(Clone)]

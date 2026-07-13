@@ -1,4 +1,4 @@
-//! F4.3 Send-to-Kindle: email a book's EPUB as an attachment over SMTP.
+//! Send-to-Kindle: email a book's EPUB as an attachment over SMTP.
 //!
 //! Called from the background worker (`Task::SendToKindle`). Resolves the EPUB
 //! bytes via the same on-disk path the download route uses, builds a MIME

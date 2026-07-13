@@ -3,7 +3,7 @@
 //! A shelf is a named library subset: **smart** (membership from a `field op
 //! value` rule over normalized metadata) or **manual** (an explicit, ordered
 //! book list). The condition shape (`RuleField`/`RuleOp`/`ShelfRule`) is defined
-//! once here so F1.5 advanced search can reuse it.
+//! once here so advanced search can reuse it.
 
 use serde::{Deserialize, Serialize};
 
@@ -44,7 +44,7 @@ pub enum MatchMode {
     All,
 }
 
-/// A field a smart rule can match on. Mirrors the F1.5 query vocabulary plus
+/// A field a smart rule can match on. Mirrors the advanced-search query vocabulary plus
 /// the acquisition-date fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -11,7 +11,7 @@ use super::PaletteError;
 /// Series-arm palette query, bound `?1 = library_path`, `?2 = like_pattern`,
 /// `?3 = limit`.
 ///
-/// F5.1: both the count and the `author_display` line use the effective
+/// Both the count and the `author_display` line use the effective
 /// (override-aware) view, mirroring `get_series` and the palette author
 /// count. `overrides.series` (string) drives membership; if a book's first
 /// creator was renamed through the metadata edit form,
@@ -19,7 +19,7 @@ use super::PaletteError;
 /// requires at least one canonical link in this library so we don't list
 /// series that exist only inside override JSON (no navigable id).
 ///
-/// Issue #154: the per-series correlated `COUNT(*)` is replaced with a
+/// The per-series correlated `COUNT(*)` is replaced with a
 /// single-pass `effective` membership CTE (scoped to the library up front) —
 /// the UNION of (1) canonical `books_series_link` rows whose book has no
 /// `series` override and (2) the scalar `overrides.series` string for books
@@ -28,7 +28,7 @@ use super::PaletteError;
 /// exactly as before. The clear-all case (`Some("")`) falls out: it drops the
 /// book from arm (1) and the empty string won't equal any real series name in
 /// arm (2). The `author_display` subquery is unchanged (not a count — out of
-/// scope for #154). UNION (not ALL) is harmless here (a book has one scalar
+/// scope). UNION (not ALL) is harmless here (a book has one scalar
 /// series override) but keeps the shape uniform with the other sites.
 const SEARCH_SERIES_SQL: &str = r"
         WITH effective AS (

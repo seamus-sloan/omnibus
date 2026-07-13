@@ -1,4 +1,4 @@
-//! Boot backfill for the F2 `scan_key` diff key.
+//! Boot backfill for the `scan_key` diff key.
 //!
 //! `books.uuid` became a durable, minted-once identity and a new
 //! `books.scan_key` (the library-relative path) took over the Phase-A diff

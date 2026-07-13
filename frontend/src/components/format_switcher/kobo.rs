@@ -9,7 +9,7 @@ use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]
 use super::async_sleep_ms;
 
-/// F4.1 "Send to Kobo" CTA. Web/SSR renders the interactive
+/// "Send to Kobo" CTA. Web/SSR renders the interactive
 /// [`SendToKoboButton`]; mobile renders a disabled placeholder (the copy-over-
 /// USB flow is desktop-only). The cfg gate lives at the helper definition (rule
 /// 07: keep cfg out of rsx bodies), and SSR + first WASM paint emit the same

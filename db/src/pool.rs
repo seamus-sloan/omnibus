@@ -60,7 +60,6 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, InitDbError> {
 /// take effect once; running it on every connection is cheap (returns the
 /// current mode) and keeps the logic in one place. It's skipped for
 /// in-memory databases so test output isn't littered with pragma results.
-/// See issue #82 for the rationale on each PRAGMA value.
 async fn connect_pool(database_url: &str, is_memory: bool) -> Result<SqlitePool, sqlx::Error> {
     SqlitePoolOptions::new()
         .max_connections(5)
@@ -97,7 +96,7 @@ async fn run_boot_backfills(pool: &SqlitePool) -> Result<(), InitDbError> {
     Ok(())
 }
 
-/// Run the one-time issue-#94 legacy cover-cache purge on the blocking pool.
+/// Run the one-time legacy cover-cache purge on the blocking pool.
 ///
 /// The previous `stable_uuid` implementation hashed via `DefaultHasher` and
 /// produced toolchain-dependent UUIDs. Switching to UUIDv5 changes every

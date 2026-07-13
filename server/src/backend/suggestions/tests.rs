@@ -1,4 +1,4 @@
-//! Tests for the F3.3 suggestions REST handlers.
+//! Tests for the suggestions REST handlers.
 
 use axum::{
     body::{to_bytes, Body},

@@ -117,7 +117,7 @@ pub async fn rpc_set_hardcover_key(key: Option<String>) -> Result<HardcoverKeySt
     }
 }
 
-/// Admin-only: masked status of the server-wide SMTP config (F4.3). Never
+/// Admin-only: masked status of the server-wide SMTP config. Never
 /// returns the raw password.
 #[get("/api/rpc/smtp", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_get_smtp_config() -> Result<SmtpConfigStatus> {

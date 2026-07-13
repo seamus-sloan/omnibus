@@ -1,6 +1,6 @@
 //! Unit tests for the `indexer` module — `diff_library` classifiers,
 //! `is_stale` window logic, `reindex` preservation-on-failure, the
-//! incomplete-enumeration data-loss guard (#819), and the shared-path
+//! incomplete-enumeration data-loss guard, and the shared-path
 //! cross-format deletion guard.
 
 use super::*;
@@ -53,7 +53,7 @@ fn row(scan_key: &str, mtime: i64, size: i64) -> IndexedRow {
         size_bytes: size,
     }
 }
-/// A fileless book row (F2): retained book whose file is gone.
+/// A fileless book row: retained book whose file is gone.
 fn fileless_row(scan_key: &str) -> IndexedRow {
     IndexedRow {
         uuid: scan_key.into(),

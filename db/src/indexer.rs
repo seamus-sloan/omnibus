@@ -41,7 +41,7 @@ impl From<crate::settings::SettingsError> for IndexerError {
 /// thrashing the disk for users who leave the app open all day.
 pub const REFRESH_AFTER_SECS: i64 = 60 * 60;
 
-/// Circuit-breaker threshold (issue #819): abort the removal pass when a
+/// Circuit-breaker threshold: abort the removal pass when a
 /// single scan would flag more than this fraction of a previously-populated
 /// library missing. A legitimate bulk delete this large is rare; a scan
 /// that would erase a fifth of the library is far more likely a transient
@@ -385,7 +385,7 @@ pub async fn reindex_with_progress(
     Ok(())
 }
 
-/// Best-effort F10 GC of books whose files have been missing past the retention
+/// Best-effort GC of books whose files have been missing past the retention
 /// window and that carry no user data. Logged, never surfaced as an error so a
 /// GC failure can never abort a reindex — matches the best-effort cover/FTS
 /// pattern. The sweep is global (not library-scoped), so running it after each
@@ -411,7 +411,7 @@ pub async fn reindex_audiobooks(pool: &SqlitePool, library_path: &str) -> anyhow
 }
 
 /// Enumeration-trust signals lifted out of Phase A so the caller can gate
-/// the removal pass without re-reading the filesystem (issue #819).
+/// the removal pass without re-reading the filesystem.
 struct EnumerationSignals {
     /// A subdir `read_dir` failed — partial view.
     incomplete: bool,
@@ -423,7 +423,7 @@ struct EnumerationSignals {
 /// under `library_path`, then group the per-file entries into one
 /// [`audiobook::AudiobookGroup`] per book (folder-based grouping). The
 /// [`EnumerationSignals`] ride alongside so the caller can suppress the
-/// removal pass on a partial or empty scan (issue #819).
+/// removal pass on a partial or empty scan.
 async fn stat_and_group_audiobooks(
     library_path: &str,
 ) -> anyhow::Result<(Vec<audiobook::AudiobookGroup>, EnumerationSignals)> {

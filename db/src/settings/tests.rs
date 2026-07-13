@@ -1,6 +1,6 @@
 //! Unit tests for the `settings` module — `get_settings`/`set_settings`
 //! roundtrip, env-var seeding (serialized via a process-global guard),
-//! F2 repoint-in-place identity preservation, and never-prune retention.
+//! repoint-in-place identity preservation, and never-prune retention.
 
 use super::*;
 use crate::books::list_books;
@@ -269,7 +269,7 @@ async fn hardcover_key_status_is_unset_when_neither_set() {
     assert_eq!(status.masked, None);
 }
 
-/// F2 repoint-in-place: changing the ebook path moves the existing
+/// Repoint-in-place: changing the ebook path moves the existing
 /// `scan_roots` row (keeping its id) so every book — and its durable
 /// `books.uuid` — survives the move under the new path. Nothing is deleted.
 #[tokio::test]
@@ -366,7 +366,7 @@ async fn set_settings_keeps_libraries_still_configured() {
 
     assert_eq!(list_books(&pool, "/books").await.unwrap().len(), 1);
 }
-/// Never-prune (F2): clearing the ebook path does **not** delete the
+/// Never-prune: clearing the ebook path does **not** delete the
 /// library's books (the durable-identity safety net) — its `scan_roots` row
 /// and books are retained, and re-adding the path lists them again.
 #[tokio::test]
@@ -426,7 +426,7 @@ async fn set_settings_none_retains_library_data() {
     .unwrap();
     assert_eq!(list_books(&pool, "/books").await.unwrap().len(), 1);
 }
-/// Never-prune (F2): `prune_orphan_libraries` drops only **childless**
+/// Never-prune: `prune_orphan_libraries` drops only **childless**
 /// orphan scan roots; a root not in `keep` that still owns books is retained
 /// (its books and their soft-ref user data must never be cascade-deleted),
 /// and it returns no cover uuids (nothing is deleted).
@@ -532,7 +532,7 @@ async fn fk_cascade_survives_libraries_rename_to_scan_roots() {
     );
 }
 
-/// Shared-root guard (F2): when ebook + audiobook point at the same scan
+/// Shared-root guard: when ebook + audiobook point at the same scan
 /// root and only one slot's path changes, the shared `scan_roots` row must
 /// NOT be repointed out from under the slot that still uses it (that would
 /// silently move both libraries).

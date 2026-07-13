@@ -1,4 +1,4 @@
-//! Tests for the F3.3 suggestions module: the pure cache state machine and
+//! Tests for the suggestions module: the pure cache state machine and
 //! filters, the cache CRUD, the Hardcover GraphQL client (against `wiremock`),
 //! and an end-to-end cascade run.
 
