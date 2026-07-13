@@ -5361,6 +5361,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .shelf-modal-head {
   display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
 }
+.shelf-modal-title { margin: 0; font-size: 16px; font-weight: 600; color: var(--ink-0); }
 .shelf-name-input {
   flex: 1 1 220px; min-width: 160px;
   font: inherit; font-size: 15px; color: var(--ink-0);

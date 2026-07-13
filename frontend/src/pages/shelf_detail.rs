@@ -18,6 +18,7 @@ use omnibus_shared::{ShelfKind, UpdateShelfRequest, Visibility};
 #[cfg(not(feature = "mobile"))]
 use crate::components::atrium::fallback_title;
 use crate::components::cover_tile::toggle_picked;
+use crate::components::EditShelfRulesModal;
 use crate::components::{CoverTile, CoverTileKind};
 #[cfg(not(feature = "mobile"))]
 use crate::components::{RailActive, ShelvesRail};
@@ -37,6 +38,7 @@ pub fn ShelfDetailPage(id: i64) -> Element {
     crate::use_page_title(move || shelf.read().as_ref().map(|s| s.name.clone()));
     let sort_key = use_signal(|| SortKey::Title);
     let mut show_add = use_signal(|| false);
+    let mut edit_rules = use_signal(|| false);
     // Bumped to force a refetch after a membership edit.
     let mut reload = use_signal(|| 0u32);
 
@@ -108,6 +110,7 @@ pub fn ShelfDetailPage(id: i64) -> Element {
             books: books.read().clone(),
             server_url: server_url.clone(),
             on_add: move |_| show_add.set(true),
+            on_edit_rules: move |_| edit_rules.set(true),
             on_changed: move |_| reload.with_mut(|n| *n += 1),
         }
     };
@@ -119,6 +122,7 @@ pub fn ShelfDetailPage(id: i64) -> Element {
         &server_url,
         sort_key,
         show_add,
+        edit_rules,
         reload,
     );
 
@@ -131,6 +135,17 @@ pub fn ShelfDetailPage(id: i64) -> Element {
                 on_close: move |_| show_add.set(false),
                 on_added: move |_| {
                     show_add.set(false);
+                    reload.with_mut(|n| *n += 1);
+                },
+            }
+        }
+
+        if edit_rules() {
+            EditShelfRulesModal {
+                shelf: current.clone(),
+                on_close: move |_| edit_rules.set(false),
+                on_saved: move |_| {
+                    edit_rules.set(false);
                     reload.with_mut(|n| *n += 1);
                 },
             }
@@ -168,6 +183,7 @@ fn web_shelf_body(
     server_url: &str,
     mut sort_key: Signal<SortKey>,
     mut show_add: Signal<bool>,
+    mut edit_rules: Signal<bool>,
     mut reload: Signal<u32>,
 ) -> Element {
     let id = current.id;
@@ -178,6 +194,7 @@ fn web_shelf_body(
             div { class: "shelf-main",
                 ShelfHeader {
                     shelf: current.clone(),
+                    on_edit_rules: move |_| edit_rules.set(true),
                     on_changed: move |_| reload.with_mut(|n| *n += 1),
                 }
 
@@ -265,10 +282,15 @@ fn member_grid(
 
 /// Header: back link, badges, name, and the actions menu. `on_changed` fires
 /// after a successful rename / visibility change so the parent refetches and
-/// the header reflects the new value.
+/// the header reflects the new value; `on_edit_rules` opens the smart-shelf
+/// rule editor.
 #[cfg(not(feature = "mobile"))]
 #[component]
-fn ShelfHeader(shelf: Shelf, on_changed: EventHandler<()>) -> Element {
+fn ShelfHeader(
+    shelf: Shelf,
+    on_edit_rules: EventHandler<()>,
+    on_changed: EventHandler<()>,
+) -> Element {
     let nav = use_navigator();
     let server_url = use_server_url();
     let mut renaming = use_signal(|| false);
@@ -276,6 +298,7 @@ fn ShelfHeader(shelf: Shelf, on_changed: EventHandler<()>) -> Element {
     let mut menu_open = use_signal(|| false);
 
     let id = shelf.id;
+    let is_smart = shelf.kind == ShelfKind::Smart;
     let kind_label = match shelf.kind {
         ShelfKind::Smart => "Smart",
         ShelfKind::Manual => "Hand-picked",
@@ -365,6 +388,14 @@ fn ShelfHeader(shelf: Shelf, on_changed: EventHandler<()>) -> Element {
                         }
                         if menu_open() {
                             div { class: "shelf-actions-menu",
+                                if is_smart {
+                                    button {
+                                        r#type: "button", class: "shelf-menu-item",
+                                        "data-testid": "shelf-edit-rules",
+                                        onclick: move |_| { menu_open.set(false); on_edit_rules.call(()); },
+                                        "Edit rules"
+                                    }
+                                }
                                 button {
                                     r#type: "button", class: "shelf-menu-item",
                                     "data-testid": "shelf-rename",

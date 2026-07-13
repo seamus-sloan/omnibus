@@ -98,3 +98,10 @@ pub mod create_shelf_modal;
 pub mod shelves_rail;
 pub use create_shelf_modal::CreateShelfModal;
 pub use shelves_rail::{RailActive, ShelvesRail};
+
+// The condition-row editor + live-preview pane shared by shelf creation and
+// the "Edit rules" surface.
+pub mod shelf_rule_builder;
+
+pub mod edit_shelf_rules_modal;
+pub use edit_shelf_rules_modal::EditShelfRulesModal;
