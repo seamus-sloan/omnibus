@@ -4,6 +4,7 @@ import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { audiobookFixturesDir, seedAudiobookLibrary } from "../utils/seed";
+import { setRangeValue } from "../utils/sliders";
 
 test.beforeAll(async ({ request }) => {
   await seedAudiobookLibrary(
@@ -72,12 +73,13 @@ test("renders the listen page layout for an mp3 audiobook", async ({
   await expect(page.getByRole("heading", { name: MP3_BOOK.title })).toBeVisible();
   await expect(page.getByText(`by ${MP3_BOOK.author}`)).toBeVisible();
 
-  // Transport: chapter map + skip-back / play / skip-forward / rate.
+  // Transport: chapter map + skip-back / play / skip-forward / rate / volume.
   await expect(page.getByTestId("chapter-map")).toBeVisible();
   await expect(page.getByRole("button", { name: "Back 30 seconds" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Forward 30 seconds" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Playback speed" })).toBeVisible();
+  await expect(page.getByRole("slider", { name: "Volume" })).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
@@ -400,6 +402,34 @@ test("arms a sleep preset and shows a live countdown", async ({
 
   // The toolbar Sleep button reflects the live countdown.
   await expect(page.getByRole("button", { name: /^Sleep · 1[45]:/ })).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// 9c. Volume slider (#989)
+// ---------------------------------------------------------------------------
+
+test("adjusts volume via the full player's slider", async ({ page, request }) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  const slider = page.getByRole("slider", { name: "Volume" });
+  await expect(slider).toBeVisible();
+  await expect(slider).toHaveValue("1");
+
+  await setRangeValue(slider, 0.3);
+
+  // The slider drives the shared `<audio>` element's volume in real time.
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (document.getElementById("omnibus-audio") as HTMLAudioElement | null)
+            ?.volume ?? null,
+      ),
+    )
+    .toBeCloseTo(0.3, 2);
+  await expect(slider).toHaveValue("0.3");
 });
 
 // ---------------------------------------------------------------------------

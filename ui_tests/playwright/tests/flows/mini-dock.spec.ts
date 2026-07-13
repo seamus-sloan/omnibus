@@ -3,6 +3,7 @@ import { AUDIOBOOK_BOOKS, AUDIOBOOK_BOOK_COUNT } from "../fixtures/audiobooks";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { audiobookFixturesDir, seedAudiobookLibrary } from "../utils/seed";
+import { setRangeValue } from "../utils/sliders";
 
 test.beforeAll(async ({ request }) => {
   await seedAudiobookLibrary(
@@ -134,6 +135,48 @@ test("dock expand navigates back to the full player", async ({
     page.getByRole("button", { name: "Play", exact: true }),
   ).toBeVisible();
   await expect(page.getByTestId("mini-dock")).toHaveCount(0);
+});
+
+// ---------------------------------------------------------------------------
+// 3b. Volume slider stays in sync with the full player (#989)
+// ---------------------------------------------------------------------------
+
+test("dock volume slider updates the shared audio element and stays in sync with the full player", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+  await spaNavigateToLibrary(page);
+
+  const dockSlider = page
+    .getByTestId("mini-dock-volume")
+    .getByRole("slider", { name: "Volume" });
+  await expect(dockSlider).toBeVisible();
+  await expect(dockSlider).toHaveValue("1");
+
+  await setRangeValue(dockSlider, 0.4);
+
+  // Both sliders read/write PlaybackState.volume, so the dock's change must
+  // reach the shared `<audio>` element in real time.
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (document.getElementById("omnibus-audio") as HTMLAudioElement | null)
+            ?.volume ?? null,
+      ),
+    )
+    .toBeCloseTo(0.4, 2);
+
+  // Expanding back to the full player must show the same volume — proof
+  // both controls share one signal rather than each tracking its own copy.
+  await page.getByTestId("mini-dock-expand-btn").click();
+  await expect(page).toHaveURL(new RegExp(`/listen/${uuid}$`));
+
+  const fullSlider = page.getByRole("slider", { name: "Volume" });
+  await expect(fullSlider).toHaveValue("0.4");
 });
 
 // ---------------------------------------------------------------------------

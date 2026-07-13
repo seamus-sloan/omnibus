@@ -112,6 +112,8 @@ pub(super) struct TransportState {
     pub rate_label: String,
     pub rate_active: bool,
     pub has_chapters: bool,
+    /// Current volume (0.0–1.0) — drives the volume slider's thumb position.
+    pub volume: f64,
 }
 
 /// Transport-row event handlers wired through to the scrubber + play/skip/rate buttons.
@@ -125,6 +127,7 @@ pub(super) struct PlayerCallbacks {
     pub on_chapter_prev: EventHandler<MouseEvent>,
     pub on_chapter_next: EventHandler<MouseEvent>,
     pub on_chapter_seek: EventHandler<f64>,
+    pub on_volume: EventHandler<f64>,
 }
 
 /// The subset of [`PlayerCallbacks`] the transport row itself dispatches.
@@ -136,6 +139,7 @@ pub(super) struct TransportCallbacks {
     pub on_rate: EventHandler<MouseEvent>,
     pub on_chapter_prev: EventHandler<MouseEvent>,
     pub on_chapter_next: EventHandler<MouseEvent>,
+    pub on_volume: EventHandler<f64>,
 }
 
 /// Toolbar row (sleep/bookmark/chapters) — per-button highlight state plus toggle handlers.
@@ -201,6 +205,7 @@ pub(super) fn PlayerStage(
                         on_rate: callbacks.on_rate,
                         on_chapter_prev: callbacks.on_chapter_prev,
                         on_chapter_next: callbacks.on_chapter_next,
+                        on_volume: callbacks.on_volume,
                     },
                 }
 

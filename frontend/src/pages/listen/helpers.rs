@@ -1,7 +1,8 @@
 //! Shared helpers for the listen page: timestamp formatting, the audio
-//! progress POST shim, the audited `window.OmnibusAudio` poke, and the
-//! transport click-handler builders shared by the mini-dock and full player.
-//! Consumed by `listen.rs`, `controls`, `speed_panel`, and `bootstrap`.
+//! progress POST shim, the audited `window.OmnibusAudio` poke, the
+//! transport click-handler builders, and the volume load/save/apply trio
+//! shared by the mini-dock and full player. Consumed by `listen.rs`,
+//! `controls`, `speed_panel`, `sleep`, `ready_player`, and `bootstrap`.
 
 // Imported for `Asset`/`MouseEvent`; the audio helpers below that use it are
 // all gated to non-mobile targets, so the import is too (unused on mobile).
@@ -49,6 +50,65 @@ pub(super) fn on_skip_forward_30() -> impl FnMut(MouseEvent) + 'static {
         #[cfg(feature = "web")]
         audio_call("skip", "30");
     }
+}
+
+/// localStorage key for the persisted session volume preference.
+#[cfg(feature = "web")]
+const VOLUME_KEY: &str = "omnibus.listen.volume";
+
+/// Clamp a requested volume to the `<audio>` element's valid range,
+/// treating non-finite input (NaN, +/-inf) as full volume.
+#[cfg(not(feature = "mobile"))]
+pub(super) fn clamp_volume(v: f64) -> f64 {
+    if v.is_finite() {
+        v.clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
+/// Load the persisted volume preference. Defaults to `1.0` when unset,
+/// unparsable, or off web — the volume slider itself is web-only, so
+/// mobile/SSR never need a stored value. Its only production caller
+/// (`bootstrap::install_audio_bootstrap`) is itself web-gated, so this
+/// would read as dead code on a server-only build without the allow.
+#[cfg(not(feature = "mobile"))]
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
+pub(super) fn load_volume() -> f64 {
+    #[cfg(feature = "web")]
+    {
+        crate::client_store::get(VOLUME_KEY)
+            .and_then(|raw| raw.parse::<f64>().ok())
+            .map(clamp_volume)
+            .unwrap_or(1.0)
+    }
+    #[cfg(not(feature = "web"))]
+    {
+        1.0
+    }
+}
+
+/// Persist the volume preference. No-op outside web.
+#[cfg(not(feature = "mobile"))]
+fn save_volume(v: f64) {
+    #[cfg(feature = "web")]
+    crate::client_store::set(VOLUME_KEY, &v.to_string());
+    #[cfg(not(feature = "web"))]
+    let _ = v;
+}
+
+/// Clamp `v`, persist it as the session-wide volume preference, update the
+/// shared signal, and forward it to the JS audio shim so the `<audio>`
+/// element's volume changes in real time. Shared by the full player's
+/// slider and the mini-dock's compact slider — both write through here so
+/// they always agree.
+#[cfg(not(feature = "mobile"))]
+pub(super) fn apply_volume(volume: &mut Signal<f64>, v: f64) {
+    let clamped = clamp_volume(v);
+    volume.set(clamped);
+    save_volume(clamped);
+    #[cfg(feature = "web")]
+    audio_call("setVolume", &clamped.to_string());
 }
 
 /// Format `seconds` as `H:MM:SS` (or `MM:SS` when under an hour).
@@ -114,5 +174,37 @@ mod tests {
         assert_eq!(format_hms(-12.0), "0:00");
         assert_eq!(format_hms(f64::NAN), "0:00");
         assert_eq!(format_hms(f64::INFINITY), "0:00");
+    }
+}
+
+// `clamp_volume`/`load_volume` don't exist on mobile (the slider is web-only),
+// so their tests live in a separately-gated module.
+#[cfg(all(test, not(feature = "mobile")))]
+mod volume_tests {
+    use super::{clamp_volume, load_volume};
+
+    #[test]
+    fn clamp_volume_within_range_is_unchanged() {
+        assert!((clamp_volume(0.42) - 0.42).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn clamp_volume_clamps_outside_zero_to_one() {
+        assert_eq!(clamp_volume(-0.5), 0.0);
+        assert_eq!(clamp_volume(1.5), 1.0);
+    }
+
+    #[test]
+    fn clamp_volume_treats_non_finite_as_full_volume() {
+        assert_eq!(clamp_volume(f64::NAN), 1.0);
+        assert_eq!(clamp_volume(f64::INFINITY), 1.0);
+        assert_eq!(clamp_volume(f64::NEG_INFINITY), 1.0);
+    }
+
+    #[test]
+    fn load_volume_defaults_to_one_under_ssr() {
+        // The `web` localStorage path isn't reachable under the `server`
+        // feature this test runs with — pins the documented SSR default.
+        assert!((load_volume() - 1.0).abs() < f64::EPSILON);
     }
 }

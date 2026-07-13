@@ -142,13 +142,14 @@ mod tests {
     }
 }
 
-/// Grouped playback signals (duration, elapsed, playing, rate, hls_ready).
+/// Grouped playback signals (duration, elapsed, playing, rate, volume, hls_ready).
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct PlaybackSignals {
     pub duration: Signal<f64>,
     pub elapsed: Signal<f64>,
     pub playing: Signal<bool>,
     pub rate: Signal<f64>,
+    pub volume: Signal<f64>,
     pub hls_ready: Signal<bool>,
 }
 
@@ -172,7 +173,7 @@ pub(super) fn ReadyPlayer(
     // Sleep timer + bookmark state. Both are custom hooks declared
     // unconditionally so SSR/WASM hook order matches (rule 07); their web
     // interop is gated internally.
-    let sleep = use_sleep_timer();
+    let sleep = use_sleep_timer(signals.volume);
     let bookmarks = use_bookmarks(uuid.clone());
 
     // Derive current chapter index from elapsed position.
@@ -306,6 +307,7 @@ pub(super) fn PlayerStageBinding(
     let duration = signals.duration;
     let elapsed = signals.elapsed;
     let playing = signals.playing;
+    let mut volume = signals.volume;
     let mut speed_panel_open = panes.speed_panel_open;
     let mut sleep_panel_open = panes.sleep_panel_open;
     let mut bookmarks_open = panes.bookmarks_open;
@@ -320,6 +322,7 @@ pub(super) fn PlayerStageBinding(
             super::helpers::audio_call("seek", &_secs.to_string());
         }
     };
+    let on_volume = move |v: f64| super::helpers::apply_volume(&mut volume, v);
     let on_rate = move |_: MouseEvent| {
         let cur = *speed_panel_open.peek();
         speed_panel_open.set(!cur);
@@ -371,6 +374,7 @@ pub(super) fn PlayerStageBinding(
                 rate_label: format!("{:.2}\u{00d7}", (signals.rate)()),
                 rate_active: speed_panel_open(),
                 has_chapters: !chs.is_empty(),
+                volume: volume(),
             },
             callbacks: PlayerCallbacks {
                 on_seek: EventHandler::new(on_seek),
@@ -381,6 +385,7 @@ pub(super) fn PlayerStageBinding(
                 on_chapter_prev: EventHandler::new(on_chapter_prev),
                 on_chapter_next: EventHandler::new(on_chapter_next),
                 on_chapter_seek,
+                on_volume: EventHandler::new(on_volume),
             },
             toolbar: ToolbarState {
                 sleep_active,
