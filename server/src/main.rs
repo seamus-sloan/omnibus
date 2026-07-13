@@ -44,8 +44,15 @@ mod server {
     pub(crate) fn init_tracing() {
         use tracing_subscriber::EnvFilter;
 
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("info,omnibus=debug"));
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|err| {
+            // try_from_default_env also errs when RUST_LOG is simply unset —
+            // only an actually-set-but-unparsable value deserves a warning.
+            // eprintln because no subscriber exists yet to carry the event.
+            if std::env::var_os("RUST_LOG").is_some() {
+                eprintln!("invalid RUST_LOG ({err}); falling back to default log filter");
+            }
+            EnvFilter::new("info,omnibus=debug")
+        });
         // try_init over init: a second subscriber (e.g. in tests) is a no-op,
         // not a panic.
         tracing_subscriber::fmt()
