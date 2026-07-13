@@ -818,12 +818,18 @@ pub struct SuggestFieldProps {
 pub fn SuggestField(props: SuggestFieldProps) -> Element {
     let mut value = props.value;
     let mut highlight = use_signal::<Option<usize>>(|| None);
-    let mut focused = use_signal(|| false);
+    // Explicit open-state, mirroring how `ChipEditor` uses `focused` +
+    // `suppress_open` to gate its dropdown. `filtered` being non-empty is
+    // *not* sufficient here: after a pick the value is set to the chosen
+    // name, which is often a substring of other pool entries, so the filter
+    // would keep matching and the dropdown would never close. `open` is set
+    // false on pick / Enter / Escape and back true on focus / input.
+    let mut open = use_signal(|| false);
 
     let filtered = {
         let suggestions = props.suggestions.read();
         let query_lc = value().trim().to_lowercase();
-        compute_suggestions(&suggestions, &[value()], &query_lc, focused(), false)
+        compute_suggestions(&suggestions, &[value()], &query_lc, open(), false)
     };
     let total = filtered.len();
     let testid_prefix = props.testid_prefix.clone();
@@ -836,20 +842,21 @@ pub fn SuggestField(props: SuggestFieldProps) -> Element {
                 "data-testid": "{testid_prefix}-input",
                 placeholder: "{props.placeholder}",
                 value: "{value}",
-                onfocus: move |_| focused.set(true),
+                onfocus: move |_| open.set(true),
                 onblur: move |_| {
-                    focused.set(false);
+                    open.set(false);
                     highlight.set(None);
                 },
                 oninput: move |e| {
                     value.set(e.value());
                     highlight.set(None);
+                    open.set(true);
                 },
                 onkeydown: move |e: Event<KeyboardData>| {
-                    dispatch_suggest_field_keydown(e, &filtered, &mut value, &mut highlight, &mut focused, total);
+                    dispatch_suggest_field_keydown(e, &filtered, &mut value, &mut highlight, &mut open, total);
                 },
             }
-            if !filtered.is_empty() {
+            if open() && !filtered.is_empty() {
                 SuggestionDropdown {
                     selection: DropdownSelectionState {
                         filtered: filtered.clone(),
@@ -862,6 +869,10 @@ pub fn SuggestField(props: SuggestFieldProps) -> Element {
                     on_pick: move |name: String| {
                         value.set(name);
                         highlight.set(None);
+                        // Close on pick: without this the just-filled value
+                        // (a substring of other pool entries) keeps the
+                        // filter non-empty and the dropdown open.
+                        open.set(false);
                     },
                 }
             }
@@ -871,15 +882,15 @@ pub fn SuggestField(props: SuggestFieldProps) -> Element {
 
 /// Arrow/Enter/Escape handling for [`SuggestField`] — a smaller sibling of
 /// [`dispatch_keydown`] without the chip-list "+ Create" row: ↑/↓ move the
-/// highlight, Enter overwrites `value` with the highlighted row (or leaves
-/// the typed text untouched when nothing is highlighted, since it's already
-/// the live value), Escape drops the highlight and closes the dropdown.
+/// highlight, Enter overwrites `value` with the highlighted row and closes
+/// the dropdown (or, with nothing highlighted, leaves the typed text — it's
+/// already the live value), Escape drops the highlight and closes.
 fn dispatch_suggest_field_keydown(
     e: Event<KeyboardData>,
     filtered: &[SuggestionItem],
     value: &mut Signal<String>,
     highlight: &mut Signal<Option<usize>>,
-    focused: &mut Signal<bool>,
+    open: &mut Signal<bool>,
     total: usize,
 ) {
     match e.key() {
@@ -904,11 +915,12 @@ fn dispatch_suggest_field_keydown(
                 e.prevent_default();
                 value.set(item.name.clone());
                 highlight.set(None);
+                open.set(false);
             }
         }
         Key::Escape => {
             highlight.set(None);
-            focused.set(false);
+            open.set(false);
         }
         _ => {}
     }
