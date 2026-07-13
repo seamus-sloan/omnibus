@@ -169,7 +169,7 @@ pub(super) fn VolumeControl(volume: f64, on_volume: EventHandler<f64>, compact: 
 
     rsx! {
         div { class: wrap_class, "data-testid": "{testid}",
-            span { class: "lp-volume-icon", "\u{1F50A}" }
+            span { class: "lp-volume-icon", aria_hidden: "true", "\u{1F50A}" }
             input {
                 r#type: "range",
                 class: "lp-volume-input",
