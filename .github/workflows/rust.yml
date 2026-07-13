@@ -36,92 +36,25 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
-  # Warm the dependency graph once so the parallel `clippy` / `test` matrices
-  # below only ever recompile workspace crates, never the heavy Dioxus/sqlx/
-  # axum dependency tree. `Swatinem/rust-cache` prunes the workspace crates
-  # from the saved cache but keeps every *dependency* artifact — so this job is
-  # the single "build once" for deps, and every downstream job restores the
-  # same `omnibus` cache read-only (`save-if: false`). The warm steps below
-  # cover the full dependency surface: native crates (default shell), the
-  # frontend's server + mobile features, wasm32 (web feature), and the GTK/wry
-  # mobile backend (`.#mobile` shell).
-  build:
-    name: build (warm deps)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      # Required by DeterminateSystems/nix-installer-action so GitHub Actions
-      # provides the OIDC token endpoints it needs to authenticate to FlakeHub.
-      # Without it the installer falls back to anonymous api.github.com fetches
-      # that intermittently 401 ("Bad credentials") during flake evaluation.
-      id-token: write
-      # Required by nix-community/cache-nix-action `purge: true` so it can
-      # delete its own expired cache entries via the Actions cache API.
-      actions: write
-    env:
-      # Match e2e.yml: pin target dir so rust-cache (keyed on `. -> target`)
-      # actually caches anything across runs.
-      CARGO_TARGET_DIR: ./target
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@v22
-
-      # Cache the Nix store across runs. Auto-purges caches with the same
-      # prefix that haven't been touched in 7 days so we stay under the 10 GB
-      # per-repo GHA cache quota. Replaces DeterminateSystems/magic-nix-cache-action
-      # (sunset; was uploading unbounded and exceeding the quota).
-      - name: Cache Nix store
-        uses: nix-community/cache-nix-action@v7
-        with:
-          primary-key: nix-rust-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
-          restore-prefixes-first-match: nix-rust-${{ runner.os }}-
-          purge: true
-          purge-prefixes: nix-rust-${{ runner.os }}-
-          purge-last-accessed: 604800
-          purge-primary-key: never
-          gc-max-store-size-linux: 5G
-
-      # `shared-key` is identical to the e2e workflow's bundle job so a warm
-      # cargo target dir from one workflow primes the other. Without it each
-      # workflow gets its own cache bucket and they never share intermediates.
-      # This is the only job that SAVES `omnibus`; the matrices below restore
-      # it read-only.
-      - name: Cache cargo registry and target
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-          shared-key: omnibus
-
-      # `--no-run` compiles the test binaries (and thus every native dependency)
-      # without executing them — the actual runs happen in the `test` matrix.
-      - name: Warm native deps (server, db, shared)
-        run: nix develop --command cargo test -p omnibus -p omnibus-db -p omnibus-shared --no-run
-
-      - name: Warm frontend deps (server feature)
-        run: nix develop --command cargo test -p omnibus-frontend --features server --no-run
-
-      - name: Warm frontend deps (mobile feature)
-        run: nix develop --command cargo test -p omnibus-frontend --features mobile --no-run
-
-      # wasm32 deps are a distinct target closure from the native builds above.
-      - name: Warm frontend deps (web feature, wasm32)
-        run: nix develop --command cargo build -p omnibus-frontend --features web --target wasm32-unknown-unknown
-
-      # `omnibus-mobile`'s wry/GTK backend needs the `.#mobile` shell's GTK 3 +
-      # WebKitGTK libs (see flake.nix `mobileExtras`); the default shell lacks
-      # them and `glib-sys` fails at `pkg-config`. Warm via clippy, not build:
-      # its only downstream consumer is `clippy (mobile)`, and a check-build
-      # never links the final binary — a `cargo build` here fails at link with
-      # `-lxdo not found` (libxdo isn't on the CI linker search path; the app
-      # is only ever host-linked via `dx serve`, never plain `cargo build`).
-      - name: Warm mobile deps (GTK/wry backend)
-        run: nix develop .#mobile --command cargo clippy -p omnibus-mobile --all-targets
-
+  # `clippy` and `test` fan out into independent matrix jobs with no serial
+  # prepass: each variant restores the cargo cache and compiles its own
+  # dependency + workspace closure, so all three distinct closures — native
+  # (default shell), wasm32 (web feature), and the GTK/wry mobile backend
+  # (`.#mobile`) — compile in parallel instead of back-to-back. There is no
+  # "build once" job; deps recompile across variants on a cold cache, but the
+  # shared caches below make steady-state runs cheap and nothing waits on a
+  # blocking prepass.
+  #
+  # Cache buckets (Swatinem/rust-cache `shared-key`; GHA keys are write-once
+  # per lockfile, so the first variant in a bucket populates it and the rest
+  # restore it):
+  #   - `omnibus`        — native host closure, shared with e2e.yml's bundle job
+  #   - `omnibus-wasm`   — wasm32 closure (only `clippy (frontend-web)`)
+  #   - `omnibus-mobile` — GTK/wry closure (only `clippy (mobile)`), kept
+  #                        separate so mobile-only artifacts don't bloat the hot
+  #                        `omnibus` restore that every native variant pays.
   clippy:
     name: clippy (${{ matrix.name }})
-    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -143,7 +76,9 @@ jobs:
             cmd: cargo clippy -p omnibus-frontend --features server --all-targets -- -D warnings
           # Lint the `web` feature on wasm32 so web-only (`#[cfg(feature = "web")]`)
           # deprecations/warnings are caught — the `server` variant never sees them.
+          # Its own cache bucket — the wasm32 closure is disjoint from native.
           - name: frontend-web
+            cache_key: omnibus-wasm
             cmd: cargo clippy -p omnibus-frontend --features web --all-targets --target wasm32-unknown-unknown -- -D warnings
           # Same cfg-split mobile code path the `test` matrix covers. Only needs
           # reqwest/tokio (no GTK/wry — that's `omnibus-mobile`), so it runs in
@@ -157,8 +92,10 @@ jobs:
           # bare clippy skips it. Target it explicitly, host target only — the
           # iOS/Android cross toolchains aren't on ubuntu-latest. Runs in the
           # `.#mobile` shell for the GTK 3 + WebKitGTK libs the wry backend needs.
+          # Own cache bucket so the heavy GTK/wry closure stays out of `omnibus`.
           - name: mobile
             shell: .#mobile
+            cache_key: omnibus-mobile
             cmd: cargo clippy -p omnibus-mobile --all-targets -- -D warnings
     steps:
       - uses: actions/checkout@v4
@@ -177,21 +114,20 @@ jobs:
           purge-primary-key: never
           gc-max-store-size-linux: 5G
 
-      # Restore the deps warmed by `build`; never save (that would prune and
-      # re-upload the workspace crates this variant just compiled).
+      # Per-variant bucket (defaults to `omnibus`). First variant in the bucket
+      # populates it; the rest restore. GHA cache keys are write-once per
+      # lockfile, so concurrent saves on a cold cache dedupe to a single write.
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          shared-key: omnibus
-          save-if: ${{ false }}
+          shared-key: ${{ matrix.cache_key || 'omnibus' }}
 
       - name: Clippy
         run: nix develop ${{ matrix.shell }} --command ${{ matrix.cmd }}
 
   test:
     name: test (${{ matrix.name }})
-    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -257,12 +193,13 @@ jobs:
           purge-primary-key: never
           gc-max-store-size-linux: 5G
 
+      # All test variants build native crates, so they share the `omnibus`
+      # bucket (also shared with clippy's native variants and e2e.yml's bundle).
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
           shared-key: omnibus
-          save-if: ${{ false }}
 
       - name: Test
         run: nix develop --command ${{ matrix.cmd }}
