@@ -300,6 +300,55 @@ async fn cache_serves_within_ttl_and_refreshes_after_expiry() {
 }
 
 #[tokio::test]
+async fn genre_share_counts_distinct_books_per_tag_not_seconds() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 3).await;
+    let user = seed_user(&pool, "alice").await;
+    let b1 = book_id(&pool, "uuid-1").await;
+    let b2 = book_id(&pool, "uuid-2").await;
+    let b3 = book_id(&pool, "uuid-3").await;
+
+    // sci-fi spans two active books; classic one (but with FAR more seconds —
+    // count-ranking must ignore that); horror tags only an inactive book.
+    link_tag(&pool, b1, "sci-fi").await;
+    link_tag(&pool, b2, "sci-fi").await;
+    link_tag(&pool, b1, "classic").await;
+    link_tag(&pool, b3, "horror").await;
+
+    reading_session(&pool, user, "uuid-1", T0, 90_000).await;
+    reading_session(&pool, user, "uuid-1", T0 + DAY, 90_000).await;
+    listening_session(&pool, user, "uuid-2", T0, 60).await;
+
+    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+
+    assert_eq!(s.genre_share.len(), 2, "inactive book's tag is excluded");
+    assert_eq!(s.genre_share[0].name, "sci-fi");
+    assert_eq!(s.genre_share[0].books, 2);
+    assert_eq!(s.genre_share[1].name, "classic");
+    assert_eq!(s.genre_share[1].books, 1);
+    // Two distinct active books, sessions on both tables.
+    assert_eq!(s.books_active, 2);
+    // Stamped from the server clock: a real YYYY-MM-DD.
+    assert_eq!(s.as_of_day.len(), 10);
+}
+
+#[tokio::test]
+async fn genre_share_is_scoped_to_the_window() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    let b1 = book_id(&pool, "uuid-1").await;
+    link_tag(&pool, b1, "sci-fi").await;
+
+    // Only pre-window activity → no genre share inside the window.
+    reading_session(&pool, user, "uuid-1", T0, 600).await;
+
+    let share = genre_share(&pool, user, T0 + DAY).await.unwrap();
+    assert!(share.is_empty());
+    assert_eq!(books_active(&pool, user, T0 + DAY).await.unwrap(), 0);
+}
+
+#[tokio::test]
 async fn avg_stars_means_ratings_updated_in_the_window() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 3).await;

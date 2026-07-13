@@ -6233,7 +6233,120 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .st-tile-accent .st-tile-unit { color: var(--accent); }
 .st-tile-label { margin-top: 6px; }
 
-/* ── Scaffold cards (replaced by tiles / heatmap as modules land) ─── */
+/* ── Composition row: genre donut + format split ──────────────────── */
+.st-page {
+  --st-donut-c0: var(--accent);
+  --st-donut-c1: color-mix(in oklch, var(--accent) 65%, var(--bg-3));
+  --st-donut-c2: color-mix(in oklch, var(--accent) 40%, var(--bg-3));
+  --st-donut-c3: color-mix(in oklch, var(--accent) 22%, var(--bg-3));
+  --st-donut-other: var(--bg-3);
+}
+.st-compose {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 18px;
+}
+.st-donut-body { display: flex; align-items: center; gap: 22px; margin-top: 14px; }
+.st-donut {
+  width: 150px;
+  height: 150px;
+  flex: 0 0 150px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+}
+.st-donut-hole {
+  width: 62%;
+  height: 62%;
+  border-radius: 999px;
+  background: var(--bg-1);
+  display: grid;
+  place-items: center;
+  text-align: center;
+  align-content: center;
+}
+.st-donut-count { font-family: var(--serif); font-size: 28px; line-height: 1; }
+.st-donut-count-label { font-size: 10px; color: var(--ink-3); margin-top: 2px; }
+.st-donut-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  flex: 1;
+  justify-content: center;
+}
+.st-donut-row { display: flex; align-items: center; gap: 10px; }
+.st-donut-swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.st-donut-name { flex: 1; font-size: 13px; color: var(--ink-1); }
+.st-donut-pct { font-size: 11px; color: var(--ink-2); }
+.st-donut-empty { margin: 14px 0 0; font-size: 13px; color: var(--ink-3); }
+
+.st-format-card { display: flex; flex-direction: column; justify-content: center; gap: 14px; }
+.st-format-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+.st-format-name { font-size: 14px; color: var(--ink-1); }
+.st-format-pct { font-size: 12px; color: var(--ink-2); }
+.st-format-track { height: 8px; border-radius: 999px; background: var(--bg-2); overflow: hidden; }
+.st-format-fill { height: 100%; border-radius: 999px; }
+
+/* ── Reading-days heatmap card ────────────────────────────────────── */
+.st-heatmap-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.st-heatmap-sub { font-size: 12.5px; color: var(--ink-3); margin-top: 3px; }
+.st-streak { text-align: right; }
+.st-streak-value {
+  font-family: var(--serif);
+  font-size: 40px;
+  line-height: 1;
+  color: var(--accent);
+}
+.st-streak-unit { font-size: 17px; color: var(--ink-3); }
+.st-streak .label { margin-top: 4px; }
+.st-heatmap {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(7, auto);
+  grid-auto-columns: 1fr;
+  gap: 3px;
+}
+.st-hm-cell { aspect-ratio: 1 / 1; border-radius: 2px; }
+.st-hm-0 { background: var(--bg-2); }
+.st-hm-1 { background: color-mix(in oklch, var(--accent) 30%, var(--bg-2)); }
+.st-hm-2 { background: color-mix(in oklch, var(--accent) 55%, var(--bg-2)); }
+.st-hm-3 { background: color-mix(in oklch, var(--accent) 80%, var(--bg-2)); }
+.st-hm-4 { background: var(--accent); }
+.st-hm-future { background: transparent; }
+.st-hm-months {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 12px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-3);
+}
+.st-hm-legend {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.st-hm-legend .st-hm-cell { width: 12px; }
+
+/* ── Scaffold cards (shown while a section's fetch is in flight) ──── */
 .st-summary-card { display: flex; flex-direction: column; gap: 8px; }
 .st-summary-line { font-size: 14px; color: var(--ink-1); }
 .st-card-placeholder { min-height: 84px; }
@@ -6253,4 +6366,16 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   .st-tiles { grid-template-columns: repeat(2, 1fr); gap: 12px; }
   .st-tile-value { font-size: 28px; }
   .st-tile-hero .st-tile-value { font-size: 40px; }
+
+  /* Composition cards stack; the donut legend flows below the ring. */
+  .st-compose { grid-template-columns: 1fr; gap: 12px; }
+  .st-donut-body { flex-direction: column; gap: 16px; }
+  .st-donut-legend { width: 100%; }
+
+  /* 52 heatmap columns don't fit a phone — scroll the card's grid. */
+  .st-heatmap { overflow-x: auto; padding-bottom: 4px; }
+  .st-heatmap .st-hm-cell { min-width: 8px; }
+  .st-hm-months { display: none; }
+  .st-streak-value { font-size: 28px; }
+  .st-streak-unit { font-size: 13px; }
 }
