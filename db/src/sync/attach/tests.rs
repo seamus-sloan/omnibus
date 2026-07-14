@@ -131,6 +131,234 @@ async fn attach_skipped_when_titles_differ() {
 }
 
 #[tokio::test]
+async fn two_audiobooks_matching_one_ebook_in_one_plan_do_not_clobber() {
+    // Two distinct M4B files for the same work land in a single New plan. The
+    // first attaches as the ebook's M4B edition; the second must become its
+    // own book, not overwrite the first's file row (#1063).
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_ebook(
+        &pool,
+        "Sanderson/Wind and Truth.epub",
+        "Wind and Truth",
+        "Brandon Sanderson",
+    )
+    .await;
+    sync_audiobooks(
+        &pool,
+        "/audio",
+        AudiobookSyncPlan {
+            new_books: vec![
+                indexed_audiobook(
+                    "Sanderson/wt-a.m4b",
+                    "Wind and Truth",
+                    Some("Brandon Sanderson"),
+                ),
+                indexed_audiobook(
+                    "Sanderson/wt-b.m4b",
+                    "Wind and Truth",
+                    Some("Brandon Sanderson"),
+                ),
+            ],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // One attaches to the ebook, the other stands alone → 2 books, and both
+    // M4B files survive (no delete-then-replace).
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 2);
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM book_files WHERE format = 'M4B'"
+        )
+        .await,
+        2
+    );
+    // Only the attached file records a ledger row; the standalone book is
+    // native, so exactly one merged_uuids row exists.
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM merged_uuids").await, 1);
+}
+
+#[tokio::test]
+async fn replayed_ledger_collision_does_not_clobber_the_incumbent_file() {
+    // Regression for #1063: two merged_uuids rows pointing at the same
+    // (book, M4B) slot — the frozen state a pre-fix clobber leaves behind. A
+    // rescan that replays the second file must refuse rather than delete the
+    // incumbent's file row and replace it. Pre-fix this collapsed to one file
+    // row (data loss); post-fix the incumbent survives and the loser becomes
+    // its own book.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_ebook(
+        &pool,
+        "Sanderson/Wind and Truth.epub",
+        "Wind and Truth",
+        "Brandon Sanderson",
+    )
+    .await;
+
+    // File A attaches to the ebook the normal way.
+    sync_audiobooks(
+        &pool,
+        "/audio",
+        AudiobookSyncPlan {
+            new_books: vec![indexed_audiobook(
+                "Sanderson/wt-a.m4b",
+                "Wind and Truth",
+                Some("Brandon Sanderson"),
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let ebook_id: i64 = sqlx::query_scalar(
+        "SELECT book_id FROM merged_uuids WHERE scan_key = 'Sanderson/wt-a.m4b'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // Forge the legacy bad state: a second ledger row for file B on A's slot.
+    sqlx::query(
+        "INSERT INTO merged_uuids (uuid, book_id, format, library_path, scan_key)
+         VALUES ('forged-b', ?, 'M4B', '/audio', 'Sanderson/wt-b.m4b')",
+    )
+    .bind(ebook_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Replay file B through the Changed bucket.
+    sync_audiobooks(
+        &pool,
+        "/audio",
+        AudiobookSyncPlan {
+            changed_books: vec![indexed_audiobook(
+                "Sanderson/wt-b.m4b",
+                "Wind and Truth",
+                Some("Brandon Sanderson"),
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // The incumbent A's file row on the ebook is untouched (its filename is
+    // A's stem, not B's) — the DELETE-then-replace never fired.
+    let incumbent: String =
+        sqlx::query_scalar("SELECT filename FROM book_files WHERE book_id = ? AND format = 'M4B'")
+            .bind(ebook_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(incumbent, "wt-a");
+    // B survives too — as its own book, not a lost row.
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM book_files WHERE format = 'M4B'"
+        )
+        .await,
+        2
+    );
+    // B's stale ledger row was forgotten, so the slot no longer has two rows
+    // fighting over it.
+    assert_eq!(
+        count(
+            &pool,
+            &format!(
+                "SELECT COUNT(*) FROM merged_uuids WHERE book_id = {ebook_id} AND format = 'M4B'"
+            )
+        )
+        .await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn replayed_ebook_ledger_collision_does_not_clobber_the_incumbent_file() {
+    // The ebook attach writer shares the same guard (#1063). Same shape as the
+    // audiobook case, roles swapped: a native audiobook holds an attached EPUB,
+    // and a forged second-EPUB ledger row must not clobber the incumbent.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_audiobook(&pool, "Herbert/Dune.m4b", "Dune", "Frank Herbert").await;
+
+    // EPUB A attaches to the audiobook.
+    sync_books(
+        &pool,
+        "/books",
+        SyncPlan {
+            new_books: vec![indexed(
+                "Herbert/dune-a.epub",
+                Some("Dune"),
+                &["Frank Herbert"],
+                &[],
+                None,
+                None,
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let book_id: i64 = sqlx::query_scalar("SELECT book_id FROM merged_uuids WHERE format = 'EPUB'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // Forge a second EPUB ledger row for file B on A's slot.
+    let scan_key_b = crate::helpers::scan_key_for("Herbert/dune-b.epub");
+    sqlx::query(
+        "INSERT INTO merged_uuids (uuid, book_id, format, library_path, scan_key)
+         VALUES ('forged-eb', ?, 'EPUB', '/books', ?)",
+    )
+    .bind(book_id)
+    .bind(&scan_key_b)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Replay EPUB B through the Changed bucket.
+    sync_books(
+        &pool,
+        "/books",
+        SyncPlan {
+            changed_books: vec![indexed(
+                "Herbert/dune-b.epub",
+                Some("Dune"),
+                &["Frank Herbert"],
+                &[],
+                None,
+                None,
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // Incumbent A's EPUB row is intact; B became its own book.
+    let incumbent: String =
+        sqlx::query_scalar("SELECT filename FROM book_files WHERE book_id = ? AND format = 'EPUB'")
+            .bind(book_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(incumbent, "dune-a");
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM book_files WHERE format = 'EPUB'"
+        )
+        .await,
+        2
+    );
+}
+
+#[tokio::test]
 async fn reindex_diff_classifies_attached_file_as_unchanged() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_ebook(&pool, "Stoker/Dracula.epub", "Dracula", "Bram Stoker").await;

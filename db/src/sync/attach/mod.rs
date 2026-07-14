@@ -60,6 +60,43 @@ pub(super) async fn find_attach_target(
     })
 }
 
+/// Return whether another file holds the `(book_id, format)` attachment slot.
+/// The incoming `scan_key` is excluded so re-attaching the same file proceeds.
+pub(super) async fn slot_held_by_other(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    format: &str,
+    scan_key: &str,
+) -> Result<bool, sqlx::Error> {
+    let held: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM merged_uuids
+          WHERE book_id = ? AND format = ? AND scan_key <> ? LIMIT 1",
+    )
+    .bind(book_id)
+    .bind(format)
+    .bind(scan_key)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(held.is_some())
+}
+
+/// Drop the `merged_uuids` row for `(library_path, scan_key)`. Called when a
+/// file that previously recorded an attachment is being demoted to its own
+/// book (its slot got taken by another file), so its stale ledger entry
+/// doesn't keep replaying the attach on every future scan (issue #1063).
+pub(super) async fn forget_attachment(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    library_path: &str,
+    scan_key: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM merged_uuids WHERE library_path = ? AND scan_key = ?")
+        .bind(library_path)
+        .bind(scan_key)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 /// Record (or refresh) the `merged_uuids` row for an attached file.
 /// `library_path` is the scanned root of the *file*, not the target
 /// book's library — the reindex diff filters on it. `scan_key` is the
