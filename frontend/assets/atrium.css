@@ -3209,6 +3209,14 @@ body {
 .app-shell > main {
   padding: 0 clamp(1.25rem, 4vw, 3.5rem);
 }
+/* Reserve room for the persistent mini-dock so its fixed bar doesn't sit
+   over — and intercept clicks on — the last row of page content. Mirrors
+   the mobile `.screen` reserve for `.m-mini` above; same `:has()` floor. */
+@supports selector(:has(a)) {
+  .app-shell > main:has(+ .mini-dock-host:not(:empty)) {
+    padding-bottom: 7rem;
+  }
+}
 
 .screen {
   display: flex;
