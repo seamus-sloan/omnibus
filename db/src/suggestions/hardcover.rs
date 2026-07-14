@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use futures::future::join_all;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
@@ -200,6 +201,9 @@ struct HcImage {
 const BOOK_FIELDS: &str = "id slug title contributions { author { name } } \
      book_series { position series { name } } image { url }";
 
+/// Max concurrent per-ISBN Hardcover lookups in [`resolve_book`].
+const ISBN_RESOLVE_CONCURRENCY: usize = 4;
+
 /// Resolve a library book to a Hardcover book. ISBNs are tried first (most
 /// reliable); on a miss we fall back to an **exact** title match ordered by
 /// `users_count` so the canonical edition wins over summary/knockoff entries
@@ -210,16 +214,27 @@ pub async fn resolve_book(
     title: &str,
     author: Option<&str>,
 ) -> Result<Option<ResolvedBook>, HardcoverError> {
-    for isbn in isbns {
-        let query = "query ($isbn: String!) { \
-             editions(where: {_or: [{isbn_13: {_eq: $isbn}}, {isbn_10: {_eq: $isbn}}]}, limit: 1) \
-             { book_id } }";
-        let data: EditionsData =
-            post_graphql(config, query, serde_json::json!({ "isbn": isbn })).await?;
-        if let Some(book_id) = data.editions.into_iter().find_map(|e| e.book_id) {
-            if let Some(resolved) = fetch_resolved_book(config, book_id).await? {
-                return Ok(Some(resolved));
-            }
+    // Look up every ISBN with bounded concurrency (at most
+    // `ISBN_RESOLVE_CONCURRENCY` in flight at once, chunk by chunk — plain
+    // `join_all` per chunk, not `futures::stream::{buffered,
+    // buffer_unordered}`, which trip a rustc higher-ranked-lifetime
+    // auto-trait inference bug elsewhere in this crate: a spurious "`Send`
+    // is not general enough" error on the unrelated `Worker::run` dispatch
+    // in `worker/exec.rs`, confirmed by bisecting — the same error surfaces
+    // regardless of which call site introduces the `Stream` combinator or
+    // an `AsyncFn`-bound generic helper) but still decide the winner exactly
+    // as the old sequential loop would: walk the results in order and stop
+    // at the first ISBN that either errors or resolves, so an ISBN's
+    // priority over a later one is unaffected by fetching concurrently.
+    let mut by_isbn: Vec<Result<Option<ResolvedBook>, HardcoverError>> =
+        Vec::with_capacity(isbns.len());
+    for chunk in isbns.chunks(ISBN_RESOLVE_CONCURRENCY) {
+        by_isbn.extend(join_all(chunk.iter().map(|isbn| resolve_by_isbn(config, isbn))).await);
+    }
+    for result in by_isbn {
+        match result? {
+            Some(resolved) => return Ok(Some(resolved)),
+            None => continue,
         }
     }
 
@@ -246,6 +261,24 @@ pub async fn resolve_book(
         })
         .or_else(|| data.books.first());
     Ok(pick.map(resolved_from_row))
+}
+
+/// One ISBN lookup: resolve its edition to a `book_id`, then hydrate the full
+/// `ResolvedBook`. `Ok(None)` means this ISBN alone had no match — the caller
+/// tries the next one.
+async fn resolve_by_isbn(
+    config: &HardcoverConfig,
+    isbn: &str,
+) -> Result<Option<ResolvedBook>, HardcoverError> {
+    let query = "query ($isbn: String!) { \
+         editions(where: {_or: [{isbn_13: {_eq: $isbn}}, {isbn_10: {_eq: $isbn}}]}, limit: 1) \
+         { book_id } }";
+    let data: EditionsData =
+        post_graphql(config, query, serde_json::json!({ "isbn": isbn })).await?;
+    match data.editions.into_iter().find_map(|e| e.book_id) {
+        Some(book_id) => fetch_resolved_book(config, book_id).await,
+        None => Ok(None),
+    }
 }
 
 fn resolved_from_row(b: &BookRow) -> ResolvedBook {

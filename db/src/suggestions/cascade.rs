@@ -5,19 +5,23 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use futures::future::join_all;
 use sqlx::SqlitePool;
 
 use crate::author_photos::{fetch_remote_image_with, RemoteImageConfig};
 use crate::suggestions::data::{
     replace_suggestions, suggestion_state, NewSuggestion, SuggestionState, SUGGESTIONS_TTL_SECS,
 };
-use crate::suggestions::filter::filter_candidates;
+use crate::suggestions::filter::{filter_candidates, Candidate};
 use crate::suggestions::hardcover::{
     co_listed_counts, curated_list_ids, fetch_candidates, resolve_book, HardcoverConfig,
 };
 
 /// Final strip size — at most 10 survivors are cached.
 const FINAL_LIMIT: usize = 10;
+
+/// Max concurrent remote cover fetches while hydrating survivor rows.
+const COVER_FETCH_CONCURRENCY: usize = 6;
 
 /// Current unix time in seconds.
 fn now_secs() -> i64 {
@@ -98,13 +102,18 @@ pub async fn resolve_with(
     );
 
     // Build cache rows, fetching cover bytes best-effort (a cover miss must not
-    // drop the suggestion — `Cover` falls back to a typographic plate).
+    // drop the suggestion — `Cover` falls back to a typographic plate). Covers
+    // fetch with bounded concurrency (at most `COVER_FETCH_CONCURRENCY` in
+    // flight at once, chunk by chunk), preserving `survivors`' order (the
+    // list's already-ranked order becomes the persisted `rank` in
+    // `insert_suggestion_rows`).
+    let mut covers: Vec<Option<(String, Vec<u8>)>> = Vec::with_capacity(survivors.len());
+    for chunk in survivors.chunks(COVER_FETCH_CONCURRENCY) {
+        covers.extend(join_all(chunk.iter().map(|c| fetch_cover(c, image_config))).await);
+    }
+
     let mut rows: Vec<NewSuggestion> = Vec::with_capacity(survivors.len());
-    for c in survivors {
-        let cover = match &c.cover_url {
-            Some(url) => fetch_remote_image_with(url, image_config).await.ok(),
-            None => None,
-        };
+    for (c, cover) in survivors.into_iter().zip(covers) {
         // Persist a cover only when the fetch returned real bytes. An empty
         // body (e.g. a 200 with no payload) would set `cover_bytes != NULL` —
         // making `get_suggestions` report `has_cover = true` while the cover
@@ -131,6 +140,17 @@ pub async fn resolve_with(
     };
     replace_suggestions(pool, book_uuid, &rows, state).await?;
     Ok(())
+}
+
+/// Best-effort remote cover fetch for one candidate. `None` for a candidate
+/// with no cover URL, or when the fetch itself fails (a cover miss must not
+/// drop the suggestion — the frontend falls back to a typographic plate).
+async fn fetch_cover(
+    candidate: &Candidate,
+    image_config: &RemoteImageConfig,
+) -> Option<(String, Vec<u8>)> {
+    let url = candidate.cover_url.as_deref()?;
+    fetch_remote_image_with(url, image_config).await.ok()
 }
 
 /// Pull candidate ISBNs from a book's identifiers. Accepts identifiers whose

@@ -301,3 +301,67 @@ async fn get_author_photo_propagates_db_error_when_pool_is_closed() {
     let err = get_author_photo(&pool, 1).await.unwrap_err();
     assert!(matches!(err, AuthorPhotosDataError::Db(_)));
 }
+
+#[tokio::test]
+async fn author_photo_status_bulk_matches_per_author_lookups_and_omits_unset() {
+    let (pool, _guard) = seed_discovery_fixture().await;
+    let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;
+    let other_id = author_id_by_name(&pool, "Grace Hopper").await;
+
+    upsert_author_photo(&pool, ada_id, AuthorPhotoSource::Letter, None, None, None)
+        .await
+        .unwrap();
+    // `other_id` is left unset — must be absent from the bulk map, mirroring
+    // `author_photo_status`'s `None` for an unset author.
+
+    let statuses = author_photo_status_bulk(&pool, &[ada_id, other_id])
+        .await
+        .unwrap();
+    assert_eq!(statuses.len(), 1);
+    assert_eq!(
+        statuses.get(&ada_id).map(|(src, _)| *src),
+        Some(AuthorPhotoSource::Letter)
+    );
+    assert!(!statuses.contains_key(&other_id));
+}
+
+#[tokio::test]
+async fn author_photo_status_bulk_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = author_photo_status_bulk(&pool, &[1, 2]).await.unwrap_err();
+    assert!(matches!(err, AuthorPhotosDataError::Db(_)));
+}
+
+#[tokio::test]
+async fn delete_author_photos_bulk_clears_every_row_and_ignores_missing_ids() {
+    let (pool, _guard) = seed_discovery_fixture().await;
+    let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;
+    let other_id = author_id_by_name(&pool, "Grace Hopper").await;
+
+    upsert_author_photo(&pool, ada_id, AuthorPhotoSource::Letter, None, None, None)
+        .await
+        .unwrap();
+    upsert_author_photo(&pool, other_id, AuthorPhotoSource::Letter, None, None, None)
+        .await
+        .unwrap();
+
+    // 99_999 doesn't exist — must not error the whole batch.
+    delete_author_photos_bulk(&pool, &[ada_id, other_id, 99_999])
+        .await
+        .unwrap();
+
+    assert!(author_photo_status(&pool, ada_id).await.unwrap().is_none());
+    assert!(author_photo_status(&pool, other_id)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn delete_author_photos_bulk_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = delete_author_photos_bulk(&pool, &[1, 2]).await.unwrap_err();
+    assert!(matches!(err, AuthorPhotosDataError::Db(_)));
+}
