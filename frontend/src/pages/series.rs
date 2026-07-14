@@ -56,19 +56,9 @@ fn render_series(s: SeriesDetail) -> Element {
         .find_map(|b| b.accent.as_deref())
         .unwrap_or("var(--accent)");
 
-    // Primary author from the first book's first creator. Capture the
-    // author id alongside the name so the breadcrumb can render a Link
-    // when the row is resolvable; books whose first creator is an
-    // override-only string (no `authors` row) fall back to a plain span.
-    let (primary_author, primary_author_id) = s
-        .books
-        .iter()
-        .find_map(|b| b.creators.first().map(|c| (c.name.clone(), c.id)))
-        .unwrap_or_default();
-
     rsx! {
         div { class: "disc-page", style: "--accent: {accent}",
-            {series_header(&s, &primary_author, primary_author_id)}
+            {series_header(&s)}
             div { class: "disc-body",
                 div { class: "series-cards",
                     for book in s.books.iter() {
@@ -80,13 +70,9 @@ fn render_series(s: SeriesDetail) -> Element {
     }
 }
 
-/// Series page header: breadcrumb (with an optional linked author crumb) and
-/// the italic-first-word hero title.
-fn series_header(
-    s: &SeriesDetail,
-    primary_author: &str,
-    primary_author_id: Option<i64>,
-) -> Element {
+/// Series page header: mobile back affordance and the italic-first-word
+/// hero title.
+fn series_header(s: &SeriesDetail) -> Element {
     // Split series name for italic styling on key word.
     let title_parts: Vec<&str> = s.name.splitn(2, ' ').collect();
     let title_first = title_parts.first().copied().unwrap_or("");
@@ -98,31 +84,14 @@ fn series_header(
     rsx! {
         div { class: "disc-series-header",
             // Mobile-only (CSS-gated via `.screen`) back affordance to the
-            // series index; web keeps the breadcrumb. Same markup on every
-            // target so the web SSR/WASM trees stay identical (rule 07).
+            // series index. Same markup on every target so the web
+            // SSR/WASM trees stay identical (rule 07).
             Link {
                 to: Route::SeriesIndex {},
                 class: "m-icon-btn disc-back",
                 "aria-label": "Back to series",
                 "data-testid": "series-back",
                 "\u{2190}"
-            }
-            nav { class: "breadcrumb", aria_label: "breadcrumb",
-                Link { to: Route::Landing {}, "Library" }
-                span { class: "breadcrumb-sep", " › " }
-                if !primary_author.is_empty() {
-                    if let Some(author_id) = primary_author_id {
-                        Link {
-                            to: Route::AuthorDetail { id: author_id },
-                            "data-testid": "series-crumb-author",
-                            "{primary_author}"
-                        }
-                    } else {
-                        span { "data-testid": "series-crumb-author", "{primary_author}" }
-                    }
-                    span { class: "breadcrumb-sep", " › " }
-                }
-                span { "{s.name}" }
             }
             div { class: "disc-series-head-row",
                 div {

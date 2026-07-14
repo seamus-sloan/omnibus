@@ -3122,6 +3122,15 @@ a.idx-letter-on:focus-visible {
   box-shadow: 0 24px 50px -10px rgba(0, 0, 0, .6);
 }
 
+/* On `/read` the dock renders as a sibling of `.rd-surface` (#988), so raise
+   it above the reader's own bottom bar (`.rd-bottom`, 54px + safe-area) —
+   otherwise the two fixed-position bars visually collide at the bottom
+   edge. Higher specificity than the plain `.mini-dock` rule (incl. the
+   phone breakpoint below), so it wins at every viewport width. */
+.rd-surface + .mini-dock-host .mini-dock {
+  bottom: calc(54px + env(safe-area-inset-bottom) + 8px);
+}
+
 .mini-dock-now {
   display: flex; align-items: center; gap: 12px;
   min-width: 0; text-decoration: none; color: inherit;
@@ -3226,6 +3235,14 @@ body {
 }
 .app-shell > main {
   padding: 0 clamp(1.25rem, 4vw, 3.5rem);
+}
+/* Reserve room for the persistent mini-dock so its fixed bar doesn't sit
+   over — and intercept clicks on — the last row of page content. Mirrors
+   the mobile `.screen` reserve for `.m-mini` above; same `:has()` floor. */
+@supports selector(:has(a)) {
+  .app-shell > main:has(+ .mini-dock-host:not(:empty)) {
+    padding-bottom: 7rem;
+  }
 }
 
 .screen {
@@ -3740,13 +3757,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
    `.screen` (mobile-only wrapper) already carries the safe-area top padding,
    so the web-sized hero/header paddings stack into a large blank band —
    collapse them to the library screen's rhythm. The `.disc-back` button is
-   rendered on every target (rule 07) but only shown here, where the web
-   breadcrumb is hidden in its favor. Declared after `.m-icon-btn` so the
+   rendered on every target (rule 07) but only shown here; web has no
+   breadcrumb affordance on these pages. Declared after `.m-icon-btn` so the
    hidden-by-default rule wins their specificity tie. */
 .disc-back { display: none; }
 .screen .disc-back { display: grid; margin-bottom: 12px; }
-.screen .disc-hero .breadcrumb,
-.screen .disc-series-header .breadcrumb { display: none; }
 .screen .idx-header { padding: 4px 0 16px; }
 .screen .disc-hero { padding: 4px 0 20px; }
 .screen .disc-hero-grid { margin-top: 12px; }
@@ -6297,7 +6312,17 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   grid-template-columns: repeat(4, 1fr);
   gap: 18px;
 }
-.st-tile { padding: 16px 16px 14px; }
+.st-tile {
+  padding: 16px 16px 22px;
+  position: relative;
+  /* Tiles render as <button>; undo UA button chrome so `.card` styling
+     (background/border/radius) is the only thing that shows. */
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
 .st-tile-value {
   font-family: var(--serif);
   font-size: 46px;
@@ -6308,6 +6333,86 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .st-tile-unit { font-size: 0.45em; color: var(--ink-3); }
 .st-tile-accent .st-tile-unit { color: var(--accent); }
 .st-tile-label { margin-top: 6px; }
+
+/* Pull-to-expand grip: a small handle glyph pinned to the tile's bottom
+   edge, signaling the drill-in affordance without adding a text label. */
+.st-tile-grip {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  width: 28px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--line-2);
+}
+.st-tile:hover .st-tile-grip, .st-tile:focus-visible .st-tile-grip { background: var(--accent); }
+
+/* ── Metric drill-in: bottom sheet (mobile) / centered modal (desktop) ──
+   Same markup on every target — the breakpoint below (mirrors .st-page's
+   720px) is the only thing that switches presentation, so SSR and first
+   WASM paint stay identical (rule 07). */
+.st-drill-scrim {
+  position: fixed; inset: 0; z-index: 60;
+  background: color-mix(in oklch, var(--bg-0) 55%, transparent);
+  display: flex; align-items: flex-end; justify-content: center;
+}
+.st-drill-sheet {
+  width: 100%; max-height: 86vh; overflow-y: auto;
+  background: var(--bg-1); border-top: 1px solid var(--line-2);
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 -18px 48px color-mix(in oklch, var(--bg-0) 70%, transparent);
+  padding: 8px 20px 24px;
+}
+.st-drill-grabber { width: 40px; height: 4px; border-radius: 999px; background: var(--bg-3); margin: 6px auto 14px; }
+.st-drill-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px;
+}
+.st-drill-head h4 { font-family: var(--serif); font-size: 20px; }
+.st-drill-close {
+  width: 32px; height: 32px; border-radius: 999px; border: 1px solid var(--line-2);
+  background: var(--bg-2); color: var(--ink-2); font-size: 14px; cursor: pointer;
+}
+.st-drill-close:hover { color: var(--ink-0); border-color: var(--line); }
+.st-drill-body { display: flex; flex-direction: column; gap: 18px; }
+
+.st-drill-delta { font-size: 15px; color: var(--ink-1); }
+.st-drill-delta.up { color: var(--accent); }
+.st-drill-delta.down { color: var(--ink-2); }
+.st-drill-delta.flat { color: var(--ink-3); }
+.st-drill-delta-vs { color: var(--ink-3); font-size: 12px; }
+.st-drill-delta-empty { font-size: 13px; color: var(--ink-3); }
+
+.st-drill-trend {
+  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(20px, 1fr);
+  gap: 6px; height: 96px; overflow-x: auto; padding-bottom: 2px;
+}
+.st-drill-trend-col { display: flex; flex-direction: column; align-items: center; height: 100%; }
+.st-drill-trend-track { flex: 1 1 auto; width: 100%; display: flex; align-items: flex-end; justify-content: center; }
+.st-drill-trend-bar { width: 60%; min-height: 2px; border-radius: 3px 3px 0 0; background: var(--accent); }
+.st-drill-trend-label { margin-top: 6px; font-size: 10px; color: var(--ink-3); }
+
+.st-drill-finished-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.st-drill-finished-row { display: flex; align-items: center; gap: 12px; padding: 6px 2px; }
+.st-drill-finished-cover { width: 40px; flex: 0 0 40px; }
+.st-drill-finished-body { flex: 1; min-width: 0; }
+.st-drill-finished-title {
+  font-size: 14px; color: var(--ink-1); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.st-drill-finished-author { font-size: 11px; color: var(--ink-3); }
+.st-drill-finished-rating { font-size: 12px; color: var(--ink-2); flex: 0 0 auto; }
+
+@media (min-width: 721px) {
+  .st-drill-scrim { align-items: center; padding: 24px; }
+  .st-drill-sheet {
+    width: min(560px, 100%); max-height: calc(100vh - 48px);
+    border-radius: var(--r-lg); border: 1px solid var(--line-2);
+    box-shadow: 0 24px 64px color-mix(in oklch, var(--bg-0) 60%, transparent);
+  }
+  .st-drill-grabber { display: none; }
+}
 
 /* ── Composition row: genre donut + format split ──────────────────── */
 .st-page {

@@ -1,8 +1,11 @@
 //! Headline metric tiles for the stats page: Finished (accent), Avg rating,
 //! Pages (placeholder — no page data exists yet), and Listening. All four are
-//! period-scoped and re-render when the switcher changes.
+//! period-scoped and re-render when the switcher changes, and each carries a
+//! pull-to-expand grip that opens its drill-in (`drill_in.rs`).
 
 use dioxus::prelude::*;
+
+use super::drill_in::Metric;
 
 /// Value + unit for a duration tile: minutes under an hour, one-decimal
 /// hours under ten, whole hours beyond ("42" m · "3.5" h · "142" h).
@@ -31,12 +34,14 @@ fn avg_stars_value(avg: Option<f64>) -> String {
 /// The four-tile headline row. Finished carries the accent tint; Pages ships
 /// as an em-dash placeholder until a page-count source exists. Takes only the
 /// scalar fields it renders — never the whole `StatsSummary` — so a re-render
-/// doesn't clone the DTO's heatmap / finished-books vectors.
+/// doesn't clone the DTO's heatmap / finished-books vectors. `expanded` is
+/// set by a tile's grip to open its drill-in (`drill_in.rs`).
 #[component]
 pub(super) fn HeadlineTiles(
     books_finished: i64,
     avg_stars: Option<f64>,
     listening_seconds: i64,
+    expanded: Signal<Option<Metric>>,
 ) -> Element {
     let finished = books_finished.to_string();
     let avg = avg_stars_value(avg_stars);
@@ -51,6 +56,7 @@ pub(super) fn HeadlineTiles(
                 accent: true,
                 hero: true,
                 testid: "stats-tile-finished",
+                onexpand: move |_| expanded.set(Some(Metric::Finished)),
             }
             StatTile {
                 value: avg,
@@ -59,6 +65,7 @@ pub(super) fn HeadlineTiles(
                 accent: false,
                 hero: true,
                 testid: "stats-tile-avg-rating",
+                onexpand: move |_| expanded.set(Some(Metric::AvgRating)),
             }
             StatTile {
                 value: "\u{2014}",
@@ -67,6 +74,7 @@ pub(super) fn HeadlineTiles(
                 accent: false,
                 hero: false,
                 testid: "stats-tile-pages",
+                onexpand: move |_| expanded.set(Some(Metric::Pages)),
             }
             StatTile {
                 value: listen_value,
@@ -75,13 +83,16 @@ pub(super) fn HeadlineTiles(
                 accent: false,
                 hero: false,
                 testid: "stats-tile-listening",
+                onexpand: move |_| expanded.set(Some(Metric::Listening)),
             }
         }
     }
 }
 
 /// One metric tile: a big serif number (with an optional smaller unit) over
-/// a micro-label. `hero` sizes the phone layout's top pair larger.
+/// a micro-label, rendered as a button so the whole tile — plus its bottom
+/// grip glyph — opens the metric's drill-in on activation. `hero` sizes the
+/// phone layout's top pair larger.
 #[component]
 fn StatTile(
     value: String,
@@ -90,6 +101,7 @@ fn StatTile(
     accent: bool,
     hero: bool,
     testid: &'static str,
+    onexpand: EventHandler<()>,
 ) -> Element {
     let mut class = String::from("card st-tile");
     if accent {
@@ -99,7 +111,12 @@ fn StatTile(
         class.push_str(" st-tile-hero");
     }
     rsx! {
-        div { class: "{class}", "data-testid": testid,
+        button {
+            class: "{class}",
+            "data-testid": testid,
+            r#type: "button",
+            "aria-label": "Expand {label} details",
+            onclick: move |_| onexpand.call(()),
             div { class: "st-tile-value",
                 {value}
                 if let Some(u) = unit {
@@ -107,6 +124,7 @@ fn StatTile(
                 }
             }
             div { class: "label st-tile-label", {label} }
+            span { class: "st-tile-grip", aria_hidden: "true" }
         }
     }
 }

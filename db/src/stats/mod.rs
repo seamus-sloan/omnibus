@@ -9,7 +9,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use omnibus_shared::{
-    DayActivity, FinishedBook, GenreShare, MonthCount, RankedEntity, StatsRange, StatsSummary,
+    DayActivity, FinishedBook, GenreShare, MonthCount, PeriodComparison, RankedEntity, StatsRange,
+    StatsSummary, TrendPoint,
 };
 use sqlx::{Row, SqlitePool};
 
@@ -142,6 +143,9 @@ async fn compute(
     let as_of_day = as_of_day(pool).await?;
     let finished_books = finished_books(pool, user_id, start).await?;
     let books_per_month = books_per_month(pool, user_id).await?;
+    let previous = previous_period(pool, user_id, range).await?;
+    let listening_daily = listening_daily(pool, user_id, start).await?;
+    let rating_monthly = rating_monthly(pool, user_id).await?;
 
     Ok(StatsSummary {
         range,
@@ -162,6 +166,9 @@ async fn compute(
         genre_share,
         finished_books,
         books_per_month,
+        previous,
+        listening_daily,
+        rating_monthly,
     })
 }
 
@@ -441,11 +448,14 @@ async fn finished_books(
         "SELECT b.uuid AS uuid,
                 COALESCE(b.title, 'Untitled') AS title,
                 a.name AS author,
-                MAX(j.created_at) AS finished_at
+                MAX(j.created_at) AS finished_at,
+                MAX(b.has_cover) AS has_cover,
+                MAX(ur.half_stars) AS half_stars
          FROM journal_entries j
          JOIN books b ON b.uuid = j.book_uuid
          LEFT JOIN books_authors_link bal ON bal.book = b.id AND bal.position = 0
          LEFT JOIN authors a ON a.id = bal.author
+         LEFT JOIN user_ratings ur ON ur.user_id = j.user_id AND ur.book_uuid = b.uuid
          WHERE j.user_id = ? AND j.progress = 100 AND j.created_at >= ?
          GROUP BY b.uuid
          ORDER BY finished_at DESC",
@@ -457,11 +467,202 @@ async fn finished_books(
 
     Ok(rows
         .into_iter()
-        .map(|r| FinishedBook {
-            book_uuid: r.get("uuid"),
-            title: r.get("title"),
-            author: r.get("author"),
-            finished_at: r.get("finished_at"),
+        .map(|r| {
+            let uuid: String = r.get("uuid");
+            let has_cover: i64 = r.get("has_cover");
+            let half_stars: Option<i64> = r.get("half_stars");
+            FinishedBook {
+                cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
+                rating: half_stars.map(|h| h as f64 / 2.0),
+                book_uuid: uuid,
+                title: r.get("title"),
+                author: r.get("author"),
+                finished_at: r.get("finished_at"),
+            }
+        })
+        .collect())
+}
+
+/// Bounds `(start, end)` (unix secs, `start` inclusive, `end` exclusive) of
+/// the window immediately preceding `range`'s current window, same length.
+/// `None` for [`StatsRange::AllTime`] — there is no window before "all of it".
+async fn prev_window_bounds(
+    pool: &SqlitePool,
+    range: StatsRange,
+) -> Result<Option<(i64, i64)>, StatsError> {
+    let exprs = match range {
+        StatsRange::Week => Some((
+            "strftime('%s', 'now', '-13 days', 'start of day')",
+            "strftime('%s', 'now', '-6 days', 'start of day')",
+        )),
+        StatsRange::Month => Some((
+            "strftime('%s', strftime('%Y-%m-01 00:00:00', 'now', '-1 month'))",
+            "strftime('%s', strftime('%Y-%m-01 00:00:00', 'now'))",
+        )),
+        StatsRange::Year => Some((
+            "strftime('%s', strftime('%Y-01-01 00:00:00', 'now', '-1 year'))",
+            "strftime('%s', strftime('%Y-01-01 00:00:00', 'now'))",
+        )),
+        StatsRange::AllTime => None,
+    };
+    let Some((start_expr, end_expr)) = exprs else {
+        return Ok(None);
+    };
+    let row = sqlx::query(&format!(
+        "SELECT CAST({start_expr} AS INTEGER) AS s, CAST({end_expr} AS INTEGER) AS e"
+    ))
+    .fetch_one(pool)
+    .await?;
+    Ok(Some((row.get("s"), row.get("e"))))
+}
+
+/// The window immediately preceding `range`'s current one — feeds the drill-in's
+/// vs-previous-period delta. Zeroed for [`StatsRange::AllTime`] (no prior window).
+async fn previous_period(
+    pool: &SqlitePool,
+    user_id: i64,
+    range: StatsRange,
+) -> Result<PeriodComparison, StatsError> {
+    let Some((start, end)) = prev_window_bounds(pool, range).await? else {
+        return Ok(PeriodComparison::default());
+    };
+    let listening_seconds = sum_seconds_bounded(
+        pool,
+        user_id,
+        start,
+        end,
+        "listening_sessions",
+        "seconds_listened",
+    )
+    .await?;
+    let avg_stars = avg_stars_bounded(pool, user_id, start, end).await?;
+    let books_finished = finished_count_bounded(pool, user_id, start, end).await?;
+    Ok(PeriodComparison {
+        books_finished,
+        avg_stars,
+        listening_seconds,
+    })
+}
+
+/// `sum_seconds`, upper-bounded — `started_at` in `[start, end)`.
+async fn sum_seconds_bounded(
+    pool: &SqlitePool,
+    user_id: i64,
+    start: i64,
+    end: i64,
+    table: &str,
+    col: &str,
+) -> Result<i64, StatsError> {
+    // `table` / `col` are fixed literals chosen by the caller, never user input.
+    let sql = format!(
+        "SELECT COALESCE(SUM({col}), 0) FROM {table} \
+         WHERE user_id = ? AND started_at >= ? AND started_at < ?"
+    );
+    Ok(sqlx::query_scalar(&sql)
+        .bind(user_id)
+        .bind(start)
+        .bind(end)
+        .fetch_one(pool)
+        .await?)
+}
+
+/// `avg_stars`, upper-bounded — `updated_at` in `[start, end)`.
+async fn avg_stars_bounded(
+    pool: &SqlitePool,
+    user_id: i64,
+    start: i64,
+    end: i64,
+) -> Result<Option<f64>, StatsError> {
+    Ok(sqlx::query_scalar(
+        "SELECT AVG(half_stars) / 2.0 FROM user_ratings
+         WHERE user_id = ? AND updated_at >= ? AND updated_at < ?",
+    )
+    .bind(user_id)
+    .bind(start)
+    .bind(end)
+    .fetch_one(pool)
+    .await?)
+}
+
+/// Count of distinct books finished (100% journal entry) with `created_at` in
+/// `[start, end)`.
+async fn finished_count_bounded(
+    pool: &SqlitePool,
+    user_id: i64,
+    start: i64,
+    end: i64,
+) -> Result<i64, StatsError> {
+    Ok(sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT book_uuid) FROM journal_entries
+         WHERE user_id = ? AND progress = 100 AND created_at >= ? AND created_at < ?",
+    )
+    .bind(user_id)
+    .bind(start)
+    .bind(end)
+    .fetch_one(pool)
+    .await?)
+}
+
+/// Daily listening seconds within the window — the Listening tile's drill-in
+/// trend chart. Mirrors [`heatmap`] but scoped to `listening_sessions` alone.
+async fn listening_daily(
+    pool: &SqlitePool,
+    user_id: i64,
+    start: i64,
+) -> Result<Vec<DayActivity>, StatsError> {
+    let rows = sqlx::query(
+        "SELECT date(started_at, 'unixepoch') AS day, SUM(seconds_listened) AS seconds
+         FROM listening_sessions WHERE user_id = ? AND started_at >= ?
+         GROUP BY day ORDER BY day",
+    )
+    .bind(user_id)
+    .bind(start)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| DayActivity {
+            day: r.get("day"),
+            seconds: r.get("seconds"),
+        })
+        .collect())
+}
+
+/// Mean star rating per calendar month over the trailing 12 months (oldest
+/// first, ending at the current month) — the Avg rating tile's drill-in trend
+/// chart. Same trailing-window CTE shape as [`books_per_month`]; a month with
+/// no ratings comes back as `0.0` rather than being omitted.
+async fn rating_monthly(pool: &SqlitePool, user_id: i64) -> Result<Vec<TrendPoint>, StatsError> {
+    let rows = sqlx::query(
+        "WITH RECURSIVE months(month) AS (
+             SELECT strftime('%Y-%m', 'now', '-11 months')
+             UNION ALL
+             SELECT strftime('%Y-%m', month || '-01', '+1 month')
+             FROM months
+             WHERE month < strftime('%Y-%m', 'now')
+         )
+         SELECT months.month AS month, AVG(ur.half_stars) / 2.0 AS avg_stars
+         FROM months
+         LEFT JOIN user_ratings ur
+                ON ur.user_id = ?
+               AND strftime('%Y-%m', ur.updated_at, 'unixepoch') = months.month
+         GROUP BY months.month
+         ORDER BY months.month",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let month: String = r.get("month");
+            let avg_stars: Option<f64> = r.get("avg_stars");
+            TrendPoint {
+                label: month,
+                value: avg_stars.unwrap_or(0.0),
+            }
         })
         .collect())
 }

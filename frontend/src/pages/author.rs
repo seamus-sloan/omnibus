@@ -179,8 +179,8 @@ struct AuthorHeroText<'a> {
     bg_style: &'a str,
 }
 
-/// Hero header: breadcrumb, avatar (with the hover-revealed photo-edit
-/// overlay), name + admin delete affordance, and the book-count stat.
+/// Hero header: avatar (with the hover-revealed photo-edit overlay), name +
+/// admin delete affordance, and the book-count stat.
 fn author_hero(
     a: &AuthorDetail,
     server_url: &str,
@@ -197,19 +197,14 @@ fn author_hero(
     rsx! {
         div { class: "disc-hero", style: "background: {bg_style}",
             // Mobile-only (CSS-gated via `.screen`) back affordance to the
-            // authors index; web keeps the breadcrumb. Same markup on every
-            // target so the web SSR/WASM trees stay identical (rule 07).
+            // authors index. Same markup on every target so the web
+            // SSR/WASM trees stay identical (rule 07).
             Link {
                 to: Route::AuthorsIndex {},
                 class: "m-icon-btn disc-back",
                 "aria-label": "Back to authors",
                 "data-testid": "author-back",
                 "\u{2190}"
-            }
-            nav { class: "breadcrumb",
-                Link { to: Route::Landing {}, "Library" }
-                span { class: "breadcrumb-sep", " › " }
-                span { "{a.name}" }
             }
             div { class: "disc-hero-grid",
                 {author_avatar(a, server_url, author, initial)}

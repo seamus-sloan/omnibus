@@ -67,10 +67,6 @@ test("renders the author page layout", async ({ page, request }) => {
 
   // Book count stat is visible
   await expect(page.getByText("In your library")).toBeVisible();
-
-  // Breadcrumb has "Library" link
-  const breadcrumb = page.locator("nav.breadcrumb");
-  await expect(breadcrumb.getByRole("link", { name: "Library" })).toBeVisible();
 });
 
 test("author page shows books by the author", async ({ page, request }) => {
@@ -92,8 +88,7 @@ test("author page shows books by the author", async ({ page, request }) => {
 test("author series section heading links to the series page", async ({ page, request }) => {
   // Niklaus Wirth's four books all belong to "Code Quartet", so the author
   // page renders a single series section whose heading is a router Link to
-  // /series/:id. The author-page breadcrumb only carries a "Library" link, so
-  // the "Code Quartet" link role is unambiguous on this page.
+  // /series/:id, and it's the only "Code Quartet" link role on the page.
   const authorId = await fetchAuthorIdByName(request, "Niklaus Wirth");
   await gotoReady(page, `/authors/${authorId}`);
 
@@ -145,10 +140,6 @@ test("renders the series page layout", async ({ page, request }) => {
 
   // Book count label is visible
   await expect(page.getByText(/in library/)).toBeVisible();
-
-  // Breadcrumb has "Library" link
-  const breadcrumb = page.locator("nav.breadcrumb");
-  await expect(breadcrumb.getByRole("link", { name: "Library" })).toBeVisible();
 });
 
 test("series page shows books in order", async ({ page, request }) => {
