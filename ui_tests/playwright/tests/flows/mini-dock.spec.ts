@@ -3,20 +3,28 @@ import { AUDIOBOOK_BOOKS, AUDIOBOOK_BOOK_COUNT } from "../fixtures/audiobooks";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
-import { audiobookFixturesDir, fixturesDir, seedLibrary } from "../utils/seed";
+import {
+  audiobookFixturesDir,
+  fixturesDir,
+  seedAudiobookLibrary,
+  seedLibrary,
+} from "../utils/seed";
 import { setRangeValue } from "../utils/sliders";
 
 // Both libraries seeded: the reader-visibility test needs an EPUB to read
 // alongside an audiobook playing in the background. No fixture pair shares
 // a normalized (title, author), so auto-attach leaves them as separate rows
 // and the counts stay additive — same reasoning as `merge.spec.ts`. Seeded
-// in one call so indexing only runs once instead of twice.
+// as two sequential settings writes (not one combined call): a single write
+// that reindexes both libraries at once was observed to leave the ebook
+// fixture the reader test depends on unresolvable by row testid in CI —
+// see the investigation note in the PR. Reverted to the two-step seed.
 test.beforeAll(async ({ request }) => {
-  await seedLibrary(
+  await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
+  await seedAudiobookLibrary(
     request,
-    fixturesDir(),
-    FIXTURE_BOOKS.length + AUDIOBOOK_BOOK_COUNT,
     audiobookFixturesDir(),
+    FIXTURE_BOOKS.length + AUDIOBOOK_BOOK_COUNT,
   );
 });
 
