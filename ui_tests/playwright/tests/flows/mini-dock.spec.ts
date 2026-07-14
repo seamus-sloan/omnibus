@@ -1,21 +1,36 @@
 import { expect, test } from "../fixtures/test";
 import { AUDIOBOOK_BOOKS, AUDIOBOOK_BOOK_COUNT } from "../fixtures/audiobooks";
+import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
-import { audiobookFixturesDir, seedAudiobookLibrary } from "../utils/seed";
+import {
+  audiobookFixturesDir,
+  fixturesDir,
+  seedAudiobookLibrary,
+  seedLibrary,
+} from "../utils/seed";
 import { setRangeValue } from "../utils/sliders";
 
+// Both libraries seeded: the reader-visibility test (#988) needs an EPUB to
+// read alongside an audiobook playing in the background. No fixture pair
+// shares a normalized (title, author), so auto-attach leaves them as
+// separate rows and the counts stay additive — same reasoning as
+// `merge.spec.ts`.
 test.beforeAll(async ({ request }) => {
+  await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
   await seedAudiobookLibrary(
     request,
     audiobookFixturesDir(),
-    AUDIOBOOK_BOOK_COUNT,
+    FIXTURE_BOOKS.length + AUDIOBOOK_BOOK_COUNT,
   );
 });
 
 const MP3_BOOK = AUDIOBOOK_BOOKS.find(
   (b) => b.format === "MP3" && b.source === "generated",
 )!;
+// Distinct author from every audiobook fixture so auto-attach never merges
+// this EPUB with the playing audiobook mid-test.
+const READER_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "gamma")!;
 
 /**
  * Wait until the App-level playback driver has run `OmnibusAudio.initDirect`
@@ -196,4 +211,58 @@ test("dock dismiss clears playback and removes the dock", async ({
   await page.getByTestId("mini-dock-dismiss").click();
 
   await expect(page.getByTestId("mini-dock")).toHaveCount(0);
+});
+
+// ---------------------------------------------------------------------------
+// 5. Dock shows on the immersive reader — the reader has no transport of
+//    its own, so a book playing in the background needs the dock (#988)
+// ---------------------------------------------------------------------------
+
+test("shows the mini-dock on the immersive reader while an audiobook is loaded", async ({
+  page,
+  request,
+}) => {
+  const audiobookUuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  const readerUuid = await fetchBookUuidByTitle(request, READER_BOOK.title);
+
+  await gotoReady(page, `/listen/${audiobookUuid}`);
+  await waitForPlayerReady(page);
+
+  // Reach the reader via real Dioxus `Link`/`nav.push` navigation the whole
+  // way — a native page load at any hop would remount `App` and drop the
+  // in-memory playback context the dock reads from.
+  await spaNavigateToLibrary(page);
+  await page.getByTestId(`ebook-row-${READER_BOOK.slug}`).click();
+  await expect(page).toHaveURL(new RegExp(`/books/${readerUuid}$`));
+  await page.getByTestId("start-reading").click();
+  await expect(page).toHaveURL(new RegExp(`/read/${readerUuid}$`));
+
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+  await expect(page.getByTestId("mini-dock")).toBeVisible();
+  await expect(page.getByTestId("mini-dock-title")).toHaveText(MP3_BOOK.title);
+
+  // A dock control works identically on the reader as elsewhere (AC3):
+  // drive the shared `playing` signal and confirm the toggle reflects it,
+  // then confirm a real click reaches the same `OmnibusAudio` surface the
+  // other mini-dock tests exercise.
+  const toggle = page.getByTestId("mini-dock-toggle");
+  await expect(toggle).toHaveAttribute("aria-label", "Play");
+  await page.evaluate(() => {
+    (
+      window as unknown as { __omnibusOnAudioPlay?: (s: number) => void }
+    ).__omnibusOnAudioPlay?.(0);
+  });
+  await expect(toggle).toHaveAttribute("aria-label", "Pause");
+  await toggle.click();
+
+  // The reader's own bottom bar and the dock must not visually collide —
+  // assert the dock sits above it rather than overlapping (AC2). `.rd-bottom`
+  // renders unconditionally in `BookReadPage`, so this is a plain assertion.
+  const dockBottom = await page
+    .getByTestId("mini-dock")
+    .evaluate((el) => el.getBoundingClientRect().bottom);
+  const readerBarTop = await page
+    .locator(".rd-bottom")
+    .evaluate((el) => el.getBoundingClientRect().top);
+  expect(dockBottom).toBeLessThanOrEqual(readerBarTop);
 });
