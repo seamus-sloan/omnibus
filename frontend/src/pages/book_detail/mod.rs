@@ -177,7 +177,7 @@ fn render_book_shell(
     merge: MergeSignals,
     author_books: Vec<EbookMetadata>,
     suggestions: Option<SuggestionsResponse>,
-    is_admin: Signal<bool>,
+    is_admin: ReadSignal<bool>,
     server_url: String,
 ) -> Element {
     // `is_admin` starts at `false` and only flips to `true` on the web

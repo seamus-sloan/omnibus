@@ -76,7 +76,7 @@ struct LandingSignals {
     error: Signal<Option<String>>,
     prefs: Signal<ViewPrefs>,
     want_more: Signal<u32>,
-    is_admin: Signal<bool>,
+    is_admin: ReadSignal<bool>,
     pools: SuggestionPools,
 }
 
@@ -149,7 +149,7 @@ fn wire_landing_effects(
     query: Signal<String>,
     mut prefs: Signal<ViewPrefs>,
     want_more: Signal<u32>,
-    is_admin: Signal<bool>,
+    is_admin: ReadSignal<bool>,
     pools: SuggestionPools,
     fetch_sigs: FetchSignals,
 ) {

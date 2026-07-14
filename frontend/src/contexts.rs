@@ -132,57 +132,72 @@ pub fn use_current_user() -> CurrentUser {
     use_context::<CurrentUser>()
 }
 
-/// Derive `is_admin` from the app-wide [`CurrentUser`] context instead of an
-/// independent per-mount `/api/auth/me` fetch. Starts `false` so SSR and the
-/// first WASM paint agree (rule 07); only the web build wires the effect
-/// that flips it once the context resolves an admin user. Mobile stays at
-/// the default since `CurrentUser` isn't provided there; SSR has the context
-/// but it stays unresolved until the web client's boot effect runs post-mount.
-#[cfg_attr(not(feature = "web"), allow(unused_mut))]
-pub fn use_is_admin() -> Signal<bool> {
-    let mut is_admin = use_signal(|| false);
-    #[cfg(feature = "web")]
-    {
-        let user_ctx = use_current_user().0;
-        use_effect(move || {
-            is_admin.set(matches!(user_ctx(), Some(Some(ref u)) if u.is_admin));
-        });
-    }
-    is_admin
+/// Derive `is_admin` from the app-wide [`CurrentUser`] context — a pure
+/// function of its value, so `use_memo` recomputes it inline with no extra
+/// render pass. Web-only: mobile has no `CurrentUser` context to read, and
+/// SSR renders this crate without the `web` feature at all, so both instead
+/// return a `false`-valued signal — the same default the web memo evaluates
+/// to on first paint (before the client's boot effect resolves `CurrentUser`),
+/// keeping SSR/first-WASM-paint parity (rule 07). Returns a boxed
+/// [`ReadSignal`] (rather than `Memo`/`Signal` directly) so call sites that
+/// store the handle in a struct field see one type regardless of which of
+/// the three arms below compiled.
+#[cfg(feature = "web")]
+pub fn use_is_admin() -> ReadSignal<bool> {
+    let user_ctx = use_current_user().0;
+    ReadSignal::new(use_memo(
+        move || matches!(user_ctx(), Some(Some(ref u)) if u.is_admin),
+    ))
+}
+
+/// Non-web fallback for [`use_is_admin`] — mobile has no `CurrentUser`
+/// context and SSR never resolves one, so both stay at the `false` default.
+#[cfg(not(feature = "web"))]
+pub fn use_is_admin() -> ReadSignal<bool> {
+    ReadSignal::new(use_signal(|| false))
 }
 
 /// Derive the resolved current user from the app-wide [`CurrentUser`]
-/// context instead of an independent per-mount `/api/auth/me` fetch,
-/// flattening "not yet resolved" and "unauthenticated" alike to `None`.
-/// Starts `None` so SSR and the first WASM paint agree (rule 07); an effect
-/// then fills it in post-mount. The web build reads it from the resolved
-/// [`CurrentUser`] context; mobile has no such context (bearer auth, not
-/// cookies), so it resolves the user directly via `/api/auth/me` — this is
-/// what lets owner-only affordances (e.g. journal edit/delete) light up on
-/// mobile. SSR (neither feature) stays at the `None` default.
-#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(unused_mut))]
-pub fn use_current_user_summary() -> Signal<Option<omnibus_shared::UserSummary>> {
+/// context — a pure function of its value, so `use_memo` recomputes it
+/// inline with no extra render pass, flattening "not yet resolved" and
+/// "unauthenticated" alike to `None`. The memo evaluates to `None` on first
+/// paint (before the client's boot effect resolves `CurrentUser`), matching
+/// the SSR default and keeping hydration parity (rule 07). Returns a boxed
+/// [`ReadSignal`], same reasoning as [`use_is_admin`].
+#[cfg(feature = "web")]
+pub fn use_current_user_summary() -> ReadSignal<Option<omnibus_shared::UserSummary>> {
+    let user_ctx = use_current_user().0;
+    ReadSignal::new(use_memo(move || user_ctx().flatten()))
+}
+
+/// Mobile fallback for [`use_current_user_summary`]. Mobile has no
+/// `CurrentUser` context (bearer auth, not cookies), so — unlike the web
+/// memo — this resolves the user via an async `/api/auth/me` fetch, which
+/// isn't a pure derivation and so can't be a `use_memo`; it stays a
+/// `use_signal` written from a post-mount `use_effect`, starting at `None`
+/// to match the web/SSR default until the fetch lands. This is what lets
+/// owner-only affordances (e.g. journal edit/delete) light up on mobile.
+#[cfg(feature = "mobile")]
+pub fn use_current_user_summary() -> ReadSignal<Option<omnibus_shared::UserSummary>> {
     let mut current = use_signal(|| None);
-    #[cfg(feature = "web")]
-    {
-        let user_ctx = use_current_user().0;
-        use_effect(move || {
-            current.set(user_ctx().flatten());
+    let server_url = use_server_url();
+    use_effect(move || {
+        let server_url = server_url.clone();
+        spawn(async move {
+            if let Ok(user) = data::get_me(&server_url).await {
+                current.set(Some(user));
+            }
         });
-    }
-    #[cfg(feature = "mobile")]
-    {
-        let server_url = use_server_url();
-        use_effect(move || {
-            let server_url = server_url.clone();
-            spawn(async move {
-                if let Ok(user) = data::get_me(&server_url).await {
-                    current.set(Some(user));
-                }
-            });
-        });
-    }
-    current
+    });
+    ReadSignal::new(current)
+}
+
+/// SSR fallback for [`use_current_user_summary`] — neither `web` nor
+/// `mobile`, so there's no context and no fetch; stays at the `None`
+/// default that the web memo and mobile signal both start from.
+#[cfg(not(any(feature = "web", feature = "mobile")))]
+pub fn use_current_user_summary() -> ReadSignal<Option<omnibus_shared::UserSummary>> {
+    ReadSignal::new(use_signal(|| None))
 }
 
 /// App-wide audiobook playback state. Owned by [`crate::App`] via

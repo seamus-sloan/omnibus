@@ -34,7 +34,7 @@ pub(super) struct FetchSignals {
 /// Refetch the admin-only author/tag suggestion pools whenever `is_admin` changes.
 pub(super) fn spawn_suggestion_pools_effect(
     server_url: String,
-    is_admin: Signal<bool>,
+    is_admin: ReadSignal<bool>,
     pools: SuggestionPools,
 ) {
     let SuggestionPools {
