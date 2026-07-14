@@ -66,3 +66,36 @@ pub async fn rpc_delete_overrides(uuid: String) -> Result<Option<EbookMetadata>>
         .await
         .map_err(|e| internal_rpc_error("get ebook", e))?)
 }
+
+/// Revert an overridden cover back to the scanned original, preserving any
+/// other field overrides. The web-only counterpart to the REST `DELETE
+/// /api/ebooks/:uuid/cover` route — cover *upload* can't ride this
+/// server-function transport (binary body), but the no-body revert can.
+#[post("/api/rpc/ebook/cover/delete", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_delete_ebook_cover(uuid: String) -> Result<Option<EbookMetadata>> {
+    if !user.is_admin && !user.can_edit {
+        return Err(ServerFnError::new("forbidden: edit permission required").into());
+    }
+    let Some(book_id) = db::resolve_book_id_by_uuid(&pool.0, &uuid)
+        .await
+        .map_err(|e| internal_rpc_error("resolve book id", e))?
+    else {
+        return Ok(None);
+    };
+    db::clear_cover_override(&pool.0, &uuid, user.id)
+        .await
+        .map_err(|e| internal_rpc_error("clear cover override", e))?;
+    // `delete_override_cover` + `invalidate_thumbs` are sync `std::fs`
+    // operations; run them on the blocking pool so this server function
+    // doesn't pin a tokio worker thread (#106).
+    let uuid_for_blocking = uuid.clone();
+    tokio::task::spawn_blocking(move || {
+        db::delete_override_cover(&uuid_for_blocking);
+        db::thumbs::invalidate_thumbs(book_id);
+    })
+    .await
+    .map_err(|e| internal_rpc_error("spawn_blocking(delete_override_cover)", e))?;
+    Ok(db::get_book_by_uuid(&pool.0, &uuid)
+        .await
+        .map_err(|e| internal_rpc_error("get ebook", e))?)
+}

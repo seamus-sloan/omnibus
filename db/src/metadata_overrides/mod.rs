@@ -19,9 +19,9 @@ mod tests;
 
 pub(crate) use upsert::{apply_overrides, load_overrides_bulk};
 pub use upsert::{
-    delete_metadata_overrides, delete_override_cover, get_book_uuid, get_metadata_overrides,
-    merge_metadata_overrides, upsert_metadata_overrides, write_override_cover,
-    MetadataOverridesError,
+    clear_cover_override, delete_metadata_overrides, delete_override_cover, get_book_uuid,
+    get_metadata_overrides, merge_metadata_overrides, upsert_metadata_overrides,
+    write_override_cover, MetadataOverridesError,
 };
 
 pub(crate) use fts::rebuild_fts_for_books_batch;

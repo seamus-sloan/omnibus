@@ -95,6 +95,13 @@ pub struct EbookMetadata {
     #[serde(default)]
     pub has_override: bool,
 
+    /// True when `cover_url` points at a user-uploaded override cover
+    /// rather than the scanned original. Distinct from `has_override`
+    /// (which is true for *any* override, text or cover) so the metadata
+    /// edit sidebar can offer a cover-only "revert to scanned" action.
+    #[serde(default)]
+    pub has_cover_override: bool,
+
     /// Per-file detail for books with multiple files of the same format
     /// (e.g. five merged M4B parts, or two EPUB editions). Empty for
     /// single-file-per-format books — the `formats` vec is sufficient.

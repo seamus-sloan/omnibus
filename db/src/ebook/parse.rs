@@ -103,6 +103,7 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
             added_at: None,
             error: None,
             has_override: false,
+            has_cover_override: false,
             book_files: Vec::new(),
             epub_size_bytes: None,
         },

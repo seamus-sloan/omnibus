@@ -2042,6 +2042,33 @@ a.idx-letter-on:focus-visible {
   color: var(--ink-3);
   margin-top: 10px;
 }
+.me-cover-actions {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* Scaled-down `.author-photo-modal__file` — same themed-container trick
+   for the native file input, sized to fit the sidebar card. */
+.me-cover-file {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  color: var(--ink-0);
+  font-family: var(--sans);
+  font-size: 12px;
+  cursor: pointer;
+}
+.me-cover-file:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.me-cover-file:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
 
 /* Identifiers */
 .me-ident-list {

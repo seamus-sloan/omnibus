@@ -10,6 +10,7 @@ use omnibus_shared::{Contributor, EbookMetadata, MetadataOverrides};
 use crate::components::{PageError, PageLoading, PageNotFound};
 use crate::{data, use_server_url, Route};
 
+mod cover_editor;
 mod fields;
 mod form_grid;
 mod header;

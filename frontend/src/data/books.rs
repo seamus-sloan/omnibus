@@ -251,6 +251,49 @@ pub async fn delete_overrides(
     Ok(Some(response.json::<EbookMetadata>().await?))
 }
 
+/// Multipart upload of a replacement cover for a book (mobile). Mirrors
+/// `upload_author_photo`'s mobile REST path against the analogous
+/// `/api/ebooks/:uuid/cover` endpoint.
+#[cfg(feature = "mobile")]
+pub async fn upload_ebook_cover(
+    server_url: &str,
+    uuid: &str,
+    filename: String,
+    mime: String,
+    bytes: Vec<u8>,
+) -> Result<Option<EbookMetadata>, DataError> {
+    let endpoint = format!("{server_url}/api/ebooks/{uuid}/cover");
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(filename)
+        .mime_str(&mime)?;
+    let form = reqwest::multipart::Form::new().part("cover", part);
+    let response = with_bearer(http_client().post(&endpoint))
+        .multipart(form)
+        .send()
+        .await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(Some(response.json::<EbookMetadata>().await?))
+}
+
+/// DELETE `/api/ebooks/{uuid}/cover` — revert an overridden cover to the
+/// scanned original, preserving any other field overrides.
+#[cfg(feature = "mobile")]
+pub async fn delete_ebook_cover(
+    server_url: &str,
+    uuid: &str,
+) -> Result<Option<EbookMetadata>, DataError> {
+    let url = format!("{server_url}/api/ebooks/{uuid}/cover");
+    let response = with_bearer(http_client().delete(&url)).send().await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(Some(response.json::<EbookMetadata>().await?))
+}
+
 /// Web/SSR `get_settings` — server-function wrapper that proxies to `rpc_get_settings`.
 #[cfg(not(feature = "mobile"))]
 pub async fn get_settings(_server_url: &str) -> Result<Settings, DataError> {
@@ -456,6 +499,91 @@ pub async fn delete_overrides(
     uuid: &str,
 ) -> Result<Option<EbookMetadata>, DataError> {
     crate::rpc::rpc_delete_overrides(uuid.to_string())
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Multipart upload of a replacement cover on the web client.
+///
+/// Server functions can't carry binary file uploads (they JSON-serialize
+/// their arguments), so this bypasses RPC and POSTs directly to the REST
+/// endpoint via `gloo-net`, mirroring `upload_author_photo`'s web path.
+#[cfg(feature = "web")]
+pub async fn upload_ebook_cover(
+    _server_url: &str,
+    uuid: &str,
+    filename: String,
+    mime: String,
+    bytes: Vec<u8>,
+) -> Result<Option<EbookMetadata>, DataError> {
+    use gloo_net::http::Request;
+    use wasm_bindgen::JsCast;
+
+    let endpoint = format!("/api/ebooks/{uuid}/cover");
+    let form =
+        web_sys::FormData::new().map_err(|e| DataError::Other(format!("FormData::new: {e:?}")))?;
+    // See `upload_author_photo`'s web impl for why this goes through a
+    // one-element `Uint8Array` → `Array` → `Blob` rather than a direct
+    // byte-slice constructor.
+    let u8 = js_sys::Uint8Array::from(bytes.as_slice());
+    let parts = js_sys::Array::new();
+    parts.push(&u8);
+    let opts = web_sys::BlobPropertyBag::new();
+    opts.set_type(&mime);
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts)
+        .map_err(|e| DataError::Other(format!("Blob::new: {e:?}")))?;
+    form.append_with_blob_and_filename("cover", &blob, &filename)
+        .map_err(|e| DataError::Other(format!("FormData::append: {e:?}")))?;
+
+    let res = Request::post(&endpoint)
+        // Don't set Content-Type: the browser fills it in with the
+        // multipart boundary.
+        .body(form.unchecked_into::<wasm_bindgen::JsValue>())
+        .map_err(|e| DataError::Other(e.to_string()))?
+        .send()
+        .await
+        .map_err(|e| DataError::Other(e.to_string()))?;
+    if res.status() == 401 {
+        super::web_auth_state::notify_unauthorized();
+        return Err(DataError::Unauthorized);
+    }
+    if !res.ok() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        return Err(DataError::Http { status, body });
+    }
+    let book = res
+        .json::<EbookMetadata>()
+        .await
+        .map_err(|e| DataError::Other(e.to_string()))?;
+    Ok(Some(book))
+}
+
+/// Fallback stub for the non-web, non-mobile build (cargo check on the
+/// default workspace members compiles the frontend with no platform
+/// feature so type-checking still passes). The metadata edit sidebar only
+/// invokes upload after a user `onchange`, which never fires under SSR.
+#[cfg(not(any(feature = "web", feature = "mobile")))]
+pub async fn upload_ebook_cover(
+    _server_url: &str,
+    _uuid: &str,
+    _filename: String,
+    _mime: String,
+    _bytes: Vec<u8>,
+) -> Result<Option<EbookMetadata>, DataError> {
+    Err(DataError::Other(
+        "upload not available in this build".into(),
+    ))
+}
+
+/// Web/SSR `delete_ebook_cover` — server-function wrapper that proxies to
+/// `rpc_delete_ebook_cover`.
+#[cfg(not(feature = "mobile"))]
+pub async fn delete_ebook_cover(
+    _server_url: &str,
+    uuid: &str,
+) -> Result<Option<EbookMetadata>, DataError> {
+    crate::rpc::rpc_delete_ebook_cover(uuid.to_string())
         .await
         .map_err(note_server_fn_err)
 }
