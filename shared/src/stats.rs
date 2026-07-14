@@ -80,12 +80,20 @@ pub struct GenreShare {
 
 /// A book completed within the window — a journal entry recorded 100% progress
 /// on it. `finished_at` is the most recent such entry's timestamp (unix secs).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FinishedBook {
     pub book_uuid: String,
     pub title: String,
     pub author: Option<String>,
     pub finished_at: i64,
+    /// `/api/covers/:uuid` when the book has a cover, `None` otherwise — same
+    /// shape as `EbookMetadata::cover_url`, so the drill-in's finished-books
+    /// list can hand it straight to `CoverTile`.
+    #[serde(default)]
+    pub cover_url: Option<String>,
+    /// The user's star rating for this book (0.5..=5.0), `None` if unrated.
+    #[serde(default)]
+    pub rating: Option<f64>,
 }
 
 /// One month's finished-book count in the trailing-12-month trend chart.
@@ -94,6 +102,26 @@ pub struct MonthCount {
     /// UTC calendar month, `YYYY-MM`.
     pub month: String,
     pub books: i64,
+}
+
+/// One point in a metric's drill-in trend chart: a period label (a day
+/// `YYYY-MM-DD` or a month `YYYY-MM`, depending on the series) and the
+/// metric's value over that period.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrendPoint {
+    pub label: String,
+    pub value: f64,
+}
+
+/// Scalar aggregates for the window immediately preceding the current one
+/// (same length, ending where the current window starts) — feeds each metric
+/// tile's drill-in delta. `Default` (all zero / `None`) for [`StatsRange::AllTime`],
+/// which has no prior window to compare against.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct PeriodComparison {
+    pub books_finished: i64,
+    pub avg_stars: Option<f64>,
+    pub listening_seconds: i64,
 }
 
 /// The full aggregate payload for one user over one [`StatsRange`].
@@ -140,6 +168,19 @@ pub struct StatsSummary {
     /// period switcher.
     #[serde(default)]
     pub books_per_month: Vec<MonthCount>,
+    /// The immediately preceding window's aggregates, for the drill-in's
+    /// vs-previous-period delta.
+    #[serde(default)]
+    pub previous: PeriodComparison,
+    /// Daily listening seconds within `range`'s window — the Listening
+    /// tile's drill-in trend chart.
+    #[serde(default)]
+    pub listening_daily: Vec<DayActivity>,
+    /// Mean star rating per month over the trailing 12 calendar months —
+    /// the Avg rating tile's drill-in trend chart. Independent of `range`,
+    /// same trailing-window convention as `books_per_month`.
+    #[serde(default)]
+    pub rating_monthly: Vec<TrendPoint>,
 }
 
 impl StatsSummary {

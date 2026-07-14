@@ -10,11 +10,13 @@ use crate::components::{PageError, PageLoading};
 use crate::{data, use_server_url, Route};
 
 mod donut;
+mod drill_in;
 mod heatmap;
 mod monthly;
 mod tiles;
 
 use donut::{FormatSplit, GenreDonut};
+use drill_in::{DrillIn, Metric};
 use heatmap::HeatmapCard;
 use monthly::MonthlyChart;
 use tiles::HeadlineTiles;
@@ -42,6 +44,9 @@ pub fn StatsPage() -> Element {
     let loading = use_signal(|| true);
     let error: Signal<Option<String>> = use_signal(|| None);
     let sheet_open = use_signal(|| false);
+    // Which tile's drill-in is open, if any — seeded closed on every target
+    // (rule 07): the sheet/modal only ever opens from a client click.
+    let expanded: Signal<Option<Metric>> = use_signal(|| None);
 
     use_period_fetch_effect(server_url.clone(), range, period, error);
     use_all_time_fetch_effect(server_url, all_time, loading, error);
@@ -62,7 +67,7 @@ pub fn StatsPage() -> Element {
                 StatsEmpty {}
             } else {
                 section { class: "st-period", "data-testid": "stats-period-section",
-                    PeriodSummary { period }
+                    PeriodSummary { period, expanded }
                 }
                 div { class: "st-divider",
                     h3 { class: "st-divider-title", "All" span { class: "st-divider-em", "-time" } }
@@ -74,6 +79,9 @@ pub fn StatsPage() -> Element {
             }
             if sheet_open() {
                 RangeSheet { range, sheet_open }
+            }
+            if let (Some(metric), Some(summary)) = (expanded(), period.read().clone()) {
+                DrillIn { metric, summary, range: range(), expanded }
             }
         }
     }
@@ -213,9 +221,13 @@ fn RangeSheet(range: Signal<StatsRange>, sheet_open: Signal<bool>) -> Element {
 
 /// The period-scoped module stack: headline tiles, then the composition row
 /// (genre donut + format split). A placeholder card until the first fetch
-/// lands.
+/// lands. `expanded` is forwarded to the tiles so a grip click can open that
+/// metric's drill-in.
 #[component]
-fn PeriodSummary(period: Signal<Option<StatsSummary>>) -> Element {
+fn PeriodSummary(
+    period: Signal<Option<StatsSummary>>,
+    expanded: Signal<Option<Metric>>,
+) -> Element {
     let guard = period.read();
     let Some(summary) = guard.as_ref() else {
         return rsx! { div { class: "card st-card-placeholder", aria_hidden: "true" } };
@@ -225,6 +237,7 @@ fn PeriodSummary(period: Signal<Option<StatsSummary>>) -> Element {
             books_finished: summary.books_finished,
             avg_stars: summary.avg_stars,
             listening_seconds: summary.listening_seconds,
+            expanded,
         }
         div { class: "st-compose",
             GenreDonut { summary: summary.clone() }

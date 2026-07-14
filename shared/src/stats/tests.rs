@@ -78,6 +78,41 @@ fn month_count_round_trips_through_json() {
 }
 
 #[test]
+fn previous_and_trend_fields_default_when_absent_from_the_wire() {
+    // Same older-payload contract as avg_stars/books_per_month — the drill-in
+    // fields are newer, so a pre-existing payload without them must still parse.
+    let s: StatsSummary = serde_json::from_str(
+        r#"{"range":"month","reading_seconds":0,"listening_seconds":0,"sessions":0,
+            "active_days":0,"longest_streak_days":0,"busiest_week_start":null,
+            "busiest_week_seconds":0,"books_finished":0,"heatmap":[],
+            "top_authors":[],"top_tags":[],"finished_books":[]}"#,
+    )
+    .unwrap();
+    assert_eq!(s.previous, PeriodComparison::default());
+    assert!(s.listening_daily.is_empty());
+    assert!(s.rating_monthly.is_empty());
+}
+
+#[test]
+fn finished_book_cover_url_and_rating_default_to_none_when_absent() {
+    let b: FinishedBook =
+        serde_json::from_str(r#"{"book_uuid":"u1","title":"Dune","author":null,"finished_at":0}"#)
+            .unwrap();
+    assert_eq!(b.cover_url, None);
+    assert_eq!(b.rating, None);
+}
+
+#[test]
+fn trend_point_round_trips_through_json() {
+    let p = TrendPoint {
+        label: "2026-07".to_string(),
+        value: 4.25,
+    };
+    let wire = serde_json::to_string(&p).unwrap();
+    assert_eq!(serde_json::from_str::<TrendPoint>(&wire).unwrap(), p);
+}
+
+#[test]
 fn as_query_matches_the_serde_wire_name() {
     for range in StatsRange::ALL {
         let wire = serde_json::to_string(&range).unwrap();
