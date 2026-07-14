@@ -478,9 +478,7 @@ async fn try_attach_new_audiobook(
 /// target book may live in a different library, and the HLS read path
 /// resolves part filenames against the *audio* root.
 ///
-/// Returns `Ok(false)` without writing anything when the `(book_id, format)`
-/// slot is already held by a **different** file — the caller then inserts
-/// this file as its own book rather than clobbering the incumbent (#1063).
+/// Returns `Ok(false)` without writing when another file holds the slot.
 async fn attach_audiobook_file(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,

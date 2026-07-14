@@ -119,9 +119,7 @@ pub(super) async fn try_attach_new_ebook(
 /// the newly-unioned identifiers (incl. an attached-only ISBN) become
 /// searchable immediately.
 ///
-/// Returns `Ok(false)` without writing anything when the `(book_id, format)`
-/// slot is already held by a **different** file — the caller then inserts
-/// this file as its own book rather than clobbering the incumbent (#1063).
+/// Returns `Ok(false)` without writing when another file holds the slot.
 pub(super) async fn attach_ebook_file(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,

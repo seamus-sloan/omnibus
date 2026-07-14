@@ -60,15 +60,8 @@ pub(super) async fn find_attach_target(
     })
 }
 
-/// Is the `(book_id, format)` attachment slot already held by a **different**
-/// file? A book can hold at most one attached file per format; the attach
-/// writers `DELETE FROM book_files WHERE book_id = ? AND format = ?` before
-/// inserting, so attaching a second, distinct file would silently clobber the
-/// incumbent's row while still leaving its own `merged_uuids` breadcrumb
-/// (issue #1063). The writers call this first and refuse when it returns
-/// `true`, so the loser is inserted as its own book instead of destroying the
-/// winner. `scan_key` is the incoming file's own key, excluded so an
-/// idempotent re-attach of the same file still proceeds.
+/// Return whether another file holds the `(book_id, format)` attachment slot.
+/// The incoming `scan_key` is excluded so re-attaching the same file proceeds.
 pub(super) async fn slot_held_by_other(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
