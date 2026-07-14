@@ -6,9 +6,15 @@
 //! clears the row to force re-resolution. The OL resolver itself lives in
 //! [`crate::author_photos`]; this file owns just the row CRUD.
 
+use std::collections::HashMap;
+
 use sqlx::SqlitePool;
 
 use crate::metadata_overrides::rebuild_fts_for_books_batch;
+
+/// Rows per chunk for the `author_id IN (...)` bulk lookup/delete below — one
+/// bind per id, comfortably under SQLite's 999-parameter cap.
+const AUTHOR_ID_CHUNK: usize = 500;
 
 /// Errors returned by the author-photos data layer. The single transparent
 /// `Db` variant wraps `sqlx::Error` at the module boundary per the
@@ -91,6 +97,35 @@ pub async fn author_photo_status(
     Ok(row.and_then(|(s, t)| AuthorPhotoSource::parse(&s).map(|src| (src, t))))
 }
 
+/// Bulk counterpart to [`author_photo_status`]: look up cascade-state
+/// metadata for every id in `author_ids` in chunked `IN (...)` queries
+/// instead of one round-trip per author. Returns a map keyed by author id;
+/// authors with no row (or an unrecognized `source`) are absent from the map.
+pub async fn author_photo_status_bulk(
+    pool: &SqlitePool,
+    author_ids: &[i64],
+) -> Result<HashMap<i64, (AuthorPhotoSource, i64)>, AuthorPhotosDataError> {
+    let mut out = HashMap::with_capacity(author_ids.len());
+    for chunk in author_ids.chunks(AUTHOR_ID_CHUNK) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT author_id, source, fetched_at FROM author_photos WHERE author_id IN ({placeholders})"
+        );
+        let mut q = sqlx::query_as::<_, (i64, String, i64)>(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        for (author_id, source, fetched_at) in q.fetch_all(pool).await? {
+            if let Some(src) = AuthorPhotoSource::parse(&source) {
+                out.insert(author_id, (src, fetched_at));
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Upsert a photo row. Replaces any existing row (PRIMARY KEY conflict on
 /// `author_id`). `bytes` / `mime` are `None` for `'letter'` negative-cache
 /// markers; `url` is `None` for manual uploads.
@@ -132,6 +167,27 @@ pub async fn delete_author_photo(
         .bind(author_id)
         .execute(pool)
         .await?;
+    Ok(())
+}
+
+/// Bulk counterpart to [`delete_author_photo`]: drop the cache row for every
+/// id in `author_ids` in chunked `IN (...)` deletes instead of one round-trip
+/// per author. A no-op for ids with no row.
+pub async fn delete_author_photos_bulk(
+    pool: &SqlitePool,
+    author_ids: &[i64],
+) -> Result<(), AuthorPhotosDataError> {
+    for chunk in author_ids.chunks(AUTHOR_ID_CHUNK) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("DELETE FROM author_photos WHERE author_id IN ({placeholders})");
+        let mut q = sqlx::query(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        q.execute(pool).await?;
+    }
     Ok(())
 }
 

@@ -4385,6 +4385,7 @@ dependencies = [
  "base64",
  "deunicode",
  "epub",
+ "futures",
  "getrandom 0.3.4",
  "image",
  "lettre",

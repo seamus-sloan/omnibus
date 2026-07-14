@@ -329,6 +329,64 @@ async fn resolve_book_falls_back_to_title_when_no_isbn() {
 }
 
 #[tokio::test]
+async fn resolve_book_prefers_the_first_isbn_in_priority_order_when_multiple_match() {
+    // `resolve_book` now looks up every ISBN with bounded concurrency instead
+    // of a sequential loop, so both lookups fire in parallel — but the first
+    // ISBN in the caller's list must still win, exactly as the old
+    // short-circuiting `for` loop would have picked it.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_string_contains("9781111111111"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "editions": [{ "book_id": 111 }] }
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(body_string_contains("9782222222222"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "editions": [{ "book_id": 222 }] }
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(body_string_contains("books(where: {id: {_eq: 111}}"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "books": [{
+                "id": 111, "slug": "first", "title": "First",
+                "contributions": [], "book_series": [], "image": null
+            }] }
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(body_string_contains("books(where: {id: {_eq: 222}}"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "books": [{
+                "id": 222, "slug": "second", "title": "Second",
+                "contributions": [], "book_series": [], "image": null
+            }] }
+        })))
+        .mount(&server)
+        .await;
+
+    let cfg = config_for(&server);
+    let resolved = resolve_book(
+        &cfg,
+        &["9781111111111".to_string(), "9782222222222".to_string()],
+        "Irrelevant Title",
+        None,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        resolved.id, 111,
+        "first ISBN's match must win, not id order"
+    );
+}
+
+#[tokio::test]
 async fn curated_list_ids_returns_list_ids() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

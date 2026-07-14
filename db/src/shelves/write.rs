@@ -12,7 +12,7 @@ use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use super::read::get_shelf;
 use super::ShelfError;
-use crate::resolve_canonical_book_uuid;
+use crate::{resolve_canonical_book_uuid, resolve_canonical_book_uuids_bulk_exec};
 
 /// Accent swatches assigned round-robin by the owner's existing shelf count.
 const ACCENTS: [&str; 6] = [
@@ -173,17 +173,17 @@ pub async fn remove_book(pool: &SqlitePool, shelf_id: i64, uuid: &str) -> Result
 
 // --- helpers ---------------------------------------------------------------
 
-/// Resolve every uuid to canonical form; error on the first unknown one.
+/// Resolve every uuid to canonical form in one batched round-trip (chunked
+/// `IN (...)`, see [`resolve_canonical_book_uuids_bulk_exec`]) instead of one
+/// query per uuid; errors on the first unknown one, preserving input order.
 async fn resolve_all(pool: &SqlitePool, uuids: &[String]) -> Result<Vec<String>, ShelfError> {
-    let mut out = Vec::with_capacity(uuids.len());
-    for uuid in uuids {
-        out.push(
-            resolve_canonical_book_uuid(pool, uuid)
-                .await?
-                .ok_or(ShelfError::BookNotFound)?,
-        );
-    }
-    Ok(out)
+    let mut tx = pool.begin().await?;
+    let resolved = resolve_canonical_book_uuids_bulk_exec(&mut tx, uuids).await?;
+    tx.commit().await?;
+    uuids
+        .iter()
+        .map(|uuid| resolved.get(uuid).cloned().ok_or(ShelfError::BookNotFound))
+        .collect()
 }
 
 /// Batch-insert `shelf_books` rows in a single transaction. Chunked at 200
