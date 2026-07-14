@@ -314,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn sorts_by_title_asc_and_desc() {
+    fn sort_books_by_title_asc_and_desc() {
         let s = sample();
         let asc = sort_books(s.clone(), SortKey::Title, SortDir::Asc);
         assert_eq!(ids(&asc), vec![1, 2, 3]);
@@ -323,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn sorts_by_author_asc() {
+    fn sort_books_by_author_asc() {
         let s = sample();
         let asc = sort_books(s, SortKey::Author, SortDir::Asc);
         // Asimov < Le Guin < Tolkien
@@ -331,7 +331,7 @@ mod tests {
     }
 
     #[test]
-    fn sorts_by_series_grouping_with_index_then_pushes_seriesless_last() {
+    fn sort_books_by_series_grouping_with_index_then_pushes_seriesless_last() {
         let s = sample();
         let asc = sort_books(s, SortKey::Series, SortDir::Asc);
         // Foundation #1 (id 1), Foundation #2 (id 2), then no-series (id 3).
@@ -339,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn sorts_by_last_updated_desc_picks_most_recent_first() {
+    fn sort_books_by_last_updated_desc_picks_most_recent_first() {
         let s = sample();
         let desc = sort_books(s, SortKey::LastUpdated, SortDir::Desc);
         // beta 2024-06 > alpha 2024-01 > gamma 2023
@@ -347,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn sorts_by_newest_added_desc() {
+    fn sort_books_by_newest_added_desc() {
         let s = sample();
         let desc = sort_books(s, SortKey::NewestAdded, SortDir::Desc);
         // alpha 2025-03 > gamma 2025-02 > beta 2025-01
@@ -355,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_timestamps_always_sort_last_even_on_desc() {
+    fn sort_books_missing_timestamps_always_sort_last_even_on_desc() {
         // Two timestamped books + one with no `modified` value. In descending
         // order the most-recent timestamp comes first, but the missing-value
         // book stays at the end (it doesn't get flipped to the top by the
