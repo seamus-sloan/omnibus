@@ -112,6 +112,7 @@ test("a tile's grip opens its drill-in and the close button dismisses it", async
   // Every drill-in shows a delta chip (or the "not enough data" fallback) and
   // a trend chart — AC2.
   await expect(page.getByTestId("stats-drill-delta")).toBeVisible();
+  await expect(page.getByTestId("stats-drill-trend")).toBeVisible();
 
   await page.getByTestId("stats-drill-close").click();
   await expect(drillIn).toHaveCount(0);
