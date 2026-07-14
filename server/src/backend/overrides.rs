@@ -145,6 +145,49 @@ pub(super) async fn post_ebook_cover(
     }
 }
 
+/// Revert an overridden cover back to the scanned original, preserving any
+/// other field overrides on the book. Requires `can_edit` or admin. Mirrors
+/// `delete_ebook_overrides` but only clears the cover half of the override
+/// row — see [`db::clear_cover_override`].
+pub(super) async fn delete_ebook_cover(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+) -> Response {
+    if !user.is_admin && !user.can_edit {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "edit permission required",
+        )
+            .into_response();
+    }
+    let id = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
+        Err(e) => return internal("resolve_book_id_by_uuid", e),
+    };
+    if let Err(e) = db::clear_cover_override(&state.pool, &uuid, user.id).await {
+        return internal("clear_cover_override", e);
+    }
+    // `delete_override_cover` + `invalidate_thumbs` are sync `std::fs`
+    // operations; run them on the blocking pool so the axum runtime stays
+    // responsive under load (#106).
+    let uuid_for_blocking = uuid.clone();
+    if let Err(e) = tokio::task::spawn_blocking(move || {
+        db::delete_override_cover(&uuid_for_blocking);
+        db::thumbs::invalidate_thumbs(id);
+    })
+    .await
+    {
+        return internal("spawn_blocking(delete_override_cover)", e);
+    }
+    match db::get_book(&state.pool, id).await {
+        Ok(Some(book)) => Json(book).into_response(),
+        Ok(None) => (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
+        Err(e) => internal("get_book", e),
+    }
+}
+
 /// Write the new override cover to disk and mark `has_cover_override = 1`,
 /// preserving any existing field overrides. Returns the error `Response`
 /// already formed on failure so the caller can early-return.

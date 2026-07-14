@@ -299,6 +299,13 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/ebooks/{uuid}/overrides",
             post(overrides::post_ebook_overrides).delete(overrides::delete_ebook_overrides),
         )
+        // Cover-only revert. Carries no upload body (unlike the POST in
+        // `upload_router`), so it stays outside the upload rate limiter —
+        // same split as the author-photo GET/DELETE vs PUT routes below.
+        .route(
+            "/api/ebooks/{uuid}/cover",
+            delete(overrides::delete_ebook_cover),
+        )
         // F2.1 progress sync — mobile-facing REST. Web hits the analogous
         // `/api/rpc/progress*` server functions defined in `omnibus_frontend::rpc`.
         .route("/api/progress", post(progress::post_progress))

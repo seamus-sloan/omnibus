@@ -97,6 +97,27 @@ fn validate_file_bytes_rejects_oversize() {
     ));
 }
 
+#[test]
+fn extend_and_validate_magic_accepts_epub_magic_split_across_chunks() {
+    let mut prefix = Vec::with_capacity(4);
+
+    assert!(!extend_and_validate_magic(&mut prefix, b"P").unwrap());
+    assert!(!extend_and_validate_magic(&mut prefix, b"K\x03").unwrap());
+    assert!(extend_and_validate_magic(&mut prefix, b"\x04rest").unwrap());
+    assert_eq!(prefix, b"PK\x03\x04");
+}
+
+#[test]
+fn extend_and_validate_magic_rejects_invalid_split_prefix() {
+    let mut prefix = Vec::with_capacity(4);
+
+    assert!(!extend_and_validate_magic(&mut prefix, b"NO").unwrap());
+    assert!(matches!(
+        extend_and_validate_magic(&mut prefix, b"PE"),
+        Err(UploadError::UnsupportedFormat)
+    ));
+}
+
 // --- Inspect ---------------------------------------------------------------
 
 #[tokio::test]

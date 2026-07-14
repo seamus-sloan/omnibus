@@ -235,6 +235,122 @@ async fn delete_metadata_overrides_removes_row() {
         .unwrap()
         .is_none());
 }
+#[tokio::test]
+async fn clear_cover_override_is_noop_when_no_override_row_exists() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    // No prior `upsert_metadata_overrides` call for this uuid — must not
+    // error or fabricate a row.
+    clear_cover_override(&pool, "no-such-uuid", 1)
+        .await
+        .unwrap();
+    assert!(get_metadata_overrides(&pool, "no-such-uuid")
+        .await
+        .unwrap()
+        .is_none());
+}
+#[tokio::test]
+async fn clear_cover_override_is_noop_when_cover_override_not_set() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let ov = MetadataOverrides {
+        title: Some("Text Only".into()),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, "text-only-uuid", &ov, false, user_id)
+        .await
+        .unwrap();
+
+    clear_cover_override(&pool, "text-only-uuid", user_id)
+        .await
+        .unwrap();
+
+    let (loaded, has_cover) = get_metadata_overrides(&pool, "text-only-uuid")
+        .await
+        .unwrap()
+        .expect("text override row must survive a no-op cover clear");
+    assert_eq!(loaded.title.as_deref(), Some("Text Only"));
+    assert!(!has_cover);
+}
+#[tokio::test]
+async fn clear_cover_override_preserves_text_overrides_when_present() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let ov = MetadataOverrides {
+        title: Some("Kept Title".into()),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, "mixed-uuid", &ov, true, user_id)
+        .await
+        .unwrap();
+
+    clear_cover_override(&pool, "mixed-uuid", user_id)
+        .await
+        .unwrap();
+
+    let (loaded, has_cover) = get_metadata_overrides(&pool, "mixed-uuid")
+        .await
+        .unwrap()
+        .expect("text override must survive a cover-only clear");
+    assert_eq!(loaded.title.as_deref(), Some("Kept Title"));
+    assert!(!has_cover, "cover flag must be cleared");
+}
+#[tokio::test]
+async fn clear_cover_override_deletes_row_when_no_overrides_remain() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    // A cover-only override: no text fields set.
+    upsert_metadata_overrides(
+        &pool,
+        "cover-only-uuid",
+        &MetadataOverrides::default(),
+        true,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    clear_cover_override(&pool, "cover-only-uuid", user_id)
+        .await
+        .unwrap();
+
+    assert!(
+        get_metadata_overrides(&pool, "cover-only-uuid")
+            .await
+            .unwrap()
+            .is_none(),
+        "an override row with nothing left active must be deleted, not left empty"
+    );
+}
+#[tokio::test]
+async fn clear_cover_override_returns_serialization_error_for_corrupt_blob() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sqlx::query(
+        "INSERT INTO metadata_overrides (book_uuid, overrides, has_cover_override) \
+         VALUES (?, ?, 1)",
+    )
+    .bind("corrupt-cover-uuid")
+    .bind("{ not valid json")
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let err = clear_cover_override(&pool, "corrupt-cover-uuid", 1)
+        .await
+        .expect_err("corrupt overrides JSON must not decode");
+    assert!(
+        matches!(err, MetadataOverridesError::Serialization(_)),
+        "got {err:?}"
+    );
+}
 /// Bug #1: saving a title override must rebuild `books_fts` so search
 /// finds the new title and stops matching the original one.
 #[tokio::test]

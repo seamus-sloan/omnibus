@@ -5,6 +5,18 @@ import { fetchBookIdByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
+// Minimal valid 1x1 PNG. detect_image_format only inspects magic bytes, so
+// the body can be tiny — duplicates the constant already used by
+// author_photo.spec.ts for the same reason.
+const TINY_PNG = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49,
+  0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06,
+  0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44,
+  0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d,
+  0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42,
+  0x60, 0x82,
+]);
+
 test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
 });
@@ -477,6 +489,87 @@ test("surfaces error and stays on edit form when revert mutation fails", async (
   await expect(page.getByRole("heading", { level: 1, name: TARGET.title })).toBeVisible();
   await gotoReady(page, `/books/${editId}/edit`);
   await expect(page.getByTestId("revert-overrides")).toHaveCount(0);
+});
+
+// ---------------------------------------------------------------------------
+// Cover upload / revert (sidebar CoverEditor)
+// ---------------------------------------------------------------------------
+
+// Seeding the override via a direct multipart POST (rather than driving the
+// sidebar's `<input type=file>`) mirrors `author_photo.spec.ts`'s proven
+// pattern for this same "web FormData/Blob upload" mechanism, so the test
+// exercises the real REST contract without depending on a Playwright
+// synthetic file-change event reaching the Dioxus web upload path.
+async function uploadCover(request: import("@playwright/test").APIRequestContext, id: string) {
+  const resp = await request.post(`/api/ebooks/${id}/cover`, {
+    multipart: { cover: { name: "cover.png", mimeType: "image/png", buffer: TINY_PNG } },
+  });
+  expect(resp.status(), "POST cover should succeed").toBe(200);
+}
+
+test("shows an uploaded cover override and reverts it", async ({ page, request }) => {
+  const id = await fetchBookIdByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${id}/edit`);
+  await expect(page.getByTestId("cover-hint")).toHaveText("extracted from file");
+  await expect(page.getByTestId("cover-remove-override")).toHaveCount(0);
+
+  await uploadCover(request, id);
+  await gotoReady(page, `/books/${id}/edit`);
+
+  await expect(page.getByTestId("cover-hint")).toHaveText("custom upload");
+  const revertBtn = page.getByTestId("cover-remove-override");
+  await expect(revertBtn).toBeVisible();
+
+  // Revert via the real UI control so subsequent tests see the original
+  // state. Unlike upload, the no-body DELETE rides the Dioxus server-function
+  // transport (`rpc_delete_ebook_cover`), not a raw REST DELETE — it's a POST
+  // to a fixed RPC path with the uuid in the body, not the URL.
+  await expectMutation(
+    page,
+    { method: "POST", url: /\/api\/rpc\/ebook\/cover\/delete$/, expectedStatus: 200 },
+    async () => revertBtn.click(),
+  );
+  await expect(page.getByTestId("cover-hint")).toHaveText("extracted from file");
+  await expect(page.getByTestId("cover-remove-override")).toHaveCount(0);
+});
+
+test("surfaces an error and keeps the override active when revert fails", async ({ page, request }) => {
+  const id = await fetchBookIdByTitle(request, TARGET.title);
+  await uploadCover(request, id);
+  await gotoReady(page, `/books/${id}/edit`);
+
+  const revertBtn = page.getByTestId("cover-remove-override");
+  await expect(revertBtn).toBeVisible();
+
+  await page.route("**/api/rpc/ebook/cover/delete", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
+    }
+    return route.continue();
+  });
+
+  await expectMutation(
+    page,
+    { method: "POST", url: /\/api\/rpc\/ebook\/cover\/delete$/, expectedStatus: 500 },
+    async () => revertBtn.click(),
+  );
+
+  // The override is still active (the delete failed) — status line surfaces
+  // the failure and the revert control stays visible and re-enabled so the
+  // user can retry.
+  await expect(page.getByTestId("cover-upload-status")).toContainText("Revert failed");
+  await expect(page.getByTestId("cover-hint")).toHaveText("custom upload");
+  await expect(revertBtn).toBeVisible();
+  await expect(revertBtn).toBeEnabled();
+
+  // Clean up: stop intercepting and revert successfully.
+  await page.unroute("**/api/rpc/ebook/cover/delete");
+  await expectMutation(
+    page,
+    { method: "POST", url: /\/api\/rpc\/ebook\/cover\/delete$/, expectedStatus: 200 },
+    async () => revertBtn.click(),
+  );
+  await expect(page.getByTestId("cover-hint")).toHaveText("extracted from file");
 });
 
 }); // test.describe.serial

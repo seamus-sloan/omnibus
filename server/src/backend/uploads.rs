@@ -150,6 +150,18 @@ fn validate_file_bytes(bytes: &[u8], cap: usize) -> Result<(), UploadError> {
     Ok(())
 }
 
+fn extend_and_validate_magic(prefix: &mut Vec<u8>, chunk: &[u8]) -> Result<bool, UploadError> {
+    let needed = 4usize.saturating_sub(prefix.len());
+    prefix.extend_from_slice(&chunk[..chunk.len().min(needed)]);
+    if prefix.len() < 4 {
+        return Ok(false);
+    }
+    if detect_ebook_format(prefix).is_none() {
+        return Err(UploadError::UnsupportedFormat);
+    }
+    Ok(true)
+}
+
 /// Trim and drop empty so blank form fields read as "no value".
 fn norm(value: &Option<String>) -> Option<String> {
     value
@@ -162,7 +174,7 @@ fn norm(value: &Option<String>) -> Option<String> {
 // --- Streaming helper -------------------------------------------------------
 
 /// Stream a multipart `file` field to a newly-created tempfile, enforcing the
-/// byte cap incrementally and validating EPUB magic bytes on the first chunk.
+/// byte cap incrementally and validating EPUB magic bytes across initial chunks.
 /// The payload is never fully buffered in RAM — only one chunk is held at a
 /// time while it is written to disk.
 async fn stream_upload_to_tempfile(
@@ -181,6 +193,7 @@ async fn stream_upload_to_tempfile(
 
     let mut total = 0usize;
     let mut format_validated = false;
+    let mut magic_prefix = Vec::with_capacity(4);
 
     loop {
         let chunk = field
@@ -189,10 +202,7 @@ async fn stream_upload_to_tempfile(
             .map_err(|e| UploadError::internal("read upload chunk", e))?;
         let Some(chunk) = chunk else { break };
         if !format_validated {
-            if detect_ebook_format(&chunk).is_none() {
-                return Err(UploadError::UnsupportedFormat);
-            }
-            format_validated = true;
+            format_validated = extend_and_validate_magic(&mut magic_prefix, &chunk)?;
         }
         total += chunk.len();
         if total > cap {
@@ -203,8 +213,11 @@ async fn stream_upload_to_tempfile(
             .map_err(|e| UploadError::internal("write upload chunk", e))?;
     }
 
-    if !format_validated {
+    if magic_prefix.is_empty() {
         return Err(UploadError::MissingFile);
+    }
+    if !format_validated {
+        return Err(UploadError::UnsupportedFormat);
     }
     Ok(tmp)
 }

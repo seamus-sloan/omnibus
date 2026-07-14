@@ -209,6 +209,54 @@ pub async fn delete_metadata_overrides(
     Ok(())
 }
 
+/// Clear a book's cover override, reverting `cover_url` to the scanned
+/// original while preserving any text-field overrides that remain. A no-op
+/// if the book has no cover override active.
+///
+/// When no text overrides remain either, the whole `metadata_overrides` row
+/// is deleted (mirrors [`delete_metadata_overrides`]'s FTS-restore step) so
+/// `has_override` reads false again — otherwise an empty-but-present row
+/// would leave the "Override active" indicator stuck on.
+pub async fn clear_cover_override(
+    pool: &SqlitePool,
+    book_uuid: &str,
+    user_id: i64,
+) -> Result<(), MetadataOverridesError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+
+    let existing: Option<(String, i64)> = sqlx::query_as(
+        "SELECT overrides, has_cover_override FROM metadata_overrides WHERE book_uuid = ?",
+    )
+    .bind(book_uuid)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some((json, has_cover)) = existing else {
+        tx.commit().await?;
+        return Ok(());
+    };
+    if has_cover == 0 {
+        tx.commit().await?;
+        return Ok(());
+    }
+
+    let overrides: MetadataOverrides = serde_json::from_str(&json)?;
+    if overrides == MetadataOverrides::default() {
+        sqlx::query("DELETE FROM metadata_overrides WHERE book_uuid = ?")
+            .bind(book_uuid)
+            .execute(&mut *tx)
+            .await?;
+        // Resolve inside the transaction so the id read agrees with the DELETE.
+        if let Some(book_id) = resolve_book_id_by_uuid_exec(&mut *tx, book_uuid).await? {
+            upsert_fts(&mut tx, book_id).await?;
+        }
+    } else {
+        upsert_overrides_row(&mut *tx, book_uuid, &json, false, user_id).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Look up the UUID for a given `books.id`. Used by the override-save
 /// endpoints to bridge the id-based API with the uuid-keyed overrides table.
 pub async fn get_book_uuid(
@@ -301,6 +349,7 @@ pub(crate) fn apply_overrides(
     if let Some(ref s) = ov.subjects {
         book.subjects = s.clone();
     }
+    book.has_cover_override = has_cover_override;
     if has_cover_override {
         // Ensure cover_url is set even if the original had no cover. The
         // REST route is uuid-keyed (`/api/covers/{uuid}`), matching the

@@ -1,12 +1,13 @@
-//! Sticky right-column sidebar for the metadata edit page: cover preview,
-//! identifiers (when present), and the override-active card. Revert
-//! clicks bubble to the parent so the async `delete_overrides` call and
-//! navigation stay in `MetadataEditForm`.
+//! Sticky right-column sidebar for the metadata edit page: cover
+//! upload/revert (delegated to `cover_editor::CoverEditor`), identifiers,
+//! and the override-active card. Full-override revert bubbles to the
+//! parent `MetadataEditForm`; cover-only revert stays local, updating
+//! `live_book` so the "Override active" card tracks it.
 
 use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
 
-use crate::components::atrium::Cover;
+use super::cover_editor::CoverEditor;
 
 /// Cover preview + identifiers + override-status sidebar.
 #[component]
@@ -15,29 +16,21 @@ pub(super) fn Sidebar(
     saving: Signal<bool>,
     on_revert: EventHandler<()>,
 ) -> Element {
-    let has_cover = book.cover_url.is_some();
-    let identifiers = &book.identifiers;
-    let has_override = book.has_override;
+    let uuid = book.unique_identifier.clone().unwrap_or_default();
+    let identifiers = book.identifiers.clone();
+    // Tracks the merged book returned by a cover upload/revert so the
+    // "Override active" card reflects a cover-only change immediately —
+    // `book` itself is the static snapshot the parent loaded once.
+    let mut live_book = use_signal(|| book.clone());
+    let has_override = live_book().has_override;
 
     rsx! {
         aside { class: "me-sidebar",
 
-            // Cover preview
-            div { class: "card me-sidebar-card",
-                div { class: "me-sidebar-head",
-                    div { class: "label", "Cover" }
-                }
-                div { class: "me-cover-preview",
-                    Cover { book: book.clone() }
-                }
-                // Cover upload deferred to v2 (cover picker gallery)
-                div { class: "mono me-cover-hint",
-                    if has_cover {
-                        "extracted from file"
-                    } else {
-                        "no cover available"
-                    }
-                }
+            CoverEditor {
+                book: book.clone(),
+                uuid,
+                on_change: move |updated| live_book.set(updated),
             }
 
             // Identifiers (read-only for v1)

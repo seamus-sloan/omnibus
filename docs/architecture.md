@@ -47,6 +47,8 @@ worker.rs           — TaskKind, ProgressState (Running/Done/Failed), TaskProgr
 
 ## db/src/
 
+`metadata_overrides::clear_cover_override` — reverts only the cover fields and deletes the override row when no text overrides remain.
+
 ```
 lib.rs              — module index + flat re-export of the query layer (books, browse, covers, discovery, helpers, kepub, identity, merge, metadata_overrides, missing_files, palette, pool, settings, sync, author_photos_data, thumbs) so callers write `omnibus_db::list_books(...)`. Declares 30 `pub mod`s plus a private `taxonomy` and a cfg-gated `test_support`.
 books/              — core book read layer: `list_books`/`list_books_for_paths`, `get_book`/`get_book_by_uuid`, `search_books` (BM25 FTS), the shared `BOOK_COLUMNS` projection, `book_file_path`, and `resolve_book_id_by_uuid` (UNIONs `merged_uuids` so format-merged uuids still resolve). `MAX_BOOKS_RETURNED` cap; `BooksError`. keyset landing path lives in `page` (`list_books_page` — opaque `PageCursor` over any of the 5 sort axes, server-side `ViewFilters`, NULL-aware keyset matching the `(library_id,<col>,id)` indexes from 0028; `CursorError`) and `facets` (`library_facets` — full-library author/series/format/tag count aggregate for the sidebar). Split into submodules (`list`/`get`/`search`/`projection`/`page`/`facets`) + `tests.rs`.
@@ -92,6 +94,8 @@ migrations/         — numbered SQL migrations embedded via sqlx::migrate!
 ```
 
 ## frontend/src/
+
+`pages/metadata_edit/cover_editor.rs` — metadata-edit cover controls: multipart upload via `data::upload_ebook_cover`, cover-only revert via `data::delete_ebook_cover`, cache-busted preview updates, and merged-book propagation back to the sidebar.
 
 ```
 lib.rs              — Route, App, styles, ScreenLayout (feature-gated); also owns the App-wide `CurrentUser` context (`use_current_user`) — a single `/api/auth/me` fetch on boot fills it, components gate `is_admin` off the cached signal instead of refetching per mount, and a `web_auth_state` subscription refills on login / clears on 401. Web/SSR only — mobile uses bearer tokens. App also provides the app-wide `PlaybackState` context (`use_playback`, defined in contexts.rs alongside CurrentUser), mounts the single persistent `<audio>` element (`pages::AudioElement`) as a sibling of the Router so playback survives navigation, and on web calls `pages::install_audio_bootstrap` — the driver that reacts to `PlaybackState.uuid` (load / swap / dismiss). `ScreenLayout` (web) renders `pages::MiniDock`, so the dock appears on every main page and is naturally absent on the immersive `/listen` + `/read` routes (rendered without `ScreenLayout`). The mobile build mirrors this — `App` provides the `MobilePlayback` context (`listen/mobile/state.rs`) + mounts `pages::MobileAudioHost` at the App root, and mobile `ScreenLayout` renders `pages::MobileMiniPlayer` above the tab bar, so audio survives navigation on native too. Mobile `ScreenLayout` also installs `use_mobile_edge_swipe_back` — a capture-phase left-edge touch listener (rebound per screen mount) that drives the router's `go_back` over an `eval` channel, since the wry/WKWebView native back gesture can't reach the off-WASM `MemoryHistory` router (the two histories have no bridge); the immersive `/read`+`/listen` routes render without `ScreenLayout`, so their own horizontal swipes (page-turn / scrub) stay unaffected.

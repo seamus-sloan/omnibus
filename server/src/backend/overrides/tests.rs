@@ -542,3 +542,173 @@ async fn api_post_cover_preserves_prior_cover_when_db_upsert_fails() {
          nothing); leftover files: {leftover:?}"
     );
 }
+
+#[tokio::test]
+async fn api_delete_cover_requires_auth() {
+    let (app, _state, _pool) = fixture().await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/ebooks/some-uuid/cover")
+                .method("DELETE")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn api_delete_cover_requires_edit_permission() {
+    let (app, _state, pool) = fixture().await;
+    let (_id, uuid) = seed_book_with_uuid(&pool, "/lib", "ReaderCoverBook").await;
+    let user = auth_test_support::create_user(&pool, "reader").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/ebooks/{uuid}/cover"))
+                .method("DELETE")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn api_delete_cover_returns_404_for_unknown_uuid() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/ebooks/no-such-uuid/cover")
+                .method("DELETE")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn api_delete_cover_reverts_to_scanned_cover_and_preserves_text_overrides() {
+    // Seed a book with both a text override and an uploaded cover, then
+    // DELETE the cover: the response must show the cover cleared while the
+    // title override survives, and the on-disk override file must be gone.
+    let _covers = CoversDirGuard::new("delete_cover_reverts");
+    let (app, _state, pool) = fixture().await;
+    let (id, uuid) = seed_book_with_uuid(&pool, "/lib", "MixedOverrideBook").await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    db::upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &omnibus_shared::MetadataOverrides {
+            title: Some("Kept Title".into()),
+            ..Default::default()
+        },
+        true,
+        admin.id,
+    )
+    .await
+    .expect("seed mixed overrides row");
+    db::write_override_cover(&uuid, "image/png", TINY_PNG).expect("seed prior cover file");
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/ebooks/{uuid}/cover"))
+                .method("DELETE")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let book: omnibus_shared::EbookMetadata = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(book.id, id);
+    assert!(
+        !book.has_cover_override,
+        "cover revert must clear has_cover_override on the merged book"
+    );
+    assert!(
+        book.has_override,
+        "the surviving title override must keep has_override true"
+    );
+    assert_eq!(book.title.as_deref(), Some("Kept Title"));
+
+    let (loaded, has_cover) = db::get_metadata_overrides(&pool, &uuid)
+        .await
+        .unwrap()
+        .expect("title override row must survive the cover-only revert");
+    assert_eq!(loaded.title.as_deref(), Some("Kept Title"));
+    assert!(!has_cover);
+
+    let leftover = leftover_override_files(&db::covers_dir(), &uuid);
+    assert!(
+        leftover.is_empty(),
+        "revert must remove the override cover file from disk; leftover: {leftover:?}"
+    );
+}
+
+#[tokio::test]
+async fn api_delete_cover_returns_500_when_clear_fails() {
+    // Force the `metadata_overrides` UPDATE branch (`has_cover_override` is
+    // currently 1, so `clear_cover_override` takes the DO-UPDATE path, not
+    // the DELETE path) to fail via a trigger, mirroring the technique used
+    // for the cover-upload 500 test above.
+    let _covers = CoversDirGuard::new("delete_cover_db_failure");
+    let (app, _state, pool) = fixture().await;
+    let (_id, uuid) = seed_book_with_uuid(&pool, "/lib", "FailingRevertBook").await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    db::upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &omnibus_shared::MetadataOverrides {
+            title: Some("Still Kept".into()),
+            ..Default::default()
+        },
+        true,
+        admin.id,
+    )
+    .await
+    .expect("seed mixed overrides row");
+
+    sqlx::query(
+        "CREATE TRIGGER block_overrides_update_on_clear
+           BEFORE UPDATE ON metadata_overrides
+           BEGIN SELECT RAISE(FAIL, 'forced failure'); END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/ebooks/{uuid}/cover"))
+                .method("DELETE")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
