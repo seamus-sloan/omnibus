@@ -1,10 +1,9 @@
 //! Persistent mini-dock audiobook bar, rendered by the web
-//! [`crate::ScreenLayout`] so it shows on every main page. Also rendered
-//! directly by the immersive `/read` route (#988) — the reader has no
-//! transport of its own — but stays absent from `/listen`, whose full
-//! player already owns one. Reads the app-wide [`crate::PlaybackState`]
-//! (the `<audio>` element + signals live at the App root) and drives
-//! transport through the shared `helpers::audio_call` seam.
+//! [`crate::ScreenLayout`] on every main page and by the immersive
+//! `/read` route (which has no transport of its own); stays absent
+//! from `/listen`, whose full player already owns one. Reads the
+//! app-wide [`crate::PlaybackState`] and drives transport through the
+//! shared `helpers::audio_call` seam.
 
 #![cfg(not(feature = "mobile"))]
 
@@ -250,10 +249,7 @@ mod tests {
         assert_eq!(progress_pct(f64::INFINITY, 100.0), 0.0);
     }
 
-    /// Mirrors [`MiniDock`]'s "renders empty host vs. active bar" branch —
-    /// the piece of logic that decides whether the dock shows content when
-    /// navigated to alongside another page (#988), without needing a full
-    /// component render.
+    // Mirrors MiniDock's "renders empty host vs. active bar" branch without needing a full component render.
     #[test]
     fn dock_active_state_is_none_when_nothing_is_playing() {
         assert_eq!(dock_active_state(None, None), None);
