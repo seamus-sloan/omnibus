@@ -1,13 +1,9 @@
 //! Cover upload/replace/revert control for the metadata edit sidebar.
-//!
-//! Cover upload posts a multipart body directly to the REST
-//! `/api/ebooks/:uuid/cover` route (binary payloads can't ride the Dioxus
-//! server-function transport — see `data::upload_ebook_cover`); revert goes
-//! through the analogous `DELETE`. Both responses carry the merged
-//! `EbookMetadata`, which this component folds into its own `cover_url` /
-//! `has_cover_override` signals so the preview updates immediately —
-//! `book` itself is a static snapshot the parent loaded once and never
-//! re-fetches mid-edit.
+//! Upload posts a multipart body directly to the REST
+//! `/api/ebooks/:uuid/cover` route (binary can't ride the server-function
+//! transport); revert goes through the analogous `DELETE`. Both fold the
+//! response's merged `EbookMetadata` into local signals so the preview
+//! updates immediately, without re-fetching the parent's static snapshot.
 
 use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;

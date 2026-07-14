@@ -1,10 +1,8 @@
 //! Sticky right-column sidebar for the metadata edit page: cover
-//! upload/revert (delegated to `cover_editor::CoverEditor`), identifiers
-//! (when present), and the override-active card. The full-override
-//! "Revert to scanned values" click bubbles to the parent so the async
-//! `delete_overrides` call and navigation stay in `MetadataEditForm`; the
-//! cover-only revert is self-contained in `CoverEditor` and only updates
-//! `live_book` here so the "Override active" card stays in sync.
+//! upload/revert (delegated to `cover_editor::CoverEditor`), identifiers,
+//! and the override-active card. Full-override revert bubbles to the
+//! parent `MetadataEditForm`; cover-only revert stays local, updating
+//! `live_book` so the "Override active" card tracks it.
 
 use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;

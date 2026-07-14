@@ -95,10 +95,7 @@ pub struct EbookMetadata {
     #[serde(default)]
     pub has_override: bool,
 
-    /// True when `cover_url` points at a user-uploaded override cover
-    /// rather than the scanned original. Distinct from `has_override`
-    /// (which is true for *any* override, text or cover) so the metadata
-    /// edit sidebar can offer a cover-only "revert to scanned" action.
+    /// True when `cover_url` is a user-uploaded override cover, not the scanned original.
     #[serde(default)]
     pub has_cover_override: bool,
 
