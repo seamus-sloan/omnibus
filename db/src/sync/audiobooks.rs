@@ -245,10 +245,22 @@ async fn sync_audiobooks_changed(
             if let Some((_uuid, target_id, format)) =
                 attach::find_attachment_by_scan_key(tx, library_path, &b.scan_key).await?
             {
-                attach_audiobook_file(tx, target_id, &format, library_path, b, &mut changed_covers)
-                    .await?;
-                on_book_written();
-                continue;
+                if attach_audiobook_file(
+                    tx,
+                    target_id,
+                    &format,
+                    library_path,
+                    b,
+                    &mut changed_covers,
+                )
+                .await?
+                {
+                    on_book_written();
+                    continue;
+                }
+                // Slot taken by a different file: forget the stale ledger row
+                // and fall through to insert this file as its own book.
+                attach::forget_attachment(tx, library_path, &b.scan_key).await?;
             }
             insert_new_audiobook(tx, library_id, b, &mut changed_covers).await?;
             on_book_written();
@@ -431,8 +443,13 @@ async fn try_attach_new_audiobook(
     if let Some((_uuid, target_id, format)) =
         attach::find_attachment_by_scan_key(tx, library_path, &b.scan_key).await?
     {
-        attach_audiobook_file(tx, target_id, &format, library_path, b, covers).await?;
-        return Ok(true);
+        if attach_audiobook_file(tx, target_id, &format, library_path, b, covers).await? {
+            return Ok(true);
+        }
+        // Slot taken by a different file: drop this file's stale ledger row so
+        // it stops replaying, and fall through to insert it as its own book.
+        attach::forget_attachment(tx, library_path, &b.scan_key).await?;
+        return Ok(false);
     }
     let (Some(title_norm), Some(author_norm)) = (
         normalize_title(&b.title),
@@ -446,8 +463,10 @@ async fn try_attach_new_audiobook(
     else {
         return Ok(false);
     };
-    attach_audiobook_file(tx, target_id, &b.format, library_path, b, covers).await?;
-    Ok(true)
+    // find_attach_target excludes a book that already has this format's file
+    // row, but the writer re-checks the ledger and may still refuse a slot a
+    // different file holds — return whatever it decides.
+    attach_audiobook_file(tx, target_id, &b.format, library_path, b, covers).await
 }
 
 /// Write (or rewrite) an attached audiobook's `book_files` row (plus
@@ -458,6 +477,10 @@ async fn try_attach_new_audiobook(
 /// row carries its own `(library_path, path)` location override — the
 /// target book may live in a different library, and the HLS read path
 /// resolves part filenames against the *audio* root.
+///
+/// Returns `Ok(false)` without writing anything when the `(book_id, format)`
+/// slot is already held by a **different** file — the caller then inserts
+/// this file as its own book rather than clobbering the incumbent (#1063).
 async fn attach_audiobook_file(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
@@ -465,7 +488,12 @@ async fn attach_audiobook_file(
     library_path: &str,
     b: &crate::audiobook::IndexedAudiobook,
     covers: &mut Vec<(String, String, Vec<u8>)>,
-) -> Result<(), SyncError> {
+) -> Result<bool, SyncError> {
+    // One attached file per (book, format) slot: refuse rather than delete a
+    // different file's row (the DELETE below is scoped only to the format).
+    if attach::slot_held_by_other(tx, book_id, format, &b.scan_key).await? {
+        return Ok(false);
+    }
     // Idempotent re-attach: the refresh path lands here too.
     sqlx::query("DELETE FROM book_files WHERE book_id = ? AND format = ?")
         .bind(book_id)
@@ -496,7 +524,7 @@ async fn attach_audiobook_file(
     if let Some(cover) = attach::maybe_adopt_cover(tx, book_id, b.cover.as_ref()).await? {
         covers.push(cover);
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Return type from a fresh audiobook insert — the ids needed by the

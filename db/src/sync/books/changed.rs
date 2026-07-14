@@ -103,7 +103,7 @@ async fn sync_changed_one(
         if let Some((merged_uuid, target_id, format)) =
             attach::find_attachment_by_scan_key(tx, library_path, scan_key).await?
         {
-            attach_ebook_file(
+            if attach_ebook_file(
                 tx,
                 target_id,
                 &format,
@@ -112,8 +112,13 @@ async fn sync_changed_one(
                 b,
                 changed_covers,
             )
-            .await?;
-            return Ok(());
+            .await?
+            {
+                return Ok(());
+            }
+            // Slot taken by a different file: forget the stale ledger row and
+            // fall through to promote this file to its own New insert.
+            attach::forget_attachment(tx, library_path, scan_key).await?;
         }
         // … or a TOCTOU: the diff said this scan_key existed in the DB,
         // but a concurrent process removed it between Phase A and

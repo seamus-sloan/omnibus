@@ -70,7 +70,7 @@ pub(super) async fn try_attach_new_ebook(
     if let Some((merged_uuid, target_id, format)) =
         attach::find_attachment_by_scan_key(tx, library_path, &scan_key).await?
     {
-        attach_ebook_file(
+        if attach_ebook_file(
             tx,
             target_id,
             &format,
@@ -79,8 +79,14 @@ pub(super) async fn try_attach_new_ebook(
             b,
             covers,
         )
-        .await?;
-        return Ok(true);
+        .await?
+        {
+            return Ok(true);
+        }
+        // Slot taken by a different file: drop this file's stale ledger row so
+        // it stops replaying, and fall through to insert it as its own book.
+        attach::forget_attachment(tx, library_path, &scan_key).await?;
+        return Ok(false);
     }
 
     let title = m.title.clone().unwrap_or_else(|| m.filename.clone());
@@ -99,8 +105,10 @@ pub(super) async fn try_attach_new_ebook(
     // A brand-new attachment: mint a stable handle for the ledger row (the
     // lookup above is by scan_key, so this uuid is only an identifier).
     let uuid = stable_uuid(library_path, &m.filename);
-    attach_ebook_file(tx, target_id, &file_ext, library_path, &uuid, b, covers).await?;
-    Ok(true)
+    // find_attach_target excludes a book that already has this format's file
+    // row, but the writer re-checks the ledger and may still refuse a slot a
+    // different file holds — return whatever it decides.
+    attach_ebook_file(tx, target_id, &file_ext, library_path, &uuid, b, covers).await
 }
 
 /// Write (or rewrite) an attached ebook's `book_files` row under
@@ -110,6 +118,10 @@ pub(super) async fn try_attach_new_ebook(
 /// target metadata wins — but the FTS row is refreshed via the door so
 /// the newly-unioned identifiers (incl. an attached-only ISBN) become
 /// searchable immediately.
+///
+/// Returns `Ok(false)` without writing anything when the `(book_id, format)`
+/// slot is already held by a **different** file — the caller then inserts
+/// this file as its own book rather than clobbering the incumbent (#1063).
 pub(super) async fn attach_ebook_file(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
@@ -118,7 +130,16 @@ pub(super) async fn attach_ebook_file(
     uuid: &str,
     b: &crate::ebook::IndexedBook,
     covers: &mut Vec<(String, String, Vec<u8>)>,
-) -> Result<(), sqlx::Error> {
+) -> Result<bool, sqlx::Error> {
+    // The attached file's own relative path is its diff key (F2), so a repoint
+    // of the file's scan root re-matches it instead of resurfacing it as a
+    // duplicate; it's also the ledger key written below.
+    let scan_key = scan_key_for(&b.metadata.filename);
+    // One attached file per (book, format) slot: refuse rather than delete a
+    // different file's row (the DELETE below is scoped only to the format).
+    if attach::slot_held_by_other(tx, book_id, format, &scan_key).await? {
+        return Ok(false);
+    }
     // Idempotent re-attach: the refresh path (and the self-healing "uuid
     // known but attachment row missing" path) both land here.
     sqlx::query("DELETE FROM book_files WHERE book_id = ? AND format = ?")
@@ -140,10 +161,6 @@ pub(super) async fn attach_ebook_file(
     .execute(&mut **tx)
     .await?;
     insert_identifier_links(tx, book_id, &b.metadata).await?;
-    // The attached file's own relative path is its diff key (F2), so a
-    // repoint of the file's scan root re-matches it instead of resurfacing
-    // it as a duplicate.
-    let scan_key = scan_key_for(&b.metadata.filename);
     attach::record_attachment(tx, uuid, book_id, format, library_path, &scan_key).await?;
     // The unioned identifiers (incl. a new ISBN from this format) just
     // changed the target's searchable text — refresh its FTS row.
@@ -151,7 +168,7 @@ pub(super) async fn attach_ebook_file(
     if let Some(cover) = attach::maybe_adopt_cover(tx, book_id, b.cover.as_ref()).await? {
         covers.push(cover);
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Insert the `book_files` row for an existing `books.id`. Shared by the
