@@ -1,16 +1,41 @@
 //! Unit tests for `auth::device` — covers the SQL roundtrip
 //! (`register_device` / `list_devices_for_user`) plus the input-validation
 //! guards on `device_name` / `client_version` (length cap, control-char
-//! rejection). Validation tests are pure unit; register/list and pre-insert
-//! rejection tests share an in-memory pool via `auth::test_support::pool`.
+//! rejection), the `LIST_DEVICES_LIMIT` response ceiling, and the
+//! `trg_devices_cap_per_user` eviction trigger. Validation tests are pure
+//! unit; register/list and pre-insert rejection tests share an in-memory
+//! pool via `auth::test_support::pool`.
 
-use sqlx::Row;
+use std::collections::HashSet;
+
+use sqlx::{Row, SqlitePool};
 
 use super::*;
 use crate::auth::session::create_session;
 use crate::auth::test_support::pool;
 use crate::auth::users::create_user;
 use crate::auth::SessionKind;
+
+/// Bulk-insert `count` device rows for `user_id` without going through
+/// `register_device` — used only to exercise `list_devices_for_user`'s
+/// `LIST_DEVICES_LIMIT` in isolation, above what the per-user registration
+/// cap would ever let `register_device` accumulate.
+async fn seed_devices_raw(pool: &SqlitePool, user_id: i64, count: i64) {
+    sqlx::query(
+        r"
+        WITH RECURSIVE n(i) AS (
+            SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
+        )
+        INSERT INTO devices (user_id, name, client_kind, created_at, last_seen_at)
+        SELECT ?, 'd' || i, 'ios', i, i FROM n
+        ",
+    )
+    .bind(count)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
 
 #[tokio::test]
 async fn device_register_and_list() {
@@ -23,6 +48,68 @@ async fn device_register_and_list() {
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].id, d.id);
     assert_eq!(list[0].client_kind, "ios");
+}
+
+/// Regression for #865: `list_devices_for_user` must not return more than
+/// `LIST_DEVICES_LIMIT` rows even when the underlying table holds more.
+/// `trg_devices_cap_per_user` would otherwise mask this by keeping the
+/// table itself under the limit, so the trigger is dropped here to
+/// exercise the SELECT-side ceiling in isolation.
+#[tokio::test]
+async fn list_devices_for_user_caps_response_at_list_devices_limit() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    sqlx::query("DROP TRIGGER trg_devices_cap_per_user")
+        .execute(&p)
+        .await
+        .unwrap();
+    let over_cap = LIST_DEVICES_LIMIT + 50;
+    seed_devices_raw(&p, u.id, over_cap).await;
+
+    let list = list_devices_for_user(&p, u.id).await.unwrap();
+    assert_eq!(
+        list.len() as i64,
+        LIST_DEVICES_LIMIT,
+        "list_devices_for_user must not return more than LIST_DEVICES_LIMIT rows",
+    );
+}
+
+/// Regression for #865: `register_device` must not let a single user
+/// accumulate unbounded devices — `trg_devices_cap_per_user` evicts the
+/// least-recently-seen device(s) beyond `MAX_DEVICES_PER_USER` on every
+/// INSERT, keeping the most-recently-registered devices.
+#[tokio::test]
+async fn register_device_evicts_oldest_when_over_max_devices_per_user() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let total = MAX_DEVICES_PER_USER + 5;
+    for i in 0..total {
+        register_device(&p, u.id, &format!("d{i}"), "ios", None)
+            .await
+            .unwrap();
+    }
+
+    let list = list_devices_for_user(&p, u.id).await.unwrap();
+    assert_eq!(
+        list.len() as i64,
+        MAX_DEVICES_PER_USER,
+        "register_device must evict down to MAX_DEVICES_PER_USER devices",
+    );
+    let names: HashSet<&str> = list.iter().map(|d| d.name.as_str()).collect();
+    for i in 0..5 {
+        let evicted = format!("d{i}");
+        assert!(
+            !names.contains(evicted.as_str()),
+            "earliest-registered device {evicted} should have been evicted, got {names:?}",
+        );
+    }
+    for i in 5..total {
+        let kept = format!("d{i}");
+        assert!(
+            names.contains(kept.as_str()),
+            "most-recently-registered device {kept} should be retained, got {names:?}",
+        );
+    }
 }
 
 #[test]
