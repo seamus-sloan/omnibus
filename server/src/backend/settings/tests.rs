@@ -9,6 +9,25 @@ use super::*;
 use crate::auth::test_support as auth_test_support;
 use crate::backend::test_support::*;
 
+/// Copies the generated EPUB fixtures into a fresh temp dir so scan/reindex
+/// tests don't materialize cover sidecars back into the shared fixtures dir.
+fn copy_epub_fixtures_to_tempdir() -> tempfile::TempDir {
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../test_data/epubs/generated")
+        .canonicalize()
+        .expect("fixtures dir should resolve");
+    assert!(source.is_dir(), "fixtures dir missing: {source:?}");
+    let scratch = tempfile::tempdir().expect("create scratch dir");
+    for entry in std::fs::read_dir(&source).expect("read fixtures dir") {
+        let entry = entry.expect("fixture entry");
+        if entry.file_type().expect("file type").is_file() {
+            let dest = scratch.path().join(entry.file_name());
+            std::fs::copy(entry.path(), dest).expect("copy fixture");
+        }
+    }
+    scratch
+}
+
 #[tokio::test]
 async fn api_get_settings_returns_null_defaults() {
     let (app, _state, pool) = fixture().await;
@@ -110,19 +129,7 @@ async fn post_settings_triggers_scan_via_worker() {
     // into the shared fixtures dir on every CI run. `tempfile::TempDir`
     // cleans itself up on Drop, so a panic before the assert below doesn't
     // leak under /tmp.
-    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../test_data/epubs/generated")
-        .canonicalize()
-        .expect("fixtures dir should resolve");
-    assert!(source.is_dir(), "fixtures dir missing: {source:?}");
-    let scratch = tempfile::tempdir().expect("create scratch dir");
-    for entry in std::fs::read_dir(&source).expect("read fixtures dir") {
-        let entry = entry.expect("fixture entry");
-        if entry.file_type().expect("file type").is_file() {
-            let dest = scratch.path().join(entry.file_name());
-            std::fs::copy(entry.path(), dest).expect("copy fixture");
-        }
-    }
+    let scratch = copy_epub_fixtures_to_tempdir();
     let path_str = scratch.path().to_string_lossy().to_string();
 
     let body = serde_json::json!({
@@ -293,18 +300,7 @@ async fn reindex_returns_200_when_scan_succeeds() {
     // so the scan finds a real EPUB and `Task::Scan` returns `Ok`. We use
     // a tempdir to keep the reindex from materializing cover sidecars
     // back into the shared fixtures directory.
-    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../test_data/epubs/generated")
-        .canonicalize()
-        .expect("fixtures dir should resolve");
-    let scratch = tempfile::tempdir().expect("create scratch dir");
-    for entry in std::fs::read_dir(&source).expect("read fixtures dir") {
-        let entry = entry.expect("fixture entry");
-        if entry.file_type().expect("file type").is_file() {
-            let dest = scratch.path().join(entry.file_name());
-            std::fs::copy(entry.path(), dest).expect("copy fixture");
-        }
-    }
+    let scratch = copy_epub_fixtures_to_tempdir();
     let settings = omnibus_shared::Settings {
         ebook_library_path: Some(scratch.path().to_string_lossy().to_string()),
         audiobook_library_path: None,
@@ -328,9 +324,10 @@ async fn reindex_returns_200_when_scan_succeeds() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-// Regression test for #1056: same as `scan_library_returns_200_when_
-// triggered_by_a_second_promoted_admin` below, but for the synchronous
-// `/api/reindex` handler the issue also named.
+// Regression test for #1056: same as
+// `scan_library_returns_200_when_triggered_by_a_second_promoted_admin`
+// below, but for the synchronous `/api/reindex` handler the issue also
+// named.
 #[tokio::test]
 async fn reindex_returns_200_when_triggered_by_a_second_promoted_admin() {
     let (app, _state, pool) = fixture().await;
@@ -338,18 +335,7 @@ async fn reindex_returns_200_when_triggered_by_a_second_promoted_admin() {
     let second_admin = auth_test_support::create_admin(&pool, "second-admin").await;
     let token = auth_test_support::bearer_token(&pool, second_admin.id).await;
 
-    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../test_data/epubs/generated")
-        .canonicalize()
-        .expect("fixtures dir should resolve");
-    let scratch = tempfile::tempdir().expect("create scratch dir");
-    for entry in std::fs::read_dir(&source).expect("read fixtures dir") {
-        let entry = entry.expect("fixture entry");
-        if entry.file_type().expect("file type").is_file() {
-            let dest = scratch.path().join(entry.file_name());
-            std::fs::copy(entry.path(), dest).expect("copy fixture");
-        }
-    }
+    let scratch = copy_epub_fixtures_to_tempdir();
     let settings = omnibus_shared::Settings {
         ebook_library_path: Some(scratch.path().to_string_lossy().to_string()),
         audiobook_library_path: None,
