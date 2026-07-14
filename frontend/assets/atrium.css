@@ -3095,6 +3095,15 @@ a.idx-letter-on:focus-visible {
   box-shadow: 0 24px 50px -10px rgba(0, 0, 0, .6);
 }
 
+/* On `/read` the dock renders as a sibling of `.rd-surface` (#988), so raise
+   it above the reader's own bottom bar (`.rd-bottom`, 54px + safe-area) —
+   otherwise the two fixed-position bars visually collide at the bottom
+   edge. Higher specificity than the plain `.mini-dock` rule (incl. the
+   phone breakpoint below), so it wins at every viewport width. */
+.rd-surface + .mini-dock-host .mini-dock {
+  bottom: calc(54px + env(safe-area-inset-bottom) + 8px);
+}
+
 .mini-dock-now {
   display: flex; align-items: center; gap: 12px;
   min-width: 0; text-decoration: none; color: inherit;
@@ -3199,6 +3208,14 @@ body {
 }
 .app-shell > main {
   padding: 0 clamp(1.25rem, 4vw, 3.5rem);
+}
+/* Reserve room for the persistent mini-dock so its fixed bar doesn't sit
+   over — and intercept clicks on — the last row of page content. Mirrors
+   the mobile `.screen` reserve for `.m-mini` above; same `:has()` floor. */
+@supports selector(:has(a)) {
+  .app-shell > main:has(+ .mini-dock-host:not(:empty)) {
+    padding-bottom: 7rem;
+  }
 }
 
 .screen {

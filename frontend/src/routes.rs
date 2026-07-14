@@ -121,6 +121,25 @@ pub fn MetadataEdit(uuid: String) -> Element {
 /// Deliberately rendered **without** [`ScreenLayout`]: the reader is a
 /// full-screen surface with its own slim control bar, so the app's top/bottom
 /// nav is suppressed. Same uuid-keyed stability rationale as [`BookDetail`].
+/// Non-mobile also layers the persistent audiobook [`crate::pages::MiniDock`]
+/// alongside the reader (#988) — unlike `/listen`, the reader has no
+/// transport of its own, so a book playing in the background would
+/// otherwise be invisible and uncontrollable while reading.
+#[cfg(not(feature = "mobile"))]
+#[component]
+pub fn BookRead(uuid: String) -> Element {
+    use_page_title(|| Some("Reader".into()));
+    rsx! {
+        BookReadPage { uuid }
+        MiniDock {}
+    }
+}
+
+/// Mobile variant of [`BookRead`]: the reader only. Mobile's persistent
+/// playback surface is [`crate::pages::MobileMiniPlayer`], scoped to
+/// [`ScreenLayout`]; extending it into the immersive reader is out of
+/// scope for #988.
+#[cfg(feature = "mobile")]
 #[component]
 pub fn BookRead(uuid: String) -> Element {
     use_page_title(|| Some("Reader".into()));

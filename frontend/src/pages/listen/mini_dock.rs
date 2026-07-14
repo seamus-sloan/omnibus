@@ -1,8 +1,9 @@
 //! Persistent mini-dock audiobook bar, rendered by the web
-//! [`crate::ScreenLayout`] so it shows on every main page and is absent on the
-//! immersive `/listen` + `/read` routes. Reads the app-wide
-//! [`crate::PlaybackState`] (the `<audio>` element + signals live at the App
-//! root) and drives transport through the shared `helpers::audio_call` seam.
+//! [`crate::ScreenLayout`] on every main page and by the immersive
+//! `/read` route (which has no transport of its own); stays absent
+//! from `/listen`, whose full player already owns one. Reads the
+//! app-wide [`crate::PlaybackState`] and drives transport through the
+//! shared `helpers::audio_call` seam.
 
 #![cfg(not(feature = "mobile"))]
 
@@ -26,24 +27,34 @@ pub(super) fn progress_pct(elapsed: f64, duration: f64) -> f64 {
     ((elapsed / duration) * 100.0).clamp(0.0, 100.0)
 }
 
+/// Whether the mini-dock has both a loaded book and a resolved uuid — the
+/// two pieces of playback state its active transport bar needs. `None`
+/// means it should render the empty host instead: `book` alone isn't
+/// enough because the Expand link would point at an empty `/listen/` route
+/// (e.g. mid-dismiss, when `book` is set but `uuid` has momentarily
+/// cleared).
+pub(super) fn dock_active_state(
+    book: Option<omnibus_shared::EbookMetadata>,
+    uuid: Option<String>,
+) -> Option<(omnibus_shared::EbookMetadata, String)> {
+    match (book, uuid) {
+        (Some(book), Some(uuid)) => Some((book, uuid)),
+        _ => None,
+    }
+}
+
 /// Persistent bottom dock. Renders only its empty host wrapper until an
 /// audiobook is loaded, keeping SSR and first-WASM-paint markup identical
 /// (`book` is `None` on both).
 #[component]
 pub fn MiniDock() -> Element {
     let playback = use_playback();
-    let book = playback.book.read().clone();
 
     // Stable host wrapper so hydration node-counting stays consistent; only
-    // the inner bar is conditional on a loaded book.
-    let Some(book) = book else {
-        return rsx! { div { class: "mini-dock-host" } };
-    };
-
-    // Require a real uuid before rendering the bar so the Expand links never
-    // point at an empty `/listen/` route (e.g. mid-dismiss, when `book` is set
-    // but `uuid` has momentarily cleared).
-    let Some(uuid) = playback.uuid.read().clone() else {
+    // the inner bar is conditional on both a loaded book and a resolved uuid.
+    let Some((book, uuid)) =
+        dock_active_state(playback.book.read().clone(), playback.uuid.read().clone())
+    else {
         return rsx! { div { class: "mini-dock-host" } };
     };
 
@@ -212,7 +223,9 @@ fn MiniDockActions(uuid: String) -> Element {
 
 #[cfg(test)]
 mod tests {
-    use super::progress_pct;
+    use omnibus_shared::EbookMetadata;
+
+    use super::{dock_active_state, progress_pct};
 
     #[test]
     fn progress_pct_is_zero_when_duration_unknown() {
@@ -234,5 +247,37 @@ mod tests {
     fn progress_pct_treats_non_finite_elapsed_as_zero() {
         assert_eq!(progress_pct(f64::NAN, 100.0), 0.0);
         assert_eq!(progress_pct(f64::INFINITY, 100.0), 0.0);
+    }
+
+    // Mirrors MiniDock's "renders empty host vs. active bar" branch without needing a full component render.
+    #[test]
+    fn dock_active_state_is_none_when_nothing_is_playing() {
+        assert_eq!(dock_active_state(None, None), None);
+    }
+
+    #[test]
+    fn dock_active_state_is_none_when_uuid_has_not_resolved_yet() {
+        let book = EbookMetadata {
+            title: Some("Test Audiobook".into()),
+            ..Default::default()
+        };
+        assert_eq!(dock_active_state(Some(book), None), None);
+    }
+
+    #[test]
+    fn dock_active_state_is_none_when_book_has_not_loaded_yet() {
+        assert_eq!(dock_active_state(None, Some("uuid-1".to_string())), None);
+    }
+
+    #[test]
+    fn dock_active_state_returns_both_when_book_and_uuid_are_present() {
+        let book = EbookMetadata {
+            title: Some("Test Audiobook".into()),
+            ..Default::default()
+        };
+        let (got_book, got_uuid) =
+            dock_active_state(Some(book.clone()), Some("uuid-1".to_string())).unwrap();
+        assert_eq!(got_book, book);
+        assert_eq!(got_uuid, "uuid-1");
     }
 }
