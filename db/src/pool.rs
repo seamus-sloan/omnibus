@@ -1,6 +1,6 @@
 //! SQLite pool initialization for the omnibus data layer. Owns
 //! `init_db` (which runs the embedded migrations, applies per-connection
-//! PRAGMAs, and performs the one-time legacy cover-cache cleanup).
+//! PRAGMAs, runs boot backfills, and performs legacy cache cleanup).
 
 use std::path::Path;
 
@@ -82,6 +82,8 @@ async fn connect_pool(database_url: &str, is_memory: bool) -> Result<SqlitePool,
 /// migrations couldn't compute. Each is a no-op once caught up and is safe
 /// against in-memory test DBs (all pure DB work, no filesystem reads).
 async fn run_boot_backfills(pool: &SqlitePool) -> Result<(), InitDbError> {
+    // Clear clobbered slots before synthetic ledger rows hide them from reindex.
+    repair_ghosted_audiobook_attachments(pool).await?;
     // Auto-attach match key for rows indexed before migration 0016.
     crate::normalize::backfill_norm_columns(pool).await?;
     // F2 `scan_key` diff key for rows indexed before migration 0026,
@@ -95,6 +97,59 @@ async fn run_boot_backfills(pool: &SqlitePool) -> Result<(), InitDbError> {
     crate::missing_files::backfill_missing_files_flags(pool).await?;
     Ok(())
 }
+
+/// Clear audiobook attachment slots bearing the legacy multi-attach clobber
+/// signature: multiple ledger rows for one `(book, format)`, backed by exactly
+/// one file row. The surviving `books` row and all uuid-keyed user data remain.
+async fn repair_ghosted_audiobook_attachments(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let damaged_slots: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT mu.book_id, UPPER(mu.format)
+           FROM merged_uuids mu
+           JOIN book_files bf
+             ON bf.book_id = mu.book_id AND bf.format = mu.format
+          WHERE UPPER(mu.format) IN ('M4B', 'M4A', 'MP3')
+          GROUP BY mu.book_id, UPPER(mu.format)
+         HAVING COUNT(*) > 1 AND COUNT(DISTINCT bf.id) = 1",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    if damaged_slots.is_empty() {
+        tx.commit().await?;
+        return Ok(());
+    }
+
+    for chunk in damaged_slots.chunks(GHOSTED_SLOT_REPAIR_CHUNK) {
+        let predicate =
+            std::iter::repeat_n("(book_id = ? AND format = ? COLLATE NOCASE)", chunk.len())
+                .collect::<Vec<_>>()
+                .join(" OR ");
+
+        let delete_files_sql = format!("DELETE FROM book_files WHERE {predicate}");
+        let mut delete_files = sqlx::query(&delete_files_sql);
+        for (book_id, format) in chunk {
+            delete_files = delete_files.bind(book_id).bind(format);
+        }
+        delete_files.execute(&mut *tx).await?;
+
+        let delete_ledger_sql = format!("DELETE FROM merged_uuids WHERE {predicate}");
+        let mut delete_ledger = sqlx::query(&delete_ledger_sql);
+        for (book_id, format) in chunk {
+            delete_ledger = delete_ledger.bind(book_id).bind(format);
+        }
+        delete_ledger.execute(&mut *tx).await?;
+    }
+
+    tx.commit().await?;
+    tracing::info!(
+        repaired_slots = damaged_slots.len(),
+        "boot backfill: cleared ghosted audiobook attachment slots"
+    );
+    Ok(())
+}
+
+/// Two binds per slot keeps each repair statement under SQLite's 999-bind cap.
+const GHOSTED_SLOT_REPAIR_CHUNK: usize = 400;
 
 /// Run the one-time legacy cover-cache purge on the blocking pool.
 ///

@@ -468,6 +468,230 @@ async fn migrator_is_idempotent_on_rerun() {
     let _ = std::fs::remove_file(&tmp);
 }
 
+struct GhostedRepairFixture {
+    audio_path: String,
+    target_id: i64,
+    target_uuid: String,
+    healthy_uuid: String,
+}
+
+async fn seed_ghosted_repair_fixture(pool: &SqlitePool) -> GhostedRepairFixture {
+    let audio_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("test_data")
+        .join("audiobooks")
+        .join("generated")
+        .join("grace_hopper_series");
+    let audio_path = audio_root.to_string_lossy().into_owned();
+    let target_uuid = crate::test_support::seed_synced_ebook(
+        pool,
+        "Hopper/The Compiled Tales.epub",
+        "The Compiled Tales",
+        "Grace Hopper",
+    )
+    .await;
+    let healthy_uuid = crate::test_support::seed_synced_ebook(
+        pool,
+        "Lovelace/Notes.epub",
+        "Notes",
+        "Ada Lovelace",
+    )
+    .await;
+    crate::sync::sync_audiobooks(
+        pool,
+        "/healthy-audio",
+        crate::sync::AudiobookSyncPlan {
+            new_books: vec![crate::test_support::indexed_audiobook(
+                "Lovelace/Notes.m4b",
+                "Notes",
+                Some("Ada Lovelace"),
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    crate::indexer::reindex_audiobooks(pool, &audio_path)
+        .await
+        .unwrap();
+    let target_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = ?")
+        .bind(&target_uuid)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let audio_file_id: i64 =
+        sqlx::query_scalar("SELECT id FROM book_files WHERE book_id = ? AND format = 'MP3'")
+            .bind(target_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let initial_parts: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM book_file_parts WHERE book_file_id = ?")
+            .bind(audio_file_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(initial_parts, 2, "fixture must begin as a two-part book");
+
+    sqlx::query("DELETE FROM book_file_parts WHERE book_file_id = ? AND ordinal = 0")
+        .bind(audio_file_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO merged_uuids (uuid, book_id, format, library_path, scan_key)
+         VALUES ('ghosted-chapter-1', ?, 'MP3', ?, 'the_compiled_tales/chapter01.mp3')",
+    )
+    .bind(target_id)
+    .bind(&audio_path)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    seed_repair_user_data(pool, &target_uuid).await;
+    assert_eq!(ghosted_slot_counts(pool, target_id).await, (2, 1));
+
+    GhostedRepairFixture {
+        audio_path,
+        target_id,
+        target_uuid,
+        healthy_uuid,
+    }
+}
+
+async fn seed_repair_user_data(pool: &SqlitePool, target_uuid: &str) {
+    sqlx::query(
+        "INSERT INTO users (id, username, password_hash, is_admin)
+         VALUES (1, 'repair-user', 'hash', 1)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO reading_progress
+            (user_id, book_uuid, format, audio_position_seconds)
+         VALUES (1, ?, 'audio', 321.5)",
+    )
+    .bind(target_uuid)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO user_ratings (user_id, book_uuid, half_stars)
+         VALUES (1, ?, 9)",
+    )
+    .bind(target_uuid)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO journal_entries (user_id, book_uuid, body_md)
+         VALUES (1, ?, 'Preserve this note')",
+    )
+    .bind(target_uuid)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn ghosted_slot_counts(pool: &SqlitePool, target_id: i64) -> (i64, i64) {
+    sqlx::query_as(
+        "SELECT
+             (SELECT COUNT(*) FROM merged_uuids
+               WHERE book_id = ? AND format = 'MP3'),
+             (SELECT COUNT(*) FROM book_files
+               WHERE book_id = ? AND format = 'MP3')",
+    )
+    .bind(target_id)
+    .bind(target_id)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn repair_user_data_counts(pool: &SqlitePool, target_uuid: &str) -> (i64, i64, i64) {
+    sqlx::query_as(
+        "SELECT
+             (SELECT COUNT(*) FROM reading_progress WHERE book_uuid = ?),
+             (SELECT COUNT(*) FROM user_ratings WHERE book_uuid = ?),
+             (SELECT COUNT(*) FROM journal_entries WHERE book_uuid = ?)",
+    )
+    .bind(target_uuid)
+    .bind(target_uuid)
+    .bind(target_uuid)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn boot_backfill_repairs_ghosted_multi_attach_and_preserves_surviving_book_data() {
+    let _covers = crate::test_support::CoversTempDir::new("ghosted-multi-attach-repair");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let fixture = seed_ghosted_repair_fixture(&pool).await;
+
+    run_boot_backfills(&pool).await.unwrap();
+    let repaired_slot = ghosted_slot_counts(&pool, fixture.target_id).await;
+    assert_eq!(
+        repaired_slot,
+        (0, 0),
+        "repair must clear the corrupt attachment slot so disk files re-flow"
+    );
+    run_boot_backfills(&pool).await.unwrap();
+    assert_eq!(
+        ghosted_slot_counts(&pool, fixture.target_id).await,
+        repaired_slot
+    );
+    let preserved_books: (i64, i64, i64) = sqlx::query_as(
+        "SELECT
+             (SELECT COUNT(*) FROM books WHERE uuid = ?),
+             (SELECT COUNT(*) FROM book_files bf
+               JOIN books b ON b.id = bf.book_id
+              WHERE b.uuid = ?),
+             (SELECT COUNT(*) FROM merged_uuids
+               WHERE book_id = (SELECT id FROM books WHERE uuid = ?))",
+    )
+    .bind(&fixture.target_uuid)
+    .bind(&fixture.healthy_uuid)
+    .bind(&fixture.healthy_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(preserved_books, (1, 2, 1));
+    assert_eq!(
+        repair_user_data_counts(&pool, &fixture.target_uuid).await,
+        (1, 1, 1)
+    );
+
+    crate::indexer::reindex_audiobooks(&pool, &fixture.audio_path)
+        .await
+        .unwrap();
+    let rebuilt: (i64, i64, i64) = sqlx::query_as(
+        "SELECT
+             (SELECT COUNT(*) FROM books WHERE uuid = ?),
+             (SELECT COUNT(*) FROM book_files
+               WHERE book_id = ? AND format = 'MP3'),
+             (SELECT COUNT(*) FROM book_file_parts p
+               JOIN book_files bf ON bf.id = p.book_file_id
+              WHERE bf.book_id = ? AND bf.format = 'MP3')",
+    )
+    .bind(&fixture.target_uuid)
+    .bind(fixture.target_id)
+    .bind(fixture.target_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rebuilt,
+        (1, 1, 2),
+        "the surviving book identity must regain one two-part audio file"
+    );
+    assert_eq!(
+        repair_user_data_counts(&pool, &fixture.target_uuid).await,
+        (1, 1, 1)
+    );
+}
+
 #[test]
 fn purge_legacy_covers_once_sweeps_then_no_ops() {
     // Standalone temp dir so we don't depend on CoversTempDir's env var
