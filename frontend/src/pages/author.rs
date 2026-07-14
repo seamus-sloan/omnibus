@@ -67,20 +67,26 @@ pub fn AuthorPage(id: i64) -> Element {
 
 // allow: ~86 lines — splitting further means threading the mobile-gated admin-delete signals across a function boundary that doesn't exist on mobile builds.
 fn render_author(
-    a: AuthorDetail,
+    mut a: AuthorDetail,
     server_url: String,
     author: Signal<Option<AuthorDetail>>,
     #[cfg_attr(feature = "mobile", allow(unused_variables))] is_admin: bool,
 ) -> Element {
     // Derive accent from the first book that has one, or fall back to theme.
+    // Owned (not `as_deref`) so this doesn't hold a borrow into `a.books`
+    // across the `mem::take` below.
     let accent = a
         .books
         .iter()
-        .find_map(|b| b.accent.as_deref())
-        .unwrap_or("var(--accent)");
+        .find_map(|b| b.accent.clone())
+        .unwrap_or_else(|| "var(--accent)".to_string());
     let (first, last) = split_name(&a.name);
     let initial = author_initial(&a.name);
-    let (series_groups, standalone) = group_books_by_series(&a.books);
+    // `mem::take` hands `group_books_by_series` ownership of the books
+    // without cloning the whole author payload; `a` itself stays valid
+    // (its `books` field just becomes empty) since `author_hero` below
+    // never reads it.
+    let (series_groups, standalone) = group_books_by_series(std::mem::take(&mut a.books));
     let bg_style = format!(
         "radial-gradient(50% 80% at 80% 20%, color-mix(in oklch, {accent} 14%, transparent), transparent 70%)"
     );
@@ -158,7 +164,7 @@ fn render_author(
         div { class: "disc-page", style: "--accent: {accent}",
             {author_hero(&a, &server_url, author, hero_text, admin_actions)}
             {modal}
-            {author_body(&series_groups, &standalone)}
+            {author_body(series_groups, standalone)}
         }
     }
 }
@@ -289,22 +295,24 @@ fn author_avatar(
 }
 
 /// One (series name, series id, books-in-series) group per distinct
-/// series, in first-seen order.
-type SeriesGroups<'a> = Vec<(String, i64, Vec<&'a EbookMetadata>)>;
+/// series, in first-seen order. Owns its books (rather than borrowing from
+/// `AuthorDetail`) so each tile can move its book into `Cover` instead of
+/// cloning the full struct — see `group_books_by_series`.
+type SeriesGroups = Vec<(String, i64, Vec<EbookMetadata>)>;
 
 /// Body: books grouped by series (each in its own section, linking to
 /// `SeriesDetail` when the series is a real row), then a trailing
 /// "Other works" section for standalone titles.
-fn author_body(series_groups: &SeriesGroups<'_>, standalone: &[&EbookMetadata]) -> Element {
+fn author_body(series_groups: SeriesGroups, standalone: Vec<EbookMetadata>) -> Element {
     rsx! {
         div { class: "disc-body",
-            for (series_name, series_id, books) in series_groups.iter() {
+            for (series_name, series_id, books) in series_groups.into_iter() {
                 div { class: "disc-section",
                     div { class: "disc-section-head",
                         span { class: "label", "Series" }
-                        if *series_id > 0 {
+                        if series_id > 0 {
                             Link {
-                                to: Route::SeriesDetail { id: *series_id },
+                                to: Route::SeriesDetail { id: series_id },
                                 class: "disc-section-title",
                                 h2 { "{series_name}" }
                             }
@@ -313,19 +321,8 @@ fn author_body(series_groups: &SeriesGroups<'_>, standalone: &[&EbookMetadata]) 
                         }
                     }
                     div { class: "disc-grid",
-                        for book in books.iter() {
-                            Link {
-                                key: "{book.id}",
-                                to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
-                                class: "lib-tile",
-                                Cover { book: (*book).clone() }
-                                div { class: "lib-tile-title",
-                                    if let Some(ref idx) = book.series_index {
-                                        "#{idx} · "
-                                    }
-                                    "{book.title.as_deref().unwrap_or(&book.filename)}"
-                                }
-                            }
+                        for book in books.into_iter() {
+                            {author_series_tile(book)}
                         }
                     }
                 }
@@ -338,20 +335,52 @@ fn author_body(series_groups: &SeriesGroups<'_>, standalone: &[&EbookMetadata]) 
                         h2 { class: "disc-section-title", "Standalone & novellas" }
                     }
                     div { class: "disc-grid",
-                        for book in standalone.iter() {
-                            Link {
-                                key: "{book.id}",
-                                to: Route::BookDetail { uuid: book.unique_identifier.clone().unwrap_or_default() },
-                                class: "lib-tile",
-                                Cover { book: (*book).clone() }
-                                div { class: "lib-tile-title",
-                                    "{book.title.as_deref().unwrap_or(&book.filename)}"
-                                }
-                            }
+                        for book in standalone.into_iter() {
+                            {author_standalone_tile(book)}
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+/// One book tile within a series group — cover, plus a title caption
+/// prefixed with the series index when set. Small display fields are
+/// pulled out before `book` moves into `Cover`, which needs ownership.
+fn author_series_tile(book: EbookMetadata) -> Element {
+    let uuid = book.unique_identifier.clone().unwrap_or_default();
+    let series_index = book.series_index.clone();
+    let title = book.title.clone().unwrap_or_else(|| book.filename.clone());
+    let book_id = book.id;
+    rsx! {
+        Link {
+            key: "{book_id}",
+            to: Route::BookDetail { uuid },
+            class: "lib-tile",
+            Cover { book }
+            div { class: "lib-tile-title",
+                if let Some(idx) = series_index {
+                    "#{idx} · "
+                }
+                "{title}"
+            }
+        }
+    }
+}
+
+/// One book tile within the standalone / "Other works" section.
+fn author_standalone_tile(book: EbookMetadata) -> Element {
+    let uuid = book.unique_identifier.clone().unwrap_or_default();
+    let title = book.title.clone().unwrap_or_else(|| book.filename.clone());
+    let book_id = book.id;
+    rsx! {
+        Link {
+            key: "{book_id}",
+            to: Route::BookDetail { uuid },
+            class: "lib-tile",
+            Cover { book }
+            div { class: "lib-tile-title", "{title}" }
         }
     }
 }
@@ -376,20 +405,22 @@ fn author_initial(name: &str) -> String {
 
 /// Groups an author's books by series (in first-seen order, each series'
 /// books in scan order), with non-series titles collected separately.
-fn group_books_by_series(books: &[EbookMetadata]) -> (SeriesGroups<'_>, Vec<&EbookMetadata>) {
-    let mut series_groups: SeriesGroups<'_> = Vec::new();
-    let mut standalone: Vec<&EbookMetadata> = Vec::new();
+/// Takes ownership of `books` so each row moves into its group once
+/// instead of being cloned per rendered tile downstream.
+fn group_books_by_series(books: Vec<EbookMetadata>) -> (SeriesGroups, Vec<EbookMetadata>) {
+    let mut series_groups: SeriesGroups = Vec::new();
+    let mut standalone: Vec<EbookMetadata> = Vec::new();
 
     for book in books {
-        if let Some(ref series_name) = book.series {
+        if let Some(series_name) = book.series.clone() {
             if let Some(group) = series_groups
                 .iter_mut()
-                .find(|(name, _, _)| name == series_name)
+                .find(|(name, _, _)| *name == series_name)
             {
                 group.2.push(book);
             } else {
                 let sid = book.series_id.unwrap_or(0);
-                series_groups.push((series_name.clone(), sid, vec![book]));
+                series_groups.push((series_name, sid, vec![book]));
             }
         } else {
             standalone.push(book);

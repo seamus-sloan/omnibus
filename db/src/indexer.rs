@@ -355,12 +355,14 @@ pub async fn reindex_with_progress(
              skipping the removal pass; no books marked missing (issue #819)"
         );
     }
-    let diff = diff_library(&stat.entries, &db_rows, &library_root, trustworthy);
+    let mut diff = diff_library(&stat.entries, &db_rows, &library_root, trustworthy);
     check_mass_missing(diff.removed.len(), db_file_backed)?;
 
-    // Parse Phase B only for the buckets that need it.
-    let new_targets = diff.new.clone();
-    let changed_targets = diff.changed.clone();
+    // Parse Phase B only for the buckets that need it. `diff.removed`/
+    // `.backfill` are read again below, but `.new`/`.changed` are not, so
+    // move them out instead of cloning every scan target on every reindex.
+    let new_targets = std::mem::take(&mut diff.new);
+    let changed_targets = std::mem::take(&mut diff.changed);
     let parsed = tokio::task::spawn_blocking(move || {
         // Materialize cover sidecars so future scans skip the zip
         // (F0.6). Best-effort: read-only filesystems fall through to the

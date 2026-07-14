@@ -27,7 +27,7 @@ pub(super) fn EbookRow(book: EbookMetadata, ctx: BookTableContext) -> Element {
     } = ctx;
 
     let uuid = book.unique_identifier.clone().unwrap_or_default();
-    let (book_state, editing, authors_draft) = use_row_state(book.clone());
+    let (book_state, editing, authors_draft) = use_row_state(book);
     let save_field = build_save_field(uuid.clone(), server_url.clone(), book_state);
     let save_authors = build_save_authors(uuid.clone(), server_url.clone(), book_state);
     let display = derive_row_display(&book_state.read(), &server_url, &uuid);
@@ -64,7 +64,11 @@ fn use_row_state(
     let editing: Signal<Option<EditField>> = use_signal(|| None);
     use_effect(use_reactive!(|book| {
         if editing().is_none() {
-            book_state.set(book.clone());
+            // `book` here is `use_reactive!`'s per-run dependency snapshot
+            // (already an owned clone produced by the macro), not the
+            // outer `book` parameter — safe to move straight into the
+            // signal instead of cloning again.
+            book_state.set(book);
         }
     }));
 
