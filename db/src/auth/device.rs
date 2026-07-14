@@ -19,6 +19,22 @@ pub const MAX_DEVICE_NAME_CHARS: usize = 255;
 /// chars covers `1.2.3-rc.10+build.20251205abcdef` with headroom.
 pub const MAX_CLIENT_VERSION_CHARS: usize = 64;
 
+/// Hard cap on how many devices `list_devices_for_user` returns for a
+/// single user. Matches `LIST_SHELVES_LIMIT`/`LIST_BOOKMARKS_LIMIT` — a
+/// defensive ceiling so a pathological device count can't produce an
+/// unbounded REST response. In practice `MAX_DEVICES_PER_USER` (enforced
+/// by the `trg_devices_cap_per_user` DB trigger, migration `0041`) keeps
+/// the real row count far below this.
+pub const LIST_DEVICES_LIMIT: i64 = 500;
+
+/// Per-user device cap enforced by the `trg_devices_cap_per_user` trigger
+/// (migration `0041`): on every INSERT it evicts the least-recently-seen
+/// device(s) for that `user_id` beyond this count. Kept as a Rust constant
+/// purely for documentation and test cross-checking — the trigger's SQL
+/// hardcodes the same number, since a trigger body can't reference a Rust
+/// const; a test asserts the two stay in sync.
+pub const MAX_DEVICES_PER_USER: i64 = 50;
+
 /// Reject ASCII control characters (incl. CR/LF) and oversize strings
 /// before INSERT. We *reject* rather than truncate so a buggy or
 /// malicious client gets a deterministic error instead of silently
@@ -64,6 +80,9 @@ pub fn validate_client_version(version: Option<&str>) -> AuthResult<()> {
 /// path in `server::auth::handlers::issue_session` uses the latter to keep the
 /// device + session inserts atomic (see #627: an orphan device row leaks if
 /// `create_session` fails after `register_device` has already committed).
+/// The `trg_devices_cap_per_user` trigger (migration `0041`) evicts the
+/// user's least-recently-seen device(s) beyond `MAX_DEVICES_PER_USER` as
+/// part of this same INSERT, so callers don't need a separate step.
 pub async fn register_device<'e, E>(
     executor: E,
     user_id: i64,
@@ -100,13 +119,14 @@ where
     })
 }
 
-/// List all registered devices for a user, ordered by most-recently-seen first.
+/// List all registered devices for a user, ordered by most-recently-seen first, up to `LIST_DEVICES_LIMIT`.
 pub async fn list_devices_for_user(pool: &SqlitePool, user_id: i64) -> AuthResult<Vec<Device>> {
     let rows = sqlx::query(
         "SELECT id, user_id, name, client_kind, client_version, created_at, last_seen_at
-         FROM devices WHERE user_id = ? ORDER BY last_seen_at DESC",
+         FROM devices WHERE user_id = ? ORDER BY last_seen_at DESC LIMIT ?",
     )
     .bind(user_id)
+    .bind(LIST_DEVICES_LIMIT)
     .fetch_all(pool)
     .await?;
     Ok(rows

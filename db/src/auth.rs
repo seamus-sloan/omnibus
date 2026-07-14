@@ -14,7 +14,7 @@ mod users;
 
 pub use device::{
     list_devices_for_user, register_device, validate_client_version, validate_device_name,
-    MAX_CLIENT_VERSION_CHARS, MAX_DEVICE_NAME_CHARS,
+    LIST_DEVICES_LIMIT, MAX_CLIENT_VERSION_CHARS, MAX_DEVICES_PER_USER, MAX_DEVICE_NAME_CHARS,
 };
 pub use login::verify_login;
 pub use password::{hash_password, validate_password, validate_username, verify_password};
