@@ -102,6 +102,40 @@ test("headline tiles render finished, avg rating, pages, and listening", async (
   await expect(page.getByTestId("stats-tile-listening")).toContainText(/\d+\s*(m|h)/);
 });
 
+test("a tile's grip opens its drill-in and the close button dismisses it", async ({ page }) => {
+  await gotoReady(page, "/stats");
+
+  await page.getByTestId("stats-tile-avg-rating").click();
+  const drillIn = page.getByTestId("stats-drill-in");
+  await expect(drillIn).toBeVisible();
+  await expect(drillIn).toContainText("Avg rating");
+  // Every drill-in shows a delta chip (or the "not enough data" fallback) and
+  // a trend chart — AC2.
+  await expect(page.getByTestId("stats-drill-delta")).toBeVisible();
+
+  await page.getByTestId("stats-drill-close").click();
+  await expect(drillIn).toHaveCount(0);
+
+  // The period switcher underneath is untouched by opening/closing (AC4).
+  await expect(page.getByRole("group", { name: "Period" }).getByRole("button", { name: "Month" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+});
+
+test("the Finished drill-in lists the books completed in the window", async ({ page }) => {
+  await gotoReady(page, "/stats");
+
+  await page.getByTestId("stats-tile-finished").click();
+  const list = page.getByTestId("stats-drill-finished-list");
+  await expect(list).toBeVisible();
+  await expect(list).toContainText(FIXTURE_BOOKS[0].title);
+
+  // Clicking the scrim (outside the sheet/modal) also dismisses it.
+  await page.getByTestId("stats-drill-in").click({ position: { x: 4, y: 4 } });
+  await expect(page.getByTestId("stats-drill-in")).toHaveCount(0);
+});
+
 test("switching the period re-queries and updates the period section", async ({ page }) => {
   await gotoReady(page, "/stats");
   const seg = page.getByRole("group", { name: "Period" });

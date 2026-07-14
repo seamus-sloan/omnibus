@@ -2,7 +2,7 @@
 //! the empty-library case, and the 60s TTL cache contract (fresh-within-window
 //! vs refresh-after-expiry).
 
-use omnibus_shared::StatsRange;
+use omnibus_shared::{PeriodComparison, StatsRange};
 
 use super::*;
 use crate::init_db;
@@ -527,4 +527,123 @@ async fn books_per_month_is_empty_of_finishes_for_a_user_with_no_activity() {
     let months = books_per_month(&pool, user).await.unwrap();
     assert_eq!(months.len(), 12);
     assert_eq!(months.iter().map(|m| m.books).sum::<i64>(), 0);
+}
+
+#[tokio::test]
+async fn finished_books_carry_cover_url_only_when_the_book_has_a_cover() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 2).await;
+    let user = seed_user(&pool, "alice").await;
+    sqlx::query("UPDATE books SET has_cover = 1 WHERE uuid = 'uuid-1'")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    finish_journal(&pool, user, "uuid-1", T0).await;
+    finish_journal(&pool, user, "uuid-2", T0).await;
+
+    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    let by_uuid = |u: &str| s.finished_books.iter().find(|b| b.book_uuid == u).unwrap();
+    assert_eq!(
+        by_uuid("uuid-1").cover_url.as_deref(),
+        Some("/api/covers/uuid-1")
+    );
+    assert_eq!(by_uuid("uuid-2").cover_url, None);
+}
+
+#[tokio::test]
+async fn finished_books_carry_the_users_rating_when_rated() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    rate_book(&pool, user, "uuid-1", 9, T0).await;
+    finish_journal(&pool, user, "uuid-1", T0).await;
+
+    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    assert_eq!(s.finished_books[0].rating, Some(4.5));
+}
+
+#[tokio::test]
+async fn finished_books_rating_is_none_when_unrated() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    finish_journal(&pool, user, "uuid-1", T0).await;
+
+    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    assert_eq!(s.finished_books[0].rating, None);
+}
+
+#[tokio::test]
+async fn previous_period_is_zeroed_for_all_time() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    listening_session(&pool, user, "uuid-1", T0, 600).await;
+
+    let prev = previous_period(&pool, user, StatsRange::AllTime)
+        .await
+        .unwrap();
+    assert_eq!(prev, PeriodComparison::default());
+}
+
+#[tokio::test]
+async fn previous_period_month_sums_only_last_calendar_months_activity() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    let last_month = months_ago_secs(&pool, 1).await;
+    let two_months_back = months_ago_secs(&pool, 2).await;
+    let now = now_secs();
+
+    listening_session(&pool, user, "uuid-1", last_month, 500).await;
+    // Outside the previous window — must not be counted.
+    listening_session(&pool, user, "uuid-1", two_months_back, 999).await;
+    listening_session(&pool, user, "uuid-1", now, 111).await;
+    rate_book(&pool, user, "uuid-1", 10, last_month).await;
+    finish_journal(&pool, user, "uuid-1", last_month).await;
+
+    let prev = previous_period(&pool, user, StatsRange::Month)
+        .await
+        .unwrap();
+    assert_eq!(prev.listening_seconds, 500);
+    assert_eq!(prev.avg_stars, Some(5.0));
+    assert_eq!(prev.books_finished, 1);
+}
+
+#[tokio::test]
+async fn listening_daily_sums_seconds_per_day_within_the_window() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    listening_session(&pool, user, "uuid-1", T0, 300).await;
+    listening_session(&pool, user, "uuid-1", T0 + 100, 200).await;
+    listening_session(&pool, user, "uuid-1", T0 + DAY, 400).await;
+
+    let daily = listening_daily(&pool, user, T0).await.unwrap();
+    assert_eq!(daily.len(), 2);
+    assert_eq!(daily[0].seconds, 500);
+    assert_eq!(daily[1].seconds, 400);
+}
+
+#[tokio::test]
+async fn rating_monthly_returns_twelve_months_zeroed_when_unrated() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "loner").await;
+
+    let months = rating_monthly(&pool, user).await.unwrap();
+    assert_eq!(months.len(), 12);
+    assert!(months.iter().all(|m| m.value == 0.0));
+}
+
+#[tokio::test]
+async fn rating_monthly_places_a_rating_in_its_calendar_month() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    let now = months_ago_secs(&pool, 0).await;
+    rate_book(&pool, user, "uuid-1", 7, now).await;
+
+    let months = rating_monthly(&pool, user).await.unwrap();
+    assert_eq!(months.last().unwrap().value, 3.5);
 }
