@@ -189,7 +189,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn allows_up_to_max_then_blocks() {
+    async fn rate_limiter_allow_up_to_max_then_blocks() {
         let rl = RateLimiter::with_policy(Duration::from_secs(60), 3);
         let ip: IpAddr = "127.0.0.1".parse().unwrap();
         assert!(rl.allow(ip).await);
@@ -199,7 +199,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn separate_ips_have_separate_buckets() {
+    async fn rate_limiter_allow_separate_ips_have_separate_buckets() {
         let rl = RateLimiter::with_policy(Duration::from_secs(60), 1);
         let a: IpAddr = "127.0.0.1".parse().unwrap();
         let b: IpAddr = "127.0.0.2".parse().unwrap();
@@ -209,7 +209,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn window_resets_after_elapsed() {
+    async fn rate_limiter_allow_window_resets_after_elapsed() {
         let rl = RateLimiter::with_policy(Duration::from_millis(10), 1);
         let ip: IpAddr = "127.0.0.1".parse().unwrap();
         assert!(rl.allow(ip).await);
@@ -418,7 +418,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prunes_stale_entries_at_cap() {
+    async fn rate_limiter_allow_prunes_stale_entries_at_cap() {
         let rl = RateLimiter::with_policy(Duration::from_millis(1), MAX_REQUESTS);
         // Fill to just under the cap using distinct IPs.
         for i in 0..MAX_BUCKETS {
