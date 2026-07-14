@@ -328,6 +328,51 @@ async fn reindex_returns_200_when_scan_succeeds() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
+// Regression test for #1056: same as `scan_library_returns_200_when_
+// triggered_by_a_second_promoted_admin` below, but for the synchronous
+// `/api/reindex` handler the issue also named.
+#[tokio::test]
+async fn reindex_returns_200_when_triggered_by_a_second_promoted_admin() {
+    let (app, _state, pool) = fixture().await;
+    auth_test_support::create_admin(&pool, "owner").await;
+    let second_admin = auth_test_support::create_admin(&pool, "second-admin").await;
+    let token = auth_test_support::bearer_token(&pool, second_admin.id).await;
+
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../test_data/epubs/generated")
+        .canonicalize()
+        .expect("fixtures dir should resolve");
+    let scratch = tempfile::tempdir().expect("create scratch dir");
+    for entry in std::fs::read_dir(&source).expect("read fixtures dir") {
+        let entry = entry.expect("fixture entry");
+        if entry.file_type().expect("file type").is_file() {
+            let dest = scratch.path().join(entry.file_name());
+            std::fs::copy(entry.path(), dest).expect("copy fixture");
+        }
+    }
+    let settings = omnibus_shared::Settings {
+        ebook_library_path: Some(scratch.path().to_string_lossy().to_string()),
+        audiobook_library_path: None,
+        scan_interval_hours: None,
+    };
+    db::set_settings(&pool, &settings)
+        .await
+        .expect("set_settings should persist the fixture path");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/reindex")
+                .method("POST")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
 #[tokio::test]
 async fn scan_library_returns_200_when_a_path_is_configured() {
     let (app, _state, pool) = fixture().await;
@@ -413,6 +458,42 @@ async fn scan_library_returns_403_when_not_admin() {
         .await
         .expect("request should succeed");
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+// Regression test for #1056: `AdminUser` gates purely on the live
+// `users.is_admin` column, with no first-user/owner/`id == 1`
+// special-casing anywhere on the scan path — a second, later-promoted
+// admin must pass identically to the very first admin account.
+#[tokio::test]
+async fn scan_library_returns_200_when_triggered_by_a_second_promoted_admin() {
+    let (app, _state, pool) = fixture().await;
+    // Seed a first admin (mirrors the account created at registration)
+    // before creating the second one the issue is about.
+    auth_test_support::create_admin(&pool, "owner").await;
+    let second_admin = auth_test_support::create_admin(&pool, "second-admin").await;
+    let token = auth_test_support::bearer_token(&pool, second_admin.id).await;
+
+    let settings = omnibus_shared::Settings {
+        ebook_library_path: Some("/some/library".to_string()),
+        audiobook_library_path: None,
+        scan_interval_hours: None,
+    };
+    db::set_settings(&pool, &settings)
+        .await
+        .expect("set_settings should persist the path");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/scan-library")
+                .method("POST")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
