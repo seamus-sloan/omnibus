@@ -520,10 +520,13 @@ test("shows an uploaded cover override and reverts it", async ({ page, request }
   const revertBtn = page.getByTestId("cover-remove-override");
   await expect(revertBtn).toBeVisible();
 
-  // Revert via the real UI control so subsequent tests see the original state.
+  // Revert via the real UI control so subsequent tests see the original
+  // state. Unlike upload, the no-body DELETE rides the Dioxus server-function
+  // transport (`rpc_delete_ebook_cover`), not a raw REST DELETE — it's a POST
+  // to a fixed RPC path with the uuid in the body, not the URL.
   await expectMutation(
     page,
-    { method: "DELETE", url: new RegExp(`/api/ebooks/${id}/cover$`), expectedStatus: 200 },
+    { method: "POST", url: /\/api\/rpc\/ebook\/cover\/delete$/, expectedStatus: 200 },
     async () => revertBtn.click(),
   );
   await expect(page.getByTestId("cover-hint")).toHaveText("extracted from file");
@@ -538,8 +541,8 @@ test("surfaces an error and keeps the override active when revert fails", async 
   const revertBtn = page.getByTestId("cover-remove-override");
   await expect(revertBtn).toBeVisible();
 
-  await page.route(`**/api/ebooks/${id}/cover`, (route) => {
-    if (route.request().method() === "DELETE") {
+  await page.route("**/api/rpc/ebook/cover/delete", (route) => {
+    if (route.request().method() === "POST") {
       return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
     }
     return route.continue();
@@ -547,7 +550,7 @@ test("surfaces an error and keeps the override active when revert fails", async 
 
   await expectMutation(
     page,
-    { method: "DELETE", url: new RegExp(`/api/ebooks/${id}/cover$`), expectedStatus: 500 },
+    { method: "POST", url: /\/api\/rpc\/ebook\/cover\/delete$/, expectedStatus: 500 },
     async () => revertBtn.click(),
   );
 
@@ -560,10 +563,10 @@ test("surfaces an error and keeps the override active when revert fails", async 
   await expect(revertBtn).toBeEnabled();
 
   // Clean up: stop intercepting and revert successfully.
-  await page.unroute(`**/api/ebooks/${id}/cover`);
+  await page.unroute("**/api/rpc/ebook/cover/delete");
   await expectMutation(
     page,
-    { method: "DELETE", url: new RegExp(`/api/ebooks/${id}/cover$`), expectedStatus: 200 },
+    { method: "POST", url: /\/api\/rpc\/ebook\/cover\/delete$/, expectedStatus: 200 },
     async () => revertBtn.click(),
   );
   await expect(page.getByTestId("cover-hint")).toHaveText("extracted from file");
