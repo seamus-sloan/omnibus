@@ -10,7 +10,7 @@ use crate::Route;
 
 use super::discovery::{
     cover_src, list_count_label, same_hand_author_label, same_hand_title, same_hand_year,
-    suggestion_cover_book,
+    suggestion_cover_book, SuggestionsSpinner,
 };
 use super::journal::BdJournalSection;
 use super::{BdInsightCell, BdMetaRow, BdSectionHead};
@@ -219,9 +219,10 @@ pub(super) fn BdSuggestionsStrip(
                 Some(SuggestionsResponse::NotConfigured) => rsx! {
                     SuggestionsConnectCard { is_admin }
                 },
-                // None (first paint, pre-fetch) or Pending → quiet placeholder.
+                // None (first paint, pre-fetch) or Pending → loading placeholder.
                 _ => rsx! {
-                    div { class: "bd-suggest-pending card", "data-testid": "suggestions-pending",
+                    div { class: "bd-suggest-pending bd-suggest-loading card", "data-testid": "suggestions-pending",
+                        SuggestionsSpinner {}
                         p { class: "mono bd-stub-hint", "Looking for read-alikes via Hardcover\u{2026}" }
                     }
                 },

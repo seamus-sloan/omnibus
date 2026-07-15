@@ -4208,6 +4208,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
 .m-strip-note { font-size: 13px; color: var(--ink-2); line-height: 1.5; }
+.m-suggest-loading { display: flex; align-items: center; gap: 8px; }
 
 /* Shelf detail: at phone widths the shared markup (rail hidden) reads as a
    mobile screen — tighten the grid to three columns to match the design. */
@@ -5323,6 +5324,23 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .bd-suggest-pending,
 .bd-suggest-connect { margin-top: 4px; }
 .bd-suggest-pending { padding: 16px 18px; }
+.bd-suggest-loading { display: flex; align-items: center; gap: 10px; }
+
+/* Inline loading spinner (F3.3 suggestions fetch) — a rotating ring, shared
+   by the web `.bd-suggest-loading` and mobile `.m-suggest-loading` blocks. */
+.suggest-spinner {
+  width: 13px; height: 13px; flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid color-mix(in oklch, var(--accent) 40%, transparent);
+  border-top-color: var(--accent);
+  animation: suggest-spin 0.9s linear infinite;
+}
+@keyframes suggest-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .suggest-spinner { animation: none; }
+}
 
 .bd-suggest-connect { display: flex; align-items: center; justify-content: space-between;
   gap: 22px; padding: 22px 24px; border: 1px dashed var(--line-2); }
