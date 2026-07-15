@@ -333,6 +333,77 @@ fn check_mass_missing_reports_counts_and_percent_in_the_error() {
     assert!((err.percent - 50.0).abs() < f64::EPSILON);
 }
 
+// ---------- #1057: warn threshold (the sub-abort middle ground) ----------
+
+#[test]
+fn ghost_warning_threshold_exceeded_is_false_below_the_warn_fraction() {
+    // 10 of 100 (10%) sits at the warn boundary, not over it — silent.
+    assert!(!ghost_warning_threshold_exceeded(10, 100));
+    // 9 of 100 (9%) is comfortably under the warn fraction.
+    assert!(!ghost_warning_threshold_exceeded(9, 100));
+}
+
+#[test]
+fn ghost_warning_threshold_exceeded_is_false_under_the_absolute_floor_regardless_of_percent() {
+    // Deleting the only book in a 1-book library is 100% but under the
+    // absolute floor shared with the abort guard — never warns.
+    assert!(!ghost_warning_threshold_exceeded(1, 1));
+    assert!(!ghost_warning_threshold_exceeded(
+        MASS_MISSING_MIN_ABSOLUTE,
+        MASS_MISSING_MIN_ABSOLUTE
+    ));
+}
+
+#[test]
+fn ghost_warning_threshold_exceeded_is_false_when_the_library_has_no_file_backed_books() {
+    assert!(!ghost_warning_threshold_exceeded(50, 0));
+}
+
+#[test]
+fn ghost_warning_threshold_exceeded_is_true_in_the_warn_band_below_the_abort_guard() {
+    // 15 of 100 (15%) clears the 10% warn fraction but stays under the 20%
+    // abort fraction — the sub-abort middle ground this issue adds.
+    assert!(ghost_warning_threshold_exceeded(15, 100));
+    assert!(
+        check_mass_missing(15, 100).is_ok(),
+        "the warn band must not trip the #819 abort guard"
+    );
+}
+
+#[test]
+fn ghost_warning_threshold_exceeded_is_true_up_to_the_abort_boundary() {
+    // 20 of 100 (20%) is the abort guard's own boundary (still allowed
+    // through by check_mass_missing) and clears the warn fraction too.
+    assert!(ghost_warning_threshold_exceeded(20, 100));
+    assert!(check_mass_missing(20, 100).is_ok());
+    // 21 of 100 (21%) crosses into the abort guard.
+    assert!(check_mass_missing(21, 100).is_err());
+}
+
+#[test]
+fn reindex_stats_ghost_warning_is_none_below_the_warn_threshold() {
+    let stats = ReindexStats {
+        removed: 5,
+        file_backed_total: 100,
+    };
+    assert_eq!(stats.ghost_warning(), None);
+}
+
+#[test]
+fn reindex_stats_ghost_warning_carries_the_removed_and_total_counts_in_the_warn_band() {
+    let stats = ReindexStats {
+        removed: 15,
+        file_backed_total: 100,
+    };
+    assert_eq!(
+        stats.ghost_warning(),
+        Some(omnibus_shared::GhostFilesWarning {
+            removed: 15,
+            total: 100,
+        })
+    );
+}
+
 #[test]
 fn is_stale_decision_respects_window_boundaries() {
     // Pure window logic: not stale strictly inside the window, stale at
@@ -720,6 +791,34 @@ async fn backfill_chapters_is_idempotent_after_all_books_have_chapters() {
         progress_calls, 0,
         "on_progress must not be called when all books already have chapters"
     );
+}
+
+// ---------- #1057: ReindexStats plumbed off a real scan ----------
+
+/// `reindex` returns the ghost count and pre-scan file-backed total it
+/// measured, not just `()` — the tally the worker projects into a
+/// [`omnibus_shared::GhostFilesWarning`] on the wire.
+#[tokio::test]
+async fn reindex_returns_stats_with_the_removed_count_and_file_backed_total() {
+    let _covers = CoversTempDir::new("reindex-stats");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = make_test_dir("reindex-stats-lib");
+    let lib_path = lib.to_string_lossy().into_owned();
+
+    seed_ebook_at(&pool, &lib_path, "a.epub", "Dracula").await;
+    seed_ebook_at(&pool, &lib_path, "b.epub", "Frankenstein").await;
+    seed_ebook_at(&pool, &lib_path, "c.epub", "Carmilla").await;
+    std::fs::remove_file(lib.join("b.epub")).unwrap();
+
+    let stats = reindex(&pool, &lib_path).await.unwrap();
+
+    assert_eq!(stats.removed, 1, "exactly one book's file went missing");
+    assert_eq!(
+        stats.file_backed_total, 3,
+        "the pre-scan file-backed total is measured before this scan's removal"
+    );
+
+    let _ = std::fs::remove_dir_all(&lib);
 }
 
 // ---------- #819: incomplete-enumeration data-loss guard ----------

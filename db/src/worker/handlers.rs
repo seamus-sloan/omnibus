@@ -9,10 +9,12 @@ use super::types::{Task, TaskId, TaskOutcome, Worker};
 
 /// Map a handler's `Result` into a [`TaskOutcome`], stringifying the error.
 /// The `Ok` payload is discarded (some handlers return a path/id), so `Ok(())`
-/// and `Ok(value)` collapse to [`TaskOutcome::Ok`] identically.
+/// and `Ok(value)` collapse to [`TaskOutcome::Ok(None)`] identically. Scan
+/// tasks that need to surface a ghost-count warning (issue #1057) build
+/// their `TaskOutcome` directly instead of going through this helper.
 fn outcome_of<T, E: std::fmt::Display>(result: Result<T, E>) -> TaskOutcome {
     match result {
-        Ok(_) => TaskOutcome::Ok,
+        Ok(_) => TaskOutcome::Ok(None),
         Err(e) => TaskOutcome::Err(e.to_string()),
     }
 }
@@ -20,16 +22,20 @@ fn outcome_of<T, E: std::fmt::Display>(result: Result<T, E>) -> TaskOutcome {
 impl Worker {
     pub(super) async fn execute(self: &Arc<Self>, task: Task, id: TaskId) -> TaskOutcome {
         match task {
-            Task::Scan { library_path } => outcome_of(
-                crate::indexer::reindex_with_progress(
+            Task::Scan { library_path } => {
+                match crate::indexer::reindex_with_progress(
                     &self.pool,
                     &library_path,
                     |processed, total| {
                         self.report_progress(id, processed, Some(total));
                     },
                 )
-                .await,
-            ),
+                .await
+                {
+                    Ok(stats) => TaskOutcome::Ok(stats.ghost_warning()),
+                    Err(e) => TaskOutcome::Err(e.to_string()),
+                }
+            }
             Task::ScanAudiobooks { library_path } => {
                 self.handle_scan_audiobooks(library_path, id).await
             }
@@ -113,9 +119,10 @@ impl Worker {
         )
         .await
         {
-            Ok(()) => {
+            Ok(stats) => {
+                let warning = stats.ghost_warning();
                 self.post(Task::BackfillChapters { library_path });
-                TaskOutcome::Ok
+                TaskOutcome::Ok(warning)
             }
             Err(e) => TaskOutcome::Err(e.to_string()),
         }
@@ -146,7 +153,7 @@ impl Worker {
         })
         .await
         {
-            Ok(Ok(())) => TaskOutcome::Ok,
+            Ok(Ok(())) => TaskOutcome::Ok(None),
             Ok(Err(e)) => TaskOutcome::Err(e.to_string()),
             Err(join_err) => {
                 let kind = if join_err.is_panic() {
@@ -175,5 +182,5 @@ async fn handle_test_task(
     if let Some(f) = on_done.as_ref() {
         f();
     }
-    TaskOutcome::Ok
+    TaskOutcome::Ok(None)
 }

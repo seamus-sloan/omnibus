@@ -162,7 +162,7 @@ async fn post_settings_triggers_scan_via_worker() {
 
     let outcome = state.worker().await_completion(task_id).await;
     assert!(
-        matches!(outcome, TaskOutcome::Ok),
+        matches!(outcome, TaskOutcome::Ok(_)),
         "worker scan should succeed on a valid fixture dir, got {outcome:?}"
     );
 

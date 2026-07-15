@@ -8,8 +8,11 @@ use std::sync::Arc;
 use std::sync::Mutex as TestMutex;
 use std::time::{Duration, Instant};
 
-use omnibus_shared::{ProgressState, TaskKind};
+use omnibus_shared::{GhostFilesWarning, ProgressState, TaskKind};
 use sqlx::SqlitePool;
+
+use crate::sync::{sync_books, SyncPlan};
+use crate::test_support::{indexed_with_stat, make_test_dir};
 
 use super::types::{Task, TaskOutcome, Worker, WorkerConfig};
 
@@ -33,7 +36,7 @@ async fn post_runs_a_task() {
         on_done: None,
     });
     match w.await_completion(id).await {
-        TaskOutcome::Ok => {}
+        TaskOutcome::Ok(_) => {}
         other => panic!("expected Ok, got {other:?}"),
     }
 }
@@ -319,8 +322,8 @@ async fn same_resource_serialized_tasks_leave_no_lock_behind() {
     let id1 = mk(&w, "s1");
     let id2 = mk(&w, "s2");
     let (o1, o2) = tokio::join!(w.await_completion(id1), w.await_completion(id2));
-    assert!(matches!(o1, TaskOutcome::Ok));
-    assert!(matches!(o2, TaskOutcome::Ok));
+    assert!(matches!(o1, TaskOutcome::Ok(_)));
+    assert!(matches!(o2, TaskOutcome::Ok(_)));
     // The run loop prunes after dropping its guard; allow the second
     // task's cleanup to land after its outcome was observed.
     let drained = poll_resource_locks_empty(&w).await;
@@ -544,7 +547,7 @@ async fn poisoned_progress_lock_recovers_instead_of_panicking() {
         on_done: None,
     });
     match w.await_completion(id).await {
-        TaskOutcome::Ok => {}
+        TaskOutcome::Ok(_) => {}
         other => panic!("expected Ok after poison recovery, got {other:?}"),
     }
 
@@ -673,7 +676,7 @@ async fn poisoned_completions_lock_recovers_instead_of_panicking() {
         .unwrap();
     });
     match outcome {
-        TaskOutcome::Ok => {}
+        TaskOutcome::Ok(_) => {}
         other => panic!("expected Ok after poison recovery, got {other:?}"),
     }
 }
@@ -716,7 +719,7 @@ async fn task_state_reports_running_then_terminal() {
     );
 
     match w.await_completion(id).await {
-        TaskOutcome::Ok => {}
+        TaskOutcome::Ok(_) => {}
         other => panic!("expected Ok, got {other:?}"),
     }
     assert!(
@@ -758,3 +761,94 @@ async fn owned_task_state_scopes_reads_to_the_owner() {
 
 // `periodic_scan_tick` tests moved to `worker::periodic_scan::tests`, a
 // sibling of `periodic_scan.rs`.
+
+// ---------- #1057: mass-missing warning plumbed onto Task::Scan's Done ----------
+
+/// Seed `count` on-disk stub ebooks under `library_path` through the real
+/// `sync_books` write path, each with its actual on-disk `(mtime, size)`
+/// stat so a later `Task::Scan` classifies an untouched file as Unchanged.
+async fn seed_stub_ebooks(pool: &SqlitePool, library_path: &str, count: usize) {
+    for i in 0..count {
+        let filename = format!("book-{i}.epub");
+        let abs = std::path::Path::new(library_path).join(&filename);
+        std::fs::write(&abs, b"not a zip").unwrap();
+        let meta = std::fs::metadata(&abs).unwrap();
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let book = indexed_with_stat(&filename, Some(&filename), mtime, meta.len() as i64);
+        sync_books(
+            pool,
+            library_path,
+            SyncPlan {
+                new_books: vec![book],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+}
+
+/// AC2: a scan that ghosts only a few books (below the warn threshold)
+/// completes with the ordinary `Done { ghost_warning: None }` — the
+/// existing `DoneRow` behavior is unchanged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_scan_reports_no_ghost_warning_below_the_warn_threshold() {
+    let pool = pool().await;
+    let lib = make_test_dir("worker-scan-no-warning");
+    let library_path = lib.to_string_lossy().into_owned();
+    seed_stub_ebooks(&pool, &library_path, 20).await;
+    // 3 of 20 ghosted books is under MASS_MISSING_MIN_ABSOLUTE (10) — always
+    // silent, regardless of the 15% fraction.
+    for i in 0..3 {
+        std::fs::remove_file(lib.join(format!("book-{i}.epub"))).unwrap();
+    }
+
+    let w = make_worker_default(pool);
+    let id = w.post(Task::Scan { library_path });
+    match w.await_completion(id).await {
+        TaskOutcome::Ok(warning) => assert_eq!(warning, None),
+        other => panic!("expected Ok, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// AC1/AC5: a scan that ghosts a large-but-sub-abort-threshold number of
+/// books completes successfully (the #819 abort guard does not trip) but
+/// its `Done` state carries a [`GhostFilesWarning`] naming the ghost count
+/// and the pre-scan file-backed total — the wire type the settings page
+/// renders a distinct warning row from.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_scan_reports_ghost_warning_in_the_warn_band_below_abort() {
+    let pool = pool().await;
+    let lib = make_test_dir("worker-scan-warning-band");
+    let library_path = lib.to_string_lossy().into_owned();
+    seed_stub_ebooks(&pool, &library_path, 100).await;
+    // 15 of 100 (15%) clears the 10% warn fraction but stays under the 20%
+    // abort fraction — the sub-abort middle ground this issue adds.
+    for i in 0..15 {
+        std::fs::remove_file(lib.join(format!("book-{i}.epub"))).unwrap();
+    }
+
+    let w = make_worker_default(pool);
+    let id = w.post(Task::Scan { library_path });
+    match w.await_completion(id).await {
+        TaskOutcome::Ok(warning) => {
+            assert_eq!(
+                warning,
+                Some(GhostFilesWarning {
+                    removed: 15,
+                    total: 100,
+                })
+            );
+        }
+        other => panic!("expected Ok with a ghost warning, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(&lib);
+}

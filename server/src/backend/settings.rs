@@ -81,7 +81,7 @@ pub(super) async fn post_reindex(_admin: AdminUser, State(state): State<AppState
     };
     let task_id = state.worker.post(Task::Scan { library_path });
     match state.worker.await_completion(task_id).await {
-        TaskOutcome::Ok => axum::http::StatusCode::OK.into_response(),
+        TaskOutcome::Ok(_) => axum::http::StatusCode::OK.into_response(),
         TaskOutcome::Err(e) => internal("reindex", e),
     }
 }
@@ -121,7 +121,7 @@ pub(super) async fn post_scan_library(
 pub(super) async fn post_rebuild_fts(_admin: AdminUser, State(state): State<AppState>) -> Response {
     let task_id = state.worker.post(Task::RebuildFtsIndex);
     match state.worker.await_completion(task_id).await {
-        TaskOutcome::Ok => axum::http::StatusCode::OK.into_response(),
+        TaskOutcome::Ok(_) => axum::http::StatusCode::OK.into_response(),
         TaskOutcome::Err(e) => internal("rebuild fts", e),
     }
 }

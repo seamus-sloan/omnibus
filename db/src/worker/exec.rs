@@ -98,9 +98,11 @@ impl Worker {
     /// success, the last reported `processed` count is pulled out of the
     /// progress map so a Phase-2 in-flight report stays reflected in the final
     /// `Done` (today there is no in-flight reporter, so this is always 0).
+    /// `ghost_warning` (issue #1057) rides straight through from the
+    /// `TaskOutcome` onto the `Done` state.
     fn project_terminal(&self, id: TaskId, outcome: &TaskOutcome) -> ProgressState {
         match outcome {
-            TaskOutcome::Ok => {
+            TaskOutcome::Ok(ghost_warning) => {
                 let processed = lock_unpoison(&self.progress)
                     .get(&id)
                     .and_then(|e| match e.progress.state {
@@ -108,7 +110,10 @@ impl Worker {
                         _ => None,
                     })
                     .unwrap_or(0);
-                ProgressState::Done { processed }
+                ProgressState::Done {
+                    processed,
+                    ghost_warning: ghost_warning.clone(),
+                }
             }
             TaskOutcome::Err(msg) => ProgressState::Failed {
                 message: msg.clone(),

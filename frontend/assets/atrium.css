@@ -2508,6 +2508,12 @@ a.idx-letter-on:focus-visible {
   color: var(--ink-0);
   align-items: flex-start;
 }
+.worker-status-warn {
+  border-left: 3px solid var(--warn);
+  background: color-mix(in oklch, var(--warn) 8%, var(--bg-1));
+  color: var(--ink-0);
+  align-items: flex-start;
+}
 .worker-status-label {
   flex: 1;
   font-variant-numeric: tabular-nums;

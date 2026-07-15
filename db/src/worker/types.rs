@@ -207,8 +207,11 @@ pub type TaskId = u64;
 /// Terminal result of a task, delivered to awaiters of its [`TaskId`].
 #[derive(Clone, Debug)]
 pub enum TaskOutcome {
-    /// The handler ran to completion successfully.
-    Ok,
+    /// The handler ran to completion successfully. `Some(_)` only for a
+    /// scan whose ghost count cleared the warn threshold (issue #1057);
+    /// every other task kind (and a scan under the threshold) reports
+    /// `None`.
+    Ok(Option<omnibus_shared::GhostFilesWarning>),
     /// The handler failed; the string is the stringified underlying error.
     /// Also produced when the spawned task is dropped or panics before
     /// reporting (see [`Worker::await_completion`]).

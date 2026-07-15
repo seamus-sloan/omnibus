@@ -186,7 +186,7 @@ coarsened to the shape below — see "Coarse variants".
 [db/src/indexer.rs](../db/src/indexer.rs):
 
 ```rust
-pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()> {
+pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<ReindexStats> {
     // ...
     if let Some(msg) = stat.error {
         anyhow::bail!("scan of {library_path} failed: {msg}");
