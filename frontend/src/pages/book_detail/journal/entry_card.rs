@@ -408,9 +408,21 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 }
 
 fn should_show_more_button(markdown: &str) -> bool {
-    let line_count = markdown.lines().count();
-    markdown.trim().chars().count() > JOURNAL_COLLAPSE_CHAR_THRESHOLD
-        || line_count > JOURNAL_COLLAPSE_LINE_THRESHOLD
+    if markdown
+        .trim()
+        .chars()
+        .take(JOURNAL_COLLAPSE_CHAR_THRESHOLD + 1)
+        .count()
+        > JOURNAL_COLLAPSE_CHAR_THRESHOLD
+    {
+        return true;
+    }
+
+    markdown
+        .lines()
+        .take(JOURNAL_COLLAPSE_LINE_THRESHOLD + 1)
+        .count()
+        > JOURNAL_COLLAPSE_LINE_THRESHOLD
 }
 
 #[cfg(test)]
