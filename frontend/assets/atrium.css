@@ -897,7 +897,7 @@ html, body { overscroll-behavior: none; }
 .bd-journal-blurb {
   font-size: 11px;
   color: var(--ink-3);
-  margin: -8px 0 18px;
+  margin: -8px 0 26px;
 }
 
 /* Collapsed composer prompt (click to expand) */
