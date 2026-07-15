@@ -1,16 +1,16 @@
+//! Unit tests for the `journal_images` module — write/read round-trip,
+//! unsupported-mime rejection, and path-traversal/malformed-name rejection.
+
 use super::*;
+use crate::test_support::EnvVarGuard;
 
-/// Serialize the env-var mutation across tests in this module.
-static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
+/// Point `OMNIBUS_JOURNAL_IMAGES_DIR` at a fresh temp dir for the duration
+/// of `f`. Both the env var (via `EnvVarGuard`) and the temp dir (via
+/// `tempfile::TempDir`) restore/clean up on drop, including on panic.
 fn with_temp_dir<T>(f: impl FnOnce() -> T) -> T {
-    let _guard = ENV_LOCK.lock().unwrap();
-    let dir = std::env::temp_dir().join(format!("omnibus-ji-test-{}", uuid::Uuid::new_v4()));
-    std::env::set_var("OMNIBUS_JOURNAL_IMAGES_DIR", &dir);
-    let out = f();
-    std::env::remove_var("OMNIBUS_JOURNAL_IMAGES_DIR");
-    let _ = std::fs::remove_dir_all(dir);
-    out
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_JOURNAL_IMAGES_DIR", Some(tmp.path().as_os_str()));
+    f()
 }
 
 #[test]
