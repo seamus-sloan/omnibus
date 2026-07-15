@@ -8,6 +8,9 @@ use omnibus_shared::{JournalEntry, JournalStatus, UpdateJournalEntry, UserSummar
 use crate::data;
 use crate::pages::book_detail::journal_editor::*;
 
+const JOURNAL_COLLAPSE_CHAR_THRESHOLD: usize = 900;
+const JOURNAL_COLLAPSE_LINE_THRESHOLD: usize = 12;
+
 /// Per-entry inline-edit signals shared by the entry card, its header action
 /// row, and the edit form. Grouped so those components stay under the prop cap.
 #[derive(Clone, Copy, PartialEq)]
@@ -169,6 +172,7 @@ pub(super) fn BdJournalEntryCard(
         error: use_signal(|| None::<String>),
         reload,
     };
+    let mut expanded = use_signal(|| false);
     let editing = edit.editing;
     let error = edit.error;
 
@@ -189,6 +193,12 @@ pub(super) fn BdJournalEntryCard(
     };
     let entry_id = entry.id;
     let entry_progress = entry.progress;
+    let can_expand = should_show_more_button(&entry.body_md);
+    let body_class = if can_expand && !expanded() {
+        "bd-journal-entry-body bd-journal-entry-body-collapsed"
+    } else {
+        "bd-journal-entry-body"
+    };
 
     rsx! {
         article { class: "card bd-journal-entry", "data-testid": "journal-entry",
@@ -215,8 +225,18 @@ pub(super) fn BdJournalEntryCard(
                 }
             } else {
                 div {
-                    class: "bd-journal-entry-body",
+                    class: "{body_class}",
                     dangerous_inner_html: "{entry.body_html}",
+                }
+                if can_expand && !expanded() {
+                    button {
+                        r#type: "button",
+                        class: "btn ghost sm bd-journal-show-more",
+                        "data-testid": "journal-show-more",
+                        "aria-expanded": "{expanded()}",
+                        onclick: move |_| expanded.set(true),
+                        "Show more \u{2193}"
+                    }
                 }
                 if let Some(msg) = error() {
                     span { class: "mono bd-journal-error", role: "alert", "{msg}" }
@@ -387,9 +407,27 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+fn should_show_more_button(markdown: &str) -> bool {
+    if markdown
+        .trim()
+        .chars()
+        .take(JOURNAL_COLLAPSE_CHAR_THRESHOLD + 1)
+        .count()
+        > JOURNAL_COLLAPSE_CHAR_THRESHOLD
+    {
+        return true;
+    }
+
+    markdown
+        .lines()
+        .take(JOURNAL_COLLAPSE_LINE_THRESHOLD + 1)
+        .count()
+        > JOURNAL_COLLAPSE_LINE_THRESHOLD
+}
+
 #[cfg(test)]
 mod tests {
-    use super::fmt_long_date;
+    use super::{fmt_long_date, should_show_more_button};
 
     #[test]
     fn formats_known_epoch_dates() {
@@ -397,5 +435,20 @@ mod tests {
         assert_eq!(fmt_long_date(1_779_019_200), "May 17, 2026");
         // The unix epoch itself.
         assert_eq!(fmt_long_date(0), "January 1, 1970");
+    }
+
+    #[test]
+    fn shows_more_for_long_markdown() {
+        let long = "x".repeat(901);
+        assert!(should_show_more_button(&long));
+        let multiline = (0..13).map(|_| "line").collect::<Vec<_>>().join("\n");
+        assert!(should_show_more_button(&multiline));
+    }
+
+    #[test]
+    fn skips_show_more_for_short_markdown() {
+        assert!(!should_show_more_button("Short entry"));
+        let exactly_twelve = (0..12).map(|_| "line").collect::<Vec<_>>().join("\n");
+        assert!(!should_show_more_button(&exactly_twelve));
     }
 }
