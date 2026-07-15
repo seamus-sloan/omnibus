@@ -6,7 +6,7 @@
 //! value clears it (un-rate).
 
 use dioxus::prelude::*;
-use omnibus_shared::{RatingRecord, RatingUpdate};
+use omnibus_shared::{AttributedRating, RatingRecord, RatingUpdate};
 
 use crate::{data, use_server_url};
 
@@ -19,6 +19,7 @@ struct RatingState {
     hover: Signal<Option<f32>>,
     failed: Signal<bool>,
     op_seq: Signal<u64>,
+    other_ratings: Signal<Vec<AttributedRating>>,
 }
 
 /// Clickable 0.5–5.0 star rating bound to the current user and `uuid`.
@@ -30,15 +31,18 @@ pub(super) fn BdRatingWidget(uuid: String) -> Element {
     // the effect below reconciles on the client only.
     let mut current = use_signal(|| None::<RatingRecord>);
     let mut hover = use_signal(|| None::<f32>);
-    let failed = use_signal(|| false);
+    let mut failed = use_signal(|| false);
     // Monotonic write counter: a save only applies its result if it's still the
     // latest, so an out-of-order (slow) response can't clobber a newer click.
-    let op_seq = use_signal(|| 0u64);
+    let mut op_seq = use_signal(|| 0u64);
+    let mut load_seq = use_signal(|| 0u64);
+    let mut other_ratings = use_signal(Vec::<AttributedRating>::new);
     let state = RatingState {
         current,
         hover,
         failed,
         op_seq,
+        other_ratings,
     };
 
     let load_url = server_url.clone();
@@ -46,11 +50,25 @@ pub(super) fn BdRatingWidget(uuid: String) -> Element {
         if uuid.is_empty() {
             return;
         }
+        let my_load = *load_seq.peek() + 1;
+        let next_op = *op_seq.peek() + 1;
+        load_seq.set(my_load);
+        op_seq.set(next_op);
+        current.set(None);
+        other_ratings.set(Vec::new());
+        failed.set(false);
         let load_url = load_url.clone();
         let uuid = uuid.clone();
         spawn(async move {
             if let Ok(rec) = data::get_rating(&load_url, &uuid).await {
-                current.set(rec);
+                if *load_seq.peek() == my_load {
+                    current.set(rec);
+                }
+            }
+            if let Ok(ratings) = data::list_other_ratings(&load_url, &uuid).await {
+                if *load_seq.peek() == my_load {
+                    other_ratings.set(ratings);
+                }
             }
         });
     }));
@@ -118,6 +136,19 @@ pub(super) fn BdRatingWidget(uuid: String) -> Element {
             "data-testid": "rating-meta",
             "{meta_text}"
         }
+        if !other_ratings().is_empty() {
+            div {
+                class: "bd-other-ratings",
+                "data-testid": "other-ratings",
+                aria_label: "Other ratings",
+                for rating in other_ratings() {
+                    BdOtherRatingRow {
+                        key: "{rating.user_id}",
+                        rating,
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -136,6 +167,7 @@ fn BdStarHalf(
         mut hover,
         failed,
         op_seq,
+        other_ratings,
     } = state;
     rsx! {
         button {
@@ -153,7 +185,15 @@ fn BdStarHalf(
                 } else {
                     Some(value)
                 };
-                apply_rating(current, failed, op_seq, uuid.clone(), server_url.clone(), target);
+                apply_rating(
+                    current,
+                    failed,
+                    op_seq,
+                    other_ratings,
+                    uuid.clone(),
+                    server_url.clone(),
+                    target,
+                );
             },
         }
     }
@@ -168,6 +208,7 @@ fn apply_rating(
     mut current: Signal<Option<RatingRecord>>,
     mut failed: Signal<bool>,
     mut op_seq: Signal<u64>,
+    mut other_ratings: Signal<Vec<AttributedRating>>,
     uuid: String,
     server_url: String,
     target: Option<f32>,
@@ -199,13 +240,79 @@ fn apply_rating(
             return;
         }
         match result {
-            Ok(rec) => current.set(rec),
+            Ok(rec) => {
+                current.set(rec);
+                if let Ok(ratings) = data::list_other_ratings(&server_url, &uuid).await {
+                    other_ratings.set(ratings);
+                }
+            }
             Err(_) => {
                 current.set(prev);
                 failed.set(true);
             }
         }
     });
+}
+
+#[component]
+fn BdOtherRatingRow(rating: AttributedRating) -> Element {
+    let initial = rating
+        .username
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| "?".to_string());
+    let age = rating_age_days(now_unix(), rating.updated_at);
+    rsx! {
+        div {
+            class: "bd-other-rating-row",
+            "data-testid": "other-rating-row",
+            span {
+                class: "bd-other-rating-avatar",
+                aria_hidden: "true",
+                "{initial}"
+            }
+            span { class: "bd-other-rating-name", "{rating.username}" }
+            span { "rated" }
+            BdOtherRatingStars { stars: rating.stars }
+            span { class: "mono bd-other-rating-age", "{age}" }
+        }
+    }
+}
+
+#[component]
+fn BdOtherRatingStars(stars: f32) -> Element {
+    rsx! {
+        span {
+            class: "bd-other-rating-stars",
+            aria_label: "{fmt_stars(stars)} out of 5 stars",
+            for i in 1..=5u8 {
+                {
+                    let slot = i as f32;
+                    let fill = if stars >= slot {
+                        100
+                    } else if stars >= slot - 0.5 {
+                        50
+                    } else {
+                        0
+                    };
+                    rsx! {
+                        span {
+                            key: "{i}",
+                            class: "bd-other-rating-star-slot",
+                            aria_hidden: "true",
+                            span { class: "bd-star-bg", "\u{2605}" }
+                            span {
+                                class: "bd-star-fg",
+                                style: "width: {fill}%",
+                                "\u{2605}"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Render a star value without a trailing `.0` (`4.5` stays, `4.0` → `4`).
@@ -244,6 +351,12 @@ fn rated_ago(updated_at: i64) -> String {
     }
 }
 
+fn rating_age_days(now: i64, updated_at: i64) -> String {
+    let days = (now - updated_at).max(0) / 86_400;
+    let suffix = if days == 1 { "day" } else { "days" };
+    format!("{days} {suffix} ago")
+}
+
 /// Current unix time in seconds. Only ever called client-side (the relative
 /// timestamp renders after the post-mount load, and the optimistic write runs
 /// on click), so SSR never invokes the JS clock.
@@ -258,5 +371,25 @@ fn now_unix() -> i64 {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rating_age_days;
+
+    #[test]
+    fn rating_age_uses_zero_days_for_recent_rating() {
+        assert_eq!(rating_age_days(1_000, 999), "0 days ago");
+    }
+
+    #[test]
+    fn rating_age_singularizes_one_day() {
+        assert_eq!(rating_age_days(172_800, 86_400), "1 day ago");
+    }
+
+    #[test]
+    fn rating_age_pluralizes_multiple_days() {
+        assert_eq!(rating_age_days(432_000, 172_800), "3 days ago");
     }
 }

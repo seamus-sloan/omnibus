@@ -3,7 +3,7 @@
 //! web/SSR variants share each function's public signature so callers stay
 //! platform-agnostic; the `#[cfg]` gates carry the split.
 
-use omnibus_shared::{RatingRecord, RatingUpdate};
+use omnibus_shared::{AttributedRating, RatingRecord, RatingUpdate};
 
 #[cfg(not(feature = "mobile"))]
 use super::note_server_fn_err;
@@ -37,6 +37,21 @@ pub async fn get_rating(server_url: &str, uuid: &str) -> Result<Option<RatingRec
     Ok(response.json::<Option<RatingRecord>>().await?)
 }
 
+/// GET `/api/ratings/others/{uuid}` — list every other user's rating.
+#[cfg(feature = "mobile")]
+pub async fn list_other_ratings(
+    server_url: &str,
+    uuid: &str,
+) -> Result<Vec<AttributedRating>, DataError> {
+    let url = format!("{server_url}/api/ratings/others/{uuid}");
+    let response = with_bearer(http_client().get(&url)).send().await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(response.json::<Vec<AttributedRating>>().await?)
+}
+
 /// DELETE `/api/ratings/{uuid}` — clear (un-rate) the current rating.
 #[cfg(feature = "mobile")]
 pub async fn clear_rating(server_url: &str, uuid: &str) -> Result<(), DataError> {
@@ -64,6 +79,17 @@ pub async fn set_rating(
 #[cfg(not(feature = "mobile"))]
 pub async fn get_rating(_server_url: &str, uuid: &str) -> Result<Option<RatingRecord>, DataError> {
     crate::rpc::rpc_get_rating(uuid.to_string())
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Web/SSR attributed-rating list — server-function wrapper.
+#[cfg(not(feature = "mobile"))]
+pub async fn list_other_ratings(
+    _server_url: &str,
+    uuid: &str,
+) -> Result<Vec<AttributedRating>, DataError> {
+    crate::rpc::rpc_list_other_ratings(uuid.to_string())
         .await
         .map_err(note_server_fn_err)
 }

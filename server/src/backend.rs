@@ -347,6 +347,10 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
         // `/api/rpc/ratings/*` server functions.
         .route("/api/ratings", post(ratings::post_rating))
         .route(
+            "/api/ratings/others/{uuid}",
+            get(ratings::get_other_ratings),
+        )
+        .route(
             "/api/ratings/{uuid}",
             get(ratings::get_rating).delete(ratings::delete_rating),
         )

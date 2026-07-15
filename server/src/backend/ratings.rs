@@ -49,6 +49,18 @@ pub(super) async fn get_rating(
     }
 }
 
+/// Fetch every other user's attributed rating for a book, newest first.
+pub(super) async fn get_other_ratings(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+) -> Response {
+    match db::ratings::list_other_ratings(&state.pool, user.id, &uuid).await {
+        Ok(ratings) => Json(ratings).into_response(),
+        Err(e) => internal("get_other_ratings", e),
+    }
+}
+
 /// Clear (un-rate) the current user's rating for a book. Idempotent — clearing
 /// an absent rating still returns 204.
 pub(super) async fn delete_rating(
