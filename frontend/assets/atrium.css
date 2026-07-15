@@ -905,6 +905,7 @@ html, body { overscroll-behavior: none; }
   width: 100%;
   display: flex; align-items: center; gap: 12px;
   padding: 13px 16px;
+  margin-top: 12px;
   text-align: left;
   cursor: text;
   color: var(--ink-3);
@@ -916,7 +917,10 @@ html, body { overscroll-behavior: none; }
 .bd-journal-prompt-plus { color: var(--ink-3); font-size: 18px; }
 
 /* Expanded composer */
-.bd-journal-composer { padding: 14px 16px; }
+.bd-journal-composer {
+ padding: 14px 16px;
+ margin-top: 12px;
+}
 .bd-journal-composer-tabs {
   display: flex; align-items: center; gap: 6px;
   margin-bottom: 12px;
