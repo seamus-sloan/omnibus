@@ -343,6 +343,12 @@ pub(crate) fn apply_overrides(
     if let Some(ref si) = ov.series_index {
         book.series_index = Some(si.clone());
     }
+    if let Some(ref i) = ov.isbn13 {
+        // Empty string is the clear sentinel (mirrors `build_overrides` on
+        // the frontend) — an override that clears the field must read back
+        // as "no ISBN", not as a literal empty string.
+        book.isbn13 = if i.is_empty() { None } else { Some(i.clone()) };
+    }
     if let Some(ref c) = ov.creators {
         book.creators = c.clone();
     }

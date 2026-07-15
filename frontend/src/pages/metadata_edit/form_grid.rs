@@ -18,6 +18,7 @@ pub(super) struct FormFields {
     pub language: Signal<String>,
     pub series: Signal<String>,
     pub series_index: Signal<String>,
+    pub isbn13: Signal<String>,
     pub authors: Signal<Vec<String>>,
     pub tags: Signal<Vec<String>>,
     pub sort_by: Signal<String>,
@@ -68,6 +69,7 @@ fn FieldGrid(
     let mut publisher = fields.publisher;
     let mut published = fields.published;
     let mut language = fields.language;
+    let mut isbn13 = fields.isbn13;
     let authors = fields.authors;
     let sort_by = fields.sort_by;
     let filename = fields.filename;
@@ -130,6 +132,18 @@ fn FieldGrid(
                 value: language,
                 on_change: move |v: String| language.set(v),
                 edited: language() != orig().language.clone().unwrap_or_default(),
+            }
+
+            // ISBN-13 — exactly 13 digits, enforced server-side on save
+            // (`MetadataOverrides::validate`); an empty value clears it.
+            MeField {
+                label: "ISBN-13",
+                value: isbn13,
+                on_change: move |v: String| isbn13.set(v),
+                mono: true,
+                edited: isbn13() != orig().isbn13.clone().unwrap_or_default(),
+                hint: "13 digits",
+                placeholder: "e.g. 9780134685991",
             }
 
             // Authors — chip row spanning 4 cols

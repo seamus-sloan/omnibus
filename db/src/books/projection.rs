@@ -151,6 +151,25 @@ pub(crate) fn parse_json_array<T: serde::de::DeserializeOwned>(
     }
 }
 
+/// Derive the book's primary ISBN-13 from its scanned `book_identifiers`
+/// rows: the first identifier whose scheme mentions "isbn" (case-
+/// insensitive — OPF scheme text is free-form) and whose value strips down
+/// to exactly 13 ASCII digits. `None` when no identifier matches; the
+/// metadata-edit override (`apply_overrides`) is then the only source.
+pub(crate) fn derive_isbn13(identifiers: &[Identifier]) -> Option<String> {
+    identifiers.iter().find_map(|ident| {
+        let is_isbn_scheme = ident
+            .scheme
+            .as_deref()
+            .is_some_and(|s| s.to_ascii_lowercase().contains("isbn"));
+        if !is_isbn_scheme {
+            return None;
+        }
+        let digits: String = ident.value.chars().filter(char::is_ascii_digit).collect();
+        (digits.chars().count() == 13).then_some(digits)
+    })
+}
+
 /// Sanitize an EPUB `<dc:description>` payload for safe rendering via
 /// `dangerous_inner_html`. OPF descriptions are commonly HTML fragments
 /// (`<p>`, `<b>`, `<em>`, lists, links). We rely on ammonia's default
@@ -207,6 +226,7 @@ pub(crate) fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata,
                 scheme: Some(i.scheme),
             })
             .collect();
+    let isbn13 = derive_isbn13(&identifiers);
 
     Ok(EbookMetadata {
         id,
@@ -220,6 +240,7 @@ pub(crate) fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata,
         creators,
         subjects,
         identifiers,
+        isbn13,
         series: series_name,
         series_index: series_index.map(format_series_index),
         series_id: series_link_id,

@@ -85,6 +85,7 @@ fn use_field_signals(book: &EbookMetadata) -> FormFields {
     let language = use_signal(|| book.language.clone().unwrap_or_default());
     let series = use_signal(|| book.series.clone().unwrap_or_default());
     let series_index = use_signal(|| book.series_index.clone().unwrap_or_default());
+    let isbn13 = use_signal(|| book.isbn13.clone().unwrap_or_default());
 
     // Authors as a signal of Vec<String> (names only for v1).
     let authors = use_signal(|| {
@@ -115,6 +116,7 @@ fn use_field_signals(book: &EbookMetadata) -> FormFields {
         language,
         series,
         series_index,
+        isbn13,
         authors,
         tags,
         sort_by,
@@ -199,6 +201,7 @@ fn use_dirty_fields(orig: Signal<EbookMetadata>, fields: FormFields) -> Memo<Vec
         language,
         series,
         series_index,
+        isbn13,
         authors,
         tags,
         sort_by: _,
@@ -227,6 +230,9 @@ fn use_dirty_fields(orig: Signal<EbookMetadata>, fields: FormFields) -> Memo<Vec
         }
         if series_index() != o.series_index.clone().unwrap_or_default() {
             dirty.push("Book #");
+        }
+        if isbn13() != o.isbn13.clone().unwrap_or_default() {
+            dirty.push("ISBN-13");
         }
         let orig_authors: Vec<String> = o.creators.iter().map(|c| c.name.clone()).collect();
         if authors() != orig_authors {
@@ -287,6 +293,7 @@ fn build_on_save(
         language,
         series,
         series_index,
+        isbn13,
         authors,
         tags,
         sort_by: _,
@@ -310,6 +317,7 @@ fn build_on_save(
                     language: &language(),
                     series: &series(),
                     series_index: &series_index(),
+                    isbn13: &isbn13(),
                     authors: &authors(),
                     tags: &tags(),
                 },

@@ -32,6 +32,7 @@ fn edited<'a>(
         language: "",
         series: "",
         series_index: "",
+        isbn13: "",
         authors,
         tags,
     }
@@ -90,6 +91,47 @@ fn build_overrides_replaces_full_creator_and_subject_lists() {
         ov.subjects,
         Some(vec!["scifi".to_string(), "classic".to_string()])
     );
+}
+
+#[test]
+fn build_overrides_sets_isbn13_when_changed() {
+    let orig = book_with(Some("Dune"), &[], &[]);
+    let ov = build_overrides(
+        &orig,
+        EditedFields {
+            isbn13: "9780134685991",
+            ..edited("Dune", "", &[], &[])
+        },
+    );
+    assert_eq!(ov.isbn13.as_deref(), Some("9780134685991"));
+}
+
+#[test]
+fn build_overrides_clearing_a_populated_isbn13_emits_empty_string() {
+    // AC4: orig.isbn13 = Some(..), edited to "" -> the override must carry
+    // the empty string so the merge/apply path clears it.
+    let orig = EbookMetadata {
+        isbn13: Some("9780134685991".into()),
+        ..book_with(Some("Dune"), &[], &[])
+    };
+    let ov = build_overrides(&orig, edited("Dune", "", &[], &[]));
+    assert_eq!(ov.isbn13.as_deref(), Some(""));
+}
+
+#[test]
+fn build_overrides_leaves_isbn13_none_when_unchanged() {
+    let orig = EbookMetadata {
+        isbn13: Some("9780134685991".into()),
+        ..book_with(Some("Dune"), &[], &[])
+    };
+    let ov = build_overrides(
+        &orig,
+        EditedFields {
+            isbn13: "9780134685991",
+            ..edited("Dune", "", &[], &[])
+        },
+    );
+    assert!(ov.isbn13.is_none());
 }
 
 #[test]

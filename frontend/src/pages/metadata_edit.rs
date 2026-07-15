@@ -130,6 +130,7 @@ struct EditedFields<'a> {
     language: &'a str,
     series: &'a str,
     series_index: &'a str,
+    isbn13: &'a str,
     authors: &'a [String],
     tags: &'a [String],
 }
@@ -177,6 +178,7 @@ fn build_overrides(orig: &EbookMetadata, edited: EditedFields<'_>) -> MetadataOv
         language: opt(edited.language, orig.language.as_deref()),
         series: opt(edited.series, orig.series.as_deref()),
         series_index: opt(edited.series_index, orig.series_index.as_deref()),
+        isbn13: opt(edited.isbn13, orig.isbn13.as_deref()),
         creators,
         subjects,
     }
