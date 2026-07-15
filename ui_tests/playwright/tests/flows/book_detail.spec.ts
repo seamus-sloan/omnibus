@@ -477,10 +477,9 @@ test("shows attributed ratings from other users", async ({ page, request }) => {
   const row = page.getByTestId("other-rating-row");
   await expect(row).toBeVisible();
   await expect(row).toContainText("R");
-  await expect(row.getByText("reader", { exact: true })).toBeVisible();
-  await expect(row.getByText("rated", { exact: true })).toBeVisible();
+  await expect(row.getByTestId("other-rating-byline")).toHaveText("reader rated 2 days ago");
+  await expect(row.getByTestId("other-rating-content")).toHaveCSS("flex-direction", "column");
   await expect(row.getByLabel("4.5 out of 5 stars")).toBeVisible();
-  await expect(row).toContainText("2 days ago");
 });
 
 test("rates a book a half-star, persists across reload, then un-rates", async ({ page, request }) => {

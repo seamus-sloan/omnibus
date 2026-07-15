@@ -272,10 +272,17 @@ fn BdOtherRatingRow(rating: AttributedRating) -> Element {
                 aria_hidden: "true",
                 "{initial}"
             }
-            span { class: "bd-other-rating-name", "{rating.username}" }
-            span { "rated" }
-            BdOtherRatingStars { stars: rating.stars }
-            span { class: "mono bd-other-rating-age", "{age}" }
+            div {
+                class: "bd-other-rating-content",
+                "data-testid": "other-rating-content",
+                div {
+                    class: "bd-other-rating-byline",
+                    "data-testid": "other-rating-byline",
+                    span { class: "bd-other-rating-name", "{rating.username}" }
+                    " rated {age}"
+                }
+                BdOtherRatingStars { stars: rating.stars }
+            }
         }
     }
 }
