@@ -108,6 +108,7 @@ test("shows a pending placeholder while a resolution is enqueued", async ({ page
 
   await expect(page.getByTestId("suggestions-pending")).toBeVisible();
   await expect(page.getByText("Looking for read-alikes via Hardcover…")).toBeVisible();
+  await expect(page.getByTestId("suggestions-spinner")).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
