@@ -19,6 +19,7 @@ fn validate_accepts_well_formed_override() {
         language: Some("en".into()),
         series: Some("Some Series".into()),
         series_index: Some("1".into()),
+        isbn13: Some("9780134685991".into()),
         creators: Some(vec![contributor("Ada Lovelace")]),
         subjects: Some(vec!["fiction".into(), "history".into()]),
     };
@@ -232,6 +233,76 @@ fn validate_accepts_tag_at_length_cap() {
     assert_eq!(ov.validate(), Ok(()));
 }
 
+#[test]
+fn validate_accepts_a_well_formed_13_digit_isbn() {
+    let ov = MetadataOverrides {
+        isbn13: Some("9780134685991".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(ov.validate(), Ok(()));
+}
+
+#[test]
+fn validate_accepts_empty_isbn13_as_a_clear() {
+    // AC4: an empty string is the "clear the override" sentinel, not an
+    // invalid value.
+    let ov = MetadataOverrides {
+        isbn13: Some(String::new()),
+        ..Default::default()
+    };
+    assert_eq!(ov.validate(), Ok(()));
+}
+
+#[test]
+fn validate_accepts_missing_isbn13_field() {
+    // `None` means "don't touch the ISBN override" — trivially valid.
+    assert_eq!(MetadataOverrides::default().validate(), Ok(()));
+}
+
+#[test]
+fn validate_rejects_isbn13_with_twelve_digits() {
+    let ov = MetadataOverrides {
+        isbn13: Some("978013468599".to_string()),
+        ..Default::default()
+    };
+    let err = ov.validate().expect_err("12-digit ISBN should be rejected");
+    assert!(err.contains("13 digits"), "unexpected message: {err}");
+}
+
+#[test]
+fn validate_rejects_isbn13_with_fourteen_digits() {
+    let ov = MetadataOverrides {
+        isbn13: Some("97801346859912".to_string()),
+        ..Default::default()
+    };
+    let err = ov.validate().expect_err("14-digit ISBN should be rejected");
+    assert!(err.contains("13 digits"), "unexpected message: {err}");
+}
+
+#[test]
+fn validate_rejects_isbn13_containing_non_digit_characters() {
+    let ov = MetadataOverrides {
+        isbn13: Some("978-0134685991".to_string()),
+        ..Default::default()
+    };
+    let err = ov
+        .validate()
+        .expect_err("hyphenated ISBN should be rejected");
+    assert!(err.contains("13 digits"), "unexpected message: {err}");
+}
+
+#[test]
+fn validate_rejects_isbn13_with_whitespace() {
+    let ov = MetadataOverrides {
+        isbn13: Some(" 9780134685991".to_string()),
+        ..Default::default()
+    };
+    assert!(
+        ov.validate().is_err(),
+        "leading whitespace should push the char count/content out of range"
+    );
+}
+
 // --- merge() -----------------------------------------------------------
 //
 // NOTE on contract: the issue describes `merge` as "applies an override
@@ -324,4 +395,29 @@ fn merge_preserves_untouched_scalar_fields_from_base() {
     assert_eq!(merged.title, Some("New Title".into()));
     assert_eq!(merged.publisher, Some("Kept Publisher".into()));
     assert_eq!(merged.series, Some("Kept Series".into()));
+}
+
+#[test]
+fn merge_incoming_isbn13_wins_over_base_isbn13() {
+    let base = MetadataOverrides {
+        isbn13: Some("9780134685991".into()),
+        ..Default::default()
+    };
+    let incoming = MetadataOverrides {
+        isbn13: Some("9780316769488".into()),
+        ..Default::default()
+    };
+    let merged = base.merge(&incoming);
+    assert_eq!(merged.isbn13, Some("9780316769488".into()));
+}
+
+#[test]
+fn merge_none_isbn13_preserves_base_isbn13() {
+    let base = MetadataOverrides {
+        isbn13: Some("9780134685991".into()),
+        ..Default::default()
+    };
+    let incoming = MetadataOverrides::default();
+    let merged = base.merge(&incoming);
+    assert_eq!(merged.isbn13, Some("9780134685991".into()));
 }

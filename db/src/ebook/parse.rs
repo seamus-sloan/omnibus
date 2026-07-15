@@ -90,6 +90,11 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
             creators,
             subjects: all(&doc, "subject"),
             identifiers,
+            // Derived at read time from `book_identifiers` (`row_to_ebook`
+            // -> `derive_isbn13`), not at parse time — this struct is
+            // written into the normalized tables before that derivation
+            // ever runs.
+            isbn13: None,
 
             series,
             series_index,

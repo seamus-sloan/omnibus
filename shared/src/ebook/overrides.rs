@@ -31,6 +31,12 @@ pub struct MetadataOverrides {
     pub series: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub series_index: Option<String>,
+    /// ISBN-13 override. `Some("")` clears any scanned/prior-override value
+    /// (mirrors the empty-string-clears convention used by the other scalar
+    /// fields); a non-empty value must be exactly 13 ASCII digits, enforced
+    /// by `validate`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isbn13: Option<String>,
     /// Replaces the entire creators list when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub creators: Option<Vec<Contributor>>,
@@ -79,8 +85,25 @@ impl MetadataOverrides {
         check("series", &self.series, Self::NAME_MAX_LEN)?;
         check("series_index", &self.series_index, Self::NAME_MAX_LEN)?;
         check("description", &self.description, Self::DESCRIPTION_MAX_LEN)?;
+        self.validate_isbn13()?;
         self.validate_creators()?;
         self.validate_subjects()?;
+        Ok(())
+    }
+
+    /// ISBN-13 input rule: empty (clears the override) or exactly 13 ASCII
+    /// digits. Hyphens/spaces are rejected rather than stripped — the
+    /// client submits a normalized digit string.
+    fn validate_isbn13(&self) -> Result<(), String> {
+        let Some(ref v) = self.isbn13 else {
+            return Ok(());
+        };
+        if v.is_empty() {
+            return Ok(());
+        }
+        if v.chars().count() != 13 || !v.chars().all(|c| c.is_ascii_digit()) {
+            return Err("ISBN-13 must be exactly 13 digits".to_string());
+        }
         Ok(())
     }
 
@@ -149,6 +172,7 @@ impl MetadataOverrides {
             language: incoming.language.clone().or(self.language.clone()),
             series: incoming.series.clone().or(self.series.clone()),
             series_index: incoming.series_index.clone().or(self.series_index.clone()),
+            isbn13: incoming.isbn13.clone().or(self.isbn13.clone()),
             creators: incoming.creators.clone().or(self.creators.clone()),
             subjects: incoming.subjects.clone().or(self.subjects.clone()),
         }

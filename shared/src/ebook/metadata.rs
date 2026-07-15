@@ -57,6 +57,13 @@ pub struct EbookMetadata {
     pub subjects: Vec<String>,
     pub identifiers: Vec<Identifier>,
 
+    /// Primary ISBN-13: derived from the first scanned `identifiers` entry
+    /// whose scheme mentions "isbn" and whose value normalizes to 13 ASCII
+    /// digits, or a user override from `metadata_overrides` layered on top
+    /// at read time. `None` when neither source has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isbn13: Option<String>,
+
     // Series / collection (Calibre + EPUB3 belongs-to-collection).
     pub series: Option<String>,
     pub series_index: Option<String>,
