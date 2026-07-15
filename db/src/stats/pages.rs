@@ -1,30 +1,8 @@
-//! Estimated-pages aggregation for the stats page's Pages tile (#1029).
-//!
-//! **Sourcing model.** No page or word data exists anywhere in the pipeline:
-//! `reading_sessions` carries only `seconds_read`, and EPUB indexing records
-//! no text-length metric. Of the three options the issue considered — a
-//! per-book estimate persisted at index time, a per-session estimate from
-//! CFI deltas, or an accumulated words-read figure reported by the reader —
-//! the persisted-at-index-time option would require adding a field to
-//! `ebook::IndexedBook`, the struct every sync-writer test in the crate
-//! constructs field-by-field (no `..Default::default()`), so it ripples
-//! into a dozen unrelated test files. The CFI/reader-accumulator options
-//! need new client instrumentation (`SessionReport` has no position delta).
-//!
-//! Instead this computes the estimate **on demand, at stats-query time**:
-//! for each book finished in the window (`journal_entries.progress = 100`,
-//! same source [`super::finished_books`] uses), resolve its EPUB path via
-//! [`crate::book_file_path`] and estimate its word count via
-//! [`crate::ebook::estimate_word_count`] (spine text, tags stripped, split
-//! on whitespace). Words convert to pages via [`WORDS_PER_PAGE`], a standard
-//! prose estimate. The window is normally a handful of books, and the
-//! result rides the same [`super::STATS_TTL_SECS`] cache as the rest of
-//! [`super::StatsSummary`], so this doesn't add a query-time cost path
-//! distinct from what the tile already pays. A book with no EPUB file, an
-//! unreadable one, or an empty spine is skipped rather than failing the
-//! whole tile — the number stays honest (an underestimate, never a
-//! fabricated one) and degrades to `None` (the tile's em-dash state) only
-//! when *no* finished book in the window yielded an estimate.
+//! Estimated-pages aggregation for the stats page's Pages tile. No page or
+//! word data is persisted anywhere, so this resolves each window-finished
+//! book's EPUB path and estimates its word count on demand at stats-query
+//! time, converting to pages via [`WORDS_PER_PAGE`]. Degrades to `None`
+//! (the tile's em-dash state) only when nothing in the window yields an estimate.
 
 use std::path::PathBuf;
 
@@ -61,11 +39,10 @@ pub(super) async fn pages_read(
     }
     // EPUB parsing is blocking zip/XML work — run it off the async runtime
     // rather than stalling other in-flight requests, same convention as
-    // `sync::books::reconcile_covers` and friends.
-    let total_words = tokio::task::spawn_blocking(move || sum_word_counts(&paths))
-        .await
-        .ok()
-        .flatten();
+    // `sync::books::reconcile_covers` and friends. `?` propagates a panic or
+    // cancellation as `StatsError::PagesTask` rather than masking it as "no
+    // data" — a spurious em-dash would hide a real bug.
+    let total_words = tokio::task::spawn_blocking(move || sum_word_counts(&paths)).await?;
     Ok(total_words.map(words_to_pages))
 }
 

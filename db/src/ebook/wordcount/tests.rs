@@ -1,3 +1,5 @@
+//! Unit tests for [`super::estimate_word_count`] and its `strip_tags` helper.
+
 use epub::doc::EpubDoc;
 
 use super::*;

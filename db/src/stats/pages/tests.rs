@@ -1,3 +1,6 @@
+//! Unit tests for [`super::pages_read`] and its helpers, seeding real fixture
+//! EPUBs on disk so the word-count estimate exercises actual parsing.
+
 use std::path::Path;
 
 use super::*;

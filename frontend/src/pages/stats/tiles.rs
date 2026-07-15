@@ -1,5 +1,5 @@
 //! Headline metric tiles for the stats page: Finished (accent), Avg rating,
-//! Pages (a spine-word-count estimate, #1029 — see `db::stats::pages` for the
+//! Pages (a spine-word-count estimate — see `db::stats::pages` for the
 //! sourcing model), and Listening. All four are period-scoped and re-render
 //! when the switcher changes, and each carries a pull-to-expand grip that
 //! opens its drill-in (`drill_in.rs`).
