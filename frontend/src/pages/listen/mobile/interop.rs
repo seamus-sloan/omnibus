@@ -261,8 +261,9 @@ fn surface_js(parts_json: &str, resume_lit: &str, rate_lit: &str, meta_lit: &str
     }} catch(_e) {{}}
     var oa = window.OmnibusMobileAudio;
     var setH = function(a, fn){{ try {{ navigator.mediaSession.setActionHandler(a, fn); }} catch(_e) {{}} }};
-    setH('play', function(){{ oa.play(); }});
-    setH('pause', function(){{ oa.pause(); }});
+    // WebKit's native handlers keep working while backgrounded JS is suspended.
+    setH('play', null);
+    setH('pause', null);
     setH('seekbackward', function(d){{ oa.skip(-((d && d.seekOffset) || 30)); }});
     setH('seekforward', function(d){{ oa.skip((d && d.seekOffset) || 30); }});
     setH('seekto', function(d){{ if (d && d.seekTime != null) oa.seek(d.seekTime); }});
@@ -329,6 +330,18 @@ mod tests {
         // No stray `format!` escape pairs leaked into the emitted JS.
         assert!(!js.contains("{{"), "literal {{ leaked into JS");
         assert!(!js.contains("}}"), "literal }} leaked into JS");
+    }
+
+    #[test]
+    fn surface_js_leaves_play_and_pause_to_native_media_session_handlers() {
+        let js = surface_js("[]", "0", "1", "null");
+        assert!(js.contains("setH('play', null);"));
+        assert!(js.contains("setH('pause', null);"));
+        assert!(!js.contains("setH('play', function"));
+        assert!(!js.contains("setH('pause', function"));
+        assert!(js.contains("setH('seekbackward', function"));
+        assert!(js.contains("setH('seekforward', function"));
+        assert!(js.contains("setH('seekto', function"));
     }
 
     #[test]
