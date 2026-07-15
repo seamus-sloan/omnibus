@@ -1,8 +1,8 @@
 //! Reading-stats aggregation over the `reading_sessions` /
 //! `listening_sessions` tables plus `journal_entries` for completion; no new
-//! schema. Every metric is computed in SQL. Results sit behind a process-wide
-//! per-user cache with a 60s TTL so a reload reflects a just-finished session
-//! while poll-driven refreshes inside the window skip the SQL.
+//! schema. Every metric is computed in SQL and cached process-wide per user
+//! for 60s, except the Pages tile ([`pages`]), which parses EPUB files on
+//! demand — see that module's doc comment for the sourcing model.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -13,6 +13,8 @@ use omnibus_shared::{
     StatsSummary, TrendPoint,
 };
 use sqlx::{Row, SqlitePool};
+
+mod pages;
 
 #[cfg(test)]
 mod tests;
@@ -46,11 +48,18 @@ const SESSION_TIME_SECS: &str = "\
         WHERE user_id = ? AND started_at >= ?";
 
 /// Failure space of the aggregation layer. Wraps `sqlx::Error` at the module
-/// boundary so no raw DB error leaks to callers.
+/// boundary so no raw DB error leaks to callers. `Books` and `PagesTask` only
+/// surface from the Pages tile's on-demand estimate ([`pages::pages_read`]):
+/// `Books` from the EPUB-path lookup, `PagesTask` when the `spawn_blocking`
+/// word-count task panics or is cancelled.
 #[derive(Debug, thiserror::Error)]
 pub enum StatsError {
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
+    #[error(transparent)]
+    Books(#[from] crate::books::BooksError),
+    #[error(transparent)]
+    PagesTask(#[from] tokio::task::JoinError),
 }
 
 type Cache = Mutex<HashMap<(i64, StatsRange), (i64, StatsSummary)>>;
@@ -146,6 +155,7 @@ async fn compute(
     let previous = previous_period(pool, user_id, range).await?;
     let listening_daily = listening_daily(pool, user_id, start).await?;
     let rating_monthly = rating_monthly(pool, user_id).await?;
+    let pages_read = pages::pages_read(pool, user_id, start).await?;
 
     Ok(StatsSummary {
         range,
@@ -169,6 +179,7 @@ async fn compute(
         previous,
         listening_daily,
         rating_monthly,
+        pages_read,
     })
 }
 

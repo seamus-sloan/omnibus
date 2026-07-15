@@ -1,7 +1,8 @@
 //! Headline metric tiles for the stats page: Finished (accent), Avg rating,
-//! Pages (placeholder — no page data exists yet), and Listening. All four are
-//! period-scoped and re-render when the switcher changes, and each carries a
-//! pull-to-expand grip that opens its drill-in (`drill_in.rs`).
+//! Pages (a spine-word-count estimate — see `db::stats::pages` for the
+//! sourcing model), and Listening. All four are period-scoped and re-render
+//! when the switcher changes, and each carries a pull-to-expand grip that
+//! opens its drill-in (`drill_in.rs`).
 
 use dioxus::prelude::*;
 
@@ -31,21 +32,52 @@ fn avg_stars_value(avg: Option<f64>) -> String {
     }
 }
 
-/// The four-tile headline row. Finished carries the accent tint; Pages ships
-/// as an em-dash placeholder until a page-count source exists. Takes only the
-/// scalar fields it renders — never the whole `StatsSummary` — so a re-render
-/// doesn't clone the DTO's heatmap / finished-books vectors. `expanded` is
-/// set by a tile's grip to open its drill-in (`drill_in.rs`).
+/// Thousand-grouped page count ("9,214"), or the em-dash empty state when
+/// [`omnibus_shared::StatsSummary::pages_read`] is `None` — no finished book
+/// in the window yielded a word-count estimate (AC2).
+fn pages_value(pages: Option<i64>) -> String {
+    match pages {
+        Some(n) => group_thousands(n),
+        None => "\u{2014}".to_string(),
+    }
+}
+
+/// Group a non-negative integer's digits in threes with `,` separators.
+/// Negative inputs (never produced by `db::stats::pages`) fall back to a
+/// plain `to_string` rather than mangling the sign.
+fn group_thousands(n: i64) -> String {
+    if n < 0 {
+        return n.to_string();
+    }
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// The four-tile headline row. Finished carries the accent tint; Pages is a
+/// spine-word-count estimate (#1029) rather than a real page position, so
+/// its label is explicit about that. Takes only the scalar fields it
+/// renders — never the whole `StatsSummary` — so a re-render doesn't clone
+/// the DTO's heatmap / finished-books vectors. `expanded` is set by a
+/// tile's grip to open its drill-in (`drill_in.rs`).
 #[component]
 pub(super) fn HeadlineTiles(
     books_finished: i64,
     avg_stars: Option<f64>,
+    pages_read: Option<i64>,
     listening_seconds: i64,
     expanded: Signal<Option<Metric>>,
 ) -> Element {
     let finished = books_finished.to_string();
     let avg = avg_stars_value(avg_stars);
     let has_avg = avg_stars.is_some();
+    let pages = pages_value(pages_read);
     let (listen_value, listen_unit) = duration_value(listening_seconds);
     rsx! {
         div { class: "st-tiles",
@@ -68,9 +100,9 @@ pub(super) fn HeadlineTiles(
                 onexpand: move |_| expanded.set(Some(Metric::AvgRating)),
             }
             StatTile {
-                value: "\u{2014}",
+                value: pages,
                 unit: None,
-                label: "Pages",
+                label: "Est. pages",
                 accent: false,
                 hero: false,
                 testid: "stats-tile-pages",
@@ -148,5 +180,23 @@ mod tests {
         assert_eq!(avg_stars_value(Some(4.24)), "4.2");
         assert_eq!(avg_stars_value(Some(5.0)), "5.0");
         assert_eq!(avg_stars_value(None), "\u{2014}");
+    }
+
+    #[test]
+    fn pages_value_groups_thousands_or_shows_em_dash() {
+        assert_eq!(pages_value(Some(0)), "0");
+        assert_eq!(pages_value(Some(214)), "214");
+        assert_eq!(pages_value(Some(9214)), "9,214");
+        assert_eq!(pages_value(Some(1_234_567)), "1,234,567");
+        assert_eq!(pages_value(None), "\u{2014}");
+    }
+
+    #[test]
+    fn group_thousands_handles_short_and_negative_inputs() {
+        assert_eq!(group_thousands(0), "0");
+        assert_eq!(group_thousands(9), "9");
+        assert_eq!(group_thousands(999), "999");
+        assert_eq!(group_thousands(1000), "1,000");
+        assert_eq!(group_thousands(-42), "-42");
     }
 }

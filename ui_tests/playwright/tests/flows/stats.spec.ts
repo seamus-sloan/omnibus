@@ -98,7 +98,11 @@ test("headline tiles render finished, avg rating, pages, and listening", async (
   await expect(page.getByTestId("stats-tile-finished")).toContainText(/\d/);
   await expect(page.getByTestId("stats-tile-finished")).toContainText("Finished");
   await expect(page.getByTestId("stats-tile-avg-rating")).toContainText(/\d\.\d\s*★/);
-  await expect(page.getByTestId("stats-tile-pages")).toContainText("—");
+  // #1029: the finished journal seeded in beforeAll gives the Pages tile a
+  // real (spine-word-count-derived) estimate — a digit, not the em-dash
+  // placeholder. The exact count depends on fixture text length, covered by
+  // db::stats unit tests instead of pinned here.
+  await expect(page.getByTestId("stats-tile-pages")).toContainText(/\d/);
   await expect(page.getByTestId("stats-tile-listening")).toContainText(/\d+\s*(m|h)/);
 });
 

@@ -236,6 +236,7 @@ fn PeriodSummary(
         HeadlineTiles {
             books_finished: summary.books_finished,
             avg_stars: summary.avg_stars,
+            pages_read: summary.pages_read,
             listening_seconds: summary.listening_seconds,
             expanded,
         }
