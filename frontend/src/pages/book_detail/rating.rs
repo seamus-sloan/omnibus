@@ -353,8 +353,11 @@ fn rated_ago(updated_at: i64) -> String {
 
 fn rating_age_days(now: i64, updated_at: i64) -> String {
     let days = (now - updated_at).max(0) / 86_400;
-    let suffix = if days == 1 { "day" } else { "days" };
-    format!("{days} {suffix} ago")
+    match days {
+        0 => "today".to_string(),
+        1 => "1 day ago".to_string(),
+        _ => format!("{days} days ago"),
+    }
 }
 
 /// Current unix time in seconds. Only ever called client-side (the relative
@@ -379,8 +382,8 @@ mod tests {
     use super::rating_age_days;
 
     #[test]
-    fn rating_age_uses_zero_days_for_recent_rating() {
-        assert_eq!(rating_age_days(1_000, 999), "0 days ago");
+    fn rating_age_uses_today_for_recent_rating() {
+        assert_eq!(rating_age_days(1_000, 999), "today");
     }
 
     #[test]
