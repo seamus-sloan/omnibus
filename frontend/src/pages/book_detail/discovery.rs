@@ -2,6 +2,7 @@
 //! author cluster + Hardcover suggestions), shared by the web [`super::body`] and
 //! [`super::mobile`] layouts so both render identical titles/years/labels.
 
+use dioxus::prelude::*;
 use omnibus_shared::{BookSuggestion, Contributor, EbookMetadata};
 
 /// Display title for a same-hand tile — the book title, falling back to the
@@ -58,6 +59,17 @@ pub(super) fn list_count_label(n: i64) -> String {
         "on 1 list".to_string()
     } else {
         format!("on {n} lists")
+    }
+}
+
+/// Inline loading spinner for the Hardcover suggestions pending state.
+/// Rendered identically by [`super::body`] and [`super::mobile`] while a
+/// lookup is in flight; the adjacent copy already carries the accessible
+/// label, so the icon itself is `aria-hidden`.
+#[component]
+pub(super) fn SuggestionsSpinner() -> Element {
+    rsx! {
+        span { class: "suggest-spinner", "data-testid": "suggestions-spinner", aria_hidden: "true" }
     }
 }
 

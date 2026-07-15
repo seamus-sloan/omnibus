@@ -12,7 +12,7 @@ use crate::Route;
 
 use super::discovery::{
     cover_src, list_count_label, same_hand_author_label, same_hand_title, same_hand_year,
-    suggestion_cover_book,
+    suggestion_cover_book, SuggestionsSpinner,
 };
 use super::file_picker::{is_audio_book_file, BdFilePickerMenu, FilePickerKind};
 use super::journal::BdJournalSection;
@@ -316,9 +316,10 @@ fn suggestions_section(
                         }
                     }
                 },
-                // None (pre-fetch) or Pending → quiet placeholder.
+                // None (pre-fetch) or Pending → loading placeholder.
                 _ => rsx! {
-                    p { class: "m-strip-note", "data-testid": "mobile-suggestions-pending",
+                    p { class: "m-strip-note m-suggest-loading", "data-testid": "mobile-suggestions-pending",
+                        SuggestionsSpinner {}
                         "Looking for read-alikes via Hardcover\u{2026}"
                     }
                 },
