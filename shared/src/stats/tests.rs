@@ -94,6 +94,21 @@ fn previous_and_trend_fields_default_when_absent_from_the_wire() {
 }
 
 #[test]
+fn pages_read_defaults_to_none_when_absent_from_the_wire() {
+    // Same older-payload contract as avg_stars/books_per_month — the Pages
+    // tile field (#1029) is newer, so a pre-existing payload without it must
+    // still parse.
+    let s: StatsSummary = serde_json::from_str(
+        r#"{"range":"month","reading_seconds":0,"listening_seconds":0,"sessions":0,
+            "active_days":0,"longest_streak_days":0,"busiest_week_start":null,
+            "busiest_week_seconds":0,"books_finished":0,"heatmap":[],
+            "top_authors":[],"top_tags":[],"finished_books":[]}"#,
+    )
+    .unwrap();
+    assert_eq!(s.pages_read, None);
+}
+
+#[test]
 fn finished_book_cover_url_and_rating_default_to_none_when_absent() {
     let b: FinishedBook =
         serde_json::from_str(r#"{"book_uuid":"u1","title":"Dune","author":null,"finished_at":0}"#)

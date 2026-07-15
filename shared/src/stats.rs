@@ -181,6 +181,13 @@ pub struct StatsSummary {
     /// same trailing-window convention as `books_per_month`.
     #[serde(default)]
     pub rating_monthly: Vec<TrendPoint>,
+    /// Estimated pages read in the window — the Pages tile (#1029). Summed
+    /// from a word-count estimate over books finished in the window (see
+    /// `db::stats` for the sourcing model); `None` when no finished book in
+    /// the window has an estimate available, driving the tile's em-dash
+    /// empty state.
+    #[serde(default)]
+    pub pages_read: Option<i64>,
 }
 
 impl StatsSummary {

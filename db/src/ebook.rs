@@ -12,10 +12,12 @@ mod accent;
 mod cover;
 mod parse;
 mod stat;
+mod wordcount;
 
 pub use accent::extract_accent;
 pub use parse::{parse_ebook_targets, ParseTarget};
 pub use stat::{stat_ebook_library, StatEntry, StatScanResult};
+pub use wordcount::estimate_word_count;
 
 /// `book_files.format` values produced by the ebook indexer. Used by
 /// [`crate::indexer::reindex`] to scope the diff's "currently indexed"

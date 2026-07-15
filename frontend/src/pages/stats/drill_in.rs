@@ -26,7 +26,7 @@ impl Metric {
             Metric::Finished => "Finished",
             Metric::AvgRating => "Avg rating",
             Metric::Listening => "Listening",
-            Metric::Pages => "Pages",
+            Metric::Pages => "Est. pages",
         }
     }
 }
@@ -301,11 +301,12 @@ fn render_delta(delta: Option<Delta>, vs: &str) -> Element {
 }
 
 /// The metric's trend chart — pure-CSS bar columns — or a placeholder note
-/// for the Pages tile, which carries no data source yet.
+/// for the Pages tile. The headline tile carries a real estimate (#1029),
+/// but a day/month-bucketed trend series over it isn't computed yet.
 fn render_trend(metric: Metric, bars: &[TrendBar]) -> Element {
     if metric == Metric::Pages {
         return rsx! {
-            p { class: "st-drill-delta-empty", "Page-level tracking isn\u{2019}t available yet." }
+            p { class: "st-drill-delta-empty", "Page trend tracking isn\u{2019}t available yet." }
         };
     }
     if bars.is_empty() {
