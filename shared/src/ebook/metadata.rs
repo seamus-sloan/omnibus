@@ -57,10 +57,11 @@ pub struct EbookMetadata {
     pub subjects: Vec<String>,
     pub identifiers: Vec<Identifier>,
 
-    /// Primary ISBN-13: derived from the first scanned `identifiers` entry
-    /// whose scheme mentions "isbn" and whose value normalizes to 13 ASCII
-    /// digits, or a user override from `metadata_overrides` layered on top
-    /// at read time. `None` when neither source has one.
+    /// Primary ISBN-13: derived from whichever `identifiers` entry (in
+    /// DB-projection order, not original OPF scan order) has a scheme
+    /// mentioning "isbn" and a value that normalizes to 13 ASCII digits, or
+    /// a user override from `metadata_overrides` layered on top at read
+    /// time. `None` when neither source has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isbn13: Option<String>,
 
