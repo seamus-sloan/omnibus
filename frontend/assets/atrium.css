@@ -1877,6 +1877,17 @@ a.idx-letter-on:focus-visible {
   border-color: color-mix(in oklch, var(--accent) 60%, transparent);
 }
 
+/* Journal write surface overrides the metadata editor textarea defaults.
+   Keep this block after `.me-textarea` so the live journal editor and its
+   textarea mirror render with the same typography as published journal text. */
+.me-textarea.bd-journal-textarea,
+.me-textarea.bd-journal-editor {
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--ink-1);
+}
+
 /* Chip rows (authors, tags) */
 .me-chip-row {
   display: flex;
