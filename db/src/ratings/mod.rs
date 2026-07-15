@@ -4,7 +4,7 @@
 //! rather than deleting it; the missing-files GC keeps any book a rating
 //! references.
 
-use omnibus_shared::{stars_from_half_stars, RatingRecord, RatingUpdate};
+use omnibus_shared::{stars_from_half_stars, AttributedRating, RatingRecord, RatingUpdate};
 use sqlx::{Row, SqlitePool};
 
 use crate::resolve_canonical_book_uuid;
@@ -98,6 +98,40 @@ pub async fn get_rating(
         stars: stars_from_half_stars(row.try_get::<i64, _>("half_stars")?),
         updated_at: row.try_get::<i64, _>("updated_at")?,
     }))
+}
+
+/// List every other user's rating for a book, newest first. The viewer's own
+/// rating stays in the separate interactive widget.
+pub async fn list_other_ratings(
+    pool: &SqlitePool,
+    viewer_id: i64,
+    book_uuid: &str,
+) -> Result<Vec<AttributedRating>, RatingError> {
+    let Some(canonical) = resolve_canonical_book_uuid(pool, book_uuid).await? else {
+        return Ok(vec![]);
+    };
+    let rows = sqlx::query(
+        "SELECT ur.user_id, u.username, ur.half_stars, ur.updated_at
+           FROM user_ratings ur
+           JOIN users u ON u.id = ur.user_id
+          WHERE ur.book_uuid = ? AND ur.user_id != ?
+          ORDER BY ur.updated_at DESC, ur.user_id DESC",
+    )
+    .bind(canonical)
+    .bind(viewer_id)
+    .fetch_all(pool)
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            Ok(AttributedRating {
+                user_id: row.try_get("user_id")?,
+                username: row.try_get("username")?,
+                stars: stars_from_half_stars(row.try_get("half_stars")?),
+                updated_at: row.try_get("updated_at")?,
+            })
+        })
+        .collect()
 }
 
 /// Remove the current user's rating for a book (un-rate). A no-op when no row

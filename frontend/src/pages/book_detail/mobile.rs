@@ -172,7 +172,7 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
             }
 
             // Rating
-            section { class: "m-section m-section-row",
+            section { class: "m-section",
                 div { class: "label", "Your rating" }
                 BdRatingWidget { uuid: uuid.clone() }
             }

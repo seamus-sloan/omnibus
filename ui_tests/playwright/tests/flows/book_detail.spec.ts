@@ -443,6 +443,45 @@ test("shows an error when the Kindle send fails", async ({ page, request }) => {
 // Action — star rating (F3.2)
 // ---------------------------------------------------------------------------
 
+test("hides other ratings when no one else has rated the book", async ({ page, request }) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await page.route("**/api/rpc/ratings/others", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
+  );
+
+  await gotoReady(page, `/books/${uuid}`);
+
+  await expect(page.getByTestId("other-ratings")).toHaveCount(0);
+});
+
+test("shows attributed ratings from other users", async ({ page, request }) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  const twoDaysAgo = Math.floor(Date.now() / 1000) - 2 * 86_400;
+  await page.route("**/api/rpc/ratings/others", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([
+        {
+          user_id: 42,
+          username: "reader",
+          stars: 4.5,
+          updated_at: twoDaysAgo,
+        },
+      ]),
+    }),
+  );
+
+  await gotoReady(page, `/books/${uuid}`);
+
+  const row = page.getByTestId("other-rating-row");
+  await expect(row).toBeVisible();
+  await expect(row).toContainText("R");
+  await expect(row.getByTestId("other-rating-byline")).toHaveText("reader rated 2 days ago");
+  await expect(row.getByTestId("other-rating-content")).toHaveCSS("flex-direction", "column");
+  await expect(row.getByLabel("4.5 out of 5 stars")).toBeVisible();
+});
+
 test("rates a book a half-star, persists across reload, then un-rates", async ({ page, request }) => {
   // Use a Wirth book so the rating never collides with the alpha-focused
   // assertions elsewhere in this serial file.

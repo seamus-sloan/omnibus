@@ -55,5 +55,15 @@ pub struct RatingRecord {
     pub updated_at: i64,
 }
 
+/// A rating with the user identity needed for an attributed book-detail row.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AttributedRating {
+    pub user_id: i64,
+    pub username: String,
+    /// Star rating in `0.5..=5.0`, in half-star steps.
+    pub stars: f32,
+    pub updated_at: i64,
+}
+
 #[cfg(test)]
 mod tests;

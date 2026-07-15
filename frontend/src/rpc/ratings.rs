@@ -2,7 +2,7 @@
 
 use dioxus::fullstack::post;
 use dioxus::prelude::*;
-use omnibus_shared::{RatingRecord, RatingUpdate};
+use omnibus_shared::{AttributedRating, RatingRecord, RatingUpdate};
 
 #[cfg(feature = "server")]
 use omnibus_db as db;
@@ -34,6 +34,14 @@ pub async fn rpc_get_rating(uuid: String) -> Result<Option<RatingRecord>> {
     Ok(db::ratings::get_rating(&pool.0, user.id, &uuid)
         .await
         .map_err(|e| internal_rpc_error("get rating", e))?)
+}
+
+/// Fetch every other user's attributed rating for a book, newest first.
+#[post("/api/rpc/ratings/others", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_list_other_ratings(uuid: String) -> Result<Vec<AttributedRating>> {
+    Ok(db::ratings::list_other_ratings(&pool.0, user.id, &uuid)
+        .await
+        .map_err(|e| internal_rpc_error("list other ratings", e))?)
 }
 
 /// Clear (un-rate) the current user's rating for a book. A no-op when no

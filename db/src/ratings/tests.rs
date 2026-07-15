@@ -232,3 +232,84 @@ async fn set_rating_propagates_db_error_when_pool_is_closed() {
         .unwrap_err();
     assert!(matches!(err, RatingError::Sqlx(_)));
 }
+
+#[tokio::test]
+async fn list_other_ratings_excludes_viewer_and_orders_newest_first() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let bob = seed_user(&pool, "bob").await;
+    let carol = seed_user(&pool, "carol").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    set_rating(&pool, alice, &update(&uuid, 1.0)).await.unwrap();
+    set_rating(&pool, bob, &update(&uuid, 4.5)).await.unwrap();
+    set_rating(&pool, carol, &update(&uuid, 3.0)).await.unwrap();
+    sqlx::query(
+        "UPDATE user_ratings SET updated_at = CASE user_id
+             WHEN ? THEN 100
+             WHEN ? THEN 300
+             WHEN ? THEN 200
+         END WHERE book_uuid = ?",
+    )
+    .bind(alice)
+    .bind(bob)
+    .bind(carol)
+    .bind(&uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let ratings = list_other_ratings(&pool, alice, &uuid).await.unwrap();
+
+    assert_eq!(ratings.len(), 2);
+    assert_eq!(ratings[0].user_id, bob);
+    assert_eq!(ratings[0].username, "bob");
+    assert_eq!(ratings[0].stars, 4.5);
+    assert_eq!(ratings[0].updated_at, 300);
+    assert_eq!(ratings[1].user_id, carol);
+}
+
+#[tokio::test]
+async fn list_other_ratings_returns_empty_for_unknown_or_unrated_book() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    assert!(list_other_ratings(&pool, alice, "no-such-book")
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(list_other_ratings(&pool, alice, &uuid)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn list_other_ratings_resolves_merged_uuid() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let bob = seed_user(&pool, "bob").await;
+    let (book_id, canonical) = seed(&pool, "/lib", "Book A").await;
+    seed_merged_uuid(&pool, "attached-uuid", book_id, "EPUB").await;
+    set_rating(&pool, bob, &update(&canonical, 4.0))
+        .await
+        .unwrap();
+
+    let ratings = list_other_ratings(&pool, alice, "attached-uuid")
+        .await
+        .unwrap();
+
+    assert_eq!(ratings.len(), 1);
+    assert_eq!(ratings[0].username, "bob");
+}
+
+#[tokio::test]
+async fn list_other_ratings_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+
+    let err = list_other_ratings(&pool, 1, "book").await.unwrap_err();
+
+    assert!(matches!(err, RatingError::Sqlx(_)));
+}
