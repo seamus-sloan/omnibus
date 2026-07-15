@@ -220,7 +220,7 @@ async fn api_other_ratings_requires_auth() {
 }
 
 #[tokio::test]
-async fn api_other_ratings_returns_other_users_newest_first() {
+async fn api_other_ratings_returns_other_users_and_excludes_viewer() {
     let (app, _state, pool) = fixture().await;
     let (_, uuid) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
     let alice = auth_test_support::create_user(&pool, "alice").await;

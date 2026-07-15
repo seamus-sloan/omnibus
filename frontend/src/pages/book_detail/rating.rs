@@ -243,7 +243,9 @@ fn apply_rating(
             Ok(rec) => {
                 current.set(rec);
                 if let Ok(ratings) = data::list_other_ratings(&server_url, &uuid).await {
-                    other_ratings.set(ratings);
+                    if op_seq() == my_op {
+                        other_ratings.set(ratings);
+                    }
                 }
             }
             Err(_) => {
