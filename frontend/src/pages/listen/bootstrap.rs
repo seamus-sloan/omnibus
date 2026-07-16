@@ -133,7 +133,6 @@ fn boot_new_book(
         user_id,
         initial_position,
         playback,
-        guard,
         current_user,
     );
 }
@@ -204,28 +203,11 @@ fn spawn_manifest_init(
     user_id: Option<i64>,
     initial_position: f64,
     playback: crate::PlaybackState,
-    guard: Signal<Option<String>>,
     current_user: Signal<Option<Option<omnibus_shared::UserSummary>>>,
 ) {
     let fid = parse_file_id_from_url();
-    let hls_ready = playback.hls_ready;
-    let playback_failed = playback.playback_failed;
-    let chapters = playback.chapters;
     spawn(async move {
-        run_manifest_init(
-            uuid,
-            fid,
-            user_id,
-            initial_position,
-            playback.rate,
-            playback.rate_error,
-            hls_ready,
-            playback_failed,
-            chapters,
-            guard,
-            current_user,
-        )
-        .await;
+        run_manifest_init(uuid, fid, user_id, initial_position, playback, current_user).await;
     });
 }
 
@@ -618,14 +600,15 @@ async fn run_manifest_init(
     file_id: Option<i64>,
     user_id: Option<i64>,
     initial_position: f64,
-    mut rate: Signal<f64>,
-    mut rate_error: Signal<Option<String>>,
-    hls_ready: Signal<bool>,
-    mut playback_failed: Signal<bool>,
-    chapters_sig: Signal<Vec<omnibus_shared::ChapterInfo>>,
-    uuid_guard: Signal<Option<String>>,
+    playback: crate::PlaybackState,
     current_user: Signal<Option<Option<omnibus_shared::UserSummary>>>,
 ) {
+    let mut rate = playback.rate;
+    let mut rate_error = playback.rate_error;
+    let hls_ready = playback.hls_ready;
+    let mut playback_failed = playback.playback_failed;
+    let chapters_sig = playback.chapters;
+    let uuid_guard = playback.uuid;
     // True only while `uuid_for_fetch` is still the active book. Checked before
     // every shared-signal write so a stale task (user switched books mid-fetch
     // or mid-`/status`-poll) can't clobber the new book's state.

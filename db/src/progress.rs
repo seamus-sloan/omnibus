@@ -121,9 +121,9 @@ pub async fn get_progress(
     book_uuid: &str,
     format: ProgressFormat,
 ) -> Result<Option<ProgressRecord>, ProgressError> {
-    let canonical = resolve_canonical_book_uuid(pool, book_uuid)
-        .await?
-        .ok_or(ProgressError::BookNotFound)?;
+    let Some(canonical) = resolve_canonical_book_uuid(pool, book_uuid).await? else {
+        return Ok(None);
+    };
     let fmt = format_str(format);
     let Some(row) = sqlx::query(
         "SELECT format, epub_cfi, audio_position_seconds, updated_at

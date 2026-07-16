@@ -6,7 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Slowest playback rate accepted by every audiobook client and transport.
 pub const MIN_AUDIOBOOK_PLAYBACK_RATE: f64 = 0.5;
+/// Fastest playback rate accepted by every audiobook client and transport.
 pub const MAX_AUDIOBOOK_PLAYBACK_RATE: f64 = 3.0;
 
 /// Request payload for changing one audiobook's playback rate.

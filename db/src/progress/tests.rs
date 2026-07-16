@@ -186,6 +186,19 @@ async fn get_progress_returns_none_when_unset() {
 }
 
 #[tokio::test]
+async fn get_progress_returns_none_for_unknown_book_uuid() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    assert!(
+        get_progress(&pool, user, "no-such-uuid", ProgressFormat::Epub)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn record_session_inserts_per_format_row() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
