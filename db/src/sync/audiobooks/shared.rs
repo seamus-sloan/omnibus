@@ -1,277 +1,17 @@
-//! Multi-file audiobook sync. Mirrors `sync_books` but writes
-//! `book_file_parts` rows in addition to `books` and `book_files`. Like
-//! the ebook path, all `books_fts` maintenance routes through the
-//! [`super::fts`] choke-point (`upsert_fts` / `delete_fts`).
+//! Cross-bucket helpers shared by `new` and `changed`: canonical row
+//! writers (`insert_audiobook_row` / `update_audiobook_row` /
+//! `insert_audiobook_file_row` / `insert_audiobook_parts` /
+//! `insert_chapters`), the rewrite-in-place and cross-format attach paths,
+//! and the author-link writer.
 
-use std::collections::HashMap;
+use sqlx::Transaction;
 
-use sqlx::{SqlitePool, Transaction};
-
-use crate::covers::delete_cover_files_for;
 use crate::helpers::{mint_uuid, sanitize_accent_color, stable_uuid};
 use crate::normalize::{normalize_author, normalize_title};
-use crate::settings::upsert_library;
 
-use super::attach;
-use super::books::{materialize_new_covers, SyncError};
-use super::fts::upsert_fts;
-
-/// Per-bucket payload for [`sync_audiobooks`]. Mirrors [`SyncPlan`] for
-/// the ebook path but carries [`crate::audiobook::IndexedAudiobook`] rows
-/// that include the ordered `book_file_parts` list.
-#[derive(Debug, Default)]
-pub struct AudiobookSyncPlan {
-    pub new_books: Vec<crate::audiobook::IndexedAudiobook>,
-    pub changed_books: Vec<crate::audiobook::IndexedAudiobook>,
-    pub removed_uuids: Vec<String>,
-    /// `(uuid, mtime_epoch, size_bytes)` stat-only backfill (no re-parse).
-    pub backfill: Vec<(String, i64, i64)>,
-}
-
-/// Apply a multi-file audiobook sync plan atomically. Mirrors [`sync_books`]
-/// but writes `book_file_parts` rows in addition to `books` and `book_files`.
-///
-/// Transaction order:
-/// 1. Upsert `scan_roots` row.
-/// 2. Mark Removed files missing (drop `book_files`, retain the `books` row).
-/// 3. Update Changed in-place: wipe `book_files` + `book_file_parts` + author
-///    link + FTS, then re-insert them.
-/// 4. Insert New.
-/// 5. Backfill `book_files.(mtime_epoch, size_bytes)` only.
-/// 6. Stamp `scan_roots.last_indexed`.
-///
-/// Post-commit: write / delete cover files (best-effort, same as sync_books).
-pub async fn sync_audiobooks(
-    pool: &SqlitePool,
-    library_path: &str,
-    plan: AudiobookSyncPlan,
-) -> anyhow::Result<()> {
-    sync_audiobooks_with_progress(pool, library_path, plan, |_, _| {}).await
-}
-
-/// [`sync_audiobooks`] variant that calls `on_progress(processed, total)`
-/// after each per-book write. `total` counts the buckets that loop per
-/// book — Changed + New. Removed and Backfill are batched and not
-/// reported as per-book ticks.
-pub async fn sync_audiobooks_with_progress(
-    pool: &SqlitePool,
-    library_path: &str,
-    plan: AudiobookSyncPlan,
-    mut on_progress: impl FnMut(u32, u32),
-) -> anyhow::Result<()> {
-    let total: u32 = (plan.changed_books.len() + plan.new_books.len())
-        .try_into()
-        .unwrap_or(u32::MAX);
-    // Emit (0, total) before any per-book work so the UI flips from
-    // indeterminate spinner to determinate bar on the first poll.
-    on_progress(0, total);
-    let mut processed: u32 = 0;
-
-    let mut tx = pool.begin().await?;
-    let library_id = upsert_library(&mut tx, library_path).await?;
-
-    sync_audiobooks_removed(&mut tx, library_id, &plan.removed_uuids).await?;
-    let changed_covers = sync_audiobooks_changed(
-        &mut tx,
-        library_id,
-        library_path,
-        &plan.changed_books,
-        || {
-            processed = processed.saturating_add(1);
-            on_progress(processed, total);
-        },
-    )
-    .await?;
-    let new_covers =
-        sync_audiobooks_new(&mut tx, library_id, library_path, &plan.new_books, || {
-            processed = processed.saturating_add(1);
-            on_progress(processed, total);
-        })
-        .await?;
-    backfill_audiobook_stats(&mut tx, library_id, &plan.backfill).await?;
-    stamp_audiobooks_last_indexed(&mut tx, library_id).await?;
-
-    tx.commit().await?;
-
-    let removed_uuids = plan.removed_uuids;
-    if let Err(join_err) = tokio::task::spawn_blocking(move || {
-        delete_cover_files_for(&removed_uuids);
-        materialize_new_covers(new_covers);
-        materialize_new_covers(changed_covers);
-    })
-    .await
-    {
-        tracing::error!("sync_audiobooks: cover reconcile spawn_blocking failed: {join_err}");
-    }
-
-    Ok(())
-}
-
-/// Apply the Removed bucket (F2): resolve affected ids and, via
-/// `books::mark_book_files_missing`, drop the `book_files` rows (parts/chapters
-/// cascade) and flag each book missing — but **retain** the `books` row, its
-/// links, FTS, and soft-ref user data, so the book stays in browse/search (the
-/// grid hides it via `EXISTS book_files`) and a returning group re-attaches via
-/// Changed. Also drop any `book_files` rows whose uuid lived only in
-/// `merged_uuids` (cross-format attachments — the target book survives).
-async fn sync_audiobooks_removed(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    library_id: i64,
-    removed_uuids: &[String],
-) -> Result<(), SyncError> {
-    if removed_uuids.is_empty() {
-        return Ok(());
-    }
-    let mut missing = 0usize;
-    // Chunk at 500 to stay under SQLite's 999-param cap when a whole library
-    // (or any large diff) is removed — same convention as `sync_removed` in
-    // `books/removed.rs`.
-    for chunk in removed_uuids.chunks(500) {
-        let placeholders = std::iter::repeat_n("?", chunk.len())
-            .collect::<Vec<_>>()
-            .join(", ");
-        // Resolve affected ids once, then drop their file rows and flag them
-        // missing with a single batched DELETE + UPDATE keyed on the id list —
-        // retaining each `books` row (and its links/FTS) as a fileless book (F2).
-        let id_sql =
-            format!("SELECT id FROM books WHERE library_id = ? AND uuid IN ({placeholders})");
-        let mut q = sqlx::query_scalar::<_, i64>(&id_sql).bind(library_id);
-        for uuid in chunk {
-            q = q.bind(uuid);
-        }
-        let ids = q.fetch_all(&mut **tx).await?;
-        if ids.is_empty() {
-            continue;
-        }
-        missing += ids.len();
-        mark_book_files_missing_batch(tx, &ids).await?;
-    }
-    if missing > 0 {
-        tracing::info!(
-            missing,
-            "sync: retained removed audiobooks as fileless books"
-        );
-    }
-
-    // Removed uuids that were cross-format attachments have no
-    // `books` row — drop their `book_files` row + `merged_uuids`
-    // entry instead (the target book survives, possibly fileless).
-    // `remove_attached_files` already chunks internally.
-    attach::remove_attached_files(tx, removed_uuids).await?;
-    Ok(())
-}
-
-/// Batched form of `books::mark_book_files_missing` for the Removed bucket: one
-/// IN-list DELETE of the `book_files` rows (parts/chapters cascade) and one
-/// guarded UPDATE flagging the now-fileless `books` rows missing (F2), instead
-/// of two statements per book. The UPDATE keeps `mark_book_files_missing`'s
-/// guards — `is_missing_files = 0` preserves the original `missing_files_since`
-/// on a re-run, and `is_missing_files_override = 0` leaves intentionally-fileless
-/// rows (wishlist) un-flagged. `ids` must be non-empty and within the SQLite
-/// 999-param cap (the caller chunks at 500).
-async fn mark_book_files_missing_batch(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    ids: &[i64],
-) -> Result<(), SyncError> {
-    let placeholders = std::iter::repeat_n("?", ids.len())
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let del_sql = format!("DELETE FROM book_files WHERE book_id IN ({placeholders})");
-    let mut del_q = sqlx::query(&del_sql);
-    for id in ids {
-        del_q = del_q.bind(id);
-    }
-    del_q.execute(&mut **tx).await?;
-
-    let upd_sql = format!(
-        "UPDATE books
-            SET is_missing_files = 1, missing_files_since = unixepoch()
-          WHERE id IN ({placeholders}) AND is_missing_files = 0 AND is_missing_files_override = 0"
-    );
-    let mut upd_q = sqlx::query(&upd_sql);
-    for id in ids {
-        upd_q = upd_q.bind(id);
-    }
-    upd_q.execute(&mut **tx).await?;
-    Ok(())
-}
-
-/// Apply the Changed bucket: batch-resolve uuid → book_id, then per book
-/// either refresh the attached file row (uuid lives in `merged_uuids`),
-/// promote to a New insert (TOCTOU — diff said the uuid existed but a
-/// concurrent process removed it), or wipe-and-rewrite the file/parts/
-/// author rows in place. Returns `(uuid, mime, bytes)` triples for the
-/// post-commit cover materialization.
-async fn sync_audiobooks_changed(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    library_id: i64,
-    library_path: &str,
-    changed_books: &[crate::audiobook::IndexedAudiobook],
-    mut on_book_written: impl FnMut(),
-) -> Result<Vec<(String, String, Vec<u8>)>, SyncError> {
-    let mut changed_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
-    if changed_books.is_empty() {
-        return Ok(changed_covers);
-    }
-    // Pre-fetch all book ids in one batch query (chunked at 499 to stay
-    // under SQLite's 999-parameter cap), keyed on the F2 `scan_key` (the
-    // group's relative path); carry each row's durable `uuid` back for the
-    // cover triple.
-    let all_scan_keys: Vec<String> = changed_books.iter().map(|b| b.scan_key.clone()).collect();
-    let mut id_map: HashMap<String, (i64, String)> = HashMap::new();
-    for chunk in all_scan_keys.chunks(499) {
-        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-        let id_sql = format!(
-            "SELECT scan_key, id, uuid FROM books
-              WHERE library_id = ? AND scan_key IN ({placeholders})"
-        );
-        let mut q = sqlx::query_as::<_, (String, i64, String)>(&id_sql).bind(library_id);
-        for sk in chunk {
-            q = q.bind(sk);
-        }
-        for (sk, id, uuid) in q.fetch_all(&mut **tx).await? {
-            id_map.insert(sk, (id, uuid));
-        }
-    }
-
-    for b in changed_books {
-        let Some((book_id, uuid)) = id_map.get(&b.scan_key).map(|(id, u)| (*id, u.clone())) else {
-            // No primary books row with this scan_key — either an attachment
-            // on another book (matched by the repoint-stable
-            // `(library_path, scan_key)`) or a TOCTOU promote to a New insert.
-            // (A fileless book whose group returned still has its books row,
-            // so it takes the update branch below and re-creates book_files.)
-            if let Some((_uuid, target_id, format)) =
-                attach::find_attachment_by_scan_key(tx, library_path, &b.scan_key).await?
-            {
-                if attach_audiobook_file(
-                    tx,
-                    target_id,
-                    &format,
-                    library_path,
-                    b,
-                    &mut changed_covers,
-                )
-                .await?
-                {
-                    on_book_written();
-                    continue;
-                }
-                // Slot taken by a different file: forget the stale ledger row
-                // and fall through to insert this file as its own book.
-                attach::forget_attachment(tx, library_path, &b.scan_key).await?;
-            }
-            insert_new_audiobook(tx, library_id, b, &mut changed_covers).await?;
-            on_book_written();
-            continue;
-        };
-
-        rewrite_audiobook_in_place(tx, book_id, &uuid, b, &mut changed_covers).await?;
-        on_book_written();
-    }
-    Ok(changed_covers)
-}
+use super::super::attach;
+use super::super::books::SyncError;
+use super::super::fts::upsert_fts;
 
 /// Rewrite an existing audiobook in place from a freshly-parsed group,
 /// preserving `books.id`/`books.uuid`: refresh the `books` scalars, wipe +
@@ -280,7 +20,7 @@ async fn sync_audiobooks_changed(
 /// path (a fileless book whose group returned, or a `replace_books`
 /// re-add). The `book_files` delete is scoped to this group's own format so
 /// a cross-format attachment (e.g. an EPUB row via `merged_uuids`) survives.
-async fn rewrite_audiobook_in_place(
+pub(super) async fn rewrite_audiobook_in_place(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
     uuid: &str,
@@ -302,69 +42,15 @@ async fn rewrite_audiobook_in_place(
     insert_chapters(tx, book_file_id, &b.chapters, &b.parts).await?;
     insert_audiobook_author_link(tx, book_id, b.creator_name.as_deref()).await?;
     upsert_fts(tx, book_id).await?;
-    super::push_cover(covers, uuid, &b.cover);
+    super::super::push_cover(covers, uuid, &b.cover);
     Ok(())
-}
-
-/// Apply the New bucket: for each entry try cross-format attach first,
-/// otherwise insert a fresh `books` + `book_files` + parts + chapters +
-/// author-link + FTS row. Returns the post-commit cover triples.
-async fn sync_audiobooks_new(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    library_id: i64,
-    library_path: &str,
-    new_books: &[crate::audiobook::IndexedAudiobook],
-    mut on_book_written: impl FnMut(),
-) -> Result<Vec<(String, String, Vec<u8>)>, SyncError> {
-    let mut new_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
-    if new_books.is_empty() {
-        return Ok(new_covers);
-    }
-    // Pre-fetch every same-scan_key `books` row in one batch (chunked at 499 to
-    // stay under SQLite's 999-param cap), keyed on the F2 `scan_key` — mirrors
-    // `sync_audiobooks_changed`. New entries carry distinct scan_keys, so each
-    // maps at most one existing row and the map never goes stale mid-loop.
-    let all_scan_keys: Vec<String> = new_books.iter().map(|b| b.scan_key.clone()).collect();
-    let mut id_map: HashMap<String, (i64, String)> = HashMap::new();
-    for chunk in all_scan_keys.chunks(499) {
-        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-        let id_sql = format!(
-            "SELECT scan_key, id, uuid FROM books
-              WHERE library_id = ? AND scan_key IN ({placeholders})"
-        );
-        let mut q = sqlx::query_as::<_, (String, i64, String)>(&id_sql).bind(library_id);
-        for sk in chunk {
-            q = q.bind(sk);
-        }
-        for (sk, id, uuid) in q.fetch_all(&mut **tx).await? {
-            id_map.insert(sk, (id, uuid));
-        }
-    }
-
-    for b in new_books {
-        // Same-scan_key row (a fileless book whose group returned, or a
-        // `replace_books` re-add) → rewrite in place, *before* the
-        // cross-format attach heuristic, preserving `books.uuid`.
-        if let Some((book_id, uuid)) = id_map.get(&b.scan_key).map(|(id, u)| (*id, u.clone())) {
-            rewrite_audiobook_in_place(tx, book_id, &uuid, b, &mut new_covers).await?;
-            on_book_written();
-            continue;
-        }
-        if try_attach_new_audiobook(tx, library_path, b, &mut new_covers).await? {
-            on_book_written();
-            continue;
-        }
-        insert_new_audiobook(tx, library_id, b, &mut new_covers).await?;
-        on_book_written();
-    }
-    Ok(new_covers)
 }
 
 /// Insert a fresh audiobook (canonical `books` + `book_files` + parts +
 /// chapters + author-link + FTS row) and push its cover triple if any.
 /// Shared by `sync_audiobooks_new` and the TOCTOU promote inside
 /// `sync_audiobooks_changed`.
-async fn insert_new_audiobook(
+pub(super) async fn insert_new_audiobook(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_id: i64,
     b: &crate::audiobook::IndexedAudiobook,
@@ -375,52 +61,7 @@ async fn insert_new_audiobook(
     insert_chapters(tx, inserted.book_file_id, &b.chapters, &b.parts).await?;
     insert_audiobook_author_link(tx, inserted.book_id, b.creator_name.as_deref()).await?;
     upsert_fts(tx, inserted.book_id).await?;
-    super::push_cover(covers, &inserted.uuid, &b.cover);
-    Ok(())
-}
-
-/// Apply the stat-only backfill: UPDATE `book_files.(mtime_epoch, size_bytes)`
-/// in chunks of 250 (3 binds per row + library_id keeps us under SQLite's
-/// 999-parameter cap). No OPF re-parse, no link writes, no FTS write.
-async fn backfill_audiobook_stats(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    library_id: i64,
-    backfill: &[(String, i64, i64)],
-) -> Result<(), SyncError> {
-    for chunk in backfill.chunks(250) {
-        let rows = std::iter::repeat_n("(?, ?, ?)", chunk.len())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!(
-            "UPDATE book_files SET mtime_epoch = v.column2, size_bytes = v.column3 \
-             FROM (VALUES {rows}) AS v, books b \
-             WHERE b.uuid = v.column1 AND b.library_id = ? AND book_files.book_id = b.id"
-        );
-        let mut q = sqlx::query(&sql);
-        for (uuid, mtime_epoch, size_bytes) in chunk {
-            q = q.bind(uuid).bind(mtime_epoch).bind(size_bytes);
-        }
-        q = q.bind(library_id);
-        q.execute(&mut **tx).await?;
-    }
-    Ok(())
-}
-
-/// Stamp `scan_roots.last_indexed` with the current unix epoch — the last
-/// step inside the sync transaction.
-async fn stamp_audiobooks_last_indexed(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    library_id: i64,
-) -> Result<(), SyncError> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    sqlx::query("UPDATE scan_roots SET last_indexed = ? WHERE id = ?")
-        .bind(now)
-        .bind(library_id)
-        .execute(&mut **tx)
-        .await?;
+    super::super::push_cover(covers, &inserted.uuid, &b.cover);
     Ok(())
 }
 
@@ -429,7 +70,7 @@ async fn stamp_audiobooks_last_indexed(
 /// `books::try_attach_new_ebook`: a `merged_uuids` hit attaches
 /// unconditionally; otherwise exactly one normalized title+author match
 /// without this format attaches. Returns `true` when attached.
-async fn try_attach_new_audiobook(
+pub(super) async fn try_attach_new_audiobook(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_path: &str,
     b: &crate::audiobook::IndexedAudiobook,
@@ -479,7 +120,7 @@ async fn try_attach_new_audiobook(
 /// resolves part filenames against the *audio* root.
 ///
 /// Returns `Ok(false)` without writing when another file holds the slot.
-async fn attach_audiobook_file(
+pub(super) async fn attach_audiobook_file(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
     format: &str,
@@ -614,7 +255,7 @@ async fn insert_audiobook_file_row(
     .await?;
     // A returning group clears the F10 missing-files flag (no-op on a fresh
     // insert) — the audiobook file-write chokepoint, mirroring the ebook path.
-    super::books::clear_missing_files_flag(tx, book_id).await?;
+    super::super::books::clear_missing_files_flag(tx, book_id).await?;
     Ok(id)
 }
 

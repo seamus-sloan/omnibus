@@ -6,7 +6,8 @@ use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
 
 use super::fields::{label_to_id, MeArea, MeField, MeLabel};
-use crate::components::chip_editor::{ChipEditor, ChipEditorOptions, SuggestField, SuggestionItem};
+use crate::components::chip_editor::{ChipEditor, ChipEditorOptions, SuggestionItem};
+use crate::components::SuggestField;
 
 /// Per-field editable signals threaded through the form rows from `MetadataEditForm`.
 #[derive(Clone, Copy, PartialEq)]

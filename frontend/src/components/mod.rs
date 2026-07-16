@@ -44,6 +44,15 @@ pub use format_switcher::SendToKoboButton;
 pub mod chip_editor;
 pub use chip_editor::ChipEditor;
 
+// Autocomplete-dropdown machinery (selection state, the dropdown component,
+// the substring filter) shared by `chip_editor` and `suggest_field`.
+mod suggestion_dropdown;
+
+// Single-value sibling of `chip_editor`'s dropdown, for fields that hold one
+// value rather than a list (e.g. the Series field).
+pub mod suggest_field;
+pub use suggest_field::SuggestField;
+
 pub mod atrium;
 
 // Shared loading/error/not-found states for top-level pages — see

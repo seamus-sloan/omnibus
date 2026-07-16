@@ -11,6 +11,9 @@ use omnibus_shared::settings::SCAN_INTERVAL_MIN_HOURS;
 
 use super::types::{Task, Worker};
 
+#[cfg(test)]
+mod tests;
+
 /// Recheck cadence used while `scan_interval_hours` is unset (or a settings
 /// read fails), so enabling the setting later takes effect without a
 /// restart instead of waiting on a timer that was never armed.
