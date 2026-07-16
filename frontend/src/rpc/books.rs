@@ -220,15 +220,11 @@ pub async fn rpc_search(q: String) -> Result<EbookLibrary> {
         .map_err(|e| internal_rpc_error("get settings", e))?;
     let ebook = settings.ebook_library_path;
     let audiobook = settings.audiobook_library_path;
-    let path = ebook
-        .as_deref()
-        .or(audiobook.as_deref())
-        .unwrap_or_default()
-        .to_string();
     let paths = db::collect_paths(ebook.as_deref(), audiobook.as_deref());
     if paths.is_empty() {
         return Ok(EbookLibrary::default());
     }
+    let path = paths[0].to_string();
     // Issue #241: single FTS5 pass returns the capped vec and the full count.
     let (books, total) = db::search_books_for_paths_with_total(&pool.0, &paths, &q)
         .await

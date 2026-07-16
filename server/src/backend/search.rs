@@ -49,11 +49,6 @@ pub(super) async fn get_search(
     };
     let ebook = settings.ebook_library_path;
     let audiobook = settings.audiobook_library_path;
-    let path = ebook
-        .as_deref()
-        .or(audiobook.as_deref())
-        .unwrap_or_default()
-        .to_string();
     let paths = db::collect_paths(ebook.as_deref(), audiobook.as_deref());
     if paths.is_empty() {
         // Match the `/api/ebooks` contract: even an empty result attaches
@@ -64,6 +59,7 @@ pub(super) async fn get_search(
             0,
         );
     }
+    let path = paths[0].to_string();
     // Issue #241: one FTS5 pass yields both the (capped) vec and the *full*
     // hit count via a scalar COUNT over the materialized matches CTE, replacing
     // the prior search_books + count_search_books double pass.
