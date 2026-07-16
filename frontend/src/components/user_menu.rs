@@ -1,13 +1,13 @@
-//! User-menu dropdown mounted in the top nav. Real wiring: Settings,
-//! Sign out, Dark/Light theme. Everything else is a stubbed `<a>`. See
-//! [`UserMenu`] for the SSR/hydration handling of the pre-auth trigger
-//! state.
+//! User-menu dropdown mounted in the top nav. Real wiring: recent progress,
+//! Settings, Sign out, and Dark/Light theme. Other account surfaces remain
+//! stubbed. See [`UserMenu`] for the SSR/hydration handling of the pre-auth
+//! trigger state.
 
 use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};
-use omnibus_shared::UserSummary;
+use omnibus_shared::{ProgressFormat, ResumePoint, UserSummary};
 
-use crate::components::atrium::{persist_theme, Theme};
+use crate::components::atrium::{persist_theme, Cover, Theme};
 use crate::{use_current_user, Route};
 
 /// Derive 1–2 character avatar initials from a username. Empty input falls
@@ -218,30 +218,83 @@ fn UmHeader(user: UserSummary) -> Element {
     }
 }
 
-/// "Now reading" stub card — static placeholder content pending the
-/// reading-progress integration.
+/// Most recently progressed book across reading and listening.
 #[cfg(any(feature = "web", feature = "server"))]
 #[component]
 fn UmNowReading() -> Element {
+    let mut recent = use_signal(|| None::<Result<Option<ResumePoint>, String>>);
+
+    use_effect(move || {
+        spawn(async move {
+            let result = crate::data::recent_progress("", 1)
+                .await
+                .map(|points| points.into_iter().next())
+                .map_err(|error| error.to_string());
+            recent.set(Some(result));
+        });
+    });
+
     rsx! {
         div { class: "um-section",
             div { class: "um-section-label", "NOW READING" }
-            a {
-                class: "um-now-reading",
-                href: "#",
-                "aria-disabled": "true",
-                tabindex: "-1",
-                onclick: move |evt| evt.prevent_default(),
-                div { class: "um-nr-cover" }
-                div { class: "um-nr-meta",
-                    div { class: "um-nr-title", "Piranesi" }
-                    div { class: "um-nr-author", "Susanna Clarke" }
-                    div { class: "um-nr-progress",
-                        div { class: "um-nr-pbar", div { class: "um-nr-pbar-fill" } }
-                        div { class: "um-nr-stats",
-                            span { "68%" }
-                            span { "ch. 22" }
-                            span { "4h 12m left" }
+            match recent() {
+                None => rsx! {
+                    div { class: "um-now-reading um-now-reading-state", role: "status",
+                        "Loading reading progress..."
+                    }
+                },
+                Some(Ok(None)) => rsx! {
+                    div { class: "um-now-reading um-now-reading-state",
+                        "Nothing in progress"
+                    }
+                },
+                Some(Err(_)) => rsx! {
+                    div { class: "um-now-reading um-now-reading-state error", role: "alert",
+                        "Unable to load reading progress."
+                    }
+                },
+                Some(Ok(Some(point))) => {
+                    let is_audio = point.record.format == ProgressFormat::Audio;
+                    let title = point
+                        .book
+                        .title
+                        .as_deref()
+                        .filter(|title| !title.trim().is_empty())
+                        .unwrap_or(&point.book.filename)
+                        .to_string();
+                    let author = point
+                        .book
+                        .creators
+                        .first()
+                        .map(|creator| creator.name.clone())
+                        .filter(|author| !author.trim().is_empty());
+                    let action = if is_audio {
+                        "Continue listening"
+                    } else {
+                        "Continue reading"
+                    };
+                    let uuid = point.record.book_uuid.clone();
+                    let to = if is_audio {
+                        Route::BookListen { uuid }
+                    } else {
+                        Route::BookRead { uuid }
+                    };
+                    let aria_label = format!("{action} {title}");
+
+                    rsx! {
+                        Link {
+                            to,
+                            class: "um-now-reading",
+                            "data-testid": "user-menu-now-reading",
+                            "aria-label": "{aria_label}",
+                            div { class: "um-nr-cover", Cover { book: point.book } }
+                            div { class: "um-nr-meta",
+                                div { class: "um-nr-title", "{title}" }
+                                if let Some(author) = author {
+                                    div { class: "um-nr-author", "{author}" }
+                                }
+                                div { class: "um-nr-action", "{action}" }
+                            }
                         }
                     }
                 }
