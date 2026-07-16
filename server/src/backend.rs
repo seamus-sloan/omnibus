@@ -616,12 +616,7 @@ fn current_dir_string() -> String {
         .unwrap_or_default()
 }
 
-/// Running server's release version, sourced from the `OMNIBUS_VERSION` env
-/// var (baked into the Docker image at build time by `docker.yml`) and
-/// captured once at boot. Falls back to the literal `"dev"` when unset —
-/// local `cargo run`/`dx serve` builds have no release tag to report.
-/// Surfaced via `/api/_health` so mobile clients can compare their installed
-/// app version against the running server (#1055).
+/// Running server's release version, captured once at boot.
 ///
 /// `main.rs` calls [`init_app_version`] eagerly during boot, mirroring
 /// [`init_build_id`]/[`init_repo_root`]. `OnceLock::get_or_init` is
@@ -637,45 +632,32 @@ pub fn init_app_version() {
 
 static APP_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-/// Reads `OMNIBUS_VERSION` and normalizes it to a single leading `v` (the
-/// Docker build-arg carries the full, already-`v`-prefixed release tag; a
-/// hand-set deployment env might not), or the literal `"dev"` when unset —
-/// distinct from a `v`-prefixed value so a bare "dev" reads unambiguously as
-/// "no release tag", never as a real version.
+/// Reads `OMNIBUS_VERSION` (baked into the Docker image at build time by
+/// `docker.yml`) and normalizes it to a single leading `v` — the Docker
+/// build-arg carries the full, already-`v`-prefixed release tag, but a
+/// hand-set deployment env might not, and a doubled `vv1.2.3` shouldn't
+/// happen either.
+///
+/// Falls back to the literal `"dev"` when the var is unset, empty/whitespace
+/// (a build-arg supplied without a value sets the env to `""` rather than
+/// leaving it unset), or literally just `"v"` after trimming — local `cargo
+/// run`/`dx serve` builds have no release tag to report, and `"dev"` reads
+/// unambiguously as "no release tag", never as a real version.
 fn read_app_version() -> String {
-    match std::env::var("OMNIBUS_VERSION") {
-        Ok(v) if v.starts_with('v') => v,
-        Ok(v) => format!("v{v}"),
-        Err(_) => "dev".to_string(),
-    }
-}
-
-#[cfg(test)]
-mod version_tests {
-    use super::read_app_version;
-
-    #[test]
-    fn read_app_version_normalizes_env_var_and_falls_back_to_dev_when_unset() {
-        // Single test (not several) so the env-var mutations can't race
-        // another test's parallel read/write of the same process-global var
-        // — no other test in this crate touches `OMNIBUS_VERSION`.
-        let prev = std::env::var("OMNIBUS_VERSION").ok();
-
-        std::env::set_var("OMNIBUS_VERSION", "v1.2.3");
-        assert_eq!(read_app_version(), "v1.2.3");
-
-        // A bare version (e.g. TestFlight's MARKETING_VERSION convention)
-        // gets a leading `v` added, so both sources render consistently.
-        std::env::set_var("OMNIBUS_VERSION", "1.2.3");
-        assert_eq!(read_app_version(), "v1.2.3");
-
-        std::env::remove_var("OMNIBUS_VERSION");
-        assert_eq!(read_app_version(), "dev");
-
-        match prev {
-            Some(v) => std::env::set_var("OMNIBUS_VERSION", v),
-            None => std::env::remove_var("OMNIBUS_VERSION"),
+    let trimmed = std::env::var("OMNIBUS_VERSION")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    match trimmed {
+        Some(v) => {
+            let bare = v.trim_start_matches('v');
+            if bare.is_empty() {
+                "dev".to_string()
+            } else {
+                format!("v{bare}")
+            }
         }
+        None => "dev".to_string(),
     }
 }
 

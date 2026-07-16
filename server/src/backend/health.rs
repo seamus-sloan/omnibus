@@ -17,9 +17,9 @@ use super::{app_version, build_id, repo_root};
 /// field lets it distinguish *this* workspace's server from a sibling
 /// `jj` workspace's server bound to the same port. The `version` field
 /// (from `OMNIBUS_VERSION`, `"dev"` when unset) lets the mobile "You"
-/// screen show the running server's release alongside its own app version
-/// (#1055). Whitelisted in `auth::gate::require_auth` so it remains
-/// reachable without a session.
+/// screen show the running server's release alongside its own app version.
+/// Whitelisted in `auth::gate::require_auth` so it remains reachable
+/// without a session.
 pub(super) async fn get_health() -> Response {
     Json(serde_json::json!({
         "app": "omnibus",
@@ -74,7 +74,7 @@ mod tests {
         // The test binary doesn't set OMNIBUS_VERSION, so this is "dev" in
         // practice — but the contract this endpoint guarantees is just
         // "a non-empty string field", which is what `read_app_version`'s
-        // dedicated fallback test in `backend.rs` covers precisely.
+        // dedicated fallback test in `backend/tests.rs` covers precisely.
         let version = json["version"].as_str().expect("version is a string");
         assert!(!version.is_empty(), "version should not be empty");
     }
