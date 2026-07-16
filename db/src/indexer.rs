@@ -60,7 +60,7 @@ pub const MASS_MISSING_MIN_ABSOLUTE: usize = 10;
 /// but still large enough that a dropped mount or partial sync shouldn't
 /// ghost books silently. Half the abort fraction — a scan in this band
 /// still proceeds (unlike the abort guard) but its `Done` state carries a
-/// dismissable warning (issue #1057).
+/// dismissible warning (issue #1057).
 pub const MASS_MISSING_WARN_FRACTION: f64 = 0.10;
 
 /// Error raised when the removal pass would flag an implausible share of the

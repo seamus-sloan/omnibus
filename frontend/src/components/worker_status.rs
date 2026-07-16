@@ -100,7 +100,7 @@ fn terminal_row(
 ) -> Element {
     let id = task.task_id;
     match &task.state {
-        // A ghost-count warning (issue #1057) renders a distinct dismissable
+        // A ghost-count warning (issue #1057) renders a distinct dismissible
         // WarnRow instead of the ordinary green DoneRow — AC1/AC3. Below the
         // warn threshold `ghost_warning` is `None` and behavior is unchanged
         // (AC2).

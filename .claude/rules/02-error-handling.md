@@ -45,7 +45,8 @@ pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<Re
     if let Some(msg) = stat.error {
         anyhow::bail!("scan of {library_path} failed: {msg}");
     }
-    Ok(stats)
+    // ... diff, sync, etc.
+    Ok(ReindexStats::default())
 }
 ```
 

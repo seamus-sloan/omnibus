@@ -43,7 +43,7 @@ pub enum ProgressState {
     Done {
         processed: u32,
         /// Set when a scan ghosted a large-but-sub-abort-threshold number of
-        /// books (issue #1057) — the UI renders a dismissable warning row
+        /// books (issue #1057) — the UI renders a dismissible warning row
         /// instead of the ordinary success row.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ghost_warning: Option<GhostFilesWarning>,
