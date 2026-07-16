@@ -48,27 +48,75 @@ pub(super) fn is_audio_book_file(f: &BookFileInfo) -> bool {
         || f.format.eq_ignore_ascii_case("MP3")
 }
 
-/// Trigger + dropdown for picking a specific `book_files` row before
-/// reading/listening. Renders nothing when `files` has fewer than two
-/// entries — callers pass only the files matching the format the CTA
-/// opens (`format == "EPUB"` for [`FilePickerKind::Read`], one of
-/// M4B/M4A/MP3 for [`FilePickerKind::Listen`]), so a single-file book's CTA
-/// row is unaffected (AC2 of #1005).
+fn file_picker_item_title(file: &BookFileInfo, kind: FilePickerKind) -> String {
+    let format = match kind {
+        FilePickerKind::Read => file.format.to_uppercase(),
+        FilePickerKind::Listen => "Audiobook".to_string(),
+    };
+    let label = file
+        .label
+        .as_deref()
+        .filter(|label| !label.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("Part {}", file.ordinal + 1));
+    format!("{format} \u{b7} {label}")
+}
+
+fn file_picker_item_meta(file: &BookFileInfo, kind: FilePickerKind) -> Option<String> {
+    let size = format_file_size(file.size_bytes)?;
+    let label = file
+        .label
+        .as_deref()
+        .filter(|label| !label.trim().is_empty());
+    match (kind, label) {
+        (FilePickerKind::Listen, Some(label)) => Some(format!("{label} \u{b7} {size}")),
+        _ => Some(size),
+    }
+}
+
+fn format_file_size(size_bytes: i64) -> Option<String> {
+    let bytes = u64::try_from(size_bytes).ok().filter(|bytes| *bytes > 0)?;
+    let (value, unit) = if bytes >= 1_000_000_000 {
+        (bytes as f64 / 1_000_000_000.0, "GB")
+    } else if bytes >= 1_000_000 {
+        (bytes as f64 / 1_000_000.0, "MB")
+    } else if bytes >= 1_000 {
+        (bytes as f64 / 1_000.0, "KB")
+    } else {
+        return Some(format!("{bytes} B"));
+    };
+    Some(format!("{value:.1} {unit}"))
+}
+
+/// Read/listen action that expands into a file picker when multiple files match.
 #[component]
 pub(super) fn BdFilePickerMenu(
     uuid: String,
     kind: FilePickerKind,
     files: Vec<BookFileInfo>,
+    label: String,
+    button_class: String,
+    single_testid: String,
 ) -> Element {
+    let prefix = kind.route_prefix();
     if files.len() < 2 {
-        return rsx! {};
+        let href = format!("/{prefix}/{uuid}");
+        return rsx! {
+            Link {
+                to: "{href}",
+                class: "{button_class}",
+                "data-testid": "{single_testid}",
+                "{label}"
+            }
+        };
     }
     let mut open = use_signal(|| false);
     let testid = kind.testid();
+    let trigger_class = format!("{button_class} bd-file-picker-trigger");
     rsx! {
         div { class: "bd-file-picker",
             button {
-                class: "btn ghost lg bd-file-picker-trigger",
+                class: "{trigger_class}",
                 "data-testid": "{testid}-trigger",
                 r#type: "button",
                 "aria-haspopup": "dialog",
@@ -78,6 +126,7 @@ pub(super) fn BdFilePickerMenu(
                     let next = !open();
                     open.set(next);
                 },
+                "{label}"
                 span { class: "bd-file-picker-caret", aria_hidden: "true", "\u{25be}" }
             }
             if open() {
@@ -110,6 +159,7 @@ fn BdFilePickerPanel(
     };
     let testid = kind.testid();
     let prefix = kind.route_prefix();
+    let heading_testid = format!("{testid}-heading");
     rsx! {
         div {
             class: "bd-export-panel bd-file-picker-panel card",
@@ -120,12 +170,15 @@ fn BdFilePickerPanel(
             onkeydown: on_keydown,
             onmounted: move |evt: MountedEvent| focus_file_picker_panel(&evt),
 
+            div {
+                class: "label bd-file-picker-heading",
+                "data-testid": "{heading_testid}",
+                "{files.len()} files \u{b7} choose one"
+            }
             for file in files.iter() {
                 {
-                    let label = file
-                        .label
-                        .clone()
-                        .unwrap_or_else(|| format!("Part {}", file.ordinal + 1));
+                    let title = file_picker_item_title(file, kind);
+                    let meta = file_picker_item_meta(file, kind);
                     let href = format!("/{prefix}/{uuid}?file_id={}", file.id);
                     let item_testid = format!("{testid}-item-{}", file.id);
                     rsx! {
@@ -135,7 +188,12 @@ fn BdFilePickerPanel(
                             class: "bd-export-item bd-file-picker-item",
                             "data-testid": "{item_testid}",
                             onclick: move |_| open.set(false),
-                            span { class: "bd-export-item-label", "{label}" }
+                            div { class: "bd-file-picker-item-copy",
+                                div { class: "bd-file-picker-item-title", "{title}" }
+                                if let Some(meta) = meta.as_deref() {
+                                    div { class: "mono bd-file-picker-item-meta", "{meta}" }
+                                }
+                            }
                         }
                     }
                 }
@@ -199,6 +257,61 @@ mod tests {
     fn is_audio_book_file_rejects_non_audio_formats() {
         assert!(!is_audio_book_file(&file("EPUB", 1, 0)));
         assert!(!is_audio_book_file(&file("PDF", 1, 0)));
+    }
+
+    #[test]
+    fn file_picker_item_title_matches_the_read_and_listen_design_labels() {
+        let mut epub = file("EPUB", 1, 0);
+        epub.label = Some("10th anniversary".to_string());
+        let mut audiobook = file("M4B", 2, 1);
+        audiobook.label = Some("Full cast".to_string());
+
+        assert_eq!(
+            file_picker_item_title(&epub, FilePickerKind::Read),
+            "EPUB · 10th anniversary"
+        );
+        assert_eq!(
+            file_picker_item_title(&audiobook, FilePickerKind::Listen),
+            "Audiobook · Full cast"
+        );
+    }
+
+    #[test]
+    fn file_picker_item_meta_formats_file_size_and_audio_label() {
+        let mut epub = file("EPUB", 1, 0);
+        epub.size_bytes = 3_100_000;
+        let mut audiobook = file("M4B", 2, 1);
+        audiobook.label = Some("Full cast".to_string());
+        audiobook.size_bytes = 512_000_000;
+
+        assert_eq!(
+            file_picker_item_meta(&epub, FilePickerKind::Read),
+            Some("3.1 MB".to_string())
+        );
+        assert_eq!(
+            file_picker_item_meta(&audiobook, FilePickerKind::Listen),
+            Some("Full cast · 512.0 MB".to_string())
+        );
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn file_picker_menu_integrates_the_caret_into_the_action_for_multiple_files() {
+        let html = dioxus::ssr::render_element(rsx! {
+            BdFilePickerMenu {
+                uuid: "book-a".to_string(),
+                kind: FilePickerKind::Listen,
+                files: vec![file("MP3", 1, 0), file("MP3", 2, 1)],
+                label: "Start listening".to_string(),
+                button_class: "btn primary lg".to_string(),
+                single_testid: "start-listening".to_string(),
+            }
+        });
+
+        assert!(html.contains("data-testid=\"listen-file-picker-trigger\""));
+        assert!(html.contains("Start listening"));
+        assert!(html.contains("\u{25be}"));
+        assert!(!html.contains("data-testid=\"start-listening\""));
     }
 
     #[test]

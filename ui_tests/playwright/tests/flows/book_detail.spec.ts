@@ -662,11 +662,21 @@ test.describe("audiobook-only seed", () => {
         // to pick which file to open before listening.
         const trigger = page.getByTestId("listen-file-picker-trigger");
         await expect(trigger).toBeVisible();
+        await expect(trigger).toHaveText(/Start listening\s*▾/);
         await expect(page.getByTestId("listen-file-picker-panel")).toHaveCount(0);
         await trigger.click();
         const panel = page.getByTestId("listen-file-picker-panel");
         await expect(panel).toBeVisible();
+        await expect(
+          page.getByTestId("listen-file-picker-heading"),
+        ).toHaveText("2 files · choose one");
         await expect(panel.getByRole("link")).toHaveCount(2);
+        await expect(panel.getByRole("link").first()).toContainText(
+          "Audiobook ·",
+        );
+        await expect(panel.getByRole("link").first()).toContainText(
+          /\d+(?:\.\d+)? [KMGT]?B/,
+        );
 
         // Picking the second (non-default) file navigates to /listen/:uuid
         // with that file's id, and the manifest fetch carries the same id.

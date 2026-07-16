@@ -192,14 +192,26 @@ fn BdCtaRow(
     rsx! {
         div { class: "bd-cta-row",
             if has_ebook {
-                Link { to: Route::BookRead { uuid: uuid.clone() }, class: "btn primary lg", "data-testid": "start-reading", "Start reading" }
-                BdFilePickerMenu { uuid: uuid.clone(), kind: FilePickerKind::Read, files: epub_files.clone() }
+                BdFilePickerMenu {
+                    uuid: uuid.clone(),
+                    kind: FilePickerKind::Read,
+                    files: epub_files.clone(),
+                    label: "Start reading",
+                    button_class: "btn primary lg",
+                    single_testid: "start-reading",
+                }
             } else if has_audio {
                 {
                     #[cfg(not(feature = "mobile"))]
                     let start_listening = rsx! {
-                        Link { to: Route::BookListen { uuid: uuid.clone() }, class: "btn primary lg", "data-testid": "start-listening", "Start listening" }
-                        BdFilePickerMenu { uuid: uuid.clone(), kind: FilePickerKind::Listen, files: audio_files.clone() }
+                        BdFilePickerMenu {
+                            uuid: uuid.clone(),
+                            kind: FilePickerKind::Listen,
+                            files: audio_files.clone(),
+                            label: "Start listening",
+                            button_class: "btn primary lg",
+                            single_testid: "start-listening",
+                        }
                     };
                     #[cfg(feature = "mobile")]
                     let start_listening = rsx! {
@@ -212,8 +224,14 @@ fn BdCtaRow(
                 {
                     #[cfg(not(feature = "mobile"))]
                     let listen_btn = rsx! {
-                        Link { to: Route::BookListen { uuid: uuid.clone() }, class: "btn lg", "data-testid": "listen-secondary", "Listen" }
-                        BdFilePickerMenu { uuid: uuid.clone(), kind: FilePickerKind::Listen, files: audio_files.clone() }
+                        BdFilePickerMenu {
+                            uuid: uuid.clone(),
+                            kind: FilePickerKind::Listen,
+                            files: audio_files.clone(),
+                            label: "Listen",
+                            button_class: "btn lg",
+                            single_testid: "listen-secondary",
+                        }
                     };
                     #[cfg(feature = "mobile")]
                     let listen_btn = rsx! {
