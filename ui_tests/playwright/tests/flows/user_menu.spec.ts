@@ -1,11 +1,53 @@
 import { expect, test } from "../fixtures/test";
+import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expectMutation } from "../utils/api";
+import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
+import { fixturesDir, seedLibrary } from "../utils/seed";
 
 // The user menu replaces the old top-bar cluster (ThemeToggle, Settings
 // link, Log out button) with a single avatar trigger that opens a dropdown.
 // Most rows in the dropdown are forward-looking stubs (disabled <a>); real
-// wiring covers Settings, Sign out, and the Dark/Light theme buttons.
+// wiring covers recent progress, Settings, Sign out, and theme selection.
+
+test.beforeAll(async ({ request }) => {
+  await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
+});
+
+async function recentPoint(
+  request: import("@playwright/test").APIRequestContext,
+  format: "epub" | "audio",
+) {
+  const target = FIXTURE_BOOKS[1];
+  const uuid = await fetchBookUuidByTitle(request, target.title);
+  const response = await request.get("/api/rpc/ebooks");
+  expect(response.status()).toBe(200);
+  const books = ((await response.json()) as {
+    books: Record<string, unknown>[];
+  }).books;
+  const book = books.find((candidate) => candidate.unique_identifier === uuid);
+  if (!book) {
+    throw new Error(`book ${JSON.stringify(target.title)} disappeared after lookup`);
+  }
+
+  return {
+    uuid,
+    title: target.title,
+    point: {
+      record: {
+        book_uuid: uuid,
+        format,
+        epub_cfi: format === "epub" ? "epubcfi(/6/2)" : null,
+        audio_position_seconds: format === "audio" ? 90 : null,
+        updated_at: 123,
+      },
+      book,
+      total_duration_seconds: null,
+      chapter_number: null,
+      chapter_count: null,
+    },
+  };
+}
 
 test("renders the user menu trigger after login", async ({ page }) => {
   await gotoReady(page, "/");
@@ -50,6 +92,53 @@ test("Settings link routes to the settings page", async ({ page }) => {
   await page.getByTestId("user-menu-trigger").click();
   await page.getByRole("link", { name: "Settings" }).click();
   await expect(page).toHaveURL(/\/settings$/);
+});
+
+for (const sample of [
+  { format: "epub" as const, action: "Continue reading", path: "read" },
+  { format: "audio" as const, action: "Continue listening", path: "listen" },
+]) {
+  test(`shows the latest ${sample.format} and its resume destination`, async ({
+    page,
+    request,
+  }) => {
+    const latest = await recentPoint(request, sample.format);
+    await page.route("**/api/rpc/progress/recent", async (route) => {
+      await route.fulfill({ status: 200, json: [latest.point] });
+    });
+
+    await gotoReady(page, "/");
+    await page.getByTestId("user-menu-trigger").click();
+
+    const card = page.getByRole("link", {
+      name: `${sample.action} ${latest.title}`,
+    });
+    await expect(card).toBeVisible();
+    await expect(card).toHaveAttribute("href", `/${sample.path}/${latest.uuid}`);
+  });
+}
+
+test("shows an empty state when no book has progress", async ({ page }) => {
+  await page.route("**/api/rpc/progress/recent", async (route) => {
+    await route.fulfill({ status: 200, json: [] });
+  });
+
+  await gotoReady(page, "/");
+  await page.getByTestId("user-menu-trigger").click();
+
+  await expect(page.getByText("Nothing in progress")).toBeVisible();
+  await expect(page.getByText("Piranesi")).toHaveCount(0);
+});
+
+test("surfaces a recent-progress fetch failure", async ({ page }) => {
+  await page.route("**/api/rpc/progress/recent", async (route) => {
+    await route.fulfill({ status: 500, body: "forced failure" });
+  });
+
+  await gotoReady(page, "/");
+  await page.getByTestId("user-menu-trigger").click();
+
+  await expect(page.getByRole("alert")).toHaveText("Unable to load reading progress.");
 });
 
 test("Sign out clears the session and routes to /login", async ({ page }) => {
