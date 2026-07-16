@@ -386,13 +386,13 @@ async fn move_links(
     Ok(())
 }
 
-/// Re-parent reading progress (with latest-wins dedupe) plus bookmarks,
-/// reading/listening sessions, and highlights from the source book onto the
-/// target. The F1 user-data tables soft-reference the durable `books.uuid`,
-/// so re-parenting is an `UPDATE … SET book_uuid = <target> WHERE book_uuid =
-/// <source>` (no FK cascade — a cascade would *delete* the children). The two
-/// canonical uuids are read from `books` while the source row still exists
-/// (it is deleted later in `finalize_merge`).
+/// Re-parent reading progress and playback preferences (with latest-wins
+/// dedupe) plus bookmarks, reading/listening sessions, and highlights from the
+/// source book onto the target. The F1 user-data tables soft-reference the
+/// durable `books.uuid`, so re-parenting is an `UPDATE … SET book_uuid =
+/// <target> WHERE book_uuid = <source>` (no FK cascade — a cascade would
+/// *delete* the children). The two canonical uuids are read from `books` while
+/// the source row still exists (it is deleted later in `finalize_merge`).
 ///
 /// Dedupe on `reading_progress` is necessary because `format` is the coarse
 /// `'epub' | 'audio'`, while the merge's format-collision check uses the real
@@ -435,8 +435,32 @@ async fn move_progress_and_history(
     .bind(&source_uuid)
     .execute(&mut **tx)
     .await?;
+    sqlx::query(
+        "DELETE FROM audiobook_playback_preferences
+          WHERE book_uuid = ?2 AND EXISTS (
+            SELECT 1 FROM audiobook_playback_preferences t
+             WHERE t.book_uuid = ?1
+               AND t.user_id = audiobook_playback_preferences.user_id
+               AND t.updated_at >= audiobook_playback_preferences.updated_at)",
+    )
+    .bind(&target_uuid)
+    .bind(&source_uuid)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "DELETE FROM audiobook_playback_preferences
+          WHERE book_uuid = ?1 AND EXISTS (
+            SELECT 1 FROM audiobook_playback_preferences s
+             WHERE s.book_uuid = ?2
+               AND s.user_id = audiobook_playback_preferences.user_id)",
+    )
+    .bind(&target_uuid)
+    .bind(&source_uuid)
+    .execute(&mut **tx)
+    .await?;
     for table in [
         "reading_progress",
+        "audiobook_playback_preferences",
         "bookmarks",
         "reading_sessions",
         "listening_sessions",

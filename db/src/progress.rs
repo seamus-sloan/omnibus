@@ -7,7 +7,8 @@
 //! the surviving book's identity.
 
 use omnibus_shared::{
-    ChapterInfo, ProgressFormat, ProgressRecord, ProgressUpdate, ResumePoint, SessionReport,
+    AudiobookPlaybackRateRecord, AudiobookPlaybackRateUpdate, ChapterInfo, ProgressFormat,
+    ProgressRecord, ProgressUpdate, ResumePoint, SessionReport,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
@@ -143,6 +144,65 @@ pub async fn get_progress(
         epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
         audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
         updated_at: row.try_get::<i64, _>("updated_at")?,
+    }))
+}
+
+/// Upsert the playback rate for `(user, book)` and return the saved preference.
+pub async fn set_playback_rate(
+    pool: &SqlitePool,
+    user_id: i64,
+    book_uuid: &str,
+    update: &AudiobookPlaybackRateUpdate,
+) -> Result<AudiobookPlaybackRateRecord, ProgressError> {
+    let canonical = resolve_canonical_book_uuid(pool, book_uuid)
+        .await?
+        .ok_or(ProgressError::BookNotFound)?;
+    let row = sqlx::query(
+        "INSERT INTO audiobook_playback_preferences
+            (user_id, book_uuid, playback_rate, updated_at)
+         VALUES (?, ?, ?, strftime('%s', 'now'))
+         ON CONFLICT(user_id, book_uuid) DO UPDATE SET
+            playback_rate = excluded.playback_rate,
+            updated_at = strftime('%s', 'now')
+         RETURNING playback_rate, updated_at",
+    )
+    .bind(user_id)
+    .bind(&canonical)
+    .bind(update.playback_rate)
+    .fetch_one(pool)
+    .await?;
+    Ok(AudiobookPlaybackRateRecord {
+        book_uuid: canonical,
+        playback_rate: row.try_get("playback_rate")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+/// Fetch the user's playback-rate preference for a book, if one exists.
+pub async fn get_playback_rate(
+    pool: &SqlitePool,
+    user_id: i64,
+    book_uuid: &str,
+) -> Result<Option<AudiobookPlaybackRateRecord>, ProgressError> {
+    let canonical = resolve_canonical_book_uuid(pool, book_uuid)
+        .await?
+        .ok_or(ProgressError::BookNotFound)?;
+    let Some(row) = sqlx::query(
+        "SELECT playback_rate, updated_at
+         FROM audiobook_playback_preferences
+         WHERE user_id = ? AND book_uuid = ?",
+    )
+    .bind(user_id)
+    .bind(&canonical)
+    .fetch_optional(pool)
+    .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(AudiobookPlaybackRateRecord {
+        book_uuid: canonical,
+        playback_rate: row.try_get("playback_rate")?,
+        updated_at: row.try_get("updated_at")?,
     }))
 }
 

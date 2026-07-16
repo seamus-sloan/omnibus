@@ -16,6 +16,8 @@ listening.
 ## Status
 
 - **PR 1 — Visual redesign + speed panel:** shipped.
+- **Playback-speed sync follow-up (#1098):** shipped. Speed is persisted per
+  user and audiobook on the server, with an account-scoped local fallback.
 - **PR 2 — Chapter infrastructure:** shipped.
 - **PR 3 — Chapter UI:** shipped.
 - **PR 6 — Mini-dock player:** shipped. Playback state and the `<audio>`
@@ -46,7 +48,8 @@ Pure frontend. No backend or DB changes.
 - Speed panel overlay: preset grid (0.5–2.0×), fine-tune slider (0.5–3.0×),
   ±0.05 stepper. Frosted glass with scrim
 - Toolbar row: Sleep, Bookmark, Chapters buttons (inert until their PRs land)
-- Per-book playback speed persistence (`omn.listening.rate::{uuid}`)
+- Per-user, per-book playback speed persistence across devices. The original
+  local-only key was replaced by server storage plus an account-scoped fallback.
 - Custom-styled scrubber with accent-coloured fill + thumb
 - Responsive: single-column on narrow viewports
 

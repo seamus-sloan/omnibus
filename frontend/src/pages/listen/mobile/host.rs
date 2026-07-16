@@ -23,6 +23,16 @@ pub fn MobileAudioHost() -> Element {
     let mut drain_task = use_signal(|| None::<Task>);
     let mut loaded_uuid = use_signal(|| None::<String>);
 
+    use_future(move || async move {
+        let mut auth = crate::data::token_store::subscribe();
+        while auth.changed().await.is_ok() {
+            if !*auth.borrow_and_update() {
+                let mut uuid = ctx.uuid;
+                uuid.set(None);
+            }
+        }
+    });
+
     // Record listening time off the play/pause signals — the rows behind
     // the `/stats` aggregates, POSTed to `/api/progress/sessions`.
     crate::session_tracker::use_listening_session(ctx.uuid, ctx.playing, server_url);
@@ -89,6 +99,8 @@ fn reset_playback(ctx: MobilePlayback) {
         mut duration,
         mut elapsed,
         mut playing,
+        mut rate_error,
+        mut user_id,
         mut sleep,
         ..
     } = ctx;
@@ -99,6 +111,8 @@ fn reset_playback(ctx: MobilePlayback) {
     duration.set(0.0);
     elapsed.set(0.0);
     playing.set(false);
+    rate_error.set(None);
+    user_id.set(None);
     sleep.set(SleepState::Off);
 }
 
@@ -115,6 +129,8 @@ async fn load_and_drain(ctx: MobilePlayback, uuid: String, server_url: String) {
         mut elapsed,
         mut playing,
         mut rate,
+        mut rate_error,
+        mut user_id,
         mut sleep,
         ..
     } = ctx;
@@ -123,8 +139,9 @@ async fn load_and_drain(ctx: MobilePlayback, uuid: String, server_url: String) {
     unsupported.set(false);
     view.set(None);
     playing.set(false);
+    rate_error.set(None);
     sleep.set(SleepState::Off);
-    rate.set(crate::audiobook_progress::load_rate(&uuid));
+    rate.set(1.0);
 
     let book = match data::get_ebook(&server_url, &uuid).await {
         Ok(Some(b)) => b,
@@ -156,6 +173,30 @@ async fn load_and_drain(ctx: MobilePlayback, uuid: String, server_url: String) {
             chapters,
         } => {
             let resume = resolve_resume(&server_url, &uuid).await;
+            let resolved_user_id = data::get_me(&server_url).await.ok().map(|user| user.id);
+            user_id.set(resolved_user_id);
+            let server_rate = data::get_playback_rate(&server_url, &uuid).await;
+            if let (Some(user_id), Ok(Some(record))) = (resolved_user_id, server_rate.as_ref()) {
+                crate::audiobook_progress::save_rate(user_id, &uuid, record.playback_rate);
+            }
+            let local_rate = resolved_user_id
+                .and_then(|user_id| crate::audiobook_progress::load_rate(user_id, &uuid));
+            let resolution = crate::audiobook_progress::resolve_rate(
+                server_rate
+                    .as_ref()
+                    .map(|record| record.as_ref().map(|record| record.playback_rate))
+                    .map_err(|_| ()),
+                local_rate,
+            );
+            rate.set(resolution.playback_rate);
+            if resolution.seed_server {
+                let update = omnibus_shared::AudiobookPlaybackRateUpdate {
+                    playback_rate: resolution.playback_rate,
+                };
+                if let Err(error) = data::set_playback_rate(&server_url, &uuid, update).await {
+                    rate_error.set(Some(format!("Could not save playback speed: {error}")));
+                }
+            }
             let pv =
                 PlayerView::from_direct(&book, chapters, total_duration_seconds, parts.clone());
             // Cover artwork for the lock screen: the same tokened thumbnail the
@@ -176,7 +217,7 @@ async fn load_and_drain(ctx: MobilePlayback, uuid: String, server_url: String) {
                 &server_url,
                 &parts,
                 resume,
-                *rate.peek(),
+                resolution.playback_rate,
                 &now_playing,
             );
             view.set(Some(pv));

@@ -9,10 +9,12 @@ use super::state::{format_countdown, sleep_remaining, SleepState, SLEEP_PRESETS}
 use super::view::format_ms;
 
 /// Speed presets shown in the sheet grid, mirroring the web `SpeedPanel`.
+use omnibus_shared::{
+    MAX_AUDIOBOOK_PLAYBACK_RATE as SPEED_MAX, MIN_AUDIOBOOK_PLAYBACK_RATE as SPEED_MIN,
+};
+
 const SPEED_PRESETS: &[f64] = &[0.5, 0.8, 1.0, 1.1, 1.2, 1.5, 1.8, 2.0];
 /// Fine-tune slider bounds + step (also the ± stepper increment).
-const SPEED_MIN: f64 = 0.5;
-const SPEED_MAX: f64 = 3.0;
 const SPEED_STEP: f64 = 0.05;
 
 /// Clamp + snap a requested rate to the fine-tune grid.

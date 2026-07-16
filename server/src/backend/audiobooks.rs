@@ -14,9 +14,10 @@ use axum::{
 use omnibus_db::{
     audiobook::{self, PlaybackMode},
     hls,
+    progress::ProgressError,
     worker::Task,
 };
-use omnibus_shared::{AudiobookManifest, ManifestPart};
+use omnibus_shared::{AudiobookManifest, AudiobookPlaybackRateUpdate, ManifestPart};
 use serde::{Deserialize, Serialize};
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
@@ -34,6 +35,40 @@ static MPEGTS_CONTENT_TYPE: HeaderValue = HeaderValue::from_static("video/MP2T")
 #[derive(Deserialize)]
 pub(super) struct ManifestQuery {
     file_id: Option<i64>,
+}
+
+/// Return the authenticated user's saved playback rate for an audiobook.
+pub(super) async fn get_playback_rate(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+) -> Response {
+    match omnibus_db::progress::get_playback_rate(&state.pool, user.id, &uuid).await {
+        Ok(record) => Json(record).into_response(),
+        Err(ProgressError::BookNotFound) => {
+            (axum::http::StatusCode::NOT_FOUND, "book not found").into_response()
+        }
+        Err(ProgressError::Sqlx(e)) => internal("get_playback_rate", e),
+    }
+}
+
+/// Persist the authenticated user's playback rate for an audiobook.
+pub(super) async fn put_playback_rate(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+    Json(update): Json<AudiobookPlaybackRateUpdate>,
+) -> Response {
+    if let Err(message) = update.validate() {
+        return (axum::http::StatusCode::BAD_REQUEST, message).into_response();
+    }
+    match omnibus_db::progress::set_playback_rate(&state.pool, user.id, &uuid, &update).await {
+        Ok(record) => Json(record).into_response(),
+        Err(ProgressError::BookNotFound) => {
+            (axum::http::StatusCode::NOT_FOUND, "book not found").into_response()
+        }
+        Err(ProgressError::Sqlx(e)) => internal("set_playback_rate", e),
+    }
 }
 
 /// Returns the HLS VOD manifest for `uuid` (always built from DB — no

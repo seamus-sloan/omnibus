@@ -18,15 +18,73 @@ pub fn save(uuid: &str, seconds: f64) {
     save_impl(uuid, seconds);
 }
 
-/// Load the saved playback-rate preference for `uuid`. Defaults to
-/// `1.0` when unset. Each book remembers its own speed.
-pub fn load_rate(uuid: &str) -> f64 {
-    load_rate_impl(uuid).unwrap_or(1.0)
+/// Result of reconciling the server preference with the scoped local fallback.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlaybackRateResolution {
+    pub playback_rate: f64,
+    pub seed_server: bool,
 }
 
-/// Persist the playback-rate preference for `uuid`.
-pub fn save_rate(uuid: &str, rate: f64) {
-    save_rate_impl(uuid, rate);
+/// Resolve a playback rate without treating a failed fetch as an empty server.
+pub fn resolve_rate(
+    server_rate: Result<Option<f64>, ()>,
+    local_rate: Option<f64>,
+) -> PlaybackRateResolution {
+    match server_rate {
+        Ok(Some(playback_rate)) => PlaybackRateResolution {
+            playback_rate,
+            seed_server: false,
+        },
+        Ok(None) => match local_rate {
+            Some(playback_rate) => PlaybackRateResolution {
+                playback_rate,
+                seed_server: true,
+            },
+            None => PlaybackRateResolution {
+                playback_rate: 1.0,
+                seed_server: false,
+            },
+        },
+        Err(_) => PlaybackRateResolution {
+            playback_rate: local_rate.unwrap_or(1.0),
+            seed_server: false,
+        },
+    }
+}
+
+/// Whether an asynchronous playback load still belongs to the active account/book.
+pub fn playback_load_matches(
+    active_uuid: Option<&str>,
+    active_user_id: Option<i64>,
+    expected_uuid: &str,
+    expected_user_id: Option<i64>,
+) -> bool {
+    active_uuid == Some(expected_uuid) && active_user_id == expected_user_id
+}
+
+fn rate_storage_key(user_id: i64, uuid: &str) -> String {
+    format!("omn.listening.rate::{user_id}::{uuid}")
+}
+
+fn parse_rate(raw: &str) -> Option<f64> {
+    raw.parse::<f64>().ok().filter(|rate| {
+        rate.is_finite()
+            && (omnibus_shared::MIN_AUDIOBOOK_PLAYBACK_RATE
+                ..=omnibus_shared::MAX_AUDIOBOOK_PLAYBACK_RATE)
+                .contains(rate)
+    })
+}
+
+/// Load the best-effort local playback-rate fallback for `(user, book)`.
+pub fn load_rate(user_id: i64, uuid: &str) -> Option<f64> {
+    crate::client_store::get(&rate_storage_key(user_id, uuid))
+        .as_deref()
+        .and_then(parse_rate)
+}
+
+/// Persist the best-effort local playback-rate fallback for `(user, book)`.
+pub fn save_rate(user_id: i64, uuid: &str, rate: f64) {
+    crate::client_store::set(&rate_storage_key(user_id, uuid), &rate.to_string());
 }
 
 // Web — localStorage.
@@ -57,31 +115,6 @@ fn save_impl(uuid: &str, seconds: f64) {
     let _ = storage.set_item(&storage_key(uuid), &format!("{seconds}"));
 }
 
-#[cfg(feature = "web")]
-fn rate_key(uuid: &str) -> String {
-    format!("{STORAGE_PREFIX}rate::{uuid}")
-}
-
-#[cfg(feature = "web")]
-fn load_rate_impl(uuid: &str) -> Option<f64> {
-    let storage = local_storage()?;
-    storage
-        .get_item(&rate_key(uuid))
-        .ok()
-        .flatten()?
-        .parse::<f64>()
-        .ok()
-        .filter(|v| v.is_finite() && *v > 0.0)
-}
-
-#[cfg(feature = "web")]
-fn save_rate_impl(uuid: &str, rate: f64) {
-    let Some(storage) = local_storage() else {
-        return;
-    };
-    let _ = storage.set_item(&rate_key(uuid), &format!("{rate}"));
-}
-
 // Mobile — process-local map; resets on cold launch.
 #[cfg(feature = "mobile")]
 mod mobile_store {
@@ -107,25 +140,6 @@ mod mobile_store {
         }
     }
 
-    fn rate_key(uuid: &str) -> String {
-        format!("rate::{uuid}")
-    }
-    /// Read the cached playback-rate preference for `uuid` from the process-local map.
-    /// Returns `None` when no entry exists or the lock is poisoned.
-    pub fn get_rate(uuid: &str) -> Option<f64> {
-        map()
-            .read()
-            .ok()
-            .and_then(|g| g.get(&rate_key(uuid)).copied())
-    }
-    /// Insert/overwrite the cached playback-rate preference for `uuid` in the process-local map.
-    /// Silently no-ops if the lock is poisoned; the in-memory copy resets on cold launch.
-    pub fn set_rate(uuid: &str, r: f64) {
-        if let Ok(mut g) = map().write() {
-            g.insert(rate_key(uuid), r);
-        }
-    }
-
     #[cfg(test)]
     pub fn clear() {
         if let Ok(mut g) = map().write() {
@@ -144,16 +158,6 @@ fn save_impl(uuid: &str, seconds: f64) {
     mobile_store::set(uuid, seconds);
 }
 
-#[cfg(feature = "mobile")]
-fn load_rate_impl(uuid: &str) -> Option<f64> {
-    mobile_store::get_rate(uuid)
-}
-
-#[cfg(feature = "mobile")]
-fn save_rate_impl(uuid: &str, rate: f64) {
-    mobile_store::set_rate(uuid, rate);
-}
-
 // SSR / server-only build — no persistence.
 #[cfg(not(any(feature = "web", feature = "mobile")))]
 fn load_impl(_uuid: &str) -> Option<f64> {
@@ -162,14 +166,6 @@ fn load_impl(_uuid: &str) -> Option<f64> {
 
 #[cfg(not(any(feature = "web", feature = "mobile")))]
 fn save_impl(_uuid: &str, _seconds: f64) {}
-
-#[cfg(not(any(feature = "web", feature = "mobile")))]
-fn load_rate_impl(_uuid: &str) -> Option<f64> {
-    None
-}
-
-#[cfg(not(any(feature = "web", feature = "mobile")))]
-fn save_rate_impl(_uuid: &str, _rate: f64) {}
 
 // Tests — only the in-memory mobile store can be exercised without a browser.
 #[cfg(all(test, feature = "mobile"))]
@@ -197,18 +193,6 @@ mod tests {
         assert_eq!(load("book-a"), Some(12.5));
         assert_eq!(load("book-b"), Some(600.0));
     }
-
-    #[test]
-    fn rate_defaults_and_persists_per_book() {
-        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
-        mobile_store::clear();
-        assert!((load_rate("book-a") - 1.0).abs() < f64::EPSILON);
-        save_rate("book-a", 1.5);
-        save_rate("book-b", 2.0);
-        assert!((load_rate("book-a") - 1.5).abs() < f64::EPSILON);
-        assert!((load_rate("book-b") - 2.0).abs() < f64::EPSILON);
-        assert!((load_rate("book-c") - 1.0).abs() < f64::EPSILON);
-    }
 }
 
 #[cfg(all(test, not(any(feature = "web", feature = "mobile"))))]
@@ -227,7 +211,89 @@ mod ssr_tests {
     }
 
     #[test]
-    fn rate_defaults_to_one() {
-        assert!((load_rate("any-book") - 1.0).abs() < f64::EPSILON);
+    fn rate_is_unset() {
+        assert_eq!(load_rate(1, "any-book"), None);
+    }
+}
+
+#[cfg(test)]
+mod rate_resolution_tests {
+    use super::*;
+
+    #[test]
+    fn server_rate_wins_over_local_rate() {
+        assert_eq!(
+            resolve_rate(Ok(Some(1.5)), Some(2.0)),
+            PlaybackRateResolution {
+                playback_rate: 1.5,
+                seed_server: false,
+            }
+        );
+    }
+
+    #[test]
+    fn scoped_local_rate_seeds_an_empty_server() {
+        assert_eq!(
+            resolve_rate(Ok(None), Some(1.5)),
+            PlaybackRateResolution {
+                playback_rate: 1.5,
+                seed_server: true,
+            }
+        );
+    }
+
+    #[test]
+    fn missing_server_and_local_rates_use_default_without_seeding() {
+        assert_eq!(
+            resolve_rate(Ok(None), None),
+            PlaybackRateResolution {
+                playback_rate: 1.0,
+                seed_server: false,
+            }
+        );
+    }
+
+    #[test]
+    fn server_fetch_failure_uses_local_rate_without_seeding() {
+        assert_eq!(
+            resolve_rate(Err(()), Some(1.8)),
+            PlaybackRateResolution {
+                playback_rate: 1.8,
+                seed_server: false,
+            }
+        );
+    }
+
+    #[test]
+    fn rate_storage_key_is_scoped_by_user_and_ignores_legacy_shape() {
+        let key = rate_storage_key(42, "book-a");
+        assert_eq!(key, "omn.listening.rate::42::book-a");
+        assert_ne!(key, "omn.listening.rate::book-a");
+        assert_ne!(key, rate_storage_key(7, "book-a"));
+        assert_ne!(key, rate_storage_key(42, "book-b"));
+    }
+
+    #[test]
+    fn parse_rate_rejects_invalid_local_values() {
+        for raw in ["NaN", "inf", "0.49", "3.01", "not-a-number"] {
+            assert_eq!(parse_rate(raw), None);
+        }
+        assert_eq!(parse_rate("2.25"), Some(2.25));
+    }
+
+    #[test]
+    fn playback_load_guard_rejects_same_book_for_different_user() {
+        assert!(!playback_load_matches(
+            Some("book-a"),
+            Some(2),
+            "book-a",
+            Some(1),
+        ));
+        assert!(playback_load_matches(
+            Some("book-a"),
+            Some(1),
+            "book-a",
+            Some(1),
+        ));
     }
 }

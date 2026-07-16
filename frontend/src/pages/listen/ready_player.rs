@@ -149,6 +149,7 @@ pub(super) struct PlaybackSignals {
     pub elapsed: Signal<f64>,
     pub playing: Signal<bool>,
     pub rate: Signal<f64>,
+    pub rate_error: Signal<Option<String>>,
     pub volume: Signal<f64>,
     pub hls_ready: Signal<bool>,
 }
@@ -164,6 +165,7 @@ pub(super) fn ReadyPlayer(
 ) -> Element {
     let elapsed = signals.elapsed;
     let rate = signals.rate;
+    let rate_error = signals.rate_error;
     let hls_ready = signals.hls_ready;
     let speed_panel_open = use_signal(|| false);
     let sleep_panel_open = use_signal(|| false);
@@ -242,6 +244,8 @@ pub(super) fn ReadyPlayer(
         has_chapters: !chs.is_empty(),
     };
     let bookmark_toast = (bookmarks.toast)();
+    let current_user = crate::use_current_user_summary();
+    let user_id = current_user().map(|user| user.id);
 
     rsx! {
         div { class: "lp-root", style: "{accent_style}",
@@ -272,6 +276,8 @@ pub(super) fn ReadyPlayer(
                 panes,
                 uuid: uuid.clone(),
                 rate,
+                rate_error,
+                user_id,
                 sleep_display,
                 bookmarks,
                 bookmark_toast,
@@ -451,6 +457,8 @@ pub(super) fn PlayerOverlays(
     panes: OverlayPanes,
     uuid: String,
     rate: Signal<f64>,
+    rate_error: Signal<Option<String>>,
+    user_id: Option<i64>,
     sleep_display: SleepDisplay,
     bookmarks: super::bookmarks::BookmarksController,
     bookmark_toast: Option<super::bookmarks::BookmarkToast>,
@@ -471,6 +479,8 @@ pub(super) fn PlayerOverlays(
         if speed_panel_open() {
             SpeedPanel {
                 rate,
+                rate_error,
+                user_id,
                 uuid: uuid.clone(),
                 on_close: move |_| speed_panel_open.set(false),
             }
@@ -511,6 +521,14 @@ pub(super) fn PlayerOverlays(
                 elapsed,
                 on_seek: on_chapter_seek,
                 on_close: move |_| chapters_open.set(false),
+            }
+        }
+        if let Some(message) = rate_error() {
+            div {
+                class: "lp-toast",
+                role: "alert",
+                "data-testid": "playback-rate-error",
+                span { class: "lp-toast-text", "{message}" }
             }
         }
     }

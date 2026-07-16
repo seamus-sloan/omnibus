@@ -128,6 +128,7 @@ pub fn BookListenPage(uuid: String) -> Element {
                             elapsed: playback.elapsed,
                             playing: playback.playing,
                             rate: playback.rate,
+                            rate_error: playback.rate_error,
                             volume: playback.volume,
                             hls_ready: playback.hls_ready,
                         },

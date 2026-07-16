@@ -43,6 +43,8 @@ pub struct MobilePlayback {
     pub elapsed: Signal<f64>,
     pub playing: Signal<bool>,
     pub rate: Signal<f64>,
+    pub rate_error: Signal<Option<String>>,
+    pub user_id: Signal<Option<i64>>,
     pub sleep: Signal<SleepState>,
 }
 
@@ -59,6 +61,8 @@ impl MobilePlayback {
             elapsed: Signal::new(0.0),
             playing: Signal::new(false),
             rate: Signal::new(1.0),
+            rate_error: Signal::new(None),
+            user_id: Signal::new(None),
             sleep: Signal::new(SleepState::Off),
         }
     }

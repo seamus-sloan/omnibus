@@ -18,7 +18,9 @@ Audiobook support is the feature AudioBookShelf users currently leave for — la
 - **Shared HLS segment cache** keyed on `(book_id, codec_profile, segment_index)`, stored under `<data_dir>/hls/<book_id>/<profile>/seg-NNN.ts`. One `tokio::sync::Mutex` per `(book, profile)` so two users on the same audiobook trigger one transcode, not two ([ABS recommendation #4](../audiobookshelf-inspection/7-recommendations.md)).
 - Chapters come from the m4b container via `mp4ameta` for native atoms; fall back to ffprobe for mp3/flac embedded chapters. Persist into a `file_chapters` table keyed on `book_file_id`, populated during scan via [F0.5 background worker](0-5-background-worker.md). Use `JoinSet` + `Semaphore(num_cpus)` — ABS's serial ffprobe loop is the single biggest scanner bottleneck.
 - Position is seconds (float); writes through F2.1 on debounce + on pause/unload.
-- Playback speed lives in localStorage per-user — not synced (device-specific preference).
+- Playback speed is stored separately from progress, keyed by authenticated user
+  and durable book UUID, and synced across devices. An account-scoped local
+  value is only a fallback and seeds the server when no preference exists yet.
 - Metadata embed tool (write ID3/m4b tags back) is deferred — admin-only feature for a later phase; see ABS's `/api/tools/item/:id/embed-metadata`.
 
 ## Status
