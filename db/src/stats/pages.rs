@@ -28,12 +28,10 @@ pub(super) async fn pages_read(
     start: i64,
 ) -> Result<Option<i64>, StatsError> {
     let book_ids = finished_book_ids(pool, user_id, start).await?;
-    let mut paths = Vec::with_capacity(book_ids.len());
-    for id in book_ids {
-        if let Some(path) = crate::book_file_path(pool, id, "EPUB").await? {
-            paths.push(path);
-        }
-    }
+    let paths: Vec<PathBuf> = crate::book_file_paths(pool, &book_ids, "EPUB")
+        .await?
+        .into_values()
+        .collect();
     if paths.is_empty() {
         return Ok(None);
     }
@@ -55,7 +53,7 @@ fn words_to_pages(words: i64) -> i64 {
 
 /// Distinct `books.id` for the user's hundred-percent journal entries in the
 /// window — the same finished-book set [`super::finished_books`] surfaces,
-/// but ids (for [`crate::book_file_path`]) rather than display rows.
+/// but ids (for [`crate::book_file_paths`]) rather than display rows.
 async fn finished_book_ids(
     pool: &SqlitePool,
     user_id: i64,

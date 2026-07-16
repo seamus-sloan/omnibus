@@ -1804,6 +1804,90 @@ async fn book_file_path_returns_none_when_no_file_row_for_format() {
     assert!(path.is_none());
 }
 
+#[tokio::test]
+async fn book_file_paths_resolves_every_id_in_one_batch() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib')")
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let book_a = sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title) \
+         VALUES ('uuid-a', ?, 'sub/dir', 'Book A')",
+    )
+    .bind(lib_id)
+    .execute(&pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    let book_b = sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title) \
+         VALUES ('uuid-b', ?, 'other', 'Book B')",
+    )
+    .bind(lib_id)
+    .execute(&pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'EPUB', 'book-a', 0)",
+    )
+    .bind(book_a)
+    .execute(&pool)
+    .await
+    .unwrap();
+    // book_b has two EPUB files; the lower ordinal must win, same tie-break
+    // as `book_file_path`.
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, ordinal, size_bytes) \
+         VALUES (?, 'EPUB', 'book-b-second', 1, 0)",
+    )
+    .bind(book_b)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, ordinal, size_bytes) \
+         VALUES (?, 'EPUB', 'book-b-first', 0, 0)",
+    )
+    .bind(book_b)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let map = book_file_paths(&pool, &[book_a, book_b, 9999], "EPUB")
+        .await
+        .unwrap();
+
+    assert_eq!(map.len(), 2, "the unknown id must be absent, got {map:?}");
+    assert_eq!(
+        map.get(&book_a),
+        Some(&std::path::PathBuf::from("/lib/sub/dir/book-a.epub"))
+    );
+    assert_eq!(
+        map.get(&book_b),
+        Some(&std::path::PathBuf::from("/lib/other/book-b-first.epub")),
+        "the lower-ordinal file must win"
+    );
+}
+
+#[tokio::test]
+async fn book_file_paths_returns_empty_map_for_empty_ids() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let map = book_file_paths(&pool, &[], "EPUB").await.unwrap();
+    assert!(map.is_empty());
+}
+
+#[tokio::test]
+async fn book_file_paths_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = book_file_paths(&pool, &[1], "EPUB").await.unwrap_err();
+    assert!(matches!(err, BooksError::Db(_)), "got {err:?}");
+}
+
 // ---------- list_indexed_rows_for_formats (#328) ----------
 
 #[tokio::test]
