@@ -46,6 +46,7 @@ fn parse_file_id_from_url() -> Option<i64> {
 pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
     let cb_holder: JsCallbackHolder =
         use_hook(|| std::rc::Rc::new(std::cell::RefCell::new(Vec::new())));
+    let current_user = use_context::<crate::CurrentUser>().0;
 
     // Seed the session volume from the persisted preference once, post-mount
     // (not per book — `boot_new_book` never resets this signal). Declared
@@ -63,6 +64,12 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
     crate::session_tracker::use_listening_session(playback.uuid, playback.playing, server_url);
 
     use_effect(move || {
+        let resolved_user = current_user();
+        if matches!(resolved_user, Some(None)) {
+            let mut uuid = playback.uuid;
+            uuid.set(None);
+            return;
+        }
         // The only reactive dependency — re-run when the active book changes.
         let Some(uuid) = playback.uuid.read().clone() else {
             // Dismissed via the dock × button. The handler already stopped
@@ -71,7 +78,8 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
             book.set(None);
             return;
         };
-        boot_new_book(&cb_holder, &uuid, playback);
+        let user_id = resolved_user.flatten().map(|user| user.id);
+        boot_new_book(&cb_holder, &uuid, user_id, current_user, playback);
     });
 }
 
@@ -79,16 +87,24 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
 /// the newly-active `uuid`. Spawned tasks (metadata fetch + manifest init)
 /// guard their writes on the live `playback.uuid` so a stale fetch can't
 /// clobber a subsequent book swap.
-fn boot_new_book(cb_holder: &JsCallbackHolder, uuid: &str, playback: crate::PlaybackState) {
+fn boot_new_book(
+    cb_holder: &JsCallbackHolder,
+    uuid: &str,
+    user_id: Option<i64>,
+    current_user: Signal<Option<Option<omnibus_shared::UserSummary>>>,
+    playback: crate::PlaybackState,
+) {
     // Signals outlive the page, so a swap must reset stale per-book state
     // before installing fresh callbacks — otherwise the previous book's
     // metadata/position/chapters leak under the new uuid until the async
     // fetches land. Clear the cross-book fields (book/error/chapters)
     // synchronously here, not just the playback scalars.
-    reset_per_book_signals(&playback, uuid);
+    reset_per_book_signals(&playback, user_id, uuid);
 
     let initial_position = crate::audiobook_progress::load(uuid).unwrap_or(0.0);
-    let initial_rate = crate::audiobook_progress::load_rate(uuid);
+    let initial_rate = user_id
+        .and_then(|id| crate::audiobook_progress::load_rate(id, uuid))
+        .unwrap_or(1.0);
     // Session-wide, not per-book — re-read on every swap so a mid-session
     // volume change (or the sleep-timer fade's transient dip) doesn't leak
     // into the freshly-installed control surface.
@@ -112,18 +128,26 @@ fn boot_new_book(cb_holder: &JsCallbackHolder, uuid: &str, playback: crate::Play
     let guard = playback.uuid;
 
     spawn_book_metadata_fetch(uuid.to_string(), guard, playback);
-    spawn_manifest_init(uuid.to_string(), initial_position, playback, guard);
+    spawn_manifest_init(
+        uuid.to_string(),
+        user_id,
+        initial_position,
+        playback,
+        guard,
+        current_user,
+    );
 }
 
 /// Synchronously clear playback scalars and cross-book fields before the
 /// next book's async fetches land, so prior metadata/chapters don't leak.
-fn reset_per_book_signals(playback: &crate::PlaybackState, uuid: &str) {
+fn reset_per_book_signals(playback: &crate::PlaybackState, user_id: Option<i64>, uuid: &str) {
     let mut duration = playback.duration;
     let mut elapsed = playback.elapsed;
     let mut playing = playback.playing;
     let mut hls_ready = playback.hls_ready;
     let mut playback_failed = playback.playback_failed;
     let mut rate = playback.rate;
+    let mut rate_error = playback.rate_error;
     let mut book = playback.book;
     let mut error = playback.error;
     let mut chapters = playback.chapters;
@@ -136,7 +160,12 @@ fn reset_per_book_signals(playback: &crate::PlaybackState, uuid: &str) {
     book.set(None);
     error.set(None);
     chapters.set(Vec::new());
-    rate.set(crate::audiobook_progress::load_rate(uuid));
+    rate_error.set(None);
+    rate.set(
+        user_id
+            .and_then(|id| crate::audiobook_progress::load_rate(id, uuid))
+            .unwrap_or(1.0),
+    );
 }
 
 /// Fetch the book metadata into the shared context so both the full
@@ -172,9 +201,11 @@ fn spawn_book_metadata_fetch(
 /// receives it as a param.
 fn spawn_manifest_init(
     uuid: String,
+    user_id: Option<i64>,
     initial_position: f64,
     playback: crate::PlaybackState,
     guard: Signal<Option<String>>,
+    current_user: Signal<Option<Option<omnibus_shared::UserSummary>>>,
 ) {
     let fid = parse_file_id_from_url();
     let hls_ready = playback.hls_ready;
@@ -184,11 +215,15 @@ fn spawn_manifest_init(
         run_manifest_init(
             uuid,
             fid,
+            user_id,
             initial_position,
+            playback.rate,
+            playback.rate_error,
             hls_ready,
             playback_failed,
             chapters,
             guard,
+            current_user,
         )
         .await;
     });
@@ -581,16 +616,32 @@ fn hls_init_js() -> &'static str {
 async fn run_manifest_init(
     uuid_for_fetch: String,
     file_id: Option<i64>,
+    user_id: Option<i64>,
     initial_position: f64,
+    mut rate: Signal<f64>,
+    mut rate_error: Signal<Option<String>>,
     hls_ready: Signal<bool>,
     mut playback_failed: Signal<bool>,
     chapters_sig: Signal<Vec<omnibus_shared::ChapterInfo>>,
     uuid_guard: Signal<Option<String>>,
+    current_user: Signal<Option<Option<omnibus_shared::UserSummary>>>,
 ) {
     // True only while `uuid_for_fetch` is still the active book. Checked before
     // every shared-signal write so a stale task (user switched books mid-fetch
     // or mid-`/status`-poll) can't clobber the new book's state.
-    let is_current = || uuid_guard.peek().as_deref() == Some(uuid_for_fetch.as_str());
+    let is_current = || {
+        let active_user_id = current_user
+            .peek()
+            .as_ref()
+            .and_then(|user| user.as_ref())
+            .map(|user| user.id);
+        crate::audiobook_progress::playback_load_matches(
+            uuid_guard.peek().as_deref(),
+            active_user_id,
+            &uuid_for_fetch,
+            user_id,
+        )
+    };
     // Reconcile resume position with the server upfront so
     // both init paths see the same starting point.
     let server_pos = data::get_progress("", &uuid_for_fetch, omnibus_shared::ProgressFormat::Audio)
@@ -600,6 +651,35 @@ async fn run_manifest_init(
         .and_then(|r| r.audio_position_seconds);
     let resume_pos = resolve_resume_pos(server_pos, initial_position);
     let pos_lit = serde_json::to_string(&resume_pos).unwrap_or_else(|_| "0".into());
+
+    let server_rate = data::get_playback_rate("", &uuid_for_fetch).await;
+    if !is_current() {
+        return;
+    }
+    if let (Some(user_id), Ok(Some(record))) = (user_id, server_rate.as_ref()) {
+        crate::audiobook_progress::save_rate(user_id, &uuid_for_fetch, record.playback_rate);
+    }
+    let local_rate =
+        user_id.and_then(|id| crate::audiobook_progress::load_rate(id, &uuid_for_fetch));
+    let resolution = crate::audiobook_progress::resolve_rate(
+        server_rate
+            .as_ref()
+            .map(|record| record.as_ref().map(|record| record.playback_rate))
+            .map_err(|_| ()),
+        local_rate,
+    );
+    rate.set(resolution.playback_rate);
+    super::helpers::audio_call("setRate", &resolution.playback_rate.to_string());
+    if resolution.seed_server {
+        let update = omnibus_shared::AudiobookPlaybackRateUpdate {
+            playback_rate: resolution.playback_rate,
+        };
+        if let Err(error) = data::set_playback_rate("", &uuid_for_fetch, update).await {
+            if is_current() {
+                rate_error.set(Some(format!("Could not save playback speed: {error}")));
+            }
+        }
+    }
 
     let manifest = fetch_manifest(&uuid_for_fetch, file_id).await;
 

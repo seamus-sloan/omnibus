@@ -7,11 +7,12 @@
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;
+use omnibus_shared::{
+    MAX_AUDIOBOOK_PLAYBACK_RATE as MAX_RATE, MIN_AUDIOBOOK_PLAYBACK_RATE as MIN_RATE,
+};
 
 const PRESETS: &[f64] = &[0.5, 0.8, 1.0, 1.1, 1.2, 1.5, 1.8, 2.0];
 const STEP: f64 = 0.05;
-const MIN_RATE: f64 = 0.5;
-const MAX_RATE: f64 = 3.0;
 
 /// Clamp `new_rate` to `[MIN_RATE, MAX_RATE]` and snap to the nearest `STEP`.
 /// Pure logic extracted for unit testing — no signal or JS side-effects.
@@ -20,12 +21,31 @@ fn clamp_and_round_rate(new_rate: f64) -> f64 {
     (clamped / STEP).round() * STEP
 }
 
-fn apply_rate(rate: &mut Signal<f64>, uuid: &str, new_rate: f64) {
+fn apply_rate(
+    rate: &mut Signal<f64>,
+    rate_error: Signal<Option<String>>,
+    user_id: Option<i64>,
+    uuid: &str,
+    new_rate: f64,
+) {
     let rounded = clamp_and_round_rate(new_rate);
     rate.set(rounded);
-    crate::audiobook_progress::save_rate(uuid, rounded);
+    if let Some(user_id) = user_id {
+        crate::audiobook_progress::save_rate(user_id, uuid, rounded);
+    }
     #[cfg(feature = "web")]
     super::helpers::audio_call("setRate", &rounded.to_string());
+    let uuid = uuid.to_string();
+    spawn(async move {
+        let mut rate_error = rate_error;
+        let update = omnibus_shared::AudiobookPlaybackRateUpdate {
+            playback_rate: rounded,
+        };
+        match crate::data::set_playback_rate("", &uuid, update).await {
+            Ok(_) => rate_error.set(None),
+            Err(error) => rate_error.set(Some(format!("Could not save playback speed: {error}"))),
+        }
+    });
 }
 
 #[cfg(test)]
@@ -63,7 +83,13 @@ mod tests {
 
 /// Frosted-glass speed panel with preset grid, fine-tune slider, and stepper.
 #[component]
-pub(super) fn SpeedPanel(rate: Signal<f64>, uuid: String, on_close: EventHandler<()>) -> Element {
+pub(super) fn SpeedPanel(
+    rate: Signal<f64>,
+    rate_error: Signal<Option<String>>,
+    user_id: Option<i64>,
+    uuid: String,
+    on_close: EventHandler<()>,
+) -> Element {
     let cur = rate();
     let rate_label = format!("{cur:.1}\u{00d7}");
     let rate_precise = format!("{cur:.2}\u{00d7}");
@@ -97,7 +123,9 @@ pub(super) fn SpeedPanel(rate: Signal<f64>, uuid: String, on_close: EventHandler
                                 key: "{val}",
                                 class: class,
                                 r#type: "button",
-                                onclick: move |_| apply_rate(&mut rate, &uuid, val),
+                                onclick: move |_| {
+                                    apply_rate(&mut rate, rate_error, user_id, &uuid, val);
+                                },
                                 "{val:.1}\u{00d7}"
                             }
                         }
@@ -144,7 +172,7 @@ pub(super) fn SpeedPanel(rate: Signal<f64>, uuid: String, on_close: EventHandler
                                 style: "position:absolute; inset:0; opacity:0; cursor:pointer; width:100%; height:100%;",
                                 oninput: move |evt: Event<FormData>| {
                                     if let Ok(v) = evt.value().parse::<f64>() {
-                                        apply_rate(&mut rate, &uuid, v);
+                                        apply_rate(&mut rate, rate_error, user_id, &uuid, v);
                                     }
                                 },
                             }
@@ -161,7 +189,9 @@ pub(super) fn SpeedPanel(rate: Signal<f64>, uuid: String, on_close: EventHandler
                             class: "lp-speed-step-btn",
                             r#type: "button",
                             "aria-label": "Decrease speed",
-                            onclick: move |_| apply_rate(&mut rate, &uuid, cur - STEP),
+                            onclick: move |_| {
+                                apply_rate(&mut rate, rate_error, user_id, &uuid, cur - STEP);
+                            },
                             "\u{2212}"
                         }
                     }
@@ -181,7 +211,9 @@ pub(super) fn SpeedPanel(rate: Signal<f64>, uuid: String, on_close: EventHandler
                             class: "lp-speed-step-btn",
                             r#type: "button",
                             "aria-label": "Increase speed",
-                            onclick: move |_| apply_rate(&mut rate, &uuid, cur + STEP),
+                            onclick: move |_| {
+                                apply_rate(&mut rate, rate_error, user_id, &uuid, cur + STEP);
+                            },
                             "+"
                         }
                     }

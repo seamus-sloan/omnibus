@@ -2,7 +2,10 @@
 
 use dioxus::fullstack::post;
 use dioxus::prelude::*;
-use omnibus_shared::{ProgressFormat, ProgressRecord, ProgressUpdate, ResumePoint, SessionReport};
+use omnibus_shared::{
+    AudiobookPlaybackRateRecord, AudiobookPlaybackRateUpdate, ProgressFormat, ProgressRecord,
+    ProgressUpdate, ResumePoint, SessionReport,
+};
 
 #[cfg(feature = "server")]
 use omnibus_db as db;
@@ -46,6 +49,40 @@ pub async fn rpc_get_progress(
     Ok(db::progress::get_progress(&pool.0, user.id, &uuid, format)
         .await
         .map_err(|e| internal_rpc_error("get progress", e))?)
+}
+
+/// Save the current user's playback rate for one audiobook.
+#[post("/api/rpc/audiobooks/playback-rate/set", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_set_playback_rate(
+    uuid: String,
+    update: AudiobookPlaybackRateUpdate,
+) -> Result<AudiobookPlaybackRateRecord> {
+    if let Err(message) = update.validate() {
+        return Err(ServerFnError::new(message).into());
+    }
+    match db::progress::set_playback_rate(&pool.0, user.id, &uuid, &update).await {
+        Ok(record) => Ok(record),
+        Err(db::progress::ProgressError::BookNotFound) => {
+            Err(ServerFnError::new("book not found").into())
+        }
+        Err(db::progress::ProgressError::Sqlx(e)) => {
+            Err(internal_rpc_error("set playback rate", e).into())
+        }
+    }
+}
+
+/// Fetch the current user's playback rate for one audiobook.
+#[post("/api/rpc/audiobooks/playback-rate/get", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_get_playback_rate(uuid: String) -> Result<Option<AudiobookPlaybackRateRecord>> {
+    match db::progress::get_playback_rate(&pool.0, user.id, &uuid).await {
+        Ok(record) => Ok(record),
+        Err(db::progress::ProgressError::BookNotFound) => {
+            Err(ServerFnError::new("book not found").into())
+        }
+        Err(db::progress::ProgressError::Sqlx(e)) => {
+            Err(internal_rpc_error("get playback rate", e).into())
+        }
+    }
 }
 
 /// The user's most recent progress rows joined with their books — the

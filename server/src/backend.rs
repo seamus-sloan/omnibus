@@ -289,6 +289,10 @@ fn content_routes() -> Router<AppState> {
             "/api/audiobooks/{uuid}/status",
             get(audiobooks::get_audiobook_status),
         )
+        .route(
+            "/api/audiobooks/{uuid}/playback-rate",
+            get(audiobooks::get_playback_rate).put(audiobooks::put_playback_rate),
+        )
 }
 
 /// Metadata overrides, progress sync, author/cover/series/tag discovery routes,

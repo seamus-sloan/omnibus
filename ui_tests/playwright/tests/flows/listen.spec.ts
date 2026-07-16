@@ -17,6 +17,9 @@ test.beforeAll(async ({ request }) => {
 const MP3_BOOK = AUDIOBOOK_BOOKS.find((b) => b.format === "MP3" && b.source === "generated")!;
 const M4B_BOOK = AUDIOBOOK_BOOKS.find((b) => b.format === "M4B")!;
 const MULTIPART_MP3_BOOK = AUDIOBOOK_BOOKS.find((b) => b.format === "MP3" && b.parts > 1)!;
+const LOCAL_SEED_BOOK = AUDIOBOOK_BOOKS.find(
+  (b) => b.format === "MP3" && b.source === "public_domain",
+)!;
 
 /**
  * Wait until the listen page's manifest fetch has resolved and
@@ -98,6 +101,114 @@ test("renders the listen page layout for an m4b audiobook", async ({
   await expect(page.getByText(`by ${M4B_BOOK.author}`)).toBeVisible();
 
   await waitForPlayerReady(page);
+});
+
+test("persists playback speed per audiobook across reloads", async ({
+  page,
+  request,
+}) => {
+  const uuidA = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  const uuidB = await fetchBookUuidByTitle(request, M4B_BOOK.title);
+  await gotoReady(page, `/listen/${uuidA}`);
+  await waitForPlayerReady(page);
+
+  await page.getByRole("button", { name: "Playback speed" }).click();
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: PLAYBACK_RATE_SET_URL,
+      expectedStatus: 200,
+      expectedBody: {
+        uuid: uuidA,
+        update: { playback_rate: 1.5 },
+      },
+    },
+    async () => page.getByRole("button", { name: "1.5×", exact: true }).click(),
+  );
+  await expect(page.getByTestId("listen-rate")).toHaveText("1.50×");
+
+  await page.reload();
+  await waitForPlayerReady(page);
+  await expect(page.getByTestId("listen-rate")).toHaveText("1.50×");
+
+  await gotoReady(page, `/listen/${uuidB}`);
+  await waitForPlayerReady(page);
+  await expect(page.getByTestId("listen-rate")).toHaveText("1.00×");
+});
+
+test("seeds an empty server preference from the account-scoped local speed", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, LOCAL_SEED_BOOK.title);
+  const meResponse = await request.get("/api/auth/me");
+  expect(meResponse.status()).toBe(200);
+  const user = (await meResponse.json()) as { id: number };
+  const storageKey = `omn.listening.rate::${user.id}::${uuid}`;
+  await page.addInitScript(
+    ({ key }) => localStorage.setItem(key, "1.8"),
+    { key: storageKey },
+  );
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: PLAYBACK_RATE_SET_URL,
+      expectedStatus: 200,
+      expectedBody: {
+        uuid,
+        update: { playback_rate: 1.8 },
+      },
+    },
+    async () => {
+      await gotoReady(page, `/listen/${uuid}`);
+      await waitForPlayerReady(page);
+    },
+  );
+  await expect(page.getByTestId("listen-rate")).toHaveText("1.80×");
+
+  await page.evaluate((key) => localStorage.removeItem(key), storageKey);
+  await page.reload();
+  await waitForPlayerReady(page);
+  await expect(page.getByTestId("listen-rate")).toHaveText("1.80×");
+});
+
+test("surfaces playback speed persistence failures without reverting playback", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MULTIPART_MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+  await page.route(PLAYBACK_RATE_SET_URL, (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "forced-failure" }),
+    }),
+  );
+
+  await page.getByRole("button", { name: "Playback speed" }).click();
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: PLAYBACK_RATE_SET_URL,
+      expectedStatus: 500,
+      expectedBody: {
+        uuid,
+        update: { playback_rate: 1.8 },
+      },
+    },
+    async () => page.getByRole("button", { name: "1.8×", exact: true }).click(),
+  );
+
+  await expect(page.getByTestId("listen-rate")).toHaveText("1.80×");
+  await expect(page.getByRole("alert")).toContainText(
+    "Could not save playback speed",
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -472,6 +583,8 @@ interface ProgressMutationOpts {
 }
 
 const PROGRESS_URL = /\/api\/rpc\/progress(?:\?|$)/;
+const PLAYBACK_RATE_SET_URL =
+  /\/api\/rpc\/audiobooks\/playback-rate\/set(?:\?|$)/;
 
 async function expectMutationProgress(
   page: import("@playwright/test").Page,

@@ -383,6 +383,53 @@ async fn merge_books_moves_progress_with_latest_wins_on_collision() {
 }
 
 #[tokio::test]
+async fn merge_books_moves_playback_rate_with_latest_wins_on_collision() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool).await;
+    let target = seed_audiobook(&pool, "A/Dracula.m4b", "Dracula", "Bram Stoker").await;
+    let mut mp3 = indexed_audiobook("B/Drakula mp3", "Drakula", Some("Bram Stoker"));
+    mp3.format = "MP3".into();
+    let source_scan_key = mp3.scan_key.clone();
+    sync_audiobooks(
+        &pool,
+        "/audio",
+        AudiobookSyncPlan {
+            new_books: vec![mp3],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let source = crate::test_support::uuid_by_scan_key(&pool, &source_scan_key).await;
+
+    for (book_uuid, playback_rate, updated_at) in [(&target, 1.25, 1000), (&source, 1.75, 2000)] {
+        sqlx::query(
+            "INSERT INTO audiobook_playback_preferences
+                (user_id, book_uuid, playback_rate, updated_at)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(user)
+        .bind(book_uuid)
+        .bind(playback_rate)
+        .bind(updated_at)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    merge_books(&pool, &source, &target, Some(user))
+        .await
+        .unwrap();
+
+    let rows: Vec<(String, f64)> =
+        sqlx::query_as("SELECT book_uuid, playback_rate FROM audiobook_playback_preferences")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, vec![(target.clone(), 1.75)]);
+}
+
+#[tokio::test]
 async fn merge_books_merges_overrides_with_target_keys_winning() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool).await;

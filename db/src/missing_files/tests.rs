@@ -118,6 +118,37 @@ async fn gc_keeps_book_with_reading_progress() {
 }
 
 #[tokio::test]
+async fn gc_keeps_book_with_audiobook_playback_preference() {
+    let _covers = CoversTempDir::new("gc_playback_preference");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let uuid = seed_and_make_missing(&pool, "listened.m4b").await;
+    backdate_missing_since(&pool, &uuid, 40).await;
+    sqlx::query(
+        "INSERT INTO audiobook_playback_preferences
+            (user_id, book_uuid, playback_rate)
+         VALUES (?, ?, 1.5)",
+    )
+    .bind(user_id)
+    .bind(&uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let purged = gc_books_missing_files(&pool, MISSING_FILES_RETENTION_DAYS)
+        .await
+        .unwrap();
+    assert_eq!(purged, 0);
+    assert!(
+        book_exists(&pool, &uuid).await,
+        "a book with a playback preference is never purged"
+    );
+}
+
+#[tokio::test]
 async fn gc_keeps_book_with_user_rating() {
     let _covers = CoversTempDir::new("gc_user_rating");
     let pool = init_db("sqlite::memory:").await.unwrap();

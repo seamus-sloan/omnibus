@@ -463,6 +463,11 @@ fn render_player(p: PlayerProps) -> Element {
                     span { class: "mono m-toast-meta", "{label}" }
                 }
             }
+            if let Some(message) = (p.ctx.rate_error)() {
+                div { class: "m-toast", role: "alert",
+                    span { class: "m-toast-text", "{message}" }
+                }
+            }
 
             {render_sheets(&sheet_props)}
         }
@@ -506,15 +511,34 @@ fn render_sheets(p: &SheetProps) -> Element {
         },
         OpenSheet::Speed => {
             let uuid = p.uuid.clone();
+            let server_url = p.server_url.clone();
             let mut rate_sig = p.ctx.rate;
+            let rate_error = p.ctx.rate_error;
+            let user_id = *p.ctx.user_id.peek();
             rsx! {
                 SpeedSheet {
                     rate: p.rate,
                     on_set: EventHandler::new(move |r: f64| {
                         let snapped = snap_rate(r);
                         rate_sig.set(snapped);
-                        crate::audiobook_progress::save_rate(&uuid, snapped);
+                        if let Some(user_id) = user_id {
+                            crate::audiobook_progress::save_rate(user_id, &uuid, snapped);
+                        }
                         interop::set_rate(snapped);
+                        let uuid = uuid.clone();
+                        let server_url = server_url.clone();
+                        spawn(async move {
+                            let mut rate_error = rate_error;
+                            let update = omnibus_shared::AudiobookPlaybackRateUpdate {
+                                playback_rate: snapped,
+                            };
+                            match data::set_playback_rate(&server_url, &uuid, update).await {
+                                Ok(_) => rate_error.set(None),
+                                Err(error) => rate_error.set(Some(format!(
+                                    "Could not save playback speed: {error}"
+                                ))),
+                            }
+                        });
                     }),
                     on_close: close,
                 }
