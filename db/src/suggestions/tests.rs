@@ -566,6 +566,129 @@ async fn resolve_with_caches_filtered_survivors_end_to_end() {
 }
 
 #[tokio::test]
+async fn resolve_with_hydrates_covers_across_multiple_concurrency_chunks_with_partial_failure() {
+    // COVER_FETCH_CONCURRENCY == 6; 8 survivors span two `chunks()` rounds
+    // (6 + 2). One cover in the FIRST chunk (book 204) deliberately 404s to
+    // prove a single failure doesn't drop, misorder, or poison its
+    // chunk-mates — the other 5 covers in that same chunk (plus both in the
+    // second chunk) must still hydrate correctly.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let uuid = seed_synced_ebook(&pool, "src.epub", "Test Source", "Source Author").await;
+
+    let server = MockServer::start().await;
+
+    // 1. Title fallback resolves the source book.
+    Mock::given(method("POST"))
+        .and(body_string_contains("title: {_eq:"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "books": [{
+                "id": 100, "slug": "src", "title": "Test Source",
+                "contributions": [{ "author": { "name": "Source Author" } }],
+                "book_series": [], "image": null
+            }] }
+        })))
+        .mount(&server)
+        .await;
+    // 2. Curated lists.
+    Mock::given(method("POST"))
+        .and(body_string_contains("list_books(where: {book_id:"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "list_books": [{ "list_id": 1 }] }
+        })))
+        .mount(&server)
+        .await;
+    // 3. Co-listing members: 8 distinct candidates (201..=208) with strictly
+    //    descending counts (9..=2) so the rank order is deterministic.
+    let mut member_rows = vec![json!({ "book_id": 100 })]; // source book — excluded
+    for (id, count) in (201..=208).zip((2..=9).rev()) {
+        for _ in 0..count {
+            member_rows.push(json!({ "book_id": id }));
+        }
+    }
+    Mock::given(method("POST"))
+        .and(body_string_contains("list_books(where: {list_id:"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "list_books": member_rows }
+        })))
+        .mount(&server)
+        .await;
+    // 4. Candidate details: 8 different authors, no series (all survive the
+    //    filter), each with its own cover URL.
+    let books: Vec<serde_json::Value> = (201..=208)
+        .map(|id: i64| {
+            let cover_url = format!("{}/cover{id}.jpg", server.uri());
+            json!({
+                "id": id, "slug": format!("b{id}"), "title": format!("Title {id}"),
+                "contributions": [{ "author": { "name": format!("Author {id}") } }],
+                "book_series": [], "image": { "url": cover_url }
+            })
+        })
+        .collect();
+    Mock::given(method("POST"))
+        .and(body_string_contains("books(where: {id: {_in:"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({ "data": { "books": books } })),
+        )
+        .mount(&server)
+        .await;
+    // 5. Cover fetches — 7 succeed; book 204 (list_count 6, in the first
+    //    chunk of 201..=206) 404s.
+    for id in 201..=208 {
+        let route = format!("/cover{id}.jpg");
+        if id == 204 {
+            Mock::given(method("GET"))
+                .and(wiremock::matchers::path(route))
+                .respond_with(ResponseTemplate::new(404))
+                .mount(&server)
+                .await;
+        } else {
+            Mock::given(method("GET"))
+                .and(wiremock::matchers::path(route))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("content-type", "image/jpeg")
+                        .set_body_bytes(vec![0xFFu8, 0xD8, 0xFF, id as u8]),
+                )
+                .mount(&server)
+                .await;
+        }
+    }
+
+    let cfg = config_for(&server);
+    let image_cfg = RemoteImageConfig {
+        allow_private_addresses: true,
+    };
+    resolve_with(&pool, &uuid, &cfg, &image_cfg).await.unwrap();
+
+    let got = get_suggestions(&pool, &uuid).await.unwrap();
+    assert_eq!(
+        got.len(),
+        8,
+        "all 8 survivors must be persisted, across both concurrency chunks"
+    );
+    let ids: Vec<i64> = got.iter().map(|s| s.hardcover_id).collect();
+    assert_eq!(
+        ids,
+        vec![201, 202, 203, 204, 205, 206, 207, 208],
+        "rank order (by co-listing count desc) must survive the chunked cover fetch"
+    );
+    for s in &got {
+        if s.hardcover_id == 204 {
+            assert!(
+                !s.has_cover,
+                "the 404'd cover must not be recorded as present"
+            );
+        } else {
+            assert!(
+                s.has_cover,
+                "book {}'s cover must survive despite a sibling's cover failing",
+                s.hardcover_id
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn mark_pending_propagates_db_error_when_pool_is_closed() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     pool.close().await;
@@ -591,4 +714,97 @@ async fn resolve_book_propagates_http_error_when_server_returns_500() {
         .await
         .unwrap_err();
     assert!(matches!(err, HardcoverError::Http(_)));
+}
+
+#[tokio::test]
+async fn resolve_book_propagates_an_earlier_isbn_error_even_when_a_later_isbn_in_the_same_chunk_would_have_resolved(
+) {
+    // ISBN_RESOLVE_CONCURRENCY == 4; 6 ISBNs span two `chunks()` rounds (4 +
+    // 2). The concurrent per-chunk fetch must still preserve the old
+    // sequential loop's priority-order semantics: walk results in ISBN
+    // order and stop at the first one that either resolves OR errors.
+    // isbn[1] (2nd priority, same chunk as isbn[2]'s would-be winner) errors
+    // — the walk must surface that error rather than skipping past it to
+    // isbn[2]'s eventual match, proving concurrency didn't quietly change
+    // "first-in-priority-order wins" into "first-successful-response wins".
+    let server = MockServer::start().await;
+    let isbns = [
+        "9780000000000", // miss
+        "9780000000001", // errors (500) — must win priority over isbn[2]
+        "9780000000002", // would resolve to book_id 777, but unreached
+        "9780000000003", // miss, same chunk
+        "9780000000004", // miss, 2nd chunk
+        "9780000000005", // miss, 2nd chunk
+    ];
+    for isbn in isbns {
+        let response = if isbn == "9780000000001" {
+            ResponseTemplate::new(500)
+        } else if isbn == "9780000000002" {
+            ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "editions": [{ "book_id": 777 }] }
+            }))
+        } else {
+            ResponseTemplate::new(200).set_body_json(json!({ "data": { "editions": [] } }))
+        };
+        Mock::given(method("POST"))
+            .and(body_string_contains(isbn))
+            .respond_with(response)
+            .mount(&server)
+            .await;
+    }
+    // isbn[2]'s edition lookup resolves to book_id 777, so `resolve_by_isbn`
+    // follows up with this detail fetch as part of the SAME concurrent
+    // `join_all` chunk that also runs isbn[1]'s failing request — stubbed so
+    // isbn[2] genuinely completes as a would-be winner, not an unmatched
+    // (and therefore also-erroring) request that would prove nothing.
+    Mock::given(method("POST"))
+        .and(body_string_contains("books(where: {id: {_eq: 777}}"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "books": [{
+                "id": 777, "slug": "would-be-winner", "title": "Would Be Winner",
+                "contributions": [], "book_series": [], "image": null
+            }] }
+        })))
+        .mount(&server)
+        .await;
+
+    let cfg = config_for(&server);
+    let err = resolve_book(
+        &cfg,
+        &isbns.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        "Irrelevant Title",
+        None,
+    )
+    .await
+    .expect_err("an earlier-priority ISBN's error must propagate");
+    assert!(
+        matches!(err, HardcoverError::Http(_)),
+        "expected the 500 from isbn[1] to surface as Http, got {err:?}"
+    );
+
+    // Every ISBN's edition lookup must have fired — the eager per-chunk
+    // `join_all` fetches the whole list before the priority walk runs, so
+    // both chunks (4 + 2) complete even though the walk aborts at isbn[1].
+    let requests = server.received_requests().await.unwrap();
+    let edition_lookups = requests
+        .iter()
+        .filter(|r| String::from_utf8_lossy(&r.body).contains("editions(where:"))
+        .count();
+    assert_eq!(
+        edition_lookups, 6,
+        "all 6 ISBNs across both concurrency chunks must have been queried"
+    );
+    // isbn[2]'s book-777 detail fetch must have actually fired — proving it
+    // was a genuine, fully-resolved would-be winner that the earlier error
+    // beat, not a mock gap that made the "earlier error wins" assertion
+    // vacuously true.
+    let book_777_fetches = requests
+        .iter()
+        .filter(|r| String::from_utf8_lossy(&r.body).contains("books(where: {id: {_eq: 777}}"))
+        .count();
+    assert_eq!(
+        book_777_fetches, 1,
+        "isbn[2] must have fully resolved to book 777 in the background, even though \
+         the earlier isbn[1] error is what the walk actually surfaces"
+    );
 }
