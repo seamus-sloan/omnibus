@@ -93,7 +93,11 @@ impl MetadataOverrides {
 
     /// ISBN-13 input rule: empty (clears the override) or exactly 13 ASCII
     /// digits. Hyphens/spaces are rejected rather than stripped — the
-    /// client submits a normalized digit string.
+    /// client submits a normalized digit string. Deliberately format-only —
+    /// no mod-10 check-digit verification — since this is user-editable
+    /// free-text metadata, not a barcode-scanned value needing strict
+    /// validation; a malformed-but-13-digit entry just renders as an
+    /// incorrect ISBN, not a corrupted one.
     fn validate_isbn13(&self) -> Result<(), String> {
         let Some(ref v) = self.isbn13 else {
             return Ok(());

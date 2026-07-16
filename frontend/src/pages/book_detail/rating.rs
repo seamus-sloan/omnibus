@@ -83,7 +83,7 @@ pub(super) fn BdRatingWidget(uuid: String) -> Element {
     } else if let Some(rec) = current() {
         format!(
             "{} \u{00b7} {} of 5",
-            rated_ago(rec.updated_at),
+            rated_ago(now_unix(), rec.updated_at),
             fmt_stars(rec.stars)
         )
     } else {
@@ -162,13 +162,8 @@ fn BdStarHalf(
     server_url: String,
     state: RatingState,
 ) -> Element {
-    let RatingState {
-        current,
-        mut hover,
-        failed,
-        op_seq,
-        other_ratings,
-    } = state;
+    let mut hover = state.hover;
+    let current = state.current;
     rsx! {
         button {
             r#type: "button",
@@ -185,34 +180,26 @@ fn BdStarHalf(
                 } else {
                     Some(value)
                 };
-                apply_rating(
-                    current,
-                    failed,
-                    op_seq,
-                    other_ratings,
-                    uuid.clone(),
-                    server_url.clone(),
-                    target,
-                );
+                apply_rating(state, uuid.clone(), server_url.clone(), target);
             },
         }
     }
 }
 
-/// Optimistically set/clear `current`, then persist and reconcile with the
-/// server (reverting and flagging on error). `Signal` is `Copy`, so the handles
-/// are passed by value. `op_seq` is bumped per call and re-checked after the
-/// request so a stale (out-of-order) response is dropped instead of clobbering a
-/// newer click.
-fn apply_rating(
-    mut current: Signal<Option<RatingRecord>>,
-    mut failed: Signal<bool>,
-    mut op_seq: Signal<u64>,
-    mut other_ratings: Signal<Vec<AttributedRating>>,
-    uuid: String,
-    server_url: String,
-    target: Option<f32>,
-) {
+/// Optimistically set/clear `state.current`, then persist and reconcile with
+/// the server (reverting and flagging on error). Takes the whole
+/// [`RatingState`] bundle rather than its sibling signals as separate
+/// positional params — `Signal` is `Copy`, so the bundle is passed by value.
+/// `op_seq` is bumped per call and re-checked after the request so a stale
+/// (out-of-order) response is dropped instead of clobbering a newer click.
+fn apply_rating(state: RatingState, uuid: String, server_url: String, target: Option<f32>) {
+    let RatingState {
+        mut current,
+        mut failed,
+        mut op_seq,
+        mut other_ratings,
+        ..
+    } = state;
     let prev = current();
     let my_op = op_seq() + 1;
     op_seq.set(my_op);
@@ -264,7 +251,7 @@ fn BdOtherRatingRow(rating: AttributedRating) -> Element {
         .next()
         .map(|c| c.to_uppercase().to_string())
         .unwrap_or_else(|| "?".to_string());
-    let age = rating_age_days(now_unix(), rating.updated_at);
+    let age = rated_ago(now_unix(), rating.updated_at);
     rsx! {
         div {
             class: "bd-other-rating-row",
@@ -281,7 +268,7 @@ fn BdOtherRatingRow(rating: AttributedRating) -> Element {
                     class: "bd-other-rating-byline",
                     "data-testid": "other-rating-byline",
                     span { class: "bd-other-rating-name", "{rating.username}" }
-                    " rated {age}"
+                    " {age}"
                 }
                 BdOtherRatingStars { stars: rating.stars }
             }
@@ -342,9 +329,12 @@ fn rate_label(value: f32) -> String {
     }
 }
 
-/// Relative "rated N ago" phrase from a unix-seconds timestamp.
-fn rated_ago(updated_at: i64) -> String {
-    let secs = (now_unix() - updated_at).max(0);
+/// Relative "rated N ago" phrase from a unix-seconds timestamp, computed
+/// against the injected `now` (rather than reading the clock internally) so
+/// every call site — the live widget and the other-ratings row alike — shares
+/// one clock-injectable, unit-testable formatter.
+fn rated_ago(now: i64, updated_at: i64) -> String {
+    let secs = (now - updated_at).max(0);
     let plural = |n: i64| if n == 1 { "" } else { "s" };
     if secs < 60 {
         "rated just now".to_string()
@@ -357,15 +347,6 @@ fn rated_ago(updated_at: i64) -> String {
     } else {
         let d = secs / 86_400;
         format!("rated {d} day{} ago", plural(d))
-    }
-}
-
-fn rating_age_days(now: i64, updated_at: i64) -> String {
-    let days = (now - updated_at).max(0) / 86_400;
-    match days {
-        0 => "today".to_string(),
-        1 => "1 day ago".to_string(),
-        _ => format!("{days} days ago"),
     }
 }
 
@@ -388,20 +369,30 @@ fn now_unix() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::rating_age_days;
+    use super::rated_ago;
 
     #[test]
-    fn rating_age_uses_today_for_recent_rating() {
-        assert_eq!(rating_age_days(1_000, 999), "today");
+    fn rated_ago_shows_just_now_for_sub_minute_gap() {
+        assert_eq!(rated_ago(1_000, 999), "rated just now");
     }
 
     #[test]
-    fn rating_age_singularizes_one_day() {
-        assert_eq!(rating_age_days(172_800, 86_400), "1 day ago");
+    fn rated_ago_singularizes_one_minute() {
+        assert_eq!(rated_ago(1_060, 1_000), "rated 1 minute ago");
     }
 
     #[test]
-    fn rating_age_pluralizes_multiple_days() {
-        assert_eq!(rating_age_days(432_000, 172_800), "3 days ago");
+    fn rated_ago_pluralizes_multiple_hours() {
+        assert_eq!(rated_ago(1_000 + 3 * 3600, 1_000), "rated 3 hours ago");
+    }
+
+    #[test]
+    fn rated_ago_singularizes_one_day() {
+        assert_eq!(rated_ago(172_800, 86_400), "rated 1 day ago");
+    }
+
+    #[test]
+    fn rated_ago_pluralizes_multiple_days() {
+        assert_eq!(rated_ago(432_000, 172_800), "rated 3 days ago");
     }
 }
