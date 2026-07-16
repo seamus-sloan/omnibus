@@ -177,3 +177,46 @@ async fn pages_read_skips_a_finished_book_with_no_epub_file() {
 
     assert_eq!(pages_read(&pool, user, 0).await.unwrap(), None);
 }
+
+// ---------- StatsError variants (#1099) ----------
+
+#[tokio::test]
+async fn pages_read_propagates_books_error_when_the_batched_lookup_fails() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let dir = make_test_dir("stats-pages-books-error");
+
+    seed_book_with_fixture(&pool, &dir, "alpha.epub", "uuid-alpha").await;
+    finish_journal(&pool, user, "uuid-alpha", T0).await;
+
+    // Drop `book_files` (not `scan_roots`): `finished_book_ids` doesn't
+    // touch it, so it still succeeds, isolating the failure to the batched
+    // `book_file_paths` join. Dropping `scan_roots` cascades via
+    // `books.library_id ON DELETE CASCADE` and deletes the seeded book too.
+    sqlx::query("DROP TABLE book_files")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let err = pages_read(&pool, user, 0).await.unwrap_err();
+    assert!(matches!(err, StatsError::Books(_)), "got {err:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn spawn_blocking_panic_surfaces_as_pages_task_variant() {
+    // The `spawn_blocking` call in `pages_read` runs `sum_word_counts` off
+    // the async runtime; a panic there (corrupt zip state, an allocation
+    // failure) must propagate as `StatsError::PagesTask` via `?` rather than
+    // being swallowed. Forcing an actual EPUB-parse panic isn't practical
+    // deterministically, so this exercises the identical `spawn_blocking` +
+    // `?` shape `pages_read` uses, with a closure that panics on purpose.
+    async fn forced() -> Result<(), StatsError> {
+        tokio::task::spawn_blocking(|| panic!("intentional test panic")).await?;
+        Ok(())
+    }
+
+    let err = forced().await.unwrap_err();
+    assert!(matches!(err, StatsError::PagesTask(_)), "got {err:?}");
+}

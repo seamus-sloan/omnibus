@@ -322,6 +322,46 @@ pub async fn resolve_canonical_book_uuids_bulk_exec(
     Ok(out)
 }
 
+/// Bulk counterpart to [`book_file_path`]: resolve every id in `ids` to its
+/// on-disk path for `format` in one round trip. Chunked at 499 ids to stay
+/// under SQLite's bind-parameter cap; when multiple files share a format,
+/// the lowest `ordinal` wins per id, same as `book_file_path`. Ids with no
+/// matching file are absent from the map.
+pub async fn book_file_paths(
+    pool: &SqlitePool,
+    ids: &[i64],
+    format: &str,
+) -> Result<HashMap<i64, std::path::PathBuf>, super::BooksError> {
+    let mut map = HashMap::with_capacity(ids.len());
+    for chunk in ids.chunks(499) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT b.id, COALESCE(bf.library_path, l.path), COALESCE(bf.path, b.path), \
+                    bf.filename, bf.format \
+             FROM books b \
+             JOIN scan_roots l ON l.id = b.library_id \
+             JOIN book_files bf ON bf.book_id = b.id \
+             WHERE b.id IN ({placeholders}) AND bf.format = ? COLLATE NOCASE \
+             ORDER BY b.id, bf.ordinal"
+        );
+        let mut q = sqlx::query_as::<_, (i64, String, String, String, String)>(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        q = q.bind(format);
+        for (id, lib, dir, stem, fmt) in q.fetch_all(pool).await? {
+            map.entry(id).or_insert_with(|| {
+                std::path::Path::new(&lib)
+                    .join(&dir)
+                    .join(format!("{stem}.{}", fmt.to_lowercase()))
+            });
+        }
+    }
+    Ok(map)
+}
+
 /// Resolve the on-disk path of a book's file for the given format
 /// (e.g. "EPUB"). When multiple files of the same format exist, returns
 /// the one with the lowest ordinal. Ok(None) when absent.
