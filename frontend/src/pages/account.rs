@@ -2,8 +2,9 @@
 //!
 //! Web/SSR renders the Send-to-Kindle destination form; the native
 //! shell renders the mobile "You" tab (identity, now-reading, quick links,
-//! account rows, theme). Signals start empty so SSR and the first WASM paint
-//! agree (rule 07); the load effects fill them after mount.
+//! account rows, theme, server/app version). Signals start empty so SSR and
+//! the first WASM paint agree (rule 07); the load effects fill them after
+//! mount.
 
 use dioxus::prelude::*;
 
@@ -276,6 +277,9 @@ fn account_body() -> Element {
     let server_url = use_server_url();
     let mut user = use_signal(|| None::<UserSummary>);
     let mut now_reading = use_signal(|| None::<EbookMetadata>);
+    // Seeded `None` so SSR and the first WASM paint agree (rule 07); the
+    // effect below fills it in after mount.
+    let mut server_version = use_signal(|| None::<String>);
 
     // Resolve the current user from the bearer token. A failure leaves the
     // signal `None` so the identity block keeps its placeholder rather than
@@ -303,6 +307,21 @@ fn account_body() -> Element {
         });
     });
 
+    // Server release version, for comparison against the app's own build
+    // (#1055). No mismatch/update prompt is shown — not every server
+    // release has a matching mobile release, so a version gap doesn't
+    // reliably mean an update exists. Users read and compare the two
+    // numbers themselves.
+    let version_url = server_url.clone();
+    use_effect(move || {
+        let url = version_url.clone();
+        spawn(async move {
+            if let Ok(v) = data::get_server_version(&url).await {
+                server_version.set(Some(v));
+            }
+        });
+    });
+
     rsx! {
         div { class: "m-account", "data-testid": "account-screen",
             AccountIdentity { user: user() }
@@ -310,6 +329,7 @@ fn account_body() -> Element {
             QuickGrid {}
             AccountRows {}
             ThemeControl {}
+            VersionBlock { server_version: server_version() }
         }
     }
 }
@@ -483,6 +503,24 @@ fn ThemeControl() -> Element {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Server + app version lines at the bottom of the "You" tab (AC2): the
+/// server's release (fetched from `/api/_health`, showing a placeholder
+/// until the post-mount fetch in `account_body` resolves) above the app's
+/// own compile-time build version. Deliberately no "update available"
+/// prompt — see the effect comment in `account_body` for why a version gap
+/// doesn't reliably indicate a pending update.
+#[cfg(feature = "mobile")]
+#[component]
+fn VersionBlock(server_version: Option<String>) -> Element {
+    let server = server_version.as_deref().unwrap_or("\u{2026}");
+    rsx! {
+        div { class: "m-account-version", "data-testid": "account-version",
+            div { "Server version: {server}" }
+            div { "App version: {crate::version::app_version()}" }
         }
     }
 }

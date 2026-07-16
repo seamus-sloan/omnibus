@@ -9,20 +9,24 @@ use axum::{
     Json,
 };
 
-use super::{build_id, repo_root};
+use super::{app_version, build_id, repo_root};
 
 /// Unauthenticated liveness + fingerprint endpoint. The `app` field lets
 /// `scripts/dev-server-up.sh` distinguish an omnibus instance from some
 /// other process that happens to bind the same port. The `repo_root`
 /// field lets it distinguish *this* workspace's server from a sibling
-/// `jj` workspace's server bound to the same port. Whitelisted in
-/// `auth::gate::require_auth` so it remains reachable without a session.
+/// `jj` workspace's server bound to the same port. The `version` field
+/// (from `OMNIBUS_VERSION`, `"dev"` when unset) lets the mobile "You"
+/// screen show the running server's release alongside its own app version
+/// (#1055). Whitelisted in `auth::gate::require_auth` so it remains
+/// reachable without a session.
 pub(super) async fn get_health() -> Response {
     Json(serde_json::json!({
         "app": "omnibus",
         "status": "ok",
         "build_id": build_id().to_string(),
         "repo_root": repo_root(),
+        "version": app_version(),
     }))
     .into_response()
 }
@@ -66,5 +70,12 @@ mod tests {
             repo_root.is_empty() || repo_root.starts_with('/'),
             "repo_root should be absolute or empty, got {repo_root:?}",
         );
+
+        // The test binary doesn't set OMNIBUS_VERSION, so this is "dev" in
+        // practice — but the contract this endpoint guarantees is just
+        // "a non-empty string field", which is what `read_app_version`'s
+        // dedicated fallback test in `backend.rs` covers precisely.
+        let version = json["version"].as_str().expect("version is a string");
+        assert!(!version.is_empty(), "version should not be empty");
     }
 }

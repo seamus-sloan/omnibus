@@ -102,6 +102,8 @@ Kobo KEPUB conversion (read by `db::kepub`, for the "Send to Kobo" download):
 - `OMNIBUS_KEPUBIFY_PATH` — explicit kepubify path; otherwise kepubify must be on `$PATH`. Absent → download falls back to plain EPUB with a one-time startup warning. Bundled in the `.#web` shell and the release image.
 - `OMNIBUS_KEPUB_DIR` — directory for the KEPUB cache, used verbatim when set; otherwise defaults to `$OMNIBUS_DATA_DIR/kepub/`. Purely a regenerable cache (safe to delete, rebuilt on next download).
 
+- `OMNIBUS_VERSION` — the running release tag (e.g. `v0.8.9`), read once at boot and returned as the `version` field on `GET /api/_health`; the mobile "You" screen fetches it there to show the server's release alongside the app's own compile-time build version (F-1055, `server::backend::app_version`). Also read at **compile time** via `option_env!` by `omnibus_frontend::version::app_version` so the web user-menu version line and a mobile build's own "App version" line report the real tag instead of the crate's pinned `0.1.0`. Baked into the Docker image build-arg (`Dockerfile`, `.github/workflows/docker.yml`) and into the TestFlight build env (`.github/workflows/testflight.yml`, mirroring its already-resolved `MARKETING_VERSION`). Leave unset for local dev — the server reports `"dev"` and the frontend falls back to `CARGO_PKG_VERSION`.
+
 If `ANDROID_HOME` / `ANDROID_NDK_HOME` come back empty inside `nix develop .#mobile`, set them manually:
 
 ```bash

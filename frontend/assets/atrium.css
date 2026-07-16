@@ -2710,6 +2710,12 @@ a.idx-letter-on:focus-visible {
 .um-theme-btn.on { background: var(--bg-0); color: var(--ink-0); }
 .um-theme-btn[disabled] { opacity: .45; cursor: not-allowed; }
 
+/* Version line — web app == server, so a single build version (#1055) */
+.um-version {
+  padding-top: 4px; text-align: center;
+  color: var(--ink-3); font-family: var(--mono); font-size: 11px;
+}
+
 /* ── Listen player (F2.3 redesign) ──────────────────────────────────
  *
  * Full-screen audiobook player: two-column cover + controls layout
@@ -5970,6 +5976,18 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   background: var(--bg-0);
   color: var(--ink-0);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+/* Server + app version lines — two builds can differ on mobile (#1055) */
+.m-account-version {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding-top: 4px;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 11px;
 }
 /* ── Mobile audiobook player ───────────────────────────────────────── */
 /* Full-screen player: pinned to the viewport with `position: fixed` so it can

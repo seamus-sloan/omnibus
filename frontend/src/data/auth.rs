@@ -129,6 +129,25 @@ pub async fn check_server(server_url: &str) -> Result<(), DataError> {
     Ok(())
 }
 
+/// GET `{server_url}/api/_health` (mobile) — resolve the running server's
+/// release version so the account "You" screen can show it alongside the
+/// app's own compile-time version (#1055). Distinct from [`check_server`],
+/// which only probes reachability and discards the body.
+#[cfg(feature = "mobile")]
+pub async fn get_server_version(server_url: &str) -> Result<String, DataError> {
+    #[derive(serde::Deserialize)]
+    struct HealthPayload {
+        version: String,
+    }
+    let url = format!("{server_url}/api/_health");
+    let response = http_client().get(&url).send().await?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(response.json::<HealthPayload>().await?.version)
+}
+
 #[cfg(feature = "mobile")]
 async fn post_mobile_auth<T: serde::Serialize>(
     server_url: &str,

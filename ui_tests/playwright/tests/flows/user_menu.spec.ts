@@ -74,6 +74,11 @@ test("opens and closes the user menu", async ({ page }) => {
   await expect(page.getByTestId("theme-dark")).toBeVisible();
   await expect(page.getByTestId("theme-light")).toBeVisible();
 
+  // Version line at the bottom of the panel (#1055) — a compile-time
+  // constant, so it's always present regardless of OMNIBUS_VERSION.
+  await expect(page.getByTestId("user-menu-version")).toBeVisible();
+  await expect(page.getByTestId("user-menu-version")).toHaveText(/^v\d+\.\d+\.\d+$/);
+
   // Close via the transparent scrim (click outside the panel).
   await page.getByTestId("user-menu-scrim").click();
   await expect(page.getByTestId("logout-button")).toHaveCount(0);

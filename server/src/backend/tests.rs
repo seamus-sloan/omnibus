@@ -41,6 +41,13 @@ async fn api_health_returns_200_unauth_with_app_and_build_id() {
         "repo_root must be a string, got {:?}",
         body["repo_root"]
     );
+    // `version` is what the mobile "You" screen fetches to show the running
+    // server's release alongside its own compile-time app version (#1055).
+    assert!(
+        body["version"].is_string(),
+        "version must be a string, got {:?}",
+        body["version"]
+    );
 }
 
 // -------------------------------------------------------------------
