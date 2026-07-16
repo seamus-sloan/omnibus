@@ -318,14 +318,15 @@ async fn list_other_ratings_propagates_db_error_when_pool_is_closed() {
 /// only ever writes one row per call) so the cap test doesn't pay the cost
 /// of `count` real password hashes.
 async fn seed_other_raters_raw(pool: &SqlitePool, book_uuid: &str, count: i64) {
+    debug_assert!(count > 0, "seed_other_raters_raw requires a positive count");
     sqlx::query(
         "WITH RECURSIVE n(i) AS (
-             SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?
+             SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
          )
          INSERT INTO users (username, password_hash, is_admin, can_upload, can_edit, can_download)
          SELECT 'rater' || i, '!x', 0, 0, 0, 1 FROM n",
     )
-    .bind(count - 1)
+    .bind(count)
     .execute(pool)
     .await
     .expect("seed raters");
