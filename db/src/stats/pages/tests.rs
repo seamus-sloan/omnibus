@@ -189,17 +189,10 @@ async fn pages_read_propagates_books_error_when_the_batched_lookup_fails() {
     seed_book_with_fixture(&pool, &dir, "alpha.epub", "uuid-alpha").await;
     finish_journal(&pool, user, "uuid-alpha", T0).await;
 
-    // `finished_book_ids` only touches `journal_entries`/`books`, so it still
-    // succeeds once `book_files` is gone — the failure surfaces from the
-    // batched `book_file_paths` lookup itself (it joins `book_files`),
-    // forcing the previously-untested `StatsError::Books` variant. Dropping
-    // `scan_roots` instead would *also* work for the join, but SQLite runs
-    // an implicit cascading `DELETE FROM` on `DROP TABLE` when FK
-    // constraints are enabled — since `books.library_id` cascades from
-    // `scan_roots`, that silently deletes the seeded book too, leaving
-    // `finished_book_ids` empty and masking the very failure this test
-    // wants to force. `book_files` is a *child* of `books` (nothing
-    // references it), so dropping it can't cascade back up.
+    // Drop `book_files` (not `scan_roots`): `finished_book_ids` doesn't
+    // touch it, so it still succeeds, isolating the failure to the batched
+    // `book_file_paths` join. Dropping `scan_roots` cascades via
+    // `books.library_id ON DELETE CASCADE` and deletes the seeded book too.
     sqlx::query("DROP TABLE book_files")
         .execute(&pool)
         .await

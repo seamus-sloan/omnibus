@@ -323,16 +323,10 @@ pub async fn resolve_canonical_book_uuids_bulk_exec(
 }
 
 /// Bulk counterpart to [`book_file_path`]: resolve every id in `ids` to its
-/// on-disk path for `format` in one round trip instead of a per-id loop —
-/// `db/src/stats/pages.rs`'s `pages_read` is the motivating caller, which
-/// previously issued one query per finished book. Chunked at 499 ids (the
-/// `get_books_by_ids`/`resolve_book_ids_bulk` convention in this file) to
-/// stay under SQLite's 999 bind-parameter cap; each chunk also binds the
-/// shared `format`, so a chunk never exceeds 500 params. Ids with no
-/// matching file are absent from the map. When multiple files share a
-/// format, the lowest `ordinal` wins per id — the query orders by
-/// `(id, ordinal)` and `entry().or_insert()` below keeps only the first
-/// (lowest-ordinal) row per id, mirroring `book_file_path`'s `LIMIT 1`.
+/// on-disk path for `format` in one round trip. Chunked at 499 ids to stay
+/// under SQLite's bind-parameter cap; when multiple files share a format,
+/// the lowest `ordinal` wins per id, same as `book_file_path`. Ids with no
+/// matching file are absent from the map.
 pub async fn book_file_paths(
     pool: &SqlitePool,
     ids: &[i64],
@@ -340,7 +334,9 @@ pub async fn book_file_paths(
 ) -> Result<HashMap<i64, std::path::PathBuf>, super::BooksError> {
     let mut map = HashMap::with_capacity(ids.len());
     for chunk in ids.chunks(499) {
-        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
         let sql = format!(
             "SELECT b.id, COALESCE(bf.library_path, l.path), COALESCE(bf.path, b.path), \
                     bf.filename, bf.format \
