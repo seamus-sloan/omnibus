@@ -102,7 +102,7 @@ pub(super) async fn post_journal_image(
         Ok(pair) => pair,
         Err(response) => return response,
     };
-    // Sync `std::fs` write — run on the blocking pool (#106).
+    // Sync `std::fs` write — run on the blocking pool.
     match tokio::task::spawn_blocking(move || {
         db::journal_images::write_journal_image(&mime, &bytes)
     })
@@ -120,7 +120,7 @@ pub(super) async fn post_journal_image(
 /// Serve a stored journal image by its minted name. 404 for a malformed name
 /// (the traversal guard) or a missing file. Media-gated like covers/thumbs.
 pub(super) async fn get_journal_image(_user: MediaAuthUser, Path(name): Path<String>) -> Response {
-    // Sync `std::fs` read — run on the blocking pool (#106).
+    // Sync `std::fs` read — run on the blocking pool.
     match tokio::task::spawn_blocking(move || db::journal_images::read_journal_image(&name)).await {
         Ok(Some((mime, bytes))) => (
             [

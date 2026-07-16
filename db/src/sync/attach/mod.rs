@@ -83,7 +83,7 @@ pub(super) async fn slot_held_by_other(
 /// Drop the `merged_uuids` row for `(library_path, scan_key)`. Called when a
 /// file that previously recorded an attachment is being demoted to its own
 /// book (its slot got taken by another file), so its stale ledger entry
-/// doesn't keep replaying the attach on every future scan (issue #1063).
+/// doesn't keep replaying the attach on every future scan.
 pub(super) async fn forget_attachment(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_path: &str,
