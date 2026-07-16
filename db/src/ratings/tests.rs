@@ -1,7 +1,7 @@
 //! Unit tests for the `ratings` module: `set_rating` round-trip (incl.
 //! half-star storage), change-overwrites, per-user isolation, `BookNotFound`,
-//! `get_rating` empty-state, `delete_rating` clear + absent no-op, and
-//! merged-uuid canonical resolution.
+//! `get_rating` empty-state, `delete_rating` clear + absent no-op,
+//! merged-uuid canonical resolution, and the `list_other_ratings` hard cap.
 
 use omnibus_shared::EbookMetadata;
 
@@ -312,4 +312,47 @@ async fn list_other_ratings_propagates_db_error_when_pool_is_closed() {
     let err = list_other_ratings(&pool, 1, "book").await.unwrap_err();
 
     assert!(matches!(err, RatingError::Sqlx(_)));
+}
+
+/// Insert `count` distinct raters directly (bypassing `set_rating`, which
+/// only ever writes one row per call) so the cap test doesn't pay the cost
+/// of `count` real password hashes.
+async fn seed_other_raters_raw(pool: &SqlitePool, book_uuid: &str, count: i64) {
+    debug_assert!(count > 0, "seed_other_raters_raw requires a positive count");
+    sqlx::query(
+        "WITH RECURSIVE n(i) AS (
+             SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
+         )
+         INSERT INTO users (username, password_hash, is_admin, can_upload, can_edit, can_download)
+         SELECT 'rater' || i, '!x', 0, 0, 0, 1 FROM n",
+    )
+    .bind(count)
+    .execute(pool)
+    .await
+    .expect("seed raters");
+    sqlx::query(
+        "INSERT INTO user_ratings (user_id, book_uuid, half_stars, updated_at)
+         SELECT u.id, ?, 8, u.id FROM users u WHERE u.username LIKE 'rater%'",
+    )
+    .bind(book_uuid)
+    .execute(pool)
+    .await
+    .expect("seed ratings");
+}
+
+#[tokio::test]
+async fn list_other_ratings_caps_response_at_hard_limit() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let over_cap = LIST_OTHER_RATINGS_LIMIT + 500;
+    seed_other_raters_raw(&pool, &uuid, over_cap).await;
+
+    let ratings = list_other_ratings(&pool, alice, &uuid).await.unwrap();
+
+    assert_eq!(
+        ratings.len() as i64,
+        LIST_OTHER_RATINGS_LIMIT,
+        "list_other_ratings must not return more than LIST_OTHER_RATINGS_LIMIT rows",
+    );
 }

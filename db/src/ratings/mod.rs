@@ -9,6 +9,12 @@ use sqlx::{Row, SqlitePool};
 
 use crate::resolve_canonical_book_uuid;
 
+/// Hard cap on how many other-user ratings `list_other_ratings` returns for
+/// a single book. Practical usage stays well under this; the cap exists so
+/// a heavily-rated book can't produce an unbounded REST response, mirroring
+/// the cap on `bookmarks::LIST_BOOKMARKS_LIMIT`.
+pub const LIST_OTHER_RATINGS_LIMIT: i64 = 1_000;
+
 #[derive(Debug, thiserror::Error)]
 pub enum RatingError {
     #[error("book not found")]
@@ -100,8 +106,9 @@ pub async fn get_rating(
     }))
 }
 
-/// List every other user's rating for a book, newest first. The viewer's own
-/// rating stays in the separate interactive widget.
+/// List every other user's rating for a book, newest first, capped at
+/// [`LIST_OTHER_RATINGS_LIMIT`]. The viewer's own rating stays in the
+/// separate interactive widget.
 pub async fn list_other_ratings(
     pool: &SqlitePool,
     viewer_id: i64,
@@ -115,10 +122,12 @@ pub async fn list_other_ratings(
            FROM user_ratings ur
            JOIN users u ON u.id = ur.user_id
           WHERE ur.book_uuid = ? AND ur.user_id != ?
-          ORDER BY ur.updated_at DESC, ur.user_id DESC",
+          ORDER BY ur.updated_at DESC, ur.user_id DESC
+          LIMIT ?",
     )
     .bind(canonical)
     .bind(viewer_id)
+    .bind(LIST_OTHER_RATINGS_LIMIT)
     .fetch_all(pool)
     .await?;
 
