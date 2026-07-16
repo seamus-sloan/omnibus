@@ -6,6 +6,8 @@
 use omnibus_shared::PaletteTagHit;
 use sqlx::{Row, SqlitePool};
 
+use crate::helpers::library_paths_json;
+
 use super::PaletteError;
 
 /// Run the tags arm of the palette for `like_pattern` (already escaped)
@@ -16,6 +18,19 @@ pub async fn search_tags(
     like_pattern: &str,
     limit: i32,
 ) -> Result<Vec<PaletteTagHit>, PaletteError> {
+    search_tags_for_paths(pool, &[library_path], like_pattern, limit).await
+}
+
+/// Run the tags arm across every configured library path.
+pub async fn search_tags_for_paths(
+    pool: &SqlitePool,
+    library_paths: &[&str],
+    like_pattern: &str,
+    limit: i32,
+) -> Result<Vec<PaletteTagHit>, PaletteError> {
+    if library_paths.is_empty() {
+        return Ok(Vec::new());
+    }
     // F5.1: the count uses the effective (override-aware) subject set,
     // not the raw `books_tags_link` rows. `MetadataOverrides.subjects`
     // (Option<Vec<String>>) replaces the canonical tag list wholesale
@@ -42,7 +57,7 @@ pub async fn search_tags(
             JOIN books b ON b.id = btl.book
             JOIN scan_roots l2 ON l2.id = b.library_id
             LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-           WHERE l2.path = ?1
+           WHERE l2.path IN (SELECT value FROM json_each(?1))
              AND (mo.book_uuid IS NULL
                   OR json_type(mo.overrides, '$.subjects') IS NULL)
           UNION
@@ -51,7 +66,7 @@ pub async fn search_tags(
             JOIN scan_roots l2 ON l2.id = b.library_id
             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
             JOIN json_each(mo.overrides, '$.subjects') je
-           WHERE l2.path = ?1
+           WHERE l2.path IN (SELECT value FROM json_each(?1))
              AND json_type(mo.overrides, '$.subjects') IS NOT NULL
         )
         SELECT t.id, t.name,
@@ -63,13 +78,14 @@ pub async fn search_tags(
             SELECT 1 FROM books_tags_link btl
               JOIN books b ON b.id = btl.book
               JOIN scan_roots l ON l.id = b.library_id
-             WHERE btl.tag = t.id AND l.path = ?1
+             WHERE btl.tag = t.id
+               AND l.path IN (SELECT value FROM json_each(?1))
           )
         ORDER BY book_count DESC, t.name
         LIMIT ?3
         ",
     )
-    .bind(library_path)
+    .bind(library_paths_json(library_paths))
     .bind(like_pattern)
     .bind(limit)
     .fetch_all(pool)
@@ -93,6 +109,18 @@ pub async fn count_tags(
     library_path: &str,
     like_pattern: &str,
 ) -> Result<i64, PaletteError> {
+    count_tags_for_paths(pool, &[library_path], like_pattern).await
+}
+
+/// Count visible matching tags across every configured library path.
+pub async fn count_tags_for_paths(
+    pool: &SqlitePool,
+    library_paths: &[&str],
+    like_pattern: &str,
+) -> Result<i64, PaletteError> {
+    if library_paths.is_empty() {
+        return Ok(0);
+    }
     Ok(sqlx::query_scalar::<_, i64>(
         r"
         SELECT COUNT(*) FROM tags t
@@ -101,11 +129,12 @@ pub async fn count_tags(
             SELECT 1 FROM books_tags_link btl
               JOIN books b ON b.id = btl.book
               JOIN scan_roots l ON l.id = b.library_id
-             WHERE btl.tag = t.id AND l.path = ?1
+             WHERE btl.tag = t.id
+               AND l.path IN (SELECT value FROM json_each(?1))
           )
         ",
     )
-    .bind(library_path)
+    .bind(library_paths_json(library_paths))
     .bind(like_pattern)
     .fetch_one(pool)
     .await?)

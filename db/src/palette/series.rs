@@ -6,6 +6,8 @@
 use omnibus_shared::PaletteSeriesHit;
 use sqlx::{Row, SqlitePool};
 
+use crate::helpers::library_paths_json;
+
 use super::PaletteError;
 
 /// Series-arm palette query, bound `?1 = library_path`, `?2 = like_pattern`,
@@ -37,7 +39,7 @@ const SEARCH_SERIES_SQL: &str = r"
             JOIN books b ON b.id = bsl.book
             JOIN scan_roots l2 ON l2.id = b.library_id
             LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-           WHERE l2.path = ?1
+           WHERE l2.path IN (SELECT value FROM json_each(?1))
              AND (mo.book_uuid IS NULL
                   OR json_type(mo.overrides, '$.series') IS NULL)
           UNION
@@ -47,7 +49,7 @@ const SEARCH_SERIES_SQL: &str = r"
             FROM books b
             JOIN scan_roots l2 ON l2.id = b.library_id
             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-           WHERE l2.path = ?1
+           WHERE l2.path IN (SELECT value FROM json_each(?1))
              AND json_type(mo.overrides, '$.series') IS NOT NULL
         )
         SELECT s.id, s.name,
@@ -67,14 +69,16 @@ const SEARCH_SERIES_SQL: &str = r"
              JOIN books b2 ON b2.id = bsl2.book
              JOIN scan_roots l2 ON l2.id = b2.library_id
              LEFT JOIN metadata_overrides mo2 ON mo2.book_uuid = b2.uuid
-            WHERE bsl2.series = s.id AND l2.path = ?1
+            WHERE bsl2.series = s.id
+              AND l2.path IN (SELECT value FROM json_each(?1))
             ORDER BY b2.sort, b2.id LIMIT 1) AS author_display,
           (SELECT COALESCE(json_extract(mo3.overrides, '$.title'), b3.title)
              FROM books_series_link bsl3
              JOIN books b3 ON b3.id = bsl3.book
              JOIN scan_roots l3 ON l3.id = b3.library_id
              LEFT JOIN metadata_overrides mo3 ON mo3.book_uuid = b3.uuid
-            WHERE bsl3.series = s.id AND l3.path = ?1
+            WHERE bsl3.series = s.id
+              AND l3.path IN (SELECT value FROM json_each(?1))
             ORDER BY b3.sort, b3.id LIMIT 1) AS lead_book_title
         FROM series s
         WHERE s.name LIKE ?2 ESCAPE '\'
@@ -82,7 +86,8 @@ const SEARCH_SERIES_SQL: &str = r"
             SELECT 1 FROM books_series_link bsl
               JOIN books b ON b.id = bsl.book
               JOIN scan_roots l ON l.id = b.library_id
-             WHERE bsl.series = s.id AND l.path = ?1
+             WHERE bsl.series = s.id
+               AND l.path IN (SELECT value FROM json_each(?1))
           )
         ORDER BY book_count DESC, s.name
         LIMIT ?3
@@ -96,8 +101,21 @@ pub async fn search_series(
     like_pattern: &str,
     limit: i32,
 ) -> Result<Vec<PaletteSeriesHit>, PaletteError> {
+    search_series_for_paths(pool, &[library_path], like_pattern, limit).await
+}
+
+/// Run the series arm across every configured library path.
+pub async fn search_series_for_paths(
+    pool: &SqlitePool,
+    library_paths: &[&str],
+    like_pattern: &str,
+    limit: i32,
+) -> Result<Vec<PaletteSeriesHit>, PaletteError> {
+    if library_paths.is_empty() {
+        return Ok(Vec::new());
+    }
     let rows = sqlx::query(SEARCH_SERIES_SQL)
-        .bind(library_path)
+        .bind(library_paths_json(library_paths))
         .bind(like_pattern)
         .bind(limit)
         .fetch_all(pool)
@@ -123,6 +141,18 @@ pub async fn count_series(
     library_path: &str,
     like_pattern: &str,
 ) -> Result<i64, PaletteError> {
+    count_series_for_paths(pool, &[library_path], like_pattern).await
+}
+
+/// Count visible matching series across every configured library path.
+pub async fn count_series_for_paths(
+    pool: &SqlitePool,
+    library_paths: &[&str],
+    like_pattern: &str,
+) -> Result<i64, PaletteError> {
+    if library_paths.is_empty() {
+        return Ok(0);
+    }
     Ok(sqlx::query_scalar::<_, i64>(
         r"
         SELECT COUNT(*) FROM series s
@@ -131,11 +161,12 @@ pub async fn count_series(
             SELECT 1 FROM books_series_link bsl
               JOIN books b ON b.id = bsl.book
               JOIN scan_roots l ON l.id = b.library_id
-             WHERE bsl.series = s.id AND l.path = ?1
+             WHERE bsl.series = s.id
+               AND l.path IN (SELECT value FROM json_each(?1))
           )
         ",
     )
-    .bind(library_path)
+    .bind(library_paths_json(library_paths))
     .bind(like_pattern)
     .fetch_one(pool)
     .await?)

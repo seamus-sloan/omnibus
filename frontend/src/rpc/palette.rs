@@ -26,10 +26,14 @@ pub async fn rpc_search_palette(q: String) -> Result<PaletteResults> {
     let settings = db::get_settings(&pool.0)
         .await
         .map_err(|e| internal_rpc_error("get settings", e))?;
-    let Some(path) = settings.ebook_library_path else {
+    let paths = db::collect_paths(
+        settings.ebook_library_path.as_deref(),
+        settings.audiobook_library_path.as_deref(),
+    );
+    if paths.is_empty() {
         return Ok(PaletteResults::default());
-    };
-    Ok(db::search_palette(&pool.0, &path, &q)
+    }
+    Ok(db::search_palette_for_paths(&pool.0, &paths, &q)
         .await
         .map_err(|e| internal_rpc_error("search palette", e))?)
 }

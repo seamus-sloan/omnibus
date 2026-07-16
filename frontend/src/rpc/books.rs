@@ -177,10 +177,8 @@ pub async fn rpc_undo_merge(merge_log_id: i64) -> Result<String> {
 }
 
 /// Admin: candidate search for the merge dialog. Same FTS5 query as
-/// `rpc_search`, but across **both** configured libraries — the typical
-/// merge pairs an ebook with an audiobook, and `rpc_search` is scoped
-/// to the ebook root only. Deduped by uuid for the shared-directory
-/// case; capped small (the dialog shows a handful of rows).
+/// `rpc_search`, explicitly deduped by uuid for the shared-directory case and
+/// capped small because the dialog shows only a handful of rows.
 #[post("/api/rpc/merge-books/candidates", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_merge_candidates(q: String) -> Result<Vec<EbookMetadata>> {
     let settings = db::get_settings(&pool.0)
@@ -203,8 +201,8 @@ pub async fn rpc_merge_candidates(q: String) -> Result<Vec<EbookMetadata>> {
     Ok(out)
 }
 
-/// FTS5-backed search across the configured ebook library. Empty or
-/// whitespace-only `q` returns an empty library.
+/// FTS5-backed search across the configured ebook and audiobook libraries.
+/// Empty or whitespace-only `q` returns an empty library.
 ///
 /// POST (not GET) so the query string can ride in the JSON body — Dioxus
 /// `#[get]` server functions reject arg bodies because HTTP spec forbids
@@ -220,11 +218,19 @@ pub async fn rpc_search(q: String) -> Result<EbookLibrary> {
     let settings = db::get_settings(&pool.0)
         .await
         .map_err(|e| internal_rpc_error("get settings", e))?;
-    let Some(path) = settings.ebook_library_path else {
+    let ebook = settings.ebook_library_path;
+    let audiobook = settings.audiobook_library_path;
+    let path = ebook
+        .as_deref()
+        .or(audiobook.as_deref())
+        .unwrap_or_default()
+        .to_string();
+    let paths = db::collect_paths(ebook.as_deref(), audiobook.as_deref());
+    if paths.is_empty() {
         return Ok(EbookLibrary::default());
-    };
+    }
     // Issue #241: single FTS5 pass returns the capped vec and the full count.
-    let (books, total) = db::search_books_with_total(&pool.0, &path, &q)
+    let (books, total) = db::search_books_for_paths_with_total(&pool.0, &paths, &q)
         .await
         .map_err(|e| internal_rpc_error("search books", e))?;
     Ok(EbookLibrary {
