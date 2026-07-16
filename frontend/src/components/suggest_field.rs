@@ -35,11 +35,8 @@ pub struct SuggestFieldProps {
     pub testid_prefix: String,
 }
 
-/// Single-value counterpart to [`super::chip_editor::ChipEditor`] for fields
-/// that hold one value rather than a list (e.g. Series): the same
-/// substring-match suggestion dropdown, but picking a row overwrites the
-/// field instead of adding a chip, and there is no "+ Create" row since
-/// typing already edits the value directly (free text is accepted as-is).
+/// Single-value counterpart to [`super::chip_editor::ChipEditor`] — picking a
+/// suggestion overwrites the field instead of adding a chip.
 #[component]
 pub fn SuggestField(props: SuggestFieldProps) -> Element {
     let mut value = props.value;

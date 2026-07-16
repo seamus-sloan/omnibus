@@ -756,5 +756,5 @@ async fn owned_task_state_scopes_reads_to_the_owner() {
     let _ = w.await_completion(id).await;
 }
 
-// `periodic_scan_tick` tests live in `worker::periodic_scan::tests` — a
-// sibling of `periodic_scan.rs` (#1078).
+// `periodic_scan_tick` tests moved to `worker::periodic_scan::tests`, a
+// sibling of `periodic_scan.rs`.

@@ -1,6 +1,7 @@
-//! Tests for [`super::periodic_scan_tick`], extracted from `worker::tests`
-//! (#1078) once the growing `periodic_scan_tick` block pushed that file past
-//! the 800-line file-shape cap.
+//! Tests for [`super::periodic_scan_tick`]: which library paths get posted
+//! for scan, and when the tick recommends a recheck wait instead (interval
+//! unset, below the minimum, a settings read failure, or no library path
+//! configured).
 
 use std::sync::Arc;
 use std::time::Duration;
