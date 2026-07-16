@@ -752,6 +752,21 @@ async fn resolve_book_propagates_an_earlier_isbn_error_even_when_a_later_isbn_in
             .mount(&server)
             .await;
     }
+    // isbn[2]'s edition lookup resolves to book_id 777, so `resolve_by_isbn`
+    // follows up with this detail fetch as part of the SAME concurrent
+    // `join_all` chunk that also runs isbn[1]'s failing request — stubbed so
+    // isbn[2] genuinely completes as a would-be winner, not an unmatched
+    // (and therefore also-erroring) request that would prove nothing.
+    Mock::given(method("POST"))
+        .and(body_string_contains("books(where: {id: {_eq: 777}}"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "books": [{
+                "id": 777, "slug": "would-be-winner", "title": "Would Be Winner",
+                "contributions": [], "book_series": [], "image": null
+            }] }
+        })))
+        .mount(&server)
+        .await;
 
     let cfg = config_for(&server);
     let err = resolve_book(
@@ -778,5 +793,18 @@ async fn resolve_book_propagates_an_earlier_isbn_error_even_when_a_later_isbn_in
     assert_eq!(
         edition_lookups, 6,
         "all 6 ISBNs across both concurrency chunks must have been queried"
+    );
+    // isbn[2]'s book-777 detail fetch must have actually fired — proving it
+    // was a genuine, fully-resolved would-be winner that the earlier error
+    // beat, not a mock gap that made the "earlier error wins" assertion
+    // vacuously true.
+    let book_777_fetches = requests
+        .iter()
+        .filter(|r| String::from_utf8_lossy(&r.body).contains("books(where: {id: {_eq: 777}}"))
+        .count();
+    assert_eq!(
+        book_777_fetches, 1,
+        "isbn[2] must have fully resolved to book 777 in the background, even though \
+         the earlier isbn[1] error is what the walk actually surfaces"
     );
 }
