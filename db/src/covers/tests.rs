@@ -187,7 +187,7 @@ async fn cover_returns_none_for_missing_book_id() {
 
 /// A minimal but valid 1x1 GIF87a: header + logical-screen descriptor + a
 /// 2-colour global table + one image descriptor and a single-pixel LZW frame.
-/// Enough for `image` to sniff the format and decode a first frame (#828).
+/// Enough for `image` to sniff the format and decode a first frame.
 const GIF_1X1: &[u8] = &[
     0x47, 0x49, 0x46, 0x38, 0x37, 0x61, // "GIF87a"
     0x01, 0x00, 0x01, 0x00, // 1x1 logical screen
@@ -200,7 +200,7 @@ const GIF_1X1: &[u8] = &[
 
 /// A cover whose bytes are really a GIF must be written as `<uuid>.gif` even
 /// when the caller hands us `image/jpeg` — the extension is sniffed from the
-/// bytes, not trusted from the mime (#828). This is the root cause of covers
+/// bytes, not trusted from the mime. This is the root cause of covers
 /// landing as `<uuid>.jpg` and later failing to decode.
 #[tokio::test]
 async fn write_cover_file_stores_gif_when_bytes_are_gif_despite_jpeg_mime() {

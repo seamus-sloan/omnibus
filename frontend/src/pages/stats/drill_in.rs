@@ -301,7 +301,7 @@ fn render_delta(delta: Option<Delta>, vs: &str) -> Element {
 }
 
 /// The metric's trend chart — pure-CSS bar columns — or a placeholder note
-/// for the Pages tile. The headline tile carries a real estimate (#1029),
+/// for the Pages tile. The headline tile carries a real estimate,
 /// but a day/month-bucketed trend series over it isn't computed yet.
 fn render_trend(metric: Metric, bars: &[TrendBar]) -> Element {
     if metric == Metric::Pages {

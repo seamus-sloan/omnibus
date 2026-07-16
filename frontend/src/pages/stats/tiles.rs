@@ -61,7 +61,7 @@ fn group_thousands(n: i64) -> String {
 }
 
 /// The four-tile headline row. Finished carries the accent tint; Pages is a
-/// spine-word-count estimate (#1029) rather than a real page position, so
+/// spine-word-count estimate rather than a real page position, so
 /// its label is explicit about that. Takes only the scalar fields it
 /// renders — never the whole `StatsSummary` — so a re-render doesn't clone
 /// the DTO's heatmap / finished-books vectors. `expanded` is set by a
