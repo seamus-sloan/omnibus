@@ -668,3 +668,53 @@ async fn refetch_all_skips_manual_and_reports_progress() {
         other => panic!("unexpected status for empty author: {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn refetch_all_processes_every_author_across_multiple_concurrency_chunks() {
+    // REFETCH_CONCURRENCY == 6; seed 8 authors so `to_refetch` spans two
+    // `chunks()` rounds (6 + 2) and the second round is actually exercised.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let mut author_ids = Vec::with_capacity(8);
+    for i in 0..8 {
+        let id: i64 =
+            sqlx::query_scalar("INSERT INTO authors (name, sort) VALUES (?, ?) RETURNING id")
+                .bind(format!("Chunk Test Author {i}"))
+                .bind(format!("Chunk Test Author {i}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        author_ids.push(id);
+    }
+
+    let progress = std::sync::Mutex::new(Vec::new());
+    refetch_all(&pool, |processed, total| {
+        progress.lock().unwrap().push((processed, total));
+    })
+    .await
+    .unwrap();
+
+    let mut calls = progress.into_inner().unwrap();
+    assert_eq!(
+        calls.len(),
+        8,
+        "one progress call per author, spanning both concurrency chunks"
+    );
+    calls.sort_unstable();
+    let expected: Vec<(u32, Option<u32>)> = (1..=8).map(|n| (n, Some(8))).collect();
+    assert_eq!(
+        calls, expected,
+        "the completion counter must reach every value 1..=8 exactly once, \
+         regardless of which chunk (or which author within a chunk) finishes first"
+    );
+
+    // Every author must have run the cascade to completion: either a sticky
+    // `letter` marker (clean Open Library miss) or an absent row (transient
+    // network error, e.g. no network access in this environment). Either
+    // outcome proves the second chunk actually ran, not just the first 6.
+    for id in author_ids {
+        match author_photo_status(&pool, id).await.unwrap() {
+            Some((AuthorPhotoSource::Letter, _)) | None => {}
+            other => panic!("unexpected status for author {id}: {other:?}"),
+        }
+    }
+}
