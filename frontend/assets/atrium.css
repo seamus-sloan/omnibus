@@ -786,14 +786,35 @@ html, body { overscroll-behavior: none; }
 }
 .bd-export-panel .bd-export-subnote:hover { text-decoration: underline; }
 
-/* Read/Listen file picker (#1005) — a compact trigger beside the CTA it
-   applies to, reusing the `.bd-export-*` scrim/panel/item look so the two
-   dropdowns read as one family. Only rendered when a book has >1 file of
-   the format that CTA opens. */
+/* Read/Listen file picker */
 .bd-file-picker { position: relative; display: inline-flex; }
-.bd-file-picker-trigger { padding: 0 12px; }
-.bd-file-picker-caret { font-size: 10px; line-height: 1; color: var(--ink-2); }
-.bd-file-picker-panel { min-width: 200px; }
+.bd-file-picker-trigger { gap: 8px; }
+.bd-file-picker-caret { font-size: 10px; line-height: 1; color: currentColor; }
+.bd-file-picker-panel {
+  top: calc(100% + 6px);
+  min-width: 300px;
+  border-radius: 14px;
+  padding: 6px;
+  gap: 0;
+}
+.bd-file-picker-heading { padding: 6px 10px 4px; }
+.bd-file-picker-item {
+  min-height: 56px;
+  padding: 9px 10px;
+  border-radius: 10px;
+}
+.bd-file-picker-item-copy { min-width: 0; }
+.bd-file-picker-item-title {
+  color: var(--ink-0);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.bd-file-picker-item-meta {
+  margin-top: 2px;
+  color: var(--ink-3);
+  font-size: 10px;
+  line-height: 1.45;
+}
 
 .bd-progress-meta { margin-top: 22px; max-width: 460px; }
 .bd-progress-line {

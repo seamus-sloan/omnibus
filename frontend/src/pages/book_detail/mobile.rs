@@ -131,26 +131,27 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
                 }
             }
 
-            // Primary CTAs — reading opens the in-app reader; listening opens
-            // the player. A book with more than one file of the format a CTA
-            // opens gets a picker alongside it (#1005); `BdFilePickerMenu`
-            // renders nothing for a single-file book (AC2).
+            // Multi-file actions open a picker; single-file actions navigate directly.
             div { class: "m-bd-cta",
                 if has_ebook {
-                    Link {
-                        to: Route::BookRead { uuid: uuid.clone() },
-                        class: "btn primary lg",
-                        "Read"
+                    BdFilePickerMenu {
+                        uuid: uuid.clone(),
+                        kind: FilePickerKind::Read,
+                        files: epub_files.clone(),
+                        label: "Read",
+                        button_class: "btn primary lg",
+                        single_testid: "start-reading",
                     }
-                    BdFilePickerMenu { uuid: uuid.clone(), kind: FilePickerKind::Read, files: epub_files.clone() }
                 }
                 if has_audio {
-                    Link {
-                        to: Route::BookListen { uuid: uuid.clone() },
-                        class: "btn lg",
-                        "Listen"
+                    BdFilePickerMenu {
+                        uuid: uuid.clone(),
+                        kind: FilePickerKind::Listen,
+                        files: audio_files.clone(),
+                        label: "Listen",
+                        button_class: "btn lg",
+                        single_testid: "start-listening",
                     }
-                    BdFilePickerMenu { uuid: uuid.clone(), kind: FilePickerKind::Listen, files: audio_files.clone() }
                 }
             }
 
