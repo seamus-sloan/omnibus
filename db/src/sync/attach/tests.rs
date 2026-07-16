@@ -134,7 +134,7 @@ async fn attach_skipped_when_titles_differ() {
 async fn two_audiobooks_matching_one_ebook_in_one_plan_do_not_clobber() {
     // Two distinct M4B files for the same work land in a single New plan. The
     // first attaches as the ebook's M4B edition; the second must become its
-    // own book, not overwrite the first's file row (#1063).
+    // own book, not overwrite the first's file row.
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_ebook(
         &pool,
@@ -183,12 +183,12 @@ async fn two_audiobooks_matching_one_ebook_in_one_plan_do_not_clobber() {
 
 #[tokio::test]
 async fn replayed_ledger_collision_does_not_clobber_the_incumbent_file() {
-    // Regression for #1063: two merged_uuids rows pointing at the same
-    // (book, M4B) slot — the frozen state a pre-fix clobber leaves behind. A
-    // rescan that replays the second file must refuse rather than delete the
-    // incumbent's file row and replace it. Pre-fix this collapsed to one file
-    // row (data loss); post-fix the incumbent survives and the loser becomes
-    // its own book.
+    // Two merged_uuids rows pointing at the same (book, M4B) slot — the
+    // frozen state a pre-fix clobber leaves behind. A rescan that replays
+    // the second file must refuse rather than delete the incumbent's file
+    // row and replace it. Pre-fix this collapsed to one file row (data
+    // loss); post-fix the incumbent survives and the loser becomes its own
+    // book.
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_ebook(
         &pool,
@@ -280,7 +280,7 @@ async fn replayed_ledger_collision_does_not_clobber_the_incumbent_file() {
 
 #[tokio::test]
 async fn replayed_ebook_ledger_collision_does_not_clobber_the_incumbent_file() {
-    // The ebook attach writer shares the same guard (#1063). Same shape as the
+    // The ebook attach writer shares the same guard. Same shape as the
     // audiobook case, roles swapped: a native audiobook holds an attached EPUB,
     // and a forged second-EPUB ledger row must not clobber the incumbent.
     let pool = init_db("sqlite::memory:").await.unwrap();

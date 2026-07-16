@@ -96,7 +96,7 @@ fn previous_and_trend_fields_default_when_absent_from_the_wire() {
 #[test]
 fn pages_read_defaults_to_none_when_absent_from_the_wire() {
     // Same older-payload contract as avg_stars/books_per_month — the Pages
-    // tile field (#1029) is newer, so a pre-existing payload without it must
+    // tile field is newer, so a pre-existing payload without it must
     // still parse.
     let s: StatsSummary = serde_json::from_str(
         r#"{"range":"month","reading_seconds":0,"listening_seconds":0,"sessions":0,

@@ -128,8 +128,8 @@ pub struct PeriodComparison {
 ///
 /// Book completion is sourced from `journal_entries.progress = 100` (the only
 /// progress fraction persisted today) rather than the session tables, which
-/// carry duration but no progress; a first-class read/unread state (#980)
-/// feeds the same field once it lands.
+/// carry duration but no progress; a future first-class read/unread state
+/// would feed the same field instead.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct StatsSummary {
     pub range: StatsRange,
@@ -181,7 +181,7 @@ pub struct StatsSummary {
     /// same trailing-window convention as `books_per_month`.
     #[serde(default)]
     pub rating_monthly: Vec<TrendPoint>,
-    /// Estimated pages read in the window — the Pages tile (#1029). Summed
+    /// Estimated pages read in the window — the Pages tile. Summed
     /// from a word-count estimate over books finished in the window (see
     /// `db::stats` for the sourcing model); `None` when no finished book in
     /// the window has an estimate available, driving the tile's em-dash

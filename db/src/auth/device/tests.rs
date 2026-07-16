@@ -50,7 +50,7 @@ async fn device_register_and_list() {
     assert_eq!(list[0].client_kind, "ios");
 }
 
-/// Regression for #865: `list_devices_for_user` must not return more than
+/// `list_devices_for_user` must not return more than
 /// `LIST_DEVICES_LIMIT` rows even when the underlying table holds more.
 /// `trg_devices_cap_per_user` would otherwise mask this by keeping the
 /// table itself under the limit, so the trigger is dropped here to
@@ -74,7 +74,7 @@ async fn list_devices_for_user_caps_response_at_list_devices_limit() {
     );
 }
 
-/// Regression for #865: `register_device` must not let a single user
+/// `register_device` must not let a single user
 /// accumulate unbounded devices — `trg_devices_cap_per_user` evicts the
 /// least-recently-seen device(s) beyond `MAX_DEVICES_PER_USER` on every
 /// INSERT, keeping the most-recently-registered devices.
@@ -248,7 +248,7 @@ async fn list_devices_for_user_query_plan_uses_covering_index() {
 
 #[tokio::test]
 async fn failed_session_insert_after_register_device_rolls_back_device_row() {
-    // Regression for #627: `issue_session` wraps `register_device` +
+    // `issue_session` wraps `register_device` +
     // `create_session` in a single transaction so a failed session insert
     // can't leave an orphan device row. Force `create_session` to fail
     // inside the shared transaction by pointing it at a non-existent
