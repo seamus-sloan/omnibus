@@ -48,6 +48,13 @@ impl From<crate::metadata_overrides::MetadataOverridesError> for BooksError {
             crate::metadata_overrides::MetadataOverridesError::Serialization(inner) => {
                 BooksError::OverridesJson(inner)
             }
+            // The only `MetadataOverridesError`-returning calls in the books
+            // read path are the overrides SELECT helpers, which never touch
+            // the cover-file filesystem — fold defensively (mirrors
+            // `ShelfError`'s `From<BooksError>`).
+            crate::metadata_overrides::MetadataOverridesError::Io(inner) => {
+                BooksError::Db(sqlx::Error::Io(inner))
+            }
         }
     }
 }
