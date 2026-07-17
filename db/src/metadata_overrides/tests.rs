@@ -828,6 +828,24 @@ fn write_override_cover_returns_typed_error_when_covers_dir_is_unwritable() {
     assert!(matches!(err, MetadataOverridesError::Io(_)), "got {err:?}");
 }
 
+/// A non-`NotFound` failure in the stale-extension cleanup loop (here, a
+/// directory occupying the path a prior override cover would live at, so
+/// `remove_file` fails with `IsADirectory` rather than `NotFound`) must
+/// propagate as `MetadataOverridesError::Io` instead of being swallowed —
+/// silently leaving the stale entry behind would let `find_override_cover_file`
+/// keep probing over it ahead of the freshly written cover.
+#[test]
+fn write_override_cover_returns_typed_error_when_stale_cleanup_hits_a_directory() {
+    let covers = CoversTempDir::new("write_cover_cleanup_fail");
+    std::fs::create_dir_all(&covers.path).unwrap();
+    // `Jpeg` is first in `PROBE_ORDER`, so this is the first cleanup target.
+    std::fs::create_dir(covers.path.join("override-clash-uuid.jpg")).unwrap();
+
+    let err = write_override_cover("clash-uuid", "image/png", b"bytes")
+        .expect_err("remove_file on a directory must fail instead of silently leaving it behind");
+    assert!(matches!(err, MetadataOverridesError::Io(_)), "got {err:?}");
+}
+
 /// The override row and the `books_series_link` row must land
 /// atomically: after `upsert_metadata_overrides` commits, a direct
 /// SELECT on `books_series_link` must already reflect the new series.
