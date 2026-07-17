@@ -22,6 +22,8 @@ pub enum MetadataOverridesError {
     Serialization(#[from] serde_json::Error),
     #[error(transparent)]
     Db(#[from] sqlx::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 impl From<crate::books::BooksError> for MetadataOverridesError {
@@ -366,7 +368,11 @@ pub(crate) fn apply_overrides(
 }
 
 /// Write a user-uploaded override cover to disk.
-pub fn write_override_cover(uuid: &str, mime: &str, bytes: &[u8]) -> std::io::Result<()> {
+pub fn write_override_cover(
+    uuid: &str,
+    mime: &str,
+    bytes: &[u8],
+) -> Result<(), MetadataOverridesError> {
     let ext = crate::covers::ImageFormat::from_mime(mime).to_ext();
     let dir = crate::covers::covers_dir();
     std::fs::create_dir_all(&dir)?;
@@ -377,7 +383,8 @@ pub fn write_override_cover(uuid: &str, mime: &str, bytes: &[u8]) -> std::io::Re
         let _ = std::fs::remove_file(old);
     }
 
-    std::fs::write(dir.join(format!("override-{uuid}.{ext}")), bytes)
+    std::fs::write(dir.join(format!("override-{uuid}.{ext}")), bytes)?;
+    Ok(())
 }
 
 /// Delete override cover files for a UUID.

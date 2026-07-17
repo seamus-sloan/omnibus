@@ -801,6 +801,33 @@ async fn rebuild_fts_for_books_batch_rewrites_multiple_uuids() {
         .is_empty());
 }
 
+/// Happy path for the filesystem-only cover write helper: the bytes land at
+/// `<covers_dir>/override-<uuid>.<ext>` with the extension derived from the
+/// declared MIME type.
+#[test]
+fn write_override_cover_writes_bytes_to_the_expected_path() {
+    let covers = CoversTempDir::new("write_cover_ok");
+
+    write_override_cover("happy-uuid", "image/png", b"OVERRIDE-BYTES").unwrap();
+
+    let written = covers.path.join("override-happy-uuid.png");
+    assert_eq!(std::fs::read(written).unwrap(), b"OVERRIDE-BYTES");
+}
+
+/// `create_dir_all` fails when a regular file already occupies the covers
+/// dir path, deterministically forcing the `std::io::Error` branch. The
+/// failure must surface as the module's typed `MetadataOverridesError::Io`,
+/// not a raw `std::io::Error`.
+#[test]
+fn write_override_cover_returns_typed_error_when_covers_dir_is_unwritable() {
+    let covers = CoversTempDir::new("write_cover_fail");
+    std::fs::write(&covers.path, b"not a directory").unwrap();
+
+    let err = write_override_cover("some-uuid", "image/png", b"bytes")
+        .expect_err("create_dir_all must fail when the covers dir path is a regular file");
+    assert!(matches!(err, MetadataOverridesError::Io(_)), "got {err:?}");
+}
+
 /// The override row and the `books_series_link` row must land
 /// atomically: after `upsert_metadata_overrides` commits, a direct
 /// SELECT on `books_series_link` must already reflect the new series.
