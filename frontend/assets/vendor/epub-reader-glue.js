@@ -32,7 +32,9 @@
  *   removeAnnotation(cfiRange)
  *   clearAnnotations()
  *   requestToc()                    re-emits __omnibusOnToc
- *   display(target)                 navigate to a TOC href or CFI
+ *   display(target)                 navigate to a TOC href or CFI (also the
+ *                                   target of in-book content-link taps —
+ *                                   see installContentLinkNav())
  *   copyText(text)                  clipboard write
  *   shareText(text)                 navigator.share, clipboard fallback
  *   exportQuoteCard(json)           canvas PNG → <a download>
@@ -174,6 +176,7 @@
       installGestureNav();
       installSelectionClearWatch();
       installContentEnhancements();
+      installContentLinkNav();
 
       rendition.themes.register("light", {
         body: { background: "#fcfbfa", color: "#2a2725" },
@@ -645,6 +648,33 @@
 
   function requestToc() {
     emitToc();
+  }
+
+  // epub.js's own content-link handling (wired in its Rendition constructor,
+  // ahead of any hook this file registers) calls the *plain* `rendition
+  // .display(href)` on every `<a href>` tap inside the book — bypassing both
+  // corrections `display()` below applies (zero-size anchor resolution and
+  // the fonts/theme settle-then-redisplay), which is why in-book links land
+  // a page or two off while TOC/CFI navigation (which already goes through
+  // `display()`) is accurate. epub.js emits a "linkClicked" event with the
+  // fully-resolved in-book path *before* issuing that plain display, so we
+  // piggyback on its own resolution (no need to reimplement href/base-tag
+  // parsing) and re-run the same href through our corrected `display()`.
+  // epub.js's own plain display() still fires first, but `rendition.display`
+  // serializes calls through an internal queue and short-circuits a
+  // still-in-flight one when a newer call arrives — the same "call display,
+  // then call it again" pattern `displaySettled()` already relies on to
+  // correct TOC navigation — so our corrected redisplay simply supersedes
+  // the stale uncorrected one before the user sees it settle.
+  function installContentLinkNav() {
+    if (!rendition || !rendition.hooks || !rendition.hooks.content) return;
+    rendition.hooks.content.register(function (contents) {
+      if (!contents || typeof contents.on !== "function") return;
+      contents.on("linkClicked", function (href) {
+        if (!book || !book.path) return;
+        display(book.path.relative(href));
+      });
+    });
   }
 
   // Navigate to a TOC href or a CFI (highlight / bookmark target).
