@@ -175,10 +175,7 @@ pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
                     div { class: "label", "Longest streak" }
                 }
             }
-            // The grid lives inside a plain block-level scroll container: on a
-            // phone the 52 columns overflow the card, and a block wrapper clips
-            // that overflow far more reliably than a grid-as-scroller does on
-            // iOS WebKit (#1076).
+            // Block-level scroll wrapper: iOS WebKit clips this far more reliably than a grid-as-scroller (#1076).
             div { class: "st-heatmap-scroll",
                 div { class: "st-heatmap", role: "img", aria_label: "Daily reading activity, trailing year",
                     for cell in cells {
