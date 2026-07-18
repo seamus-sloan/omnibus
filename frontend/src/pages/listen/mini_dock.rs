@@ -43,6 +43,17 @@ pub(super) fn dock_active_state(
     }
 }
 
+/// Borrowed twin of [`dock_active_state`] for callers that only need the
+/// boolean — the `/read` route uses it to add the `rd-immersive` reflow class
+/// exactly while the dock's bar is rendered, so the reserved stage space and
+/// the visible bar can't drift apart.
+pub(crate) fn dock_is_active(
+    book: &Option<omnibus_shared::EbookMetadata>,
+    uuid: &Option<String>,
+) -> bool {
+    book.is_some() && uuid.is_some()
+}
+
 /// Playback speeds the dock's speed chip steps through on each tap.
 const RATE_CYCLE: &[f64] = &[0.8, 1.0, 1.2, 1.5, 1.8, 2.0];
 
@@ -290,7 +301,7 @@ fn MiniDockActions(uuid: String) -> Element {
 mod tests {
     use omnibus_shared::EbookMetadata;
 
-    use super::{cycle_rate, dock_active_state, dock_sub_text, progress_pct};
+    use super::{cycle_rate, dock_active_state, dock_is_active, dock_sub_text, progress_pct};
 
     #[test]
     fn progress_pct_is_zero_when_duration_unknown() {
@@ -365,6 +376,28 @@ mod tests {
     #[test]
     fn dock_active_state_is_none_when_book_has_not_loaded_yet() {
         assert_eq!(dock_active_state(None, Some("uuid-1".to_string())), None);
+    }
+
+    // The `/read` route reserves reflow space off `dock_is_active`; it must
+    // agree with `dock_active_state` (the dock's own render gate) on every
+    // combination or the reader reserves space for a bar that isn't there.
+    #[test]
+    fn dock_is_active_agrees_with_dock_active_state_for_every_combination() {
+        let book = EbookMetadata {
+            title: Some("Test Audiobook".into()),
+            ..Default::default()
+        };
+        for (b, u) in [
+            (None, None),
+            (Some(book.clone()), None),
+            (None, Some("uuid-1".to_string())),
+            (Some(book.clone()), Some("uuid-1".to_string())),
+        ] {
+            assert_eq!(
+                dock_is_active(&b, &u),
+                dock_active_state(b.clone(), u.clone()).is_some()
+            );
+        }
     }
 
     #[test]

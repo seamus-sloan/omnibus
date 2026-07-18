@@ -484,6 +484,7 @@ fn ReaderLayout(
 
             div {
                 class: "rd-bottom",
+                "data-testid": "reader-footer",
                 span { style: "color:var(--ink-2);", "{page_str}" }
                 div { style: "flex:1; text-align:center; letter-spacing:.08em;", "{chapter_str}" }
                 // The phone footer moves the chapter position to the right

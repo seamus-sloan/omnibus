@@ -1,7 +1,8 @@
 //! Mobile layout for the book-detail page — re-flows the same loaded-book data
 //! ([`super::LoadedBookView`]) into the native design's single-column surface:
 //! an accent-tinted hero over About / rating / info / files / journal sections.
-//! Reading stays stubbed on mobile (disabled CTA); listening opens the player.
+//! Read opens the reader, Listen the player, and (for dual-format books)
+//! Immersive Read opens the reader with the audiobook docked.
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
@@ -15,6 +16,7 @@ use super::discovery::{
     suggestion_cover_book, SuggestionsSpinner,
 };
 use super::file_picker::{is_audio_book_file, BdFilePickerMenu, FilePickerKind};
+use super::immersive::BdImmersiveButton;
 use super::journal::BdJournalSection;
 use super::rating::BdRatingWidget;
 use super::{derive_loaded_view, BdFormatBadge, BdMetaRow, LoadedBookView};
@@ -152,6 +154,10 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
                         button_class: "btn lg",
                         single_testid: "start-listening",
                     }
+                }
+                // Immersive Read is a dual-format-only action, so gate it on both.
+                if has_ebook && has_audio {
+                    BdImmersiveButton { uuid: uuid.clone() }
                 }
             }
 

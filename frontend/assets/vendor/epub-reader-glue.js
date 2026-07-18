@@ -71,6 +71,12 @@
   var locationsReady = false;
   var tocFlat = [];
   var currentTheme = "dark";
+  // Re-paginates when the viewer CONTAINER resizes without a window resize —
+  // epub.js only listens for window resize, so the immersive audio dock
+  // appearing/disappearing mid-read (which shrinks/grows `.rd-stage`) would
+  // otherwise leave the last line of prose clipped behind stale pagination.
+  var stageResizeObserver = null;
+  var stageResizeTimer = null;
 
   function emitStatus(state) {
     if (typeof window.__omnibusOnStatus === "function") {
@@ -86,6 +92,18 @@
     if (relocateTimer) {
       clearTimeout(relocateTimer);
       relocateTimer = null;
+    }
+    if (stageResizeTimer) {
+      clearTimeout(stageResizeTimer);
+      stageResizeTimer = null;
+    }
+    if (stageResizeObserver) {
+      try {
+        stageResizeObserver.disconnect();
+      } catch (e) {
+        /* ignore teardown errors */
+      }
+      stageResizeObserver = null;
     }
     locationsReady = false;
     tocFlat = [];
@@ -148,6 +166,36 @@
     };
   }
 
+  // Watch the mount element for container-driven size changes (the immersive
+  // dock reflowing `.rd-stage`) and re-run epub.js pagination. Skips the
+  // initial observe callback (rendition display is still settling) and
+  // debounces so a CSS transition only re-paginates once, at its final size.
+  function installStageResizeWatch(elementId) {
+    if (typeof ResizeObserver !== "function") return;
+    var el = document.getElementById(elementId);
+    if (!el) return;
+    var lastW = el.clientWidth;
+    var lastH = el.clientHeight;
+    stageResizeObserver = new ResizeObserver(function () {
+      var w = el.clientWidth;
+      var h = el.clientHeight;
+      if (w === lastW && h === lastH) return;
+      lastW = w;
+      lastH = h;
+      if (stageResizeTimer) clearTimeout(stageResizeTimer);
+      stageResizeTimer = setTimeout(function () {
+        stageResizeTimer = null;
+        if (!rendition) return;
+        try {
+          rendition.resize();
+        } catch (e) {
+          /* ignore resize races during teardown */
+        }
+      }, 120);
+    });
+    stageResizeObserver.observe(el);
+  }
+
   function init(elementId, fileUrl, opts) {
     opts = opts || {};
 
@@ -177,6 +225,7 @@
       installSelectionClearWatch();
       installContentEnhancements();
       installContentLinkNav();
+      installStageResizeWatch(elementId);
 
       rendition.themes.register("light", {
         body: { background: "#fcfbfa", color: "#2a2725" },
