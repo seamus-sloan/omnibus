@@ -39,7 +39,7 @@ pub use listen::BookListenPage;
 #[cfg(not(feature = "mobile"))]
 pub(crate) use listen::{dock_is_active, AudioElement, MiniDock};
 #[cfg(feature = "mobile")]
-pub(crate) use listen::{mobile_dock_view, MobileAudioHost, MobileMiniPlayer, MobilePlayback};
+pub(crate) use listen::{mobile_dock_is_active, MobileAudioHost, MobileMiniPlayer, MobilePlayback};
 pub use metadata_edit::MetadataEditPage;
 pub use reader::BookReadPage;
 pub use search::SearchPage;

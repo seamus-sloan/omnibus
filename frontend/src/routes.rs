@@ -154,7 +154,9 @@ pub fn BookRead(uuid: String) -> Element {
 pub fn BookRead(uuid: String) -> Element {
     use_page_title(|| Some("Reader".into()));
     let ctx = use_context::<MobilePlayback>();
-    let docked = mobile_dock_view((ctx.view)(), (ctx.unsupported)()).is_some();
+    // Borrowed read (still reactive, unlike `peek`) so the route doesn't
+    // clone the whole PlayerView just to derive a boolean each render.
+    let docked = mobile_dock_is_active(&ctx.view.read(), (ctx.unsupported)());
     rsx! {
         div { class: if docked { "rd-host rd-immersive" } else { "rd-host" },
             BookReadPage { uuid }

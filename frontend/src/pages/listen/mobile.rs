@@ -34,7 +34,7 @@ use state::{sleep_pill_label, use_mobile_playback, SleepState};
 use view::{chapter_index_for_elapsed, format_hms, format_ms, remaining_at_rate, PlayerView};
 
 pub use host::MobileAudioHost;
-pub(crate) use mini::mobile_dock_view;
+pub(crate) use mini::mobile_dock_is_active;
 pub use mini::MobileMiniPlayer;
 pub use state::MobilePlayback;
 

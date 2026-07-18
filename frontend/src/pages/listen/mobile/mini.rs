@@ -26,6 +26,13 @@ pub(crate) fn mobile_dock_view(view: Option<PlayerView>, unsupported: bool) -> O
     view
 }
 
+/// Borrowed twin of [`mobile_dock_view`] for callers that only need the
+/// boolean — the mobile `/read` route uses it to add the `rd-immersive`
+/// reflow class without cloning the whole `PlayerView` every render.
+pub(crate) fn mobile_dock_is_active(view: &Option<PlayerView>, unsupported: bool) -> bool {
+    !unsupported && view.is_some()
+}
+
 /// Renders the docked mini-player, or nothing when no audiobook is loaded.
 #[component]
 pub fn MobileMiniPlayer() -> Element {
@@ -132,10 +139,22 @@ pub fn MobileMiniPlayer() -> Element {
 mod tests {
     use omnibus_shared::EbookMetadata;
 
-    use super::mobile_dock_view;
     use super::PlayerView;
+    use super::{mobile_dock_is_active, mobile_dock_view};
 
-    fn view() -> PlayerView {
+    fn playable_view() -> PlayerView {
+        PlayerView::from_direct(
+            &EbookMetadata {
+                title: Some("Test Audiobook".into()),
+                ..Default::default()
+            },
+            Vec::new(),
+            60.0,
+            Vec::new(),
+        )
+    }
+
+    fn unsupported_view() -> PlayerView {
         PlayerView::from_hls(&EbookMetadata {
             title: Some("Test Audiobook".into()),
             ..Default::default()
@@ -144,7 +163,7 @@ mod tests {
 
     #[test]
     fn mobile_dock_view_returns_the_view_when_loaded_and_playable() {
-        assert!(mobile_dock_view(Some(view()), false).is_some());
+        assert!(mobile_dock_view(Some(playable_view()), false).is_some());
     }
 
     #[test]
@@ -154,6 +173,24 @@ mod tests {
 
     #[test]
     fn mobile_dock_view_is_none_for_an_unsupported_hls_book() {
-        assert!(mobile_dock_view(Some(view()), true).is_none());
+        assert!(mobile_dock_view(Some(unsupported_view()), true).is_none());
+    }
+
+    // The mobile `/read` route reserves reflow space off `mobile_dock_is_active`;
+    // it must agree with `mobile_dock_view` (the bar's render gate) on every
+    // combination or the reader reserves space for a bar that isn't there.
+    #[test]
+    fn mobile_dock_is_active_agrees_with_mobile_dock_view_for_every_combination() {
+        for (view, unsupported) in [
+            (None, false),
+            (None, true),
+            (Some(playable_view()), false),
+            (Some(playable_view()), true),
+        ] {
+            assert_eq!(
+                mobile_dock_is_active(&view, unsupported),
+                mobile_dock_view(view.clone(), unsupported).is_some()
+            );
+        }
     }
 }
