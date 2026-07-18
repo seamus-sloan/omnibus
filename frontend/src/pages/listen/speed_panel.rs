@@ -11,75 +11,9 @@ use omnibus_shared::{
     MAX_AUDIOBOOK_PLAYBACK_RATE as MAX_RATE, MIN_AUDIOBOOK_PLAYBACK_RATE as MIN_RATE,
 };
 
+use super::helpers::{apply_rate, RATE_STEP as STEP};
+
 const PRESETS: &[f64] = &[0.5, 0.8, 1.0, 1.1, 1.2, 1.5, 1.8, 2.0];
-const STEP: f64 = 0.05;
-
-/// Clamp `new_rate` to `[MIN_RATE, MAX_RATE]` and snap to the nearest `STEP`.
-/// Pure logic extracted for unit testing — no signal or JS side-effects.
-fn clamp_and_round_rate(new_rate: f64) -> f64 {
-    let clamped = new_rate.clamp(MIN_RATE, MAX_RATE);
-    (clamped / STEP).round() * STEP
-}
-
-fn apply_rate(
-    rate: &mut Signal<f64>,
-    rate_error: Signal<Option<String>>,
-    user_id: Option<i64>,
-    uuid: &str,
-    new_rate: f64,
-) {
-    let rounded = clamp_and_round_rate(new_rate);
-    rate.set(rounded);
-    if let Some(user_id) = user_id {
-        crate::audiobook_progress::save_rate(user_id, uuid, rounded);
-    }
-    #[cfg(feature = "web")]
-    super::helpers::audio_call("setRate", &rounded.to_string());
-    let uuid = uuid.to_string();
-    spawn(async move {
-        let mut rate_error = rate_error;
-        let update = omnibus_shared::AudiobookPlaybackRateUpdate {
-            playback_rate: rounded,
-        };
-        match crate::data::set_playback_rate("", &uuid, update).await {
-            Ok(_) => rate_error.set(None),
-            Err(error) => rate_error.set(Some(format!("Could not save playback speed: {error}"))),
-        }
-    });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn clamp_and_round_rate_accepts_value_within_range() {
-        let result = clamp_and_round_rate(1.0);
-        assert!((result - 1.0).abs() < f64::EPSILON * 10.0);
-    }
-
-    #[test]
-    fn clamp_and_round_rate_clamps_below_minimum() {
-        let result = clamp_and_round_rate(0.0);
-        assert!((result - MIN_RATE).abs() < f64::EPSILON * 10.0);
-    }
-
-    #[test]
-    fn clamp_and_round_rate_clamps_above_maximum() {
-        let result = clamp_and_round_rate(10.0);
-        assert!((result - MAX_RATE).abs() < f64::EPSILON * 10.0);
-    }
-
-    #[test]
-    fn clamp_and_round_rate_rounds_to_nearest_step() {
-        // 1.07 rounds to 1.05
-        let result = clamp_and_round_rate(1.07);
-        assert!((result - 1.05).abs() < 0.001);
-        // 1.08 rounds to 1.10
-        let result2 = clamp_and_round_rate(1.08);
-        assert!((result2 - 1.10).abs() < 0.001);
-    }
-}
 
 /// Frosted-glass speed panel with preset grid, fine-tune slider, and stepper.
 #[component]

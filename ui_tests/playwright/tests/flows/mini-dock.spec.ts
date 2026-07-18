@@ -9,7 +9,6 @@ import {
   seedAudiobookLibrary,
   seedLibrary,
 } from "../utils/seed";
-import { setRangeValue } from "../utils/sliders";
 
 // Both libraries seeded: the reader-visibility test needs an EPUB to read
 // alongside an audiobook playing in the background. No fixture pair shares
@@ -156,10 +155,10 @@ test("dock expand navigates back to the full player", async ({
 });
 
 // ---------------------------------------------------------------------------
-// 3b. Volume slider stays in sync with the full player (#989)
+// 3b. Compact bar: single flex row, no volume slider (AC1)
 // ---------------------------------------------------------------------------
 
-test("dock volume slider updates the shared audio element and stays in sync with the full player", async ({
+test("dock is a single-row flex bar with no volume slider", async ({
   page,
   request,
 }) => {
@@ -168,33 +167,68 @@ test("dock volume slider updates the shared audio element and stays in sync with
   await waitForPlayerReady(page);
   await spaNavigateToLibrary(page);
 
-  const dockSlider = page
-    .getByTestId("mini-dock-volume")
-    .getByRole("slider", { name: "Volume" });
-  await expect(dockSlider).toBeVisible();
-  await expect(dockSlider).toHaveValue("1");
+  const dock = page.getByTestId("mini-dock");
+  await expect(dock).toBeVisible();
 
-  await setRangeValue(dockSlider, 0.4);
+  // The bar is one content-sized flex row now, not the old 4-column grid that
+  // wrapped a trailing actions row (the residual bottom whitespace, #1132).
+  await expect(dock).toHaveCSS("display", "flex");
+  await expect(dock).not.toHaveCSS("flex-wrap", "wrap");
 
-  // Both sliders read/write PlaybackState.volume, so the dock's change must
-  // reach the shared `<audio>` element in real time.
+  // The volume slider moved out of the dock in the compact design.
+  await expect(page.getByTestId("mini-dock-volume")).toHaveCount(0);
+});
+
+// ---------------------------------------------------------------------------
+// 3c. Speed chip cycles the rate and stays in sync with the full player
+// ---------------------------------------------------------------------------
+
+test("dock speed chip cycles playback rate and reaches the shared audio + full player", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+  await spaNavigateToLibrary(page);
+
+  const speed = page.getByTestId("mini-dock-speed");
+  await expect(speed).toHaveText("1.0×");
+
+  await speed.click();
+  await expect(speed).toHaveText("1.2×");
+
+  // The chip writes through the shared apply_rate seam, so the change must
+  // reach the shared `<audio>` element's playbackRate in real time.
   await expect
     .poll(() =>
       page.evaluate(
         () =>
           (document.getElementById("omnibus-audio") as HTMLAudioElement | null)
-            ?.volume ?? null,
+            ?.playbackRate ?? null,
       ),
     )
-    .toBeCloseTo(0.4, 2);
+    .toBeCloseTo(1.2, 2);
 
-  // Expanding back to the full player must show the same volume — proof
-  // both controls share one signal rather than each tracking its own copy.
+  // Expanding back to the full player must show the same rate — proof both
+  // controls share one signal rather than each tracking its own copy.
   await page.getByTestId("mini-dock-expand-btn").click();
   await expect(page).toHaveURL(new RegExp(`/listen/${uuid}$`));
+  await expect(page.getByTestId("listen-rate")).toContainText("1.2");
+});
 
-  const fullSlider = page.getByRole("slider", { name: "Volume" });
-  await expect(fullSlider).toHaveValue("0.4");
+// ---------------------------------------------------------------------------
+// 3d. Sleep chip expands to the full player (where the sleep timer lives)
+// ---------------------------------------------------------------------------
+
+test("dock sleep chip opens the full player", async ({ page, request }) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+  await spaNavigateToLibrary(page);
+
+  await page.getByTestId("mini-dock-sleep").click();
+  await expect(page).toHaveURL(new RegExp(`/listen/${uuid}$`));
 });
 
 // ---------------------------------------------------------------------------
