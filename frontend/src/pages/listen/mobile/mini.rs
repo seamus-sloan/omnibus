@@ -98,6 +98,24 @@ pub fn MobileMiniPlayer() -> Element {
                         span { class: "m-mini-tri" }
                     }
                 }
+                button {
+                    r#type: "button", class: "m-mini-skip mono",
+                    "data-testid": "mini-skip-forward", "aria-label": "Forward 30 seconds",
+                    onclick: move |_| interop::skip(30.0),
+                    "+30"
+                }
+                Link {
+                    to: Route::BookListen { uuid: uuid.clone() },
+                    class: "m-mini-expand",
+                    "data-testid": "mini-expand",
+                    "aria-label": "Expand to full player",
+                    svg {
+                        width: "18", height: "18", view_box: "0 0 24 24", fill: "none",
+                        stroke: "currentColor", stroke_width: "1.9",
+                        stroke_linecap: "round", stroke_linejoin: "round",
+                        path { d: "M6 15l6-6 6 6" }
+                    }
+                }
             }
         }
     }

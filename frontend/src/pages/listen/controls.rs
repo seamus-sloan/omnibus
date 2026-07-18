@@ -143,32 +143,19 @@ pub(super) fn TransportButtons(state: TransportState, callbacks: TransportCallba
                 "{rate_label}"
             }
 
-            VolumeControl { volume, on_volume, compact: false }
+            VolumeControl { volume, on_volume }
         }
     }
 }
 
 /// Volume slider — updates the shared `<audio>` element's volume in real
-/// time. `compact` selects the mini-dock's narrower sizing and drops the
-/// percentage readout; both variants read/write the same
-/// [`crate::PlaybackState::volume`] signal via `helpers::apply_volume`, so
-/// the full player and the mini-dock always agree.
+/// time via `helpers::apply_volume`, writing the same
+/// [`crate::PlaybackState::volume`] signal the rest of the player reads.
 #[component]
-pub(super) fn VolumeControl(volume: f64, on_volume: EventHandler<f64>, compact: bool) -> Element {
+pub(super) fn VolumeControl(volume: f64, on_volume: EventHandler<f64>) -> Element {
     let pct = (volume * 100.0).round();
-    let wrap_class = if compact {
-        "lp-volume compact"
-    } else {
-        "lp-volume"
-    };
-    let testid = if compact {
-        "mini-dock-volume"
-    } else {
-        "listen-volume"
-    };
-
     rsx! {
-        div { class: wrap_class, "data-testid": "{testid}",
+        div { class: "lp-volume", "data-testid": "listen-volume",
             span { class: "lp-volume-icon", aria_hidden: "true", "\u{1F50A}" }
             input {
                 r#type: "range",
@@ -184,9 +171,7 @@ pub(super) fn VolumeControl(volume: f64, on_volume: EventHandler<f64>, compact: 
                     }
                 },
             }
-            if !compact {
-                span { class: "lp-volume-pct", "{pct:.0}%" }
-            }
+            span { class: "lp-volume-pct", "{pct:.0}%" }
         }
     }
 }

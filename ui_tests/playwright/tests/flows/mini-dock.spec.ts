@@ -1,6 +1,7 @@
 import { expect, test } from "../fixtures/test";
 import { AUDIOBOOK_BOOKS, AUDIOBOOK_BOOK_COUNT } from "../fixtures/audiobooks";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import {
@@ -9,7 +10,6 @@ import {
   seedAudiobookLibrary,
   seedLibrary,
 } from "../utils/seed";
-import { setRangeValue } from "../utils/sliders";
 
 // Both libraries seeded: the reader-visibility test needs an EPUB to read
 // alongside an audiobook playing in the background. No fixture pair shares
@@ -34,6 +34,9 @@ const MP3_BOOK = AUDIOBOOK_BOOKS.find(
 // Distinct author from every audiobook fixture so auto-attach never merges
 // this EPUB with the playing audiobook mid-test.
 const READER_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "gamma")!;
+
+// The web speed control posts through the `rpc_set_playback_rate` server fn.
+const PLAYBACK_RATE_SET_URL = /\/api\/rpc\/audiobooks\/playback-rate\/set(?:\?|$)/;
 
 /**
  * Wait until the App-level playback driver has run `OmnibusAudio.initDirect`
@@ -156,10 +159,10 @@ test("dock expand navigates back to the full player", async ({
 });
 
 // ---------------------------------------------------------------------------
-// 3b. Volume slider stays in sync with the full player (#989)
+// 3b. Compact bar: single flex row, no volume slider (AC1)
 // ---------------------------------------------------------------------------
 
-test("dock volume slider updates the shared audio element and stays in sync with the full player", async ({
+test("dock is a single-row flex bar with no volume slider", async ({
   page,
   request,
 }) => {
@@ -168,33 +171,83 @@ test("dock volume slider updates the shared audio element and stays in sync with
   await waitForPlayerReady(page);
   await spaNavigateToLibrary(page);
 
-  const dockSlider = page
-    .getByTestId("mini-dock-volume")
-    .getByRole("slider", { name: "Volume" });
-  await expect(dockSlider).toBeVisible();
-  await expect(dockSlider).toHaveValue("1");
+  const dock = page.getByTestId("mini-dock");
+  await expect(dock).toBeVisible();
 
-  await setRangeValue(dockSlider, 0.4);
+  // The bar is one content-sized flex row now, not the old 4-column grid that
+  // wrapped a trailing actions row (the residual bottom whitespace, #1132).
+  await expect(dock).toHaveCSS("display", "flex");
+  await expect(dock).not.toHaveCSS("flex-wrap", "wrap");
 
-  // Both sliders read/write PlaybackState.volume, so the dock's change must
-  // reach the shared `<audio>` element in real time.
+  // The volume slider moved out of the dock in the compact design.
+  await expect(page.getByTestId("mini-dock-volume")).toHaveCount(0);
+});
+
+// ---------------------------------------------------------------------------
+// 3c. Speed chip cycles the rate and stays in sync with the full player
+// ---------------------------------------------------------------------------
+
+test("dock speed chip cycles playback rate and reaches the shared audio + full player", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+  await spaNavigateToLibrary(page);
+
+  // Speed persists per-book, so don't assume a fixed starting rate — read the
+  // chip's current value and assert the transition to the next cycle preset.
+  const RATE_CYCLE = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0];
+  const speed = page.getByTestId("mini-dock-speed");
+  const start = parseFloat((await speed.textContent()) ?? "");
+  const next = RATE_CYCLE.find((r) => r > start + 0.001) ?? RATE_CYCLE[0];
+
+  // The chip cycles the rate and persists it via `rpc_set_playback_rate`;
+  // assert that POST fired with the next preset before checking UI/audio state.
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: PLAYBACK_RATE_SET_URL,
+      expectedStatus: 200,
+      expectedBody: { uuid, update: { playback_rate: next } },
+    },
+    async () => speed.click(),
+  );
+  await expect(speed).toHaveText(`${next.toFixed(1)}×`);
+
+  // The chip writes through the shared apply_rate seam, so the change must
+  // reach the shared `<audio>` element's playbackRate in real time.
   await expect
     .poll(() =>
       page.evaluate(
         () =>
           (document.getElementById("omnibus-audio") as HTMLAudioElement | null)
-            ?.volume ?? null,
+            ?.playbackRate ?? null,
       ),
     )
-    .toBeCloseTo(0.4, 2);
+    .toBeCloseTo(next, 2);
 
-  // Expanding back to the full player must show the same volume — proof
-  // both controls share one signal rather than each tracking its own copy.
+  // Expanding back to the full player must show the same rate — proof both
+  // controls share one signal rather than each tracking its own copy.
   await page.getByTestId("mini-dock-expand-btn").click();
   await expect(page).toHaveURL(new RegExp(`/listen/${uuid}$`));
+  await expect(page.getByTestId("listen-rate")).toContainText(next.toFixed(1));
+});
 
-  const fullSlider = page.getByRole("slider", { name: "Volume" });
-  await expect(fullSlider).toHaveValue("0.4");
+// ---------------------------------------------------------------------------
+// 3d. Sleep chip expands to the full player (where the sleep timer lives)
+// ---------------------------------------------------------------------------
+
+test("dock sleep chip opens the full player", async ({ page, request }) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+  await spaNavigateToLibrary(page);
+
+  await page.getByTestId("mini-dock-sleep").click();
+  await expect(page).toHaveURL(new RegExp(`/listen/${uuid}$`));
 });
 
 // ---------------------------------------------------------------------------
