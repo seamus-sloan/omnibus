@@ -318,6 +318,26 @@
         rect: rect,
       }));
     });
+
+    // Arrow keys page the book when the content iframe has focus. Key events
+    // inside the iframe never bubble to the host document (so the Rust surface
+    // keydown handler can't see them) — epub.js forwards them here instead.
+    const prevPageKeys = new Set(["ArrowLeft", "ArrowUp", "H", "K"]);
+    const nextPageKeys = new Set(["ArrowRight", "ArrowDown", "L", "J"]);
+    rendition.on("keyup", function (e) {
+      if (!e || !e.key) return;
+      // Letter keys arrive lowercase without Shift; uppercase single-char keys
+      // so h/j/k/l match the sets (arrow-key names are multi-char, unchanged).
+      var k = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+
+      if (prevPageKeys.has(k)) {
+        prev();
+        e.preventDefault?.();
+      } else if (nextPageKeys.has(k)) {
+        next();
+        e.preventDefault?.();
+      }
+    });
   }
 
   function emitRelocate(location) {
