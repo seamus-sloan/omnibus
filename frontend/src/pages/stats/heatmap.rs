@@ -175,11 +175,17 @@ pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
                     div { class: "label", "Longest streak" }
                 }
             }
-            div { class: "st-heatmap", role: "img", aria_label: "Daily reading activity, trailing year",
-                for cell in cells {
-                    div {
-                        class: if cell.future { "st-hm-cell st-hm-future" } else { "st-hm-cell st-hm-{cell.level}" },
-                        title: if !cell.future && cell.secs > 0 { "{format_active_time(cell.secs)} on {cell.day}" } else { "{cell.day}" },
+            // The grid lives inside a plain block-level scroll container: on a
+            // phone the 52 columns overflow the card, and a block wrapper clips
+            // that overflow far more reliably than a grid-as-scroller does on
+            // iOS WebKit (#1076).
+            div { class: "st-heatmap-scroll",
+                div { class: "st-heatmap", role: "img", aria_label: "Daily reading activity, trailing year",
+                    for cell in cells {
+                        div {
+                            class: if cell.future { "st-hm-cell st-hm-future" } else { "st-hm-cell st-hm-{cell.level}" },
+                            title: if !cell.future && cell.secs > 0 { "{format_active_time(cell.secs)} on {cell.day}" } else { "{cell.day}" },
+                        }
                     }
                 }
             }

@@ -6844,9 +6844,16 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   .st-donut-body { flex-direction: column; gap: 16px; }
   .st-donut-legend { width: 100%; }
 
-  /* 52 heatmap columns don't fit a phone — scroll the card's grid. */
-  .st-heatmap { overflow-x: auto; padding-bottom: 4px; }
-  .st-heatmap .st-hm-cell { min-width: 8px; }
+  /* 52 heatmap columns don't fit a phone. Scroll the grid inside a
+     block-level wrapper (iOS WebKit clips a block scroll container far more
+     reliably than a grid-as-scroller, which bled off-screen — #1076), and
+     contain the overscroll so the horizontal swipe can't chain to the page. */
+  .st-heatmap-scroll {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding-bottom: 4px;
+  }
+  .st-heatmap { grid-auto-columns: 8px; }
   .st-hm-months { display: none; }
   .st-streak-value { font-size: 28px; }
   .st-streak-unit { font-size: 13px; }
