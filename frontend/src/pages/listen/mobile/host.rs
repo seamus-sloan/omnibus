@@ -13,6 +13,24 @@ use super::view::PlayerView;
 use super::{interop, persist_position, resolve_resume};
 use crate::data;
 
+/// `book_files.id` of the first audio file, lowest ordinal wins, or `None`.
+///
+/// A book with both an ebook and an audiobook lists the ebook format first
+/// (`get_book_files` orders by format), so `book_files.first()` would hand the
+/// audiobook manifest an EPUB id and 404. Filter to the audio formats the HLS
+/// resolver accepts (`db::hls::resolve_audiobook`'s `format IN
+/// ('M4B','M4A','MP3')`) before picking.
+fn first_audio_file_id(files: &[omnibus_shared::BookFileInfo]) -> Option<i64> {
+    files
+        .iter()
+        .filter(|f| {
+            let fmt = f.format.to_ascii_uppercase();
+            fmt == "M4B" || fmt == "M4A" || fmt == "MP3"
+        })
+        .min_by_key(|f| f.ordinal)
+        .map(|f| f.id)
+}
+
 /// Render-less app-root component owning the load → install → drain pipeline.
 #[component]
 pub fn MobileAudioHost() -> Element {
@@ -156,7 +174,7 @@ async fn load_and_drain(ctx: MobilePlayback, uuid: String, server_url: String) {
             return;
         }
     };
-    let file_id = book.book_files.first().map(|f| f.id);
+    let file_id = first_audio_file_id(&book.book_files);
     let manifest = match data::get_manifest(&server_url, &uuid, file_id).await {
         Ok(m) => m,
         Err(e) => {
@@ -273,5 +291,42 @@ async fn drain_audio_events(
             // Channel closed (surface torn down) — stop draining.
             Err(_) => return,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::first_audio_file_id;
+    use omnibus_shared::BookFileInfo;
+
+    fn bf(id: i64, format: &str, ordinal: i64) -> BookFileInfo {
+        BookFileInfo {
+            id,
+            format: format.into(),
+            filename: String::new(),
+            ordinal,
+            label: None,
+            size_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn first_audio_file_id_skips_a_leading_ebook_format() {
+        // A merged ebook+audiobook lists EPUB first (ordered by format); the
+        // audiobook manifest must still receive the M4B id, not the EPUB's.
+        let files = vec![bf(698, "EPUB", 0), bf(917, "M4B", 0), bf(922, "M4B", 1)];
+        assert_eq!(first_audio_file_id(&files), Some(917));
+    }
+
+    #[test]
+    fn first_audio_file_id_picks_lowest_ordinal() {
+        let files = vec![bf(5, "M4B", 2), bf(3, "M4B", 0), bf(4, "M4B", 1)];
+        assert_eq!(first_audio_file_id(&files), Some(3));
+    }
+
+    #[test]
+    fn first_audio_file_id_is_none_without_an_audio_file() {
+        let files = vec![bf(1, "EPUB", 0), bf(2, "PDF", 0)];
+        assert_eq!(first_audio_file_id(&files), None);
     }
 }
