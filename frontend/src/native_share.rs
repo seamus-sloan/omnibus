@@ -136,6 +136,9 @@ mod ios {
             return;
         };
 
+        // SAFETY: called on the main thread per `mtm`'s `MainThreadMarker` proof above;
+        // `activity_items` and `alloc(mtm)` are both valid Objective-C objects owned for
+        // the duration of this call.
         let avc = unsafe {
             UIActivityViewController::initWithActivityItems_applicationActivities(
                 UIActivityViewController::alloc(mtm),
