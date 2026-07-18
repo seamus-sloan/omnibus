@@ -11,10 +11,11 @@
 -- book, each matched to its own `merged_uuids` guard row.
 --
 -- Additive and non-destructive: a nullable column. The boot backfill
--- (`identity::backfill_book_files_scan_keys`) fills `scan_key` for
--- pre-migration rows from `book_file_parts` (audiobooks) and
--- `merged_uuids` / `books.scan_key` (ebooks) — no filesystem reads —
--- mirroring `normalize::backfill_norm_columns`.
+-- (`identity::backfill_book_files_scan_keys`) reconstructs `scan_key` for
+-- pre-migration rows from each row's stored `(path, filename, format)` plus
+-- its `book_file_parts` count (a single part or non-MP3 file carries the
+-- lowercased extension; a multi-part MP3 folder is a directory key) — no
+-- filesystem reads — mirroring `normalize::backfill_norm_columns`.
 
 ALTER TABLE book_files ADD COLUMN scan_key TEXT;
 

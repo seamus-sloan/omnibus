@@ -200,11 +200,20 @@ async fn repair_multipart_audiobook_attachments(pool: &SqlitePool) -> Result<(),
         .await?;
     }
 
+    // Match the resurrected dupe to the *same physical file* — same scanned
+    // root AND relative path — not scan_key alone. `books.scan_key` is only
+    // unique per (library_id, scan_key) (0026), so two scan roots sharing a
+    // relative path could otherwise delete a healthy book in another library.
     let dupes: Vec<i64> = sqlx::query_scalar(
         "SELECT b.id FROM books b
+           JOIN scan_roots lb ON lb.id = b.library_id
           WHERE b.scan_key IS NOT NULL
             AND EXISTS (SELECT 1 FROM book_files bf
-                         WHERE bf.scan_key = b.scan_key AND bf.book_id <> b.id)
+                          JOIN books ob        ON ob.id = bf.book_id
+                          JOIN scan_roots lo   ON lo.id = ob.library_id
+                         WHERE bf.book_id <> b.id
+                           AND bf.scan_key = b.scan_key
+                           AND COALESCE(bf.library_path, lo.path) = lb.path)
             AND NOT EXISTS (SELECT 1 FROM reading_progress   WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM reading_sessions   WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM listening_sessions WHERE book_uuid = b.uuid)

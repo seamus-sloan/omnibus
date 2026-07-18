@@ -871,6 +871,75 @@ async fn boot_backfill_replants_multipart_guards_and_drops_resurrected_duplicate
     assert!(diff.new.is_empty());
 }
 
+#[tokio::test]
+async fn boot_repair_spares_a_same_scan_key_book_in_another_library() {
+    // scan_key is only unique per (library_id, scan_key). A healthy book in
+    // library B must not be deleted just because library A attached a file at
+    // the same *relative* path — the dupe match is scoped to the same root.
+    let _covers = crate::test_support::CoversTempDir::new("multipart-guard-crosslib");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    // Library A ("/audio-a"): an ebook with an attached m4b at "Dup/p.m4b".
+    let target_uuid =
+        crate::test_support::seed_synced_ebook(&pool, "A/book.epub", "Book A", "Author A").await;
+    let target_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = ?")
+        .bind(&target_uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let ab = crate::test_support::indexed_audiobook("Dup/p.m4b", "Book A", Some("Author A"));
+    sqlx::query(
+        "INSERT INTO merged_uuids (uuid, book_id, format, library_path, scan_key)
+         VALUES (?, ?, 'M4B', '/audio-a', ?)",
+    )
+    .bind(crate::helpers::stable_uuid("/audio-a", "Dup/p.m4b"))
+    .bind(target_id)
+    .bind(&ab.scan_key)
+    .execute(&pool)
+    .await
+    .unwrap();
+    crate::sync::sync_audiobooks(
+        &pool,
+        "/audio-a",
+        crate::sync::AudiobookSyncPlan {
+            new_books: vec![ab],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // Library B ("/audio-b"): a healthy standalone audiobook at the same
+    // relative path, different title/author, no user data.
+    crate::sync::sync_audiobooks(
+        &pool,
+        "/audio-b",
+        crate::sync::AudiobookSyncPlan {
+            new_books: vec![crate::test_support::indexed_audiobook(
+                "Dup/p.m4b",
+                "Book B",
+                Some("Author B"),
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    run_boot_backfills(&pool).await.unwrap();
+
+    // The library-B book survives — its file lives under a different scan root.
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM books b JOIN scan_roots l ON l.id = b.library_id
+              WHERE b.scan_key = 'Dup/p.m4b' AND l.path = '/audio-b'"
+        )
+        .await,
+        1
+    );
+}
+
 #[test]
 fn purge_legacy_covers_once_sweeps_then_no_ops() {
     // Standalone temp dir so we don't depend on CoversTempDir's env var
