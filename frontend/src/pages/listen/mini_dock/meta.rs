@@ -42,8 +42,10 @@ pub(crate) fn dock_is_active(
 }
 
 /// Wall-clock listening time left at the current speed, e.g.
-/// "about 1h 50m left". `None` while the duration is unknown; sub-minute
-/// remainders round to "about 1m left" rather than counting seconds.
+/// "about 1h 50m left". `None` while the duration is unknown or once playback
+/// reaches/​passes the end (no phantom "1m left" at the finish); a positive
+/// sub-minute remainder rounds up to "about 1m left" rather than counting
+/// seconds.
 pub(super) fn time_left_text(elapsed: f64, duration: f64, rate: f64) -> Option<String> {
     if duration <= 0.0 || !elapsed.is_finite() {
         return None;
@@ -53,8 +55,11 @@ pub(super) fn time_left_text(elapsed: f64, duration: f64, rate: f64) -> Option<S
     } else {
         1.0
     };
-    let secs = (duration - elapsed).max(0.0) / rate;
-    // Bounded by duration (finite, > 0) and non-negative, so the cast is an
+    let secs = (duration - elapsed) / rate;
+    if secs <= 0.0 {
+        return None;
+    }
+    // Bounded by duration (finite, > 0) and positive, so the cast is an
     // in-range truncation.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let mins = ((secs / 60.0).round().min(f64::from(u32::MAX))) as u64;

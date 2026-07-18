@@ -60,6 +60,13 @@ fn time_left_text_divides_by_playback_rate() {
 }
 
 #[test]
+fn time_left_text_is_none_at_or_past_the_end() {
+    // At the finish there is no time left — don't claim a phantom "1m".
+    assert_eq!(time_left_text(3600.0, 3600.0, 1.0), None);
+    assert_eq!(time_left_text(4000.0, 3600.0, 1.0), None);
+}
+
+#[test]
 fn time_left_text_floors_at_one_minute_and_ignores_bad_rate() {
     assert_eq!(
         time_left_text(3599.0, 3600.0, 1.0),

@@ -191,8 +191,10 @@ test("dock is a full-width single-row bar and adjusts volume via its popover", a
     dock.boundingBox(),
     page.viewportSize(),
   ]);
-  expect(dockBox!.width).toBe(viewport!.width);
-  expect(dockBox!.x).toBe(0);
+  // Edge-to-edge, with a sub-pixel tolerance — boundingBox() is float and can
+  // land at N ± 0.5 depending on the renderer's deviceScaleFactor rounding.
+  expect(dockBox!.width).toBeCloseTo(viewport!.width, 0);
+  expect(dockBox!.x).toBeCloseTo(0, 0);
 
   // Volume lives behind an icon → upward popover with a vertical slider
   // (supersedes #1132's no-inline-slider AC: the bar row itself still has no

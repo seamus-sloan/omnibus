@@ -1,11 +1,8 @@
-//! Persistent full-width audiobook dock bar ("AudioDockBar"), rendered by
-//! the web [`crate::ScreenLayout`] on every main page and by the immersive
-//! `/read` route (which has no transport of its own); stays absent from
-//! `/listen`, whose full player already owns one. Reads the app-wide
-//! [`crate::PlaybackState`] and drives transport through the shared
-//! `helpers::audio_call` seam. Layout: cover + title/meta on the left, a
-//! centered transport (chapter jumps, ±30, play), and a right cluster of
-//! volume / speed / sleep popovers plus expand & close icons.
+//! Persistent full-width audiobook dock bar ("AudioDockBar"): left cover +
+//! title/meta, centered transport (chapter jumps, ±30, play), right cluster
+//! of volume / speed / sleep popovers plus expand & close. Rendered by web
+//! [`crate::ScreenLayout`] and `/read`, absent on `/listen`; reads
+//! [`crate::PlaybackState`] and drives transport via `helpers::audio_call`.
 
 #![cfg(not(feature = "mobile"))]
 
