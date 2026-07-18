@@ -815,6 +815,17 @@ html, body { overscroll-behavior: none; }
   font-size: 10px;
   line-height: 1.45;
 }
+/* Long titles/labels wrap instead of forcing the panel wider than its box. */
+.bd-file-picker-item-title, .bd-file-picker-item-meta { overflow-wrap: anywhere; }
+/* Mobile CTA row: the trigger sits at the screen's right edge, so a left-
+   anchored panel opened off-screen and let the whole page scroll sideways.
+   Anchor it to the right and bound its width to the viewport — the 300px min
+   is kept where it fits and only shrinks on a phone too narrow for it. */
+.m-bd-cta .bd-file-picker-panel {
+  right: 0; left: auto;
+  min-width: min(300px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+}
 
 .bd-progress-meta { margin-top: 22px; max-width: 460px; }
 .bd-progress-line {
