@@ -20,6 +20,8 @@ mod bootstrap;
 #[cfg(not(feature = "mobile"))]
 mod chapter_map;
 #[cfg(not(feature = "mobile"))]
+mod chapter_nav;
+#[cfg(not(feature = "mobile"))]
 mod chapters_drawer;
 #[cfg(not(feature = "mobile"))]
 mod controls;
@@ -52,6 +54,10 @@ pub(crate) use bootstrap::install_audio_bootstrap;
 pub(crate) use controls::AudioElement;
 #[cfg(not(feature = "mobile"))]
 pub(crate) use mini_dock::{dock_is_active, MiniDock};
+// App-root sleep-timer install: the controller is created once by `App` (so
+// the countdown survives leaving `/listen`) and consumed via `sleep::use_sleep`.
+#[cfg(not(feature = "mobile"))]
+pub(crate) use sleep::use_sleep_timer;
 // Mobile app-root pieces: the playback context (provided by `App`), the
 // render-less audio host, and the persistent mini-player (`ScreenLayout`).
 #[cfg(feature = "mobile")]

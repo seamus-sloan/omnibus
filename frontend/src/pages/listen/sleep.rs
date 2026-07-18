@@ -1,9 +1,10 @@
-//! Sleep-timer state machine for the listen page.
+//! App-scoped sleep-timer state machine for audiobook playback.
 //!
 //! Owns the countdown signal and the self-re-arming 1 s tick, plus pure
 //! helpers (preset table, countdown formatting, end-of-chapter math). The
-//! panel in `sleep_panel` renders this controller; `ready_player` drives it.
-//! Session-only — not persisted across page loads.
+//! controller is installed once at App root (so the countdown survives
+//! leaving `/listen`) and consumed via [`use_sleep`] by both the full
+//! player and the mini-dock. Session-only — not persisted across page loads.
 
 #![cfg(not(feature = "mobile"))]
 
@@ -29,7 +30,7 @@ const FADE_SECONDS: i32 = 30;
 
 /// Which sleep option is currently selected — drives the panel highlight.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum SleepChoice {
+pub(crate) enum SleepChoice {
     Off,
     Preset(i32),
     EndOfChapter,
@@ -56,6 +57,17 @@ pub(super) fn sleep_toolbar_label(remaining: Option<i32>) -> String {
     }
 }
 
+/// Mini-dock Sleep-chip label: bare "Sleep" when off, the live countdown for
+/// a duration preset, and a fixed "End of ch." tag for the chapter option
+/// (its remaining seconds drift with seeks, so a countdown would mislead).
+pub(super) fn sleep_chip_label(remaining: Option<i32>, choice: SleepChoice) -> String {
+    match (choice, remaining) {
+        (SleepChoice::EndOfChapter, Some(s)) if s > 0 => "Sleep \u{00b7} End of ch.".to_string(),
+        (_, Some(s)) if s > 0 => format!("Sleep \u{00b7} {}", format_countdown(s)),
+        _ => "Sleep".to_string(),
+    }
+}
+
 /// Seconds left until the end of the current chapter, for the "End of
 /// chapter" option. `None` when `idx` is out of range (empty/stale list).
 pub(super) fn end_of_chapter_seconds(
@@ -74,7 +86,7 @@ pub(super) fn end_of_chapter_seconds(
 /// controller methods bump an internal session token so an in-flight tick
 /// from a cancelled session is ignored.
 #[derive(Clone, Copy)]
-pub(super) struct SleepController {
+pub(crate) struct SleepController {
     pub remaining: Signal<Option<i32>>,
     pub choice: Signal<SleepChoice>,
     pub fade: Signal<bool>,
@@ -132,12 +144,19 @@ impl SleepController {
     }
 }
 
+/// App-scoped accessor for the [`SleepController`] provided at App root.
+pub(crate) fn use_sleep() -> SleepController {
+    use_context()
+}
+
 /// Install the sleep-timer signals and the self-re-arming countdown effect.
-/// The effect is declared unconditionally (hook-order parity across SSR and
-/// WASM); only the audio interop and the 1 s tick are web-gated. `volume` is
-/// the shared [`crate::PlaybackState::volume`] signal — the fade restores to
-/// it instead of a hardcoded `1.0`.
-pub(super) fn use_sleep_timer(volume: Signal<f64>) -> SleepController {
+/// Called once from App root (`use_user_and_playback_contexts`) so the
+/// countdown outlives `/listen`. The effect is declared unconditionally
+/// (hook-order parity across SSR and WASM); only the audio interop and the
+/// 1 s tick are web-gated. `volume` is the shared
+/// [`crate::PlaybackState::volume`] signal — the fade restores to it instead
+/// of a hardcoded `1.0`.
+pub(crate) fn use_sleep_timer(volume: Signal<f64>) -> SleepController {
     let remaining = use_signal(|| None::<i32>);
     let choice = use_signal(|| SleepChoice::Off);
     let fade = use_signal(|| true);
@@ -243,6 +262,28 @@ mod tests {
     #[test]
     fn sleep_toolbar_label_shows_countdown_when_active() {
         assert_eq!(sleep_toolbar_label(Some(1722)), "Sleep \u{00b7} 28:42");
+    }
+
+    #[test]
+    fn sleep_chip_label_is_bare_sleep_when_off() {
+        assert_eq!(sleep_chip_label(None, SleepChoice::Off), "Sleep");
+        assert_eq!(sleep_chip_label(Some(0), SleepChoice::Off), "Sleep");
+    }
+
+    #[test]
+    fn sleep_chip_label_shows_countdown_for_preset() {
+        assert_eq!(
+            sleep_chip_label(Some(1722), SleepChoice::Preset(1800)),
+            "Sleep \u{00b7} 28:42"
+        );
+    }
+
+    #[test]
+    fn sleep_chip_label_names_end_of_chapter_instead_of_counting_down() {
+        assert_eq!(
+            sleep_chip_label(Some(311), SleepChoice::EndOfChapter),
+            "Sleep \u{00b7} End of ch."
+        );
     }
 
     #[test]

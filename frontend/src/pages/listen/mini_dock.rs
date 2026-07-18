@@ -9,8 +9,8 @@
 use dioxus::prelude::*;
 use dioxus_router::Link;
 
+use super::chapter_nav::chapter_index_for_elapsed;
 use super::helpers::format_hms;
-use super::ready_player::chapter_index_for_elapsed;
 use super::stage::chapter_sub_text;
 use crate::components::atrium::Cover;
 use crate::contexts::use_current_user_summary;

@@ -56,6 +56,17 @@ pub(super) fn on_skip_forward_30() -> impl FnMut(MouseEvent) + 'static {
     }
 }
 
+/// Seek the shared audio element to an absolute position in seconds. Shared
+/// by the full player's scrub/chapter handlers and the mini-dock's chapter
+/// jumps; no-op off web (SSR has no audio element to poke).
+#[cfg(not(feature = "mobile"))]
+pub(super) fn seek_to(secs: f64) {
+    #[cfg(feature = "web")]
+    audio_call("seek", &secs.to_string());
+    #[cfg(not(feature = "web"))]
+    let _ = secs;
+}
+
 /// localStorage key for the persisted session volume preference.
 #[cfg(feature = "web")]
 const VOLUME_KEY: &str = "omnibus.listen.volume";
