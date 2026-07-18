@@ -620,9 +620,10 @@ test.describe("audiobook-only seed", () => {
     // format that CTA opens (see the merge-based test below).
     await expect(page.getByTestId("listen-file-picker-trigger")).toHaveCount(0);
 
-    // Clicking the primary CTA must SPA-navigate to the listen page.
+    // Clicking the primary CTA must SPA-navigate to the listen page. Dioxus
+    // serializes the optional `?file_id=` route param as a bare trailing `?`.
     await startListening.click();
-    await expect(page).toHaveURL(new RegExp(`/listen/${uuid}$`));
+    await expect(page).toHaveURL(new RegExp(`/listen/${uuid}\\??$`));
   });
 
   // ---------------------------------------------------------------------------
