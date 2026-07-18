@@ -744,6 +744,21 @@ html, body { overscroll-behavior: none; }
 }
 .bd-cta-row .btn[disabled] { opacity: 0.65; cursor: not-allowed; }
 
+/* Immersive Read CTA — read + listen at once. Accent-tinted so it reads as a
+   distinct third option beside the primary "Start reading" and the secondary
+   "Listen", with the book+soundwave mark drawn in the accent colour. */
+.bd-immersive-cta {
+  gap: 9px;
+  background: color-mix(in oklch, var(--accent) 16%, var(--bg-1));
+  border-color: color-mix(in oklch, var(--accent) 55%, transparent);
+  color: var(--ink-0);
+}
+.bd-immersive-cta:hover {
+  background: color-mix(in oklch, var(--accent) 24%, var(--bg-1));
+  border-color: color-mix(in oklch, var(--accent) 70%, transparent);
+}
+.bd-immersive-mark { display: inline-flex; color: var(--accent); }
+
 /* Hero "Export" dropdown — trigger + anchored menu. Mirrors the user-menu
    scrim/panel/row pattern (`.um-*`) so the two dropdowns read the same. */
 .bd-export { position: relative; display: inline-flex; }
