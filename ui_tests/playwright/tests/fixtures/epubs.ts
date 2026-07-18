@@ -360,6 +360,23 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     hasCover: true,
   },
 
+  // Dual-format book: shares a normalized (title, author) with the
+  // "Immersive Voyage" audiobook (`fixtures/audiobooks.ts`), so the indexer
+  // auto-attaches the two into ONE book with both formats — the Immersive
+  // Read precondition. See `fixtures/dual_format.ts`. The title sorts under
+  // "i" (before "The Isle of Functions"), so it never displaces the
+  // alphabetically-last fixture the landing sort test asserts on.
+  {
+    slug: "immersive-voyage",
+    filename: "immersive-voyage.epub",
+    title: "Immersive Voyage",
+    authors: ["Alan Turing"],
+    publisher: "Omnibus Test Press",
+    published: "1950-10-01",
+    language: "en",
+    hasCover: true,
+  },
+
   // Public-domain Project Gutenberg / Standard Ebooks EPUBs under
   // `test_data/epubs/public_domain/`. Metadata below is what each file's OPF
   // actually claims — `db/tests/public_domain_epubs.rs` keeps the parser honest.
