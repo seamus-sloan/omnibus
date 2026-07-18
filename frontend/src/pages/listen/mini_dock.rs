@@ -1,9 +1,8 @@
 //! Persistent mini-dock audiobook bar, rendered by the web
-//! [`crate::ScreenLayout`] on every main page and by the immersive
-//! `/read` route (which has no transport of its own); stays absent
-//! from `/listen`, whose full player already owns one. Reads the
-//! app-wide [`crate::PlaybackState`] and drives transport through the
-//! shared `helpers::audio_call` seam.
+//! [`crate::ScreenLayout`] on every main page and by the immersive `/read`
+//! route; absent from `/listen`, whose full player owns its own transport.
+//! Reads the app-wide [`crate::PlaybackState`] and drives transport through
+//! the shared `helpers::audio_call` seam.
 
 #![cfg(not(feature = "mobile"))]
 

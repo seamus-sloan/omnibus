@@ -161,8 +161,8 @@ pub(super) fn apply_rate(
     });
 }
 
-/// Format `seconds` as `H:MM:SS` (or `MM:SS` when under an hour).
-#[cfg_attr(feature = "mobile", allow(dead_code))]
+/// Format `seconds` as `H:MM:SS` (or `MM:SS` when under an hour). On mobile
+/// the sleep-timer countdown delegates here (`mobile::state::format_countdown`).
 pub(super) fn format_hms(seconds: f64) -> String {
     if !seconds.is_finite() || seconds < 0.0 {
         return "0:00".into();

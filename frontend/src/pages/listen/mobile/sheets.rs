@@ -49,9 +49,10 @@ pub(super) fn MSheet(
     }
 }
 
-/// Props for the [`ChaptersSheet`] component.
-#[derive(Props, Clone, PartialEq)]
-pub(super) struct ChaptersSheetProps {
+/// Render-ready view data for the chapters sheet: the chapter map plus the
+/// playback position that highlights the current row.
+#[derive(Clone, PartialEq)]
+pub(super) struct ChaptersListView {
     /// Ordered chapter markers rendered as sheet rows.
     pub chapters: Vec<ChapterInfo>,
     /// Index of the currently-playing chapter.
@@ -60,6 +61,12 @@ pub(super) struct ChaptersSheetProps {
     pub elapsed: f64,
     /// Formatted total-duration label shown in the sheet header.
     pub total_label: String,
+}
+
+/// Props for the [`ChaptersSheet`] component: the view data plus handlers.
+#[derive(Props, Clone, PartialEq)]
+pub(super) struct ChaptersSheetProps {
+    pub list: ChaptersListView,
     /// Fired with the target time in seconds when a row is tapped.
     pub on_seek: EventHandler<f64>,
     /// Fired when the scrim dismisses the sheet.
@@ -71,10 +78,13 @@ pub(super) struct ChaptersSheetProps {
 #[component]
 pub(super) fn ChaptersSheet(props: ChaptersSheetProps) -> Element {
     let ChaptersSheetProps {
-        chapters,
-        current_index,
-        elapsed,
-        total_label,
+        list:
+            ChaptersListView {
+                chapters,
+                current_index,
+                elapsed,
+                total_label,
+            },
         on_seek,
         on_close,
     } = props;
@@ -210,19 +220,32 @@ pub(super) fn SpeedSheet(
     }
 }
 
+/// Timer state the sleep sheet renders from: the armed state, the playback
+/// position (for the live countdown), and the current chapter's boundary.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct SleepSheetView {
+    pub sleep: SleepState,
+    pub elapsed: f64,
+    /// End of the currently-playing chapter (absolute seconds), when known.
+    pub chapter_end: Option<f64>,
+    /// 1-based chapter number for the "End of chapter N" label.
+    pub chapter_no: usize,
+}
+
 /// Sleep-timer sheet: preset grid plus an "End of chapter" option, with the
 /// live remaining countdown in the header while armed.
 #[component]
 pub(super) fn SleepSheet(
-    sleep: SleepState,
-    elapsed: f64,
-    /// End of the currently-playing chapter (absolute seconds), when known.
-    chapter_end: Option<f64>,
-    /// 1-based chapter number for the "End of chapter N" label.
-    chapter_no: usize,
+    view: SleepSheetView,
     on_set: EventHandler<SleepState>,
     on_close: EventHandler<MouseEvent>,
 ) -> Element {
+    let SleepSheetView {
+        sleep,
+        elapsed,
+        chapter_end,
+        chapter_no,
+    } = view;
     let remaining = sleep_remaining(sleep, elapsed);
     let meta = remaining.filter(|r| *r > 0).map(|r| {
         rsx! {

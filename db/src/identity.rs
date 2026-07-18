@@ -1,12 +1,8 @@
-//! Boot backfill for the `scan_key` diff key.
+//! Boot backfill for `books.scan_key` on rows indexed before it existed.
 //!
-//! `books.uuid` became a durable, minted-once identity and a new
-//! `books.scan_key` (the library-relative path) took over the Phase-A diff
-//! (migration 0026). Rows indexed before that migration have `scan_key IS
-//! NULL`; this fills them in **purely from stored columns** — no filesystem
-//! reads — so it is safe against in-memory test DBs and idempotent (a no-op
-//! once caught up). Mirrors [`crate::normalize::backfill_norm_columns`] and
-//! runs from `init_db` right after it.
+//! Fills `scan_key IS NULL` rows purely from stored columns (no filesystem
+//! reads) — idempotent, safe on in-memory test DBs. Mirrors
+//! [`crate::normalize::backfill_norm_columns`]; runs from `init_db`.
 
 use sqlx::SqlitePool;
 

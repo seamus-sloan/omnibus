@@ -107,3 +107,33 @@ async fn api_get_stats_honors_the_range_param() {
     assert_eq!(summary.range, StatsRange::AllTime);
     assert_eq!(summary.reading_seconds, 900);
 }
+
+/// Mirrors the ebooks/audiobooks sibling suites' DROP TABLE pattern: a DB
+/// failure inside `db::stats` must surface as a 500. Uses `range=year` —
+/// a range no other test caches — so the process-wide stats cache can't
+/// serve a stale 200 here.
+#[tokio::test]
+async fn api_get_stats_returns_500_when_db_fails() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    // FKs off before the DROP so references to the sessions table can't
+    // turn the drop itself into an error (same as the ebooks suite).
+    let mut conn = pool.acquire().await.unwrap();
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE reading_sessions")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
+
+    let res = app
+        .oneshot(get_with_bearer("/api/stats?range=year", &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}

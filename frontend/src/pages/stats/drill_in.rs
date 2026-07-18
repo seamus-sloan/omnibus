@@ -269,7 +269,7 @@ pub(super) fn DrillIn(
                     {render_delta(delta, vs)}
                     {render_trend(metric, &bars)}
                     if metric == Metric::Finished {
-                        {render_finished_list(&summary.finished_books, &server_url)}
+                        {render_finished_list(&summary.finished_books, summary.books_finished, &server_url)}
                     }
                 }
             }
@@ -331,18 +331,24 @@ fn render_trend(metric: Metric, bars: &[TrendBar]) -> Element {
 }
 
 /// The "what you finished" rail: cover (via `CoverTile`) + title + rating
-/// per book completed in the window.
-fn render_finished_list(books: &[FinishedBook], server_url: &str) -> Element {
+/// per book completed in the window. The server caps the list at its newest
+/// N completions while `total` is the uncapped count, so a truncated rail
+/// labels itself instead of silently posing as exhaustive.
+fn render_finished_list(books: &[FinishedBook], total: i64, server_url: &str) -> Element {
     if books.is_empty() {
         return rsx! {
             p { class: "st-drill-delta-empty", "No books finished in this window." }
         };
     }
+    let shown = books.len() as i64;
     rsx! {
         ul { class: "st-drill-finished-list", "data-testid": "stats-drill-finished-list",
             for book in books {
                 {render_finished_row(book, server_url)}
             }
+        }
+        if total > shown {
+            p { class: "st-drill-delta-empty", "Showing the latest {shown} of {total} finished books." }
         }
     }
 }

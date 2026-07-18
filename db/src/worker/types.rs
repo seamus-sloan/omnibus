@@ -1,9 +1,8 @@
 //! Public type surface and shared helpers for the worker.
 //!
 //! Owns `Task` / `TaskOutcome` / `TaskId` / `WorkerConfig`, the `Worker`
-//! struct + constructor, the internal `ProgressEntry`, the
-//! `TERMINAL_RETENTION` knob, and the `lock_unpoison` / `wall_clock_ms`
-//! helpers every other sibling module reaches for.
+//! struct, `ProgressEntry`, `TERMINAL_RETENTION`, and the `lock_unpoison` /
+//! `wall_clock_ms` helpers the sibling modules share.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard};

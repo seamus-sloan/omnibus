@@ -170,12 +170,9 @@ async fn load_and_drain(
         mut loading,
         mut error,
         mut unsupported,
-        mut duration,
-        mut elapsed,
         mut playing,
         mut rate,
         mut rate_error,
-        mut user_id,
         mut sleep,
         ..
     } = ctx;
@@ -219,56 +216,16 @@ async fn load_and_drain(
             total_duration_seconds,
             chapters,
         } => {
-            let resume = resolve_resume(&server_url, &uuid).await;
-            let resolved_user_id = data::get_me(&server_url).await.ok().map(|user| user.id);
-            user_id.set(resolved_user_id);
-            let server_rate = data::get_playback_rate(&server_url, &uuid).await;
-            if let (Some(user_id), Ok(Some(record))) = (resolved_user_id, server_rate.as_ref()) {
-                crate::audiobook_progress::save_rate(user_id, &uuid, record.playback_rate);
-            }
-            let local_rate = resolved_user_id
-                .and_then(|user_id| crate::audiobook_progress::load_rate(user_id, &uuid));
-            let resolution = crate::audiobook_progress::resolve_rate(
-                server_rate
-                    .as_ref()
-                    .map(|record| record.as_ref().map(|record| record.playback_rate))
-                    .map_err(|_| ()),
-                local_rate,
-            );
-            rate.set(resolution.playback_rate);
-            if resolution.seed_server {
-                let update = omnibus_shared::AudiobookPlaybackRateUpdate {
-                    playback_rate: resolution.playback_rate,
-                };
-                if let Err(error) = data::set_playback_rate(&server_url, &uuid, update).await {
-                    rate_error.set(Some(format!("Could not save playback speed: {error}")));
-                }
-            }
-            let pv =
-                PlayerView::from_direct(&book, chapters, total_duration_seconds, parts.clone());
-            // Cover artwork for the lock screen: the same tokened thumbnail the
-            // hero uses. WebKit fetches it itself, so it must carry `?token=`.
-            let artwork = book
-                .cover_url
-                .as_ref()
-                .map(|_| crate::thumb_url(&server_url, &uuid, "lg"));
-            let now_playing = interop::NowPlaying {
-                title: &pv.title,
-                author: &pv.author,
-                artwork_url: artwork.as_deref(),
-            };
-            duration.set(total_duration_seconds);
-            elapsed.set(resume);
-            loading.set(false);
-            let eval = interop::install_direct_surface(
-                &server_url,
-                &parts,
-                resume,
-                resolution.playback_rate,
-                &now_playing,
-            );
-            view.set(Some(pv));
-            drain_audio_events(eval, ctx, uuid, server_url).await;
+            init_direct_and_drain(
+                ctx,
+                &book,
+                uuid,
+                server_url,
+                parts,
+                total_duration_seconds,
+                chapters,
+            )
+            .await;
         }
         AudiobookManifest::Hls { .. } => {
             // hls.js isn't bundled on mobile; don't fake playback.
@@ -277,6 +234,81 @@ async fn load_and_drain(
             loading.set(false);
         }
     }
+}
+
+/// Resolve the effective playback rate: publish `user_id`, reconcile the
+/// server-saved rate with the local cache, seed the server when only a local
+/// value exists, and set the `rate` signal. Returns the resolved rate.
+async fn resolve_playback_rate(ctx: MobilePlayback, server_url: &str, uuid: &str) -> f64 {
+    let mut user_id_sig = ctx.user_id;
+    let mut rate = ctx.rate;
+    let mut rate_error = ctx.rate_error;
+
+    let resolved_user_id = data::get_me(server_url).await.ok().map(|user| user.id);
+    user_id_sig.set(resolved_user_id);
+    let server_rate = data::get_playback_rate(server_url, uuid).await;
+    if let (Some(user_id), Ok(Some(record))) = (resolved_user_id, server_rate.as_ref()) {
+        crate::audiobook_progress::save_rate(user_id, uuid, record.playback_rate);
+    }
+    let local_rate =
+        resolved_user_id.and_then(|user_id| crate::audiobook_progress::load_rate(user_id, uuid));
+    let resolution = crate::audiobook_progress::resolve_rate(
+        server_rate
+            .as_ref()
+            .map(|record| record.as_ref().map(|record| record.playback_rate))
+            .map_err(|_| ()),
+        local_rate,
+    );
+    rate.set(resolution.playback_rate);
+    if resolution.seed_server {
+        let update = omnibus_shared::AudiobookPlaybackRateUpdate {
+            playback_rate: resolution.playback_rate,
+        };
+        if let Err(error) = data::set_playback_rate(server_url, uuid, update).await {
+            rate_error.set(Some(format!("Could not save playback speed: {error}")));
+        }
+    }
+    resolution.playback_rate
+}
+
+/// Direct-play arm of [`load_and_drain`]: resolve resume + rate, seed the
+/// view/duration signals, install the JS control surface, then drain audio
+/// events until superseded.
+async fn init_direct_and_drain(
+    ctx: MobilePlayback,
+    book: &omnibus_shared::EbookMetadata,
+    uuid: String,
+    server_url: String,
+    parts: Vec<omnibus_shared::ManifestPart>,
+    total_duration_seconds: f64,
+    chapters: Vec<omnibus_shared::ChapterInfo>,
+) {
+    let mut view = ctx.view;
+    let mut loading = ctx.loading;
+    let mut duration = ctx.duration;
+    let mut elapsed = ctx.elapsed;
+
+    let resume = resolve_resume(&server_url, &uuid).await;
+    let playback_rate = resolve_playback_rate(ctx, &server_url, &uuid).await;
+    let pv = PlayerView::from_direct(book, chapters, total_duration_seconds, parts.clone());
+    // Cover artwork for the lock screen: the same tokened thumbnail the
+    // hero uses. WebKit fetches it itself, so it must carry `?token=`.
+    let artwork = book
+        .cover_url
+        .as_ref()
+        .map(|_| crate::thumb_url(&server_url, &uuid, "lg"));
+    let now_playing = interop::NowPlaying {
+        title: &pv.title,
+        author: &pv.author,
+        artwork_url: artwork.as_deref(),
+    };
+    duration.set(total_duration_seconds);
+    elapsed.set(resume);
+    loading.set(false);
+    let eval =
+        interop::install_direct_surface(&server_url, &parts, resume, playback_rate, &now_playing);
+    view.set(Some(pv));
+    drain_audio_events(eval, ctx, uuid, server_url).await;
 }
 
 /// Drain the JS→Rust audio event channel until cancelled, updating the

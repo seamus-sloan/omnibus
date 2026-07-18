@@ -98,16 +98,10 @@ pub(super) const SLEEP_PRESETS: &[(&str, i32)] = &[
 ];
 
 /// Format a non-negative countdown as `M:SS` (or `H:MM:SS` past an hour).
+/// Delegates to the shared listen-page formatter so the web and mobile
+/// duration displays can't drift on edge-case handling.
 pub(super) fn format_countdown(secs: i32) -> String {
-    let s = secs.max(0);
-    let h = s / 3600;
-    let m = (s % 3600) / 60;
-    let sec = s % 60;
-    if h > 0 {
-        format!("{h}:{m:02}:{sec:02}")
-    } else {
-        format!("{m}:{sec:02}")
-    }
+    super::super::helpers::format_hms(f64::from(secs.max(0)))
 }
 
 /// Seconds left on the sleep timer for display, deriving the end-of-chapter

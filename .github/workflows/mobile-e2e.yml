@@ -1,13 +1,14 @@
 name: Mobile E2E
 
 # Maestro flows (ui_tests/maestro) against the mobile app — the same YAML suite
-# drives iOS and Android. Right now only the **iOS** job runs on PR/push (macOS
-# runner); the Android job (KVM Linux runner) is gated to manual dispatch while
-# its emulator run is stabilized — see the `if:` on that job. Trigger paths are
-# scoped to what can change the mobile app or the suite. `server/**` + `db/**`
-# are included because the job boots the real native server and the flows probe
-# `GET /api/_health` — a server or boot regression can fail these runs even when
-# nothing mobile changed.
+# drives iOS and Android. Both jobs are **manual-dispatch only** for now: the
+# PR/push triggers below are commented out while runner cost and run time are
+# worked out (re-enabling them is tracked in #1034; Android additionally in
+# #1035 — see the `if:` on that job). The commented `paths:` filter is kept as
+# the intended scope for when triggers return: `server/**` + `db/**` are
+# included because the job boots the real native server and the flows probe
+# `GET /api/_health` — a server or boot regression can fail these runs even
+# when nothing mobile changed.
 on:
 #  push:
 #    branches: [main]

@@ -1,13 +1,8 @@
 //! Mobile audiobook player — the single-column phone adaptation of the
-//! desktop two-column "Now playing" surface.
-//!
-//! The page is a view over the app-wide [`state::MobilePlayback`] context:
-//! on mount it retargets `ctx.uuid` and the app-root [`host::MobileAudioHost`]
-//! does the manifest fetch, drives the HTML `<audio>` element (via
-//! `dioxus::document::eval`, since mobile is a wry WebView), and persists
-//! position + rate through [`crate::audiobook_progress`] — so playback and
-//! position tracking survive navigating away (the mini-player takes over).
-//! HLS manifests render an unsupported state rather than faking playback.
+//! desktop "Now playing" surface. A view over the app-wide
+//! [`state::MobilePlayback`] context: [`host::MobileAudioHost`] fetches the
+//! manifest, drives the `<audio>` element, and persists position + rate, so
+//! playback survives navigating away. HLS renders an unsupported state.
 
 #![cfg(feature = "mobile")]
 
@@ -52,6 +47,9 @@ enum OpenSheet {
 /// Renders the mobile audiobook player for `uuid`. Retargets the app-wide
 /// playback context and renders its state; the heavy lifting (fetch, audio
 /// surface, event drain) lives in the app-root [`host::MobileAudioHost`].
+/// Kept near the line cap by design: the body is hook wiring that must run
+/// unconditionally before the early returns, so a split would only thread
+/// the same signals through another layer.
 #[component]
 pub fn MobilePlayer(uuid: String, file_id: Option<i64>) -> Element {
     let server_url = use_server_url();
@@ -321,28 +319,38 @@ fn render_player(p: PlayerProps) -> Element {
     let on_back = move |_| interop::skip(-30.0);
     let on_fwd = move |_| interop::skip(30.0);
 
-    let chs_prev = view.chapters.clone();
-    let on_prev = move |_: MouseEvent| {
-        if let Some(t) = view::chapter_prev_seek(&chs_prev, elapsed, chapter_index) {
-            interop::seek(t);
+    // One shared chapters allocation for the handlers and the sheet layer —
+    // `render_player` reruns on every position tick, so per-closure deep
+    // clones of the chapters vec add up (issue #1143).
+    let chapters = std::rc::Rc::new(view.chapters.clone());
+    let on_prev = {
+        let chapters = chapters.clone();
+        move |_: MouseEvent| {
+            if let Some(t) = view::chapter_prev_seek(&chapters, elapsed, chapter_index) {
+                interop::seek(t);
+            }
         }
     };
-    let chs_next = view.chapters.clone();
-    let on_next = move |_: MouseEvent| {
-        if chapter_index + 1 < chs_next.len() {
-            interop::seek(chs_next[chapter_index + 1].start_seconds);
+    let on_next = {
+        let chapters = chapters.clone();
+        move |_: MouseEvent| {
+            if chapter_index + 1 < chapters.len() {
+                interop::seek(chapters[chapter_index + 1].start_seconds);
+            }
         }
     };
-
-    let chs_mark = view.chapters.clone();
-    let on_bookmark = move |_: MouseEvent| {
-        bookmarks.create(elapsed, &chs_mark);
-        sheet.set(OpenSheet::Bookmarks);
+    let on_bookmark = {
+        let chapters = chapters.clone();
+        move |_: MouseEvent| {
+            bookmarks.create(elapsed, &chapters);
+            sheet.set(OpenSheet::Bookmarks);
+        }
     };
 
     let sheet_props = SheetProps {
         uuid: uuid.clone(),
-        view: view.clone(),
+        chapters,
+        total_label: view.total_label.clone(),
         elapsed,
         rate,
         sleep,
@@ -483,7 +491,11 @@ fn render_player(p: PlayerProps) -> Element {
 /// transport-focused function.
 struct SheetProps {
     uuid: String,
-    view: PlayerView,
+    /// Shared with the transport handlers; the inner vec is cloned only for
+    /// whichever sheet is actually open.
+    chapters: std::rc::Rc<Vec<omnibus_shared::ChapterInfo>>,
+    /// Formatted total-duration label for the chapters-sheet header.
+    total_label: String,
     elapsed: f64,
     rate: f64,
     sleep: SleepState,
@@ -503,10 +515,12 @@ fn render_sheets(p: &SheetProps) -> Element {
         OpenSheet::None => rsx! {},
         OpenSheet::Chapters => rsx! {
             ChaptersSheet {
-                chapters: p.view.chapters.clone(),
-                current_index: p.chapter_index,
-                elapsed: p.elapsed,
-                total_label: p.view.total_label.clone(),
+                list: sheets::ChaptersListView {
+                    chapters: p.chapters.as_ref().clone(),
+                    current_index: p.chapter_index,
+                    elapsed: p.elapsed,
+                    total_label: p.total_label.clone(),
+                },
                 on_seek: EventHandler::new(move |secs: f64| {
                     interop::seek(secs);
                     sheet.set(OpenSheet::None);
@@ -551,17 +565,18 @@ fn render_sheets(p: &SheetProps) -> Element {
         }
         OpenSheet::Sleep => {
             let chapter_end = p
-                .view
                 .chapters
                 .get(p.chapter_index)
                 .map(|c| c.start_seconds + c.duration_seconds);
             let mut sleep_sig = p.ctx.sleep;
             rsx! {
                 SleepSheet {
-                    sleep: p.sleep,
-                    elapsed: p.elapsed,
-                    chapter_end,
-                    chapter_no: p.chapter_index + 1,
+                    view: sheets::SleepSheetView {
+                        sleep: p.sleep,
+                        elapsed: p.elapsed,
+                        chapter_end,
+                        chapter_no: p.chapter_index + 1,
+                    },
                     on_set: EventHandler::new(move |s: SleepState| sleep_sig.set(s)),
                     on_close: close,
                 }
@@ -573,7 +588,7 @@ fn render_sheets(p: &SheetProps) -> Element {
             rsx! {
                 BookmarksSheet {
                     bookmarks: p.bookmarks,
-                    chapters: p.view.chapters.clone(),
+                    chapters: p.chapters.as_ref().clone(),
                     on_seek: EventHandler::new(move |secs: f64| {
                         interop::seek(secs);
                         persist_position(&uuid, &server_url, secs);

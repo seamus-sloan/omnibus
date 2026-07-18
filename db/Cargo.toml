@@ -60,7 +60,12 @@ getrandom = "0.3"
 #   be dead weight (a separate version that never reaches argon2's OsRng)
 #   until argon2 0.6 stabilizes and moves password-hash to rand_core 0.9.
 rand_core = { version = "0.6", features = ["getrandom"] } # held at 0.6: tied to argon2 0.5's password-hash
-sha2 = "0.11"
+# held at 0.10: argon2 0.5's password-hash pulls sha2 0.10 transitively, and
+#   declaring 0.11 here forced a second sha2 copy into Cargo.lock (issue #643)
+#   — a crypto crate we don't want duplicated for audit purposes. The Digest
+#   API we use (Sha256 token hashing) is identical across the two. Bump in
+#   lockstep with the argon2 0.6 migration above.
+sha2 = "0.10"
 base64 = "0.22"
 
 # F1.2 thumbnail pipeline: decode EPUB covers (JPEG/PNG/WebP/GIF) and re-encode
@@ -80,12 +85,18 @@ ammonia = "4"
 # F3.2 journals: render user-authored markdown to HTML server-side (then
 # sanitized by `ammonia` above). Strikethrough is enabled to match the
 # composer's formatting affordances; a custom `||spoiler||` pass runs first.
+# PRE-1.0 PIN: parses user-authored journal markdown, but its output is always
+#   run through `ammonia` before storage/render, so a parser bug can't reach
+#   raw HTML/script output.
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 
 # F2.3 audiobook metadata: read title/artist/album/duration and embedded
 # cover artwork from m4b/m4a/mp3 (and any other container lofty supports).
 # Chosen over `mp4ameta` so mp3 works through the same Tag API without an
 # ffprobe fallback.
+# PRE-1.0 PIN: parses audiobook container metadata only from files already
+#   inside the admin's own library path — never from network or direct user
+#   upload input.
 lofty = "0.24"
 
 

@@ -13,6 +13,11 @@
 [advisories]
 version = 2
 db-urls = ["https://github.com/rustsec/advisory-db"]
+# Yanked crates surface as warnings, not errors. Currently accepted:
+# `spin 0.9.8` (yanked, no advisory) — transitive via `flume` (sqlx-sqlite)
+# and `multer` (axum); collapses when either upstream drops it. See
+# docs/dependency-audit.md § Yanked crates.
+yanked = "warn"
 # "sound" = no known exploitable vulnerability; "best-effort" also pulls in
 # unmaintained / notice advisories.
 ignore = [
