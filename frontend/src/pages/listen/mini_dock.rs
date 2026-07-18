@@ -202,7 +202,10 @@ fn MiniDockSpeed(rate: f64, uuid: String, user_id: Option<i64>) -> Element {
         let rate_error = playback.rate_error;
         let uuid = uuid.clone();
         move |_: MouseEvent| {
-            let next = cycle_rate(rate);
+            // Cycle from the live signal, not the render-time `rate` prop, so
+            // rapid taps before a re-render each advance a full step instead of
+            // recomputing the same `next` from a stale value.
+            let next = cycle_rate(*rate_sig.peek());
             super::helpers::apply_rate(&mut rate_sig, rate_error, user_id, &uuid, next);
         }
     };

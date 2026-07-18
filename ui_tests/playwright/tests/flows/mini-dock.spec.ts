@@ -1,6 +1,7 @@
 import { expect, test } from "../fixtures/test";
 import { AUDIOBOOK_BOOKS, AUDIOBOOK_BOOK_COUNT } from "../fixtures/audiobooks";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import {
@@ -33,6 +34,9 @@ const MP3_BOOK = AUDIOBOOK_BOOKS.find(
 // Distinct author from every audiobook fixture so auto-attach never merges
 // this EPUB with the playing audiobook mid-test.
 const READER_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "gamma")!;
+
+// The web speed control posts through the `rpc_set_playback_rate` server fn.
+const PLAYBACK_RATE_SET_URL = /\/api\/rpc\/audiobooks\/playback-rate\/set(?:\?|$)/;
 
 /**
  * Wait until the App-level playback driver has run `OmnibusAudio.initDirect`
@@ -192,11 +196,26 @@ test("dock speed chip cycles playback rate and reaches the shared audio + full p
   await waitForPlayerReady(page);
   await spaNavigateToLibrary(page);
 
+  // Speed persists per-book, so don't assume a fixed starting rate — read the
+  // chip's current value and assert the transition to the next cycle preset.
+  const RATE_CYCLE = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0];
   const speed = page.getByTestId("mini-dock-speed");
-  await expect(speed).toHaveText("1.0×");
+  const start = parseFloat((await speed.textContent()) ?? "");
+  const next = RATE_CYCLE.find((r) => r > start + 0.001) ?? RATE_CYCLE[0];
 
-  await speed.click();
-  await expect(speed).toHaveText("1.2×");
+  // The chip cycles the rate and persists it via `rpc_set_playback_rate`;
+  // assert that POST fired with the next preset before checking UI/audio state.
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: PLAYBACK_RATE_SET_URL,
+      expectedStatus: 200,
+      expectedBody: { uuid, update: { playback_rate: next } },
+    },
+    async () => speed.click(),
+  );
+  await expect(speed).toHaveText(`${next.toFixed(1)}×`);
 
   // The chip writes through the shared apply_rate seam, so the change must
   // reach the shared `<audio>` element's playbackRate in real time.
@@ -208,13 +227,13 @@ test("dock speed chip cycles playback rate and reaches the shared audio + full p
             ?.playbackRate ?? null,
       ),
     )
-    .toBeCloseTo(1.2, 2);
+    .toBeCloseTo(next, 2);
 
   // Expanding back to the full player must show the same rate — proof both
   // controls share one signal rather than each tracking its own copy.
   await page.getByTestId("mini-dock-expand-btn").click();
   await expect(page).toHaveURL(new RegExp(`/listen/${uuid}$`));
-  await expect(page.getByTestId("listen-rate")).toContainText("1.2");
+  await expect(page.getByTestId("listen-rate")).toContainText(next.toFixed(1));
 });
 
 // ---------------------------------------------------------------------------
