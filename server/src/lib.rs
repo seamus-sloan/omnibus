@@ -10,6 +10,8 @@ pub mod backend;
 #[cfg(feature = "server")]
 pub mod logging;
 #[cfg(feature = "server")]
+pub mod metrics;
+#[cfg(feature = "server")]
 pub mod rate_limit;
 #[cfg(feature = "server")]
 pub mod security_headers;
