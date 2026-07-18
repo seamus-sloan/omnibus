@@ -27,8 +27,12 @@ sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"], optional = true }
 tracing = { workspace = true, optional = true }
 # Owns the global subscriber (RUST_LOG-driven console logs); installed before
-# `dioxus::serve` so dioxus-logger's default subscriber never takes over.
-tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+# `dioxus::serve` so dioxus-logger's default subscriber never takes over. The
+# `json` feature backs the durable on-disk log sink (#939).
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"], optional = true }
+# Non-blocking rolling-file appender for the on-disk JSON log sink. Its
+# `WorkerGuard` must outlive the process so buffered records flush on shutdown.
+tracing-appender = { version = "0.2", optional = true }
 time = { version = "0.3", optional = true }
 # Re-exported by dioxus::serve as the return error type, and used by the
 # native startup helpers in main.rs that previously lived inside an inline
@@ -74,6 +78,7 @@ server = [
     "dep:tokio",
     "dep:tracing",
     "dep:tracing-subscriber",
+    "dep:tracing-appender",
     "dep:time",
     "dep:anyhow",
     "dep:tempfile",
