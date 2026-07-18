@@ -318,6 +318,20 @@
         rect: rect,
       }));
     });
+
+    // Arrow keys page the book when the content iframe has focus. Key events
+    // inside the iframe never bubble to the host document (so the Rust surface
+    // keydown handler can't see them) — epub.js forwards them here instead.
+    rendition.on("keyup", function (e) {
+      var k = e && e.key;
+      if (k === "ArrowLeft") {
+        prev();
+        if (e.preventDefault) e.preventDefault();
+      } else if (k === "ArrowRight") {
+        next();
+        if (e.preventDefault) e.preventDefault();
+      }
+    });
   }
 
   function emitRelocate(location) {
