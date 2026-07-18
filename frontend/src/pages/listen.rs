@@ -52,11 +52,11 @@ pub(crate) use bootstrap::install_audio_bootstrap;
 #[cfg(not(feature = "mobile"))]
 pub(crate) use controls::AudioElement;
 #[cfg(not(feature = "mobile"))]
-pub(crate) use mini_dock::MiniDock;
+pub(crate) use mini_dock::{dock_is_active, MiniDock};
 // Mobile app-root pieces: the playback context (provided by `App`), the
 // render-less audio host, and the persistent mini-player (`ScreenLayout`).
 #[cfg(feature = "mobile")]
-pub(crate) use mobile::{MobileAudioHost, MobileMiniPlayer, MobilePlayback};
+pub(crate) use mobile::{mobile_dock_view, MobileAudioHost, MobileMiniPlayer, MobilePlayback};
 
 /// Renders the audiobook listen page for the book with the given uuid.
 ///

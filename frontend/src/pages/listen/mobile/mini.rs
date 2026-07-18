@@ -11,8 +11,20 @@ use crate::contexts::use_server_url;
 use crate::Route;
 
 use super::state::use_mobile_playback;
-use super::view::{chapter_index_for_elapsed, format_hms, remaining_at_rate};
+use super::view::{chapter_index_for_elapsed, format_hms, remaining_at_rate, PlayerView};
 use super::{cover_src, interop};
+
+/// The mini bar's render gate: the loaded view when it's playable, `None`
+/// when nothing is loaded or the book is HLS-only (unsupported on mobile —
+/// the full player shows a message and never starts playback, so there is
+/// nothing for a mini transport to control). Shared with the mobile `/read`
+/// route so the reader reserves reflow space exactly while the bar is docked.
+pub(crate) fn mobile_dock_view(view: Option<PlayerView>, unsupported: bool) -> Option<PlayerView> {
+    if unsupported {
+        return None;
+    }
+    view
+}
 
 /// Renders the docked mini-player, or nothing when no audiobook is loaded.
 #[component]
@@ -20,14 +32,9 @@ pub fn MobileMiniPlayer() -> Element {
     let ctx = use_mobile_playback();
     let server_url = use_server_url();
 
-    let Some(view) = (ctx.view)() else {
+    let Some(view) = mobile_dock_view((ctx.view)(), (ctx.unsupported)()) else {
         return rsx! {};
     };
-    // HLS books render an unsupported message in the full player and never
-    // start playback — nothing for a mini transport to control.
-    if (ctx.unsupported)() {
-        return rsx! {};
-    }
     let uuid = (ctx.uuid)().unwrap_or_default();
     let elapsed = (ctx.elapsed)();
     let playing = (ctx.playing)();
@@ -118,5 +125,35 @@ pub fn MobileMiniPlayer() -> Element {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use omnibus_shared::EbookMetadata;
+
+    use super::mobile_dock_view;
+    use super::PlayerView;
+
+    fn view() -> PlayerView {
+        PlayerView::from_hls(&EbookMetadata {
+            title: Some("Test Audiobook".into()),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn mobile_dock_view_returns_the_view_when_loaded_and_playable() {
+        assert!(mobile_dock_view(Some(view()), false).is_some());
+    }
+
+    #[test]
+    fn mobile_dock_view_is_none_when_nothing_is_loaded() {
+        assert!(mobile_dock_view(None, false).is_none());
+    }
+
+    #[test]
+    fn mobile_dock_view_is_none_for_an_unsupported_hls_book() {
+        assert!(mobile_dock_view(Some(view()), true).is_none());
     }
 }

@@ -123,3 +123,47 @@ test("Immersive Read opens the reader with the audiobook player docked", async (
   await expect(dock).toBeVisible();
   await expect(page.getByTestId("mini-dock-title")).toHaveText(DUAL_FORMAT_BOOK.title);
 });
+
+// ---------------------------------------------------------------------------
+// Action — the reading stage reflows above the docked player (F-1131)
+// ---------------------------------------------------------------------------
+
+test("reader prose reflows above the docked player with the footer clear beneath it", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchDualFormatUuid(request);
+  await gotoReady(page, `/books/${uuid}`);
+
+  await page.getByTestId("immersive-read").click();
+  await expect(page).toHaveURL(new RegExp(`/read/${uuid}$`));
+
+  const viewer = page.getByTestId("reader-viewer");
+  const dock = page.getByTestId("mini-dock");
+  const footer = page.getByTestId("reader-footer");
+  await expect(viewer).toBeVisible();
+  await expect(dock).toBeVisible();
+  await expect(footer).toBeVisible();
+
+  // The `rd-immersive` reflow class lands asynchronously (once playback state
+  // resolves the book), so poll the geometry rather than asserting once:
+  // stage bottom must clear the dock's top (AC1 — no occluded prose), and the
+  // dock's bottom must sit above the reader's own footer (AC2 — the progress
+  // footer stays visible and interactive).
+  await expect
+    .poll(
+      async () => {
+        const [v, d, f] = await Promise.all([
+          viewer.boundingBox(),
+          dock.boundingBox(),
+          footer.boundingBox(),
+        ]);
+        if (!v || !d || !f) return "missing-box";
+        if (v.y + v.height > d.y + 0.5) return "stage-overlaps-dock";
+        if (d.y + d.height > f.y + 0.5) return "dock-overlaps-footer";
+        return "clear";
+      },
+      { timeout: 10_000 },
+    )
+    .toBe("clear");
+});

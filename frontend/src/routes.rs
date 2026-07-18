@@ -129,22 +129,37 @@ pub fn MetadataEdit(uuid: String) -> Element {
 #[component]
 pub fn BookRead(uuid: String) -> Element {
     use_page_title(|| Some("Reader".into()));
+    // `rd-immersive` reflows the reading stage above the docked bar (#1131).
+    // Gated on the same predicate as MiniDock's active bar so the reserved
+    // space and the visible dock always agree. SSR and the first WASM paint
+    // both see an inactive dock (`book`/`uuid` start `None`), so hydration
+    // parity holds (rule 07); the class lands post-boot alongside the bar.
+    let playback = crate::use_playback();
+    let docked = dock_is_active(&playback.book.read(), &playback.uuid.read());
     rsx! {
-        BookReadPage { uuid }
-        MiniDock {}
+        div { class: if docked { "rd-host rd-immersive" } else { "rd-host" },
+            BookReadPage { uuid }
+            MiniDock {}
+        }
     }
 }
 
-/// Mobile variant of [`BookRead`]: the reader only. Mobile's persistent
-/// playback surface is [`crate::pages::MobileMiniPlayer`], scoped to
-/// [`ScreenLayout`]; extending it into the immersive reader is
-/// deliberately not implemented here.
+/// Mobile variant of [`BookRead`]: the reader with the persistent
+/// [`crate::pages::MobileMiniPlayer`] docked beneath it (#1133) — launched
+/// immersively from book detail, or simply carrying an already-playing
+/// audiobook into the reader. Same `rd-immersive` reflow contract as the web
+/// variant; mobile renders client-side only, so no hydration constraint.
 #[cfg(feature = "mobile")]
 #[component]
 pub fn BookRead(uuid: String) -> Element {
     use_page_title(|| Some("Reader".into()));
+    let ctx = use_context::<MobilePlayback>();
+    let docked = mobile_dock_view((ctx.view)(), (ctx.unsupported)()).is_some();
     rsx! {
-        BookReadPage { uuid }
+        div { class: if docked { "rd-host rd-immersive" } else { "rd-host" },
+            BookReadPage { uuid }
+            MobileMiniPlayer {}
+        }
     }
 }
 

@@ -12,6 +12,7 @@ use crate::{data, use_server_url, Route};
 
 mod discovery;
 mod file_picker;
+mod immersive;
 mod journal;
 mod journal_editor;
 mod merge;

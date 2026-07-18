@@ -3316,13 +3316,22 @@ a.idx-letter-on:focus-visible {
 .mini-dock-prog { position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--bg-2); }
 .mini-dock-prog > i { display: block; height: 100%; background: var(--accent); }
 
+/* Immersive dock geometry. The `/read` route wraps the reader and its docked
+   audiobook bar in `.rd-host`, adding `rd-immersive` while the bar is active;
+   this height + gap pair is the single source of truth shared by the docked
+   bar below and the reader's stage inset (see the reader-chrome section), so
+   the two can't drift apart. */
+.rd-host { --rd-dock-h: 68px; --rd-dock-gap: 8px; }
+
 /* On `/read` the dock renders as a sibling of `.rd-surface` (#988), so raise
    it above the reader's own bottom bar (`.rd-bottom`, 54px + safe-area) —
    otherwise the two fixed-position bars visually collide at the bottom
    edge. Higher specificity than the plain `.mini-dock` rule (incl. the
-   phone breakpoint below), so it wins at every viewport width. */
+   phone breakpoint below), so it wins at every viewport width. Height is
+   pinned to the shared value the reader reserves space with. */
 .rd-surface + .mini-dock-host .mini-dock {
-  bottom: calc(54px + env(safe-area-inset-bottom) + 8px);
+  bottom: calc(54px + env(safe-area-inset-bottom) + var(--rd-dock-gap));
+  height: var(--rd-dock-h);
 }
 
 .mini-dock-now {
@@ -4950,6 +4959,15 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   top: calc(60px + env(safe-area-inset-top));
   bottom: calc(54px + env(safe-area-inset-bottom));
   overflow: hidden; }
+/* Immersive reflow: while the audiobook bar is docked (`rd-immersive` set by
+   the /read route), the stage's bottom inset grows by the bar's height plus
+   a gap on each side, so the last line of prose clears the bar and the
+   reader's own bottom chrome (progress footer, ribbon) stays visible and
+   clickable beneath it. Shares --rd-dock-h/--rd-dock-gap with the dock rules
+   in the mini-dock section — one source of truth for the reserved band. */
+.rd-immersive .rd-stage {
+  bottom: calc(54px + env(safe-area-inset-bottom) + var(--rd-dock-h) + 2 * var(--rd-dock-gap));
+}
 .rd-viewer { position: absolute; inset: 0; }
 .rd-turn { position: absolute; top: 50%; transform: translateY(-50%); z-index: 5;
   width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center;
@@ -6363,6 +6381,18 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .m-mini-pause { display: flex; gap: 3.5px; }
 .m-mini-pause span { width: 3.5px; height: 13px; border-radius: 1px; background: var(--accent-ink); }
+
+/* Mobile immersive: on `/read` (no tab bar) the mini bar docks just above the
+   reader's bottom bar instead, pinned to the shared --rd-dock-h so the stage
+   inset reserved by `.rd-immersive .rd-stage` matches it exactly. The column
+   layout lets the transport row fill the pinned height with no dead space. */
+.rd-host .m-mini {
+  left: 8px; right: 8px;
+  bottom: calc(54px + env(safe-area-inset-bottom) + var(--rd-dock-gap));
+  height: var(--rd-dock-h);
+  display: flex; flex-direction: column;
+}
+.rd-host .m-mini .m-mini-row { flex: 1; }
 .m-mini-expand {
   width: 32px; height: 32px; flex: 0 0 32px; border-radius: 999px;
   border: none; background: transparent; color: var(--ink-1);
