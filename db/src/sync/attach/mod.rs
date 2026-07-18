@@ -168,9 +168,11 @@ pub(super) async fn maybe_adopt_cover(
 /// removed uuids. The companion to `sync_removed`'s `DELETE FROM books`:
 /// removed uuids that were attachments have no `books` row of their own,
 /// so the books delete no-ops for them — this cleans up the actual
-/// attachment instead. Parts and chapters cascade via the `book_files`
-/// FK; the target book survives (possibly fileless, which is a legal
-/// state).
+/// attachment instead. The file delete is scoped per-file on
+/// `(book_id, scan_key)` so removing one multi-part `.m4b` sibling leaves
+/// the rest of the parts attached. Parts and chapters cascade via the
+/// `book_files` FK; the target book survives (possibly fileless, which is
+/// a legal state).
 pub(super) async fn remove_attached_files(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     removed_uuids: &[String],
@@ -183,7 +185,7 @@ pub(super) async fn remove_attached_files(
             "DELETE FROM book_files WHERE id IN
                 (SELECT bf.id FROM book_files bf
                    JOIN merged_uuids mu
-                     ON mu.book_id = bf.book_id AND mu.format = bf.format
+                     ON mu.book_id = bf.book_id AND mu.scan_key = bf.scan_key
                   WHERE mu.uuid IN ({placeholders}))"
         );
         let mut q = sqlx::query(&files_sql);

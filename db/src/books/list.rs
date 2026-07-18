@@ -235,9 +235,10 @@ pub async fn list_merged_rows_for_formats(
         .collect::<Vec<_>>()
         .join(", ");
     // An attached file is matched by its own relative `scan_key` (F2), so a
-    // repoint of the file's scan root preserves the attachment. `has_file`
-    // is always true — the INNER JOIN means the backing `book_files` row
-    // exists. `COALESCE(mu.scan_key, '')` guards pre-backfill rows.
+    // repoint of the file's scan root preserves the attachment. The join is
+    // per-file on `(book_id, scan_key)` — not `(book_id, format)` — so N
+    // same-format parts under one book each surface their own row's stat
+    // rather than an N×N cartesian. `has_file` is always true (INNER JOIN).
     let sql = format!(
         r"
         SELECT mu.uuid                       AS uuid,
@@ -246,7 +247,8 @@ pub async fn list_merged_rows_for_formats(
                bf.size_bytes                 AS size_bytes,
                1                             AS has_file
           FROM merged_uuids mu
-          JOIN book_files bf ON bf.book_id = mu.book_id AND bf.format = mu.format
+          JOIN book_files bf
+            ON bf.book_id = mu.book_id AND bf.scan_key = mu.scan_key
          WHERE mu.library_path = ?
            AND mu.format IN ({placeholders})
         "

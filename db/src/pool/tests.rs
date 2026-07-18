@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::test_support::count_rows as count;
+
 #[tokio::test]
 async fn init_db_returns_db_error_when_url_is_invalid() {
     // `sqlite://` URL pointing at a path under a non-existent dir + no
@@ -689,6 +691,252 @@ async fn boot_backfill_repairs_ghosted_multi_attach_and_preserves_surviving_book
     assert_eq!(
         repair_user_data_counts(&pool, &fixture.target_uuid).await,
         (1, 1, 1)
+    );
+}
+
+/// Forge a per-file guard and replay the file so it attaches as another
+/// same-format part under `book_id` (a manual multi-part merge).
+async fn attach_m4b_part(pool: &SqlitePool, book_id: i64, group_path: &str) {
+    let ab =
+        crate::test_support::indexed_audiobook(group_path, "Wind and Truth", Some("Sanderson"));
+    sqlx::query(
+        "INSERT INTO merged_uuids (uuid, book_id, format, library_path, scan_key)
+         VALUES (?, ?, 'M4B', '/audio', ?)",
+    )
+    .bind(crate::helpers::stable_uuid("/audio", group_path))
+    .bind(book_id)
+    .bind(&ab.scan_key)
+    .execute(pool)
+    .await
+    .unwrap();
+    crate::sync::sync_audiobooks(
+        pool,
+        "/audio",
+        crate::sync::AudiobookSyncPlan {
+            new_books: vec![ab],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Insert a resurrected standalone book for `group_path` (the bug's output):
+/// a books row whose scan_key equals an already-attached part's file.
+async fn resurrect_standalone(pool: &SqlitePool, group_path: &str) {
+    crate::sync::sync_audiobooks(
+        pool,
+        "/audio",
+        crate::sync::AudiobookSyncPlan {
+            new_books: vec![crate::test_support::indexed_audiobook(
+                group_path,
+                "Wind and Truth",
+                Some("Sanderson"),
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn boot_backfill_replants_multipart_guards_and_drops_resurrected_duplicates() {
+    let _covers = crate::test_support::CoversTempDir::new("multipart-guard-repair");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let target_uuid = crate::test_support::seed_synced_ebook(
+        &pool,
+        "Sanderson/wt.epub",
+        "Wind and Truth",
+        "Sanderson",
+    )
+    .await;
+    let target_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = ?")
+        .bind(&target_uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    for gp in [
+        "Sanderson/wt-1.m4b",
+        "Sanderson/wt-2.m4b",
+        "Sanderson/wt-3.m4b",
+    ] {
+        attach_m4b_part(&pool, target_id, gp).await;
+    }
+
+    // Corrupt to the pre-#1126 state: parts 2 & 3 lost their guards and
+    // resurrected as standalone books; part 3's dupe accrued user data.
+    sqlx::query(
+        "DELETE FROM merged_uuids WHERE scan_key IN ('Sanderson/wt-2.m4b', 'Sanderson/wt-3.m4b')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    resurrect_standalone(&pool, "Sanderson/wt-2.m4b").await;
+    resurrect_standalone(&pool, "Sanderson/wt-3.m4b").await;
+    let dupe3_uuid: String =
+        sqlx::query_scalar("SELECT uuid FROM books WHERE scan_key = 'Sanderson/wt-3.m4b'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    sqlx::query(
+        "INSERT INTO users (id, username, password_hash, is_admin) VALUES (1, 'u', 'h', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO user_ratings (user_id, book_uuid, half_stars) VALUES (1, ?, 8)")
+        .bind(&dupe3_uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Precondition: 1 target + 2 standalone dupes; only part 1 keeps its guard.
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 3);
+    assert_eq!(
+        count(
+            &pool,
+            &format!("SELECT COUNT(*) FROM merged_uuids WHERE book_id = {target_id}")
+        )
+        .await,
+        1
+    );
+
+    run_boot_backfills(&pool).await.unwrap();
+
+    // Every attached part regains a guard; the no-user-data dupe (part 2) is
+    // deleted, but the rated dupe (part 3) is left for a deliberate merge.
+    assert_eq!(
+        count(
+            &pool,
+            &format!("SELECT COUNT(*) FROM merged_uuids WHERE book_id = {target_id}")
+        )
+        .await,
+        3
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM books WHERE scan_key = 'Sanderson/wt-2.m4b'"
+        )
+        .await,
+        0,
+        "the unrated resurrected duplicate is removed"
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM books WHERE scan_key = 'Sanderson/wt-3.m4b'"
+        )
+        .await,
+        1,
+        "a dupe carrying user data is preserved for manual handling"
+    );
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM user_ratings").await, 1);
+
+    // Idempotent: a second run changes nothing.
+    run_boot_backfills(&pool).await.unwrap();
+    assert_eq!(
+        count(
+            &pool,
+            &format!("SELECT COUNT(*) FROM merged_uuids WHERE book_id = {target_id}")
+        )
+        .await,
+        3
+    );
+
+    // The three parts now classify Unchanged on a reindex — no resurrection.
+    let disk: Vec<_> = [
+        "Sanderson/wt-1.m4b",
+        "Sanderson/wt-2.m4b",
+        "Sanderson/wt-3.m4b",
+    ]
+    .iter()
+    .map(|gp| {
+        let ab = crate::test_support::indexed_audiobook(gp, "Wind and Truth", Some("Sanderson"));
+        crate::ebook::StatEntry {
+            filename: ab.group_path.clone(),
+            scan_key: ab.scan_key.clone(),
+            mtime_epoch: ab.max_mtime_epoch,
+            size_bytes: ab.total_size_bytes,
+            error: None,
+        }
+    })
+    .collect();
+    let db_rows =
+        crate::books::list_merged_rows_for_formats(&pool, "/audio", &["M4B", "M4A", "MP3"])
+            .await
+            .unwrap();
+    let diff = crate::indexer::diff_library(&disk, &db_rows, std::path::Path::new("/audio"), true);
+    assert_eq!(diff.unchanged.len(), 3);
+    assert!(diff.new.is_empty());
+}
+
+#[tokio::test]
+async fn boot_repair_spares_a_same_scan_key_book_in_another_library() {
+    // scan_key is only unique per (library_id, scan_key). A healthy book in
+    // library B must not be deleted just because library A attached a file at
+    // the same *relative* path — the dupe match is scoped to the same root.
+    let _covers = crate::test_support::CoversTempDir::new("multipart-guard-crosslib");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    // Library A ("/audio-a"): an ebook with an attached m4b at "Dup/p.m4b".
+    let target_uuid =
+        crate::test_support::seed_synced_ebook(&pool, "A/book.epub", "Book A", "Author A").await;
+    let target_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = ?")
+        .bind(&target_uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let ab = crate::test_support::indexed_audiobook("Dup/p.m4b", "Book A", Some("Author A"));
+    sqlx::query(
+        "INSERT INTO merged_uuids (uuid, book_id, format, library_path, scan_key)
+         VALUES (?, ?, 'M4B', '/audio-a', ?)",
+    )
+    .bind(crate::helpers::stable_uuid("/audio-a", "Dup/p.m4b"))
+    .bind(target_id)
+    .bind(&ab.scan_key)
+    .execute(&pool)
+    .await
+    .unwrap();
+    crate::sync::sync_audiobooks(
+        &pool,
+        "/audio-a",
+        crate::sync::AudiobookSyncPlan {
+            new_books: vec![ab],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // Library B ("/audio-b"): a healthy standalone audiobook at the same
+    // relative path, different title/author, no user data.
+    crate::sync::sync_audiobooks(
+        &pool,
+        "/audio-b",
+        crate::sync::AudiobookSyncPlan {
+            new_books: vec![crate::test_support::indexed_audiobook(
+                "Dup/p.m4b",
+                "Book B",
+                Some("Author B"),
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    run_boot_backfills(&pool).await.unwrap();
+
+    // The library-B book survives — its file lives under a different scan root.
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM books b JOIN scan_roots l ON l.id = b.library_id
+              WHERE b.scan_key = 'Dup/p.m4b' AND l.path = '/audio-b'"
+        )
+        .await,
+        1
     );
 }
 

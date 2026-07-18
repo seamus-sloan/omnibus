@@ -87,8 +87,13 @@ async fn run_boot_backfills(pool: &SqlitePool) -> Result<(), InitDbError> {
     // Auto-attach match key for rows indexed before migration 0016.
     crate::normalize::backfill_norm_columns(pool).await?;
     // F2 `scan_key` diff key for rows indexed before migration 0026,
-    // reconstructed from stored columns.
+    // reconstructed from stored columns (also fills `book_files.scan_key`,
+    // migration 0043).
     crate::identity::backfill_scan_keys(pool).await?;
+    // #1126 recovery: re-plant per-file guards for multi-part audiobook
+    // attachments and drop the standalone duplicates the old clobber left.
+    // Runs after the scan_key backfill it depends on.
+    repair_multipart_audiobook_attachments(pool).await?;
     // F5b `series_sort` keyset column for rows indexed before migration 0028,
     // reconstructed from the existing series link.
     crate::sort_keys::backfill_series_sort(pool).await?;
@@ -145,6 +150,98 @@ async fn repair_ghosted_audiobook_attachments(pool: &SqlitePool) -> Result<(), s
         repaired_slots = damaged_slots.len(),
         "boot backfill: cleared ghosted audiobook attachment slots"
     );
+    Ok(())
+}
+
+/// Repair multi-part audiobook merges damaged before the per-file attach fix
+/// (#1126). Two idempotent steps, both `WHERE`-guarded no-ops once healthy:
+///
+/// 1. Plant a `merged_uuids` guard for every attached audiobook `book_files`
+///    row missing one — the state the old `(book, format)` single-occupancy
+///    slot left, where all but one part lost its guard and resurrected as a
+///    standalone book on each scan. An attachment is identified by its
+///    `scan_key` differing from its book's own native `scan_key`.
+/// 2. Delete standalone books that duplicate a file now attached elsewhere (the
+///    resurrected copies) — but only when they carry **no** user data, so a
+///    dupe someone rated/journaled is left for a deliberate manual merge. The
+///    `delete_fts` + orphan-taxonomy prune mirror the merge finalize.
+///
+/// Runs after `backfill_scan_keys` so `book_files.scan_key` is populated.
+async fn repair_multipart_audiobook_attachments(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    let orphaned: Vec<(i64, String, String, String)> = sqlx::query_as(
+        "SELECT bf.book_id, bf.format, bf.scan_key, COALESCE(bf.library_path, l.path)
+           FROM book_files bf
+           JOIN books b ON b.id = bf.book_id
+           JOIN scan_roots l ON l.id = b.library_id
+          WHERE UPPER(bf.format) IN ('M4B', 'M4A', 'MP3')
+            AND bf.scan_key IS NOT NULL
+            AND bf.scan_key <> COALESCE(b.scan_key, '')
+            AND NOT EXISTS (SELECT 1 FROM merged_uuids mu
+                             WHERE mu.book_id = bf.book_id AND mu.scan_key = bf.scan_key)",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    for (book_id, format, scan_key, library_path) in &orphaned {
+        // stable_uuid keys the ledger handle to the file's path, matching the
+        // attach writer's convention; the reindex matches on scan_key, not this.
+        let uuid = crate::helpers::stable_uuid(library_path, scan_key);
+        sqlx::query(
+            "INSERT OR IGNORE INTO merged_uuids (uuid, book_id, format, library_path, scan_key)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&uuid)
+        .bind(book_id)
+        .bind(format)
+        .bind(library_path)
+        .bind(scan_key)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // Match the resurrected dupe to the *same physical file* — same scanned
+    // root AND relative path — not scan_key alone. `books.scan_key` is only
+    // unique per (library_id, scan_key) (0026), so two scan roots sharing a
+    // relative path could otherwise delete a healthy book in another library.
+    let dupes: Vec<i64> = sqlx::query_scalar(
+        "SELECT b.id FROM books b
+           JOIN scan_roots lb ON lb.id = b.library_id
+          WHERE b.scan_key IS NOT NULL
+            AND EXISTS (SELECT 1 FROM book_files bf
+                          JOIN books ob        ON ob.id = bf.book_id
+                          JOIN scan_roots lo   ON lo.id = ob.library_id
+                         WHERE bf.book_id <> b.id
+                           AND bf.scan_key = b.scan_key
+                           AND COALESCE(bf.library_path, lo.path) = lb.path)
+            AND NOT EXISTS (SELECT 1 FROM reading_progress   WHERE book_uuid = b.uuid)
+            AND NOT EXISTS (SELECT 1 FROM reading_sessions   WHERE book_uuid = b.uuid)
+            AND NOT EXISTS (SELECT 1 FROM listening_sessions WHERE book_uuid = b.uuid)
+            AND NOT EXISTS (SELECT 1 FROM bookmarks          WHERE book_uuid = b.uuid)
+            AND NOT EXISTS (SELECT 1 FROM user_ratings       WHERE book_uuid = b.uuid)
+            AND NOT EXISTS (SELECT 1 FROM journal_entries    WHERE book_uuid = b.uuid)",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    for id in &dupes {
+        crate::sync::delete_fts(&mut tx, *id).await?;
+        sqlx::query("DELETE FROM books WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if !dupes.is_empty() {
+        crate::taxonomy::delete_orphan_taxonomy(&mut tx).await?;
+    }
+
+    tx.commit().await?;
+    if !orphaned.is_empty() || !dupes.is_empty() {
+        tracing::info!(
+            planted_guards = orphaned.len(),
+            removed_duplicates = dupes.len(),
+            "boot backfill: repaired multi-part audiobook attachments (#1126)"
+        );
+    }
     Ok(())
 }
 

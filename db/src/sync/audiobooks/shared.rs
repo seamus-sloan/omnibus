@@ -81,16 +81,13 @@ pub(super) async fn try_attach_new_audiobook(
     }
     // Already a recorded attachment? Match by the repoint-stable relative
     // `scan_key` (the group path) and re-attach against the stored ledger uuid.
+    // The attach accumulates per-file, so a second same-format part no longer
+    // clobbers its siblings or falls back to resurrecting a standalone book.
     if let Some((_uuid, target_id, format)) =
         attach::find_attachment_by_scan_key(tx, library_path, &b.scan_key).await?
     {
-        if attach_audiobook_file(tx, target_id, &format, library_path, b, covers).await? {
-            return Ok(true);
-        }
-        // Slot taken by a different file: drop this file's stale ledger row so
-        // it stops replaying, and fall through to insert it as its own book.
-        attach::forget_attachment(tx, library_path, &b.scan_key).await?;
-        return Ok(false);
+        attach_audiobook_file(tx, target_id, &format, library_path, b, covers).await?;
+        return Ok(true);
     }
     let (Some(title_norm), Some(author_norm)) = (
         normalize_title(&b.title),
@@ -104,10 +101,11 @@ pub(super) async fn try_attach_new_audiobook(
     else {
         return Ok(false);
     };
-    // find_attach_target excludes a book that already has this format's file
-    // row, but the writer re-checks the ledger and may still refuse a slot a
-    // different file holds — return whatever it decides.
-    attach_audiobook_file(tx, target_id, &b.format, library_path, b, covers).await
+    // find_attach_target already excludes a book that holds this format, so the
+    // title+author auto-attach stays one-file-per-format; deliberate multi-part
+    // combines come through the manual-merge path, not here.
+    attach_audiobook_file(tx, target_id, &b.format, library_path, b, covers).await?;
+    Ok(true)
 }
 
 /// Write (or rewrite) an attached audiobook's `book_files` row (plus
@@ -119,7 +117,9 @@ pub(super) async fn try_attach_new_audiobook(
 /// target book may live in a different library, and the HLS read path
 /// resolves part filenames against the *audio* root.
 ///
-/// Returns `Ok(false)` without writing when another file holds the slot.
+/// Attaching a second same-format file (a distinct multi-part `.m4b`)
+/// accumulates as its own `book_files` row keyed on `scan_key` — it does
+/// not clobber the sibling parts already attached to this `(book, format)`.
 pub(super) async fn attach_audiobook_file(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
@@ -127,19 +127,35 @@ pub(super) async fn attach_audiobook_file(
     library_path: &str,
     b: &crate::audiobook::IndexedAudiobook,
     covers: &mut Vec<(String, String, Vec<u8>)>,
-) -> Result<bool, SyncError> {
-    // One attached file per (book, format) slot: refuse rather than delete a
-    // different file's row (the DELETE below is scoped only to the format).
-    if attach::slot_held_by_other(tx, book_id, format, &b.scan_key).await? {
-        return Ok(false);
-    }
-    // Idempotent re-attach: the refresh path lands here too.
-    sqlx::query("DELETE FROM book_files WHERE book_id = ? AND format = ?")
+) -> Result<(), SyncError> {
+    // Per-file identity: scope the idempotent-re-attach delete to *this* file's
+    // scan_key so sibling parts under the same (book, format) survive. The old
+    // format-wide delete is what wiped every part but the last on each scan.
+    // Capture the prior ordinal first so a re-attach (stat change) keeps its
+    // slot in the picker instead of jumping to the end.
+    let prior_ordinal: Option<i64> = sqlx::query_scalar(
+        "SELECT ordinal FROM book_files WHERE book_id = ? AND format = ? AND scan_key = ?",
+    )
+    .bind(book_id)
+    .bind(format)
+    .bind(&b.scan_key)
+    .fetch_optional(&mut **tx)
+    .await?;
+    sqlx::query("DELETE FROM book_files WHERE book_id = ? AND format = ? AND scan_key = ?")
         .bind(book_id)
         .bind(format)
+        .bind(&b.scan_key)
         .execute(&mut **tx)
         .await?;
     let book_file_id = insert_audiobook_file_row(tx, book_id, b).await?;
+    if let Some(ordinal) = prior_ordinal {
+        // Freed by the delete above, so restoring it can't collide.
+        sqlx::query("UPDATE book_files SET ordinal = ? WHERE id = ?")
+            .bind(ordinal)
+            .bind(book_file_id)
+            .execute(&mut **tx)
+            .await?;
+    }
     let dir = std::path::Path::new(&b.group_path)
         .parent()
         .and_then(|p| p.to_str())
@@ -163,7 +179,7 @@ pub(super) async fn attach_audiobook_file(
     if let Some(cover) = attach::maybe_adopt_cover(tx, book_id, b.cover.as_ref()).await? {
         covers.push(cover);
     }
-    Ok(true)
+    Ok(())
 }
 
 /// Return type from a fresh audiobook insert — the ids needed by the
@@ -241,9 +257,16 @@ async fn insert_audiobook_file_row(
         .to_string();
 
     let id = sqlx::query_scalar::<_, i64>(
+        // Ordinal appends after any existing same-format rows so a second
+        // multi-part `.m4b` attaching to this book doesn't collide on the
+        // `(book_id, format, ordinal)` unique index; a fresh book's first file
+        // gets 0. book_id/format are bound twice (all-positional `?`) rather
+        // than mixing numbered params, which misaligns sqlx binds.
         "INSERT INTO book_files \
-            (book_id, format, filename, size_bytes, mtime_epoch) \
-         VALUES (?, ?, ?, ?, ?) \
+            (book_id, format, filename, size_bytes, mtime_epoch, scan_key, ordinal) \
+         VALUES (?, ?, ?, ?, ?, ?, \
+                 COALESCE((SELECT MAX(ordinal) + 1 FROM book_files \
+                            WHERE book_id = ? AND format = ?), 0)) \
          RETURNING id",
     )
     .bind(book_id)
@@ -251,6 +274,11 @@ async fn insert_audiobook_file_row(
     .bind(&filename)
     .bind(b.total_size_bytes)
     .bind(b.max_mtime_epoch)
+    // Per-file attachment identity: the group's relative path, matching the
+    // `merged_uuids` guard so N same-format parts each resolve to their own row.
+    .bind(&b.scan_key)
+    .bind(book_id)
+    .bind(&b.format)
     .fetch_one(&mut **tx)
     .await?;
     // A returning group clears the F10 missing-files flag (no-op on a fresh

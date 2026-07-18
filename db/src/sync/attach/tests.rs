@@ -182,13 +182,12 @@ async fn two_audiobooks_matching_one_ebook_in_one_plan_do_not_clobber() {
 }
 
 #[tokio::test]
-async fn replayed_ledger_collision_does_not_clobber_the_incumbent_file() {
-    // Two merged_uuids rows pointing at the same (book, M4B) slot — the
-    // frozen state a pre-fix clobber leaves behind. A rescan that replays
-    // the second file must refuse rather than delete the incumbent's file
-    // row and replace it. Pre-fix this collapsed to one file row (data
-    // loss); post-fix the incumbent survives and the loser becomes its own
-    // book.
+async fn replayed_second_file_accumulates_as_another_part_under_the_book() {
+    // Two merged_uuids rows pointing at the same (book, M4B) — a deliberate
+    // multi-part `.m4b` merge (#1126). Attachments key on the file's own
+    // scan_key, so replaying the second file accumulates it as another part
+    // beside the first rather than clobbering it or resurrecting a standalone
+    // book. (Pre-#1126 the second file was demoted to its own book.)
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_ebook(
         &pool,
@@ -246,16 +245,27 @@ async fn replayed_ledger_collision_does_not_clobber_the_incumbent_file() {
     .await
     .unwrap();
 
-    // The incumbent A's file row on the ebook is untouched (its filename is
-    // A's stem, not B's) — the DELETE-then-replace never fired.
-    let incumbent: String =
-        sqlx::query_scalar("SELECT filename FROM book_files WHERE book_id = ? AND format = 'M4B'")
-            .bind(ebook_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(incumbent, "wt-a");
-    // B survives too — as its own book, not a lost row.
+    // The incumbent A's file row survives — the scoped delete only touches B's
+    // own scan_key — and B is now a second M4B row under the *same* ebook.
+    let stems: Vec<String> = sqlx::query_scalar(
+        "SELECT filename FROM book_files WHERE book_id = ? AND format = 'M4B' ORDER BY ordinal",
+    )
+    .bind(ebook_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stems, vec!["wt-a".to_string(), "wt-b".to_string()]);
+    // Both parts hang off the ebook — no standalone book was resurrected for B.
+    assert_eq!(
+        count(
+            &pool,
+            &format!(
+                "SELECT COUNT(*) FROM book_files WHERE book_id = {ebook_id} AND format = 'M4B'"
+            )
+        )
+        .await,
+        2
+    );
     assert_eq!(
         count(
             &pool,
@@ -264,8 +274,7 @@ async fn replayed_ledger_collision_does_not_clobber_the_incumbent_file() {
         .await,
         2
     );
-    // B's stale ledger row was forgotten, so the slot no longer has two rows
-    // fighting over it.
+    // Both parts keep their guard rows, each keyed on its own scan_key.
     assert_eq!(
         count(
             &pool,
@@ -274,7 +283,7 @@ async fn replayed_ledger_collision_does_not_clobber_the_incumbent_file() {
             )
         )
         .await,
-        1
+        2
     );
 }
 
@@ -468,6 +477,164 @@ async fn removed_attached_file_drops_attachment_but_keeps_book() {
     );
     assert_eq!(
         count(&pool, "SELECT COUNT(*) FROM book_file_parts").await,
+        0
+    );
+}
+
+/// Merge an extra same-format `.m4b` part onto `book_id` the way a manual
+/// multi-part merge does: forge the per-file ledger row, then replay the file
+/// so the per-file attach accumulates it beside the existing parts.
+async fn attach_extra_m4b_part(pool: &sqlx::SqlitePool, book_id: i64, group_path: &str) {
+    let ab = indexed_audiobook(group_path, "Wind and Truth", Some("Brandon Sanderson"));
+    sqlx::query(
+        "INSERT INTO merged_uuids (uuid, book_id, format, library_path, scan_key)
+         VALUES (?, ?, 'M4B', '/audio', ?)",
+    )
+    .bind(crate::helpers::stable_uuid("/audio", group_path))
+    .bind(book_id)
+    .bind(&ab.scan_key)
+    .execute(pool)
+    .await
+    .unwrap();
+    sync_audiobooks(
+        pool,
+        "/audio",
+        AudiobookSyncPlan {
+            new_books: vec![ab],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+}
+
+async fn seed_three_part_audiobook(pool: &sqlx::SqlitePool) -> i64 {
+    seed_ebook(
+        pool,
+        "Sanderson/wt.epub",
+        "Wind and Truth",
+        "Brandon Sanderson",
+    )
+    .await;
+    seed_audiobook(
+        pool,
+        "Sanderson/wt-1.m4b",
+        "Wind and Truth",
+        "Brandon Sanderson",
+    )
+    .await;
+    let ebook_id: i64 = sqlx::query_scalar(
+        "SELECT book_id FROM merged_uuids WHERE scan_key = 'Sanderson/wt-1.m4b'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    attach_extra_m4b_part(pool, ebook_id, "Sanderson/wt-2.m4b").await;
+    attach_extra_m4b_part(pool, ebook_id, "Sanderson/wt-3.m4b").await;
+    ebook_id
+}
+
+#[tokio::test]
+async fn multipart_audiobook_attachments_survive_rescan_as_unchanged() {
+    // The #1126 core case: N same-format parts manually merged under one book.
+    // Each keys on its own scan_key, so a rescan classifies every one Unchanged
+    // instead of resurrecting all-but-one as standalone duplicates.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_three_part_audiobook(&pool).await;
+
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 1);
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM book_files WHERE format = 'M4B'"
+        )
+        .await,
+        3
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM merged_uuids WHERE format = 'M4B'"
+        )
+        .await,
+        3
+    );
+
+    let disk: Vec<_> = [
+        "Sanderson/wt-1.m4b",
+        "Sanderson/wt-2.m4b",
+        "Sanderson/wt-3.m4b",
+    ]
+    .iter()
+    .map(|gp| {
+        let ab = indexed_audiobook(gp, "Wind and Truth", Some("Brandon Sanderson"));
+        crate::ebook::StatEntry {
+            filename: ab.group_path.clone(),
+            scan_key: ab.scan_key.clone(),
+            mtime_epoch: ab.max_mtime_epoch,
+            size_bytes: ab.total_size_bytes,
+            error: None,
+        }
+    })
+    .collect();
+    let db_rows = list_merged_rows_for_formats(&pool, "/audio", &["M4B", "M4A", "MP3"])
+        .await
+        .unwrap();
+    let diff = diff_library(&disk, &db_rows, std::path::Path::new("/audio"), true);
+    assert_eq!(diff.unchanged.len(), 3);
+    assert!(
+        diff.new.is_empty(),
+        "no part resurrects as a standalone book"
+    );
+    assert!(diff.removed.is_empty());
+}
+
+#[tokio::test]
+async fn removing_one_multipart_sibling_keeps_the_other_parts() {
+    // AC3: removing one part's file drops only that part's row — the old
+    // `(book_id, format)` join would have deleted every M4B part at once.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_three_part_audiobook(&pool).await;
+
+    let part2_uuid: String =
+        sqlx::query_scalar("SELECT uuid FROM merged_uuids WHERE scan_key = 'Sanderson/wt-2.m4b'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    sync_audiobooks(
+        &pool,
+        "/audio",
+        AudiobookSyncPlan {
+            removed_uuids: vec![part2_uuid],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 1);
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM book_files WHERE format = 'M4B'"
+        )
+        .await,
+        2
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM merged_uuids WHERE format = 'M4B'"
+        )
+        .await,
+        2
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM book_files WHERE scan_key = 'Sanderson/wt-2.m4b'"
+        )
+        .await,
         0
     );
 }
