@@ -41,6 +41,60 @@ async fn api_health_returns_200_unauth_with_app_and_build_id() {
         "repo_root must be a string, got {:?}",
         body["repo_root"]
     );
+    // `version` is what the mobile "You" screen fetches to show the running
+    // server's release alongside its own compile-time app version.
+    assert!(
+        body["version"].is_string(),
+        "version must be a string, got {:?}",
+        body["version"]
+    );
+}
+
+// -------------------------------------------------------------------
+// read_app_version — OMNIBUS_VERSION normalization for `app_version`.
+// -------------------------------------------------------------------
+
+#[test]
+fn read_app_version_normalizes_env_var_and_falls_back_to_dev_when_unset_or_blank() {
+    // One test (not several) so the env-var mutations can't race another
+    // test's parallel read/write of the same process-global var — no other
+    // test in this crate touches `OMNIBUS_VERSION`.
+    let prev = std::env::var("OMNIBUS_VERSION").ok();
+
+    std::env::set_var("OMNIBUS_VERSION", "v1.2.3");
+    assert_eq!(read_app_version(), "v1.2.3");
+
+    // A bare version (e.g. TestFlight's MARKETING_VERSION convention) gets a
+    // leading `v` added, so both sources render consistently.
+    std::env::set_var("OMNIBUS_VERSION", "1.2.3");
+    assert_eq!(read_app_version(), "v1.2.3");
+
+    // A doubled leading `v` collapses to one.
+    std::env::set_var("OMNIBUS_VERSION", "vv1.2.3");
+    assert_eq!(read_app_version(), "v1.2.3");
+
+    // A Docker build-arg supplied without a value (`--build-arg
+    // OMNIBUS_VERSION=` or omitted entirely with no Dockerfile default) sets
+    // the env var to an empty string rather than leaving it unset — that
+    // must not render the bare "v".
+    std::env::set_var("OMNIBUS_VERSION", "");
+    assert_eq!(read_app_version(), "dev");
+
+    std::env::set_var("OMNIBUS_VERSION", "   \n\t");
+    assert_eq!(read_app_version(), "dev");
+
+    // Literally just "v" (or "v" surrounded by whitespace) has nothing left
+    // after stripping the leading `v`s, so it's treated the same as unset.
+    std::env::set_var("OMNIBUS_VERSION", "v");
+    assert_eq!(read_app_version(), "dev");
+
+    std::env::remove_var("OMNIBUS_VERSION");
+    assert_eq!(read_app_version(), "dev");
+
+    match prev {
+        Some(v) => std::env::set_var("OMNIBUS_VERSION", v),
+        None => std::env::remove_var("OMNIBUS_VERSION"),
+    }
 }
 
 // -------------------------------------------------------------------

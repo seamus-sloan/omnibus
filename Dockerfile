@@ -35,6 +35,14 @@ RUN curl -L --proto '=https' --tlsv1.2 -sSf \
 WORKDIR /src
 COPY . .
 
+# Release tag (e.g. "v0.8.9") the crate's own `version` never carries — every
+# merge to main cuts a release (.github/workflows/release.yml) but Cargo.toml
+# stays pinned at 0.1.0. `frontend::version::app_version` reads this via
+# `option_env!` at compile time, so it must be set before `dx bundle`
+# compiles both the server binary and the WASM client (#1055).
+ARG OMNIBUS_VERSION
+ENV OMNIBUS_VERSION=${OMNIBUS_VERSION}
+
 # Produces /src/target/dx/omnibus/release/web/{server, public/, ...}.
 RUN dx bundle --platform web --package omnibus --fullstack --release
 
@@ -78,6 +86,13 @@ COPY --from=builder /src/target/dx/omnibus/release/web/ /app/
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Re-declared in this stage (ARG/ENV don't cross the builder's `FROM`
+# boundary) so the *running* server also reads its own release tag at boot
+# — `server::backend::app_version` calls `std::env::var("OMNIBUS_VERSION")`
+# at runtime, not compile time, unlike the frontend's `option_env!` constant
+# baked in above (#1055).
+ARG OMNIBUS_VERSION
+
 # Bind on all interfaces (Dioxus defaults to 127.0.0.1, unreachable from
 # outside the container) and default the persistent paths into the /config
 # and /cache volumes. Everything here is overridable in docker-compose.yml.
@@ -86,7 +101,8 @@ ENV IP=0.0.0.0 \
     DATABASE_URL="sqlite:///config/omnibus.db?mode=rwc" \
     OMNIBUS_COVERS_DIR=/config/covers \
     OMNIBUS_THUMBS_DIR=/cache/thumbs \
-    OMNIBUS_DATA_DIR=/cache/data
+    OMNIBUS_DATA_DIR=/cache/data \
+    OMNIBUS_VERSION=${OMNIBUS_VERSION}
 
 EXPOSE 3000
 VOLUME ["/config", "/cache"]

@@ -89,6 +89,10 @@ mod server {
         // workspace's server" from a sibling workspace's server bound to the
         // port I want.
         backend::init_repo_root();
+        // Read OMNIBUS_VERSION once at boot so /api/_health's `version`
+        // field reflects the process's own launch env, not a value that
+        // could drift if something mutated the env var mid-run (#1055).
+        backend::init_app_version();
     }
 
     /// Log a WARN if `OMNIBUS_TRUST_FORWARDED_FOR` is enabled — required only

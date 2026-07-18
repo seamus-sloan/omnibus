@@ -1,7 +1,7 @@
 //! User-menu dropdown mounted in the top nav. Real wiring: recent progress,
-//! Settings, Sign out, and Dark/Light theme. Other account surfaces remain
-//! stubbed. See [`UserMenu`] for the SSR/hydration handling of the pre-auth
-//! trigger state.
+//! Settings, Sign out, Dark/Light theme, and app version. Other account
+//! surfaces remain stubbed. See [`UserMenu`] for the SSR/hydration handling
+//! of the pre-auth trigger state.
 
 use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};
@@ -164,6 +164,7 @@ fn UserMenuPanel(user: UserSummary, open: Signal<bool>) -> Element {
             UmSessionRows { on_signout }
 
             UmThemeSeg { theme }
+            UmVersion {}
         }
     }
 }
@@ -436,6 +437,21 @@ fn UmThemeSeg(theme: Signal<Theme>) -> Element {
                     "Sepia"
                 }
             }
+        }
+    }
+}
+
+/// Single version line at the bottom of the panel. The web app is served by
+/// the server, so the two are always the same build — render the
+/// compile-time constant directly rather than fetching `/api/_health` (AC1).
+/// A compile-time constant renders identically on SSR and first WASM paint,
+/// so there's no hydration-parity concern here (rule 07).
+#[cfg(any(feature = "web", feature = "server"))]
+#[component]
+fn UmVersion() -> Element {
+    rsx! {
+        div { class: "um-version", "data-testid": "user-menu-version",
+            "{crate::version::app_version()}"
         }
     }
 }

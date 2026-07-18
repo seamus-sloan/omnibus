@@ -616,6 +616,51 @@ fn current_dir_string() -> String {
         .unwrap_or_default()
 }
 
+/// Running server's release version, captured once at boot.
+///
+/// `main.rs` calls [`init_app_version`] eagerly during boot, mirroring
+/// [`init_build_id`]/[`init_repo_root`]. `OnceLock::get_or_init` is
+/// idempotent, so calling [`app_version`] later returns the same value.
+pub fn app_version() -> &'static str {
+    APP_VERSION.get_or_init(read_app_version)
+}
+
+/// Eagerly initialize [`app_version`]. Idempotent.
+pub fn init_app_version() {
+    let _ = APP_VERSION.get_or_init(read_app_version);
+}
+
+static APP_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Reads `OMNIBUS_VERSION` (baked into the Docker image at build time by
+/// `docker.yml`) and normalizes it to a single leading `v` — the Docker
+/// build-arg carries the full, already-`v`-prefixed release tag, but a
+/// hand-set deployment env might not, and a doubled `vv1.2.3` shouldn't
+/// happen either.
+///
+/// Falls back to the literal `"dev"` when the var is unset, empty/whitespace
+/// (a build-arg supplied without a value sets the env to `""` rather than
+/// leaving it unset), or literally just `"v"` after trimming — local `cargo
+/// run`/`dx serve` builds have no release tag to report, and `"dev"` reads
+/// unambiguously as "no release tag", never as a real version.
+fn read_app_version() -> String {
+    let trimmed = std::env::var("OMNIBUS_VERSION")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    match trimmed {
+        Some(v) => {
+            let bare = v.trim_start_matches('v');
+            if bare.is_empty() {
+                "dev".to_string()
+            } else {
+                format!("v{bare}")
+            }
+        }
+        None => "dev".to_string(),
+    }
+}
+
 /// Attach the pagination hint headers to a list/search response.
 ///
 /// * `X-Total-Count` — the true row count of the underlying query, before

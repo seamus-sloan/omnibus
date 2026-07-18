@@ -98,6 +98,11 @@ jobs:
           platforms: ${{ matrix.platform }}
           pull: true
           labels: ${{ steps.meta.outputs.labels }}
+          # Threads the release tag into the image as OMNIBUS_VERSION (see
+          # Dockerfile) so the server and web app report the real release
+          # instead of the crate's pinned 0.1.0 (#1055).
+          build-args: |
+            OMNIBUS_VERSION=${{ inputs.tag || github.ref_name }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           # Scope the layer cache per arch so the two legs don't clobber each
           # other's cache entries.

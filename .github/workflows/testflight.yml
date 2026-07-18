@@ -176,6 +176,13 @@ jobs:
       # a pre-zipped .ipa, but it neither embeds the provisioning profile nor
       # patches DTPlatformName — scripts/ios-package-ipa.sh does both).
       - name: dx bundle (iOS release)
+        # OMNIBUS_VERSION mirrors the already-resolved MARKETING_VERSION so
+        # `frontend::version::app_version` reports the real release instead
+        # of the crate's pinned 0.1.0 fallback (#1055). Bare (no `v` prefix,
+        # e.g. "0.8.9") — CFBundleShortVersionString can't carry one; the
+        # frontend helper normalizes it to `v0.8.9` for display.
+        env:
+          OMNIBUS_VERSION: ${{ env.MARKETING_VERSION }}
         run: nix develop .#mobile --command dx bundle --platform ios --release --package omnibus-mobile --package-types ios
 
       - name: Sign and package .ipa
