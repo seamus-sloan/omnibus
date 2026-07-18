@@ -151,7 +151,7 @@ test("dock expand navigates back to the full player", async ({
   await expect(page.getByTestId("mini-dock")).toBeVisible();
   await page.getByTestId("mini-dock-expand-btn").click();
 
-  await expect(page).toHaveURL(new RegExp(`/listen/${uuid}$`));
+  await expect(page).toHaveURL(new RegExp(`/listen/${uuid}\\??$`));
   await expect(
     page.getByRole("button", { name: "Play", exact: true }),
   ).toBeVisible();
@@ -232,7 +232,7 @@ test("dock speed chip cycles playback rate and reaches the shared audio + full p
   // Expanding back to the full player must show the same rate — proof both
   // controls share one signal rather than each tracking its own copy.
   await page.getByTestId("mini-dock-expand-btn").click();
-  await expect(page).toHaveURL(new RegExp(`/listen/${uuid}$`));
+  await expect(page).toHaveURL(new RegExp(`/listen/${uuid}\\??$`));
   await expect(page.getByTestId("listen-rate")).toContainText(next.toFixed(1));
 });
 
@@ -247,7 +247,7 @@ test("dock sleep chip opens the full player", async ({ page, request }) => {
   await spaNavigateToLibrary(page);
 
   await page.getByTestId("mini-dock-sleep").click();
-  await expect(page).toHaveURL(new RegExp(`/listen/${uuid}$`));
+  await expect(page).toHaveURL(new RegExp(`/listen/${uuid}\\??$`));
 });
 
 // ---------------------------------------------------------------------------

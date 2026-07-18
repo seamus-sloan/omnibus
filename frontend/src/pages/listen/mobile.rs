@@ -52,7 +52,7 @@ enum OpenSheet {
 /// playback context and renders its state; the heavy lifting (fetch, audio
 /// surface, event drain) lives in the app-root [`host::MobileAudioHost`].
 #[component]
-pub fn MobilePlayer(uuid: String) -> Element {
+pub fn MobilePlayer(uuid: String, file_id: Option<i64>) -> Element {
     let server_url = use_server_url();
     let ctx = use_mobile_playback();
     let sheet = use_signal(|| OpenSheet::None);
@@ -79,8 +79,12 @@ pub fn MobilePlayer(uuid: String) -> Element {
     // so re-entering the currently-playing book (e.g. from the mini-player)
     // is seamless instead of restarting the surface.
     let route_uuid = uuid.clone();
-    use_effect(use_reactive!(|route_uuid| {
+    use_effect(use_reactive!(|(route_uuid, file_id)| {
         let mut uuid_sig = ctx.uuid;
+        let mut file_sig = ctx.file_id;
+        // Publish the picker's selection first so the host reads the right file
+        // when the uuid change kicks off the load.
+        file_sig.set(file_id);
         if uuid_sig.peek().as_deref() != Some(route_uuid.as_str()) {
             uuid_sig.set(Some(route_uuid.clone()));
         }

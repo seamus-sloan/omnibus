@@ -75,16 +75,19 @@ pub(crate) use mobile::{MobileAudioHost, MobileMiniPlayer, MobilePlayback};
 /// forward on the next open. Across direct-mode parts the JS shim reports
 /// absolute (cross-part) seconds so the same shape works for both modes.
 #[component]
-pub fn BookListenPage(uuid: String) -> Element {
+pub fn BookListenPage(uuid: String, file_id: Option<i64>) -> Element {
     #[cfg(feature = "mobile")]
     {
         return rsx! {
-            mobile::MobilePlayer { uuid }
+            mobile::MobilePlayer { uuid, file_id }
         };
     }
 
     #[cfg(not(feature = "mobile"))]
     {
+        // Web resolves the picker's `?file_id=` from `window.location` in the
+        // app-root playback bootstrap, so the routed prop is unused here.
+        let _ = file_id;
         let playback = use_playback();
 
         // Point the app-wide player at this route's book. The App-level

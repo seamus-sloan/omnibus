@@ -27,8 +27,8 @@ pub enum Route {
     MetadataEdit { uuid: String },
     #[route("/read/:uuid")]
     BookRead { uuid: String },
-    #[route("/listen/:uuid")]
-    BookListen { uuid: String },
+    #[route("/listen/:uuid?:file_id")]
+    BookListen { uuid: String, file_id: Option<i64> },
     #[route("/authors")]
     AuthorsIndex {},
     #[route("/authors/:id")]
@@ -152,10 +152,10 @@ pub fn BookRead(uuid: String) -> Element {
 /// Same uuid-keyed stability + no-chrome rationale as [`BookRead`]; the
 /// player owns its own slim top bar.
 #[component]
-pub fn BookListen(uuid: String) -> Element {
+pub fn BookListen(uuid: String, file_id: Option<i64>) -> Element {
     use_page_title(|| Some("Player".into()));
     rsx! {
-        BookListenPage { uuid }
+        BookListenPage { uuid, file_id }
     }
 }
 

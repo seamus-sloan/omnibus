@@ -119,7 +119,12 @@ for (const sample of [
       name: `${sample.action} ${latest.title}`,
     });
     await expect(card).toBeVisible();
-    await expect(card).toHaveAttribute("href", `/${sample.path}/${latest.uuid}`);
+    // The `/listen/:uuid?:file_id` route serializes an unset file_id as a bare
+    // trailing `?`, so tolerate it (the `/read` destination stays clean).
+    await expect(card).toHaveAttribute(
+      "href",
+      new RegExp(`^/${sample.path}/${latest.uuid}\\??$`),
+    );
   });
 }
 

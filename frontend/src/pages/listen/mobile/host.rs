@@ -13,6 +13,40 @@ use super::view::PlayerView;
 use super::{interop, persist_position, resolve_resume};
 use crate::data;
 
+/// `book_files.id` of the first audio file, lowest ordinal wins, or `None`.
+///
+/// A book with both an ebook and an audiobook lists the ebook format first
+/// (`get_book_files` orders by format), so `book_files.first()` would hand the
+/// audiobook manifest an EPUB id and 404. Filter to the audio formats the HLS
+/// resolver accepts (`db::hls::resolve_audiobook`'s `format IN
+/// ('M4B','M4A','MP3')`) before picking.
+fn first_audio_file_id(files: &[omnibus_shared::BookFileInfo]) -> Option<i64> {
+    files
+        .iter()
+        .filter(|f| {
+            f.format.eq_ignore_ascii_case("M4B")
+                || f.format.eq_ignore_ascii_case("M4A")
+                || f.format.eq_ignore_ascii_case("MP3")
+        })
+        .min_by_key(|f| f.ordinal)
+        .map(|f| f.id)
+}
+
+/// Whether the host must (re)load for a newly-requested `(uuid, file_id)`.
+///
+/// A different book always reloads. The *same* book reloads only on an
+/// explicit, different file selection — so tapping another part in the picker
+/// switches files, while the mini-player (which links with no `file_id`)
+/// resumes the current part instead of restarting from the first file.
+fn needs_reload(loaded: &Option<(String, Option<i64>)>, uuid: &str, file_id: Option<i64>) -> bool {
+    match loaded {
+        Some((loaded_uuid, loaded_file)) if loaded_uuid == uuid => {
+            file_id.is_some() && file_id != *loaded_file
+        }
+        _ => true,
+    }
+}
+
 /// Render-less app-root component owning the load → install → drain pipeline.
 #[component]
 pub fn MobileAudioHost() -> Element {
@@ -21,7 +55,8 @@ pub fn MobileAudioHost() -> Element {
     // The live drain task, cancelled before every reinstall so a superseded
     // loop can't sit on a dead eval channel forever.
     let mut drain_task = use_signal(|| None::<Task>);
-    let mut loaded_uuid = use_signal(|| None::<String>);
+    // What's currently loaded: (book uuid, the file_id it was loaded with).
+    let mut loaded_key = use_signal(|| None::<(String, Option<i64>)>);
 
     use_future(move || async move {
         let mut auth = crate::data::token_store::subscribe();
@@ -37,27 +72,32 @@ pub fn MobileAudioHost() -> Element {
     // the `/stats` aggregates, POSTed to `/api/progress/sessions`.
     crate::session_tracker::use_listening_session(ctx.uuid, ctx.playing, server_url);
 
-    // Loader: reacts to the listen page retargeting `ctx.uuid`.
+    // Loader: reacts to the listen page retargeting `ctx.uuid` / `ctx.file_id`.
     use_effect(move || {
-        let requested = (ctx.uuid)();
-        if requested == *loaded_uuid.peek() {
+        let requested_uuid = (ctx.uuid)();
+        let requested_file = (ctx.file_id)();
+        let Some(uuid) = requested_uuid else {
+            // Nothing requested — tear down if a book was loaded.
+            if loaded_key.peek().is_some() {
+                if let Some(task) = drain_task.write().take() {
+                    task.cancel();
+                }
+                loaded_key.set(None);
+                interop::teardown();
+                reset_playback(ctx);
+            }
+            return;
+        };
+        if !needs_reload(&loaded_key.peek().clone(), &uuid, requested_file) {
             return;
         }
         if let Some(task) = drain_task.write().take() {
             task.cancel();
         }
-        loaded_uuid.set(requested.clone());
-        match requested {
-            Some(uuid) => {
-                let server = server_url.peek().clone();
-                let task = spawn(load_and_drain(ctx, uuid, server));
-                drain_task.set(Some(task));
-            }
-            None => {
-                interop::teardown();
-                reset_playback(ctx);
-            }
-        }
+        loaded_key.set(Some((uuid.clone(), requested_file)));
+        let server = server_url.peek().clone();
+        let task = spawn(load_and_drain(ctx, uuid, requested_file, server));
+        drain_task.set(Some(task));
     });
 
     // Wall-clock sleep countdown: a self-re-arming 1 s tick (the mobile
@@ -119,7 +159,12 @@ fn reset_playback(ctx: MobilePlayback) {
 /// Fetch metadata + manifest for `uuid`, seed the context, install the audio
 /// control surface for direct-play books (or flag HLS as unsupported), then
 /// drain its events until superseded.
-async fn load_and_drain(ctx: MobilePlayback, uuid: String, server_url: String) {
+async fn load_and_drain(
+    ctx: MobilePlayback,
+    uuid: String,
+    selected_file_id: Option<i64>,
+    server_url: String,
+) {
     let MobilePlayback {
         mut view,
         mut loading,
@@ -156,7 +201,9 @@ async fn load_and_drain(ctx: MobilePlayback, uuid: String, server_url: String) {
             return;
         }
     };
-    let file_id = book.book_files.first().map(|f| f.id);
+    // Honor the picker's explicit choice; otherwise default to the first audio
+    // file (a bare `/listen/:uuid` with no `?file_id=`).
+    let file_id = selected_file_id.or_else(|| first_audio_file_id(&book.book_files));
     let manifest = match data::get_manifest(&server_url, &uuid, file_id).await {
         Ok(m) => m,
         Err(e) => {
@@ -273,5 +320,66 @@ async fn drain_audio_events(
             // Channel closed (surface torn down) — stop draining.
             Err(_) => return,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::first_audio_file_id;
+    use omnibus_shared::BookFileInfo;
+
+    fn bf(id: i64, format: &str, ordinal: i64) -> BookFileInfo {
+        BookFileInfo {
+            id,
+            format: format.into(),
+            filename: String::new(),
+            ordinal,
+            label: None,
+            size_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn first_audio_file_id_skips_a_leading_ebook_format() {
+        // A merged ebook+audiobook lists EPUB first (ordered by format); the
+        // audiobook manifest must still receive the M4B id, not the EPUB's.
+        let files = vec![bf(698, "EPUB", 0), bf(917, "M4B", 0), bf(922, "M4B", 1)];
+        assert_eq!(first_audio_file_id(&files), Some(917));
+    }
+
+    #[test]
+    fn first_audio_file_id_picks_lowest_ordinal() {
+        let files = vec![bf(5, "M4B", 2), bf(3, "M4B", 0), bf(4, "M4B", 1)];
+        assert_eq!(first_audio_file_id(&files), Some(3));
+    }
+
+    #[test]
+    fn first_audio_file_id_is_none_without_an_audio_file() {
+        let files = vec![bf(1, "EPUB", 0), bf(2, "PDF", 0)];
+        assert_eq!(first_audio_file_id(&files), None);
+    }
+
+    use super::needs_reload;
+
+    #[test]
+    fn needs_reload_when_nothing_loaded_or_book_changed() {
+        assert!(needs_reload(&None, "book-a", None));
+        let loaded = Some(("book-a".to_string(), Some(917)));
+        assert!(needs_reload(&loaded, "book-b", Some(940)));
+    }
+
+    #[test]
+    fn needs_reload_on_explicit_different_part_of_same_book() {
+        let loaded = Some(("book-a".to_string(), Some(917)));
+        assert!(needs_reload(&loaded, "book-a", Some(918)));
+    }
+
+    #[test]
+    fn no_reload_for_same_part_or_bare_relink_of_same_book() {
+        let loaded = Some(("book-a".to_string(), Some(917)));
+        // Same part re-selected → no restart.
+        assert!(!needs_reload(&loaded, "book-a", Some(917)));
+        // Mini-player relinks with no file_id → keep the current part.
+        assert!(!needs_reload(&loaded, "book-a", None));
     }
 }

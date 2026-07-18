@@ -34,6 +34,10 @@ pub enum SleepState {
 #[derive(Copy, Clone)]
 pub struct MobilePlayback {
     pub uuid: Signal<Option<String>>,
+    /// The specific `book_files` row to play, from the listen route's
+    /// `?file_id=` (the file picker's selection). `None` lets the host pick the
+    /// first audio file — the default "just play the audiobook" entry.
+    pub file_id: Signal<Option<i64>>,
     pub view: Signal<Option<PlayerView>>,
     pub loading: Signal<bool>,
     pub error: Signal<Option<String>>,
@@ -53,6 +57,7 @@ impl MobilePlayback {
     pub fn new() -> Self {
         Self {
             uuid: Signal::new(None),
+            file_id: Signal::new(None),
             view: Signal::new(None),
             loading: Signal::new(false),
             error: Signal::new(None),
