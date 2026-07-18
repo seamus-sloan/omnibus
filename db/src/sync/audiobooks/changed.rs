@@ -60,22 +60,12 @@ pub(super) async fn sync_audiobooks_changed(
             if let Some((_uuid, target_id, format)) =
                 attach::find_attachment_by_scan_key(tx, library_path, &b.scan_key).await?
             {
-                if attach_audiobook_file(
-                    tx,
-                    target_id,
-                    &format,
-                    library_path,
-                    b,
-                    &mut changed_covers,
-                )
-                .await?
-                {
-                    on_book_written();
-                    continue;
-                }
-                // Slot taken by a different file: forget the stale ledger row
-                // and fall through to insert this file as its own book.
-                attach::forget_attachment(tx, library_path, &b.scan_key).await?;
+                // Per-file attach: refresh this part's own row; sibling parts
+                // under the same (book, format) are untouched.
+                attach_audiobook_file(tx, target_id, &format, library_path, b, &mut changed_covers)
+                    .await?;
+                on_book_written();
+                continue;
             }
             insert_new_audiobook(tx, library_id, b, &mut changed_covers).await?;
             on_book_written();

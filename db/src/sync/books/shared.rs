@@ -180,14 +180,17 @@ async fn insert_book_file_row(
     let m = &b.metadata;
     let (_, file_stem, file_ext) = split_filename(&m.filename);
     sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch)
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch, scan_key)
+         VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(book_id)
     .bind(&file_ext)
     .bind(&file_stem)
     .bind(b.size_bytes)
     .bind(b.mtime_epoch)
+    // Per-file attachment identity: the file's own relative path (F2), so a
+    // cross-format attachment resolves to its own row on the shared merged join.
+    .bind(scan_key_for(&m.filename))
     .execute(&mut **tx)
     .await?;
     clear_missing_files_flag(tx, book_id).await?;

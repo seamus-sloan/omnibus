@@ -40,13 +40,65 @@ fn reconstruct_scan_key(path: &str, filename: &str, format: &str, part_count: i6
     }
 }
 
-/// One-time backfill of `books.scan_key` + `merged_uuids.scan_key` for rows
-/// indexed before migration 0026. Idempotent — only touches rows where
-/// `scan_key IS NULL` — and pure DB work, so it runs on every boot from
-/// `init_db` and against in-memory test DBs.
+/// One-time backfill of `books.scan_key` + `merged_uuids.scan_key` +
+/// `book_files.scan_key` for rows indexed before migrations 0026 / 0043.
+/// Idempotent — only touches rows where `scan_key IS NULL` — and pure DB
+/// work, so it runs on every boot from `init_db` and against in-memory test
+/// DBs.
 pub async fn backfill_scan_keys(pool: &SqlitePool) -> Result<(), IdentityError> {
     backfill_books_scan_keys(pool).await?;
     backfill_merged_scan_keys(pool).await?;
+    backfill_book_files_scan_keys(pool).await?;
+    Ok(())
+}
+
+/// Fill `book_files.scan_key` (migration 0043) for every row from its own
+/// stored `(path, filename, format)` + part count — the same reconstruction
+/// the `books`/`merged_uuids` backfills use. Attached rows carry their file's
+/// real `path` (the attach writer sets it), so this yields the exact
+/// `scan_key` their `merged_uuids` guard matches on; native rows reconstruct
+/// too (only the merged-join needs an exact value, and that only reads
+/// attachment rows). Idempotent — `scan_key IS NULL` only.
+async fn backfill_book_files_scan_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let rows: Vec<(i64, String, String, String, i64)> = sqlx::query_as(
+        "SELECT bf.id, COALESCE(bf.path, ''), bf.filename, bf.format,
+                (SELECT COUNT(*) FROM book_file_parts p WHERE p.book_file_id = bf.id)
+           FROM book_files bf
+          WHERE bf.scan_key IS NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let updates: Vec<(i64, String)> = rows
+        .into_iter()
+        .map(|(id, path, filename, format, part_count)| {
+            (
+                id,
+                reconstruct_scan_key(&path, &filename, &format, part_count),
+            )
+        })
+        .collect();
+
+    let mut tx = pool.begin().await?;
+    for chunk in updates.chunks(SCAN_KEY_UPDATE_CHUNK) {
+        let values = std::iter::repeat_n("(?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "UPDATE book_files SET scan_key = v.column2
+               FROM (VALUES {values}) AS v
+              WHERE book_files.id = v.column1"
+        );
+        let mut q = sqlx::query(&sql);
+        for (id, scan_key) in chunk {
+            q = q.bind(id).bind(scan_key);
+        }
+        q.execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
     Ok(())
 }
 
