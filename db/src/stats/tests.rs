@@ -647,3 +647,67 @@ async fn rating_monthly_places_a_rating_in_its_calendar_month() {
     let months = rating_monthly(&pool, user).await.unwrap();
     assert_eq!(months.last().unwrap().value, 3.5);
 }
+
+/// Seed a user with an explicit id. The stats cache is a process-wide static
+/// keyed on `(user_id, range)` and every test pool restarts ids at 1, so
+/// tests exercising the *cached* `user_stats` entry point must claim ids no
+/// sibling test can collide with (tests run in parallel — a `clear_cache()`
+/// here would race the TTL test instead of helping).
+async fn seed_user_with_id(pool: &SqlitePool, id: i64, name: &str) -> i64 {
+    sqlx::query("INSERT INTO users (id, username, password_hash) VALUES (?, ?, '!x')")
+        .bind(id)
+        .bind(name)
+        .execute(pool)
+        .await
+        .unwrap();
+    id
+}
+
+#[tokio::test]
+async fn user_stats_returns_summary_through_the_public_entry_point() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user_with_id(&pool, 9901, "entry-point").await;
+    reading_session(&pool, user, "uuid-1", T0, 600).await;
+
+    let summary = user_stats(&pool, user, StatsRange::AllTime).await.unwrap();
+
+    assert_eq!(summary.reading_seconds, 600);
+    assert_eq!(summary.sessions, 1);
+}
+
+#[tokio::test]
+async fn user_stats_surfaces_sqlx_error_when_sessions_table_is_missing() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user_with_id(&pool, 9902, "broken-db").await;
+    sqlx::query("DROP TABLE reading_sessions")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let err = user_stats(&pool, user, StatsRange::AllTime)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, StatsError::Sqlx(_)), "got: {err:?}");
+}
+
+#[tokio::test]
+async fn finished_books_rail_is_capped_but_count_is_not() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, FINISHED_BOOKS_LIMIT + 5).await;
+    let user = seed_user(&pool, "finisher").await;
+    for i in 1..=(FINISHED_BOOKS_LIMIT + 5) {
+        finish_journal(&pool, user, &format!("uuid-{i}"), T0 + i).await;
+    }
+
+    let rail = finished_books(&pool, user, 0).await.unwrap();
+    let total = finished_count(&pool, user, 0).await.unwrap();
+
+    assert_eq!(rail.len() as i64, FINISHED_BOOKS_LIMIT);
+    assert_eq!(total, FINISHED_BOOKS_LIMIT + 5);
+    // Newest completions win the capped rail.
+    assert_eq!(
+        rail[0].book_uuid,
+        format!("uuid-{}", FINISHED_BOOKS_LIMIT + 5)
+    );
+}

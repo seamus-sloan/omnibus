@@ -27,6 +27,11 @@ pub const STATS_TTL_SECS: i64 = 60;
 /// How many rows the top-authors / top-tags rollups return.
 const TOP_N: i64 = 8;
 
+/// Cap on the finished-books rail. `books_finished` counts every completion
+/// via [`finished_count`]; this only bounds the rendered list so an
+/// `AllTime` range on a long-lived library can't return an unbounded vec.
+const FINISHED_BOOKS_LIMIT: i64 = 100;
+
 /// The book-scoped session union reused by the top-N rollups: one
 /// `(book_uuid, secs)` row per reading and listening session in the window.
 /// Bind order is `user_id, start, user_id, start`.
@@ -151,6 +156,7 @@ async fn compute(
     let books_active = books_active(pool, user_id, start).await?;
     let as_of_day = as_of_day(pool).await?;
     let finished_books = finished_books(pool, user_id, start).await?;
+    let books_finished = finished_count(pool, user_id, start).await?;
     let books_per_month = books_per_month(pool, user_id).await?;
     let previous = previous_period(pool, user_id, range).await?;
     let listening_daily = listening_daily(pool, user_id, start).await?;
@@ -167,7 +173,7 @@ async fn compute(
         longest_streak_days,
         busiest_week_start,
         busiest_week_seconds,
-        books_finished: finished_books.len() as i64,
+        books_finished,
         books_active,
         as_of_day,
         heatmap,
@@ -447,9 +453,27 @@ async fn as_of_day(pool: &SqlitePool) -> Result<String, StatsError> {
         .await?)
 }
 
+/// Total completions in the window under the same definition as
+/// [`finished_books`], uncapped — the rail is limited to
+/// [`FINISHED_BOOKS_LIMIT`] rows but `books_finished` must reflect the
+/// real count.
+async fn finished_count(pool: &SqlitePool, user_id: i64, start: i64) -> Result<i64, StatsError> {
+    Ok(sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT b.uuid)
+         FROM journal_entries j
+         JOIN books b ON b.uuid = j.book_uuid
+         WHERE j.user_id = ? AND j.progress = 100 AND j.created_at >= ?",
+    )
+    .bind(user_id)
+    .bind(start)
+    .fetch_one(pool)
+    .await?)
+}
+
 /// Books completed in the window — sourced from `journal_entries.progress = 100`
 /// (the only progress fraction persisted today). Ghosted books (no live `books`
 /// row for the journal's `book_uuid`) are omitted from the rail and the count.
+/// Capped at [`FINISHED_BOOKS_LIMIT`] newest completions.
 async fn finished_books(
     pool: &SqlitePool,
     user_id: i64,
@@ -469,10 +493,12 @@ async fn finished_books(
          LEFT JOIN user_ratings ur ON ur.user_id = j.user_id AND ur.book_uuid = b.uuid
          WHERE j.user_id = ? AND j.progress = 100 AND j.created_at >= ?
          GROUP BY b.uuid
-         ORDER BY finished_at DESC",
+         ORDER BY finished_at DESC
+         LIMIT ?",
     )
     .bind(user_id)
     .bind(start)
+    .bind(FINISHED_BOOKS_LIMIT)
     .fetch_all(pool)
     .await?;
 

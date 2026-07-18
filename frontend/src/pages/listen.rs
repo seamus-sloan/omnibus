@@ -1,9 +1,8 @@
 //! Immersive audiobook player with direct-play and HLS fallback.
 //!
-//! Web renders a full-screen two-column "Now playing" surface — cover, title,
-//! and author on the left; scrub bar and transport on the right. Mobile renders
-//! the single-column [`mobile::MobilePlayer`] adaptation. See [`BookListenPage`]
-//! for the startup sequence and position-sync details.
+//! Web renders a full-screen two-column "Now playing" surface; mobile renders
+//! the single-column [`mobile::MobilePlayer`] adaptation. See
+//! [`BookListenPage`] for startup sequence and position-sync details.
 
 use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]

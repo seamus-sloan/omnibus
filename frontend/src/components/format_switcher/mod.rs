@@ -27,21 +27,30 @@ pub use kindle::SendToKindleButton;
 #[cfg(not(feature = "mobile"))]
 pub use kobo::SendToKoboButton;
 
+/// Book-level metadata shared by the format/CTA action rows: identity for
+/// links, author + title for the Send-to-Kobo `<Author>/<Title>/` layout,
+/// the single-file EPUB size for the Send-to-Kindle email cap, and the
+/// per-file rows for multi-file pickers.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BookActionMeta {
+    pub uuid: String,
+    pub author: String,
+    pub title: String,
+    pub epub_size_bytes: Option<i64>,
+    pub book_files: Vec<BookFileInfo>,
+}
+
 /// Renders the format switcher, letting the reader pick which available
 /// format of a book to open.
 #[component]
-pub fn FormatSwitcher(
-    formats: Vec<String>,
-    uuid: String,
-    #[props(default)] book_files: Vec<BookFileInfo>,
-    // Raw author + title, used to nest the Kobo write under `<Author>/<Title>/`
-    // (see [`SendToKoboButton`]). Default empty → write at the drive root.
-    #[props(default)] book_author: String,
-    #[props(default)] book_title: String,
-    // Size of the single-file EPUB, so the Send-to-Kindle action can gate on
-    // Kindle's email cap. Multi-EPUB books carry per-file sizes on `book_files`.
-    #[props(default)] epub_size_bytes: Option<i64>,
-) -> Element {
+pub fn FormatSwitcher(formats: Vec<String>, meta: BookActionMeta) -> Element {
+    let BookActionMeta {
+        uuid,
+        author: book_author,
+        title: book_title,
+        epub_size_bytes,
+        book_files,
+    } = meta;
     let rows = prepare_rows(&formats);
     if rows.is_empty() {
         return rsx! {};

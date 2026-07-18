@@ -70,7 +70,30 @@ pub async fn rpc_get_ebooks_page(
     cursor: Option<String>,
     limit: i64,
 ) -> Result<LibraryPage> {
-    let settings = db::get_settings(&pool.0)
+    Ok(ebooks_page(
+        &pool.0,
+        sort_key,
+        sort_dir,
+        &filters,
+        cursor.as_deref(),
+        limit,
+    )
+    .await?)
+}
+
+/// Server-side body of [`rpc_get_ebooks_page`], extracted so the
+/// cursor-decode and first-page-aggregates branches can be unit-tested
+/// without the server-fn transport.
+#[cfg(feature = "server")]
+async fn ebooks_page(
+    pool: &sqlx::SqlitePool,
+    sort_key: SortKey,
+    sort_dir: SortDir,
+    filters: &ViewFilters,
+    cursor: Option<&str>,
+    limit: i64,
+) -> Result<LibraryPage, ServerFnError> {
+    let settings = db::get_settings(pool)
         .await
         .map_err(|e| internal_rpc_error("get settings", e))?;
     let ebook = settings.ebook_library_path;
@@ -84,20 +107,20 @@ pub async fn rpc_get_ebooks_page(
     // server-issued cursor, so this is defensive — surface it rather than
     // silently restarting at the top. `CursorError::Malformed` carries a
     // caller-safe message, not raw internals, so it keeps its own text.
-    let decoded = match cursor.as_deref() {
+    let decoded = match cursor {
         Some(c) => match db::PageCursor::decode(c) {
             Ok(p) => Some(p),
-            Err(e) => return Err(ServerFnError::new(e.to_string()).into()),
+            Err(e) => return Err(ServerFnError::new(e.to_string())),
         },
         None => None,
     };
 
     let page = db::list_books_page(
-        &pool.0,
+        pool,
         &paths,
         sort_key,
         sort_dir,
-        &filters,
+        filters,
         decoded.as_ref(),
         limit,
     )
@@ -107,12 +130,12 @@ pub async fn rpc_get_ebooks_page(
     let (total, facets) = if decoded.is_none() {
         (
             Some(
-                db::count_books_for_paths(&pool.0, &paths)
+                db::count_books_for_paths(pool, &paths)
                     .await
                     .map_err(|e| internal_rpc_error("count books", e))?,
             ),
             Some(
-                db::library_facets(&pool.0, &paths)
+                db::library_facets(pool, &paths)
                     .await
                     .map_err(|e| internal_rpc_error("library facets", e))?,
             ),
@@ -181,7 +204,18 @@ pub async fn rpc_undo_merge(merge_log_id: i64) -> Result<String> {
 /// capped small because the dialog shows only a handful of rows.
 #[post("/api/rpc/merge-books/candidates", pool: PoolExt, _admin: AdminUser)]
 pub async fn rpc_merge_candidates(q: String) -> Result<Vec<EbookMetadata>> {
-    let settings = db::get_settings(&pool.0)
+    Ok(merge_candidates(&pool.0, &q).await?)
+}
+
+/// Server-side body of [`rpc_merge_candidates`], extracted so the
+/// cross-library dedup and the 20-row cap can be unit-tested without the
+/// server-fn transport.
+#[cfg(feature = "server")]
+async fn merge_candidates(
+    pool: &sqlx::SqlitePool,
+    q: &str,
+) -> Result<Vec<EbookMetadata>, ServerFnError> {
+    let settings = db::get_settings(pool)
         .await
         .map_err(|e| internal_rpc_error("get settings", e))?;
     let mut out: Vec<EbookMetadata> = Vec::new();
@@ -190,7 +224,7 @@ pub async fn rpc_merge_candidates(q: String) -> Result<Vec<EbookMetadata>> {
         .flatten()
     {
         out.extend(
-            db::search_books(&pool.0, &path, &q)
+            db::search_books(pool, &path, q)
                 .await
                 .map_err(|e| internal_rpc_error("search books", e))?,
         );
@@ -290,5 +324,132 @@ pub async fn rpc_get_suggestions(uuid: String) -> Result<SuggestionsResponse> {
         Ok(SuggestionsResponse::Ready { items })
     } else {
         Ok(SuggestionsResponse::Pending)
+    }
+}
+
+// `server`-gated: exercises the extracted server-side bodies against an
+// in-memory DB. CI runs this via `cargo test -p omnibus-frontend --features
+// server`.
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::{ebooks_page, merge_candidates};
+    use omnibus_db::test_support::seed_synced_ebook;
+    use omnibus_shared::{Settings, SortDir, SortKey, ViewFilters};
+
+    async fn configured_pool(audiobook_path: Option<&str>) -> sqlx::SqlitePool {
+        let pool = omnibus_db::init_db("sqlite::memory:").await.unwrap();
+        omnibus_db::set_settings(
+            &pool,
+            &Settings {
+                ebook_library_path: Some("/ebooks".into()),
+                audiobook_library_path: audiobook_path.map(Into::into),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn ebooks_page_first_page_carries_total_and_facets() {
+        let pool = configured_pool(None).await;
+        seed_synced_ebook(&pool, "a.epub", "Alpha", "Ann Author").await;
+        seed_synced_ebook(&pool, "b.epub", "Beta", "Bob Author").await;
+
+        let first = ebooks_page(
+            &pool,
+            SortKey::Title,
+            SortDir::Asc,
+            &ViewFilters::default(),
+            None,
+            1,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(first.books.len(), 1);
+        assert_eq!(first.books[0].title.as_deref(), Some("Alpha"));
+        assert_eq!(first.total, Some(2));
+        assert!(first.facets.is_some());
+        assert!(first.next_cursor.is_some());
+    }
+
+    #[tokio::test]
+    async fn ebooks_page_later_page_continues_after_cursor_and_omits_aggregates() {
+        let pool = configured_pool(None).await;
+        seed_synced_ebook(&pool, "a.epub", "Alpha", "Ann Author").await;
+        seed_synced_ebook(&pool, "b.epub", "Beta", "Bob Author").await;
+
+        let first = ebooks_page(
+            &pool,
+            SortKey::Title,
+            SortDir::Asc,
+            &ViewFilters::default(),
+            None,
+            1,
+        )
+        .await
+        .unwrap();
+        let cursor = first.next_cursor.expect("first page should issue a cursor");
+
+        let second = ebooks_page(
+            &pool,
+            SortKey::Title,
+            SortDir::Asc,
+            &ViewFilters::default(),
+            Some(&cursor),
+            1,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(second.books.len(), 1);
+        assert_eq!(second.books[0].title.as_deref(), Some("Beta"));
+        assert_eq!(second.total, None, "later pages must omit the total");
+        assert!(second.facets.is_none(), "later pages must omit the facets");
+    }
+
+    #[tokio::test]
+    async fn ebooks_page_surfaces_error_for_malformed_cursor() {
+        let pool = configured_pool(None).await;
+
+        let result = ebooks_page(
+            &pool,
+            SortKey::Title,
+            SortDir::Asc,
+            &ViewFilters::default(),
+            Some("not-a-server-issued-cursor"),
+            10,
+        )
+        .await;
+
+        assert!(result.is_err(), "malformed cursor must surface an error");
+    }
+
+    #[tokio::test]
+    async fn merge_candidates_dedups_shared_directory_hits_and_caps_at_twenty() {
+        // Both library slots pointing at one directory is the documented
+        // dedup case: every hit comes back once per path, so without the
+        // uuid dedup the list would double.
+        let pool = configured_pool(Some("/ebooks")).await;
+        for i in 0..25 {
+            seed_synced_ebook(
+                &pool,
+                &format!("tome-{i}.epub"),
+                &format!("Common Tome {i}"),
+                "Prolific Author",
+            )
+            .await;
+        }
+
+        let out = merge_candidates(&pool, "Common").await.unwrap();
+
+        assert_eq!(out.len(), 20, "25 deduped hits must truncate to 20");
+        let mut seen = std::collections::HashSet::new();
+        assert!(
+            out.iter().all(|b| seen.insert(b.unique_identifier.clone())),
+            "no duplicate unique_identifier may survive the dedup"
+        );
     }
 }

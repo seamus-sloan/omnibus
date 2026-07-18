@@ -176,31 +176,42 @@ pub(super) fn BookmarksSheet(
                     p { class: "subtitle m-bm-empty", "No bookmarks yet \u{2014} tap Bookmark to mark this spot." }
                 }
                 for b in list.into_iter() {
-                    {bookmark_row(&b, &chapters, fresh, bookmarks, &on_seek, editing, draft)}
+                    {bookmark_row(&b, BookmarkRowCtx { chapters: &chapters, fresh, bookmarks, on_seek, editing, draft })}
                 }
             }
         }
     }
 }
 
-/// One bookmark row (plain fn — no hooks).
-#[allow(clippy::too_many_arguments)]
-fn bookmark_row(
-    b: &Bookmark,
-    chapters: &[ChapterInfo],
+/// Sheet-level rendering context shared by every [`bookmark_row`]: the
+/// chapter map plus the controller and edit-state signals each row wires to.
+#[derive(Clone, Copy)]
+struct BookmarkRowCtx<'a> {
+    chapters: &'a [ChapterInfo],
     fresh: Option<i64>,
     bookmarks: MobileBookmarks,
-    on_seek: &EventHandler<f64>,
+    on_seek: EventHandler<f64>,
     editing: Signal<Option<i64>>,
     draft: Signal<String>,
-) -> Element {
+}
+
+/// One bookmark row (plain fn — no hooks).
+fn bookmark_row(b: &Bookmark, ctx: BookmarkRowCtx<'_>) -> Element {
+    let BookmarkRowCtx {
+        chapters,
+        fresh,
+        bookmarks,
+        on_seek,
+        editing,
+        draft,
+    } = ctx;
     let id = b.id;
     let pos = bookmark_position_seconds(b);
     let is_fresh = fresh == Some(id);
     let label = row_label(pos, chapters);
     let note = b.title.clone().unwrap_or_default();
     let is_editing = editing() == Some(id);
-    let seek = *on_seek;
+    let seek = on_seek;
     let mut editing_sig = editing;
     let mut draft_sig = draft;
     let note_seed = note.clone();

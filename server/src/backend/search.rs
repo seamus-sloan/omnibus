@@ -1,9 +1,8 @@
 //! `GET /api/search` handler.
 //!
-//! Cookie-gated FTS5 search across the configured libraries. Returns a
-//! capped result vec plus the full hit count via `X-Total-Count` /
-//! `X-Total-Cap` headers so clients can detect truncation without parsing
-//! the body. Mounted on a sub-router that carries its own rate limit.
+//! Cookie-gated FTS5 search across the configured libraries. Returns a capped
+//! result vec plus the full hit count via `X-Total-Count` / `X-Total-Cap`
+//! headers; mounted on a sub-router that carries its own rate limit.
 
 use axum::{
     extract::{Query, State},

@@ -91,6 +91,8 @@ ndk-context = { version = "0.1", optional = true }
 [dev-dependencies]
 # Sandboxed temp dirs for the mobile `token_store` / `app_dirs` file tests.
 tempfile.workspace = true
+# In-memory pool + seed fixtures for the `server`-gated rpc tests.
+omnibus-db = { path = "../db", features = ["test-support"] }
 
 [features]
 default = []

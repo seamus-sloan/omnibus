@@ -33,11 +33,11 @@ pub use bottom_nav::BottomNav as Nav;
 pub use bottom_nav::BottomNav;
 
 mod format_switcher;
-pub use format_switcher::FormatSwitcher;
 #[cfg(not(feature = "mobile"))]
 pub use format_switcher::SendToKindleButton;
 #[cfg(not(feature = "mobile"))]
 pub use format_switcher::SendToKoboButton;
+pub use format_switcher::{BookActionMeta, FormatSwitcher};
 
 // Reusable add/remove chip editor with a substring-match suggestion
 // dropdown. See `chip_editor.rs` for the full API.

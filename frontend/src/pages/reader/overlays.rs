@@ -9,7 +9,7 @@ use dioxus::prelude::*;
 use omnibus_shared::{Highlight, HighlightColor};
 
 use super::annotations_sheet::AnnotationsSheet;
-use super::highlights::{spawn_create_highlight, PostCreate};
+use super::highlights::{spawn_create_highlight, HighlightTargets, NewHighlight, PostCreate};
 use super::highlights_drawer::HighlightsDrawer;
 use super::note_composer::NoteComposer;
 use super::quote_panel::QuotePanel;
@@ -30,6 +30,11 @@ pub(super) fn ReaderSelectionPopover(
     quote_target: Signal<Option<Highlight>>,
 ) -> Element {
     let server_url = crate::contexts::use_server_url();
+    let targets = HighlightTargets {
+        highlights,
+        note_target,
+        quote_target,
+    };
     let Some(sel) = selection.read().as_ref().cloned() else {
         return rsx! {};
     };
@@ -54,8 +59,10 @@ pub(super) fn ReaderSelectionPopover(
                         let mut selection = selection;
                         selection.set(None);
                         spawn_create_highlight(
-                            server_url.clone(), uuid.clone(), cfi, color, text,
-                            highlights, note_target, quote_target, PostCreate::None,
+                            server_url.clone(),
+                            uuid.clone(),
+                            NewHighlight { cfi, color, text, post: PostCreate::None },
+                            targets,
                         );
                     }
                 }),
@@ -66,8 +73,10 @@ pub(super) fn ReaderSelectionPopover(
                         let mut selection = selection;
                         selection.set(None);
                         spawn_create_highlight(
-                            server_url.clone(), uuid.clone(), cfi, HighlightColor::Amber, text,
-                            highlights, note_target, quote_target, PostCreate::Note,
+                            server_url.clone(),
+                            uuid.clone(),
+                            NewHighlight { cfi, color: HighlightColor::Amber, text, post: PostCreate::Note },
+                            targets,
                         );
                     }
                 }),
@@ -78,8 +87,10 @@ pub(super) fn ReaderSelectionPopover(
                         let mut selection = selection;
                         selection.set(None);
                         spawn_create_highlight(
-                            server_url.clone(), uuid.clone(), cfi, HighlightColor::Amber, text,
-                            highlights, note_target, quote_target, PostCreate::Quote,
+                            server_url.clone(),
+                            uuid.clone(),
+                            NewHighlight { cfi, color: HighlightColor::Amber, text, post: PostCreate::Quote },
+                            targets,
                         );
                     }
                 }),

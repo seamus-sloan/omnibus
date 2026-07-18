@@ -1,13 +1,8 @@
-//! Multi-file audiobook sync. Mirrors `sync_books` but writes
-//! `book_file_parts` rows in addition to `books` and `book_files`. Like
-//! the ebook path, all `books_fts` maintenance routes through the
-//! [`super::fts`] choke-point (`upsert_fts` / `delete_fts`).
-//!
-//! Split across per-bucket sub-modules mirroring [`super::books`]:
-//! [`changed`] / [`new`] / [`removed`] apply their bucket, [`shared`] holds
-//! the row writers + cross-format attach path both New and Changed call
-//! into, and [`backfill`] handles the stat-only backfill plus the
-//! `scan_roots.last_indexed` stamp.
+//! Multi-file audiobook sync. Mirrors `sync_books` but also writes
+//! `book_file_parts`; all `books_fts` maintenance routes through
+//! [`super::fts`]. Split per bucket like [`super::books`]: [`changed`] /
+//! [`new`] / [`removed`] apply their bucket, [`shared`] holds the row
+//! writers + attach path, [`backfill`] the stat-only backfill + stamp.
 
 use sqlx::SqlitePool;
 

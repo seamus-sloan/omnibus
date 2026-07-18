@@ -5,7 +5,7 @@ use dioxus_router::Link;
 use omnibus_shared::{BookSuggestion, EbookMetadata, Identifier, SuggestionsResponse};
 
 use crate::components::atrium::Cover;
-use crate::components::FormatSwitcher;
+use crate::components::{BookActionMeta, FormatSwitcher};
 use crate::Route;
 
 use super::discovery::{
@@ -343,13 +343,15 @@ pub(super) fn BdRailSection(
                 div { class: "label bd-rail-head", "Formats" }
                 FormatSwitcher {
                     formats: b.formats.clone(),
-                    uuid: uuid.clone(),
-                    book_files: b.book_files.clone(),
-                    // Author + title drive the Send-to-Kobo `<Author>/<Title>/`
-                    // folder layout on the device.
-                    book_author: b.creators.first().map(|c| c.name.clone()).unwrap_or_default(),
-                    book_title: title.clone(),
-                    epub_size_bytes: b.epub_size_bytes,
+                    meta: BookActionMeta {
+                        uuid: uuid.clone(),
+                        // Author + title drive the Send-to-Kobo `<Author>/<Title>/`
+                        // folder layout on the device.
+                        author: b.creators.first().map(|c| c.name.clone()).unwrap_or_default(),
+                        title: title.clone(),
+                        epub_size_bytes: b.epub_size_bytes,
+                        book_files: b.book_files.clone(),
+                    },
                 }
                 Link {
                     to: Route::MetadataEdit { uuid: uuid.clone() },

@@ -213,8 +213,9 @@ mod tests {
 
 /// Toolbar row beneath transport: Sleep, Bookmark, Chapters.
 /// Each button toggles its overlay panel; `*_active` props drive the
-/// highlighted state. The panels themselves are visual shells until
-/// their backing infrastructure ships (PRs 3–5).
+/// highlighted state. The panels are fully wired: sleep countdown via
+/// `use_sleep_timer`, bookmark creation via `BookmarksController`, and
+/// chapter seek navigation via `ChaptersDrawer` (see `ready_player`).
 #[component]
 pub(super) fn Toolbar(state: ToolbarState) -> Element {
     let ToolbarState {

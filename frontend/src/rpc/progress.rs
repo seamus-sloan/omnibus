@@ -117,15 +117,48 @@ fn check_session_batch_cap(reports: &[SessionReport]) -> Result<(), ServerFnErro
     Ok(())
 }
 
+/// Single-transaction batch insert shared by `rpc_record_sessions` and its
+/// tests. Pre-resolves every `book_uuid` in one bulk query, then loops pure
+/// inserts and commits once — mirroring the mobile REST route
+/// (`server::backend::progress::post_sessions`), so a DB error mid-batch
+/// rolls the whole batch back and the client can safely retry. Reports whose
+/// `book_uuid` is unknown are silently skipped; the returned count reflects
+/// only the rows that landed.
+#[cfg(feature = "server")]
+async fn record_sessions_batch(
+    pool: &sqlx::SqlitePool,
+    user_id: i64,
+    reports: &[SessionReport],
+) -> Result<u64, ServerFnError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| internal_rpc_error("begin sessions batch", e))?;
+    let batch_uuids: Vec<String> = reports.iter().map(|r| r.book_uuid.clone()).collect();
+    let resolved = db::resolve_canonical_book_uuids_bulk_exec(&mut tx, &batch_uuids)
+        .await
+        .map_err(|e| internal_rpc_error("resolve sessions batch", e))?;
+    let mut inserted = 0u64;
+    for r in reports {
+        let Some(canonical) = resolved.get(&r.book_uuid) else {
+            continue;
+        };
+        db::progress::insert_session_tx(&mut tx, user_id, r, canonical)
+            .await
+            .map_err(|e| internal_rpc_error("insert session", e))?;
+        inserted += 1;
+    }
+    tx.commit()
+        .await
+        .map_err(|e| internal_rpc_error("commit sessions batch", e))?;
+    Ok(inserted)
+}
+
 /// Persist a batch of reading- or listening-session reports and return the
 /// inserted count. Batches larger than `SESSION_BATCH_CAP` are rejected up
-/// front (mirroring the mobile REST route in `server::backend::progress`).
-/// Validates every report before any insert; the inserts then run
-/// sequentially (not in a single transaction), so a DB error mid-batch
-/// commits the rows that already succeeded and propagates the error to the
-/// caller — the count of committed rows is then lost. Reports whose
-/// `book_uuid` is unknown are silently dropped (counted out) rather than
-/// failing the batch.
+/// front and every report is validated before any insert (mirroring the
+/// mobile REST route in `server::backend::progress`); the inserts then run
+/// inside a single transaction via `record_sessions_batch`.
 #[post("/api/rpc/progress/sessions", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_record_sessions(reports: Vec<SessionReport>) -> Result<u64> {
     check_session_batch_cap(&reports)?;
@@ -134,16 +167,7 @@ pub async fn rpc_record_sessions(reports: Vec<SessionReport>) -> Result<u64> {
             return Err(ServerFnError::new(msg).into());
         }
     }
-    let mut inserted = 0u64;
-    for r in &reports {
-        if db::progress::record_session(&pool.0, user.id, r)
-            .await
-            .map_err(|e| internal_rpc_error("record session", e))?
-        {
-            inserted += 1;
-        }
-    }
-    Ok(inserted)
+    Ok(record_sessions_batch(&pool.0, user.id, &reports).await?)
 }
 
 // `server`-gated because these tests exercise `check_session_batch_cap`, which
@@ -151,18 +175,54 @@ pub async fn rpc_record_sessions(reports: Vec<SessionReport>) -> Result<u64> {
 // `cargo test -p omnibus-frontend --features server`.
 #[cfg(all(test, feature = "server"))]
 mod tests {
-    use super::{check_session_batch_cap, SESSION_BATCH_CAP};
+    use super::{check_session_batch_cap, record_sessions_batch, SESSION_BATCH_CAP};
     use omnibus_shared::{ProgressFormat, SessionReport};
 
     fn dummy_report() -> SessionReport {
+        report("uuid", ProgressFormat::Epub)
+    }
+
+    fn report(book_uuid: &str, format: ProgressFormat) -> SessionReport {
         SessionReport {
-            book_uuid: "uuid".into(),
-            format: ProgressFormat::Epub,
+            book_uuid: book_uuid.into(),
+            format,
             started_at: 0,
             ended_at: 1,
             progress_units: 1,
             device_id: None,
         }
+    }
+
+    #[tokio::test]
+    async fn record_sessions_batch_skips_unknown_uuid_and_counts_only_inserted_rows() {
+        let pool = omnibus_db::init_db("sqlite::memory:").await.unwrap();
+        omnibus_db::test_support::seed_minimal_books(&pool, 2).await;
+        let user_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (username, password_hash) VALUES ('alice', 'x') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let reports = vec![
+            report("uuid-1", ProgressFormat::Epub),
+            report("no-such-book", ProgressFormat::Epub),
+            report("uuid-2", ProgressFormat::Audio),
+        ];
+        let inserted = record_sessions_batch(&pool, user_id, &reports)
+            .await
+            .unwrap();
+        assert_eq!(inserted, 2, "unknown uuid must be skipped, not counted");
+
+        let reading: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM reading_sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let listening: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM listening_sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!((reading, listening), (1, 1));
     }
 
     #[test]

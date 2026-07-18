@@ -1,6 +1,6 @@
 # Dependency Audit — Cargo.lock Duplicate Families
 
-Last updated: 2026-07-16 (issue #1100).
+Last updated: 2026-07-18 (issues #1147, #643).
 
 Run `cargo tree -d` and inspect the output any time Dioxus or Axum are bumped.
 The `deny.toml` `[bans]` section has matching `skip` entries for all accepted
@@ -30,6 +30,15 @@ this list.
 ## First-party skew resolved in this PR
 
 - `thiserror` in `db/Cargo.toml` and `frontend/Cargo.toml` aligned to `thiserror.workspace = true` (workspace declares `thiserror = "2"`). Previously both crates pinned `thiserror = "1"` independently. The workspace now acts as a single source of truth — new crates must use `.workspace = true`.
+
+## Yanked crates
+
+- `spin 0.9.8` — flagged by `cargo audit` as yanked from crates.io (no
+  RUSTSEC advisory, 0 vulnerabilities). Reaches the production graph two
+  ways: `sqlx-sqlite → flume → spin` and `axum → multer → spin`. Accepted
+  until `flume`/`multer` naturally drop it on their next releases — it is a
+  yanked-not-vulnerable notice, and both parents are well-maintained.
+  `deny.toml` sets `[advisories] yanked = "warn"` with a matching comment.
 
 ## Policy
 

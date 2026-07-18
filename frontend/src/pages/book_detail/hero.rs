@@ -5,6 +5,7 @@ use dioxus_router::Link;
 use omnibus_shared::{BookFileInfo, EbookMetadata};
 
 use crate::components::atrium::Cover;
+use crate::components::BookActionMeta;
 use crate::Route;
 
 use super::export_menu::BdExportMenu;
@@ -140,13 +141,15 @@ fn BdTitleCol(
                 div { class: "bd-desc", "data-testid": "book-description", dangerous_inner_html: "{desc}" }
             }
             BdCtaRow {
-                uuid: uuid.clone(),
                 has_ebook,
                 has_audio,
-                book_author: b.creators.first().map(|c| c.name.clone()).unwrap_or_default(),
-                book_title: title.clone(),
-                epub_size_bytes: b.epub_size_bytes,
-                book_files: b.book_files.clone(),
+                meta: BookActionMeta {
+                    uuid: uuid.clone(),
+                    author: b.creators.first().map(|c| c.name.clone()).unwrap_or_default(),
+                    title: title.clone(),
+                    epub_size_bytes: b.epub_size_bytes,
+                    book_files: b.book_files.clone(),
+                },
             }
             div { class: "bd-progress-meta", aria_hidden: "true",
                 div { class: "bd-progress-line",
@@ -168,17 +171,17 @@ fn BdTitleCol(
 
 /// CTA button row: primary read/listen action, secondary listen, the
 /// per-format file picker, and the "Export" dropdown that collects the
-/// per-device send/download actions.
+/// per-device send/download actions. Over the line cap by design — the body
+/// is one declarative rsx! block whose branches mirror the CTA layout.
 #[component]
-fn BdCtaRow(
-    uuid: String,
-    has_ebook: bool,
-    has_audio: bool,
-    #[props(default)] book_author: String,
-    #[props(default)] book_title: String,
-    #[props(default)] epub_size_bytes: Option<i64>,
-    #[props(default)] book_files: Vec<BookFileInfo>,
-) -> Element {
+fn BdCtaRow(has_ebook: bool, has_audio: bool, meta: BookActionMeta) -> Element {
+    let BookActionMeta {
+        uuid,
+        author: book_author,
+        title: book_title,
+        epub_size_bytes,
+        book_files,
+    } = meta;
     let epub_files: Vec<BookFileInfo> = book_files
         .iter()
         .filter(|f| f.format.eq_ignore_ascii_case("EPUB"))
@@ -268,9 +271,12 @@ mod tests {
     fn render_cta_row(has_ebook: bool, has_audio: bool) -> String {
         dioxus::ssr::render_element(rsx! {
             BdCtaRow {
-                uuid: "book-uuid".to_string(),
                 has_ebook,
                 has_audio,
+                meta: BookActionMeta {
+                    uuid: "book-uuid".to_string(),
+                    ..Default::default()
+                },
             }
         })
     }
