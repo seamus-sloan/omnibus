@@ -8,6 +8,8 @@ pub mod auth;
 #[cfg(feature = "server")]
 pub mod backend;
 #[cfg(feature = "server")]
+pub mod logging;
+#[cfg(feature = "server")]
 pub mod rate_limit;
 #[cfg(feature = "server")]
 pub mod security_headers;
