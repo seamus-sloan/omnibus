@@ -6,8 +6,9 @@ use axum::{
 };
 use tower::ServiceExt;
 
-/// One test drives all four ACs because `layer_and_route` installs the
-/// process-global recorder and can only be called once per test binary.
+/// One test drives all four ACs. `layer_and_route` memoizes its (layer, route)
+/// so repeat calls are safe, but a single test keeps the metric counts it
+/// asserts on free of cross-test bleed through the shared global recorder.
 #[tokio::test]
 async fn metrics_endpoint_renders_labeled_histograms_and_groups_id_paths() {
     let (layer, metrics_route) = layer_and_route();
