@@ -240,6 +240,12 @@ fn BdCtaRow(
                     listen_btn
                 }
             }
+            // Immersive Read — opens the ereader and the audiobook player
+            // (docked, minimized) together for the same book. Only when the
+            // book has both an ebook and an audiobook.
+            if has_audio && has_ebook {
+                BdImmersiveButton { uuid: uuid.clone() }
+            }
             // Download + Send-to-Kindle/Kobo live behind one "Export" menu so
             // the CTA row stays a single primary action plus this dropdown.
             // Author + title feed the Send-to-Kobo `<Author>/<Title>/` layout.
@@ -252,5 +258,120 @@ fn BdCtaRow(
                 epub_size_bytes,
             }
         }
+    }
+}
+
+/// The book+soundwave glyph on the Immersive Read CTA. Factored out so the
+/// active (web) and disabled (mobile) buttons share identical markup.
+fn bd_immersive_mark() -> Element {
+    rsx! {
+        span { class: "bd-immersive-mark", aria_hidden: "true",
+            svg {
+                width: "17",
+                height: "17",
+                view_box: "0 0 24 24",
+                fill: "none",
+                stroke: "currentColor",
+                "stroke-width": "1.7",
+                "stroke-linecap": "round",
+                "stroke-linejoin": "round",
+                path { d: "M4 5.2A2 2 0 0 1 6 4h4.2a1.8 1.8 0 0 1 1.8 1.8V18a1.6 1.6 0 0 0-1.6-1.6H6A2 2 0 0 1 4 14.4V5.2z" }
+                path { d: "M15.5 8v8M18.5 6v12M21 9.5v5" }
+            }
+        }
+    }
+}
+
+/// Immersive Read CTA (web): opens the reader and docks the audiobook player
+/// together. Clicking retargets the app-wide [`crate::PlaybackState`] at this
+/// book — the App-level audio bootstrap then loads + plays it, and the `/read`
+/// route's [`crate::pages::MiniDock`] surfaces once book + uuid resolve — then
+/// navigates to the reader. The playback context and navigator are read inside
+/// the handler (not as render-time hooks) so the button renders under SSR and
+/// in unit tests without a provider, keeping hydration parity (rule 07).
+#[cfg(not(feature = "mobile"))]
+#[component]
+fn BdImmersiveButton(uuid: String) -> Element {
+    let on_click = move |_: MouseEvent| {
+        let playback = consume_context::<crate::PlaybackState>();
+        // Retarget only when the book differs, mirroring the listen page: clear
+        // the previous book's metadata/error and flag loading first so the dock
+        // can't flash the old book under the new reader before the driver reloads.
+        let mut uuid_sig = playback.uuid;
+        if uuid_sig.peek().as_deref() != Some(uuid.as_str()) {
+            let mut book_sig = playback.book;
+            let mut error_sig = playback.error;
+            let mut loading_sig = playback.loading;
+            book_sig.set(None);
+            error_sig.set(None);
+            loading_sig.set(true);
+            uuid_sig.set(Some(uuid.clone()));
+        }
+        dioxus_router::navigator().push(Route::BookRead { uuid: uuid.clone() });
+    };
+    rsx! {
+        button {
+            class: "btn lg bd-immersive-cta",
+            r#type: "button",
+            "data-testid": "immersive-read",
+            title: "Open the ereader and audiobook together, kept in sync",
+            onclick: on_click,
+            {bd_immersive_mark()}
+            "Immersive Read"
+        }
+    }
+}
+
+/// Immersive Read CTA (mobile): disabled stub. Mobile has no web
+/// [`crate::PlaybackState`] to dock a player into; the mobile immersive
+/// experience is tracked separately (#1133).
+#[cfg(feature = "mobile")]
+#[component]
+fn BdImmersiveButton(uuid: String) -> Element {
+    let _ = uuid;
+    rsx! {
+        button {
+            class: "btn lg bd-immersive-cta",
+            disabled: true,
+            "data-testid": "immersive-read",
+            title: "Immersive reading on mobile coming soon",
+            {bd_immersive_mark()}
+            "Immersive Read"
+        }
+    }
+}
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::*;
+
+    /// SSR-render the CTA row for a book with the given format availability.
+    fn render_cta_row(has_ebook: bool, has_audio: bool) -> String {
+        dioxus::ssr::render_element(rsx! {
+            BdCtaRow {
+                uuid: "book-uuid".to_string(),
+                has_ebook,
+                has_audio,
+            }
+        })
+    }
+
+    #[test]
+    fn immersive_cta_renders_when_book_has_both_ebook_and_audio() {
+        let html = render_cta_row(true, true);
+        assert!(html.contains("data-testid=\"immersive-read\""));
+        assert!(html.contains("Immersive Read"));
+    }
+
+    #[test]
+    fn immersive_cta_absent_when_book_has_ebook_only() {
+        let html = render_cta_row(true, false);
+        assert!(!html.contains("data-testid=\"immersive-read\""));
+    }
+
+    #[test]
+    fn immersive_cta_absent_when_book_has_audio_only() {
+        let html = render_cta_row(false, true);
+        assert!(!html.contains("data-testid=\"immersive-read\""));
     }
 }
