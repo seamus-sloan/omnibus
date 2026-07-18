@@ -2,7 +2,7 @@
 //! series, and tags. Books go through the FTS5 MATCH path (with
 //! override-aware overlays applied after hydration); taxonomy categories
 //! use scoped `LIKE` substring matches against the name columns. Bounded
-//! per category and scoped to `library_path`.
+//! per category and scoped to one or more configured library paths.
 
 use omnibus_shared::PaletteResults;
 use sqlx::SqlitePool;
@@ -23,9 +23,16 @@ mod tests;
 // publicly exposed pre-split; the arm helpers stay reachable internally
 // for `search_palette` and externally only via the fully-qualified
 // `palette::authors::search_authors` path.
+use authors::{count_authors_for_paths, search_authors_for_paths};
+use books::search_books_for_paths;
+use series::{count_series_for_paths, search_series_for_paths};
+use tags::{count_tags_for_paths, search_tags_for_paths};
+
+#[cfg(test)]
 use authors::{count_authors, search_authors};
-use books::search_books;
+#[cfg(test)]
 use series::{count_series, search_series};
+#[cfg(test)]
 use tags::{count_tags, search_tags};
 
 /// Errors returned by the search palette.
@@ -39,8 +46,10 @@ pub enum PaletteError {
 /// uncapped per-category totals (`book_total` etc.) are computed separately.
 const LIMIT: i32 = 5;
 
-/// Grouped command-palette results: up to 5 books, authors, series, and
-/// tags scoped to `library_path`, plus server-side timing in `duration_ms`.
+/// Grouped command-palette results for one library path.
+///
+/// Returns up to 5 books, authors, series, and tags plus server-side timing in
+/// `duration_ms`.
 /// Books are matched via FTS5 (`build_fts_match`); taxonomy categories use
 /// `LIKE '%q%'`. Empty/whitespace queries return `PaletteResults::default()`.
 pub async fn search_palette(
@@ -48,6 +57,18 @@ pub async fn search_palette(
     library_path: &str,
     q: &str,
 ) -> Result<PaletteResults, PaletteError> {
+    search_palette_for_paths(pool, &[library_path], q).await
+}
+
+/// Search every configured library path as one ranked palette result set.
+pub async fn search_palette_for_paths(
+    pool: &SqlitePool,
+    library_paths: &[&str],
+    q: &str,
+) -> Result<PaletteResults, PaletteError> {
+    if library_paths.is_empty() {
+        return Ok(PaletteResults::default());
+    }
     let trimmed = q.trim();
     if trimmed.is_empty() {
         return Ok(PaletteResults::default());
@@ -64,7 +85,7 @@ pub async fn search_palette(
     // displays (FTS already matches on the merged text — see
     // `rebuild_fts_for_book` in the override write path). The books arm also
     // returns its uncapped total in the same FTS5 pass.
-    let (books, book_total) = search_books(pool, library_path, trimmed, LIMIT).await?;
+    let (books, book_total) = search_books_for_paths(pool, library_paths, trimmed, LIMIT).await?;
 
     // Escape the query for LIKE pattern: backslash first (it's the ESCAPE char),
     // then the LIKE wildcards percent and underscore.
@@ -75,27 +96,30 @@ pub async fn search_palette(
     let like_pattern = format!("%{like_q}%");
 
     // B. Authors — substring match, scoped to library, ordered by book count.
-    let authors = search_authors(pool, library_path, &like_pattern, LIMIT).await?;
+    let authors = search_authors_for_paths(pool, library_paths, &like_pattern, LIMIT).await?;
 
     // C. Series — substring match with primary author from first book.
-    let series = search_series(pool, library_path, &like_pattern, LIMIT).await?;
+    let series = search_series_for_paths(pool, library_paths, &like_pattern, LIMIT).await?;
 
     // D. Tags — substring match, scoped to library.
-    let tags = search_tags(pool, library_path, &like_pattern, LIMIT).await?;
+    let tags = search_tags_for_paths(pool, library_paths, &like_pattern, LIMIT).await?;
 
     // Uncapped per-category totals for the full-page results header. Each is a
     // cheap COUNT over the same visibility predicate the arm uses; books got
     // theirs in-pass above. Skipped when the capped vec already holds the whole
     // match set (len < LIMIT ⇒ no more rows to count).
     let author_total = total_for(authors.len(), || {
-        count_authors(pool, library_path, &like_pattern)
+        count_authors_for_paths(pool, library_paths, &like_pattern)
     })
     .await?;
     let series_total = total_for(series.len(), || {
-        count_series(pool, library_path, &like_pattern)
+        count_series_for_paths(pool, library_paths, &like_pattern)
     })
     .await?;
-    let tag_total = total_for(tags.len(), || count_tags(pool, library_path, &like_pattern)).await?;
+    let tag_total = total_for(tags.len(), || {
+        count_tags_for_paths(pool, library_paths, &like_pattern)
+    })
+    .await?;
 
     let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 

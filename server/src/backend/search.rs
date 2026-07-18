@@ -1,6 +1,6 @@
 //! `GET /api/search` handler.
 //!
-//! Cookie-gated FTS5 search across the configured library. Returns a
+//! Cookie-gated FTS5 search across the configured libraries. Returns a
 //! capped result vec plus the full hit count via `X-Total-Count` /
 //! `X-Total-Cap` headers so clients can detect truncation without parsing
 //! the body. Mounted on a sub-router that carries its own rate limit.
@@ -47,7 +47,10 @@ pub(super) async fn get_search(
         Ok(s) => s,
         Err(error) => return internal("read settings", error),
     };
-    let Some(path) = settings.ebook_library_path else {
+    let ebook = settings.ebook_library_path;
+    let audiobook = settings.audiobook_library_path;
+    let paths = db::collect_paths(ebook.as_deref(), audiobook.as_deref());
+    if paths.is_empty() {
         // Match the `/api/ebooks` contract: even an empty result attaches
         // `X-Total-Count: 0` so clients can rely on the header always
         // being present.
@@ -55,14 +58,16 @@ pub(super) async fn get_search(
             Json(omnibus_shared::EbookLibrary::default()).into_response(),
             0,
         );
-    };
+    }
+    let path = paths[0].to_string();
     // Issue #241: one FTS5 pass yields both the (capped) vec and the *full*
     // hit count via a scalar COUNT over the materialized matches CTE, replacing
     // the prior search_books + count_search_books double pass.
-    let (books, total) = match db::search_books_with_total(&state.pool, &path, &params.q).await {
-        Ok(pair) => pair,
-        Err(error) => return internal("search books", error),
-    };
+    let (books, total) =
+        match db::search_books_for_paths_with_total(&state.pool, &paths, &params.q).await {
+            Ok(pair) => pair,
+            Err(error) => return internal("search books", error),
+        };
     // The full hit count rides the `X-Total-Count` / `X-Total-Cap` headers so
     // clients can detect truncation without changing the JSON body shape.
     let body = Json(omnibus_shared::EbookLibrary {
@@ -87,10 +92,14 @@ pub(super) async fn get_search_palette(
         Ok(s) => s,
         Err(error) => return internal("read settings", error),
     };
-    let Some(path) = settings.ebook_library_path else {
+    let paths = db::collect_paths(
+        settings.ebook_library_path.as_deref(),
+        settings.audiobook_library_path.as_deref(),
+    );
+    if paths.is_empty() {
         return Json(omnibus_shared::PaletteResults::default()).into_response();
-    };
-    match db::search_palette(&state.pool, &path, &params.q).await {
+    }
+    match db::search_palette_for_paths(&state.pool, &paths, &params.q).await {
         Ok(results) => Json(results).into_response(),
         Err(error) => internal("search palette", error),
     }

@@ -6,7 +6,7 @@ use omnibus_shared::PaletteBookHit;
 use sqlx::{Row, SqlitePool};
 
 use crate::books::parse_json_array;
-use crate::helpers::build_fts_match;
+use crate::helpers::{build_fts_match, library_paths_json};
 use crate::metadata_overrides::load_overrides_bulk;
 
 use super::PaletteError;
@@ -22,7 +22,8 @@ const SEARCH_BOOKS_SQL: &str = r"
             FROM books_fts
             JOIN books b ON b.id = books_fts.rowid
             JOIN scan_roots l ON l.id = b.library_id
-            WHERE books_fts MATCH ?1 AND l.path = ?2
+            WHERE books_fts MATCH ?1
+              AND l.path IN (SELECT value FROM json_each(?2))
         )
         SELECT b.id, b.uuid, b.title, b.has_cover, b.accent_color,
                SUBSTR(b.pubdate, 1, 4) AS year,
@@ -61,13 +62,26 @@ pub async fn search_books(
     trimmed: &str,
     limit: i32,
 ) -> Result<(Vec<PaletteBookHit>, i64), PaletteError> {
+    search_books_for_paths(pool, &[library_path], trimmed, limit).await
+}
+
+/// Run the books arm across every configured library path.
+pub async fn search_books_for_paths(
+    pool: &SqlitePool,
+    library_paths: &[&str],
+    trimmed: &str,
+    limit: i32,
+) -> Result<(Vec<PaletteBookHit>, i64), PaletteError> {
+    if library_paths.is_empty() {
+        return Ok((Vec::new(), 0));
+    }
     let Some(match_expr) = build_fts_match(trimmed) else {
         return Ok((Vec::new(), 0));
     };
 
     let rows = sqlx::query(SEARCH_BOOKS_SQL)
         .bind(&match_expr)
-        .bind(library_path)
+        .bind(library_paths_json(library_paths))
         .bind(limit)
         .fetch_all(pool)
         .await?;

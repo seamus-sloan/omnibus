@@ -6,6 +6,8 @@
 use omnibus_shared::PaletteAuthorHit;
 use sqlx::{Row, SqlitePool};
 
+use crate::helpers::library_paths_json;
+
 use super::PaletteError;
 
 /// Authors-arm palette query, bound `?1 = library_path`, `?2 = like_pattern`,
@@ -42,7 +44,7 @@ const SEARCH_AUTHORS_SQL: &str = r"
             JOIN books b ON b.id = bal.book
             JOIN scan_roots l2 ON l2.id = b.library_id
             LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-           WHERE l2.path = ?1
+           WHERE l2.path IN (SELECT value FROM json_each(?1))
              AND (mo.book_uuid IS NULL
                   OR json_type(mo.overrides, '$.creators') IS NULL)
           UNION
@@ -53,7 +55,7 @@ const SEARCH_AUTHORS_SQL: &str = r"
             JOIN scan_roots l2 ON l2.id = b.library_id
             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
             JOIN json_each(mo.overrides, '$.creators') je
-           WHERE l2.path = ?1
+           WHERE l2.path IN (SELECT value FROM json_each(?1))
              AND json_type(mo.overrides, '$.creators') IS NOT NULL
         )
         SELECT a.id, a.name,
@@ -64,7 +66,8 @@ const SEARCH_AUTHORS_SQL: &str = r"
              JOIN books b3 ON b3.id = bal3.book
              JOIN scan_roots l3 ON l3.id = b3.library_id
              LEFT JOIN metadata_overrides mo3 ON mo3.book_uuid = b3.uuid
-            WHERE bal3.author = a.id AND l3.path = ?1
+            WHERE bal3.author = a.id
+              AND l3.path IN (SELECT value FROM json_each(?1))
             ORDER BY b3.sort, b3.id LIMIT 1) AS lead_book_title
         FROM authors a
         WHERE a.name LIKE ?2 ESCAPE '\'
@@ -72,7 +75,8 @@ const SEARCH_AUTHORS_SQL: &str = r"
             SELECT 1 FROM books_authors_link bal
               JOIN books b ON b.id = bal.book
               JOIN scan_roots l ON l.id = b.library_id
-             WHERE bal.author = a.id AND l.path = ?1
+             WHERE bal.author = a.id
+               AND l.path IN (SELECT value FROM json_each(?1))
           )
         ORDER BY book_count DESC, a.name
         LIMIT ?3
@@ -86,8 +90,21 @@ pub async fn search_authors(
     like_pattern: &str,
     limit: i32,
 ) -> Result<Vec<PaletteAuthorHit>, PaletteError> {
+    search_authors_for_paths(pool, &[library_path], like_pattern, limit).await
+}
+
+/// Run the authors arm across every configured library path.
+pub async fn search_authors_for_paths(
+    pool: &SqlitePool,
+    library_paths: &[&str],
+    like_pattern: &str,
+    limit: i32,
+) -> Result<Vec<PaletteAuthorHit>, PaletteError> {
+    if library_paths.is_empty() {
+        return Ok(Vec::new());
+    }
     let rows = sqlx::query(SEARCH_AUTHORS_SQL)
-        .bind(library_path)
+        .bind(library_paths_json(library_paths))
         .bind(like_pattern)
         .bind(limit)
         .fetch_all(pool)
@@ -113,6 +130,18 @@ pub async fn count_authors(
     library_path: &str,
     like_pattern: &str,
 ) -> Result<i64, PaletteError> {
+    count_authors_for_paths(pool, &[library_path], like_pattern).await
+}
+
+/// Count visible matching authors across every configured library path.
+pub async fn count_authors_for_paths(
+    pool: &SqlitePool,
+    library_paths: &[&str],
+    like_pattern: &str,
+) -> Result<i64, PaletteError> {
+    if library_paths.is_empty() {
+        return Ok(0);
+    }
     Ok(sqlx::query_scalar::<_, i64>(
         r"
         SELECT COUNT(*) FROM authors a
@@ -121,11 +150,12 @@ pub async fn count_authors(
             SELECT 1 FROM books_authors_link bal
               JOIN books b ON b.id = bal.book
               JOIN scan_roots l ON l.id = b.library_id
-             WHERE bal.author = a.id AND l.path = ?1
+             WHERE bal.author = a.id
+               AND l.path IN (SELECT value FROM json_each(?1))
           )
         ",
     )
-    .bind(library_path)
+    .bind(library_paths_json(library_paths))
     .bind(like_pattern)
     .fetch_one(pool)
     .await?)

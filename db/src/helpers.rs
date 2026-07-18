@@ -1,4 +1,4 @@
-//! Pure, dependency-free helpers shared across the db query layer:
+//! Pure helpers shared across the db query layer:
 //! deterministic UUID derivation, filename / accent-color sanitisation,
 //! and the FTS5 query / match builders.
 
@@ -18,6 +18,17 @@ pub(crate) const MAX_QUERY_LEN: usize = 256;
 /// by every search entrypoint so the cap is applied identically everywhere.
 pub(crate) fn cap_query_len(q: &str) -> String {
     q.trim().chars().take(MAX_QUERY_LEN).collect()
+}
+
+/// Encode library paths for binding through SQLite's `json_each`.
+pub(crate) fn library_paths_json(library_paths: &[&str]) -> String {
+    serde_json::Value::Array(
+        library_paths
+            .iter()
+            .map(|path| serde_json::Value::String((*path).to_string()))
+            .collect(),
+    )
+    .to_string()
 }
 
 /// Deterministic UUIDv5 derived from `(library_path, filename)` so reindexing

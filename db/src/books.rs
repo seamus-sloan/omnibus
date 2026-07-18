@@ -29,7 +29,10 @@ pub use list::{
 };
 pub use page::{count_books_page, list_books_page, BookPage, CursorError, PageCursor};
 pub use projection::MAX_BOOKS_RETURNED;
-pub use search::{count_search_books, search_books, search_books_with_total};
+pub use search::{
+    count_search_books, count_search_books_for_paths, search_books, search_books_for_paths,
+    search_books_for_paths_with_total, search_books_with_total,
+};
 
 /// Errors returned by the books read path.
 #[derive(Debug, thiserror::Error)]

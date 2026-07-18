@@ -6,7 +6,7 @@
 use omnibus_shared::EbookMetadata;
 use sqlx::{Row, SqlitePool};
 
-use crate::helpers::{build_fts_match, cap_query_len};
+use crate::helpers::{build_fts_match, cap_query_len, library_paths_json};
 
 use super::projection::{
     backfill_creator_ids, merge_overrides_into_books, row_to_ebook, BOOK_COLUMNS,
@@ -30,7 +30,16 @@ pub async fn search_books(
     library_path: &str,
     q: &str,
 ) -> Result<Vec<EbookMetadata>, super::BooksError> {
-    let (books, _total) = search_books_with_total(pool, library_path, q).await?;
+    search_books_for_paths(pool, &[library_path], q).await
+}
+
+/// Full-text search across every configured library path.
+pub async fn search_books_for_paths(
+    pool: &SqlitePool,
+    library_paths: &[&str],
+    q: &str,
+) -> Result<Vec<EbookMetadata>, super::BooksError> {
+    let (books, _total) = search_books_for_paths_with_total(pool, library_paths, q).await?;
     Ok(books)
 }
 
@@ -46,6 +55,18 @@ pub async fn search_books_with_total(
     library_path: &str,
     q: &str,
 ) -> Result<(Vec<EbookMetadata>, i64), super::BooksError> {
+    search_books_for_paths_with_total(pool, &[library_path], q).await
+}
+
+/// Search across `library_paths` and return capped rows plus the true hit count.
+pub async fn search_books_for_paths_with_total(
+    pool: &SqlitePool,
+    library_paths: &[&str],
+    q: &str,
+) -> Result<(Vec<EbookMetadata>, i64), super::BooksError> {
+    if library_paths.is_empty() {
+        return Ok((Vec::new(), 0));
+    }
     // Cap query length before parsing to bound the FTS5 MATCH expression size,
     // matching `search_palette` (issue #189). Normal/short queries are
     // unaffected; see `cap_query_len`.
@@ -54,7 +75,7 @@ pub async fn search_books_with_total(
         return Ok((Vec::new(), 0));
     };
 
-    let rows = fetch_search_rows(pool, library_path, &match_expr).await?;
+    let rows = fetch_search_rows(pool, library_paths, &match_expr).await?;
 
     // `total_count` is the scalar `COUNT(*)` over the materialized matches, so
     // it's identical on every row; read it off the first. An empty result set
@@ -79,7 +100,7 @@ pub async fn search_books_with_total(
 /// references books_fts, so it must live inside the CTE.
 async fn fetch_search_rows(
     pool: &SqlitePool,
-    library_path: &str,
+    library_paths: &[&str],
     match_expr: &str,
 ) -> Result<Vec<sqlx::sqlite::SqliteRow>, sqlx::Error> {
     let sql = format!(
@@ -90,7 +111,8 @@ async fn fetch_search_rows(
             FROM books_fts
             JOIN books b ON b.id = books_fts.rowid
             JOIN scan_roots l ON l.id = b.library_id
-            WHERE books_fts MATCH ? AND l.path = ?
+            WHERE books_fts MATCH ?
+              AND l.path IN (SELECT value FROM json_each(?))
         )
         SELECT {BOOK_COLUMNS},
                (SELECT COUNT(*) FROM matches)               AS total_count
@@ -102,7 +124,7 @@ async fn fetch_search_rows(
     );
     sqlx::query(&sql)
         .bind(match_expr)
-        .bind(library_path)
+        .bind(library_paths_json(library_paths))
         .bind(MAX_BOOKS_RETURNED)
         .fetch_all(pool)
         .await
@@ -116,6 +138,18 @@ pub async fn count_search_books(
     library_path: &str,
     q: &str,
 ) -> Result<i64, super::BooksError> {
+    count_search_books_for_paths(pool, &[library_path], q).await
+}
+
+/// Count FTS5 hits across every configured library path.
+pub async fn count_search_books_for_paths(
+    pool: &SqlitePool,
+    library_paths: &[&str],
+    q: &str,
+) -> Result<i64, super::BooksError> {
+    if library_paths.is_empty() {
+        return Ok(0);
+    }
     // Cap query length before parsing to mirror `search_books` /
     // `search_palette` (issue #189). Normal/short queries are unaffected;
     // see `cap_query_len`.
@@ -129,11 +163,12 @@ pub async fn count_search_books(
           FROM books_fts
           JOIN books b ON b.id = books_fts.rowid
           JOIN scan_roots l ON l.id = b.library_id
-         WHERE books_fts MATCH ? AND l.path = ?
+         WHERE books_fts MATCH ?
+           AND l.path IN (SELECT value FROM json_each(?))
         ",
     )
     .bind(&match_expr)
-    .bind(library_path)
+    .bind(library_paths_json(library_paths))
     .fetch_one(pool)
     .await?)
 }
