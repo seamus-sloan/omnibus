@@ -67,6 +67,21 @@ const EXPECTED: &[Expected] = &[
         series_index: Some("2"),
         has_cover: false,
     },
+    // Dual-format fixture: shares a normalized (title, author) with the
+    // "Immersive Voyage" audiobook so the indexer auto-attaches them into one
+    // book (the Immersive Read precondition). See the matching entry in
+    // `ui_tests/playwright/tests/fixtures/epubs.ts`.
+    Expected {
+        filename: "immersive-voyage.epub",
+        title: "Immersive Voyage",
+        authors: &["Alan Turing"],
+        publisher: Some("Omnibus Test Press"),
+        published: Some("1950-10-01"),
+        language: "en",
+        series: None,
+        series_index: None,
+        has_cover: true,
+    },
     Expected {
         filename: "pioneers-3.epub",
         title: "Pioneers Vol 3: Cipher",
