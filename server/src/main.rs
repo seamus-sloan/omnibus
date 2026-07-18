@@ -31,7 +31,7 @@ mod server {
 
     use axum::Router;
     use dioxus::server::axum::Extension;
-    use omnibus::{auth, backend, rate_limit, security_headers};
+    use omnibus::{auth, backend, metrics, rate_limit, security_headers};
     use omnibus_db::{
         indexer,
         worker::{Task, Worker},
@@ -206,7 +206,12 @@ mod server {
         // `/api/rpc/search-palette` so neither bypasses the budget (#249).
         let search_rpc_prefixes: Arc<Vec<&'static str>> = Arc::new(vec!["/api/rpc/search"]);
 
+        // Prometheus HTTP metrics: middleware + `/metrics` scrape route. The
+        // layer goes on outermost (see below); the route merges in here.
+        let (prometheus_layer, metrics_route) = metrics::layer_and_route();
+
         dioxus::server::router(App)
+            .merge(metrics_route)
             .layer(axum::middleware::from_fn_with_state(
                 (search_limiter.clone(), search_rpc_prefixes),
                 rate_limit::rate_limit_paths,
@@ -250,6 +255,9 @@ mod server {
                 std::time::Duration::from_secs(30),
             ))
             .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024))
+            // Outermost app layer so the histograms observe every request
+            // (including the 408/413 short-circuits from the guards above).
+            .layer(prometheus_layer)
     }
 
     /// Layer global HTTP security response headers onto `router`, plus
