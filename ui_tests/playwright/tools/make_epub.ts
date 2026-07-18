@@ -366,6 +366,24 @@ const FIXTURES: EpubInput[] = [
     language: "en",
     withCover: true,
   },
+
+  // --- Dual-format book: this EPUB shares a normalized (title, author) with
+  // the "Immersive Voyage" audiobook in `make_audiobook.ts`, so the indexer
+  // auto-attaches the pair into ONE book carrying both formats — the
+  // precondition for the Immersive Read CTA (immersive.spec.ts). Keep the
+  // title/author byte-identical across both generators so the attached book's
+  // metadata is the same regardless of which library indexes first. See
+  // `tests/fixtures/dual_format.ts`.
+  {
+    filename: "immersive-voyage.epub",
+    id: "urn:omnibus-test:immersive-voyage",
+    title: "Immersive Voyage",
+    authors: ["Alan Turing"],
+    publisher: "Omnibus Test Press",
+    published: "1950-10-01",
+    language: "en",
+    withCover: true,
+  },
 ];
 
 /**

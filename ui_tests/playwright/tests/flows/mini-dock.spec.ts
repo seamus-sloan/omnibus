@@ -1,5 +1,6 @@
 import { expect, test } from "../fixtures/test";
 import { AUDIOBOOK_BOOKS, AUDIOBOOK_BOOK_COUNT } from "../fixtures/audiobooks";
+import { AUTO_ATTACHED_PAIRS } from "../fixtures/dual_format";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
@@ -12,11 +13,13 @@ import {
 } from "../utils/seed";
 
 // Both libraries seeded: the reader-visibility test needs an EPUB to read
-// alongside an audiobook playing in the background. No fixture pair shares
-// a normalized (title, author), so auto-attach leaves them as separate rows
-// and the counts stay additive — same reasoning as `merge.spec.ts`. Seeded
-// as two sequential settings writes (not one combined call): a single write
-// that reindexes both libraries at once was observed to leave the ebook
+// alongside an audiobook playing in the background. Exactly one fixture pair
+// ("Immersive Voyage") shares a normalized (title, author) and auto-attaches
+// into a single dual-format book, so the combined total is the additive sum
+// minus AUTO_ATTACHED_PAIRS — same reasoning as `merge.spec.ts`. The books
+// this spec drives (gamma + "The Analytical Audiobook") aren't that pair.
+// Seeded as two sequential settings writes (not one combined call): a single
+// write that reindexes both libraries at once was observed to leave the ebook
 // fixture the reader test depends on unresolvable by row testid in CI —
 // see the investigation note in the PR. Reverted to the two-step seed.
 test.beforeAll(async ({ request }) => {
@@ -24,7 +27,7 @@ test.beforeAll(async ({ request }) => {
   await seedAudiobookLibrary(
     request,
     audiobookFixturesDir(),
-    FIXTURE_BOOKS.length + AUDIOBOOK_BOOK_COUNT,
+    FIXTURE_BOOKS.length + AUDIOBOOK_BOOK_COUNT - AUTO_ATTACHED_PAIRS,
   );
 });
 

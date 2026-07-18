@@ -71,6 +71,22 @@ const FIXTURES: AudiobookInput[] = [
     track: 2,
     frames: 80,
   },
+
+  // Dual-format book: a single-file audiobook whose (title, artist) is
+  // byte-identical to the "Immersive Voyage" EPUB in `make_epub.ts`. The
+  // indexer normalizes (title, author) the same way for both libraries and
+  // auto-attaches this MP3 to that EPUB, yielding one book with both formats —
+  // the precondition for the Immersive Read CTA. TIT2 == TALB so the
+  // single-file indexer surfaces the book title (not a chapter title). See
+  // `tests/fixtures/dual_format.ts`.
+  {
+    filename: "alan_turing_solo/immersive_voyage.mp3",
+    title: "Immersive Voyage",
+    artist: "Alan Turing",
+    album: "Immersive Voyage",
+    track: 1,
+    frames: 80,
+  },
 ];
 
 // ---------------------------------------------------------------------------

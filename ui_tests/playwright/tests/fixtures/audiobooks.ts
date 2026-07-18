@@ -72,6 +72,21 @@ export const AUDIOBOOK_BOOKS: readonly ExpectedAudiobook[] = [
     hasCover: false,
     source: "public_domain",
   },
+
+  // Dual-format book: this single-file MP3 shares a normalized (title, author)
+  // with the "Immersive Voyage" EPUB (`fixtures/epubs.ts`), so the indexer
+  // auto-attaches them into ONE book with both formats — the Immersive Read
+  // precondition (immersive.spec.ts). Appended last so the `.find(MP3 &&
+  // generated)` selectors in listen/mini-dock/book_detail specs keep resolving
+  // to "The Analytical Audiobook". See `fixtures/dual_format.ts`.
+  {
+    title: "Immersive Voyage",
+    author: "Alan Turing",
+    format: "MP3",
+    parts: 1,
+    hasCover: true,
+    source: "generated",
+  },
 ] as const;
 
 /** Total audiobook *books* (groups) — not parts — the indexer surfaces. */
