@@ -5,6 +5,7 @@ import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
+import { setRangeValue } from "../utils/sliders";
 import {
   audiobookFixturesDir,
   fixturesDir,
@@ -33,6 +34,11 @@ test.beforeAll(async ({ request }) => {
 
 const MP3_BOOK = AUDIOBOOK_BOOKS.find(
   (b) => b.format === "MP3" && b.source === "generated",
+)!;
+// Multi-part book → one synthetic chapter per part, so the chapter-jump
+// buttons have a real boundary to cross (same reasoning as listen.spec.ts).
+const MULTIPART_MP3_BOOK = AUDIOBOOK_BOOKS.find(
+  (b) => b.format === "MP3" && b.parts > 1,
 )!;
 // Distinct author from every audiobook fixture so auto-attach never merges
 // this EPUB with the playing audiobook mid-test.
@@ -162,10 +168,10 @@ test("dock expand navigates back to the full player", async ({
 });
 
 // ---------------------------------------------------------------------------
-// 3b. Compact bar: single flex row, no volume slider (AC1)
+// 3b. Full-width single-row bar with a popover-based volume control
 // ---------------------------------------------------------------------------
 
-test("dock is a single-row flex bar with no volume slider", async ({
+test("dock is a full-width single-row bar and adjusts volume via its popover", async ({
   page,
   request,
 }) => {
@@ -177,20 +183,51 @@ test("dock is a single-row flex bar with no volume slider", async ({
   const dock = page.getByTestId("mini-dock");
   await expect(dock).toBeVisible();
 
-  // The bar is one content-sized flex row now, not the old 4-column grid that
-  // wrapped a trailing actions row (the residual bottom whitespace, #1132).
+  // One content-sized flex row spanning the full viewport width (the
+  // AudioDockBar design — supersedes the old floating-pill geometry).
   await expect(dock).toHaveCSS("display", "flex");
   await expect(dock).not.toHaveCSS("flex-wrap", "wrap");
+  const [dockBox, viewport] = await Promise.all([
+    dock.boundingBox(),
+    page.viewportSize(),
+  ]);
+  expect(dockBox!.width).toBe(viewport!.width);
+  expect(dockBox!.x).toBe(0);
 
-  // The volume slider moved out of the dock in the compact design.
-  await expect(page.getByTestId("mini-dock-volume")).toHaveCount(0);
+  // Volume lives behind an icon → upward popover with a vertical slider
+  // (supersedes #1132's no-inline-slider AC: the bar row itself still has no
+  // slider; the popover does).
+  const volPop = page.getByTestId("mini-dock-pop-vol");
+  await expect(volPop).not.toHaveClass(/open/);
+  await page.getByTestId("mini-dock-volume").click();
+  await expect(volPop).toHaveClass(/open/);
+
+  const slider = volPop.getByRole("slider", { name: "Volume" });
+  await setRangeValue(slider, 0.3);
+
+  // The popover writes through the shared apply_volume seam, so the change
+  // must reach the shared `<audio>` element in real time.
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (document.getElementById("omnibus-audio") as HTMLAudioElement | null)
+            ?.volume ?? null,
+      ),
+    )
+    .toBeCloseTo(0.3, 2);
+
+  // Clicking outside (the scrim) closes the popover. (Corner click — the
+  // scrim's center can sit under an open panel.)
+  await page.getByTestId("mini-dock-scrim").click({ position: { x: 10, y: 10 } });
+  await expect(volPop).not.toHaveClass(/open/);
 });
 
 // ---------------------------------------------------------------------------
-// 3c. Speed chip cycles the rate and stays in sync with the full player
+// 3c. Speed chip opens the shared speed panel and stays in sync everywhere
 // ---------------------------------------------------------------------------
 
-test("dock speed chip cycles playback rate and reaches the shared audio + full player", async ({
+test("dock speed popover sets playback rate and reaches the shared audio + full player", async ({
   page,
   request,
 }) => {
@@ -199,15 +236,19 @@ test("dock speed chip cycles playback rate and reaches the shared audio + full p
   await waitForPlayerReady(page);
   await spaNavigateToLibrary(page);
 
-  // Speed persists per-book, so don't assume a fixed starting rate — read the
-  // chip's current value and assert the transition to the next cycle preset.
-  const RATE_CYCLE = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0];
+  // The chip no longer cycles on click — it opens the same preset-grid panel
+  // as the full player. Pick a preset different from the persisted rate.
   const speed = page.getByTestId("mini-dock-speed");
   const start = parseFloat((await speed.textContent()) ?? "");
-  const next = RATE_CYCLE.find((r) => r > start + 0.001) ?? RATE_CYCLE[0];
+  const next = Math.abs(start - 1.5) > 0.001 ? 1.5 : 1.2;
 
-  // The chip cycles the rate and persists it via `rpc_set_playback_rate`;
-  // assert that POST fired with the next preset before checking UI/audio state.
+  const pop = page.getByTestId("mini-dock-pop-speed");
+  await expect(pop).not.toHaveClass(/open/);
+  await speed.click();
+  await expect(pop).toHaveClass(/open/);
+
+  // Selecting a preset persists via `rpc_set_playback_rate`; assert that POST
+  // fired with the chosen value before checking UI/audio state.
   await expectMutation(
     page,
     {
@@ -216,11 +257,12 @@ test("dock speed chip cycles playback rate and reaches the shared audio + full p
       expectedStatus: 200,
       expectedBody: { uuid, update: { playback_rate: next } },
     },
-    async () => speed.click(),
+    async () =>
+      pop.getByRole("button", { name: `${next.toFixed(1)}×`, exact: true }).click(),
   );
-  await expect(speed).toHaveText(`${next.toFixed(1)}×`);
+  await expect(speed).toContainText(`${next.toFixed(1)}×`);
 
-  // The chip writes through the shared apply_rate seam, so the change must
+  // The panel writes through the shared apply_rate seam, so the change must
   // reach the shared `<audio>` element's playbackRate in real time.
   await expect
     .poll(() =>
@@ -232,25 +274,160 @@ test("dock speed chip cycles playback rate and reaches the shared audio + full p
     )
     .toBeCloseTo(next, 2);
 
-  // Expanding back to the full player must show the same rate — proof both
-  // controls share one signal rather than each tracking its own copy.
+  // Clicking outside closes the popover; expanding back to the full player
+  // must show the same rate — proof both controls share one signal. Click the
+  // scrim's top-left corner — its center can sit under the open panel.
+  await page.getByTestId("mini-dock-scrim").click({ position: { x: 10, y: 10 } });
+  await expect(pop).not.toHaveClass(/open/);
   await page.getByTestId("mini-dock-expand-btn").click();
   await expect(page).toHaveURL(new RegExp(`/listen/${uuid}\\??$`));
   await expect(page.getByTestId("listen-rate")).toContainText(next.toFixed(1));
 });
 
 // ---------------------------------------------------------------------------
-// 3d. Sleep chip expands to the full player (where the sleep timer lives)
+// 3d. Sleep chip opens the shared sleep panel; the armed timer follows the
+//     user into the full player (app-scoped controller)
 // ---------------------------------------------------------------------------
 
-test("dock sleep chip opens the full player", async ({ page, request }) => {
+test("dock sleep popover arms a countdown that the full player then shows", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
   await gotoReady(page, `/listen/${uuid}`);
   await waitForPlayerReady(page);
   await spaNavigateToLibrary(page);
 
-  await page.getByTestId("mini-dock-sleep").click();
+  const sleep = page.getByTestId("mini-dock-sleep");
+  await expect(sleep).toHaveText("Sleep");
+
+  const pop = page.getByTestId("mini-dock-pop-sleep");
+  await expect(pop).not.toHaveClass(/open/);
+  await sleep.click();
+  await expect(pop).toHaveClass(/open/);
+
+  // Arming "30 min" starts the countdown; the chip reflects it live (it
+  // begins decrementing immediately, so accept 29:xx or 30:00).
+  await pop.getByRole("button", { name: "30 min" }).click();
+  await expect(sleep).toHaveText(/^Sleep · (29:\d\d|30:00)$/);
+
+  // The controller is app-scoped: expanding to the full player shows the
+  // same running countdown in its sleep status. (Corner click — the scrim's
+  // center can sit under the open panel.)
+  await page.getByTestId("mini-dock-scrim").click({ position: { x: 10, y: 10 } });
+  await page.getByTestId("mini-dock-expand-btn").click();
   await expect(page).toHaveURL(new RegExp(`/listen/${uuid}\\??$`));
+  await page.getByRole("button", { name: /^sleep/i }).click();
+  await expect(page.getByTestId("sleep-status")).toHaveText(/^(29|30):\d\d$/);
+});
+
+// ---------------------------------------------------------------------------
+// 3e. Chapter jumps — whole-chapter seeks from the dock transport
+// ---------------------------------------------------------------------------
+
+test("dock chapter jumps seek across chapter boundaries", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MULTIPART_MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+  await spaNavigateToLibrary(page);
+
+  // Absolute (cross-part) position, mirroring the shim's `absTime()`: in
+  // direct mode the `<audio>` element's currentTime is per-part, so a jump
+  // into part 2 would otherwise read as ~0 again.
+  const audioTime = () =>
+    page.evaluate(() => {
+      const oa = (
+        window as unknown as {
+          OmnibusAudio?: {
+            _mode?: string | null;
+            _parts?: unknown;
+            _cumOffsets?: number[];
+            _index?: number;
+          };
+        }
+      ).OmnibusAudio;
+      const el = document.getElementById(
+        "omnibus-audio",
+      ) as HTMLAudioElement | null;
+      if (!oa || !el) return null;
+      if (oa._mode === "direct" && oa._parts) {
+        return (oa._cumOffsets?.[oa._index ?? 0] ?? 0) + (el.currentTime || 0);
+      }
+      return el.currentTime || 0;
+    });
+  // Next chapter: from position 0 (chapter 1) the target is chapter 2's
+  // start — currentTime must move strictly forward past zero.
+  await page.getByTestId("mini-dock-ch-next").click();
+  await expect.poll(audioTime).toBeGreaterThan(0);
+  const afterNext = (await audioTime())!;
+
+  // Previous chapter: freshly landed at a chapter start (≤ 3 s in), so the
+  // target is the previous chapter's start — back to 0.
+  await page.getByTestId("mini-dock-ch-prev").click();
+  await expect.poll(audioTime).toBeLessThan(afterNext);
+});
+
+// ---------------------------------------------------------------------------
+// 3f. Popovers are mutually exclusive — opening one closes the others
+// ---------------------------------------------------------------------------
+
+test("dock popovers are mutually exclusive", async ({ page, request }) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+  await spaNavigateToLibrary(page);
+
+  const speedPop = page.getByTestId("mini-dock-pop-speed");
+  const sleepPop = page.getByTestId("mini-dock-pop-sleep");
+
+  await page.getByTestId("mini-dock-speed").click();
+  await expect(speedPop).toHaveClass(/open/);
+
+  await page.getByTestId("mini-dock-sleep").click();
+  await expect(sleepPop).toHaveClass(/open/);
+  await expect(speedPop).not.toHaveClass(/open/);
+
+  // Re-clicking the open panel's own chip closes it.
+  await page.getByTestId("mini-dock-sleep").click();
+  await expect(sleepPop).not.toHaveClass(/open/);
+});
+
+// ---------------------------------------------------------------------------
+// 3g. Narrow viewports shed the secondary controls, keeping play + actions
+// ---------------------------------------------------------------------------
+
+test("dock sheds secondary controls on narrow viewports", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+  await spaNavigateToLibrary(page);
+
+  await page.setViewportSize({ width: 700, height: 800 });
+
+  // The `mini-dock-hide` set — chapter jumps, ±30 seeks, volume, speed and
+  // sleep chips — disappears below the 900px breakpoint…
+  for (const id of [
+    "mini-dock-ch-prev",
+    "mini-dock-ch-next",
+    "mini-dock-skip-back",
+    "mini-dock-skip-forward",
+    "mini-dock-volume",
+    "mini-dock-speed",
+    "mini-dock-sleep",
+  ]) {
+    await expect(page.getByTestId(id)).toBeHidden();
+  }
+
+  // …while play, expand, and dismiss stay reachable.
+  await expect(page.getByTestId("mini-dock-toggle")).toBeVisible();
+  await expect(page.getByTestId("mini-dock-expand-btn")).toBeVisible();
+  await expect(page.getByTestId("mini-dock-dismiss")).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
@@ -322,14 +499,20 @@ test("shows the mini-dock on the immersive reader while an audiobook is loaded",
   await expect(toggle).toHaveAttribute("aria-label", "Pause");
   await toggle.click();
 
-  // The reader's own bottom bar and the dock must not visually collide —
-  // assert the dock sits above it rather than overlapping (AC2). `.rd-bottom`
-  // renders unconditionally in `BookReadPage`, so this is a plain assertion.
-  const dockBottom = await page
+  // Immersive geometry: the dock sits flush at the bottom edge and the
+  // reader's bottom bar becomes a slim footer pinned directly above it — the
+  // two stack rather than collide (#988, restated for the AudioDockBar
+  // design). The footer renders unconditionally in `BookReadPage`.
+  const dockBox = await page
     .getByTestId("mini-dock")
-    .evaluate((el) => el.getBoundingClientRect().bottom);
-  const readerBarTop = await page
-    .locator(".rd-bottom")
-    .evaluate((el) => el.getBoundingClientRect().top);
-  expect(dockBottom).toBeLessThanOrEqual(readerBarTop);
+    .evaluate((el) => el.getBoundingClientRect().toJSON());
+  const footerBox = await page
+    .getByTestId("reader-footer")
+    .evaluate((el) => el.getBoundingClientRect().toJSON());
+  const viewport = page.viewportSize()!;
+  expect(dockBox.bottom).toBeCloseTo(viewport.height, 0);
+  expect(footerBox.bottom).toBeCloseTo(dockBox.top, 0);
+
+  // The reader's own progress ribbon yields to the dock's rail.
+  await expect(page.locator(".rd-ribbon")).toBeHidden();
 });

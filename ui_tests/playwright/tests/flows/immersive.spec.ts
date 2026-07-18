@@ -146,10 +146,10 @@ test("reader prose reflows above the docked player with the footer clear beneath
   await expect(footer).toBeVisible();
 
   // The `rd-immersive` reflow class lands asynchronously (once playback state
-  // resolves the book), so poll the geometry rather than asserting once:
-  // stage bottom must clear the dock's top (AC1 — no occluded prose), and the
-  // dock's bottom must sit above the reader's own footer (AC2 — the progress
-  // footer stays visible and interactive).
+  // resolves the book), so poll the geometry rather than asserting once. The
+  // AudioDockBar stacking: prose clears the footer (AC1 — no occluded prose),
+  // the slim progress footer sits directly above the dock (AC2 — it stays
+  // visible and interactive), and the dock is flush with the bottom edge.
   await expect
     .poll(
       async () => {
@@ -159,8 +159,8 @@ test("reader prose reflows above the docked player with the footer clear beneath
           footer.boundingBox(),
         ]);
         if (!v || !d || !f) return "missing-box";
-        if (v.y + v.height > d.y + 0.5) return "stage-overlaps-dock";
-        if (d.y + d.height > f.y + 0.5) return "dock-overlaps-footer";
+        if (v.y + v.height > f.y + 0.5) return "stage-overlaps-footer";
+        if (f.y + f.height > d.y + 0.5) return "footer-overlaps-dock";
         return "clear";
       },
       { timeout: 10_000 },

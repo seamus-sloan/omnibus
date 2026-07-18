@@ -137,7 +137,11 @@ pub(super) const RATE_STEP: f64 = 0.05;
 #[cfg(not(feature = "mobile"))]
 fn clamp_and_round_rate(new_rate: f64) -> f64 {
     let clamped = new_rate.clamp(MIN_RATE, MAX_RATE);
-    (clamped / RATE_STEP).round() * RATE_STEP
+    // Snap by multiplying into whole step counts and dividing back out —
+    // `steps.round() * RATE_STEP` accumulates binary-float error (1.2 becomes
+    // 1.2000000000000002, which then leaks into the persisted JSON payload).
+    let steps_per_unit = (1.0 / RATE_STEP).round();
+    (clamped * steps_per_unit).round() / steps_per_unit
 }
 
 /// Snap/clamp `new_rate`, update the shared signal, persist it per-book, and

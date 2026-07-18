@@ -3299,16 +3299,17 @@ a.idx-letter-on:focus-visible {
 /* Empty host until a book is loaded — keeps SSR / WASM markup aligned. */
 .mini-dock-host:empty { display: none; }
 
+/* Full-width edge-to-edge bar (the "AudioDockBar" design): no inset, no
+   radius, a hairline top border over a frosted surface. `overflow` stays
+   visible so the upward popovers can escape the bar. */
 .mini-dock {
-  position: fixed; left: 24px; right: 24px; bottom: 18px; z-index: 40;
-  display: flex; align-items: center; gap: 14px;
-  padding: 12px 16px; border-radius: 16px;
-  background: color-mix(in oklch, var(--bg-1) 95%, transparent);
-  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
-  border: 1px solid var(--line);
-  box-shadow: 0 24px 50px -10px rgba(0, 0, 0, .6);
-  /* Clip the full-width top progress line to the rounded corners. */
-  overflow: hidden;
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+  height: calc(78px + env(safe-area-inset-bottom));
+  display: flex; align-items: center; gap: 16px;
+  padding: 0 22px env(safe-area-inset-bottom);
+  border-top: 1px solid var(--line);
+  background: color-mix(in oklch, var(--bg-1) 93%, transparent);
+  backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
 }
 
 /* Thin progress line pinned to the top edge — replaces the old inline
@@ -3316,56 +3317,79 @@ a.idx-letter-on:focus-visible {
 .mini-dock-prog { position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--bg-2); }
 .mini-dock-prog > i { display: block; height: 100%; background: var(--accent); }
 
+/* Transparent outside-click catcher while a popover is open — below the bar
+   (so its own controls keep working) but above the page. */
+.mini-dock-scrim { position: fixed; inset: 0; z-index: 39; background: transparent; }
+
 /* Immersive dock geometry. The `/read` route wraps the reader and its docked
    audiobook bar in `.rd-host`, adding `rd-immersive` while the bar is active;
    this height + gap pair is the single source of truth shared by the docked
-   bar below and the reader's stage inset (see the reader-chrome section), so
-   the two can't drift apart. */
+   bar and the reader's stage inset (see the reader-chrome section), so the
+   two can't drift apart. The web route also adds `rd-dock-full`: its dock is
+   the full-width bar at the very bottom edge (no collision offset needed —
+   the reader's bottom bar becomes a slim footer pinned above the dock),
+   while mobile keeps the base 68px floating-bar values. */
 .rd-host { --rd-dock-h: 68px; --rd-dock-gap: 8px; }
+.rd-dock-full { --rd-dock-h: 78px; --rd-foot-h: 40px; }
 
-/* On `/read` the dock renders as a sibling of `.rd-surface` (#988), so raise
-   it above the reader's own bottom bar (`.rd-bottom`, 54px + safe-area) —
-   otherwise the two fixed-position bars visually collide at the bottom
-   edge. Higher specificity than the plain `.mini-dock` rule (incl. the
-   phone breakpoint below), so it wins at every viewport width. Height is
-   pinned to the shared value the reader reserves space with. */
-.rd-surface + .mini-dock-host .mini-dock {
-  bottom: calc(54px + env(safe-area-inset-bottom) + var(--rd-dock-gap));
-  height: var(--rd-dock-h);
-}
-
+/* LEFT cluster — cover + title/meta. Capped so it can't run under the
+   absolutely-centered transport. */
 .mini-dock-now {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   display: flex; align-items: center; gap: 12px;
-  min-width: 0; text-decoration: none; color: inherit;
+  min-width: 0; max-width: min(420px, calc(50% - 170px));
+  text-decoration: none; color: inherit;
 }
-.mini-dock-cover { width: 44px; flex: none; }
-.mini-dock-cover .cover-wrap, .mini-dock-cover .cover { width: 44px; border-radius: 4px; }
+.mini-dock-cover { width: 38px; flex: none; }
+.mini-dock-cover .cover-wrap, .mini-dock-cover .cover { width: 38px; border-radius: 4px; }
 .mini-dock-meta { min-width: 0; }
 .mini-dock-title {
   font-size: 13.5px; color: var(--ink-0); font-weight: 500;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .mini-dock-sub {
-  font-family: var(--mono); font-size: 11px; color: var(--ink-3);
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); margin-top: 2px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-.mini-dock-controls { display: flex; align-items: center; gap: 10px; flex: none; color: var(--ink-1); }
+/* Spacer pushing the right cluster to the edge (the transport is absolutely
+   centered, so normal flex order skips it). */
+.mini-dock-spacer { flex: 1; }
+
+/* CENTER transport — absolutely centered in the bar so it never drifts with
+   the left/right cluster widths. Vertically centered on the control band
+   (bar height minus the safe-area padding). */
+.mini-dock-mid {
+  position: absolute; left: 50%;
+  top: calc((100% - env(safe-area-inset-bottom)) / 2);
+  transform: translate(-50%, -50%);
+  display: flex; align-items: center; gap: 12px; color: var(--ink-1);
+}
 .mini-dock-btn {
   background: transparent; border: 1px solid var(--line);
   color: var(--ink-1); cursor: pointer; transition: color .15s, background .15s;
 }
 .mini-dock-btn:hover { color: var(--ink-0); background: var(--bg-1); }
 .mini-dock-skip {
-  width: 32px; height: 32px; padding: 0; border-radius: 999px;
+  width: 38px; height: 38px; padding: 0; border-radius: 999px;
   display: grid; place-items: center;
   font-family: var(--mono); font-size: 10px;
 }
+/* Whole-chapter jumps — bordered squares flanking the transport, reusing the
+   full player's bar + triangle glyph spans. */
+.mini-dock-ch {
+  width: 34px; height: 34px; padding: 0; flex: none; border-radius: 9px;
+  border: 1px solid var(--line-2); background: transparent; color: var(--ink-1);
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  gap: 3px; transition: color .14s, background .14s;
+}
+.mini-dock-ch:hover:not(:disabled) { background: var(--bg-2); color: var(--ink-0); }
+.mini-dock-ch:disabled { opacity: .35; cursor: not-allowed; }
 .mini-dock-play {
-  width: 44px; height: 44px; padding: 0; border-radius: 999px; border: 0;
+  width: 46px; height: 46px; padding: 0; border-radius: 999px; border: 0;
   background: var(--accent); color: var(--accent-ink);
   cursor: pointer; display: grid; place-items: center; transition: transform .12s;
+  box-shadow: 0 10px 22px -10px color-mix(in oklch, var(--accent) 60%, transparent);
 }
 .mini-dock-play:hover { transform: scale(1.04); }
 .mini-dock-play:active { transform: scale(0.97); }
@@ -3376,7 +3400,8 @@ a.idx-letter-on:focus-visible {
 }
 .mini-dock-ico-pause { display: flex; gap: 4px; }
 .mini-dock-ico-pause-bar { width: 4px; height: 14px; background: currentColor; border-radius: 1px; }
-/* Speed / Sleep chips — pill buttons that shed on narrow viewports. */
+/* Speed / Sleep chips — pill buttons that shed on narrow viewports. `.on`
+   marks the chip whose popover is open. */
 .mini-dock-chip {
   flex: none; display: inline-flex; align-items: center; gap: 6px;
   height: 32px; padding: 0 12px; border-radius: 999px;
@@ -3386,6 +3411,11 @@ a.idx-letter-on:focus-visible {
 }
 .mini-dock-chip:hover { background: var(--bg-2); color: var(--ink-0); }
 .mini-dock-chip.mono { font-family: var(--mono); }
+.mini-dock-chip.on {
+  color: var(--accent);
+  border-color: color-mix(in oklch, var(--accent) 42%, transparent);
+  background: color-mix(in oklch, var(--accent) 12%, transparent);
+}
 
 /* Thin divider before the inline icon actions. */
 .mini-dock-div { flex: none; width: 1px; height: 34px; background: var(--line-2); }
@@ -3398,6 +3428,49 @@ a.idx-letter-on:focus-visible {
   transition: color .14s, background .14s, border-color .14s;
 }
 .mini-dock-ico:hover { background: var(--bg-2); color: var(--ink-0); border-color: var(--line-2); }
+.mini-dock-ico.on { background: var(--bg-2); color: var(--accent); border-color: var(--line-2); }
+
+/* ── Dock popovers ─────────────────────────────────────────────── */
+/* Anchor wrapper so each popover positions against its own chip. */
+.mini-dock-pop-anchor { position: relative; flex: none; display: inline-flex; }
+
+/* Upward popover — same frosted surface as the full player's panels,
+   spring-opened above its chip. Always in the DOM; `.open` gates
+   visibility, pointer-events, and the entrance animation. */
+.mini-dock-pop {
+  position: absolute; z-index: 45; right: -6px; bottom: calc(100% + 14px);
+  padding: 28px; border-radius: var(--r-xl);
+  background: color-mix(in oklch, var(--bg-1) 96%, transparent);
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--line);
+  box-shadow: 0 30px 70px -16px rgba(0, 0, 0, .7);
+  transform-origin: bottom right;
+  opacity: 0; transform: translateY(10px) scale(.96); pointer-events: none;
+  transition: opacity .2s ease, transform .3s cubic-bezier(.18, .9, .28, 1.25);
+}
+.mini-dock-pop.open { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
+.mini-dock-pop-speed { width: 468px; }
+.mini-dock-pop-sleep { width: 430px; }
+.mini-dock-pop-vol { padding: 18px 16px; }
+
+/* Volume — vertical slider inside the upward popover. Fill height rides the
+   `--p` custom property set inline from the volume signal. */
+.mini-dock-vol-vert { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.mini-dock-vol-vert input[type="range"] {
+  writing-mode: vertical-lr; direction: rtl;
+  -webkit-appearance: none; appearance: none;
+  width: 6px; height: 118px; border-radius: 999px; cursor: pointer;
+  background: linear-gradient(to top, var(--accent) var(--p, 100%), var(--bg-3) var(--p, 100%));
+}
+.mini-dock-vol-vert input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 15px; height: 15px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--bg-1);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .45); cursor: pointer;
+}
+.mini-dock-vol-vert input[type="range"]::-moz-range-thumb {
+  width: 15px; height: 15px; border: 2px solid var(--bg-1); border-radius: 50%;
+  background: var(--accent); box-shadow: 0 1px 4px rgba(0, 0, 0, .45); cursor: pointer;
+}
 
 /* ── Responsive ─────────────────────────────────────────────── */
 @media (max-width: 900px) {
@@ -3411,12 +3484,12 @@ a.idx-letter-on:focus-visible {
   .lp-sleep-panel { width: calc(100vw - 48px); right: 24px; bottom: 80px; }
   .lp-drawer { width: 100%; }
 
-  /* Narrow the dock and shed the secondary controls (±30 seeks, speed and
-     sleep chips) so cover, title, play, and expand/close stay on one row. */
-  .mini-dock {
-    left: 12px; right: 12px; bottom: 12px; gap: 10px; padding: 10px 12px;
-  }
+  /* Shed the secondary controls (chapter jumps, ±30 seeks, volume, speed
+     and sleep chips) so cover, title, play, and expand/close stay on one
+     row, and let the title use the space the centered transport frees up. */
+  .mini-dock { gap: 10px; padding: 0 12px env(safe-area-inset-bottom); }
   .mini-dock .mini-dock-hide { display: none; }
+  .mini-dock-now { max-width: calc(50% - 44px); }
 }
 
 /* ── Legacy globals (layout primitives, sr-only) ───────────────────── */
@@ -3443,7 +3516,8 @@ body {
    the mobile `.screen` reserve for `.m-mini` above; same `:has()` floor. */
 @supports selector(:has(a)) {
   .app-shell > main:has(+ .mini-dock-host:not(:empty)) {
-    padding-bottom: 7rem;
+    /* Bar height (78px) plus breathing room. */
+    padding-bottom: calc(78px + 2.5rem);
   }
 }
 
@@ -4968,6 +5042,25 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-immersive .rd-stage {
   bottom: calc(54px + env(safe-area-inset-bottom) + var(--rd-dock-h) + 2 * var(--rd-dock-gap));
 }
+/* Web immersive (`rd-dock-full`, set by the web /read route): the full-width
+   AudioDockBar sits at the bottom edge, the reader's own bottom bar becomes
+   a slim mono footer pinned directly above it (page position left, chapter
+   count centered — the design's "page cleared of the dock"), the progress
+   ribbon is hidden (the dock's own rail takes over that edge), and the stage
+   clears footer + dock so no prose hides behind either. */
+.rd-dock-full.rd-immersive .rd-bottom {
+  bottom: calc(var(--rd-dock-h) + env(safe-area-inset-bottom));
+  height: var(--rd-foot-h); padding-bottom: 0;
+  background: color-mix(in oklch, var(--bg-0) 62%, transparent);
+}
+.rd-dock-full.rd-immersive .rd-ribbon { display: none; }
+.rd-dock-full.rd-immersive .rd-stage {
+  bottom: calc(var(--rd-dock-h) + var(--rd-foot-h) + env(safe-area-inset-bottom) + var(--rd-dock-gap));
+}
+/* The footer + dock replace the reader's bottom chrome wholesale, so the
+   distraction-free centre-tap keeps them in place (the top bar still
+   slides away). */
+.rd-dock-full.rd-immersive .rd-chrome-hidden .rd-bottom { transform: none; }
 .rd-viewer { position: absolute; inset: 0; }
 .rd-turn { position: absolute; top: 50%; transform: translateY(-50%); z-index: 5;
   width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center;
