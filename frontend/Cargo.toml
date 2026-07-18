@@ -91,7 +91,13 @@ ndk-context = { version = "0.1", optional = true }
 [dev-dependencies]
 # Sandboxed temp dirs for the mobile `token_store` / `app_dirs` file tests.
 tempfile.workspace = true
-# In-memory pool + seed fixtures for the `server`-gated rpc tests.
+
+# In-memory pool + seed fixtures for the `server`-gated rpc tests. Gated off
+# wasm32: those tests only compile under the (native) `server` feature, and an
+# unconditional dev-dep would drag sqlx/tokio-net into the wasm test closure
+# that CI's `clippy (frontend-web) --all-targets` builds (mio can't compile
+# for wasm).
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 omnibus-db = { path = "../db", features = ["test-support"] }
 
 [features]
