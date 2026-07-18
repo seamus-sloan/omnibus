@@ -40,9 +40,9 @@ async fn search_palette(pool: &sqlx::SqlitePool, q: &str) -> Result<PaletteResul
     if paths.is_empty() {
         return Ok(PaletteResults::default());
     }
-    Ok(db::search_palette_for_paths(pool, &paths, q)
+    db::search_palette_for_paths(pool, &paths, q)
         .await
-        .map_err(|e| internal_rpc_error("search palette", e))?)
+        .map_err(|e| internal_rpc_error("search palette", e))
 }
 
 // `server`-gated: exercises the extracted server-side body against an
