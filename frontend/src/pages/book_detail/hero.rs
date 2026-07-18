@@ -240,9 +240,7 @@ fn BdCtaRow(
                     listen_btn
                 }
             }
-            // Immersive Read — opens the ereader and the audiobook player
-            // (docked, minimized) together for the same book. Only when the
-            // book has both an ebook and an audiobook.
+            // Immersive Read is a dual-format-only action, so gate it on both.
             if has_audio && has_ebook {
                 BdImmersiveButton { uuid: uuid.clone() }
             }
@@ -284,11 +282,13 @@ fn bd_immersive_mark() -> Element {
 
 /// Immersive Read CTA (web): opens the reader and docks the audiobook player
 /// together. Clicking retargets the app-wide [`crate::PlaybackState`] at this
-/// book — the App-level audio bootstrap then loads + plays it, and the `/read`
-/// route's [`crate::pages::MiniDock`] surfaces once book + uuid resolve — then
-/// navigates to the reader. The playback context and navigator are read inside
-/// the handler (not as render-time hooks) so the button renders under SSR and
-/// in unit tests without a provider, keeping hydration parity (rule 07).
+/// book — the App-level audio bootstrap then loads its manifest and the `/read`
+/// route's [`crate::pages::MiniDock`] surfaces (paused, at the resume position)
+/// once book + uuid resolve — then navigates to the reader. Playback itself
+/// starts on the first transport action, not on load. The playback context and
+/// navigator are read inside the handler (not as render-time hooks) so the
+/// button renders under SSR and in unit tests without a provider, keeping
+/// hydration parity (rule 07).
 #[cfg(not(feature = "mobile"))]
 #[component]
 fn BdImmersiveButton(uuid: String) -> Element {
