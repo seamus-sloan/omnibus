@@ -337,7 +337,7 @@ pub(super) async fn get_ebook_kepub(
 async fn kepub_conversion_succeeded(state: &AppState, book_id: i64) -> bool {
     let task_id = state.worker.post(Task::KepubConvert { book_id });
     match tokio::time::timeout(KEPUB_CONVERT_BUDGET, state.worker.await_completion(task_id)).await {
-        Ok(TaskOutcome::Ok) => true,
+        Ok(TaskOutcome::Ok(_)) => true,
         Ok(TaskOutcome::Err(msg)) => {
             tracing::warn!(book_id, error = %msg, "kepub conversion failed; serving plain epub");
             false

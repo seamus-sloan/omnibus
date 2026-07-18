@@ -42,10 +42,25 @@ pub enum ProgressState {
     },
     Done {
         processed: u32,
+        /// Set when a scan ghosted a large-but-sub-abort-threshold number of
+        /// books (issue #1057) — the UI renders a dismissible warning row
+        /// instead of the ordinary success row.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ghost_warning: Option<GhostFilesWarning>,
     },
     Failed {
         message: String,
     },
+}
+
+/// Ghost-count tally attached to a scan's `Done` state (issue #1057): `removed`
+/// books lost their backing file this scan out of `total` file-backed books in
+/// the library, clearing the warn threshold but staying under the #819 abort
+/// guard.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GhostFilesWarning {
+    pub removed: u32,
+    pub total: u32,
 }
 
 impl ProgressState {
@@ -93,5 +108,39 @@ impl WorkerStatus {
     /// `true` when no tasks are active or recently completed.
     pub fn is_empty(&self) -> bool {
         self.active.is_empty() && self.recent_complete.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn done_without_a_ghost_warning_omits_the_field_from_the_wire() {
+        // AC5: the wire type must stay compact for the ordinary (no
+        // warning) case — no `ghost_warning` key at all, not even `null`.
+        let state = ProgressState::Done {
+            processed: 3,
+            ghost_warning: None,
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(
+            !json.contains("ghost_warning"),
+            "expected no ghost_warning key, got {json}"
+        );
+    }
+
+    #[test]
+    fn done_with_a_ghost_warning_round_trips_the_removed_and_total_counts() {
+        let state = ProgressState::Done {
+            processed: 100,
+            ghost_warning: Some(GhostFilesWarning {
+                removed: 15,
+                total: 100,
+            }),
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        let round_tripped: ProgressState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, round_tripped);
     }
 }

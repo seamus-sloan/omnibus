@@ -56,6 +56,13 @@ pub const MASS_MISSING_FRACTION: f64 = 0.20;
 /// percentage guard.
 pub const MASS_MISSING_MIN_ABSOLUTE: usize = 10;
 
+/// Warn threshold: below [`MASS_MISSING_FRACTION`] (the #819 abort guard)
+/// but still large enough that a dropped mount or partial sync shouldn't
+/// ghost books silently. Half the abort fraction — a scan in this band
+/// still proceeds (unlike the abort guard) but its `Done` state carries a
+/// dismissible warning (issue #1057).
+pub const MASS_MISSING_WARN_FRACTION: f64 = 0.10;
+
 /// Error raised when the removal pass would flag an implausible share of the
 /// library missing. Surfaced (not swallowed) so the worker logs it and the
 /// existing index is left intact — the underlying files are almost certainly
@@ -112,6 +119,44 @@ fn check_mass_missing(removed: usize, db_file_backed: usize) -> Result<(), MassM
         });
     }
     Ok(())
+}
+
+/// `true` when a scan's ghost count clears [`MASS_MISSING_WARN_FRACTION`]:
+/// more than [`MASS_MISSING_MIN_ABSOLUTE`] books *and* more than the warn
+/// fraction of the file-backed library. Reuses the abort guard's absolute
+/// floor so an ordinary small-library edit never warns either. Callers only
+/// reach this after [`check_mass_missing`] has already passed, so the warn
+/// band is implicitly capped above by [`MASS_MISSING_FRACTION`].
+fn ghost_warning_threshold_exceeded(removed: usize, db_file_backed: usize) -> bool {
+    if removed <= MASS_MISSING_MIN_ABSOLUTE || db_file_backed == 0 {
+        return false;
+    }
+    removed as f64 / db_file_backed as f64 > MASS_MISSING_WARN_FRACTION
+}
+
+/// Per-scan tallies handed back to the worker so it can decide whether to
+/// attach a [`omnibus_shared::GhostFilesWarning`] to the task's `Done`
+/// state. `removed` is this scan's ghost count; `file_backed_total` is the
+/// file-backed library size [`check_mass_missing`] measured it against.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ReindexStats {
+    pub removed: usize,
+    pub file_backed_total: usize,
+}
+
+impl ReindexStats {
+    /// Project this scan's tallies into a wire-facing warning when the
+    /// ghost count clears [`MASS_MISSING_WARN_FRACTION`]; `None` below the
+    /// threshold, which is the ordinary silent-ghosting path (AC2).
+    pub fn ghost_warning(&self) -> Option<omnibus_shared::GhostFilesWarning> {
+        if !ghost_warning_threshold_exceeded(self.removed, self.file_backed_total) {
+            return None;
+        }
+        Some(omnibus_shared::GhostFilesWarning {
+            removed: u32::try_from(self.removed).unwrap_or(u32::MAX),
+            total: u32::try_from(self.file_backed_total).unwrap_or(u32::MAX),
+        })
+    }
 }
 
 /// True when a refresh should be kicked off: no state at all, or state
@@ -308,19 +353,20 @@ pub fn diff_library(
 /// (which would also suppress retries until [`REFRESH_AFTER_SECS`]
 /// elapses). Per-book parse failures are *not* fatal; they land in the
 /// DB as rows with `error = Some(_)`, same as before.
-pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()> {
+pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<ReindexStats> {
     reindex_with_progress(pool, library_path, |_, _| {}).await
 }
 
 /// [`reindex`] variant that calls `on_progress(processed, total)` after
 /// each per-book write inside `sync_books`. Used by
 /// [`crate::worker::Worker`] to report determinate `processed / total`
-/// counts to the UI indicator.
+/// counts to the UI indicator. Returns the scan's ghost-count tallies
+/// (issue #1057) so the caller can decide whether to attach a warning.
 pub async fn reindex_with_progress(
     pool: &SqlitePool,
     library_path: &str,
     on_progress: impl FnMut(u32, u32),
-) -> anyhow::Result<()> {
+) -> anyhow::Result<ReindexStats> {
     let path_for_scan = library_path.to_owned();
     let library_key_for_scan = library_path.to_owned();
     let stat = tokio::task::spawn_blocking(move || {
@@ -356,7 +402,8 @@ pub async fn reindex_with_progress(
         );
     }
     let mut diff = diff_library(&stat.entries, &db_rows, &library_root, trustworthy);
-    check_mass_missing(diff.removed.len(), db_file_backed)?;
+    let removed_count = diff.removed.len();
+    check_mass_missing(removed_count, db_file_backed)?;
 
     // Parse Phase B only for the buckets that need it. `diff.removed`/
     // `.backfill` are read again below, but `.new`/`.changed` are not, so
@@ -384,7 +431,10 @@ pub async fn reindex_with_progress(
     };
     sync::sync_books_with_progress(pool, library_path, plan, on_progress).await?;
     gc_missing_files_best_effort(pool).await;
-    Ok(())
+    Ok(ReindexStats {
+        removed: removed_count,
+        file_backed_total: db_file_backed,
+    })
 }
 
 /// Best-effort GC of books whose files have been missing past the retention
@@ -408,7 +458,10 @@ async fn gc_missing_files_best_effort(pool: &SqlitePool) {
 /// Audiobook-library sibling of [`reindex`]. Groups audio files by folder,
 /// reads multi-part tags, then calls [`sync::sync_audiobooks`] to write
 /// `book_file_parts` rows.
-pub async fn reindex_audiobooks(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()> {
+pub async fn reindex_audiobooks(
+    pool: &SqlitePool,
+    library_path: &str,
+) -> anyhow::Result<ReindexStats> {
     reindex_audiobooks_with_progress(pool, library_path, |_, _| {}).await
 }
 
@@ -471,12 +524,13 @@ fn project_groups_to_stat(groups: &[audiobook::AudiobookGroup]) -> Vec<ebook::St
 /// [`reindex_audiobooks`] variant that calls `on_progress(processed,
 /// total)` after each per-book write inside `sync_audiobooks`. Used by
 /// [`crate::worker::Worker`] to report determinate `processed / total`
-/// counts to the UI indicator.
+/// counts to the UI indicator. Returns the scan's ghost-count tallies
+/// (issue #1057) so the caller can decide whether to attach a warning.
 pub async fn reindex_audiobooks_with_progress(
     pool: &SqlitePool,
     library_path: &str,
     on_progress: impl FnMut(u32, u32),
-) -> anyhow::Result<()> {
+) -> anyhow::Result<ReindexStats> {
     let (groups, signals) = stat_and_group_audiobooks(library_path).await?;
 
     // Diff groups against DB rows (project groups to the ebook StatEntry shape
@@ -508,7 +562,8 @@ pub async fn reindex_audiobooks_with_progress(
         );
     }
     let diff = diff_library(&groups_as_stat, &db_rows, &library_root, trustworthy);
-    check_mass_missing(diff.removed.len(), db_file_backed)?;
+    let removed_count = diff.removed.len();
+    check_mass_missing(removed_count, db_file_backed)?;
 
     // Phase B: parse only the New and Changed groups.
     let groups_by_group_path: std::collections::HashMap<String, audiobook::AudiobookGroup> = groups
@@ -544,7 +599,10 @@ pub async fn reindex_audiobooks_with_progress(
     };
     sync::sync_audiobooks_with_progress(pool, library_path, plan, on_progress).await?;
     gc_missing_files_best_effort(pool).await;
-    Ok(())
+    Ok(ReindexStats {
+        removed: removed_count,
+        file_backed_total: db_file_backed,
+    })
 }
 
 /// Fill `file_chapters` for audiobook `book_files` rows that have none.

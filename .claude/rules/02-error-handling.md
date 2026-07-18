@@ -40,12 +40,13 @@ just propagates. `anyhow::bail!` with a context-rich format string is
 honest about the open-ended failure space:
 
 ```rust
-pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<()> {
+pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<ReindexStats> {
     let stat = scan(library_path).await?;
     if let Some(msg) = stat.error {
         anyhow::bail!("scan of {library_path} failed: {msg}");
     }
-    Ok(())
+    // ... diff, sync, etc.
+    Ok(ReindexStats::default())
 }
 ```
 
