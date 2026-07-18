@@ -276,7 +276,7 @@ fn UmNowReading() -> Element {
                     };
                     let uuid = point.record.book_uuid.clone();
                     let to = if is_audio {
-                        Route::BookListen { uuid }
+                        Route::BookListen { uuid, file_id: None }
                     } else {
                         Route::BookRead { uuid }
                     };

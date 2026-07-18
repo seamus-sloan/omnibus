@@ -254,7 +254,7 @@ pub(super) async fn async_sleep_ms(ms: u32) {
 fn listen_book_action(uuid: &str) -> Element {
     rsx! {
         Link {
-            to: Route::BookListen { uuid: uuid.to_string() },
+            to: Route::BookListen { uuid: uuid.to_string(), file_id: None },
             class: "btn",
             "data-testid": "action-listen",
             "Listen"

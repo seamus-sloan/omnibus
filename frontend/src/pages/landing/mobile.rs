@@ -174,7 +174,10 @@ fn resume_card(point: &ResumePoint, server_url: &str) -> Element {
         .unwrap_or_default();
     let is_audio = point.record.format == ProgressFormat::Audio;
     let to = if is_audio {
-        Route::BookListen { uuid: uuid.clone() }
+        Route::BookListen {
+            uuid: uuid.clone(),
+            file_id: None,
+        }
     } else {
         Route::BookRead { uuid: uuid.clone() }
     };

@@ -115,7 +115,7 @@ pub fn MiniDock() -> Element {
                 }
 
                 Link {
-                    to: Route::BookListen { uuid: uuid.clone() },
+                    to: Route::BookListen { uuid: uuid.clone(), file_id: None },
                     class: "mini-dock-now",
                     "data-testid": "mini-dock-expand",
                     "aria-label": "Expand player",
@@ -129,7 +129,7 @@ pub fn MiniDock() -> Element {
                 MiniDockControls { playing: playing }
                 MiniDockSpeed { rate: rate, uuid: uuid.clone(), user_id: user_id }
                 Link {
-                    to: Route::BookListen { uuid: uuid.clone() },
+                    to: Route::BookListen { uuid: uuid.clone(), file_id: None },
                     class: "mini-dock-chip mini-dock-hide",
                     "data-testid": "mini-dock-sleep",
                     "aria-label": "Sleep timer \u{2014} open player",
@@ -246,7 +246,7 @@ fn MiniDockActions(uuid: String) -> Element {
     rsx! {
         div { class: "mini-dock-actions",
             Link {
-                to: Route::BookListen { uuid: uuid.clone() },
+                to: Route::BookListen { uuid: uuid.clone(), file_id: None },
                 class: "mini-dock-ico",
                 "data-testid": "mini-dock-expand-btn",
                 "aria-label": "Expand to full player",

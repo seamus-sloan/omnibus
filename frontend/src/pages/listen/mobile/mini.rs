@@ -66,7 +66,7 @@ pub fn MobileMiniPlayer() -> Element {
             div { class: "m-mini-progress", div { style: "width:{pct}%" } }
             div { class: "m-mini-row",
                 Link {
-                    to: Route::BookListen { uuid: uuid.clone() },
+                    to: Route::BookListen { uuid: uuid.clone(), file_id: None },
                     class: "m-mini-main",
                     "aria-label": "Open player for {view.title}",
                     span { class: "m-mini-cover",
@@ -105,7 +105,7 @@ pub fn MobileMiniPlayer() -> Element {
                     "+30"
                 }
                 Link {
-                    to: Route::BookListen { uuid: uuid.clone() },
+                    to: Route::BookListen { uuid: uuid.clone(), file_id: None },
                     class: "m-mini-expand",
                     "data-testid": "mini-expand",
                     "aria-label": "Expand to full player",
