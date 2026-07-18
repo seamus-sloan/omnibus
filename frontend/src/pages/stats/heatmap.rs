@@ -175,11 +175,14 @@ pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
                     div { class: "label", "Longest streak" }
                 }
             }
-            div { class: "st-heatmap", role: "img", aria_label: "Daily reading activity, trailing year",
-                for cell in cells {
-                    div {
-                        class: if cell.future { "st-hm-cell st-hm-future" } else { "st-hm-cell st-hm-{cell.level}" },
-                        title: if !cell.future && cell.secs > 0 { "{format_active_time(cell.secs)} on {cell.day}" } else { "{cell.day}" },
+            // Block-level scroll wrapper: iOS WebKit clips this far more reliably than a grid-as-scroller (#1076).
+            div { class: "st-heatmap-scroll",
+                div { class: "st-heatmap", role: "img", aria_label: "Daily reading activity, trailing year",
+                    for cell in cells {
+                        div {
+                            class: if cell.future { "st-hm-cell st-hm-future" } else { "st-hm-cell st-hm-{cell.level}" },
+                            title: if !cell.future && cell.secs > 0 { "{format_active_time(cell.secs)} on {cell.day}" } else { "{cell.day}" },
+                        }
                     }
                 }
             }
