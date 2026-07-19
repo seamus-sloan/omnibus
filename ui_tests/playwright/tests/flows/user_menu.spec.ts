@@ -8,7 +8,8 @@ import { fixturesDir, seedLibrary } from "../utils/seed";
 // The user menu replaces the old top-bar cluster (ThemeToggle, Settings
 // link, Log out button) with a single avatar trigger that opens a dropdown.
 // Most rows in the dropdown are forward-looking stubs (disabled <a>); real
-// wiring covers recent progress, Settings, Sign out, and theme selection.
+// wiring covers recent progress, Account, Settings, the Admin log-viewer
+// link, Sign out, and theme selection.
 
 test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
@@ -97,6 +98,14 @@ test("Settings link routes to the settings page", async ({ page }) => {
   await page.getByTestId("user-menu-trigger").click();
   await page.getByRole("link", { name: "Settings" }).click();
   await expect(page).toHaveURL(/\/settings$/);
+});
+
+test("Admin · server health link routes to the log viewer", async ({ page }) => {
+  await gotoReady(page, "/");
+  await page.getByTestId("user-menu-trigger").click();
+  await page.getByRole("link", { name: "Admin · server health" }).click();
+  await expect(page).toHaveURL(/\/logs$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Server logs" })).toBeVisible();
 });
 
 for (const sample of [
