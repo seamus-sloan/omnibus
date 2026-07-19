@@ -84,18 +84,20 @@ pub fn BookListenPage(uuid: String, file_id: Option<i64>) -> Element {
 
     #[cfg(not(feature = "mobile"))]
     {
-        // Web resolves the picker's `?file_id=` from `window.location` in the
-        // app-root playback bootstrap, so the routed prop is unused here.
-        let _ = file_id;
         let playback = use_playback();
 
-        // Point the app-wide player at this route's book. The App-level
-        // driver (install_audio_bootstrap) reacts to `uuid` and does the
-        // fetch + manifest init; we only retarget it, and only when it
-        // differs so re-entering an already-playing book is seamless.
+        // Point the app-wide player at this route's book + selected file. The
+        // App-level driver (install_audio_bootstrap) reacts to both `uuid` and
+        // `file_id` and does the fetch + manifest init; we only retarget. The
+        // uuid write (which clears the prior book) fires only when the book
+        // differs so re-entering an already-playing book is seamless, but the
+        // file_id signal always tracks the route so the picker's `?file_id=`
+        // reboots the *same* book onto the chosen part.
         let route_uuid = uuid.clone();
-        use_effect(use_reactive!(|route_uuid| {
+        let route_file_id = file_id;
+        use_effect(use_reactive!(|(route_uuid, route_file_id)| {
             let mut uuid_sig = playback.uuid;
+            let mut file_sig = playback.file_id;
             let mut loading_sig = playback.loading;
             let mut book_sig = playback.book;
             let mut error_sig = playback.error;
@@ -109,6 +111,7 @@ pub fn BookListenPage(uuid: String, file_id: Option<i64>) -> Element {
                 loading_sig.set(true);
                 uuid_sig.set(Some(route_uuid.clone()));
             }
+            file_sig.set(route_file_id);
         }));
 
         let active = playback.uuid.read().as_deref() == Some(uuid.as_str());
