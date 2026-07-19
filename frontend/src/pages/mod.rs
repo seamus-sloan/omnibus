@@ -37,7 +37,7 @@ pub use landing::LandingPage;
 pub(crate) use listen::install_audio_bootstrap;
 pub use listen::BookListenPage;
 #[cfg(not(feature = "mobile"))]
-pub(crate) use listen::{dock_is_active, AudioElement, MiniDock};
+pub(crate) use listen::{dock_is_active, use_sleep_timer, AudioElement, MiniDock};
 #[cfg(feature = "mobile")]
 pub(crate) use listen::{mobile_dock_is_active, MobileAudioHost, MobileMiniPlayer, MobilePlayback};
 pub use metadata_edit::MetadataEditPage;

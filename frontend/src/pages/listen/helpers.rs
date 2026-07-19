@@ -56,6 +56,17 @@ pub(super) fn on_skip_forward_30() -> impl FnMut(MouseEvent) + 'static {
     }
 }
 
+/// Seek the shared audio element to an absolute position in seconds. Shared
+/// by the full player's scrub/chapter handlers and the mini-dock's chapter
+/// jumps; no-op off web (SSR has no audio element to poke).
+#[cfg(not(feature = "mobile"))]
+pub(super) fn seek_to(secs: f64) {
+    #[cfg(feature = "web")]
+    audio_call("seek", &secs.to_string());
+    #[cfg(not(feature = "web"))]
+    let _ = secs;
+}
+
 /// localStorage key for the persisted session volume preference.
 #[cfg(feature = "web")]
 const VOLUME_KEY: &str = "omnibus.listen.volume";
@@ -126,7 +137,11 @@ pub(super) const RATE_STEP: f64 = 0.05;
 #[cfg(not(feature = "mobile"))]
 fn clamp_and_round_rate(new_rate: f64) -> f64 {
     let clamped = new_rate.clamp(MIN_RATE, MAX_RATE);
-    (clamped / RATE_STEP).round() * RATE_STEP
+    // Snap by multiplying into whole step counts and dividing back out —
+    // `steps.round() * RATE_STEP` accumulates binary-float error (1.2 becomes
+    // 1.2000000000000002, which then leaks into the persisted JSON payload).
+    let steps_per_unit = (1.0 / RATE_STEP).round();
+    (clamped * steps_per_unit).round() / steps_per_unit
 }
 
 /// Snap/clamp `new_rate`, update the shared signal, persist it per-book, and

@@ -10,8 +10,8 @@
 use dioxus::prelude::*;
 use omnibus_shared::{Bookmark, ChapterInfo};
 
+use super::chapter_nav::chapter_index_for_elapsed;
 use super::helpers::format_hms;
-use super::ready_player::chapter_index_for_elapsed;
 
 /// Transient "Bookmark saved" toast payload.
 #[derive(Clone, PartialEq, Eq)]

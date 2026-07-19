@@ -1,8 +1,10 @@
-//! Frosted-glass speed-control overlay for the listen page.
+//! Frosted-glass speed controls shared by the listen page and the mini-dock.
 //!
-//! Renders a preset grid (0.5–2.0×), a fine-tune slider (0.5–3.0×), and a
-//! ±0.05 stepper. Rate changes are persisted per-book via
-//! [`crate::audiobook_progress`] and forwarded to the JS audio shim.
+//! [`SpeedPanelBody`] renders the content — a preset grid (0.5–2.0×), a
+//! fine-tune slider (0.5–3.0×), and a ±0.05 stepper; [`SpeedPanel`] wraps it
+//! in the full player's scrim + panel chrome, while the mini-dock hosts the
+//! same body inside its upward popover. Rate changes are persisted per-book
+//! via [`crate::audiobook_progress`] and forwarded to the JS audio shim.
 
 #![cfg(not(feature = "mobile"))]
 
@@ -15,7 +17,7 @@ use super::helpers::{apply_rate, RATE_STEP as STEP};
 
 const PRESETS: &[f64] = &[0.5, 0.8, 1.0, 1.1, 1.2, 1.5, 1.8, 2.0];
 
-/// Frosted-glass speed panel with preset grid, fine-tune slider, and stepper.
+/// Full-player speed overlay: scrim + panel chrome around [`SpeedPanelBody`].
 #[component]
 pub(super) fn SpeedPanel(
     rate: Signal<f64>,
@@ -23,6 +25,28 @@ pub(super) fn SpeedPanel(
     user_id: Option<i64>,
     uuid: String,
     on_close: EventHandler<()>,
+) -> Element {
+    rsx! {
+        div {
+            class: "lp-scrim",
+            onclick: move |_| on_close.call(()),
+        }
+
+        div { class: "lp-panel lp-speed-panel",
+            SpeedPanelBody { rate, rate_error, user_id, uuid }
+        }
+    }
+}
+
+/// Speed-panel content — preset grid, fine-tune slider, stepper — free of
+/// positioning chrome so the full player and the mini-dock popover can both
+/// host it.
+#[component]
+pub(super) fn SpeedPanelBody(
+    rate: Signal<f64>,
+    rate_error: Signal<Option<String>>,
+    user_id: Option<i64>,
+    uuid: String,
 ) -> Element {
     let cur = rate();
     let rate_label = format!("{cur:.1}\u{00d7}");
@@ -32,12 +56,6 @@ pub(super) fn SpeedPanel(
     let thumb_left = format!("calc({slider_pct:.1}% - 9px)");
 
     rsx! {
-        div {
-            class: "lp-scrim",
-            onclick: move |_| on_close.call(()),
-        }
-
-        div { class: "lp-panel lp-speed-panel",
             div { class: "lp-panel-head",
                 div {
                     div { class: "lp-panel-kicker", "Playback speed" }
@@ -153,6 +171,5 @@ pub(super) fn SpeedPanel(
                     }
                 }
             }
-        }
     }
 }

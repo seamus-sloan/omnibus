@@ -11,50 +11,16 @@ use omnibus_shared::{ChapterInfo, EbookMetadata};
 
 use super::bookmarks::use_bookmarks;
 use super::bookmarks_drawer::BookmarksDrawer;
+use super::chapter_nav::{chapter_index_for_elapsed, chapter_next_target, chapter_prev_target};
 use super::chapters_drawer::ChaptersDrawer;
 use super::overlays::{FailedOverlay, PreparingOverlay};
-use super::sleep::{end_of_chapter_seconds, sleep_toolbar_label, use_sleep_timer, SleepChoice};
+use super::sleep::{end_of_chapter_seconds, sleep_toolbar_label, use_sleep, SleepChoice};
 use super::sleep_panel::SleepPanel;
 use super::speed_panel::SpeedPanel;
 use super::stage::{
     PlaybackPosition, PlayerCallbacks, PlayerContent, PlayerStage, ToolbarState, TransportState,
 };
 use crate::Nav;
-
-/// Derive the current chapter index from `elapsed` and a sorted chapter list.
-/// Returns 0 when `chapters` is empty.
-pub(super) fn chapter_index_for_elapsed(chapters: &[ChapterInfo], elapsed: f64) -> usize {
-    if chapters.is_empty() {
-        return 0;
-    }
-    chapters
-        .partition_point(|c| c.start_seconds <= elapsed)
-        .saturating_sub(1)
-}
-
-/// Resolve the seek target for "previous chapter":
-/// - If we're more than 3 s into the current chapter, seek to its start.
-/// - If within 3 s of the start and not the first chapter, go to the previous.
-/// - Otherwise seek to 0.
-///
-/// Returns `None` when `chapters` is empty or `idx` is out of bounds
-/// (the click handler computes `idx` from a separate signal, so a chapter
-/// list refresh in between can leave it stale).
-pub(super) fn chapter_prev_target(
-    chapters: &[ChapterInfo],
-    elapsed: f64,
-    idx: usize,
-) -> Option<f64> {
-    let current = chapters.get(idx)?;
-    let target = if elapsed - current.start_seconds > 3.0 {
-        current.start_seconds
-    } else if let Some(prev) = idx.checked_sub(1).and_then(|i| chapters.get(i)) {
-        prev.start_seconds
-    } else {
-        0.0
-    };
-    Some(target)
-}
 
 /// Scrub bar maximum — at least 1.0 so the range input is never empty.
 pub(super) fn scrub_max(duration: f64) -> f64 {
@@ -67,69 +33,7 @@ pub(super) fn scrub_max(duration: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use omnibus_shared::ChapterInfo;
-
     use super::*;
-
-    fn ch(ordinal: i64, title: &str, start: f64, dur: f64) -> ChapterInfo {
-        ChapterInfo {
-            ordinal,
-            title: title.into(),
-            start_seconds: start,
-            duration_seconds: dur,
-        }
-    }
-
-    #[test]
-    fn chapter_index_for_elapsed_returns_zero_for_empty_list() {
-        assert_eq!(chapter_index_for_elapsed(&[], 60.0), 0);
-    }
-
-    #[test]
-    fn chapter_index_for_elapsed_returns_first_chapter_before_any_start() {
-        let chs = vec![ch(1, "Intro", 0.0, 300.0), ch(2, "Part 1", 300.0, 600.0)];
-        assert_eq!(chapter_index_for_elapsed(&chs, 0.0), 0);
-        assert_eq!(chapter_index_for_elapsed(&chs, 150.0), 0);
-    }
-
-    #[test]
-    fn chapter_index_for_elapsed_advances_past_chapter_boundary() {
-        let chs = vec![ch(1, "Intro", 0.0, 300.0), ch(2, "Part 1", 300.0, 600.0)];
-        assert_eq!(chapter_index_for_elapsed(&chs, 300.0), 1);
-        assert_eq!(chapter_index_for_elapsed(&chs, 500.0), 1);
-    }
-
-    #[test]
-    fn chapter_prev_target_returns_none_when_chapters_empty() {
-        assert_eq!(chapter_prev_target(&[], 10.0, 0), None);
-    }
-
-    #[test]
-    fn chapter_prev_target_returns_chapter_start_when_well_into_chapter() {
-        let chs = vec![ch(1, "Intro", 0.0, 300.0), ch(2, "Part 1", 300.0, 600.0)];
-        // 50 s into chapter 1 (idx=1, start=300), elapsed=350 → 350-300=50 > 3 → back to 300
-        assert_eq!(chapter_prev_target(&chs, 350.0, 1), Some(300.0));
-    }
-
-    #[test]
-    fn chapter_prev_target_returns_previous_chapter_when_near_start() {
-        let chs = vec![ch(1, "Intro", 0.0, 300.0), ch(2, "Part 1", 300.0, 600.0)];
-        // 1 s into chapter 1 (idx=1, start=300), elapsed=301 → 301-300=1 ≤ 3 → go to ch 0 start=0
-        assert_eq!(chapter_prev_target(&chs, 301.0, 1), Some(0.0));
-    }
-
-    #[test]
-    fn chapter_prev_target_returns_zero_when_at_first_chapter_start() {
-        let chs = vec![ch(1, "Intro", 0.0, 300.0)];
-        assert_eq!(chapter_prev_target(&chs, 1.0, 0), Some(0.0));
-    }
-
-    #[test]
-    fn chapter_prev_target_returns_none_when_idx_is_out_of_bounds() {
-        let chs = vec![ch(1, "Intro", 0.0, 300.0)];
-        // idx came from a stale signal — chapters list shrunk under it.
-        assert_eq!(chapter_prev_target(&chs, 1.0, 5), None);
-    }
 
     #[test]
     fn scrub_max_returns_duration_when_positive() {
@@ -172,10 +76,11 @@ pub(super) fn ReadyPlayer(
     let bookmarks_open = use_signal(|| false);
     let chapters_open = use_signal(|| false);
 
-    // Sleep timer + bookmark state. Both are custom hooks declared
-    // unconditionally so SSR/WASM hook order matches (rule 07); their web
-    // interop is gated internally.
-    let sleep = use_sleep_timer(signals.volume);
+    // App-scoped sleep timer (provided at App root so it outlives this page)
+    // + per-book bookmark state. Both hooks are declared unconditionally so
+    // SSR/WASM hook order matches (rule 07); their web interop is gated
+    // internally.
+    let sleep = use_sleep();
     let bookmarks = use_bookmarks(uuid.clone());
 
     // Derive current chapter index from elapsed position.
@@ -194,10 +99,7 @@ pub(super) fn ReadyPlayer(
 
     // `seek` is shared by the stage's chapter list and the chapters/bookmarks
     // drawers, so it's built once here and handed to both children.
-    let on_chapter_seek = move |_secs: f64| {
-        #[cfg(feature = "web")]
-        super::helpers::audio_call("seek", &_secs.to_string());
-    };
+    let on_chapter_seek = move |secs: f64| super::helpers::seek_to(secs);
 
     // Sleep + bookmark actions are lifted here so `PlayerOverlays` can stay a
     // pure passthrough — `SleepController` isn't `PartialEq`, so it can't be a
@@ -323,9 +225,8 @@ pub(super) fn PlayerStageBinding(
     let on_skip_back = super::helpers::on_skip_back_30();
     let on_skip_forward = super::helpers::on_skip_forward_30();
     let on_seek = move |evt: Event<FormData>| {
-        if let Ok(_secs) = evt.value().parse::<f64>() {
-            #[cfg(feature = "web")]
-            super::helpers::audio_call("seek", &_secs.to_string());
+        if let Ok(secs) = evt.value().parse::<f64>() {
+            super::helpers::seek_to(secs);
         }
     };
     let on_volume = move |v: f64| super::helpers::apply_volume(&mut volume, v);
@@ -341,17 +242,15 @@ pub(super) fn PlayerStageBinding(
     let on_chapter_prev = move |_: MouseEvent| {
         let chs = chapters();
         let idx = current_chapter_index();
-        if let Some(_target) = chapter_prev_target(&chs, elapsed(), idx) {
-            #[cfg(feature = "web")]
-            super::helpers::audio_call("seek", &_target.to_string());
+        if let Some(target) = chapter_prev_target(&chs, elapsed(), idx) {
+            super::helpers::seek_to(target);
         }
     };
     let on_chapter_next = move |_: MouseEvent| {
         let chs = chapters();
         let idx = current_chapter_index();
-        if idx + 1 < chs.len() {
-            #[cfg(feature = "web")]
-            super::helpers::audio_call("seek", &chs[idx + 1].start_seconds.to_string());
+        if let Some(target) = chapter_next_target(&chs, idx) {
+            super::helpers::seek_to(target);
         }
     };
 

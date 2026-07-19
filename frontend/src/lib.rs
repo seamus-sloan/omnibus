@@ -223,7 +223,12 @@ fn use_user_and_playback_contexts() {
     // App-wide audiobook playback. Provided unconditionally on
     // not(mobile) so SSR markup matches the WASM client; the web-only
     // driver below reacts to its `uuid` signal.
-    use_context_provider(PlaybackState::new);
+    let playback = use_context_provider(PlaybackState::new);
+    // App-scoped sleep timer, so an armed countdown keeps ticking (and
+    // fading/pausing) after the user leaves /listen — the mini-dock's sleep
+    // chip and the full player share this one controller via `use_sleep`.
+    let sleep = pages::use_sleep_timer(playback.volume);
+    use_context_provider(|| sleep);
 }
 
 /// Mobile: no `/me` cache (bearer tokens via `token_store`), but an app-wide

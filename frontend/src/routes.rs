@@ -136,8 +136,12 @@ pub fn BookRead(uuid: String) -> Element {
     // parity holds (rule 07); the class lands post-boot alongside the bar.
     let playback = crate::use_playback();
     let docked = dock_is_active(&playback.book.read(), &playback.uuid.read());
+    // `rd-dock-full` marks the web reader host, whose docked bar is the
+    // full-width AudioDockBar at the bottom edge (the reader's bottom bar
+    // becomes a slim footer above it); mobile keeps the floating mini bar
+    // and the base `rd-immersive` geometry.
     rsx! {
-        div { class: if docked { "rd-host rd-immersive" } else { "rd-host" },
+        div { class: if docked { "rd-host rd-dock-full rd-immersive" } else { "rd-host rd-dock-full" },
             BookReadPage { uuid }
             MiniDock {}
         }
