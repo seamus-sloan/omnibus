@@ -3,11 +3,30 @@ import { resolve } from "node:path";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { gotoReady, expectNavVisible } from "../utils/nav";
-import { fixturesDir } from "../utils/seed";
+import { audiobookFixturesDir, fixturesDir } from "../utils/seed";
 
 // A committed EPUB fixture to feed the file input. Any valid EPUB works — the
 // inspect endpoint parses its embedded metadata.
 const SAMPLE_EPUB = resolve(fixturesDir(), "generated", "beta.epub");
+
+// The committed multi-part MP3 audiobook fixture — two chapters that the
+// inspect endpoint groups into one book.
+const AUDIOBOOK_PARTS = [
+  resolve(
+    audiobookFixturesDir(),
+    "generated",
+    "grace_hopper_series",
+    "the_compiled_tales",
+    "chapter01.mp3",
+  ),
+  resolve(
+    audiobookFixturesDir(),
+    "generated",
+    "grace_hopper_series",
+    "the_compiled_tales",
+    "chapter02.mp3",
+  ),
+];
 
 const fileInput = (page: import("@playwright/test").Page) =>
   page.getByTestId("add-books-file-input");
@@ -19,8 +38,9 @@ test("renders the add-books layout", async ({ page }) => {
 
   await expect(page.getByRole("heading", { name: "Add books" })).toBeVisible();
   await expect(fileInput(page)).toBeVisible();
-  // The audiobook type is present but stubbed out.
-  await expect(page.getByTestId("add-books-type-audiobook")).toBeDisabled();
+  // Both upload types are now selectable; ebook is the default.
+  await expect(page.getByTestId("add-books-type-ebook")).toBeEnabled();
+  await expect(page.getByTestId("add-books-type-audiobook")).toBeEnabled();
   await expectNavVisible(page);
 });
 
@@ -58,4 +78,23 @@ test("surfaces an error when inspect fails", async ({ page }) => {
   await expect(status(page)).toBeVisible();
   await expect(status(page)).toHaveClass(/error/);
   await expect(page.getByTestId("add-books-submit")).toHaveCount(0);
+});
+
+test("auto-fills the form from a multi-part MP3 audiobook", async ({ page }) => {
+  await gotoReady(page, "/add-books");
+
+  // Switch to the audiobook type, then pick both .mp3 parts at once.
+  await page.getByTestId("add-books-type-audiobook").click();
+
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/uploads/audiobooks/inspect", expectedStatus: 200 },
+    async () => fileInput(page).setInputFiles(AUDIOBOOK_PARTS),
+  );
+
+  await expect(page.getByTestId("add-books-submit")).toBeVisible();
+  // The title is derived from the shared album tag across the parts.
+  await expect(page.getByLabel("Title")).not.toHaveValue("");
+  // Audiobooks carry no series metadata, so those fields are omitted.
+  await expect(page.getByLabel("Series")).toHaveCount(0);
 });

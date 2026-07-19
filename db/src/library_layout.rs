@@ -212,5 +212,73 @@ pub fn allocate_canonical_path(
     }
 }
 
+/// Allocate a non-colliding canonical *folder* for a multi-file book (e.g. a
+/// per-chapter `.mp3` audiobook): `<root>/<author-slug>/<title-slug>/`. Like
+/// [`allocate_canonical_path`] the title-slug component gains a ` (2)`, ` (3)`,
+/// … suffix until an unused folder is found, but the returned path is the
+/// directory itself — the caller places each part inside it. Unlike the
+/// single-file allocator this takes no extension: the parts keep their own
+/// filenames within the folder.
+pub fn allocate_canonical_dir(
+    library_root: &Path,
+    author: &str,
+    title: &str,
+) -> std::io::Result<PathBuf> {
+    let author_slug = slugify(author);
+    let title_slug = slugify(title);
+    let author_dir = library_root.join(&author_slug);
+
+    let mut suffix: u32 = 1;
+    loop {
+        let folder_name = if suffix == 1 {
+            title_slug.clone()
+        } else {
+            format!("{title_slug} ({suffix})")
+        };
+        let candidate = author_dir.join(&folder_name);
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+        suffix += 1;
+        if suffix > 9999 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("too many collisions for title slug {title_slug:?}"),
+            ));
+        }
+    }
+}
+
+const FALLBACK_SLUG_PART: &str = "part";
+
+/// Sanitize a client-supplied filename into a safe `<stem-slug>.<ext>` basename
+/// for placing inside a canonical folder. Strips any directory components
+/// (defeating `../` path traversal), [`slugify`]s the stem, and lowercases the
+/// extension so the audiobook scanner's extension filter still recognizes the
+/// part. A missing/empty stem falls back to `"part"`; a missing extension
+/// yields the bare stem slug. The `(track, filename)` playlist sort survives
+/// because a leading-number stem (`01-intro`) still sorts first.
+pub fn sanitize_part_filename(filename: &str) -> String {
+    let base = Path::new(filename)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(filename);
+    let path = Path::new(base);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(str::to_ascii_lowercase);
+    let stem_slug = if stem.is_empty() {
+        FALLBACK_SLUG_PART.to_string()
+    } else {
+        slugify(stem)
+    };
+    match ext {
+        Some(ext) if !ext.is_empty() => format!("{stem_slug}.{ext}"),
+        _ => stem_slug,
+    }
+}
+
 #[cfg(test)]
 mod tests;

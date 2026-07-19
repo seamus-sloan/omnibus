@@ -420,3 +420,51 @@ fn allocate_three_collisions_returns_4() {
         "got: {s}"
     );
 }
+
+#[test]
+fn allocate_dir_no_collision_returns_canonical_folder() {
+    let dir = temp_dir("alloc_dir_clean");
+    let p = allocate_canonical_dir(&dir, "Author A", "Title T").unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let s = p.to_string_lossy();
+    assert!(s.ends_with("/author-a/title-t"), "got: {s}");
+}
+
+#[test]
+fn allocate_dir_one_collision_appends_2() {
+    let dir = temp_dir("alloc_dir_one");
+    std::fs::create_dir_all(dir.join("author-a").join("title-t")).unwrap();
+    let p = allocate_canonical_dir(&dir, "Author A", "Title T").unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let s = p.to_string_lossy();
+    assert!(s.ends_with("/author-a/title-t (2)"), "got: {s}");
+}
+
+#[test]
+fn sanitize_part_slugifies_stem_and_lowercases_ext() {
+    assert_eq!(sanitize_part_filename("Chapter 01.MP3"), "chapter-01.mp3");
+}
+
+#[test]
+fn sanitize_part_strips_directory_traversal() {
+    // A `../` prefix must never survive — only the final component is kept.
+    assert_eq!(sanitize_part_filename("../../etc/passwd.mp3"), "passwd.mp3");
+}
+
+#[test]
+fn sanitize_part_preserves_leading_number_order() {
+    // The (track, filename) playlist sort tiebreaker relies on leading
+    // numbers surviving.
+    assert_eq!(sanitize_part_filename("01 - Intro.mp3"), "01-intro.mp3");
+    assert_eq!(sanitize_part_filename("02 - Outro.mp3"), "02-outro.mp3");
+}
+
+#[test]
+fn sanitize_part_empty_name_falls_back() {
+    assert_eq!(sanitize_part_filename(""), "part");
+}
+
+#[test]
+fn sanitize_part_no_extension_yields_bare_slug() {
+    assert_eq!(sanitize_part_filename("weird name"), "weird-name");
+}

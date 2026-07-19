@@ -148,6 +148,57 @@ fn build_indexed_book_surfaces_tag_error_for_undecodable_audio() {
     );
 }
 
+/// Absolute path to a committed (non-download-gated) generated audiobook
+/// fixture under `test_data/audiobooks/generated/`.
+fn generated_fixture(rel: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../test_data/audiobooks/generated")
+        .join(rel)
+}
+
+#[test]
+fn inspect_audiobook_files_single_mp3_reads_book_metadata() {
+    let path = generated_fixture("ada_lovelace_solo/the_analytical_audiobook.mp3");
+    let out = inspect_audiobook_files(&[path]).expect("fixture should parse");
+    assert!(
+        out.title.as_deref().is_some_and(|t| !t.is_empty()),
+        "expected a title tag, got {:?}",
+        out.title
+    );
+    assert!(
+        out.duration_seconds.is_some_and(|d| d > 0.0),
+        "expected a positive duration"
+    );
+}
+
+#[test]
+fn inspect_audiobook_files_multi_mp3_derives_title_from_album() {
+    let parts = [
+        generated_fixture("grace_hopper_series/the_compiled_tales/chapter01.mp3"),
+        generated_fixture("grace_hopper_series/the_compiled_tales/chapter02.mp3"),
+    ];
+    let out = inspect_audiobook_files(&parts).expect("fixtures should parse");
+    // Multi-file: the book title is the shared album tag, not either
+    // chapter's per-file title tag.
+    assert!(
+        out.title.as_deref().is_some_and(|t| !t.is_empty()),
+        "expected an album-derived title, got {:?}",
+        out.title
+    );
+    // Duration is summed across both parts.
+    assert!(out.duration_seconds.is_some_and(|d| d > 0.0));
+}
+
+#[test]
+fn inspect_audiobook_files_errors_when_no_readable_tags() {
+    let dir = make_test_dir("inspect_junk");
+    let f = dir.join("junk.mp3");
+    fs::write(&f, b"not an mp3 at all").unwrap();
+    let err = inspect_audiobook_files(&[f]).expect_err("junk must not parse");
+    fs::remove_dir_all(&dir).unwrap();
+    assert!(matches!(err, AudiobookError::Unsupported(_)), "got {err:?}");
+}
+
 #[test]
 fn duration_to_hm_splits_finite_seconds_into_hours_and_minutes() {
     assert_eq!(duration_to_hm(3661.0), (1, 1));
