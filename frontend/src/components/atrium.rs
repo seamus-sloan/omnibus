@@ -199,8 +199,7 @@ const THEME_STORAGE_KEY: &str = "omn.theme";
 
 /// Persist the chosen theme via [`crate::client_store`]: `localStorage` on
 /// web, a JSON file under the app data dir on mobile (survives cold
-/// launch — this is what fixes theme reset on app close/reopen, issue
-/// #1125), a no-op on SSR.
+/// launch), a no-op on SSR.
 pub(crate) fn persist_theme(t: Theme) {
     crate::client_store::set(THEME_STORAGE_KEY, t.as_attr());
 }
@@ -250,16 +249,9 @@ mod tests {
     }
 }
 
-// SSR / server-only tests — exercise the no-persistence path that compiles
-// under the default `cargo test -p omnibus-frontend --features server`. The
-// `web`/`mobile` persistence lives in `client_store` behind its own cfgs
-// (already covered there) and is unreachable here; this module pins the
-// documented SSR contract instead: `persist_theme` is inert and
-// `read_persisted_theme` always sees nothing, so `init_theme` keeps its
-// deterministic `Theme::Dark` default for SSR markup (issue #1125 fix:
-// before this change, `persist_theme` had a separate `#[cfg(not(feature =
-// "web"))]` no-op branch that also silently swallowed mobile writes — now
-// mobile routes through `client_store` instead of that branch).
+// SSR has no persistence: `persist_theme` is inert and `read_persisted_theme`
+// always sees nothing, so `init_theme` keeps its deterministic `Theme::Dark`
+// default for SSR markup.
 #[cfg(all(test, not(any(feature = "web", feature = "mobile"))))]
 mod ssr_tests {
     use super::*;
