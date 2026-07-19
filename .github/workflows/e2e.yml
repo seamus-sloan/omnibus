@@ -3,29 +3,15 @@ name: E2E
 on:
   push:
     branches: [main]
+  # No workflow-level `paths:` filter: this workflow must run on EVERY PR so
+  # its `e2e-required` gate always reports a status (a required check keyed on
+  # a path-filtered workflow never resolves on a PR that doesn't match, which
+  # blocks the merge forever). Path gating moved into the `changes` job below;
+  # `bundle`/`playwright` skip when nothing E2E-relevant changed, and the gate
+  # treats skipped as pass. `workflow_dispatch` stays the force-run escape
+  # hatch for a PR that touches none of the E2E paths.
   pull_request:
     types: [opened, synchronize, reopened]
-    # Only run E2E when a PR touches code that can change the web bundle or
-    # the test suite itself. This replaces the old `run_ui_tests` label
-    # opt-in: matching PRs get Playwright coverage automatically. The trigger
-    # set must stay in sync with the bundle cache key below — any input
-    # hashed into the key needs a corresponding entry here, otherwise a PR
-    # could change the bundle without ever invalidating its cache. To force
-    # E2E on a PR that touches none of these paths, use the
-    # `workflow_dispatch` escape hatch below.
-    paths:
-      - "frontend/**"
-      - "shared/**"
-      - "server/**"
-      - "db/**"
-      - "ui_tests/**"
-      - "**/Cargo.toml"
-      - "Cargo.lock"
-      - "**/Dioxus.toml"
-      - "flake.lock"
-      - "flake.nix"
-      - "scripts/fetch-fixtures.sh"
-      - ".github/workflows/e2e.yml"
   workflow_dispatch:
 
 concurrency:
@@ -33,6 +19,41 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Detect whether this PR touches anything that can change the web bundle or
+  # the test suite. On push / workflow_dispatch the real jobs run
+  # unconditionally, so this output is only consulted for pull_request events.
+  # Keep the filter list in sync with the bundle cache key below.
+  changes:
+    name: detect changes
+    runs-on: ubuntu-latest
+    # `pull-requests: read` so `dorny/paths-filter` can list the PR's changed
+    # files via the API under restrictive permissions (matches release.yml).
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      e2e: ${{ steps.filter.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            e2e:
+              - "frontend/**"
+              - "shared/**"
+              - "server/**"
+              - "db/**"
+              - "ui_tests/**"
+              - "**/Cargo.toml"
+              - "Cargo.lock"
+              - "**/Dioxus.toml"
+              - "flake.lock"
+              - "flake.nix"
+              - "scripts/fetch-fixtures.sh"
+              - ".github/workflows/e2e.yml"
+              - ".github/actions/ci-gate/action.yml"
   # Compile the fullstack web bundle (native server binary + WASM client)
   # in release mode once and stash it in the GHA cache. Release mode strips
   # the Dioxus hot-reload client from the WASM bundle, which otherwise
@@ -43,6 +64,8 @@ jobs:
   # workflow file. Keep the `paths:` trigger above in sync.
   bundle:
     name: bundle
+    needs: changes
+    if: ${{ needs.changes.outputs.e2e == 'true' || github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -375,3 +398,23 @@ jobs:
           git add -A
           git commit -q -m "test report: ${BRANCH_NAME}@${COMMIT_SHA:0:9}" || { echo "no changes to publish"; exit 0; }
           git push "$AUTH_URL" HEAD:gh-pages
+
+  # The required status check for this workflow. Always runs (no paths filter +
+  # `if: always()`), so branch protection gets a resolved status on every PR —
+  # green when bundle + playwright passed or were skipped, red when either
+  # failed. `publish-report` is intentionally NOT gated on: report publishing
+  # failing must not block a merge. Mark ONLY `🔒 Playwright Required` as
+  # required in branch protection; do not require `bundle` / the `playwright`
+  # shards (they skip on non-E2E PRs and would hang the merge).
+  playwright-required:
+    name: 🔒 Playwright Required
+    needs: [changes, bundle, playwright]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}
