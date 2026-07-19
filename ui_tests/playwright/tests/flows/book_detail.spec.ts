@@ -757,7 +757,11 @@ test.describe("audiobook-only seed", () => {
         // SPA-navigate to the SECOND part of the *same* book (uuid unchanged,
         // only file_id differs). A true anchor click keeps it client-side, so
         // the app-root driver must notice the file_id change and reboot.
+        // Sentinel on `window` proves the nav stayed in-app: a full page load
+        // would clear it, and a full load refetches the manifest regardless of
+        // the fix — so without this guard the test could false-positive.
         await page.evaluate((url) => {
+          (window as unknown as { __repickSentinel?: boolean }).__repickSentinel = true;
           const a = document.createElement("a");
           a.href = url;
           a.id = "__test-repick-nav";
@@ -777,6 +781,13 @@ test.describe("audiobook-only seed", () => {
           page.locator("#__test-repick-nav").click(),
         ]);
         expect(secondManifest.url()).toContain(`file_id=${secondId}`);
+
+        // The nav must have been a client-side SPA transition — if the page
+        // fully reloaded, the manifest fetch above proves nothing.
+        const stayedInApp = await page.evaluate(
+          () => (window as unknown as { __repickSentinel?: boolean }).__repickSentinel === true,
+        );
+        expect(stayedInApp, "re-pick nav must stay in-app (no full page load)").toBe(true);
       } finally {
         const undoResp = await request.post("/api/rpc/merge-books/undo", {
           data: { merge_log_id: mergeLogId },

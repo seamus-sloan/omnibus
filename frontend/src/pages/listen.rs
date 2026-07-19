@@ -101,6 +101,9 @@ pub fn BookListenPage(uuid: String, file_id: Option<i64>) -> Element {
             let mut loading_sig = playback.loading;
             let mut book_sig = playback.book;
             let mut error_sig = playback.error;
+            // Publish the picker's selection first so the driver reads the right
+            // file when the uuid change kicks off the load (mirrors mobile).
+            file_sig.set(route_file_id);
             if uuid_sig.peek().as_deref() != Some(route_uuid.as_str()) {
                 // Clear the previous book's app-global metadata before
                 // retargeting so a re-render can't show the old book (or its
@@ -111,7 +114,6 @@ pub fn BookListenPage(uuid: String, file_id: Option<i64>) -> Element {
                 loading_sig.set(true);
                 uuid_sig.set(Some(route_uuid.clone()));
             }
-            file_sig.set(route_file_id);
         }));
 
         let active = playback.uuid.read().as_deref() == Some(uuid.as_str());
