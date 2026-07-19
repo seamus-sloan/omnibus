@@ -92,10 +92,10 @@ jobs:
   # The required status check for this workflow. Always runs (no paths filter +
   # `if: always()`), so branch protection gets a resolved status on every PR —
   # green when `stylelint` passed or was skipped, red when it failed. Mark ONLY
-  # `Stylelint Required` as required in branch protection; do not require the
+  # `🔒 Stylelint Required` as required in branch protection; do not require the
   # `stylelint` job directly (it skips on non-CSS PRs and would hang the merge).
   stylelint-required:
-    name: Stylelint Required
+    name: 🔒 Stylelint Required
     needs: [changes, stylelint]
     if: ${{ always() }}
     runs-on: ubuntu-latest

@@ -403,11 +403,11 @@ jobs:
   # `if: always()`), so branch protection gets a resolved status on every PR —
   # green when bundle + playwright passed or were skipped, red when either
   # failed. `publish-report` is intentionally NOT gated on: report publishing
-  # failing must not block a merge. Mark ONLY `Playwright Required` as required
-  # in branch protection; do not require `bundle` / the `playwright` shards
-  # (they skip on non-E2E PRs and would hang the merge).
+  # failing must not block a merge. Mark ONLY `🔒 Playwright Required` as
+  # required in branch protection; do not require `bundle` / the `playwright`
+  # shards (they skip on non-E2E PRs and would hang the merge).
   playwright-required:
-    name: Playwright Required
+    name: 🔒 Playwright Required
     needs: [changes, bundle, playwright]
     if: ${{ always() }}
     runs-on: ubuntu-latest

@@ -394,12 +394,12 @@ jobs:
   # runs (its `if` is `always()` and the workflow has no paths filter), so
   # branch protection gets a resolved status on every PR: green when its
   # underlying job(s) passed or were skipped, red when any failed. Mark ONLY
-  # these gate jobs as required in branch protection — `Rustfmt Required`,
-  # `Clippy Required`, `Cargo Test Required`, `Cargo Audit Required` — and do
-  # NOT require the individual matrix jobs (they skip on non-Rust PRs and would
-  # hang the merge).
+  # these gate jobs as required in branch protection — `🔒 Rustfmt Required`,
+  # `🔒 Clippy Required`, `🔒 Cargo Test Required`, `🔒 Cargo Audit Required` —
+  # and do NOT require the individual matrix jobs (they skip on non-Rust PRs and
+  # would hang the merge).
   rustfmt-required:
-    name: Rustfmt Required
+    name: 🔒 Rustfmt Required
     needs: [changes, fmt]
     if: ${{ always() }}
     runs-on: ubuntu-latest
@@ -410,7 +410,7 @@ jobs:
           needs: ${{ toJSON(needs) }}
 
   clippy-required:
-    name: Clippy Required
+    name: 🔒 Clippy Required
     needs: [changes, clippy]
     if: ${{ always() }}
     runs-on: ubuntu-latest
@@ -421,7 +421,7 @@ jobs:
           needs: ${{ toJSON(needs) }}
 
   cargo-test-required:
-    name: Cargo Test Required
+    name: 🔒 Cargo Test Required
     needs: [changes, test]
     if: ${{ always() }}
     runs-on: ubuntu-latest
@@ -432,7 +432,7 @@ jobs:
           needs: ${{ toJSON(needs) }}
 
   cargo-audit-required:
-    name: Cargo Audit Required
+    name: 🔒 Cargo Audit Required
     needs: [changes, security]
     if: ${{ always() }}
     runs-on: ubuntu-latest
