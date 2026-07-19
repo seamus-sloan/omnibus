@@ -1,14 +1,10 @@
 //! Settings KV CRUD, scan-root row upserts, and orphan-scan-root pruning.
-//!
 //! `settings` KV keys (`ebook_library_path` / `audiobook_library_path`) are
 //! read by the UI and translated into `scan_roots` rows by the indexer; saving
-//! settings prunes any orphan root and its books, FTS rows, and on-disk covers.
-//!
-//! Per-library metadata-source precedence (F5.1, #972) also lives here, as a
-//! `scan_roots.metadata_precedence` column keyed by `path` rather than a
-//! `Settings` field — mirrors the Hardcover-key/SMTP pattern of a dedicated
-//! get/set pair so this setting's CRUD stays out of `set_settings`'s
-//! scan-root reconciliation.
+//! settings prunes any orphan root and its books, FTS rows, and on-disk
+//! covers. Also owns per-library metadata-source precedence, a
+//! `scan_roots.metadata_precedence` column keyed by `path` via a dedicated
+//! get/set pair kept out of `set_settings`'s reconciliation.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -20,7 +16,7 @@ pub use omnibus_shared::{
     SmtpSecurity, EMAIL_MAX_LEN, HARDCOVER_API_KEY_MAX_LEN, SMTP_FIELD_MAX_LEN,
     SMTP_PASSWORD_MAX_LEN,
 };
-use omnibus_shared::{MetadataSource, DEFAULT_METADATA_PRECEDENCE};
+use omnibus_shared::{is_valid_metadata_precedence, MetadataSource, DEFAULT_METADATA_PRECEDENCE};
 
 /// `settings` KV keys consumed by the UI/RPC layer. Kept as constants so the
 /// indexer, settings handlers, and tests all reference the same identifier.
@@ -688,11 +684,15 @@ pub(crate) async fn upsert_library(
 }
 
 /// Parse a `scan_roots.metadata_precedence` JSON value, falling back to the
-/// default order on any parse failure (e.g. a hand-edited row) rather than
-/// erroring — matches the `scan_interval_hours` "stale value is treated as
-/// unset" convention elsewhere in this module.
+/// default order on a parse failure *or* a parsed-but-invalid list (e.g. a
+/// hand-edited row missing a source) rather than erroring — matches the
+/// `scan_interval_hours` "stale value is treated as unset" convention
+/// elsewhere in this module.
 fn parse_metadata_precedence(json: &str) -> Vec<MetadataSource> {
-    serde_json::from_str(json).unwrap_or_else(|_| DEFAULT_METADATA_PRECEDENCE.to_vec())
+    serde_json::from_str(json)
+        .ok()
+        .filter(|order: &Vec<MetadataSource>| is_valid_metadata_precedence(order))
+        .unwrap_or_else(|| DEFAULT_METADATA_PRECEDENCE.to_vec())
 }
 
 /// Read the metadata-source precedence configured for the scan root at

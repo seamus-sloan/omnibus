@@ -4,12 +4,19 @@
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
-    is_valid_metadata_precedence, HardcoverKeyStatus, LibraryContents, MetadataSource, Settings,
-    SmtpConfigStatus, SmtpConfigUpdate, WorkerStatus, DEFAULT_METADATA_PRECEDENCE,
+    HardcoverKeyStatus, LibraryContents, MetadataSource, Settings, SmtpConfigStatus,
+    SmtpConfigUpdate, WorkerStatus,
 };
 
 #[cfg(feature = "server")]
 use omnibus_db::{self as db, scanner};
+
+// Only referenced from the server-only bodies the `#[get]`/`#[post]` macros
+// splice in under `#[cfg(feature = "server")]` — the client stub compiled
+// for `web`/`mobile` never calls them, so gate the imports to match or a
+// non-`server` build sees them as unused.
+#[cfg(feature = "server")]
+use omnibus_shared::{is_valid_metadata_precedence, DEFAULT_METADATA_PRECEDENCE};
 
 #[cfg(feature = "server")]
 use super::{internal_rpc_error, AdminUser, AuthUser, PoolExt, WorkerExt};

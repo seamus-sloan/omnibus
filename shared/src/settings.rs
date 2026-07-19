@@ -70,13 +70,11 @@ impl Settings {
 }
 
 /// A named metadata source a scan root's per-library precedence list can
-/// order (F5.1, #972). Mirrors AudioBookShelf's per-library
-/// `metadataPrecedence`. Only [`MetadataSource::EmbeddedTags`] (the scanned
-/// OPF/tag metadata) and [`MetadataSource::OmnibusOverrides`] (the F5.1
-/// user-edit layer) have a real data provider today — `FolderStructure`,
-/// `OpfSidecar`, and `ProviderMatch` are accepted and stored for
-/// forward-compatibility with AudioBookShelf-style folder/sidecar/provider
-/// sources, and are no-ops in the merge path until implemented (see
+/// order. Only [`MetadataSource::EmbeddedTags`] (the scanned OPF/tag
+/// metadata) and [`MetadataSource::OmnibusOverrides`] (the manual-override
+/// layer) have a real data provider today — the other three variants are
+/// accepted and stored for forward-compatibility but are no-ops in the
+/// merge path until implemented (see
 /// `db::metadata_overrides::upsert::apply_overrides`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

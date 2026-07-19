@@ -1,9 +1,8 @@
-//! Per-library metadata-source precedence editor (F5.1, #972). Two
-//! independent ordered lists (ebook / audiobook) with up/down reordering —
-//! each list's "Save Order" persists to the owning scan root's
-//! `metadata_precedence` column via a dedicated RPC pair (kept separate
-//! from the path-saving `Settings` form, mirroring the Hardcover-key /
-//! SMTP cards below it).
+//! Per-library metadata-source precedence editor. Two independent ordered
+//! lists (ebook / audiobook) with up/down reordering — each list's "Save
+//! Order" persists to the owning scan root's `metadata_precedence` column
+//! via a dedicated RPC pair, kept separate from the path-saving `Settings`
+//! form.
 
 use dioxus::prelude::*;
 use omnibus_shared::{MetadataSource, DEFAULT_METADATA_PRECEDENCE};

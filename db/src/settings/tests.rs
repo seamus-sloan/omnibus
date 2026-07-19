@@ -863,6 +863,27 @@ async fn get_metadata_precedence_falls_back_to_default_for_unparseable_value() {
 }
 
 #[tokio::test]
+async fn get_metadata_precedence_falls_back_to_default_for_valid_json_missing_a_source() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    // Well-formed JSON, but only lists one of the 5 known sources — e.g. a
+    // hand-edited row. Must not be treated as authoritative: silently
+    // dropping sources from the merge order is worse than falling back.
+    sqlx::query(
+        "INSERT INTO scan_roots (path, display_name, metadata_precedence) VALUES (?, ?, ?)",
+    )
+    .bind("/lib")
+    .bind("lib")
+    .bind(r#"["embedded_tags"]"#)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        get_metadata_precedence(&pool, "/lib").await.unwrap(),
+        DEFAULT_METADATA_PRECEDENCE.to_vec()
+    );
+}
+
+#[tokio::test]
 async fn metadata_precedence_by_uuid_resolves_each_books_scan_root() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
