@@ -20,7 +20,7 @@ use super::toc_drawer::TocEntry;
 use super::{reader_call_json, reader_call_json2, ReaderStatus, RelocateData};
 
 mod interop;
-pub(crate) mod prefs_storage;
+pub(super) mod prefs_storage;
 
 /// The signals the reader drives from the JS event channel — the mobile mirror
 /// of the web `interop::InteropSignals`.

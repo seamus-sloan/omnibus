@@ -6,11 +6,18 @@
 //! are fire-and-forget like `reader_call`; reads are necessarily async
 //! (`Eval::recv`), unlike the synchronous `web_sys::Storage` path.
 
+use std::time::Duration;
+
 use dioxus::document::eval;
 use dioxus::prelude::WritableExt;
 
 use super::super::prefs::{ReaderPrefs, FONT_SIZE_MAX, FONT_SIZE_MIN};
 use super::super::typography::{LineSpacing, Margins, Spread, Typeface};
+
+/// How long `load_and_apply_reader_prefs` waits for the bulk-read eval to
+/// respond before giving up and leaving the caller's seeded defaults —
+/// mirrors the 10 s script-load timeout in `mobile::interop::install_surface_js`.
+const LOAD_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Every `omn.*` key persisted by [`ReaderPrefs`]'s setters, read back in one
 /// round trip. Order doesn't matter — the bulk-read script keys its result
@@ -90,14 +97,20 @@ fn parse_stored(stored: StoredPrefs) -> ParsedPrefs {
             .line_spacing
             .and_then(|s| LineSpacing::from_storage(&s)),
         margins: stored.margins.and_then(|s| Margins::from_storage(&s)),
-        justify: stored.justify.map(|s| s == "true"),
+        justify: stored.justify.and_then(|s| match s.as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        }),
         spread: stored.spread.and_then(|s| Spread::from_storage(&s)),
     }
 }
 
 /// Load every persisted reader pref from the WebView's `localStorage` and
 /// apply the present ones to `prefs`'s signals in place. Best-effort: an
-/// eval/parse failure just leaves the caller's already-seeded defaults.
+/// eval/parse failure, or a `recv` that never resolves within
+/// [`LOAD_TIMEOUT`], just leaves the caller's already-seeded defaults rather
+/// than blocking `mount_and_drain` forever on "Loading…".
 ///
 /// Timing tradeoff (AC3): unlike web's synchronous `web_sys` read, this eval
 /// is necessarily async, so `mobile::mount_and_drain` awaits it *before*
@@ -108,7 +121,7 @@ fn parse_stored(stored: StoredPrefs) -> ParsedPrefs {
 /// no synchronous mobile localStorage API to avoid that gap entirely.
 pub(crate) async fn load_and_apply_reader_prefs(mut prefs: ReaderPrefs) {
     let mut ev = eval(&load_all_js());
-    let Ok(stored) = ev.recv::<StoredPrefs>().await else {
+    let Ok(Ok(stored)) = tokio::time::timeout(LOAD_TIMEOUT, ev.recv::<StoredPrefs>()).await else {
         return;
     };
     let parsed = parse_stored(stored);
@@ -230,17 +243,30 @@ mod tests {
     }
 
     #[test]
-    fn justify_parses_only_the_exact_true_token() {
+    fn justify_parses_the_exact_true_and_false_tokens() {
         let true_stored = StoredPrefs {
             justify: Some("true".into()),
             ..StoredPrefs::default()
         };
         assert_eq!(parse_stored(true_stored).justify, Some(true));
 
-        let other_stored = StoredPrefs {
+        let false_stored = StoredPrefs {
+            justify: Some("false".into()),
+            ..StoredPrefs::default()
+        };
+        assert_eq!(parse_stored(false_stored).justify, Some(false));
+    }
+
+    #[test]
+    fn justify_drops_an_unrecognized_or_corrupted_token_to_none() {
+        // A garbage/corrupted token must fall through to `None` — same
+        // "unrecognized -> None" contract as the other prefs — rather than
+        // coercing to `Some(false)` and silently overwriting the caller's
+        // seeded default.
+        let stored = StoredPrefs {
             justify: Some("yes".into()),
             ..StoredPrefs::default()
         };
-        assert_eq!(parse_stored(other_stored).justify, Some(false));
+        assert_eq!(parse_stored(stored).justify, None);
     }
 }

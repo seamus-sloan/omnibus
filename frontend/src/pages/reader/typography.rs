@@ -11,13 +11,8 @@ pub(crate) enum Typeface {
     Modern,
 }
 
-// The CSS/storage conversions run on both interactive targets — web via
-// `web_sys` localStorage, mobile via the JS-eval bridge in
-// `mobile::prefs_storage`. Only a plain SSR (`server`-only, no `web`) build
-// never converts them, so the blanket `not(feature = "web")` allow is a
-// slight overshoot (it also covers mobile, where the methods *are* used)
-// rather than plumbing a third `cfg` arm through this attribute.
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+// Unused only in plain SSR builds (no web, no mobile) — both interactive targets convert.
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 impl Typeface {
     pub(crate) fn to_css(self) -> &'static str {
         // Georgia sits ahead of the generic `serif` so a webfont that fails to
@@ -54,7 +49,7 @@ pub(crate) enum LineSpacing {
     Airy,
 }
 
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 impl LineSpacing {
     pub(crate) fn to_css(self) -> &'static str {
         match self {
@@ -89,7 +84,7 @@ pub(crate) enum Margins {
     Wide,
 }
 
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 impl Margins {
     pub(crate) fn to_css(self) -> &'static str {
         match self {
@@ -126,7 +121,7 @@ pub(crate) enum Spread {
     Double,
 }
 
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 impl Spread {
     pub(crate) fn to_css(self) -> &'static str {
         match self {
