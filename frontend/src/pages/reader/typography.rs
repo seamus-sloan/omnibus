@@ -1,6 +1,8 @@
-//! Typography preference enums and their localStorage persistence. These
-//! are cross-book, per-user reader prefs (typeface, line spacing, margins);
-//! the reader page reads them on mount and writes them on every change.
+//! Typography preference enums, plus their `web_sys`-backed localStorage
+//! persistence (web only — see `mobile::prefs_storage` for the WebView
+//! counterpart). These are cross-book, per-user reader prefs (typeface,
+//! line spacing, margins); the reader page reads them on mount and writes
+//! them on every change.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Typeface {
@@ -9,10 +11,8 @@ pub(crate) enum Typeface {
     Modern,
 }
 
-// The CSS/storage conversions are only invoked on the web target; on
-// native builds the enum is still constructed (as a default) but never
-// converted, so the methods read as dead code there.
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+// Unused only in plain SSR builds (no web, no mobile) — both interactive targets convert.
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 impl Typeface {
     pub(crate) fn to_css(self) -> &'static str {
         // Georgia sits ahead of the generic `serif` so a webfont that fails to
@@ -49,7 +49,7 @@ pub(crate) enum LineSpacing {
     Airy,
 }
 
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 impl LineSpacing {
     pub(crate) fn to_css(self) -> &'static str {
         match self {
@@ -84,7 +84,7 @@ pub(crate) enum Margins {
     Wide,
 }
 
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 impl Margins {
     pub(crate) fn to_css(self) -> &'static str {
         match self {
@@ -121,7 +121,7 @@ pub(crate) enum Spread {
     Double,
 }
 
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 impl Spread {
     pub(crate) fn to_css(self) -> &'static str {
         match self {

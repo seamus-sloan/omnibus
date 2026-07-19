@@ -8,6 +8,8 @@ use dioxus::prelude::*;
 
 use crate::components::atrium::{persist_theme, Theme};
 
+#[cfg(feature = "mobile")]
+use super::mobile::prefs_storage::save_reader_pref_mobile;
 #[cfg(any(feature = "web", feature = "mobile"))]
 use super::reader_call;
 #[cfg(any(feature = "web", feature = "mobile"))]
@@ -18,8 +20,10 @@ use super::typography::{LineSpacing, Margins, Spread, Typeface};
 
 /// Min/max for the AA-panel font-size slider, in CSS px. Kept in sync with
 /// the `font_pct` accessor below so the slider thumb tracks the value.
-const FONT_SIZE_MIN: i32 = 12;
-const FONT_SIZE_MAX: i32 = 32;
+/// `pub(crate)` so `mobile::prefs_storage` can clamp a loaded value to the
+/// same bounds without duplicating the constants.
+pub(crate) const FONT_SIZE_MIN: i32 = 12;
+pub(crate) const FONT_SIZE_MAX: i32 = 32;
 
 /// Copy-able handle to every reader preference plus its setter. Lives in
 /// the Dioxus context for the duration of a reader page mount.
@@ -53,10 +57,12 @@ impl ReaderPrefs {
         reader_call("setFontSize", &next.to_string());
         #[cfg(feature = "web")]
         save_reader_pref("omn.fontSize", &next.to_string());
+        #[cfg(feature = "mobile")]
+        save_reader_pref_mobile("omn.fontSize", &next.to_string());
     }
 
     /// Step the font size up one px (clamped to `FONT_SIZE_MAX`), push to
-    /// JS, persist to localStorage (web).
+    /// JS, persist to localStorage (web) / WebView localStorage (mobile).
     pub(crate) fn increase_font(self) {
         let mut font_size = self.font_size;
         let next = (*font_size.read() + 1).clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
@@ -65,9 +71,12 @@ impl ReaderPrefs {
         reader_call("setFontSize", &next.to_string());
         #[cfg(feature = "web")]
         save_reader_pref("omn.fontSize", &next.to_string());
+        #[cfg(feature = "mobile")]
+        save_reader_pref_mobile("omn.fontSize", &next.to_string());
     }
 
-    /// Apply a typeface, push to JS, persist to localStorage (web).
+    /// Apply a typeface, push to JS, persist to localStorage (web) /
+    /// WebView localStorage (mobile).
     pub(crate) fn set_typeface(self, t: Typeface) {
         let mut typeface = self.typeface;
         typeface.set(t);
@@ -75,9 +84,12 @@ impl ReaderPrefs {
         reader_call_json("setFont", t.to_css());
         #[cfg(feature = "web")]
         save_reader_pref("omn.typeface", t.to_storage());
+        #[cfg(feature = "mobile")]
+        save_reader_pref_mobile("omn.typeface", t.to_storage());
     }
 
-    /// Apply a line-spacing choice, push to JS, persist to localStorage (web).
+    /// Apply a line-spacing choice, push to JS, persist to localStorage
+    /// (web) / WebView localStorage (mobile).
     pub(crate) fn set_line_spacing(self, ls: LineSpacing) {
         let mut line_spacing = self.line_spacing;
         line_spacing.set(ls);
@@ -85,9 +97,12 @@ impl ReaderPrefs {
         reader_call_json("setLineHeight", ls.to_css());
         #[cfg(feature = "web")]
         save_reader_pref("omn.lineSpacing", ls.to_storage());
+        #[cfg(feature = "mobile")]
+        save_reader_pref_mobile("omn.lineSpacing", ls.to_storage());
     }
 
-    /// Apply a margins choice, push to JS, persist to localStorage (web).
+    /// Apply a margins choice, push to JS, persist to localStorage (web) /
+    /// WebView localStorage (mobile).
     pub(crate) fn set_margins(self, m: Margins) {
         let mut margins = self.margins;
         margins.set(m);
@@ -95,9 +110,12 @@ impl ReaderPrefs {
         reader_call_json("setMargins", m.to_css());
         #[cfg(feature = "web")]
         save_reader_pref("omn.margins", m.to_storage());
+        #[cfg(feature = "mobile")]
+        save_reader_pref_mobile("omn.margins", m.to_storage());
     }
 
-    /// Apply a page-view (spread) choice, push to JS, persist to localStorage (web).
+    /// Apply a page-view (spread) choice, push to JS, persist to
+    /// localStorage (web) / WebView localStorage (mobile).
     pub(crate) fn set_spread(self, s: Spread) {
         let mut spread = self.spread;
         spread.set(s);
@@ -105,6 +123,8 @@ impl ReaderPrefs {
         reader_call_json("setSpread", s.to_css());
         #[cfg(feature = "web")]
         save_reader_pref("omn.spread", s.to_storage());
+        #[cfg(feature = "mobile")]
+        save_reader_pref_mobile("omn.spread", s.to_storage());
     }
 
     /// Flip the justify toggle and push the new boolean into the JS glue.
@@ -116,6 +136,8 @@ impl ReaderPrefs {
         reader_call("setJustify", if next { "true" } else { "false" });
         #[cfg(feature = "web")]
         save_reader_pref("omn.justify", if next { "true" } else { "false" });
+        #[cfg(feature = "mobile")]
+        save_reader_pref_mobile("omn.justify", if next { "true" } else { "false" });
     }
 
     /// Slider position for the AA-panel size track, expressed as 0–100%.
@@ -131,9 +153,12 @@ impl ReaderPrefs {
 }
 
 /// Construct the reader-prefs signals, seeding each from localStorage on
-/// web (with a target-agnostic default fallback). `theme` is borrowed from
-/// the app-wide atrium signal so changes here flip both reader and the
-/// surrounding chrome.
+/// web (with a target-agnostic default fallback). Mobile seeds the same
+/// defaults here and overwrites them asynchronously once
+/// `mobile::prefs_storage::load_and_apply_reader_prefs` resolves the
+/// WebView's `localStorage` (see that function's doc for the first-paint
+/// timing tradeoff). `theme` is borrowed from the app-wide atrium signal so
+/// changes here flip both reader and the surrounding chrome.
 pub(crate) fn init_reader_prefs(theme: Signal<Theme>) -> ReaderPrefs {
     let font_size = use_signal(load_font_size_or_default);
     let typeface = use_signal(load_typeface_or_default);
