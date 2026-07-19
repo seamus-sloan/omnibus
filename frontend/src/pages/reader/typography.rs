@@ -1,6 +1,8 @@
-//! Typography preference enums and their localStorage persistence. These
-//! are cross-book, per-user reader prefs (typeface, line spacing, margins);
-//! the reader page reads them on mount and writes them on every change.
+//! Typography preference enums, plus their `web_sys`-backed localStorage
+//! persistence (web only — see `mobile::prefs_storage` for the WebView
+//! counterpart). These are cross-book, per-user reader prefs (typeface,
+//! line spacing, margins); the reader page reads them on mount and writes
+//! them on every change.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Typeface {
@@ -9,9 +11,12 @@ pub(crate) enum Typeface {
     Modern,
 }
 
-// The CSS/storage conversions are only invoked on the web target; on
-// native builds the enum is still constructed (as a default) but never
-// converted, so the methods read as dead code there.
+// The CSS/storage conversions run on both interactive targets — web via
+// `web_sys` localStorage, mobile via the JS-eval bridge in
+// `mobile::prefs_storage`. Only a plain SSR (`server`-only, no `web`) build
+// never converts them, so the blanket `not(feature = "web")` allow is a
+// slight overshoot (it also covers mobile, where the methods *are* used)
+// rather than plumbing a third `cfg` arm through this attribute.
 #[cfg_attr(not(feature = "web"), allow(dead_code))]
 impl Typeface {
     pub(crate) fn to_css(self) -> &'static str {

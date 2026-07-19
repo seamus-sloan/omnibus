@@ -20,6 +20,7 @@ use super::toc_drawer::TocEntry;
 use super::{reader_call_json, reader_call_json2, ReaderStatus, RelocateData};
 
 mod interop;
+pub(crate) mod prefs_storage;
 
 /// The signals the reader drives from the JS event channel — the mobile mirror
 /// of the web `interop::InteropSignals`.
@@ -98,13 +99,18 @@ pub(super) fn install_reader_mobile_interop(
 
 /// Resolve the resume CFI, mount epub.js, then drain its events forever. The
 /// starting position is server-authoritative (falling back to the local
-/// in-memory cache), matching the web bootstrap.
+/// in-memory cache), matching the web bootstrap. Persisted typography prefs
+/// are loaded and applied to `prefs`'s signals first, so the glue's init
+/// options (built from those signals just below) mount with the restored
+/// values rather than the target-agnostic defaults `init_reader_prefs`
+/// seeded at signal-construction time.
 async fn mount_and_drain(
     uuid: String,
     prefs: ReaderPrefs,
     sigs: InteropSignals,
     server_url: String,
 ) {
+    prefs_storage::load_and_apply_reader_prefs(prefs).await;
     let local_saved = crate::reader_progress::load(&uuid);
     let server_cfi = data::get_progress(&server_url, &uuid, ProgressFormat::Epub)
         .await
