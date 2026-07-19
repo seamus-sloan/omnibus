@@ -125,7 +125,8 @@ async fn rebuild_target_fts_best_effort(
 
 /// Recreate the source `books` row from the snapshot. The original uuid
 /// is free to reuse — the `merged_uuids` guard kept reindexes from
-/// resurrecting it.
+/// resurrecting it. `scan_key` is restored too so the next reindex matches
+/// the on-disk file/folder to this row instead of inserting a duplicate.
 async fn recreate_source_row(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     snap: &SourceSnapshot,
@@ -153,14 +154,16 @@ async fn recreate_source_row(
     // now for the same reason. The `pubdate` COALESCE is pre-existing.
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO books
-            (uuid, library_id, path, title, sort, author_sort, series_sort, series_index, pubdate,
-             timestamp, last_modified, has_cover, description, accent_color, title_norm, author_norm)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')),
+            (uuid, library_id, scan_key, path, title, sort, author_sort, series_sort, series_index,
+             pubdate, timestamp, last_modified, has_cover, description, accent_color, title_norm,
+             author_norm)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')),
                  COALESCE(?, strftime('%s','now')), strftime('%s','now'), ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(&snap.uuid)
     .bind(library_id)
+    .bind(&snap.scan_key)
     .bind(&snap.path)
     .bind(&snap.title)
     .bind(&snap.sort)
