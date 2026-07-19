@@ -704,4 +704,96 @@ test.describe("audiobook-only seed", () => {
       }
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Regression: picking a different part of the *already-playing* book must
+  // switch parts. The app-root web driver used to react only to the book uuid
+  // (constant across a book's files), so re-picking a file on the active book
+  // silently kept part 1. Assert a fresh manifest fetch fires for the newly
+  // selected file_id even when the uuid is unchanged.
+  // ---------------------------------------------------------------------------
+
+  test("re-picking a different part of the already-active audiobook reloads onto that part", async ({
+    page,
+    request,
+  }) => {
+    test.slow();
+    await withLock("audiobook-merge", async () => {
+      const primaryUuid = await fetchBookUuidByTitle(request, PRIMARY_MP3.title);
+      const secondUuid = await fetchBookUuidByTitle(request, SECOND_MP3.title);
+
+      const mergeResp = await request.post("/api/rpc/merge-books", {
+        data: { source_uuid: secondUuid, target_uuid: primaryUuid },
+      });
+      expect(mergeResp.status(), "POST /api/rpc/merge-books failed").toBe(200);
+      const { merge_log_id: mergeLogId } = (await mergeResp.json()) as {
+        merge_log_id: number;
+      };
+
+      try {
+        // The two audio `book_files` rows the merge produced, in file-picker
+        // order (`GET /api/ebooks/:uuid` returns them by ordinal).
+        const detailResp = await request.get(`/api/ebooks/${primaryUuid}`);
+        expect(detailResp.status(), "GET /api/ebooks/:uuid failed").toBe(200);
+        const detail = (await detailResp.json()) as {
+          book_files: { id: number; format: string }[];
+        };
+        const audioIds = detail.book_files
+          .filter((f) => /^(mp3|m4b|m4a)$/i.test(f.format))
+          .map((f) => f.id);
+        expect(audioIds.length, "expected two audio files after merge").toBe(2);
+        const [firstId, secondId] = audioIds;
+
+        // Load the FIRST part directly — this makes the book the active
+        // playback book (uuid now set on the app-root PlaybackState).
+        const [firstManifest] = await Promise.all([
+          page.waitForRequest((req) =>
+            req.url().includes(`/api/audiobooks/${primaryUuid}/manifest?file_id=${firstId}`),
+          ),
+          gotoReady(page, `/listen/${primaryUuid}?file_id=${firstId}`),
+        ]);
+        expect(firstManifest.url()).toContain(`file_id=${firstId}`);
+
+        // SPA-navigate to the SECOND part of the *same* book (uuid unchanged,
+        // only file_id differs). A true anchor click keeps it client-side, so
+        // the app-root driver must notice the file_id change and reboot.
+        // Sentinel on `window` proves the nav stayed in-app: a full page load
+        // would clear it, and a full load refetches the manifest regardless of
+        // the fix — so without this guard the test could false-positive.
+        await page.evaluate((url) => {
+          (window as unknown as { __repickSentinel?: boolean }).__repickSentinel = true;
+          const a = document.createElement("a");
+          a.href = url;
+          a.id = "__test-repick-nav";
+          a.textContent = "repick-nav";
+          a.style.cssText =
+            "position:fixed;top:0;left:0;padding:8px;background:#000;color:#fff;z-index:99999;";
+          document.body.appendChild(a);
+        }, `/listen/${primaryUuid}?file_id=${secondId}`);
+
+        // Before the fix this request never fired (uuid unchanged → no reboot).
+        const [secondManifest] = await Promise.all([
+          page.waitForRequest(
+            (req) =>
+              req.url().includes(`/api/audiobooks/${primaryUuid}/manifest?file_id=${secondId}`),
+            { timeout: 10_000 },
+          ),
+          page.locator("#__test-repick-nav").click(),
+        ]);
+        expect(secondManifest.url()).toContain(`file_id=${secondId}`);
+
+        // The nav must have been a client-side SPA transition — if the page
+        // fully reloaded, the manifest fetch above proves nothing.
+        const stayedInApp = await page.evaluate(
+          () => (window as unknown as { __repickSentinel?: boolean }).__repickSentinel === true,
+        );
+        expect(stayedInApp, "re-pick nav must stay in-app (no full page load)").toBe(true);
+      } finally {
+        const undoResp = await request.post("/api/rpc/merge-books/undo", {
+          data: { merge_log_id: mergeLogId },
+        });
+        expect(undoResp.status(), "POST /api/rpc/merge-books/undo failed").toBe(200);
+      }
+    });
+  });
 });

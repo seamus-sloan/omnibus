@@ -30,12 +30,20 @@ fn resolve_resume_pos(server_pos: Option<f64>, local_pos: f64) -> f64 {
     server_pos.unwrap_or(local_pos)
 }
 
-/// Extract `file_id` from the current URL's query string (`?file_id=N`),
-/// targeting a specific `book_files` row for multi-file audiobooks.
-fn parse_file_id_from_url() -> Option<i64> {
-    let search = web_sys::window()?.location().search().ok()?;
-    let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
-    params.get("file_id")?.parse().ok()
+/// Whether the driver must (re)load for a newly-requested `(uuid, file_id)`.
+///
+/// A different book always reloads. The *same* book reloads only on an
+/// explicit, different file selection — so picking another part in the file
+/// picker switches parts, while the mini-dock (which relinks with no
+/// `file_id`) resumes the current part instead of restarting from the first
+/// file. Mirrors `pages::listen::mobile::host::needs_reload`.
+fn needs_reload(loaded: &Option<(String, Option<i64>)>, uuid: &str, file_id: Option<i64>) -> bool {
+    match loaded {
+        Some((loaded_uuid, loaded_file)) if loaded_uuid == uuid => {
+            file_id.is_some() && file_id != *loaded_file
+        }
+        _ => true,
+    }
 }
 
 /// App-root playback driver. Installs the `window.OmnibusAudio` shim and
@@ -43,10 +51,11 @@ fn parse_file_id_from_url() -> Option<i64> {
 ///
 /// Called once from [`crate::App`] (so the audio element and all signals
 /// outlive any single route). The inner `use_effect` reacts to
-/// `playback.uuid`: setting it (the listen page on mount, or a dock dismiss
-/// that clears it) loads, swaps, or tears down playback. Because the signals
-/// now outlive the page, every book swap must reset the prior book's state
-/// before installing fresh callbacks.
+/// `playback.uuid` and `playback.file_id`: retargeting either (the listen
+/// page on mount / a picker selection, or a dock dismiss that clears the
+/// uuid) loads, swaps, or tears down playback, gated by [`needs_reload`].
+/// Because the signals now outlive the page, every book swap must reset the
+/// prior book's state before installing fresh callbacks.
 pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
     let cb_holder: JsCallbackHolder =
         use_hook(|| std::rc::Rc::new(std::cell::RefCell::new(Vec::new())));
@@ -67,6 +76,11 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
     let server_url = use_signal(String::new);
     crate::session_tracker::use_listening_session(playback.uuid, playback.playing, server_url);
 
+    // What's currently booted: (book uuid, the file_id it was booted with).
+    // Gates re-boot so a same-book file-pick reloads but a bare mini-dock
+    // relink resumes the current part. Held across renders via `use_hook`.
+    let mut loaded_key = use_hook(|| Signal::new(None::<(String, Option<i64>)>));
+
     use_effect(move || {
         let resolved_user = current_user();
         if matches!(resolved_user, Some(None)) {
@@ -74,16 +88,32 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
             uuid.set(None);
             return;
         }
-        // The only reactive dependency — re-run when the active book changes.
-        let Some(uuid) = playback.uuid.read().clone() else {
+        // Reactive dependencies — re-run when the active book *or* the selected
+        // file changes (the picker retargets `file_id` without changing uuid).
+        let requested_uuid = playback.uuid.read().clone();
+        let requested_file = *playback.file_id.read();
+        let Some(uuid) = requested_uuid else {
             // Dismissed via the dock × button. The handler already stopped
-            // the element; clear the book so the dock hides everywhere.
+            // the element; clear the book so the dock hides everywhere, and
+            // forget the booted key so re-selecting the same book reloads.
             let mut book = playback.book;
             book.set(None);
+            loaded_key.set(None);
             return;
         };
+        if !needs_reload(&loaded_key.peek().clone(), &uuid, requested_file) {
+            return;
+        }
+        loaded_key.set(Some((uuid.clone(), requested_file)));
         let user_id = resolved_user.flatten().map(|user| user.id);
-        boot_new_book(&cb_holder, &uuid, user_id, current_user, playback);
+        boot_new_book(
+            &cb_holder,
+            &uuid,
+            requested_file,
+            user_id,
+            current_user,
+            playback,
+        );
     });
 }
 
@@ -94,6 +124,7 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
 fn boot_new_book(
     cb_holder: &JsCallbackHolder,
     uuid: &str,
+    file_id: Option<i64>,
     user_id: Option<i64>,
     current_user: Signal<Option<Option<omnibus_shared::UserSummary>>>,
     playback: crate::PlaybackState,
@@ -134,6 +165,7 @@ fn boot_new_book(
     spawn_book_metadata_fetch(uuid.to_string(), guard, playback);
     spawn_manifest_init(
         uuid.to_string(),
+        file_id,
         user_id,
         initial_position,
         playback,
@@ -199,19 +231,26 @@ fn spawn_book_metadata_fetch(
 }
 
 /// Kick off the manifest fetch + branch on `mode` (direct/HLS/none). The
-/// active book's `file_id` (multi-file books) rides on the listen route's
-/// query string; read it here since the App-level driver no longer
-/// receives it as a param.
+/// active book's `file_id` (multi-file books) is the picker's selection,
+/// threaded down from the driver's `(uuid, file_id)` reload key.
 fn spawn_manifest_init(
     uuid: String,
+    file_id: Option<i64>,
     user_id: Option<i64>,
     initial_position: f64,
     playback: crate::PlaybackState,
     current_user: Signal<Option<Option<omnibus_shared::UserSummary>>>,
 ) {
-    let fid = parse_file_id_from_url();
     spawn(async move {
-        run_manifest_init(uuid, fid, user_id, initial_position, playback, current_user).await;
+        run_manifest_init(
+            uuid,
+            file_id,
+            user_id,
+            initial_position,
+            playback,
+            current_user,
+        )
+        .await;
     });
 }
 
@@ -529,5 +568,27 @@ mod tests {
     #[test]
     fn resolve_resume_pos_returns_zero_local_when_both_absent() {
         assert!((resolve_resume_pos(None, 0.0)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn needs_reload_when_nothing_booted_or_book_changed() {
+        assert!(needs_reload(&None, "book-a", None));
+        let booted = Some(("book-a".to_string(), Some(917)));
+        assert!(needs_reload(&booted, "book-b", Some(940)));
+    }
+
+    #[test]
+    fn needs_reload_on_explicit_different_part_of_same_book() {
+        let booted = Some(("book-a".to_string(), Some(917)));
+        assert!(needs_reload(&booted, "book-a", Some(918)));
+    }
+
+    #[test]
+    fn no_reload_for_same_part_or_bare_relink_of_same_book() {
+        let booted = Some(("book-a".to_string(), Some(917)));
+        // Same part re-selected → no restart.
+        assert!(!needs_reload(&booted, "book-a", Some(917)));
+        // Mini-dock relinks with no file_id → keep the current part.
+        assert!(!needs_reload(&booted, "book-a", None));
     }
 }

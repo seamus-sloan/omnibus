@@ -215,6 +215,10 @@ pub fn use_current_user_summary() -> ReadSignal<Option<omnibus_shared::UserSumma
 #[derive(Copy, Clone)]
 pub struct PlaybackState {
     pub uuid: Signal<Option<String>>,
+    /// The `book_files` row the picker selected (`?file_id=`). `None` lets the
+    /// backend pick the lowest-ordinal audio file. Tracked as a signal so the
+    /// App-level driver reboots when the *same* book's selected file changes.
+    pub file_id: Signal<Option<i64>>,
     pub book: Signal<Option<omnibus_shared::EbookMetadata>>,
     pub loading: Signal<bool>,
     pub error: Signal<Option<String>>,
@@ -238,6 +242,7 @@ impl PlaybackState {
     pub fn new() -> Self {
         Self {
             uuid: Signal::new(None),
+            file_id: Signal::new(None),
             book: Signal::new(None),
             loading: Signal::new(false),
             error: Signal::new(None),
