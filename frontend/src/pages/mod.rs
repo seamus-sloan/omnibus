@@ -12,6 +12,8 @@ mod authors_index;
 mod book_detail;
 mod landing;
 mod listen;
+#[cfg(not(feature = "mobile"))]
+mod logs;
 mod metadata_edit;
 mod reader;
 mod search;
@@ -40,6 +42,8 @@ pub use listen::BookListenPage;
 pub(crate) use listen::{dock_is_active, use_sleep_timer, AudioElement, MiniDock};
 #[cfg(feature = "mobile")]
 pub(crate) use listen::{mobile_dock_is_active, MobileAudioHost, MobileMiniPlayer, MobilePlayback};
+#[cfg(not(feature = "mobile"))]
+pub use logs::LogsPage;
 pub use metadata_edit::MetadataEditPage;
 pub use reader::BookReadPage;
 pub use search::SearchPage;

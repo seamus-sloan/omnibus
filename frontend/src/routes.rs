@@ -17,6 +17,8 @@ pub enum Route {
     Landing {},
     #[route("/settings")]
     Settings {},
+    #[route("/logs")]
+    Logs {},
     #[route("/account")]
     Account {},
     #[route("/add-books")]
@@ -73,6 +75,30 @@ pub fn Settings() -> Element {
     rsx! {
         ScreenLayout { SettingsPage {} }
     }
+}
+
+/// Route target for `/logs` — the admin-only server log viewer. Web wraps
+/// [`LogsPage`] in the screen layout; mobile has no log viewer, so — like the
+/// web `/search` stub — it redirects to the landing page.
+#[cfg(not(feature = "mobile"))]
+#[component]
+pub fn Logs() -> Element {
+    use_page_title(|| Some("Server logs".into()));
+    rsx! {
+        ScreenLayout { LogsPage {} }
+    }
+}
+
+/// Mobile stub for `/logs`: redirect to the landing page (no log viewer on
+/// mobile).
+#[cfg(feature = "mobile")]
+#[component]
+pub fn Logs() -> Element {
+    let nav = dioxus_router::use_navigator();
+    use_effect(move || {
+        nav.replace(Route::Landing {});
+    });
+    rsx! {}
 }
 
 /// Route target for `/account` — wraps [`AccountPage`] in the platform screen

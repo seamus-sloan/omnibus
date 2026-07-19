@@ -24,6 +24,7 @@ pub mod journals;
 pub mod kepub;
 pub mod kindle;
 pub mod library_layout;
+pub mod logs;
 pub mod merge;
 pub mod metadata_overrides;
 pub mod missing_files;
