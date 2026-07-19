@@ -30,7 +30,9 @@ pub(super) fn EbookRow(book: EbookMetadata, ctx: BookTableContext) -> Element {
     let (book_state, editing, authors_draft) = use_row_state(book);
     let save_field = build_save_field(uuid.clone(), server_url.clone(), book_state);
     let save_authors = build_save_authors(uuid.clone(), server_url.clone(), book_state);
-    let display = derive_row_display(&book_state.read(), &server_url, &uuid);
+    let cover_bust =
+        crate::contexts::cover_bust_for(crate::contexts::use_cover_cache_bust().0, &uuid);
+    let display = derive_row_display(&book_state.read(), &server_url, &uuid, cover_bust);
 
     let ctx = RowContext {
         is_admin,
@@ -117,14 +119,24 @@ struct RowDisplay {
 
 /// Compute the per-cell display strings from the optimistic book state.
 /// Pulled out of [`EbookRow`] so the closures and rsx live in their own
-/// scopes.
-fn derive_row_display(book: &EbookMetadata, server_url: &str, uuid: &str) -> RowDisplay {
+/// scopes. `cover_bust` is this book's [`crate::contexts::CoverCacheBust`]
+/// counter (0 = unchanged this session) — `/api/thumbs/*` is cached
+/// `private, max-age=86400`, so without it the table would keep showing a
+/// pre-edit thumbnail for the otherwise-unchanged URL after navigating back
+/// from a cover edit (issue #1087).
+fn derive_row_display(
+    book: &EbookMetadata,
+    server_url: &str,
+    uuid: &str,
+    cover_bust: u32,
+) -> RowDisplay {
     let row_testid = format!("ebook-row-{}", row_slug(&book.filename));
     // Per-variant URLs (not a shared base) so mobile's `?token=` attaches to
     // each `srcset` candidate; see `crate::thumb_url`.
-    let sm = crate::thumb_url(server_url, uuid, "sm");
-    let md = crate::thumb_url(server_url, uuid, "md");
-    let lg = crate::thumb_url(server_url, uuid, "lg");
+    let bust = |url: String| crate::contexts::append_cache_bust(url, cover_bust);
+    let sm = bust(crate::thumb_url(server_url, uuid, "sm"));
+    let md = bust(crate::thumb_url(server_url, uuid, "md"));
+    let lg = bust(crate::thumb_url(server_url, uuid, "lg"));
     let thumb_src = md.clone();
     let thumb_srcset = format!("{sm} 160w, {md} 320w, {lg} 640w");
     let title = book.title.as_deref().unwrap_or(&book.filename).to_string();
