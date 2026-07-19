@@ -4453,6 +4453,61 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .settings-status.success, .success-msg { color: #34d399; }
 .settings-status.error, .error { color: #f87171; font-size: 0.85rem; }
 
+/* F5.2 admin log viewer (`/logs`). */
+.logs-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.logs-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem 1rem;
+  align-items: end;
+  margin: 1.25rem 0;
+}
+.logs-filters .settings-actions.logs-apply { margin: 0; }
+.logs-table-wrap { overflow-x: auto; }
+.logs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.logs-table th, .logs-table td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--line-2);
+  vertical-align: top;
+}
+.logs-table th { color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+.logs-time, .logs-module-cell { white-space: nowrap; color: var(--ink-1); }
+.logs-message { word-break: break-word; }
+.logs-fields { margin-top: 0.35rem; }
+.logs-fields summary { cursor: pointer; color: var(--ink-2); }
+.logs-fields pre { margin: 0.35rem 0 0; white-space: pre-wrap; word-break: break-word; }
+.logs-level {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  background: var(--bg-1);
+  color: var(--ink-1);
+}
+.logs-level-error { background: rgba(248, 113, 113, 0.18); color: #f87171; }
+.logs-level-warn { background: rgba(251, 191, 36, 0.18); color: #fbbf24; }
+.logs-level-info { background: rgba(96, 165, 250, 0.18); color: #60a5fa; }
+.logs-level-debug, .logs-level-trace { color: var(--ink-2); }
+.logs-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
 /* F4.3 Send-to-Kindle result toast — fixed bottom-center, mirrors
    .bd-merge-toast so action feedback is consistent across the book page. */
 .kindle-toast, .kobo-toast {

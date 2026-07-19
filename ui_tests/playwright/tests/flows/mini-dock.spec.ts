@@ -24,6 +24,9 @@ import {
 // fixture the reader test depends on unresolvable by row testid in CI —
 // see the investigation note in the PR. Reverted to the two-step seed.
 test.beforeAll(async ({ request }) => {
+  // Two sequential seed polls (ebooks then audiobooks), up to 45s each, so
+  // this hook needs more than the 60s config default.
+  test.setTimeout(120_000);
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
   await seedAudiobookLibrary(
     request,

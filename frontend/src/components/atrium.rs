@@ -11,7 +11,8 @@ use crate::{media_url, use_server_url};
 
 // ── Theme state ────────────────────────────────────────────────────
 
-/// Atrium theme. Persisted under `omn.theme` in localStorage on web.
+/// Atrium theme. Persisted under `omn.theme` via [`crate::client_store`]
+/// (`localStorage` on web, a JSON file on mobile).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Theme {
     Dark,
@@ -46,27 +47,21 @@ impl Theme {
 /// component.
 ///
 /// SSR-safe by construction: the signal always starts as `Theme::Dark` so
-/// server-rendered markup is deterministic and matches the WASM client's
-/// first paint (no hydration mismatch on the `data-theme` attribute). A
-/// web-only `use_effect` then reads `localStorage["omn.theme"]` after the
-/// component mounts and updates the signal if the user has a stored
-/// preference, triggering a single re-render to apply it.
+/// server-rendered markup is deterministic and matches the first paint on
+/// every client target (no hydration mismatch on the `data-theme`
+/// attribute). A target-agnostic `use_effect` then reads the persisted value
+/// back via [`crate::client_store`] (`localStorage` on web, a JSON file on
+/// mobile, always `None` on SSR) after the component mounts and updates the
+/// signal if the user has a stored preference, triggering a single
+/// re-render to apply it. Mirrors the `view_prefs` hydration pattern in
+/// `frontend/src/pages/landing.rs`.
 pub fn init_theme() {
-    // Server / mobile builds only need the signal context — `theme` is
-    // unused in those targets, hence the `_` prefix to keep clippy quiet
-    // under `-D warnings`. The web build shadows it with a mutable binding
-    // inside the `#[cfg(feature = "web")]` block below so the
-    // post-hydration `use_effect` can write to it.
-    let _theme = use_context_provider(|| Signal::new(Theme::Dark));
-    #[cfg(feature = "web")]
-    {
-        let mut theme = _theme;
-        use_effect(move || {
-            if let Some(persisted) = read_persisted_theme() {
-                theme.set(persisted);
-            }
-        });
-    }
+    let mut theme = use_context_provider(|| Signal::new(Theme::Dark));
+    use_effect(move || {
+        if let Some(persisted) = read_persisted_theme() {
+            theme.set(persisted);
+        }
+    });
 }
 
 /// Wrap the app body in the Atrium themed container. The `data-theme`
@@ -200,28 +195,20 @@ pub(crate) fn fallback_title(title: Option<&str>, filename: &str) -> String {
 
 // ── Persistence ───────────────────────────────────────────────────
 
-#[cfg(feature = "web")]
+const THEME_STORAGE_KEY: &str = "omn.theme";
+
+/// Persist the chosen theme via [`crate::client_store`]: `localStorage` on
+/// web, a JSON file under the app data dir on mobile (survives cold
+/// launch), a no-op on SSR.
 pub(crate) fn persist_theme(t: Theme) {
-    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = storage.set_item("omn.theme", t.as_attr());
-    }
+    crate::client_store::set(THEME_STORAGE_KEY, t.as_attr());
 }
 
-#[cfg(not(feature = "web"))]
-pub(crate) fn persist_theme(_t: Theme) {
-    // TODO(F1.7-mobile): persist to $HOME/.omnibus-theme in debug builds,
-    // analogous to data::token_store.
-}
-
-/// Web-only: read the persisted theme value from `localStorage`. The
-/// `init_theme` `use_effect` call site is itself `#[cfg(feature = "web")]`,
-/// so this function only exists when the WASM client is being built. No
-/// non-web stub — the call is gated, so the symbol is never referenced
-/// on server / mobile builds.
-#[cfg(feature = "web")]
+/// Read the persisted theme value back via [`crate::client_store`]. Returns
+/// `None` when nothing is stored, storage is unavailable, or the stored
+/// value doesn't parse as a known [`Theme`].
 fn read_persisted_theme() -> Option<Theme> {
-    let storage = web_sys::window().and_then(|w| w.local_storage().ok().flatten())?;
-    let value = storage.get_item("omn.theme").ok().flatten()?;
+    let value = crate::client_store::get(THEME_STORAGE_KEY)?;
     Theme::from_attr(&value)
 }
 
@@ -259,5 +246,20 @@ mod tests {
     #[test]
     fn fallback_title_uses_filename_for_whitespace_only_title() {
         assert_eq!(fallback_title(Some("   "), "dune.epub"), "dune.epub");
+    }
+}
+
+// SSR has no persistence: `persist_theme` is inert and `read_persisted_theme`
+// always sees nothing, so `init_theme` keeps its deterministic `Theme::Dark`
+// default for SSR markup.
+#[cfg(all(test, not(any(feature = "web", feature = "mobile"))))]
+mod ssr_tests {
+    use super::*;
+
+    #[test]
+    fn persist_theme_is_a_noop_and_read_persisted_theme_stays_none() {
+        assert_eq!(read_persisted_theme(), None);
+        persist_theme(Theme::Sepia);
+        assert_eq!(read_persisted_theme(), None);
     }
 }

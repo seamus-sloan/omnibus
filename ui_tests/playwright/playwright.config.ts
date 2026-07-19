@@ -19,6 +19,13 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   reporter: "list",
+  // Most specs seed in a `beforeAll` that polls the indexer for up to 45s
+  // (see `pollForBookCount` — cold GitHub-runner indexing of the full
+  // public-domain set measured 27–36s). Hooks inherit the test timeout, so
+  // the Playwright 30s default cut the seed off before the poll could finish.
+  // 60s clears a single-library seed with margin; dual-library seeding hooks
+  // (two sequential polls) raise their own timeout via `test.setTimeout`.
+  timeout: 60_000,
   globalSetup: require.resolve("./globalSetup.ts"),
   use: {
     baseURL: BASE_URL,
