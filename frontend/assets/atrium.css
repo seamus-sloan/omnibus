@@ -4488,24 +4488,32 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   margin: 1.25rem 0;
 }
 .logs-filters .settings-actions.logs-apply { margin: 0; }
-.logs-table-wrap { overflow-x: auto; }
-.logs-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.85rem;
+/* Grafana-style log stream: one big box that scrolls both axes, one
+   non-wrapping line per record with the details shown inline. */
+.logs-stream {
+  max-height: 70vh;
+  overflow: auto;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  line-height: 1.6;
 }
-.logs-table th, .logs-table td {
-  text-align: left;
-  padding: 0.4rem 0.6rem;
-  border-bottom: 1px solid var(--line-2);
-  vertical-align: top;
+.logs-line {
+  /* max-content + min-width:100% makes each line grow to its own width so the
+     container's scrollWidth tracks the widest line — that's what enables the
+     horizontal scroll instead of wrapping. */
+  white-space: pre;
+  width: max-content;
+  min-width: 100%;
+  padding: 0.05rem 0;
 }
-.logs-table th { color: var(--ink-2); font-weight: 600; white-space: nowrap; }
-.logs-time, .logs-module-cell { white-space: nowrap; color: var(--ink-1); }
-.logs-message { word-break: break-word; }
-.logs-fields { margin-top: 0.35rem; }
-.logs-fields summary { cursor: pointer; color: var(--ink-2); }
-.logs-fields pre { margin: 0.35rem 0 0; white-space: pre-wrap; word-break: break-word; }
+.logs-line:hover { background: var(--bg-2); }
+.logs-time { color: var(--ink-2); }
+.logs-module-cell { color: var(--ink-2); }
+.logs-message { color: var(--ink-1); }
+.logs-fields { color: var(--ink-2); }
 .logs-level {
   display: inline-block;
   padding: 0.05rem 0.4rem;

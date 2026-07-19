@@ -273,54 +273,43 @@ fn LogResults(
         };
     }
     rsx! {
-        LogTable { records: page.records.clone() }
+        LogStream { records: page.records.clone() }
         LogPagination { applied, has_more: page.has_more, loading: loading() }
     }
 }
 
-/// Newest-first table of one page of records.
+/// Newest-first Grafana-style log stream: one page of records rendered as
+/// non-wrapping monospace lines inside a single box that scrolls both axes.
 #[component]
-fn LogTable(records: Vec<LogRecord>) -> Element {
+fn LogStream(records: Vec<LogRecord>) -> Element {
     rsx! {
-        div { class: "logs-table-wrap",
-            table { class: "logs-table", "data-testid": "logs-table",
-                thead {
-                    tr {
-                        th { "Time" }
-                        th { "Level" }
-                        th { "Module" }
-                        th { "Message" }
-                    }
-                }
-                tbody {
-                    for record in records {
-                        LogRow { record }
-                    }
-                }
+        div { class: "logs-stream mono", "data-testid": "logs-table", role: "log",
+            for record in records {
+                LogLine { record }
             }
         }
     }
 }
 
-/// One log record row; folds the extra fields into an expandable detail.
+/// One log record as a single preformatted line: timestamp, colored level,
+/// module, message, and the extra fields ("details") shown inline by default
+/// rather than folded behind a collapse. `white-space: pre` keeps the line
+/// intact so the stream scrolls horizontally instead of wrapping.
 #[component]
-fn LogRow(record: LogRecord) -> Element {
+fn LogLine(record: LogRecord) -> Element {
     let level_class = format!("logs-level logs-level-{}", record.level.to_lowercase());
     rsx! {
-        tr { class: "logs-row", "data-testid": "logs-row",
-            td { class: "logs-time mono", "{record.timestamp}" }
-            td {
-                span { class: "{level_class}", "{record.level}" }
-            }
-            td { class: "logs-module-cell mono", "{record.target}" }
-            td { class: "logs-message",
-                "{record.message}"
-                if let Some(fields) = record.fields {
-                    details { class: "logs-fields",
-                        summary { "details" }
-                        pre { class: "mono", "{fields}" }
-                    }
-                }
+        div { class: "logs-line", "data-testid": "logs-row",
+            span { class: "logs-time", "{record.timestamp}" }
+            " "
+            span { class: "{level_class}", "{record.level}" }
+            " "
+            span { class: "logs-module-cell", "{record.target}" }
+            " "
+            span { class: "logs-message", "{record.message}" }
+            if let Some(fields) = record.fields {
+                " "
+                span { class: "logs-fields", "{fields}" }
             }
         }
     }

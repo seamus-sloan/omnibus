@@ -304,8 +304,8 @@ fn UmNowReading() -> Element {
     }
 }
 
-/// Account-scoped linear rows: Settings (real link, closes the menu),
-/// plus the stubbed Admin/Notifications rows.
+/// Account-scoped linear rows: Account, Settings, and the Admin log-viewer
+/// link (all real, each closes the menu), plus the stubbed Notifications row.
 #[cfg(any(feature = "web", feature = "server"))]
 #[component]
 fn UmAccountRows(open: Signal<bool>) -> Element {
@@ -326,15 +326,13 @@ fn UmAccountRows(open: Signal<bool>) -> Element {
                 span { class: "um-row-icon", "⚙" }
                 span { class: "um-row-label", "Settings" }
             }
-            a {
+            Link {
+                to: Route::Logs {},
                 class: "um-row",
-                href: "#",
-                "aria-disabled": "true",
-                tabindex: "-1",
-                onclick: move |evt| evt.prevent_default(),
+                onclick: move |_| open.set(false),
                 span { class: "um-row-icon", "▣" }
                 span { class: "um-row-label", "Admin · server health" }
-                span { class: "um-row-aside", "all ok" }
+                span { class: "um-row-aside", "logs" }
             }
             a {
                 class: "um-row",
