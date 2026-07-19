@@ -36,6 +36,14 @@ pub(super) struct SourceSnapshot {
     /// The source book's `scan_roots.path` (re-resolved or recreated on
     /// undo) — also the `merged_uuids.library_path` for the guard row.
     pub library_path: String,
+    /// `books.scan_key` — the library-relative path the reindex diff (F2)
+    /// matches disk against. Undo must restore it, or the next reindex
+    /// can't match the on-disk file/folder to the recreated row and
+    /// inserts a duplicate. `#[serde(default)]` keeps pre-fix `merge_log`
+    /// JSON (no `scan_key` key) replaying — those degrade to `None`, the
+    /// prior behaviour.
+    #[serde(default)]
+    pub scan_key: Option<String>,
     pub path: String,
     pub title: String,
     pub sort: Option<String>,
@@ -87,6 +95,7 @@ pub(super) struct SourceSnapshot {
 struct BookSnapshot {
     uuid: String,
     library_path: String,
+    scan_key: Option<String>,
     path: String,
     title: String,
     sort: Option<String>,
@@ -126,7 +135,7 @@ pub(super) async fn build_snapshot(
     book_id: i64,
 ) -> Result<SourceSnapshot, sqlx::Error> {
     let row: BookSnapshot = sqlx::query_as(
-        "SELECT b.uuid, l.path AS library_path, b.path, b.title, b.sort, b.author_sort,
+        "SELECT b.uuid, l.path AS library_path, b.scan_key, b.path, b.title, b.sort, b.author_sort,
                 b.series_sort, b.series_index, b.pubdate, b.timestamp, b.has_cover,
                 b.description, b.accent_color, b.title_norm, b.author_norm
            FROM books b JOIN scan_roots l ON l.id = b.library_id
@@ -142,6 +151,7 @@ pub(super) async fn build_snapshot(
     Ok(SourceSnapshot {
         uuid: row.uuid,
         library_path: row.library_path,
+        scan_key: row.scan_key,
         path: row.path,
         title: row.title,
         sort: row.sort,

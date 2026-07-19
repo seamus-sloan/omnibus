@@ -4,7 +4,7 @@
 use omnibus_shared::MetadataOverrides;
 
 use super::*;
-use crate::books::list_merged_rows_for_formats;
+use crate::books::{list_indexed_rows_for_formats, list_merged_rows_for_formats};
 use crate::indexer::diff_library;
 use crate::pool::init_db;
 use crate::sync::{sync_audiobooks, AudiobookSyncPlan};
@@ -598,6 +598,51 @@ async fn undo_merge_restores_source_book_and_moves_file_back() {
         .unwrap();
     assert!(undone.is_some());
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM books_fts").await, 2);
+}
+
+#[tokio::test]
+async fn undo_merge_restores_scan_key_so_reindex_finds_no_duplicate() {
+    // Regression: undo used to omit `books.scan_key` from the recreated row,
+    // leaving it NULL. The next reindex then couldn't match the on-disk file
+    // to the restored (scan_key-less) row and inserted a second copy — the
+    // duplicate that destabilized the audiobook E2E suite.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let target = seed_ebook(&pool, "A/Dracula.epub", "Dracula", "Bram Stoker").await;
+    let source = seed_audiobook(&pool, "B/Drakula.m4b", "Drakula", "Bram Stoker").await;
+    let source_scan_key = crate::helpers::scan_key_for("B/Drakula.m4b");
+
+    let out = merge_books(&pool, &source, &target, None).await.unwrap();
+    undo_merge(&pool, out.merge_log_id).await.unwrap();
+
+    // The recreated row carries the source's original scan_key back.
+    let restored_scan_key: Option<String> =
+        sqlx::query_scalar("SELECT scan_key FROM books WHERE uuid = ?")
+            .bind(&source)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(restored_scan_key.as_deref(), Some(source_scan_key.as_str()));
+
+    // A reindex now matches the on-disk file to the restored native row and
+    // classifies it Unchanged — no `new` entry, so no duplicate insert.
+    let ab = indexed_audiobook("B/Drakula.m4b", "Drakula", Some("Bram Stoker"));
+    let db_rows = list_indexed_rows_for_formats(&pool, "/audio", &["M4B", "M4A", "MP3"])
+        .await
+        .unwrap();
+    let disk = vec![crate::ebook::StatEntry {
+        filename: ab.group_path.clone(),
+        scan_key: ab.scan_key.clone(),
+        mtime_epoch: ab.max_mtime_epoch,
+        size_bytes: ab.total_size_bytes,
+        error: None,
+    }];
+    let diff = diff_library(&disk, &db_rows, std::path::Path::new("/audio"), true);
+    assert!(
+        diff.new.is_empty(),
+        "restored book must not reindex as New (would duplicate): {:?}",
+        diff.new
+    );
+    assert_eq!(diff.unchanged, vec![source]);
 }
 
 #[tokio::test]
