@@ -1,9 +1,8 @@
 //! Tracing subscriber setup: a compact human-readable stderr layer plus a
 //! non-blocking, daily-rolling JSON file sink, both gated by one `RUST_LOG`
 //! env-filter. Called by `main` before `dioxus::serve`; the JSON file is the
-//! durable log source for the admin log viewer.
-
-use std::path::PathBuf;
+//! durable log source for the admin log viewer, which reads it back through
+//! `omnibus_db::logs` (the single owner of the log-directory resolution).
 
 /// Install the global tracing subscriber. Must run before `dioxus::serve`,
 /// which otherwise installs dioxus-logger's default subscriber with a fixed
@@ -32,8 +31,10 @@ pub fn init_tracing() -> Option<tracing_appender::non_blocking::WorkerGuard> {
 
     // Build the rolling-file JSON layer, or fall back to stderr-only if the
     // directory can't be created. `Option<Layer>` is itself a `Layer` (None =
-    // no-op), so the registry wiring is identical either way.
-    let dir = log_dir();
+    // no-op), so the registry wiring is identical either way. The directory is
+    // owned by `omnibus_db::logs` so the log viewer reads exactly where we
+    // write.
+    let dir = omnibus_db::logs::log_dir();
     let (file_layer, guard) = match std::fs::create_dir_all(&dir) {
         Ok(()) => {
             let appender = tracing_appender::rolling::daily(&dir, "omnibus.log");
@@ -61,26 +62,3 @@ pub fn init_tracing() -> Option<tracing_appender::non_blocking::WorkerGuard> {
 
     guard
 }
-
-/// Directory for the on-disk JSON logs. `$OMNIBUS_LOG_DIR` is used verbatim when
-/// set; otherwise `<$OMNIBUS_DATA_DIR>/logs` (data dir default `./data`),
-/// mirroring the other durable-storage dirs.
-fn log_dir() -> PathBuf {
-    resolve_log_dir(
-        std::env::var("OMNIBUS_LOG_DIR").ok(),
-        std::env::var("OMNIBUS_DATA_DIR").ok(),
-    )
-}
-
-/// Pure resolution of [`log_dir`] from its two env inputs, split out so the
-/// precedence is testable without mutating process env.
-fn resolve_log_dir(log_dir: Option<String>, data_dir: Option<String>) -> PathBuf {
-    if let Some(dir) = log_dir {
-        return PathBuf::from(dir);
-    }
-    let base = data_dir.unwrap_or_else(|| "./data".into());
-    PathBuf::from(base).join("logs")
-}
-
-#[cfg(test)]
-mod tests;

@@ -12,13 +12,14 @@ mod metadata_precedence;
 mod smtp;
 
 use dioxus::prelude::*;
+use dioxus_router::Link;
 use omnibus_shared::{
     HardcoverKeyStatus, LibraryContents, LibrarySection, Settings, SCAN_INTERVAL_MIN_HOURS,
 };
 
 #[cfg(not(feature = "mobile"))]
 use crate::components::worker_status::WorkerStatusIndicator;
-use crate::{data, use_server_url};
+use crate::{data, use_server_url, Route};
 
 #[cfg(not(feature = "mobile"))]
 use metadata_precedence::MetadataPrecedenceField;
@@ -111,6 +112,13 @@ pub fn SettingsPage() -> Element {
             {metadata_precedence_slot()}
             HardcoverKeyField {}
             SmtpConfigField {}
+            section { class: "card", "data-testid": "logs-link-card",
+                h2 { "Server logs" }
+                p { class: "subtitle",
+                    "Browse the on-disk structured logs with level, module, and time-range filters."
+                }
+                Link { to: Route::Logs {}, class: "btn", "data-testid": "logs-link", "Open log viewer" }
+            }
         }
         }
     }

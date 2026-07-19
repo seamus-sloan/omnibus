@@ -29,6 +29,9 @@ test.describe.configure({ mode: "serial" });
 // book, so the combined total is the additive sum minus AUTO_ATTACHED_PAIRS.
 // The merge TARGET/SOURCE below are chosen to avoid that pair.
 test.beforeAll(async ({ request }) => {
+  // Two sequential seed polls (ebooks then audiobooks), up to 45s each, so
+  // this hook needs more than the 60s config default.
+  test.setTimeout(120_000);
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
   await seedAudiobookLibrary(
     request,

@@ -1,8 +1,19 @@
 //! Filesystem storage for images embedded in journal entries (F3.2b).
 //! Files live under `<journal_images_dir()>/<uuidv4>.<ext>` and are served by
-//! `GET /api/journals/images/{name}`. Durable user data — not a regenerable
-//! cache like thumbs/kepub — so nothing here evicts.
+//! `GET /api/journals/images/{name}`. Unlike thumbs/kepub this is durable user
+//! data, not a regenerable cache — so there is no capacity-based eviction.
+//! Orphans (an upload whose draft/entry is discarded or edited to remove it)
+//! are cleaned up best-effort by `journals::{update_journal_entry,
+//! delete_journal_entry}`, which diff before/after `body_md` image references
+//! and delete any file no longer referenced by any entry. There is no
+//! separate drafts table — a draft is a `journal_entries` row with
+//! `status = 'draft'` — so this also covers the composer's Cancel button
+//! (which deletes the draft row) and an abandoned-then-edited draft. An
+//! upload whose draft is *never* saved or explicitly cancelled (e.g. the tab
+//! is closed mid-compose) is not swept; that residual case was judged not
+//! worth a periodic boot sweep for the added complexity.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 /// Root directory for journal images.
@@ -62,6 +73,43 @@ fn is_valid_image_name(name: &str) -> bool {
         return false;
     };
     matches!(ext, "jpg" | "png" | "gif" | "webp") && uuid::Uuid::parse_str(stem).is_ok()
+}
+
+/// Every journal-image serving name referenced in `body_md` via the
+/// `IMAGE_URL_PREFIX` embed URL (`journals::markdown::IMAGE_URL_PREFIX`), for
+/// orphan-cleanup diffing. Malformed matches (a prefix not followed by a
+/// well-formed `<uuidv4>.<ext>` name) are ignored rather than collected.
+pub fn referenced_image_names(body_md: &str) -> HashSet<String> {
+    let prefix = crate::journals::markdown::IMAGE_URL_PREFIX;
+    let mut names = HashSet::new();
+    let mut rest = body_md;
+    while let Some(pos) = rest.find(prefix) {
+        let after = &rest[pos + prefix.len()..];
+        let end = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '.'))
+            .unwrap_or(after.len());
+        let name = &after[..end];
+        if is_valid_image_name(name) {
+            names.insert(name.to_string());
+        }
+        rest = &after[end..];
+    }
+    names
+}
+
+/// Best-effort delete of a stored journal image by its serving name. A
+/// missing file and a malformed name are both no-ops; a real I/O error is
+/// logged, not propagated — this is opportunistic orphan GC, not a
+/// correctness-critical path. Sync `std::fs` — call from `spawn_blocking`.
+pub fn delete_journal_image(name: &str) {
+    if !is_valid_image_name(name) {
+        return;
+    }
+    if let Err(e) = std::fs::remove_file(journal_images_dir().join(name)) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(name, error = %e, "failed to delete orphaned journal image");
+        }
+    }
 }
 
 #[cfg(test)]
