@@ -93,10 +93,21 @@ async fn add_physical_copy_resolves_a_merged_uuid() {
     .await
     .unwrap();
 
+    // Checked in against the merged ledger key, the copy is stored under the
+    // canonical (surviving) uuid — the value the rest of the system keys on.
     let copy = add_physical_copy(&pool, "old-uuid", None, None, None)
         .await
         .unwrap();
-    assert_eq!(copy.book_uuid, "old-uuid");
+    assert_eq!(copy.book_uuid, "uuid-1");
+    // And it's findable by either uuid, since the read path folds to canonical.
+    assert_eq!(
+        list_physical_copies(&pool, "old-uuid").await.unwrap().len(),
+        1
+    );
+    assert_eq!(
+        list_physical_copies(&pool, "uuid-1").await.unwrap().len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -139,6 +150,16 @@ async fn add_wishlist_entry_returns_the_entry() {
     assert_eq!(entry.user_id, user);
     assert_eq!(entry.book_uuid, "uuid-1");
     assert_eq!(entry.source, WishlistSource::Scan);
+}
+
+#[tokio::test]
+async fn add_wishlist_entry_errors_when_book_missing() {
+    let pool = pool().await;
+    let user = seed_user(&pool, "reader").await;
+    let err = add_wishlist_entry(&pool, user, "nope", WishlistSource::Scan)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, PhysicalError::BookNotFound));
 }
 
 #[tokio::test]

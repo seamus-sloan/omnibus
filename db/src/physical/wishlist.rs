@@ -7,6 +7,7 @@ use sqlx::SqlitePool;
 use omnibus_shared::physical::{WishlistEntry, WishlistSource};
 
 use super::PhysicalError;
+use crate::books::resolve_canonical_book_uuid;
 
 /// A `wishlist_entries` row as read back from the DB, in column order.
 type WishlistRow = (i64, i64, String, i64, String);
@@ -24,15 +25,23 @@ fn map_entry(r: WishlistRow) -> WishlistEntry {
     }
 }
 
-/// Add a book to a user's wishlist, returning the entry. Idempotent: a second
-/// add for the same `(user_id, book_uuid)` returns the existing row unchanged
-/// (the original `source`/`added_at` win).
+/// Add a book to a user's wishlist, returning the entry.
+///
+/// Folds the uuid to canonical `books.uuid` (honoring `merged_uuids`) and
+/// stores that, so uniqueness holds across a merge and the row always resolves
+/// to a live book; an unresolvable uuid returns [`PhysicalError::BookNotFound`].
+/// Idempotent: a second add for the same `(user_id, canonical uuid)` returns the
+/// existing row unchanged (the original `source`/`added_at` win).
 pub async fn add_wishlist_entry(
     pool: &SqlitePool,
     user_id: i64,
     book_uuid: &str,
     source: WishlistSource,
 ) -> Result<WishlistEntry, PhysicalError> {
+    let canonical = resolve_canonical_book_uuid(pool, book_uuid)
+        .await?
+        .ok_or(PhysicalError::BookNotFound)?;
+
     // ON CONFLICT ... DO UPDATE (a no-op self-assign) so RETURNING yields the
     // surviving row on both insert and conflict — a bare DO NOTHING returns no
     // row on conflict.
@@ -43,7 +52,7 @@ pub async fn add_wishlist_entry(
          RETURNING id, user_id, book_uuid, added_at, source",
     )
     .bind(user_id)
-    .bind(book_uuid)
+    .bind(&canonical)
     .bind(source.as_str())
     .fetch_one(pool)
     .await?;
@@ -52,14 +61,21 @@ pub async fn add_wishlist_entry(
 
 /// Remove a book from a user's wishlist. A no-op (not an error) when absent —
 /// the desired end state (not on the wishlist) already holds.
+///
+/// Folds the uuid to canonical first so a `merged_uuids` ledger key still
+/// deletes the row stored under the surviving book. An unresolvable uuid can
+/// have no entry, so it's a no-op.
 pub async fn remove_wishlist_entry(
     pool: &SqlitePool,
     user_id: i64,
     book_uuid: &str,
 ) -> Result<(), PhysicalError> {
+    let Some(canonical) = resolve_canonical_book_uuid(pool, book_uuid).await? else {
+        return Ok(());
+    };
     sqlx::query("DELETE FROM wishlist_entries WHERE user_id = ?1 AND book_uuid = ?2")
         .bind(user_id)
-        .bind(book_uuid)
+        .bind(&canonical)
         .execute(pool)
         .await?;
     Ok(())
