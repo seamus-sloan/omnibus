@@ -283,7 +283,7 @@ fn LogResults(
 #[component]
 fn LogStream(records: Vec<LogRecord>) -> Element {
     rsx! {
-        div { class: "logs-stream mono", "data-testid": "logs-table", role: "log",
+        div { class: "logs-stream mono", "data-testid": "logs-table", role: "region", "aria-label": "Server log stream",
             for record in records {
                 LogLine { record }
             }
