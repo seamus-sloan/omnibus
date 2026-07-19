@@ -18,7 +18,8 @@ tags:
   - smoke
 ---
 - retry:
-    maxRetries: 6
+    # 3 is Maestro's hard cap (see connect.yaml).
+    maxRetries: 3
     commands:
       - launchApp:
           clearState: true

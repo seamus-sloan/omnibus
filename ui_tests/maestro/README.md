@@ -60,8 +60,23 @@ on both platforms:
   boots the emulator, flows target `http://10.0.2.2:3000` (the emulator's
   alias for the host loopback — this is why flows parameterize `SERVER_URL`).
 
-Trigger paths are scoped to mobile-affecting code (macOS minutes are
-expensive); `workflow_dispatch` is the escape hatch.
+**Triggers (#1034):** the iOS job runs on `push` to `main` and on PRs, both
+path-filtered to mobile-affecting code (macOS minutes are expensive) —
+`server/**`/`db/**` included because the flows probe the real server's
+`/api/_health`. The Android job is manual-only behind the `android`
+`workflow_dispatch` input until its flows are green on the emulator (#1035).
+
+**Flake armor:** on top of each flow's `retry` block (Maestro hard-caps
+`maxRetries` at 3), CI retries the whole `maestro test` invocation up to 3
+times — the residual failure modes (XCUITest driver startup timeout, the
+WebView process dying under CI load, dropped `inputText` characters) are
+environmental and recover on a fresh invocation. A pass on attempt > 1 emits
+a warning annotation and keeps the Maestro debug artifact so the flake stays
+visible. Per-flow results land in the job's step summary (JUnit).
+
+**Stress runs:** the `stress` dispatch input fans the iOS job into N identical
+matrix instances (e.g. `[1,2,3,4,5]`) for flake-hunting; run once normally
+first so the stress instances start from warm caches.
 
 ## State model — hermetic flows, serial execution
 

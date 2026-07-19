@@ -1,33 +1,60 @@
 name: Mobile E2E
 
 # Maestro flows (ui_tests/maestro) against the mobile app — the same YAML suite
-# drives iOS and Android. Both jobs are **manual-dispatch only** for now: the
-# PR/push triggers below are commented out while runner cost and run time are
-# worked out (re-enabling them is tracked in #1034; Android additionally in
-# #1035 — see the `if:` on that job). The commented `paths:` filter is kept as
-# the intended scope for when triggers return: `server/**` + `db/**` are
-# included because the job boots the real native server and the flows probe
-# `GET /api/_health` — a server or boot regression can fail these runs even
-# when nothing mobile changed.
+# drives iOS and Android.
+#
+# - The iOS job gates the PR/push path (#1034). `server/**` + `db/**` are in
+#   the path filter because the job boots the real native server and the flows
+#   probe `GET /api/_health` — a server or boot regression can fail these runs
+#   even when nothing mobile changed.
+# - The Android job is manual-only behind the `android` dispatch input until
+#   its flows are green on the emulator (#1035).
+# - The `stress` dispatch input fans the iOS job into N identical matrix
+#   instances (e.g. `[1,2,3,4,5]`) to smoke out flakiness — every instance
+#   must pass. Warm the caches with a normal run first so the stress
+#   instances measure the suite, not a cold rebuild.
+# The two paths lists below are duplicates — keep them in sync.
 on:
-#  push:
-#    branches: [main]
-#  pull_request:
-#    types: [opened, synchronize, reopened]
-#    paths:
-#      - "mobile/**"
-#      - "frontend/**"
-#      - "shared/**"
-#      - "server/**"
-#      - "db/**"
-#      - "ui_tests/maestro/**"
-#      - "**/Cargo.toml"
-#      - "Cargo.lock"
-#      - "**/Dioxus.toml"
-#      - "flake.lock"
-#      - "flake.nix"
-#      - ".github/workflows/mobile-e2e.yml"
+  push:
+    branches: [main]
+    paths:
+      - "mobile/**"
+      - "frontend/**"
+      - "shared/**"
+      - "server/**"
+      - "db/**"
+      - "ui_tests/maestro/**"
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "**/Dioxus.toml"
+      - "flake.lock"
+      - "flake.nix"
+      - ".github/workflows/mobile-e2e.yml"
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "mobile/**"
+      - "frontend/**"
+      - "shared/**"
+      - "server/**"
+      - "db/**"
+      - "ui_tests/maestro/**"
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "**/Dioxus.toml"
+      - "flake.lock"
+      - "flake.nix"
+      - ".github/workflows/mobile-e2e.yml"
   workflow_dispatch:
+    inputs:
+      stress:
+        description: "iOS repeat ids as a JSON array — [1] for one run, [1,2,3,4,5] for a 5x flake check"
+        type: string
+        default: "[1]"
+      android:
+        description: "Also run the Android emulator job (#1035)"
+        type: boolean
+        default: false
 
 concurrency:
   group: mobile-e2e-${{ github.ref }}
@@ -35,9 +62,17 @@ concurrency:
 
 jobs:
   maestro-ios:
-    name: maestro (iOS simulator)
+    # Single runs keep the bare name (stable check name); stress repeats > 1
+    # get a suffix so the instances are tellable apart in the checks UI.
+    name: maestro (iOS simulator${{ matrix.repeat != 1 && format(', repeat {0}', matrix.repeat) || '' }})
     runs-on: macos-15
     timeout-minutes: 45
+    strategy:
+      # Stress runs must report every instance — one flaky repeat cancelling
+      # the rest would hide the very signal the matrix exists to collect.
+      fail-fast: false
+      matrix:
+        repeat: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.stress || '[1]') }}
     permissions:
       contents: read
       actions: write
@@ -46,8 +81,36 @@ jobs:
       # Seeds a known admin on server boot — not needed by the current
       # pre-login flows, but in place for the login flow that comes next.
       OMNIBUS_DEV_SEED_USER: "admin:omnibus-dev"
+      # The XCUITest driver install (xcodebuild of Maestro's runner) can blow
+      # past the default startup timeout on a busy CI host — observed as
+      # IOSDriverTimeoutException "iOS driver not ready in time" (#1034).
+      MAESTRO_DRIVER_STARTUP_TIMEOUT: "180000"
+      MAESTRO_CLI_NO_ANALYTICS: "1"
     steps:
       - uses: actions/checkout@v4
+
+      # Kicked off first so the simulator boots in parallel with the Nix
+      # install, cache restores, and both builds (~8 min of overlap); the
+      # install step below waits on `bootstatus` before touching it.
+      # Pick the newest available iOS runtime, then choose an iPhone from
+      # THAT runtime's own supportedDeviceTypes — guarantees a compatible
+      # pair. Selecting a device type from the global list instead lands on
+      # traps: the iPod touch is filed under the iPhone family, and an old
+      # iPhone (e.g. 6s) paired with a current runtime fails with
+      # "Incompatible device". The name prefix drops iPod/iPad.
+      - name: Boot iOS simulator (background)
+        run: |
+          set -euo pipefail
+          runtimes=$(xcrun simctl list runtimes -j)
+          runtime=$(echo "$runtimes" \
+            | jq -r '[.runtimes[] | select(.isAvailable and (.identifier | test("iOS")))] | last | .identifier')
+          device_type=$(echo "$runtimes" | jq -r --arg rt "$runtime" \
+            '.runtimes[] | select(.identifier==$rt) | .supportedDeviceTypes
+             | map(select(.name | test("^iPhone"))) | last | .identifier')
+          echo "creating sim: device_type=$device_type runtime=$runtime"
+          udid=$(xcrun simctl create maestro-ci "$device_type" "$runtime")
+          xcrun simctl boot "$udid"
+          echo "SIM_UDID=$udid" >> "$GITHUB_ENV"
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v22
@@ -85,29 +148,19 @@ jobs:
       - name: Build iOS simulator app
         run: nix develop .#mobile --command dx build --platform ios --package omnibus-mobile
 
-      - name: Boot iOS simulator and install app
+      # The extra pre-warm launch loads dyld caches and spawns the WebKit
+      # processes once before Maestro measures anything — the first-ever
+      # launch on a cold simulator is the jankiest, and that jank is what
+      # drops typed characters and blanks the WebView (#1034).
+      - name: Install app on simulator
         run: |
           set -euo pipefail
-          # Pick the newest available iOS runtime, then choose an iPhone from
-          # THAT runtime's own supportedDeviceTypes — guarantees a compatible
-          # pair. Selecting a device type from the global list instead lands on
-          # traps: the iPod touch is filed under the iPhone family, and an old
-          # iPhone (e.g. 6s) paired with a current runtime fails with
-          # "Incompatible device". The name prefix drops iPod/iPad.
-          runtimes=$(xcrun simctl list runtimes -j)
-          runtime=$(echo "$runtimes" \
-            | jq -r '[.runtimes[] | select(.isAvailable and (.identifier | test("iOS")))] | last | .identifier')
-          device_type=$(echo "$runtimes" | jq -r --arg rt "$runtime" \
-            '.runtimes[] | select(.identifier==$rt) | .supportedDeviceTypes
-             | map(select(.name | test("^iPhone"))) | last | .identifier')
-          echo "creating sim: device_type=$device_type runtime=$runtime"
-          udid=$(xcrun simctl create maestro-ci "$device_type" "$runtime")
-          xcrun simctl boot "$udid"
-          xcrun simctl bootstatus "$udid"
+          xcrun simctl bootstatus "$SIM_UDID"
           app=$(find "$CARGO_TARGET_DIR/dx/omnibus-mobile" -type d -name "*.app" -path "*ios*" -print0 \
             | xargs -0 ls -dt | head -1)
           echo "installing $app"
-          xcrun simctl install "$udid" "$app"
+          xcrun simctl install "$SIM_UDID" "$app"
+          xcrun simctl launch "$SIM_UDID" com.omnibus.mobile
 
       # Backgrounded with `nohup ... &` + `disown` so the server survives the
       # step's shell exit (same pattern as e2e.yml). The simulator shares the
@@ -132,17 +185,63 @@ jobs:
             exit 1
           '
 
+      # Whole-suite retry (3 attempts) on top of the per-flow `retry` blocks:
+      # the residual failure modes are environmental — XCUITest driver startup
+      # timeouts, the app's WebView process dying under CI load, Maestro's
+      # typeText dropping characters on a janky sim — and all three recover on
+      # a fresh invocation. A real regression still fails all 3 attempts, and
+      # a flaky pass is surfaced loudly (warning annotation + step summary)
+      # rather than swallowed.
       - name: Run Maestro flows
+        id: maestro
         run: |
-          nix develop .#mobile --command \
-            maestro test -e SERVER_URL=http://127.0.0.1:3000 ui_tests/maestro/flows/
+          nix develop .#mobile --command bash -c '
+            set -uo pipefail
+            for attempt in 1 2 3; do
+              echo "::group::maestro attempt $attempt/3"
+              if maestro test \
+                   --format junit --output maestro-report.xml \
+                   -e SERVER_URL=http://127.0.0.1:3000 \
+                   ui_tests/maestro/flows/; then
+                echo "::endgroup::"
+                echo "attempts=$attempt" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "::endgroup::"
+            done
+            echo "attempts=3" >> "$GITHUB_OUTPUT"
+            exit 1
+          '
+
+      # Per-flow results (name, status, duration) into the run's step summary
+      # and check annotations, pass or fail. annotate_only keeps it inside
+      # this job's permissions — no checks:write needed.
+      - name: Publish Maestro results
+        if: ${{ always() && hashFiles('maestro-report.xml') != '' }}
+        uses: mikepenz/action-junit-report@v5
+        with:
+          report_paths: maestro-report.xml
+          annotate_only: true
+          detailed_summary: true
+          include_passed: true
+
+      - name: Report suite attempts
+        if: ${{ always() && steps.maestro.outputs.attempts != '' }}
+        run: |
+          n="${{ steps.maestro.outputs.attempts }}"
+          echo "Maestro suite attempts: $n/3" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.maestro.outcome }}" = "success" ] && [ "$n" != "1" ]; then
+            echo "::warning title=Flaky Maestro run::suite passed only on attempt $n of 3 — check the maestro-artifacts-ios artifact"
+          fi
 
       # Maestro writes per-flow logs + failure screenshots under ~/.maestro.
+      # Also kept on a flaky pass (attempts > 1) so the flake is diagnosable
+      # after the fact, not just when it hard-fails.
       - name: Upload Maestro artifacts
-        if: failure()
+        if: ${{ failure() || steps.maestro.outputs.attempts > 1 }}
         uses: actions/upload-artifact@v4
         with:
-          name: maestro-artifacts-ios
+          name: maestro-artifacts-ios-r${{ matrix.repeat }}
           path: ~/.maestro/tests
           retention-days: 7
 
@@ -150,17 +249,18 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: mobile-e2e-server-log-ios
+          name: mobile-e2e-server-log-ios-r${{ matrix.repeat }}
           path: server.log
           retention-days: 7
 
-  # Manual-only for now: the build + server + emulator boot are green, but the
-  # flows themselves still fail on the emulator (WebView text selectors under
-  # investigation). Gated to workflow_dispatch so it's off the PR/push path and
-  # doesn't block merge — trigger it by hand from the Actions tab to iterate.
+  # Manual-only (the `android` dispatch input): the build + server + emulator
+  # boot are green, but the flows themselves still fail on the emulator
+  # (WebView text selectors under investigation — #1035). Opt in from the
+  # Actions tab to iterate; the input default keeps iOS-only stress runs from
+  # spinning emulators.
   maestro-android:
     name: maestro (Android emulator)
-    if: github.event_name == 'workflow_dispatch'
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.android }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:

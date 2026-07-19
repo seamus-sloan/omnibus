@@ -22,9 +22,11 @@ tags:
   - smoke
 ---
 - retry:
-    # Generous count: cheap insurance on a janky sim for the rare attempt that
-    # still mangles the input despite the extendedWaitUntil below.
-    maxRetries: 6
+    # 3 is Maestro's hard cap — larger values are silently clamped (a `6` here
+    # still logged "Max retries (3) reached"). CI adds a whole-suite retry on
+    # top for the failure modes a flow-level retry can't recover (app crash,
+    # driver startup timeout) — see mobile-e2e.yml.
+    maxRetries: 3
     commands:
       - launchApp:
           clearState: true
