@@ -9,13 +9,13 @@ name: CSS Lint
 # this never nags about pre-existing stylistic choices.
 
 on:
+  # No workflow-level `paths:` filter: this workflow must run on EVERY PR so
+  # its `stylelint-required` gate always reports a status (a required check
+  # keyed on a path-filtered workflow never resolves on a PR that doesn't
+  # match, blocking the merge forever). Path gating moved into the `changes`
+  # job below; `stylelint` skips when no CSS input changed, and the gate treats
+  # skipped as pass.
   pull_request:
-    paths:
-      - "frontend/assets/**/*.css"
-      - ".stylelintrc.json"
-      - ".github/workflows/css-lint.yml"
-      - "flake.nix"
-      - "flake.lock"
   push:
     branches: [main]
 
@@ -27,8 +27,33 @@ permissions:
   contents: read
 
 jobs:
+  # Detect whether this PR touches anything stylelint cares about. On push (and
+  # any non-PR event) `stylelint` runs unconditionally, so this output is only
+  # consulted for pull_request events.
+  changes:
+    name: detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      css: ${{ steps.filter.outputs.css }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            css:
+              - "frontend/assets/**/*.css"
+              - ".stylelintrc.json"
+              - ".github/workflows/css-lint.yml"
+              - ".github/actions/ci-gate/action.yml"
+              - "flake.nix"
+              - "flake.lock"
+
   stylelint:
     name: stylelint
+    needs: changes
+    if: ${{ needs.changes.outputs.css == 'true' || github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -57,3 +82,21 @@ jobs:
 
       - name: stylelint (structural CSS lint)
         run: nix develop --command stylelint 'frontend/assets/**/*.css'
+
+  # The required status check for this workflow. Always runs (no paths filter +
+  # `if: always()`), so branch protection gets a resolved status on every PR —
+  # green when `stylelint` passed or was skipped, red when it failed. Mark ONLY
+  # `Stylelint Required` as required in branch protection; do not require the
+  # `stylelint` job directly (it skips on non-CSS PRs and would hang the merge).
+  stylelint-required:
+    name: Stylelint Required
+    needs: [changes, stylelint]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}
