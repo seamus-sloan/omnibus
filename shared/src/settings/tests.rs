@@ -128,6 +128,52 @@ fn settings_validate_reports_ebook_field_when_both_are_over_max_len() {
 }
 
 #[test]
+fn is_valid_metadata_precedence_accepts_the_default_order() {
+    assert!(is_valid_metadata_precedence(&DEFAULT_METADATA_PRECEDENCE));
+}
+
+#[test]
+fn is_valid_metadata_precedence_accepts_any_permutation() {
+    let reordered = [
+        MetadataSource::OmnibusOverrides,
+        MetadataSource::EmbeddedTags,
+        MetadataSource::FolderStructure,
+        MetadataSource::ProviderMatch,
+        MetadataSource::OpfSidecar,
+    ];
+    assert!(is_valid_metadata_precedence(&reordered));
+}
+
+#[test]
+fn is_valid_metadata_precedence_rejects_a_short_list() {
+    assert!(!is_valid_metadata_precedence(&[
+        MetadataSource::EmbeddedTags,
+        MetadataSource::OmnibusOverrides,
+    ]));
+}
+
+#[test]
+fn is_valid_metadata_precedence_rejects_a_duplicate_entry() {
+    let dup = [
+        MetadataSource::EmbeddedTags,
+        MetadataSource::EmbeddedTags,
+        MetadataSource::FolderStructure,
+        MetadataSource::OmnibusOverrides,
+        MetadataSource::ProviderMatch,
+    ];
+    assert!(!is_valid_metadata_precedence(&dup));
+}
+
+#[test]
+fn metadata_source_serializes_to_snake_case_json() {
+    let json = serde_json::to_string(&DEFAULT_METADATA_PRECEDENCE).unwrap();
+    assert_eq!(
+        json,
+        r#"["folder_structure","embedded_tags","opf_sidecar","omnibus_overrides","provider_match"]"#
+    );
+}
+
+#[test]
 fn settings_validate_accepts_scan_interval_at_the_minimum() {
     let s = Settings {
         ebook_library_path: None,

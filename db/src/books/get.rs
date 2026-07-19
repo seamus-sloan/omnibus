@@ -39,9 +39,15 @@ pub async fn get_book(
     let uuid: String = row.try_get("uuid")?;
     let mut book = row_to_ebook(&row)?;
 
-    // F5.1: merge user-supplied metadata overrides.
+    // F5.1: merge user-supplied metadata overrides, gated by the owning
+    // scan root's configured metadata-source precedence (#972).
     if let Some((ov, has_cover_ov)) = get_metadata_overrides(pool, &uuid).await? {
-        apply_overrides(&mut book, &uuid, &ov, has_cover_ov);
+        let precedence =
+            crate::settings::metadata_precedence_by_uuid(pool, std::slice::from_ref(&uuid))
+                .await?
+                .remove(&uuid)
+                .unwrap_or_else(|| omnibus_shared::DEFAULT_METADATA_PRECEDENCE.to_vec());
+        apply_overrides(&mut book, &uuid, &ov, has_cover_ov, &precedence);
     }
 
     backfill_series_id_by_name(pool, &mut book).await?;

@@ -4,11 +4,19 @@
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
-    HardcoverKeyStatus, LibraryContents, Settings, SmtpConfigStatus, SmtpConfigUpdate, WorkerStatus,
+    HardcoverKeyStatus, LibraryContents, MetadataSource, Settings, SmtpConfigStatus,
+    SmtpConfigUpdate, WorkerStatus,
 };
 
 #[cfg(feature = "server")]
 use omnibus_db::{self as db, scanner};
+
+// Only referenced from the server-only bodies the `#[get]`/`#[post]` macros
+// splice in under `#[cfg(feature = "server")]` — the client stub compiled
+// for `web`/`mobile` never calls them, so gate the imports to match or a
+// non-`server` build sees them as unused.
+#[cfg(feature = "server")]
+use omnibus_shared::{is_valid_metadata_precedence, DEFAULT_METADATA_PRECEDENCE};
 
 #[cfg(feature = "server")]
 use super::{internal_rpc_error, AdminUser, AuthUser, PoolExt, WorkerExt};
@@ -50,6 +58,71 @@ pub async fn rpc_save_settings(settings: Settings) -> Result<Settings> {
             .post(omnibus_db::worker::Task::ScanAudiobooks { library_path });
     }
     Ok(updated)
+}
+
+/// Resolve the `library` discriminator (`"ebook"` or `"audiobook"`) used by
+/// the metadata-precedence RPCs below to the corresponding configured path.
+/// A separate get/set pair per concern (mirroring the Hardcover-key / SMTP
+/// RPCs) keeps this F5.1 (#972) setting out of the `Settings` struct, whose
+/// exhaustive field literals are used across dozens of call sites.
+#[cfg(feature = "server")]
+fn precedence_library_path(
+    settings: &Settings,
+    library: &str,
+) -> Result<Option<String>, ServerFnError> {
+    match library {
+        "ebook" => Ok(settings.ebook_library_path.clone()),
+        "audiobook" => Ok(settings.audiobook_library_path.clone()),
+        _ => Err(ServerFnError::new(
+            "library must be \"ebook\" or \"audiobook\"",
+        )),
+    }
+}
+
+/// Fetch the metadata-source precedence for `library` (`"ebook"` or
+/// `"audiobook"`). Returns the default order when the library path isn't
+/// configured yet, so the settings UI always has something to render.
+#[post("/api/rpc/metadata-precedence/get", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_get_metadata_precedence(library: String) -> Result<Vec<MetadataSource>> {
+    let settings = db::get_settings(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get settings", e))?;
+    let path = precedence_library_path(&settings, &library)?;
+    match path {
+        Some(p) => Ok(db::get_metadata_precedence(&pool.0, &p)
+            .await
+            .map_err(|e| internal_rpc_error("get metadata precedence", e))?),
+        None => Ok(DEFAULT_METADATA_PRECEDENCE.to_vec()),
+    }
+}
+
+/// Persist the metadata-source precedence for `library` (`"ebook"` or
+/// `"audiobook"`). Requires the library's path to already be configured
+/// (the setting lives on its `scan_roots` row) and rejects a precedence
+/// list that isn't a permutation of the 5 known sources.
+#[post("/api/rpc/metadata-precedence/set", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_set_metadata_precedence(
+    library: String,
+    precedence: Vec<MetadataSource>,
+) -> Result<Vec<MetadataSource>> {
+    if !is_valid_metadata_precedence(&precedence) {
+        return Err(
+            ServerFnError::new("metadata precedence must list each source exactly once").into(),
+        );
+    }
+    let settings = db::get_settings(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get settings", e))?;
+    let Some(path) = precedence_library_path(&settings, &library)? else {
+        return Err(ServerFnError::new(
+            "configure the library path before setting its metadata precedence",
+        )
+        .into());
+    };
+    db::set_metadata_precedence(&pool.0, &path, &precedence)
+        .await
+        .map_err(|e| internal_rpc_error("set metadata precedence", e))?;
+    Ok(precedence)
 }
 
 /// Snapshot of every in-flight and recently-completed background-worker

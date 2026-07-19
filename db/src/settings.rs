@@ -1,9 +1,12 @@
 //! Settings KV CRUD, scan-root row upserts, and orphan-scan-root pruning.
-//!
 //! `settings` KV keys (`ebook_library_path` / `audiobook_library_path`) are
 //! read by the UI and translated into `scan_roots` rows by the indexer; saving
-//! settings prunes any orphan root and its books, FTS rows, and on-disk covers.
+//! settings prunes any orphan root and its books, FTS rows, and on-disk
+//! covers. Also owns per-library metadata-source precedence, a
+//! `scan_roots.metadata_precedence` column keyed by `path` via a dedicated
+//! get/set pair kept out of `set_settings`'s reconciliation.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use sqlx::{SqlitePool, Transaction};
@@ -13,6 +16,7 @@ pub use omnibus_shared::{
     SmtpSecurity, EMAIL_MAX_LEN, HARDCOVER_API_KEY_MAX_LEN, SMTP_FIELD_MAX_LEN,
     SMTP_PASSWORD_MAX_LEN,
 };
+use omnibus_shared::{is_valid_metadata_precedence, MetadataSource, DEFAULT_METADATA_PRECEDENCE};
 
 /// `settings` KV keys consumed by the UI/RPC layer. Kept as constants so the
 /// indexer, settings handlers, and tests all reference the same identifier.
@@ -47,6 +51,9 @@ pub enum SettingsError {
     /// per-case message rather than a generic 500.
     #[error("{0}")]
     Validation(String),
+    /// A `scan_roots.metadata_precedence` JSON (de)serialization failure.
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
 }
 
 /// Read the ebook and audiobook library paths from the `settings` KV table.
@@ -674,6 +681,91 @@ pub(crate) async fn upsert_library(
         .fetch_one(&mut **tx)
         .await?;
     Ok(id)
+}
+
+/// Parse a `scan_roots.metadata_precedence` JSON value, falling back to the
+/// default order on a parse failure *or* a parsed-but-invalid list (e.g. a
+/// hand-edited row missing a source) rather than erroring — matches the
+/// `scan_interval_hours` "stale value is treated as unset" convention
+/// elsewhere in this module.
+fn parse_metadata_precedence(json: &str) -> Vec<MetadataSource> {
+    serde_json::from_str(json)
+        .ok()
+        .filter(|order: &Vec<MetadataSource>| is_valid_metadata_precedence(order))
+        .unwrap_or_else(|| DEFAULT_METADATA_PRECEDENCE.to_vec())
+}
+
+/// Read the metadata-source precedence configured for the scan root at
+/// `path`, or the default order when the root doesn't exist yet (library
+/// configured but never scanned).
+pub async fn get_metadata_precedence(
+    pool: &SqlitePool,
+    path: &str,
+) -> Result<Vec<MetadataSource>, SettingsError> {
+    let json = sqlx::query_scalar::<_, String>(
+        "SELECT metadata_precedence FROM scan_roots WHERE path = ?",
+    )
+    .bind(path)
+    .fetch_optional(pool)
+    .await?;
+    Ok(json
+        .map(|j| parse_metadata_precedence(&j))
+        .unwrap_or_else(|| DEFAULT_METADATA_PRECEDENCE.to_vec()))
+}
+
+/// Persist the metadata-source precedence for the scan root at `path`,
+/// upserting the row (matching [`upsert_library`]'s shape) so saving the
+/// setting before the library's first scan isn't silently dropped.
+pub async fn set_metadata_precedence(
+    pool: &SqlitePool,
+    path: &str,
+    precedence: &[MetadataSource],
+) -> Result<(), SettingsError> {
+    let json = serde_json::to_string(precedence)?;
+    let display_name = Path::new(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(path)
+        .to_string();
+    sqlx::query(
+        "INSERT INTO scan_roots (path, display_name, metadata_precedence) VALUES (?, ?, ?)
+         ON CONFLICT(path) DO UPDATE SET metadata_precedence = excluded.metadata_precedence",
+    )
+    .bind(path)
+    .bind(&display_name)
+    .bind(&json)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Bulk-resolve each uuid's scan root's metadata precedence in one query,
+/// for the override-merge read path (`crate::metadata_overrides::apply_overrides`
+/// callers). Uuids with no matching row (shouldn't happen in practice) are
+/// simply absent from the map — callers fall back to the default order.
+pub(crate) async fn metadata_precedence_by_uuid(
+    pool: &SqlitePool,
+    uuids: &[String],
+) -> Result<HashMap<String, Vec<MetadataSource>>, sqlx::Error> {
+    let mut map = HashMap::with_capacity(uuids.len());
+    for chunk in uuids.chunks(499) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT b.uuid, sr.metadata_precedence \
+             FROM books b JOIN scan_roots sr ON sr.id = b.library_id \
+             WHERE b.uuid IN ({placeholders})"
+        );
+        let mut q = sqlx::query_as::<_, (String, String)>(&sql);
+        for uuid in chunk {
+            q = q.bind(uuid);
+        }
+        for (uuid, json) in q.fetch_all(pool).await? {
+            map.insert(uuid, parse_metadata_precedence(&json));
+        }
+    }
+    Ok(map)
 }
 
 /// Unix-seconds timestamp of the last successful index for `library_path`,

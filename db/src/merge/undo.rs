@@ -134,12 +134,16 @@ async fn recreate_source_row(
         .await
         .map_err(|e| match e {
             crate::settings::SettingsError::Db(inner) => MergeError::Db(inner),
-            // `upsert_library` never returns `Validation` — the arm exists only to
-            // keep the match exhaustive after `SettingsError` grew a validation
-            // variant for `set_hardcover_api_key`.
+            // `upsert_library` never returns `Validation`/`Json` — those arms
+            // exist only to keep the match exhaustive after `SettingsError`
+            // grew variants for `set_hardcover_api_key` / the F5.1 metadata
+            // precedence JSON column.
             crate::settings::SettingsError::Validation(msg) => MergeError::Db(
                 sqlx::Error::Protocol(format!("unexpected settings validation error: {msg}")),
             ),
+            crate::settings::SettingsError::Json(inner) => MergeError::Db(sqlx::Error::Protocol(
+                format!("unexpected settings JSON error: {inner}"),
+            )),
         })?;
     // `timestamp` is restored from the snapshot, falling back to now when a
     // pre-0038 snapshot's timestamp couldn't be parsed to an epoch
