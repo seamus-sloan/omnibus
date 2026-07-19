@@ -113,8 +113,8 @@ pub async fn list_journal_entries(
 /// Edit an entry owned by `user_id`, returning the updated row. Errors with
 /// `NotFound` when the id does not exist or belongs to another user (the two
 /// cases are deliberately indistinguishable). Any journal image referenced in
-/// the old body but not the new one is opportunistically GC'd (issue #1083)
-/// — see [`cleanup_orphaned_images`].
+/// the old body but not the new one is opportunistically GC'd — see
+/// [`cleanup_orphaned_images`].
 pub async fn update_journal_entry(
     pool: &SqlitePool,
     user_id: i64,
@@ -157,8 +157,8 @@ pub async fn update_journal_entry(
 
 /// Delete an entry owned by `user_id`. Errors with `NotFound` when the id does
 /// not exist or belongs to another user. Any journal image uniquely
-/// referenced by the deleted entry's body is opportunistically GC'd (issue
-/// #1083, e.g. the composer's Cancel button discarding a draft) — see
+/// referenced by the deleted entry's body is opportunistically GC'd (e.g. the
+/// composer's Cancel button discarding a draft) — see
 /// [`cleanup_orphaned_images`].
 pub async fn delete_journal_entry(
     pool: &SqlitePool,
@@ -184,9 +184,10 @@ pub async fn delete_journal_entry(
 }
 
 /// Best-effort delete of any `candidates` no longer referenced by any
-/// `journal_entries.body_md`. Called only after the caller's own mutation
-/// has already committed, so a plain substring scan (no self-exclusion) is
-/// correct: the caller's row either no longer contains the name (edit) or no
+/// `journal_entries.body_md` (matched by the full embed path, not the bare
+/// name — see the substring-collision note below). Called only after the
+/// caller's own mutation has already committed, so no self-exclusion is
+/// needed: the caller's row either no longer contains the name (edit) or no
 /// longer exists (delete). Failures — a DB error on the reference check, or
 /// a panic in the filesystem unlink — are logged and swallowed: this is
 /// opportunistic GC of an orphanable-but-durable file store, not a
@@ -195,11 +196,17 @@ pub async fn delete_journal_entry(
 async fn cleanup_orphaned_images(pool: &SqlitePool, candidates: HashSet<String>) {
     let mut orphaned = Vec::new();
     for name in &candidates {
-        let still_referenced: Result<bool, sqlx::Error> =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM journal_entries WHERE body_md LIKE ?)")
-                .bind(format!("%{name}%"))
-                .fetch_one(pool)
-                .await;
+        // Match the full embed path, not the bare name — a bare-name substring
+        // match could false-positive on an unrelated file whose uuid happens to
+        // contain this one as a substring, or on stray body text, and wrongly
+        // treat a true orphan as still-referenced.
+        let full_path = format!("{}{name}", markdown::IMAGE_URL_PREFIX);
+        let still_referenced: Result<bool, sqlx::Error> = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM journal_entries WHERE instr(body_md, ?) > 0)",
+        )
+        .bind(&full_path)
+        .fetch_one(pool)
+        .await;
         match still_referenced {
             Ok(false) => orphaned.push(name.clone()),
             Ok(true) => {}

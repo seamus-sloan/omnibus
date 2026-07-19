@@ -11,7 +11,7 @@
 //! (which deletes the draft row) and an abandoned-then-edited draft. An
 //! upload whose draft is *never* saved or explicitly cancelled (e.g. the tab
 //! is closed mid-compose) is not swept; that residual case was judged not
-//! worth a periodic boot sweep for the added complexity (issue #1083).
+//! worth a periodic boot sweep for the added complexity.
 
 use std::collections::HashSet;
 use std::path::PathBuf;

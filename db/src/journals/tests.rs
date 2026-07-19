@@ -1,7 +1,7 @@
 //! Unit tests for the `journals` module: create round-trip + markdown render,
 //! `BookNotFound`, the public all-users list ordering, owner-scoped
 //! update/delete (with non-owner `NotFound`), merged-uuid canonical
-//! resolution, and the update/delete orphan-image-cleanup diffing (#1083).
+//! resolution, and the update/delete orphan-image-cleanup diffing.
 
 use omnibus_shared::{CreateJournalEntry, EbookMetadata, JournalStatus, UpdateJournalEntry};
 
@@ -515,5 +515,36 @@ async fn delete_keeps_an_image_still_referenced_by_another_entry() {
     assert!(
         journal_images_dir().join(&shared_name).exists(),
         "image referenced by another surviving entry must not be deleted"
+    );
+}
+
+#[tokio::test]
+async fn cleanup_ignores_a_bare_name_substring_that_is_not_a_real_embed_reference() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_JOURNAL_IMAGES_DIR", Some(tmp.path().as_os_str()));
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let uuid = seed(&pool, "/lib", "Book A").await;
+    let (embed, name) = write_image();
+    let entry = create_journal_entry(&pool, user, &create(&uuid, &embed, None))
+        .await
+        .unwrap();
+    // A second entry's body happens to contain the bare serving name as a
+    // substring (e.g. quoted in prose), without the `IMAGE_URL_PREFIX` that
+    // makes it a real embed. A bare-name `LIKE %name%` match would wrongly
+    // count this as "still referenced" and skip the sweep.
+    create_journal_entry(
+        &pool,
+        user,
+        &create(&uuid, &format!("mentions the file {name} in passing"), None),
+    )
+    .await
+    .unwrap();
+
+    delete_journal_entry(&pool, user, entry.id).await.unwrap();
+
+    assert!(
+        !journal_images_dir().join(&name).exists(),
+        "a bare-name substring elsewhere must not block the sweep of a true orphan"
     );
 }
