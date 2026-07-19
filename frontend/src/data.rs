@@ -11,6 +11,8 @@ mod books;
 mod highlights;
 mod journals;
 mod kindle;
+#[cfg(not(feature = "mobile"))]
+mod logs;
 mod progress;
 mod ratings;
 mod series;
@@ -31,6 +33,8 @@ pub use books::*;
 pub use highlights::*;
 pub use journals::*;
 pub use kindle::*;
+#[cfg(not(feature = "mobile"))]
+pub use logs::*;
 pub use progress::*;
 pub use ratings::*;
 pub use series::*;
