@@ -83,6 +83,16 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
 
     use_effect(move || {
         let resolved_user = current_user();
+        // Auth may still be resolving on a fresh page load (`None` = unknown).
+        // Booting now would capture `user_id = None`; the manifest task's
+        // `is_current` guard then bails once `current_user` resolves to a real
+        // id, leaving the player stuck "preparing". Wait for resolution —
+        // this effect re-runs when `current_user` flips — instead of booting
+        // early, because the `needs_reload` gate would otherwise suppress the
+        // corrected re-boot.
+        if resolved_user.is_none() {
+            return;
+        }
         if matches!(resolved_user, Some(None)) {
             let mut uuid = playback.uuid;
             uuid.set(None);

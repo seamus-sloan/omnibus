@@ -742,48 +742,65 @@ test.describe("audiobook-only seed", () => {
           .filter((f) => /^(mp3|m4b|m4a)$/i.test(f.format))
           .map((f) => f.id);
         expect(audioIds.length, "expected two audio files after merge").toBe(2);
-        const [firstId, secondId] = audioIds;
 
-        // Load the FIRST part directly — this makes the book the active
-        // playback book (uuid now set on the app-root PlaybackState).
-        const [firstManifest] = await Promise.all([
-          page.waitForRequest((req) =>
-            req.url().includes(`/api/audiobooks/${primaryUuid}/manifest?file_id=${firstId}`),
-          ),
-          gotoReady(page, `/listen/${primaryUuid}?file_id=${firstId}`),
-        ]);
-        expect(firstManifest.url()).toContain(`file_id=${firstId}`);
+        // The whole flow below is one single-page-app session: a single full
+        // load of the book-detail page, then every navigation is a real Dioxus
+        // `<Link>` (the file picker) or an in-app history transition
+        // (`goBack`). The `__repickSentinel` on `window` is set once after that
+        // initial load and must survive to the end — a full page load anywhere
+        // clears it, and a full reload refetches the manifest regardless of the
+        // app-root driver fix, so the sentinel is what proves the *driver* (not
+        // a reload) rebooted onto the newly-picked part.
+        //
+        // (A raw injected `<a>` is NOT usable here: dioxus-web routes clicks
+        // through its `Link` components, not a document-level delegated
+        // listener, so an injected anchor full-page-loads and defeats the
+        // sentinel. The real picker links are the only faithful in-app nav.)
+        const manifestFor = (fid: string) =>
+          new RegExp(`/api/audiobooks/${primaryUuid}/manifest\\?file_id=${fid}$`);
+        const pickerLinks = async () => {
+          await page.getByTestId("listen-file-picker-trigger").click();
+          await expect(page.getByTestId("listen-file-picker-panel")).toBeVisible();
+          return page.getByTestId("listen-file-picker-panel").getByRole("link");
+        };
+        const fileIdOf = (manifestUrl: string) =>
+          new URL(manifestUrl).searchParams.get("file_id");
 
-        // SPA-navigate to the SECOND part of the *same* book (uuid unchanged,
-        // only file_id differs). A true anchor click keeps it client-side, so
-        // the app-root driver must notice the file_id change and reboot.
-        // Sentinel on `window` proves the nav stayed in-app: a full page load
-        // would clear it, and a full load refetches the manifest regardless of
-        // the fix — so without this guard the test could false-positive.
-        await page.evaluate((url) => {
+        await gotoReady(page, `/books/${primaryUuid}`);
+        await page.evaluate(() => {
           (window as unknown as { __repickSentinel?: boolean }).__repickSentinel = true;
-          const a = document.createElement("a");
-          a.href = url;
-          a.id = "__test-repick-nav";
-          a.textContent = "repick-nav";
-          a.style.cssText =
-            "position:fixed;top:0;left:0;padding:8px;background:#000;color:#fff;z-index:99999;";
-          document.body.appendChild(a);
-        }, `/listen/${primaryUuid}?file_id=${secondId}`);
+        });
 
-        // Before the fix this request never fired (uuid unchanged → no reboot).
-        const [secondManifest] = await Promise.all([
-          page.waitForRequest(
-            (req) =>
-              req.url().includes(`/api/audiobooks/${primaryUuid}/manifest?file_id=${secondId}`),
-            { timeout: 10_000 },
-          ),
-          page.locator("#__test-repick-nav").click(),
+        // Pick the FIRST part via the picker → SPA-navigate to /listen and make
+        // the book the active playback book (uuid now set on the app-root
+        // PlaybackState).
+        const [firstManifest] = await Promise.all([
+          page.waitForRequest((req) => manifestFor("\\d+").test(req.url())),
+          (await pickerLinks()).nth(0).click(),
         ]);
-        expect(secondManifest.url()).toContain(`file_id=${secondId}`);
+        const firstFileId = fileIdOf(firstManifest.url());
+        await expect(page).toHaveURL(new RegExp(`/listen/${primaryUuid}\\?file_id=\\d+$`));
 
-        // The nav must have been a client-side SPA transition — if the page
-        // fully reloaded, the manifest fetch above proves nothing.
+        // Back to the detail page in-app (history popstate — no full load).
+        await page.goBack();
+        await expect(page).toHaveURL(new RegExp(`/books/${primaryUuid}$`));
+
+        // Re-pick the SECOND part of the *already-active* book. Before the fix
+        // the driver keyed only on the (unchanged) uuid, so this fired no fresh
+        // manifest and stayed on part 1.
+        const [secondManifest] = await Promise.all([
+          page.waitForRequest((req) => manifestFor("\\d+").test(req.url()), {
+            timeout: 10_000,
+          }),
+          (await pickerLinks()).nth(1).click(),
+        ]);
+        const secondFileId = fileIdOf(secondManifest.url());
+        expect(secondFileId, "re-pick must reboot onto a different part").not.toBe(
+          firstFileId,
+        );
+
+        // The whole session stayed client-side — if any hop fully reloaded, the
+        // manifest fetch above would prove nothing.
         const stayedInApp = await page.evaluate(
           () => (window as unknown as { __repickSentinel?: boolean }).__repickSentinel === true,
         );
