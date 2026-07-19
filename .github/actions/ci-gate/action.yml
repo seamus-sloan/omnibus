@@ -10,8 +10,8 @@ description: >
 inputs:
   needs:
     description: >
-      The gate job's `needs` context serialized as JSON — pass
-      `${{ toJSON(needs) }}`. Each entry's `.result` is inspected.
+      The gate job's `needs` context serialized as JSON, passed via a
+      toJSON(needs) expression. Each entry's `.result` is inspected.
     required: true
 
 runs:
@@ -26,8 +26,7 @@ runs:
         echo "Upstream job results:"
         jq -r 'to_entries[] | "  \(.key): \(.value.result)"' <<<"$NEEDS_JSON"
 
-        # Skipped counts as pass — that's the whole point: a path-gated job that
-        # didn't need to run must not block the merge. Only real failures do.
+        # Skipped counts as pass. Only real failures emerge. 
         failed=$(jq -r '
           to_entries[]
           | select(.value.result == "failure" or .value.result == "cancelled")
