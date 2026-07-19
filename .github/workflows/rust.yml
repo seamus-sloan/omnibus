@@ -25,6 +25,13 @@ jobs:
   changes:
     name: detect changes
     runs-on: ubuntu-latest
+    # `dorny/paths-filter` lists the PR's changed files via the GitHub API on
+    # pull_request events; under the workflow's restrictive `contents: read` it
+    # needs `pull-requests: read` too, or the API call is denied and the filter
+    # errors. Matches release.yml's changed-file listing.
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
     steps:

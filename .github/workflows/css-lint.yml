@@ -33,6 +33,12 @@ jobs:
   changes:
     name: detect changes
     runs-on: ubuntu-latest
+    # `pull-requests: read` so `dorny/paths-filter` can list the PR's changed
+    # files via the API under the workflow's `contents: read` (matches
+    # release.yml).
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       css: ${{ steps.filter.outputs.css }}
     steps:
