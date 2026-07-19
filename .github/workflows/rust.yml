@@ -1,16 +1,13 @@
 name: Rust
 
 on:
+  # No workflow-level `paths:` filter: this workflow must run on EVERY PR so
+  # its `rust-required` gate always reports a status. A required check keyed on
+  # a path-filtered workflow never resolves on a PR that doesn't touch the
+  # paths, blocking the merge forever. Path gating moved into the `changes`
+  # job below; the real jobs skip when no Rust input changed, and the gate
+  # treats skipped as pass.
   pull_request:
-    paths:
-      - "**/*.rs"
-      - "**/Cargo.toml"
-      - "Cargo.lock"
-      - "flake.nix"
-      - "flake.lock"
-      - "rust-toolchain*"
-      - ".github/workflows/rust.yml"
-      - "deny.toml"
   push:
     branches: [main]
 
@@ -22,8 +19,37 @@ permissions:
   contents: read
 
 jobs:
+  # Detect whether this PR touches anything the Rust jobs care about. On push
+  # (and any non-PR event) the real jobs run unconditionally, so this output is
+  # only consulted for pull_request events.
+  changes:
+    name: detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # Keep in sync with the old workflow-level `paths:` list.
+          filters: |
+            rust:
+              - "**/*.rs"
+              - "**/Cargo.toml"
+              - "Cargo.lock"
+              - "flake.nix"
+              - "flake.lock"
+              - "rust-toolchain*"
+              - ".github/workflows/rust.yml"
+              - ".github/actions/ci-gate/action.yml"
+              - "deny.toml"
+
   fmt:
     name: rustfmt
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +81,8 @@ jobs:
   #                        `omnibus` restore that every native variant pays.
   clippy:
     name: clippy (${{ matrix.name }})
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -128,6 +156,8 @@ jobs:
 
   test:
     name: test (${{ matrix.name }})
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -206,6 +236,8 @@ jobs:
 
   security:
     name: cargo audit
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -350,3 +382,55 @@ jobs:
       # `ignore`/`skip` list rather than re-introducing `continue-on-error: true`.
       - name: cargo deny check
         run: nix develop .#audit --command cargo deny check advisories sources bans licenses
+
+  # Required status checks for this workflow — one per concern. Each always
+  # runs (its `if` is `always()` and the workflow has no paths filter), so
+  # branch protection gets a resolved status on every PR: green when its
+  # underlying job(s) passed or were skipped, red when any failed. Mark ONLY
+  # these gate jobs as required in branch protection — `Rustfmt Required`,
+  # `Clippy Required`, `Cargo Test Required`, `Cargo Audit Required` — and do
+  # NOT require the individual matrix jobs (they skip on non-Rust PRs and would
+  # hang the merge).
+  rustfmt-required:
+    name: Rustfmt Required
+    needs: [changes, fmt]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}
+
+  clippy-required:
+    name: Clippy Required
+    needs: [changes, clippy]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}
+
+  cargo-test-required:
+    name: Cargo Test Required
+    needs: [changes, test]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}
+
+  cargo-audit-required:
+    name: Cargo Audit Required
+    needs: [changes, security]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}
