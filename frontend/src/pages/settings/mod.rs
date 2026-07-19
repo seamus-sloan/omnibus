@@ -4,6 +4,11 @@
 //! at ebook / audiobook directories, and shows recursive per-extension
 //! counts via the scanner so changes can be eyeballed before saving.
 
+// Only compiled on web/server: its body calls the web-only
+// `data::get_metadata_precedence`/`save_metadata_precedence` (no mobile RPC
+// route yet).
+#[cfg(not(feature = "mobile"))]
+mod metadata_precedence;
 mod smtp;
 
 use dioxus::prelude::*;
@@ -15,6 +20,8 @@ use omnibus_shared::{
 use crate::components::worker_status::WorkerStatusIndicator;
 use crate::{data, use_server_url};
 
+#[cfg(not(feature = "mobile"))]
+use metadata_precedence::MetadataPrecedenceField;
 use smtp::SmtpConfigField;
 
 /// Library paths settings form + live recursive file-count summaries.
@@ -101,10 +108,25 @@ pub fn SettingsPage() -> Element {
             }
         }
         if is_admin() {
+            {metadata_precedence_slot()}
             HardcoverKeyField {}
             SmtpConfigField {}
         }
         }
+    }
+}
+
+/// Metadata-precedence card slot — emits [`MetadataPrecedenceField`] on
+/// web/server, nothing on mobile (no mobile RPC route yet; see
+/// `data::get_metadata_precedence`'s doc comment).
+fn metadata_precedence_slot() -> Element {
+    #[cfg(not(feature = "mobile"))]
+    {
+        rsx! { MetadataPrecedenceField {} }
+    }
+    #[cfg(feature = "mobile")]
+    {
+        rsx! {}
     }
 }
 

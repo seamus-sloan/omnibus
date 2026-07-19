@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use omnibus_shared::{EbookMetadata, MetadataOverrides};
+use omnibus_shared::{EbookMetadata, MetadataOverrides, MetadataSource};
 use sqlx::{Executor, SqlitePool};
 
 use crate::books::resolve_book_id_by_uuid_exec;
@@ -315,15 +315,22 @@ pub(crate) async fn load_overrides_bulk(
     Ok(map)
 }
 
-/// Apply a `MetadataOverrides` to an `EbookMetadata`, mutating it in place.
-/// Scalar fields are replaced when `Some`; m2m fields (`creators`, `subjects`)
-/// replace entirely when present.
+/// Apply a `MetadataOverrides` to an `EbookMetadata`, mutating it in place,
+/// gated by whether `precedence` (the owning scan root's configured
+/// metadata-source order, F5.1 #972) ranks `OmnibusOverrides` above
+/// `EmbeddedTags` — the two sources with a real data provider today (see
+/// [`overrides_outrank_embedded`]). Scalar fields are replaced when `Some`;
+/// m2m fields (`creators`, `subjects`) replace entirely when present.
 pub(crate) fn apply_overrides(
     book: &mut EbookMetadata,
     uuid: &str,
     ov: &MetadataOverrides,
     has_cover_override: bool,
+    precedence: &[MetadataSource],
 ) {
+    if !overrides_outrank_embedded(precedence) {
+        return;
+    }
     if let Some(ref t) = ov.title {
         book.title = Some(t.clone());
     }
@@ -365,6 +372,30 @@ pub(crate) fn apply_overrides(
         book.cover_url = Some(format!("/api/covers/{uuid}"));
     }
     book.has_override = true;
+}
+
+/// Whether `MetadataSource::OmnibusOverrides` should win over
+/// `MetadataSource::EmbeddedTags` (the scanned baseline) under a library's
+/// configured precedence order. List order is lowest-to-highest priority,
+/// so overrides win when they appear *after* embedded tags.
+/// `FolderStructure`/`OpfSidecar`/`ProviderMatch` have no data provider yet
+/// (see [`apply_overrides`]'s doc comment), so their position in the list
+/// doesn't currently affect this.
+///
+/// A malformed/partial list missing one of the two real sources falls back
+/// to the legacy always-wins behavior rather than silently dropping
+/// overrides.
+fn overrides_outrank_embedded(precedence: &[MetadataSource]) -> bool {
+    let embedded = precedence
+        .iter()
+        .position(|s| *s == MetadataSource::EmbeddedTags);
+    let overrides = precedence
+        .iter()
+        .position(|s| *s == MetadataSource::OmnibusOverrides);
+    match (embedded, overrides) {
+        (Some(e), Some(o)) => o > e,
+        _ => true,
+    }
 }
 
 /// Write a user-uploaded override cover to disk.

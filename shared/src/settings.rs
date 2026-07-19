@@ -69,6 +69,50 @@ impl Settings {
     }
 }
 
+/// A named metadata source a scan root's per-library precedence list can
+/// order (F5.1, #972). Mirrors AudioBookShelf's per-library
+/// `metadataPrecedence`. Only [`MetadataSource::EmbeddedTags`] (the scanned
+/// OPF/tag metadata) and [`MetadataSource::OmnibusOverrides`] (the F5.1
+/// user-edit layer) have a real data provider today — `FolderStructure`,
+/// `OpfSidecar`, and `ProviderMatch` are accepted and stored for
+/// forward-compatibility with AudioBookShelf-style folder/sidecar/provider
+/// sources, and are no-ops in the merge path until implemented (see
+/// `db::metadata_overrides::upsert::apply_overrides`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MetadataSource {
+    FolderStructure,
+    EmbeddedTags,
+    OpfSidecar,
+    OmnibusOverrides,
+    ProviderMatch,
+}
+
+/// Precedence order that reproduces today's hardcoded "override always
+/// wins" merge behavior. List order is lowest-to-highest priority — a
+/// CSS-cascade-style "last wins" — so `OmnibusOverrides` ranks above
+/// `EmbeddedTags` by default. This is the default value of
+/// `scan_roots.metadata_precedence` (migration `0044`).
+pub const DEFAULT_METADATA_PRECEDENCE: [MetadataSource; 5] = [
+    MetadataSource::FolderStructure,
+    MetadataSource::EmbeddedTags,
+    MetadataSource::OpfSidecar,
+    MetadataSource::OmnibusOverrides,
+    MetadataSource::ProviderMatch,
+];
+
+/// Whether `order` is a valid precedence list: every one of the 5 known
+/// sources, each exactly once (any relative order is accepted). Used to
+/// reject a malformed/partial list before it's persisted.
+pub fn is_valid_metadata_precedence(order: &[MetadataSource]) -> bool {
+    if order.len() != DEFAULT_METADATA_PRECEDENCE.len() {
+        return false;
+    }
+    DEFAULT_METADATA_PRECEDENCE
+        .iter()
+        .all(|s| order.iter().filter(|o| *o == s).count() == 1)
+}
+
 /// Loose email plausibility check: exactly one `@`, non-empty local part, a
 /// dotted domain, no whitespace, within [`crate::EMAIL_MAX_LEN`]. Not
 /// RFC-complete — just enough to reject obvious typos before handing an

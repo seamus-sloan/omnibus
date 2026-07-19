@@ -10,6 +10,9 @@ use omnibus_shared::{
 };
 
 #[cfg(not(feature = "mobile"))]
+use omnibus_shared::MetadataSource;
+
+#[cfg(not(feature = "mobile"))]
 use super::note_server_fn_err;
 use super::DataError;
 #[cfg(feature = "mobile")]
@@ -314,6 +317,34 @@ pub async fn save_settings(_server_url: &str, settings: Settings) -> Result<Sett
 #[cfg(not(feature = "mobile"))]
 pub async fn get_library(_server_url: &str) -> Result<LibraryContents, DataError> {
     crate::rpc::rpc_get_library()
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Web/SSR: fetch the metadata-source precedence for `library` (`"ebook"` or
+/// `"audiobook"`, F5.1 #972) — server-function wrapper that proxies to
+/// `rpc_get_metadata_precedence`. Web-only for now (no mobile REST route);
+/// mobile keeps the today's-effective-order behavior until a mobile editing
+/// surface is built.
+#[cfg(not(feature = "mobile"))]
+pub async fn get_metadata_precedence(
+    _server_url: &str,
+    library: &str,
+) -> Result<Vec<MetadataSource>, DataError> {
+    crate::rpc::rpc_get_metadata_precedence(library.to_string())
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Web/SSR: persist the metadata-source precedence for `library` — proxies
+/// to `rpc_set_metadata_precedence`. Returns the saved order.
+#[cfg(not(feature = "mobile"))]
+pub async fn save_metadata_precedence(
+    _server_url: &str,
+    library: &str,
+    precedence: Vec<MetadataSource>,
+) -> Result<Vec<MetadataSource>, DataError> {
+    crate::rpc::rpc_set_metadata_precedence(library.to_string(), precedence)
         .await
         .map_err(note_server_fn_err)
 }

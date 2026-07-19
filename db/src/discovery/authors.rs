@@ -177,11 +177,16 @@ async fn merge_overrides_into_author_books(
         .filter_map(|b| b.unique_identifier.clone())
         .collect();
     let overrides_map = load_overrides_bulk(pool, &uuids).await?;
+    let precedence_map = crate::settings::metadata_precedence_by_uuid(pool, &uuids).await?;
     for book in books.iter_mut() {
         let uuid_owned = book.unique_identifier.clone();
         if let Some(uuid) = uuid_owned.as_deref() {
             if let Some((ov, has_cover_ov)) = overrides_map.get(uuid) {
-                apply_overrides(book, uuid, ov, *has_cover_ov);
+                let precedence = precedence_map
+                    .get(uuid)
+                    .cloned()
+                    .unwrap_or_else(|| omnibus_shared::DEFAULT_METADATA_PRECEDENCE.to_vec());
+                apply_overrides(book, uuid, ov, *has_cover_ov, &precedence);
             }
         }
     }
