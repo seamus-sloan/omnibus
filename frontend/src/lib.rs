@@ -424,6 +424,8 @@ pub fn App() -> Element {
     // via `use_page_title`; rendered once as `document::Title` below.
     let page_title = use_signal(|| "Omnibus".to_string());
     use_context_provider(|| PageTitle(page_title));
+    // Cover cache-bust registry — see `contexts::CoverCacheBust`.
+    use_context_provider(|| CoverCacheBust(Signal::new(std::collections::HashMap::new())));
     // Hook calls in App() are unconditional — the feature gates live inside
     // the helper bodies (mobile compiles them to no-op stubs). This keeps
     // rule 07's SSR-vs-WASM hydration parity within the not(mobile) build,

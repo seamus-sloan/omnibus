@@ -1,14 +1,14 @@
 //! Cover upload/replace/revert control for the metadata edit sidebar.
 //! Upload posts a multipart body directly to the REST
 //! `/api/ebooks/:uuid/cover` route (binary can't ride the server-function
-//! transport); revert goes through the analogous `DELETE`. Both fold the
-//! response's merged `EbookMetadata` into local signals so the preview
-//! updates immediately, without re-fetching the parent's static snapshot.
+//! transport); revert goes through the analogous `DELETE`. Both update the
+//! local preview and bump the app-wide `CoverCacheBust` registry.
 
 use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
 
 use crate::components::atrium::Cover;
+use crate::contexts::{bump_cover_cache_bust, use_cover_cache_bust};
 use crate::{data, media_url, use_server_url};
 
 /// Cover preview card: image/plate + upload + revert-override controls.
@@ -34,6 +34,8 @@ pub(super) fn CoverEditor(
         // browser would otherwise keep serving it from cache for the
         // unchanged `/api/covers/:uuid` URL.
         cover_bust: use_signal(|| 0u32),
+        // App-wide registry (survives navigation) — see `apply` below.
+        global_bust: use_cover_cache_bust().0,
     };
 
     rsx! {
@@ -74,6 +76,7 @@ struct CoverState {
     cover_url: Signal<Option<String>>,
     has_cover_override: Signal<bool>,
     cover_bust: Signal<u32>,
+    global_bust: Signal<std::collections::HashMap<String, u32>>,
 }
 
 impl CoverState {
@@ -83,12 +86,21 @@ impl CoverState {
         self.status.set(Some(msg.to_string()));
     }
 
-    /// Fold a successful server response into the local preview state and
-    /// bubble the merged book up to the parent sidebar.
-    fn apply(&mut self, updated: EbookMetadata, msg: &str, on_change: EventHandler<EbookMetadata>) {
+    /// Fold a successful server response into the local preview state,
+    /// bump the app-wide cache-bust counter for `uuid` so other views of
+    /// this book pick up the change too (issue #1087), and bubble the
+    /// merged book up to the parent sidebar.
+    fn apply(
+        &mut self,
+        uuid: &str,
+        updated: EbookMetadata,
+        msg: &str,
+        on_change: EventHandler<EbookMetadata>,
+    ) {
         self.cover_url.set(updated.cover_url.clone());
         self.has_cover_override.set(updated.has_cover_override);
         self.cover_bust.set((self.cover_bust)() + 1);
+        bump_cover_cache_bust(self.global_bust, uuid);
         self.status.set(Some(msg.to_string()));
         on_change.call(updated);
     }
@@ -165,7 +177,9 @@ fn cover_controls(
                         )
                         .await;
                         match result {
-                            Ok(Some(updated)) => state.apply(updated, "Cover updated.", on_change),
+                            Ok(Some(updated)) => {
+                                state.apply(&uuid, updated, "Cover updated.", on_change)
+                            }
                             Ok(None) => state.fail("Upload failed: book not found.".into()),
                             Err(e) => state.fail(format!("Upload failed: {e}")),
                         }
@@ -183,7 +197,9 @@ fn cover_controls(
         state.start("Reverting\u{2026}");
         spawn(async move {
             match data::delete_ebook_cover(&server_url, &uuid).await {
-                Ok(Some(updated)) => state.apply(updated, "Reverted to scanned cover.", on_change),
+                Ok(Some(updated)) => {
+                    state.apply(&uuid, updated, "Reverted to scanned cover.", on_change)
+                }
                 Ok(None) => state.fail("Revert failed: book not found.".into()),
                 Err(e) => state.fail(format!("Revert failed: {e}")),
             }

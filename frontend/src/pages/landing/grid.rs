@@ -39,9 +39,13 @@ fn GridTile(book: EbookMetadata, server_url: String) -> Element {
 
     // Prefer the responsive `/api/thumbs/:uuid/{sm,md,lg}` endpoint over the
     // raw `/api/covers/:uuid`: smaller payload (WebP, resized per slot). Books
-    // with no cover fall back to the Atrium plate template.
+    // with no cover fall back to the Atrium plate template. Cache-busted per
+    // `CoverCacheBust` so a cover edit is visible immediately on return to
+    // the grid (issue #1087) rather than after the browser's 1-day thumb cache expires.
+    let cover_bust =
+        crate::contexts::cover_bust_for(crate::contexts::use_cover_cache_bust().0, &uuid);
     let (thumb_src, thumb_srcset) =
-        crate::components::cover_tile::thumb_srcs(&book, &uuid, &server_url);
+        crate::components::cover_tile::thumb_srcs(&book, &uuid, &server_url, cover_bust);
 
     let uuid_click = uuid.clone();
     let uuid_key = uuid.clone();

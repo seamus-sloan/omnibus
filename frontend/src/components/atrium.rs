@@ -7,6 +7,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
 
+use crate::contexts::{append_cache_bust, cover_bust_for, use_cover_cache_bust};
 use crate::{media_url, use_server_url};
 
 // ── Theme state ────────────────────────────────────────────────────
@@ -132,25 +133,38 @@ pub fn Cover(
         .unwrap_or("")
         .to_uppercase();
     // Callers that pass `src_override` (grid/table/rails) already built an
-    // authenticated URL via `thumb_url`. The `book.cover_url` fallback (detail
-    // hero, listen page) is a relative `/api/covers/:uuid` path, so route it
-    // through `media_url` to give it an origin + mobile token. No-op on web.
+    // authenticated, cache-busted URL themselves (`CoverTile::thumb_srcs`).
+    // The `book.cover_url` fallback (detail hero, listen page) is a relative
+    // `/api/covers/:uuid` path, so route it through `media_url` to give it an
+    // origin + mobile token (no-op on web), then apply this book's cache-bust
+    // counter — `/api/covers/*` is cached `private, max-age=86400`, so
+    // without it a book detail revisited after a cover edit would keep
+    // showing the pre-edit image until the cache expires (issue #1087).
+    // `use_cover_cache_bust()` is the context lookup and stays unconditional
+    // per the rules of hooks, but the signal *read* (`cover_bust_for`) is
+    // gated on `src_override` being absent — reading it unconditionally
+    // would subscribe every mounted `Cover` to `CoverCacheBust`, forcing a
+    // re-render of the whole grid/table on a single book's cover bump.
     let server_url = use_server_url();
-    let image_src = src_override.or_else(|| {
-        book.cover_url
-            .as_deref()
-            .map(|path| media_url(&server_url, path))
-    });
+    let uuid = book.unique_identifier.clone().unwrap_or_default();
+    let cover_cache_bust = use_cover_cache_bust();
+    let image_src = match src_override {
+        Some(src) => Some(src),
+        None => book.cover_url.as_deref().map(|path| {
+            let cache_bust = cover_bust_for(cover_cache_bust.0, &uuid);
+            append_cache_bust(media_url(&server_url, path), cache_bust)
+        }),
+    };
     let srcset_attr = srcset.unwrap_or_default();
     let sizes_attr = sizes.unwrap_or_default();
     // Broken/expired cover URLs otherwise render the browser's broken-image
     // icon with no self-heal until a full reload; fall back to the
     // typographic plate on a load error instead. Tracks the *url* that
     // failed (not just a bool) so a later render with a different url —
-    // a mobile token rotation, a different `src_override`, or (once #832
-    // item 4 versions thumb URLs) a regenerated cover — always gets a
-    // fresh chance to load, even though this component instance stays
-    // mounted across the change.
+    // a mobile token rotation, a different `src_override`, or a
+    // cache-busted regenerated cover (see `cache_bust` above) — always
+    // gets a fresh chance to load, even though this component instance
+    // stays mounted across the change.
     let mut broken_cover_src: Signal<Option<String>> = use_signal(|| None);
 
     rsx! {

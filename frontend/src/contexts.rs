@@ -105,6 +105,48 @@ fn format_page_title(subtitle: Option<&str>) -> String {
     }
 }
 
+/// Cross-route cover cache-bust registry: book uuid → a counter bumped by
+/// [`crate::pages::metadata_edit`]'s `CoverEditor` after a successful cover
+/// upload/revert. `/api/covers/*` and `/api/thumbs/*` are served with
+/// `Cache-Control: private, max-age=86400`, so re-fetching the *book* on a
+/// later navigation (landing grid/table, book detail) still leaves the
+/// browser serving pre-edit image bytes for the otherwise-unchanged
+/// `/api/covers/:uuid` / `/api/thumbs/:uuid/:size` URL. Owned by [`App`] via
+/// `use_context_provider` so it survives route changes for the SPA session —
+/// the WASM runtime never reloads on navigation, only components
+/// unmount/remount.
+#[derive(Copy, Clone)]
+pub struct CoverCacheBust(pub Signal<std::collections::HashMap<String, u32>>);
+
+/// Convenience accessor for the cover cache-bust context.
+pub fn use_cover_cache_bust() -> CoverCacheBust {
+    use_context::<CoverCacheBust>()
+}
+
+/// Current bust counter for `uuid`, or 0 when its cover hasn't changed this
+/// session — the common case, where no cache-busting is needed.
+pub fn cover_bust_for(bust: Signal<std::collections::HashMap<String, u32>>, uuid: &str) -> u32 {
+    bust.read().get(uuid).copied().unwrap_or(0)
+}
+
+/// Record a cover change for `uuid`, bumping its bust counter so every other
+/// mounted or future view of this book's cover picks a fresh URL.
+pub fn bump_cover_cache_bust(mut bust: Signal<std::collections::HashMap<String, u32>>, uuid: &str) {
+    bust.with_mut(|m| *m.entry(uuid.to_string()).or_insert(0) += 1);
+}
+
+/// Append a cache-busting `v=` query param to `url` when `bust > 0`, using
+/// `&` when `url` already carries a query string (mobile's [`media_url`]
+/// appends `?token=…`). A no-op when the cover hasn't changed this session,
+/// so the common case still benefits from the browser's HTTP cache.
+pub fn append_cache_bust(url: String, bust: u32) -> String {
+    if bust == 0 {
+        return url;
+    }
+    let sep = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{sep}v={bust}")
+}
+
 /// App-wide cached `/api/auth/me` result. Owned by [`App`] via
 /// `use_context_provider` so every component that needs to gate on
 /// `is_admin` (top nav avatar, landing inline edits, author Delete) reads
@@ -274,11 +316,71 @@ pub fn use_playback() -> PlaybackState {
 
 #[cfg(test)]
 mod tests {
-    use super::format_page_title;
+    use std::collections::HashMap;
+
+    use dioxus::prelude::*;
+
+    use super::{append_cache_bust, bump_cover_cache_bust, cover_bust_for, format_page_title};
 
     #[test]
     fn format_page_title_prefixes_subtitle_and_omits_when_none() {
         assert_eq!(format_page_title(Some("Settings")), "Omnibus | Settings");
         assert_eq!(format_page_title(None), "Omnibus");
+    }
+
+    #[test]
+    fn append_cache_bust_is_a_no_op_when_bust_is_zero() {
+        assert_eq!(
+            append_cache_bust("/api/covers/abc".into(), 0),
+            "/api/covers/abc"
+        );
+    }
+
+    #[test]
+    fn append_cache_bust_adds_query_param_when_bust_is_nonzero() {
+        assert_eq!(
+            append_cache_bust("/api/covers/abc".into(), 2),
+            "/api/covers/abc?v=2"
+        );
+    }
+
+    #[test]
+    fn append_cache_bust_uses_ampersand_when_url_already_has_a_query_string() {
+        // Mirrors mobile's `media_url`, which appends `?token=…`.
+        assert_eq!(
+            append_cache_bust("/api/covers/abc?token=xyz".into(), 1),
+            "/api/covers/abc?token=xyz&v=1"
+        );
+    }
+
+    // Regression for #1087: after `CoverEditor` bumps a book's counter, every
+    // other reader of the same `CoverCacheBust` signal must observe it — this
+    // is what lets the landing grid/table and book detail pick up a cover
+    // change made on a page they've already left, without a manual refresh.
+    // `Signal::new` requires an active Dioxus runtime, so the assertions run
+    // inside a throwaway component driven by a bare `VirtualDom` rebuild
+    // (mirrors `dioxus::ssr::render_element`'s use elsewhere in this crate
+    // for exercising component-only APIs from a plain `#[test]`).
+    #[test]
+    fn bump_cover_cache_bust_is_observed_by_other_readers_of_the_same_signal() {
+        #[component]
+        fn AssertBustCounter() -> Element {
+            let bust: Signal<HashMap<String, u32>> = Signal::new(HashMap::new());
+            assert_eq!(cover_bust_for(bust, "book-1"), 0);
+
+            bump_cover_cache_bust(bust, "book-1");
+            assert_eq!(cover_bust_for(bust, "book-1"), 1);
+
+            // A second bump (e.g. upload then revert) keeps incrementing so a
+            // stale cached URL from either step is still invalidated.
+            bump_cover_cache_bust(bust, "book-1");
+            assert_eq!(cover_bust_for(bust, "book-1"), 2);
+
+            // A different book's counter is untouched.
+            assert_eq!(cover_bust_for(bust, "book-2"), 0);
+
+            rsx! {}
+        }
+        VirtualDom::new(AssertBustCounter).rebuild_in_place();
     }
 }
