@@ -8,6 +8,8 @@
 //! FK/cascade) through the merged-uuid-aware canonical resolver. Markdown is
 //! rendered to sanitized HTML on read (see [`markdown`]).
 
+use std::collections::HashSet;
+
 use omnibus_shared::{CreateJournalEntry, JournalEntry, UpdateJournalEntry};
 use sqlx::{Row, SqlitePool};
 
@@ -110,13 +112,21 @@ pub async fn list_journal_entries(
 
 /// Edit an entry owned by `user_id`, returning the updated row. Errors with
 /// `NotFound` when the id does not exist or belongs to another user (the two
-/// cases are deliberately indistinguishable).
+/// cases are deliberately indistinguishable). Any journal image referenced in
+/// the old body but not the new one is opportunistically GC'd (issue #1083)
+/// — see [`cleanup_orphaned_images`].
 pub async fn update_journal_entry(
     pool: &SqlitePool,
     user_id: i64,
     entry_id: i64,
     input: &UpdateJournalEntry,
 ) -> Result<JournalEntry, JournalError> {
+    let old_body: Option<String> =
+        sqlx::query_scalar("SELECT body_md FROM journal_entries WHERE id = ? AND user_id = ?")
+            .bind(entry_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
     let result = sqlx::query(
         "UPDATE journal_entries
             SET body_md = ?, progress = ?, status = COALESCE(?, status),
@@ -133,25 +143,83 @@ pub async fn update_journal_entry(
     if result.rows_affected() == 0 {
         return Err(JournalError::NotFound);
     }
+    if let Some(old_body) = old_body {
+        let removed: HashSet<String> = crate::journal_images::referenced_image_names(&old_body)
+            .difference(&crate::journal_images::referenced_image_names(
+                &input.body_md,
+            ))
+            .cloned()
+            .collect();
+        cleanup_orphaned_images(pool, removed).await;
+    }
     get_entry_by_id(pool, entry_id).await
 }
 
 /// Delete an entry owned by `user_id`. Errors with `NotFound` when the id does
-/// not exist or belongs to another user.
+/// not exist or belongs to another user. Any journal image uniquely
+/// referenced by the deleted entry's body is opportunistically GC'd (issue
+/// #1083, e.g. the composer's Cancel button discarding a draft) — see
+/// [`cleanup_orphaned_images`].
 pub async fn delete_journal_entry(
     pool: &SqlitePool,
     user_id: i64,
     entry_id: i64,
 ) -> Result<(), JournalError> {
-    let result = sqlx::query("DELETE FROM journal_entries WHERE id = ? AND user_id = ?")
-        .bind(entry_id)
-        .bind(user_id)
-        .execute(pool)
-        .await?;
-    if result.rows_affected() == 0 {
+    let deleted: Option<String> = sqlx::query_scalar(
+        "DELETE FROM journal_entries WHERE id = ? AND user_id = ? RETURNING body_md",
+    )
+    .bind(entry_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(body_md) = deleted else {
         return Err(JournalError::NotFound);
-    }
+    };
+    cleanup_orphaned_images(
+        pool,
+        crate::journal_images::referenced_image_names(&body_md),
+    )
+    .await;
     Ok(())
+}
+
+/// Best-effort delete of any `candidates` no longer referenced by any
+/// `journal_entries.body_md`. Called only after the caller's own mutation
+/// has already committed, so a plain substring scan (no self-exclusion) is
+/// correct: the caller's row either no longer contains the name (edit) or no
+/// longer exists (delete). Failures — a DB error on the reference check, or
+/// a panic in the filesystem unlink — are logged and swallowed: this is
+/// opportunistic GC of an orphanable-but-durable file store, not a
+/// correctness-critical path, and must never fail the journal mutation that
+/// triggered it (mirrors `set_settings`'s cover cleanup).
+async fn cleanup_orphaned_images(pool: &SqlitePool, candidates: HashSet<String>) {
+    let mut orphaned = Vec::new();
+    for name in &candidates {
+        let still_referenced: Result<bool, sqlx::Error> =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM journal_entries WHERE body_md LIKE ?)")
+                .bind(format!("%{name}%"))
+                .fetch_one(pool)
+                .await;
+        match still_referenced {
+            Ok(false) => orphaned.push(name.clone()),
+            Ok(true) => {}
+            Err(e) => {
+                tracing::warn!(name, error = %e, "cleanup_orphaned_images: reference check failed")
+            }
+        }
+    }
+    if orphaned.is_empty() {
+        return;
+    }
+    if let Err(join_err) = tokio::task::spawn_blocking(move || {
+        for name in &orphaned {
+            crate::journal_images::delete_journal_image(name);
+        }
+    })
+    .await
+    {
+        tracing::error!("cleanup_orphaned_images: spawn_blocking failed: {join_err}");
+    }
 }
 
 /// Re-read one entry by id (no user scope — callers have already authorized).

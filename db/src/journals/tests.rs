@@ -1,11 +1,13 @@
 //! Unit tests for the `journals` module: create round-trip + markdown render,
 //! `BookNotFound`, the public all-users list ordering, owner-scoped
-//! update/delete (with non-owner `NotFound`), and merged-uuid canonical
-//! resolution.
+//! update/delete (with non-owner `NotFound`), merged-uuid canonical
+//! resolution, and the update/delete orphan-image-cleanup diffing (#1083).
 
 use omnibus_shared::{CreateJournalEntry, EbookMetadata, JournalStatus, UpdateJournalEntry};
 
 use super::*;
+use crate::journal_images::{self, journal_images_dir};
+use crate::test_support::EnvVarGuard;
 use crate::{init_db, replace_books};
 
 async fn seed(pool: &SqlitePool, library: &str, title: &str) -> String {
@@ -383,4 +385,135 @@ async fn create_propagates_db_error_when_pool_is_closed() {
         .await
         .unwrap_err();
     assert!(matches!(err, JournalError::Sqlx(_)));
+}
+
+/// Write a real journal image file and return its `IMAGE_URL_PREFIX`-embedded
+/// markdown reference plus its bare serving name. Caller must hold an
+/// `OMNIBUS_JOURNAL_IMAGES_DIR` `EnvVarGuard` pointed at a temp dir.
+fn write_image() -> (String, String) {
+    let name = journal_images::write_journal_image("image/png", b"bytes").unwrap();
+    let embed = format!("![img]({}{name})", markdown::IMAGE_URL_PREFIX);
+    (embed, name)
+}
+
+#[tokio::test]
+async fn update_deletes_an_image_dropped_from_the_body_but_keeps_one_still_referenced() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_JOURNAL_IMAGES_DIR", Some(tmp.path().as_os_str()));
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let uuid = seed(&pool, "/lib", "Book A").await;
+    let (dropped_embed, dropped_name) = write_image();
+    let (kept_embed, kept_name) = write_image();
+    let entry = create_journal_entry(
+        &pool,
+        user,
+        &create(&uuid, &format!("{dropped_embed} {kept_embed}"), None),
+    )
+    .await
+    .unwrap();
+
+    update_journal_entry(
+        &pool,
+        user,
+        entry.id,
+        &UpdateJournalEntry {
+            body_md: kept_embed,
+            progress: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        !journal_images_dir().join(&dropped_name).exists(),
+        "image removed from the body must be swept"
+    );
+    assert!(
+        journal_images_dir().join(&kept_name).exists(),
+        "image still referenced by the new body must survive"
+    );
+}
+
+#[tokio::test]
+async fn update_keeps_an_image_still_referenced_by_another_entry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_JOURNAL_IMAGES_DIR", Some(tmp.path().as_os_str()));
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let uuid = seed(&pool, "/lib", "Book A").await;
+    let (shared_embed, shared_name) = write_image();
+    let other = create_journal_entry(&pool, user, &create(&uuid, &shared_embed, None))
+        .await
+        .unwrap();
+    let entry = create_journal_entry(&pool, user, &create(&uuid, &shared_embed, None))
+        .await
+        .unwrap();
+
+    update_journal_entry(
+        &pool,
+        user,
+        entry.id,
+        &UpdateJournalEntry {
+            body_md: "no images now".into(),
+            progress: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        journal_images_dir().join(&shared_name).exists(),
+        "image referenced by another surviving entry must not be deleted"
+    );
+    // Sanity: the other entry is untouched.
+    assert_eq!(
+        get_entry_by_id(&pool, other.id).await.unwrap().body_md,
+        shared_embed
+    );
+}
+
+#[tokio::test]
+async fn delete_removes_an_image_uniquely_referenced_by_the_deleted_entry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_JOURNAL_IMAGES_DIR", Some(tmp.path().as_os_str()));
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let uuid = seed(&pool, "/lib", "Book A").await;
+    let (embed, name) = write_image();
+    let entry = create_journal_entry(&pool, user, &create(&uuid, &embed, None))
+        .await
+        .unwrap();
+
+    delete_journal_entry(&pool, user, entry.id).await.unwrap();
+
+    assert!(
+        !journal_images_dir().join(&name).exists(),
+        "image uniquely referenced by the deleted entry must be swept"
+    );
+}
+
+#[tokio::test]
+async fn delete_keeps_an_image_still_referenced_by_another_entry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_JOURNAL_IMAGES_DIR", Some(tmp.path().as_os_str()));
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let uuid = seed(&pool, "/lib", "Book A").await;
+    let (shared_embed, shared_name) = write_image();
+    create_journal_entry(&pool, user, &create(&uuid, &shared_embed, None))
+        .await
+        .unwrap();
+    let entry = create_journal_entry(&pool, user, &create(&uuid, &shared_embed, None))
+        .await
+        .unwrap();
+
+    delete_journal_entry(&pool, user, entry.id).await.unwrap();
+
+    assert!(
+        journal_images_dir().join(&shared_name).exists(),
+        "image referenced by another surviving entry must not be deleted"
+    );
 }
