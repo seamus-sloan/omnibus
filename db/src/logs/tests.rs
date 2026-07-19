@@ -1,3 +1,6 @@
+//! Unit tests for the log reader: directory resolution, record parsing, and
+//! the filter / newest-first pagination behaviour of `read_logs`.
+
 use super::*;
 use crate::test_support::make_test_dir;
 

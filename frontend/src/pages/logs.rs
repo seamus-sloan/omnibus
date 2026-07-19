@@ -30,8 +30,11 @@ pub fn LogsPage() -> Element {
     let result = use_signal(|| None::<LogPage>);
     let error = use_signal(|| false);
     let loading = use_signal(|| false);
+    // Monotonic ticket so a slow earlier fetch can't clobber a newer one when
+    // the operator clicks Apply / pagination in quick succession.
+    let fetch_seq = use_signal(|| 0u32);
 
-    spawn_logs_fetch(use_server_url(), applied, result, error, loading);
+    spawn_logs_fetch(use_server_url(), applied, result, error, loading, fetch_seq);
 
     let filters = LogFilters {
         level,
@@ -74,21 +77,32 @@ struct LogFilters {
 }
 
 /// Fetch the applied query whenever it changes, mapping success/failure onto
-/// the result/error/loading signals.
+/// the result/error/loading signals. `fetch_seq` is bumped per request and
+/// re-checked after the await so an out-of-order (stale) response is dropped
+/// instead of overwriting a newer one. Read via `peek` so bumping it doesn't
+/// re-trigger this effect — only `applied` is a dependency.
 fn spawn_logs_fetch(
     server_url: String,
     applied: Signal<LogQuery>,
     mut result: Signal<Option<LogPage>>,
     mut error: Signal<bool>,
     mut loading: Signal<bool>,
+    mut fetch_seq: Signal<u32>,
 ) {
     use_effect(move || {
         let query = applied();
         let url = server_url.clone();
+        let ticket = *fetch_seq.peek() + 1;
+        fetch_seq.set(ticket);
         loading.set(true);
         error.set(false);
         spawn(async move {
-            match data::get_logs(&url, query).await {
+            let outcome = data::get_logs(&url, query).await;
+            // A newer request superseded this one — drop the stale result.
+            if *fetch_seq.peek() != ticket {
+                return;
+            }
+            match outcome {
                 Ok(page) => {
                     result.set(Some(page));
                 }
@@ -111,8 +125,8 @@ fn apply_filters_handler(
         applied.set(LogQuery {
             level: none_if_blank(&(filters.level)()),
             module: none_if_blank(&(filters.module)()),
-            from: none_if_blank(&(filters.from)()),
-            to: none_if_blank(&(filters.to)()),
+            from: local_to_utc_prefix(&(filters.from)()),
+            to: local_to_utc_prefix(&(filters.to)()),
             page: 0,
             per_page: 0,
         });
@@ -123,6 +137,40 @@ fn apply_filters_handler(
 fn none_if_blank(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Convert a `datetime-local` value (local wall-clock, `YYYY-MM-DDTHH:MM`) to a
+/// UTC ISO-8601 minute prefix (`YYYY-MM-DDTHH:MM`) so it lines up with the
+/// server's UTC (`…Z`) log timestamps. Without this an admin in a non-UTC zone
+/// would filter a window shifted by their offset. `None` for a blank/invalid
+/// value. The minute precision is deliberate — the reader treats `to` as
+/// inclusive of the whole minute.
+#[cfg(feature = "web")]
+fn local_to_utc_prefix(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // `new Date("YYYY-MM-DDTHH:MM")` (no zone) parses as local time; the ISO
+    // string is then UTC. Bail on an unparsable value rather than send NaN.
+    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(trimmed));
+    if date.get_time().is_nan() {
+        return None;
+    }
+    Some(
+        String::from(date.to_iso_string())
+            .chars()
+            .take(16)
+            .collect(),
+    )
+}
+
+/// Non-web fallback: the Apply handler only runs client-side, so this is never
+/// exercised on SSR — it just has to compile. Pass the value through untrimmed
+/// of timezone semantics.
+#[cfg(not(feature = "web"))]
+fn local_to_utc_prefix(value: &str) -> Option<String> {
+    none_if_blank(value)
 }
 
 /// Level / module / time-range inputs plus the Apply button.

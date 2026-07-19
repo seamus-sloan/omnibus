@@ -42,7 +42,14 @@ function mockLogs(page: Page, body: string | ((route: Route) => string)) {
 }
 
 test("renders the log viewer layout from the on-disk logs", async ({ page }) => {
-  await gotoReady(page, "/logs");
+  // The page fires a POST /api/rpc/logs on mount (the framework routes the
+  // arg-bearing read as POST); await it explicitly per rule 04 rather than
+  // leaning on networkidle.
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/logs", expectedStatus: 200 },
+    async () => gotoReady(page, "/logs"),
+  );
 
   await expect(page.getByRole("heading", { level: 1, name: "Server logs" })).toBeVisible();
   await expect(levelFilter(page)).toBeVisible();
@@ -145,6 +152,32 @@ test("paginates to older records and back", async ({ page }) => {
   await expect(page.getByTestId("logs-prev")).toBeEnabled();
   await expect(page.getByTestId("logs-next")).toBeDisabled();
   await expect(rows(page).first()).toContainText("older-record");
+
+  // Newer → back to page 0.
+  const { request: newerReq } = await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/logs", expectedStatus: 200 },
+    async () => page.getByTestId("logs-prev").click(),
+  );
+  expect(newerReq.postDataJSON()).toMatchObject({ query: { page: 0 } });
+  await expect(page.getByTestId("logs-page-indicator")).toHaveText("Page 1");
+  await expect(page.getByTestId("logs-prev")).toBeDisabled();
+  await expect(rows(page).first()).toContainText("newer-record");
+});
+
+test("rejects an unauthenticated request to the log endpoint (AC4)", async ({
+  playwright,
+  baseURL,
+}) => {
+  // A fresh request context carries neither the admin bearer (the suite's
+  // default `request` fixture) nor the browser session cookie, so the
+  // `require_auth` boundary must turn it away before any log is read.
+  const anon = await playwright.request.newContext({ baseURL });
+  const response = await anon.post("/api/rpc/logs", {
+    data: { query: { page: 0, per_page: 5 } },
+  });
+  expect(response.status()).toBe(401);
+  await anon.dispose();
 });
 
 test("shows an error status when the log read fails", async ({ page }) => {

@@ -1,3 +1,6 @@
+//! Unit tests for the admin log-viewer wire types (`per_page` clamping and
+//! serde shape).
+
 use super::*;
 
 #[test]
