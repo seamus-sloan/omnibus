@@ -145,14 +145,21 @@ pub fn Cover(
     // counter — `/api/covers/*` is cached `private, max-age=86400`, so
     // without it a book detail revisited after a cover edit would keep
     // showing the pre-edit image until the cache expires (issue #1087).
+    // `use_cover_cache_bust()` is the context lookup and stays unconditional
+    // per the rules of hooks, but the signal *read* (`cover_bust_for`) is
+    // gated on `src_override` being absent — reading it unconditionally
+    // would subscribe every mounted `Cover` to `CoverCacheBust`, forcing a
+    // re-render of the whole grid/table on a single book's cover bump.
     let server_url = use_server_url();
     let uuid = book.unique_identifier.clone().unwrap_or_default();
-    let cache_bust = cover_bust_for(use_cover_cache_bust().0, &uuid);
-    let image_src = src_override.or_else(|| {
-        book.cover_url
-            .as_deref()
-            .map(|path| append_cache_bust(media_url(&server_url, path), cache_bust))
-    });
+    let cover_cache_bust = use_cover_cache_bust();
+    let image_src = match src_override {
+        Some(src) => Some(src),
+        None => book.cover_url.as_deref().map(|path| {
+            let cache_bust = cover_bust_for(cover_cache_bust.0, &uuid);
+            append_cache_bust(media_url(&server_url, path), cache_bust)
+        }),
+    };
     let srcset_attr = srcset.unwrap_or_default();
     let sizes_attr = sizes.unwrap_or_default();
     // Broken/expired cover URLs otherwise render the browser's broken-image

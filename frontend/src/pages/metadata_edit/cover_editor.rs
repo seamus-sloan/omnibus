@@ -1,12 +1,8 @@
 //! Cover upload/replace/revert control for the metadata edit sidebar.
 //! Upload posts a multipart body directly to the REST
 //! `/api/ebooks/:uuid/cover` route (binary can't ride the server-function
-//! transport); revert goes through the analogous `DELETE`. Both fold the
-//! response's merged `EbookMetadata` into local signals so the preview
-//! updates immediately, without re-fetching the parent's static snapshot,
-//! and bump the app-wide `CoverCacheBust` registry so other already-mounted
-//! or later-visited views of this book (landing grid/table, book detail)
-//! also bypass the browser's cached `/api/covers` / `/api/thumbs` bytes.
+//! transport); revert goes through the analogous `DELETE`. Both update the
+//! local preview and bump the app-wide `CoverCacheBust` registry.
 
 use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
