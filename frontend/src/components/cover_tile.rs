@@ -8,18 +8,26 @@ use dioxus_router::Link;
 use omnibus_shared::EbookMetadata;
 
 use crate::components::atrium::Cover;
+use crate::contexts::append_cache_bust;
 use crate::Route;
 
-/// Responsive `md`-src + sm/md/lg `srcset` for a book's cover thumbnail; `(None, None)` when it has no cover.
+/// Responsive `md`-src + sm/md/lg `srcset` for a book's cover thumbnail;
+/// `(None, None)` when it has no cover. `bust` is this book's
+/// [`crate::contexts::CoverCacheBust`] counter (0 = unchanged this
+/// session) — `/api/thumbs/*` is cached `private, max-age=86400`, so
+/// without it the grid/table would keep showing a pre-edit thumbnail for
+/// the otherwise-unchanged URL after navigating back from a cover edit
+/// (issue #1087).
 pub fn thumb_srcs(
     book: &EbookMetadata,
     uuid: &str,
     server_url: &str,
+    bust: u32,
 ) -> (Option<String>, Option<String>) {
     if book.cover_url.is_some() {
-        let sm = crate::thumb_url(server_url, uuid, "sm");
-        let md = crate::thumb_url(server_url, uuid, "md");
-        let lg = crate::thumb_url(server_url, uuid, "lg");
+        let sm = append_cache_bust(crate::thumb_url(server_url, uuid, "sm"), bust);
+        let md = append_cache_bust(crate::thumb_url(server_url, uuid, "md"), bust);
+        let lg = append_cache_bust(crate::thumb_url(server_url, uuid, "lg"), bust);
         (
             Some(md.clone()),
             Some(format!("{sm} 160w, {md} 320w, {lg} 640w")),
@@ -67,7 +75,8 @@ pub fn CoverTile(
     kind: CoverTileKind,
 ) -> Element {
     let uuid = book.unique_identifier.clone().unwrap_or_default();
-    let (src, srcset) = thumb_srcs(&book, &uuid, &server_url);
+    let bust = crate::contexts::cover_bust_for(crate::contexts::use_cover_cache_bust().0, &uuid);
+    let (src, srcset) = thumb_srcs(&book, &uuid, &server_url, bust);
     let cover_sizes = Some(sizes);
 
     match kind {
@@ -123,7 +132,7 @@ mod tests {
     #[test]
     fn thumb_srcs_builds_three_candidate_srcset_when_cover_present() {
         let book = book_with_cover(Some("/api/covers/abc"));
-        let (src, srcset) = thumb_srcs(&book, "abc", "");
+        let (src, srcset) = thumb_srcs(&book, "abc", "", 0);
         assert_eq!(src.as_deref(), Some("/api/thumbs/abc/md"));
         assert_eq!(
             srcset.as_deref(),
@@ -134,6 +143,24 @@ mod tests {
     #[test]
     fn thumb_srcs_returns_none_when_no_cover() {
         let book = book_with_cover(None);
-        assert_eq!(thumb_srcs(&book, "abc", ""), (None, None));
+        assert_eq!(thumb_srcs(&book, "abc", "", 0), (None, None));
+    }
+
+    // Regression for #1087: a nonzero cache-bust counter appends `?v=N` to
+    // every srcset candidate so a browser that cached the pre-edit
+    // thumbnail bytes for this URL (`Cache-Control: private,
+    // max-age=86400`) is forced to re-fetch after a cover change, instead
+    // of showing stale art until a manual refresh.
+    #[test]
+    fn thumb_srcs_appends_cache_bust_query_when_bust_is_nonzero() {
+        let book = book_with_cover(Some("/api/covers/abc"));
+        let (src, srcset) = thumb_srcs(&book, "abc", "", 3);
+        assert_eq!(src.as_deref(), Some("/api/thumbs/abc/md?v=3"));
+        assert_eq!(
+            srcset.as_deref(),
+            Some(
+                "/api/thumbs/abc/sm?v=3 160w, /api/thumbs/abc/md?v=3 320w, /api/thumbs/abc/lg?v=3 640w"
+            ),
+        );
     }
 }
