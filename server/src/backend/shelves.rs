@@ -14,7 +14,8 @@ use axum::{
 };
 use omnibus_db::{self as db, shelves::ShelfError};
 use omnibus_shared::{
-    CreateShelfRequest, RulePreviewRequest, Shelf, SortDir, SortKey, UpdateShelfRequest,
+    validate_book_uuids, CreateShelfRequest, RulePreviewRequest, Shelf, SortDir, SortKey,
+    UpdateShelfRequest,
 };
 
 use super::{internal, AppState};
@@ -113,6 +114,9 @@ pub(super) async fn add_shelf_books(
     Path(id): Path<i64>,
     Json(req): Json<AddBooksRequest>,
 ) -> Response {
+    if let Err(msg) = req.validate() {
+        return (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
+    }
     if let Err(resp) = load_for_edit(&state, id, &user).await {
         return resp;
     }
@@ -143,10 +147,8 @@ pub(super) async fn preview_rule(
     State(state): State<AppState>,
     Json(req): Json<RulePreviewRequest>,
 ) -> Response {
-    for rule in &req.rules {
-        if let Err(msg) = rule.validate() {
-            return (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
-        }
+    if let Err(msg) = req.validate() {
+        return (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
     }
     match db::preview_rule(&state.pool, user.id, req.match_mode, &req.rules).await {
         Ok(preview) => Json(preview).into_response(),
@@ -208,6 +210,13 @@ fn map_err(e: ShelfError) -> Response {
 #[derive(serde::Deserialize)]
 pub(super) struct AddBooksRequest {
     pub book_uuids: Vec<String>,
+}
+
+impl AddBooksRequest {
+    /// Reject an over-long or malformed book uuid list before any DB round trip.
+    fn validate(&self) -> Result<(), String> {
+        validate_book_uuids(&self.book_uuids)
+    }
 }
 
 /// Query string for the shelf page (`?sort=&dir=`).

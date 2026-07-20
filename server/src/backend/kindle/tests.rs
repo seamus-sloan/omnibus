@@ -200,6 +200,24 @@ async fn send_returns_422_when_user_has_no_kindle_email() {
 }
 
 #[tokio::test]
+async fn send_returns_422_when_book_uuid_exceeds_the_length_cap() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "reader").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let oversized = "a".repeat(omnibus_shared::BOOK_UUID_MAX_LEN + 1);
+    let response = app
+        .oneshot(post_json(
+            "/api/kindle/send",
+            &token,
+            serde_json::json!({ "book_uuid": oversized }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
 async fn send_returns_404_when_gates_pass_but_book_missing() {
     let (app, _state, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "reader").await;

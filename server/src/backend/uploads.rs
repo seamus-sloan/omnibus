@@ -30,6 +30,13 @@ use crate::auth::AuthUser;
 /// unparseable. Generous so it survives the future large-audiobook case.
 pub const DEFAULT_MAX_UPLOAD_BYTES: usize = 1024 * 1024 * 1024;
 
+/// Per-field byte cap for the commit multipart's text fields
+/// (title/author/series/series_index), enforced incrementally while
+/// streaming so an oversized field is rejected before it's fully buffered.
+/// Generous headroom over `MetadataOverrides`' char caps (500 for title, 250
+/// for the rest) while still bounding memory ahead of that later validation.
+const MAX_TEXT_FIELD_BYTES: usize = 8 * 1024;
+
 /// Resolve the configured upload size cap from `OMNIBUS_MAX_UPLOAD_BYTES`,
 /// falling back to [`DEFAULT_MAX_UPLOAD_BYTES`]. Read at router-build time for
 /// the body limit and again per-request as a defense-in-depth backstop.
@@ -63,6 +70,9 @@ pub(super) enum UploadError {
     BadEpub(String),
     /// File exceeds the configured byte cap → 413.
     TooLarge(usize),
+    /// A multipart text field (title/author/series/series_index) exceeds its
+    /// per-field byte cap, rejected before it's fully buffered → 413.
+    FieldTooLarge { field: &'static str, cap: usize },
     /// Override validation failed (a field too long) → 400.
     Validation(String),
     /// Unexpected internal failure → 500 (logged; detail not leaked to the wire).
@@ -115,6 +125,11 @@ impl IntoResponse for UploadError {
             UploadError::TooLarge(cap) => (
                 StatusCode::PAYLOAD_TOO_LARGE,
                 format!("file exceeds the {cap}-byte upload limit"),
+            )
+                .into_response(),
+            UploadError::FieldTooLarge { field, cap } => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                format!("{field} exceeds the {cap}-byte limit"),
             )
                 .into_response(),
             UploadError::Validation(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
@@ -220,6 +235,33 @@ async fn stream_upload_to_tempfile(
         return Err(UploadError::UnsupportedFormat);
     }
     Ok(tmp)
+}
+
+/// Read a multipart text field incrementally, capping the bytes buffered
+/// before it is fully read (mirrors `stream_upload_to_tempfile`'s incremental
+/// cap on the `file` field). Returns `Ok(None)` for non-UTF-8 bytes, matching
+/// `field.text().await.ok()`'s prior silent-drop behavior.
+async fn read_text_field_capped(
+    mut field: Field<'_>,
+    field_name: &'static str,
+    cap: usize,
+) -> Result<Option<String>, UploadError> {
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        let chunk = field
+            .chunk()
+            .await
+            .map_err(|e| UploadError::internal("read multipart text chunk", e))?;
+        let Some(chunk) = chunk else { break };
+        if buf.len() + chunk.len() > cap {
+            return Err(UploadError::FieldTooLarge {
+                field: field_name,
+                cap,
+            });
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8(buf).ok())
 }
 
 // --- Inspect ---------------------------------------------------------------
@@ -396,10 +438,23 @@ async fn parse_commit_multipart(
                     "file" => {
                         form.tmp_file = Some(stream_upload_to_tempfile(field, cap).await?);
                     }
-                    "title" => form.title = field.text().await.ok(),
-                    "author" => form.author = field.text().await.ok(),
-                    "series" => form.series = field.text().await.ok(),
-                    "series_index" => form.series_index = field.text().await.ok(),
+                    "title" => {
+                        form.title =
+                            read_text_field_capped(field, "title", MAX_TEXT_FIELD_BYTES).await?
+                    }
+                    "author" => {
+                        form.author =
+                            read_text_field_capped(field, "author", MAX_TEXT_FIELD_BYTES).await?
+                    }
+                    "series" => {
+                        form.series =
+                            read_text_field_capped(field, "series", MAX_TEXT_FIELD_BYTES).await?
+                    }
+                    "series_index" => {
+                        form.series_index =
+                            read_text_field_capped(field, "series_index", MAX_TEXT_FIELD_BYTES)
+                                .await?
+                    }
                     _ => continue,
                 }
             }

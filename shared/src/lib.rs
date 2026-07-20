@@ -44,6 +44,24 @@ pub const SMTP_PASSWORD_MAX_LEN: usize = 1024;
 /// commonly-cited practical upper bound for `local@domain`.
 pub const EMAIL_MAX_LEN: usize = 320;
 
+/// Maximum byte length of a `book_uuid` used purely as a lookup key (Kindle
+/// send, shelf membership). A minted book uuid is a 36-byte hyphenated
+/// UUIDv4; this leaves headroom for other id formats while still rejecting
+/// abusive input before it reaches a DB lookup.
+pub const BOOK_UUID_MAX_LEN: usize = 64;
+
+/// Handler-level cap on a decoded search query's length, in bytes. Shared by
+/// the REST search/palette handlers and their RPC counterparts so both
+/// boundaries reject oversized input before any FTS5 call; the db layer still
+/// applies its own char-count trim (`cap_query_len`) as a fallback.
+pub const SEARCH_QUERY_MAX_LEN: usize = 1024;
+
+/// `true` once `q` exceeds [`SEARCH_QUERY_MAX_LEN`] and should be rejected
+/// before it reaches a search db call.
+pub fn search_query_too_long(q: &str) -> bool {
+    q.len() > SEARCH_QUERY_MAX_LEN
+}
+
 pub use audiobook::*;
 pub use auth::*;
 pub use bookmark::*;
@@ -66,3 +84,14 @@ pub use suggestion::*;
 pub use upload::*;
 pub use view_prefs::*;
 pub use worker::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_query_too_long_rejects_over_cap_and_accepts_at_cap() {
+        assert!(!search_query_too_long(&"a".repeat(SEARCH_QUERY_MAX_LEN)));
+        assert!(search_query_too_long(&"a".repeat(SEARCH_QUERY_MAX_LEN + 1)));
+    }
+}

@@ -281,6 +281,64 @@ async fn api_list_returns_only_visible_shelves() {
 }
 
 #[tokio::test]
+async fn api_add_book_rejects_oversized_book_uuids_array_with_422() {
+    let (app, _s, pool) = fixture().await;
+    seed_book(&pool, "bk1").await;
+    let alice = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, alice.id).await;
+
+    let created = app
+        .clone()
+        .oneshot(req(
+            "POST",
+            "/api/shelves",
+            Some(&token),
+            Some(serde_json::json!({ "kind": "manual", "name": "Picks", "visibility": "private" })),
+        ))
+        .await
+        .unwrap();
+    let id = shelf_from(created).await.id;
+
+    let too_many: Vec<String> = (0..omnibus_shared::MAX_SHELF_BOOK_UUIDS + 1)
+        .map(|i| i.to_string())
+        .collect();
+    let res = app
+        .oneshot(req(
+            "POST",
+            &format!("/api/shelves/{id}/books"),
+            Some(&token),
+            Some(serde_json::json!({ "book_uuids": too_many })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn api_preview_rule_rejects_too_many_rules_with_422() {
+    let (app, _s, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let rules: Vec<_> = std::iter::repeat_n(
+        serde_json::json!({ "field": "tag", "op": "is", "value": "Fantasy" }),
+        omnibus_shared::MAX_PREVIEW_RULES + 1,
+    )
+    .collect();
+    let body = serde_json::json!({ "match_mode": "any", "rules": rules });
+    let res = app
+        .oneshot(req(
+            "POST",
+            "/api/shelves/preview",
+            Some(&token),
+            Some(body),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
 async fn api_add_book_to_manual_shelf_returns_204() {
     let (app, _s, pool) = fixture().await;
     seed_book(&pool, "bk1").await;
