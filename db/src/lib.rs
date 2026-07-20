@@ -26,6 +26,7 @@ pub mod kindle;
 pub mod library_layout;
 pub mod logs;
 pub mod merge;
+pub mod metadata_lookup;
 pub mod metadata_overrides;
 pub mod missing_files;
 pub mod normalize;
@@ -69,6 +70,9 @@ pub use discovery::*;
 pub use helpers::{build_fts_match, sanitize_fts_query};
 pub use kepub::{convert_book, kepub_path, kepubify_available, warn_if_unavailable, KepubError};
 pub use merge::{merge_books, undo_merge, MergeError, MergeOutcome};
+pub use metadata_lookup::{
+    lookup_isbn, normalize_isbn, IsbnError, MetadataLookupConfig, MetadataLookupError,
+};
 pub use metadata_overrides::*;
 pub use missing_files::{
     backfill_missing_files_flags, gc_books_missing_files, MissingFilesError,
