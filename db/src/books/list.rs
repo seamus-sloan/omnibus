@@ -70,8 +70,9 @@ async fn fetch_list_rows(
         SELECT {BOOK_COLUMNS}
         FROM books b
         JOIN scan_roots l ON l.id = b.library_id
-        WHERE l.path IN ({placeholders})
-          AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)
+        WHERE (l.path IN ({placeholders})
+               AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id))
+           OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid)
         ORDER BY b.sort, b.id
         LIMIT ?
         "
@@ -292,8 +293,9 @@ pub async fn count_books_for_paths(
         SELECT COUNT(*)
           FROM books b
           JOIN scan_roots l ON l.id = b.library_id
-         WHERE l.path IN ({placeholders})
-           AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)
+         WHERE (l.path IN ({placeholders})
+                AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id))
+            OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid)
         "
     );
     let mut q = sqlx::query_scalar::<_, i64>(&sql);

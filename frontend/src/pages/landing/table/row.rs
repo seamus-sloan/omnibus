@@ -287,7 +287,7 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
             placeholder: "YYYY-MM-DD".to_string(),
             ctx: cell_ctx.clone(),
         }
-        EbookRowFormatsCell { formats: book.formats }
+        EbookRowFormatsCell { formats: book.formats, has_physical: book.has_physical }
         td { class: "ebook-col-updated", "data-testid": "ebook-cell-updated", "{updated}" }
         td { class: "ebook-col-added", "data-testid": "ebook-cell-added", "{added}" }
         RowScalarCell {

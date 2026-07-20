@@ -4669,6 +4669,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   padding: 2px 6px;
   background: transparent;
 }
+.format-badge--physical { color: var(--accent); border-color: var(--accent); }
 .ebook-cell-formats-empty { color: var(--ink-3); }
 
 .ebook-cell-editable {

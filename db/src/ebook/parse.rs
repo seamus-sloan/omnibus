@@ -105,6 +105,9 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
             cover_url: None,
             accent,
             formats: vec![],
+            // Derived at read time from `physical_copies` (projection), not at
+            // parse time — this struct is written before that derivation runs.
+            has_physical: false,
             added_at: None,
             error: None,
             has_override: false,

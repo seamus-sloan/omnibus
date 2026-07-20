@@ -45,8 +45,9 @@ async fn author_facets(
               JOIN authors a ON a.id = bal.author
               JOIN books b ON b.id = bal.book
               JOIN scan_roots l ON l.id = b.library_id
-             WHERE l.path IN ({ph})
-               AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)
+             WHERE (l.path IN ({ph})
+                    AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id))
+                OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid)
              GROUP BY a.name
              ORDER BY count DESC, value ASC
             "
@@ -73,7 +74,8 @@ async fn series_facets(
               JOIN scan_roots l ON l.id = b.library_id
              WHERE l.path IN ({ph})
                AND s.name <> ''
-               AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)
+               AND (EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)
+                   OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
              GROUP BY s.name
              ORDER BY count DESC, value ASC
             "
@@ -127,7 +129,8 @@ async fn tag_facets(
               JOIN scan_roots l ON l.id = b.library_id
              WHERE l.path IN ({ph})
                AND t.name <> ''
-               AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)
+               AND (EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)
+                   OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
              GROUP BY t.name
              ORDER BY count DESC, value ASC
             "

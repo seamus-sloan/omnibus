@@ -238,14 +238,22 @@ pub(super) fn EbookRowCoverCell(
 
 /// Formats `<td>` — one badge span per format, em-dash when empty.
 #[component]
-pub(super) fn EbookRowFormatsCell(formats: Vec<String>) -> Element {
+pub(super) fn EbookRowFormatsCell(formats: Vec<String>, has_physical: bool) -> Element {
     rsx! {
         td { class: "ebook-col-formats", "data-testid": "ebook-cell-formats",
-            if formats.is_empty() {
+            if formats.is_empty() && !has_physical {
                 span { class: "ebook-cell-formats-empty", "—" }
             } else {
                 for fmt in formats.iter() {
                     span { key: "{fmt}", class: "format-badge", "{format_badge_label(fmt)}" }
+                }
+                if has_physical {
+                    span {
+                        class: "format-badge format-badge--physical",
+                        "data-testid": "format-badge-physical",
+                        title: "In your physical collection",
+                        "PHYS"
+                    }
                 }
             }
         }

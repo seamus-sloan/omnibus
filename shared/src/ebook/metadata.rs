@@ -88,6 +88,11 @@ pub struct EbookMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub formats: Vec<String>,
 
+    /// Whether the book has ≥1 physical copy checked in — drives the physical
+    /// ownership badge alongside the digital `formats`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_physical: bool,
+
     /// Row insertion timestamp from `books.timestamp` — SQLite
     /// `datetime('now')` format (`YYYY-MM-DD HH:MM:SS`, UTC, space separator).
     /// Drives the "Newest Added" sort — distinct from `modified` (DC

@@ -199,8 +199,9 @@ fn build_page_sql(
                {cursor_idx_sql} AS cursor_idx
           FROM books b
           JOIN scan_roots l ON l.id = b.library_id
-         WHERE l.path IN ({path_ph})
-           AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)
+         WHERE ((l.path IN ({path_ph})
+                 AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id))
+             OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
            {filter_sql}{keyset_sql}
          ORDER BY {order_by}
          LIMIT ?
@@ -372,8 +373,9 @@ pub async fn count_books_page(
         SELECT COUNT(*)
           FROM books b
           JOIN scan_roots l ON l.id = b.library_id
-         WHERE l.path IN ({path_ph})
-           AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id){filter_sql}
+         WHERE ((l.path IN ({path_ph})
+                 AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id))
+             OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid)){filter_sql}
         "
     );
     let mut q = sqlx::query_scalar::<_, i64>(&sql);
