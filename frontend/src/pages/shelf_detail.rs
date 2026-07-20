@@ -297,6 +297,16 @@ fn ShelfHeader(
     let mut draft_name = use_signal(|| shelf.name.clone());
     let mut menu_open = use_signal(|| false);
 
+    // Owner/admin gating; `None` until the boot effect resolves the viewer, so
+    // controls stay hidden on SSR + first paint (hydration parity, rule 07). The
+    // server enforces the same rule (`shelf_for_edit`).
+    let viewer = crate::use_current_user_summary()();
+    let owner_id = shelf.owner_user_id;
+    let can_manage = viewer
+        .as_ref()
+        .is_some_and(|u| u.id == owner_id || u.is_admin);
+    let show_attribution = viewer.as_ref().is_some_and(|u| u.id != owner_id);
+
     let id = shelf.id;
     let is_smart = shelf.kind == ShelfKind::Smart;
     let kind_label = match shelf.kind {
@@ -359,6 +369,13 @@ fn ShelfHeader(
             div { class: "shelf-badges",
                 span { class: "shelf-badge", "{kind_label}" }
                 span { class: "shelf-badge shelf-badge--vis", "{vis_label}" }
+                if show_attribution {
+                    span {
+                        class: "shelf-badge shelf-badge--owner",
+                        "data-testid": "shelf-owner-attribution",
+                        "by {shelf.owner_username}"
+                    }
+                }
             }
             div { class: "shelf-title-row",
                 if renaming() {
@@ -377,6 +394,7 @@ fn ShelfHeader(
                     }
                 } else {
                     h1 { class: "shelf-title", "{shelf.name}" }
+                    if can_manage {
                     div { class: "shelf-actions",
                         button {
                             r#type: "button",
@@ -416,6 +434,7 @@ fn ShelfHeader(
                                 }
                             }
                         }
+                    }
                     }
                 }
             }
