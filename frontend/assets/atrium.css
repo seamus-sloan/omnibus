@@ -5812,6 +5812,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .shelf-row-count { font-size: 11px; color: var(--ink-3); }
+.shelf-row-owner { margin-left: 6px; font-size: 10.5px; color: var(--ink-3); font-weight: 400; }
 .shelf-row-vis { display: inline-flex; color: var(--ink-3); flex: 0 0 auto; }
 .shelf-rail-foot { font-size: 10.5px; color: var(--ink-3); margin: 2px 0 0; }
 
@@ -5953,6 +5954,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   border: 1px solid var(--line-2); border-radius: 6px; padding: 2px 7px;
 }
 .shelf-badge--vis { color: var(--accent); }
+.shelf-badge--owner { text-transform: none; letter-spacing: 0; color: var(--ink-3); }
 .shelf-title-row { display: flex; align-items: center; gap: 12px; }
 .shelf-title { margin: 0; font-size: 26px; color: var(--ink-0); flex: 1 1 auto; }
 .shelf-actions { position: relative; }

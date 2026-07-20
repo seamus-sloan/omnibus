@@ -28,6 +28,9 @@ pub fn ShelvesRail(active: RailActive) -> Element {
     let mut shelves = use_signal(Vec::<ShelfSummary>::new);
     let mut show_create = use_signal(|| false);
     let url = use_server_url();
+    // `None` until the boot effect resolves the viewer (SSR + first paint), so
+    // attribution only appears once we know whose shelves aren't ours.
+    let viewer_id = crate::use_current_user_summary()().map(|u| u.id);
 
     let refetch_url = url.clone();
     let refetch = move || {
@@ -79,7 +82,7 @@ pub fn ShelvesRail(active: RailActive) -> Element {
                 }
 
                 for s in shelves.read().iter() {
-                    {render_shelf_row(s, active)}
+                    {render_shelf_row(s, active, viewer_id)}
                 }
             }
 
@@ -98,8 +101,9 @@ pub fn ShelvesRail(active: RailActive) -> Element {
     }
 }
 
-/// One shelf row: kind marker, name, count, visibility icon.
-fn render_shelf_row(s: &ShelfSummary, active: RailActive) -> Element {
+/// One shelf row: kind marker, name (+ owner attribution when not yours),
+/// count, visibility icon.
+fn render_shelf_row(s: &ShelfSummary, active: RailActive, viewer_id: Option<i64>) -> Element {
     let id = s.id;
     let is_active = matches!(active, RailActive::Shelf(other) if other == id);
     let class = if is_active {
@@ -108,6 +112,8 @@ fn render_shelf_row(s: &ShelfSummary, active: RailActive) -> Element {
         "shelf-row"
     };
     let accent = s.accent.clone().unwrap_or_else(|| "var(--accent)".into());
+    // Attribute a shelf that isn't the viewer's (only once the viewer is known).
+    let not_mine = viewer_id.is_some_and(|vid| vid != s.owner_user_id);
 
     rsx! {
         Link {
@@ -126,7 +132,12 @@ fn render_shelf_row(s: &ShelfSummary, active: RailActive) -> Element {
                     },
                 }
             }
-            span { class: "shelf-row-name", "{s.name}" }
+            span { class: "shelf-row-name",
+                "{s.name}"
+                if not_mine {
+                    span { class: "shelf-row-owner mono", "by {s.owner_username}" }
+                }
+            }
             span { class: "shelf-row-count mono", "{s.book_count}" }
             span { class: "shelf-row-vis",
                 match s.visibility {

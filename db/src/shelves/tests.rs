@@ -402,10 +402,11 @@ async fn list_visible_scopes_by_owner_public_and_admin() {
     public.visibility = Visibility::Public;
     create_shelf(&pool, alice, &public).await.unwrap();
 
-    // Bob sees only Alice's public shelf.
+    // Bob sees only Alice's public shelf, attributed to its owner.
     let bob_view = list_visible_shelves(&pool, bob, false).await.unwrap();
     assert_eq!(bob_view.len(), 1);
     assert_eq!(bob_view[0].name, "Alice public");
+    assert_eq!(bob_view[0].owner_username, "alice");
 
     // Alice sees both of her own.
     assert_eq!(
@@ -423,6 +424,18 @@ async fn list_visible_scopes_by_owner_public_and_admin() {
             .len(),
         2
     );
+}
+
+#[tokio::test]
+async fn get_shelf_carries_owner_username() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = make_user(&pool, "alice", false).await;
+    let shelf = create_shelf(&pool, alice, &manual_req("Alice shelf", vec![]))
+        .await
+        .unwrap();
+
+    let fetched = get_shelf(&pool, shelf.id).await.unwrap().unwrap();
+    assert_eq!(fetched.owner_username, "alice");
 }
 
 /// Bulk-insert `count` manual shelf rows owned by `owner_id` without going
@@ -817,6 +830,21 @@ async fn can_view_and_can_edit_enforce_visibility() {
     assert!(can_edit(&full, owner, false));
     assert!(!can_edit(&full, owner + 1, false));
     assert!(can_edit(&full, owner + 1, true)); // admin
+}
+
+#[tokio::test]
+async fn public_shelf_is_viewable_but_not_editable_by_non_owner() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let owner = make_user(&pool, "owner", false).await;
+    let mut req = manual_req("Public", vec![]);
+    req.visibility = Visibility::Public;
+    let shelf = create_shelf(&pool, owner, &req).await.unwrap();
+    let full = get_shelf(&pool, shelf.id).await.unwrap().unwrap();
+
+    // AC1: a non-owner may read a public shelf. AC2: but never mutate it —
+    // the guard the rpc layer (`shelf_for_edit`) enforces before every write.
+    assert!(can_view(&full, owner + 1, false));
+    assert!(!can_edit(&full, owner + 1, false));
 }
 
 #[tokio::test]

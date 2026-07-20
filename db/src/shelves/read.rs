@@ -42,10 +42,12 @@ pub async fn list_visible_shelves(
     is_admin: bool,
 ) -> Result<Vec<ShelfSummary>, ShelfError> {
     let rows = sqlx::query(
-        "SELECT id, owner_user_id, kind, name, visibility, accent, match_mode
-           FROM shelves
-          WHERE owner_user_id = ? OR visibility = 'public' OR ?
-          ORDER BY position, id
+        "SELECT s.id, s.owner_user_id, u.username AS owner_username,
+                s.kind, s.name, s.visibility, s.accent, s.match_mode
+           FROM shelves s
+           JOIN users u ON u.id = s.owner_user_id
+          WHERE s.owner_user_id = ? OR s.visibility = 'public' OR ?
+          ORDER BY s.position, s.id
           LIMIT ?",
     )
     .bind(viewer_id)
@@ -57,6 +59,7 @@ pub async fn list_visible_shelves(
     struct VisibleShelfRow {
         id: i64,
         owner_user_id: i64,
+        owner_username: String,
         kind: ShelfKind,
         name: String,
         visibility: Visibility,
@@ -76,6 +79,7 @@ pub async fn list_visible_shelves(
         parsed.push(VisibleShelfRow {
             id,
             owner_user_id: r.try_get("owner_user_id")?,
+            owner_username: r.try_get("owner_username")?,
             kind,
             name: r.try_get("name")?,
             visibility: parse_visibility(&r.try_get::<String, _>("visibility")?)?,
@@ -100,6 +104,7 @@ pub async fn list_visible_shelves(
         out.push(ShelfSummary {
             id: row.id,
             owner_user_id: row.owner_user_id,
+            owner_username: row.owner_username,
             kind: row.kind,
             name: row.name,
             visibility: row.visibility,
@@ -113,8 +118,11 @@ pub async fn list_visible_shelves(
 /// Full shelf detail (including its rules), or `None` if the id is unknown.
 pub async fn get_shelf(pool: &SqlitePool, id: i64) -> Result<Option<Shelf>, ShelfError> {
     let Some(r) = sqlx::query(
-        "SELECT id, owner_user_id, kind, name, description, visibility, accent, match_mode
-           FROM shelves WHERE id = ?",
+        "SELECT s.id, s.owner_user_id, u.username AS owner_username,
+                s.kind, s.name, s.description, s.visibility, s.accent, s.match_mode
+           FROM shelves s
+           JOIN users u ON u.id = s.owner_user_id
+          WHERE s.id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -149,6 +157,7 @@ pub async fn get_shelf(pool: &SqlitePool, id: i64) -> Result<Option<Shelf>, Shel
     Ok(Some(Shelf {
         id,
         owner_user_id,
+        owner_username: r.try_get("owner_username")?,
         kind,
         name: r.try_get("name")?,
         description: r.try_get("description")?,
