@@ -134,6 +134,20 @@ async fn stream_audio_to_tempfile(
             .map_err(|e| UploadError::internal("write upload chunk", e))?;
     }
 
+    // Flush + fsync before the path is handed to a separate reader (lofty in a
+    // `spawn_blocking`, or `std::fs::copy` on commit). Without this the inspect
+    // path can reopen the tempfile before the streamed writes are durably
+    // visible and lofty reads an empty/partial file → a spurious 415. Surfaced
+    // only under CI's Linux filesystem timing; the commit path's extra awaits
+    // masked it.
+    f.flush()
+        .await
+        .map_err(|e| UploadError::internal("flush audio tempfile", e))?;
+    f.sync_all()
+        .await
+        .map_err(|e| UploadError::internal("sync audio tempfile", e))?;
+    drop(f);
+
     if prefix.is_empty() {
         return Err(UploadError::MissingFile);
     }
