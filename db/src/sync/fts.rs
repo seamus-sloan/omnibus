@@ -9,48 +9,59 @@
 //! job [`rebuild_all_fts`] is built on the same door.
 
 use anyhow::Context;
-use sqlx::{Row, SqliteConnection, SqlitePool};
+use sqlx::{SqliteConnection, SqlitePool};
+
+/// The `SELECT` projection shared by the per-book upsert and the
+/// whole-table rebuild: same columns, same correlated subqueries for the
+/// taxonomy joins and the ISBN lookup. Kept as one constant so the two
+/// call sites can't drift apart — append `WHERE b.id = ?` for the
+/// single-book form, or leave it off to project every row.
+///
+/// `authors` / `series` / `tags` mirror the rename-trigger projections in
+/// 0005_fts5.sql so the inline upsert and the triggers agree on the same
+/// text. `isbn` takes the first ISBN-scheme identifier (case-insensitive)
+/// straight from `book_identifiers` — the canonical source now that the
+/// denormalized `books.isbn` column is gone (F8).
+const FTS_SELECT_FROM_BOOKS: &str = "
+    SELECT
+        b.id,
+        COALESCE(b.title, ''),
+        COALESCE((SELECT group_concat(a.name, ' ')
+                  FROM books_authors_link l JOIN authors a ON a.id = l.author
+                  WHERE l.book = b.id), ''),
+        COALESCE((SELECT group_concat(s.name, ' ')
+                  FROM books_series_link l JOIN series s ON s.id = l.series
+                  WHERE l.book = b.id), ''),
+        COALESCE((SELECT group_concat(t.name, ' ')
+                  FROM books_tags_link l JOIN tags t ON t.id = l.tag
+                  WHERE l.book = b.id), ''),
+        COALESCE(b.description, ''),
+        COALESCE((SELECT bi.value FROM book_identifiers bi
+                  WHERE bi.book_id = b.id AND bi.scheme = 'ISBN' COLLATE NOCASE
+                  LIMIT 1), '')
+     FROM books b";
 
 /// Delete-then-insert the `books_fts` row for `book_id`, sourcing the
 /// indexed text from the canonical `books` row plus its taxonomy links.
 ///
-/// This is the only place that inserts a `books_fts` row. The column set
-/// (`title, authors, series, tags, description, isbn`) is identical for
-/// ebooks and audiobooks — both live in the same `books` table and the
-/// joins below read whatever link rows exist — so one door serves both.
-/// A no-op INSERT when `book_id` has no `books` row, but callers only
-/// pass live ids.
+/// This is the only place that inserts a single `books_fts` row (the
+/// whole-table rebuild in [`rebuild_all_fts`] uses the same projection but
+/// batches it into one statement). The column set (`title, authors,
+/// series, tags, description, isbn`) is identical for ebooks and
+/// audiobooks — both live in the same `books` table and the joins below
+/// read whatever link rows exist — so one door serves both. A no-op
+/// INSERT when `book_id` has no `books` row, but callers only pass live
+/// ids.
 pub(crate) async fn upsert_fts(
     conn: &mut SqliteConnection,
     book_id: i64,
 ) -> Result<(), sqlx::Error> {
     delete_fts(&mut *conn, book_id).await?;
-    // `authors` / `series` / `tags` mirror the rename-trigger projections
-    // in 0005_fts5.sql so the inline upsert and the triggers agree on the
-    // same text. `isbn` takes the first ISBN-scheme identifier
-    // (case-insensitive) straight from `book_identifiers` — the canonical
-    // source now that the denormalized `books.isbn` column is gone (F8).
-    sqlx::query(
+    sqlx::query(&format!(
         "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn)
-         SELECT
-            b.id,
-            COALESCE(b.title, ''),
-            COALESCE((SELECT group_concat(a.name, ' ')
-                      FROM books_authors_link l JOIN authors a ON a.id = l.author
-                      WHERE l.book = b.id), ''),
-            COALESCE((SELECT group_concat(s.name, ' ')
-                      FROM books_series_link l JOIN series s ON s.id = l.series
-                      WHERE l.book = b.id), ''),
-            COALESCE((SELECT group_concat(t.name, ' ')
-                      FROM books_tags_link l JOIN tags t ON t.id = l.tag
-                      WHERE l.book = b.id), ''),
-            COALESCE(b.description, ''),
-            COALESCE((SELECT bi.value FROM book_identifiers bi
-                      WHERE bi.book_id = b.id AND bi.scheme = 'ISBN' COLLATE NOCASE
-                      LIMIT 1), '')
-         FROM books b
-         WHERE b.id = ?",
-    )
+         {FTS_SELECT_FROM_BOOKS}
+         WHERE b.id = ?"
+    ))
     .bind(book_id)
     .execute(&mut *conn)
     .await?;
@@ -70,14 +81,16 @@ pub(crate) async fn delete_fts(
     Ok(())
 }
 
-/// Rebuild the entire `books_fts` index from `books`: drop every row,
-/// then upsert one row per book through [`upsert_fts`]. Used by the admin
-/// "rebuild search index" job to repair any drift left by a failed
+/// Rebuild the entire `books_fts` index from `books`: drop every row, then
+/// re-insert every row in one batched `INSERT ... SELECT`. Used by the
+/// admin "rebuild search index" job to repair any drift left by a failed
 /// post-commit refresh. Idempotent — safe to re-run.
 ///
-/// Runs in a single transaction so the index is never observed empty
-/// mid-rebuild. Orphan `books_fts` rows (rowid with no `books` row) are
-/// swept by the leading `DELETE`.
+/// Two DML statements total regardless of library size — previously this
+/// looped `upsert_fts` per book (2N statements for N books, one DELETE +
+/// one INSERT each). Runs in a single transaction so the index is never
+/// observed empty mid-rebuild. Orphan `books_fts` rows (rowid with no
+/// `books` row) are swept by the leading `DELETE`.
 pub async fn rebuild_all_fts(pool: &SqlitePool) -> anyhow::Result<()> {
     let mut tx = pool
         .begin()
@@ -87,20 +100,13 @@ pub async fn rebuild_all_fts(pool: &SqlitePool) -> anyhow::Result<()> {
         .execute(&mut *tx)
         .await
         .context("rebuild_all_fts: clear books_fts")?;
-    let ids: Vec<i64> = sqlx::query("SELECT id FROM books ORDER BY id")
-        .fetch_all(&mut *tx)
-        .await
-        .context("rebuild_all_fts: list book ids")?
-        .into_iter()
-        .map(|r| r.get::<i64, _>("id"))
-        .collect();
-    for id in ids {
-        // The DELETE above already cleared every row, but `upsert_fts`
-        // re-runs a per-id delete first; harmless on an empty table.
-        upsert_fts(&mut tx, id)
-            .await
-            .with_context(|| format!("rebuild_all_fts: upsert book {id}"))?;
-    }
+    sqlx::query(&format!(
+        "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn)
+         {FTS_SELECT_FROM_BOOKS}"
+    ))
+    .execute(&mut *tx)
+    .await
+    .context("rebuild_all_fts: repopulate books_fts")?;
     tx.commit()
         .await
         .context("rebuild_all_fts: commit transaction")?;
