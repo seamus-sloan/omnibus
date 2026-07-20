@@ -1,9 +1,12 @@
 //! Acceptance tests for the `books_fts` choke-point: the no-orphan
 //! invariant after every public write path, the cross-format attach gap
 //! regression (a newly-attached format's ISBN must become searchable),
-//! and `rebuild_all_fts` reconstructing a corrupted index.
+//! `rebuild_all_fts` reconstructing a corrupted or fully-emptied index,
+//! and its batched `INSERT ... SELECT` matching the per-book `upsert_fts`
+//! path row-for-row.
 
 use omnibus_shared::{Contributor, EbookMetadata, Identifier};
+use sqlx::Row;
 
 use super::*;
 use crate::ebook::IndexedBook;
@@ -69,6 +72,72 @@ async fn fts_isbn_hits(pool: &sqlx::SqlitePool, isbn: &str) -> i64 {
         .fetch_one(pool)
         .await
         .unwrap()
+}
+
+/// One `books_fts` row's plain-text columns, ordered by `rowid`. Used to
+/// diff the batched rebuild's output against the per-book upsert path.
+type FtsRowSnapshot = (i64, String, String, String, String, String, String);
+
+/// Snapshot every `books_fts` row (all seven columns) ordered by `rowid`,
+/// so two populations of the same `books` table can be compared for exact
+/// content equality regardless of which code path produced them.
+async fn snapshot_fts_rows(pool: &sqlx::SqlitePool) -> Vec<FtsRowSnapshot> {
+    sqlx::query(
+        "SELECT rowid, title, authors, series, tags, description, isbn
+         FROM books_fts ORDER BY rowid",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|r| {
+        (
+            r.get::<i64, _>("rowid"),
+            r.get::<String, _>("title"),
+            r.get::<String, _>("authors"),
+            r.get::<String, _>("series"),
+            r.get::<String, _>("tags"),
+            r.get::<String, _>("description"),
+            r.get::<String, _>("isbn"),
+        )
+    })
+    .collect()
+}
+
+/// Seed a varied fixture exercising every branch of the FTS projection:
+/// multiple authors, a series, multiple tags, an ISBN, and a book with
+/// none of the optional taxonomy links — so a diff between the per-book
+/// and batched projections would catch a mismatch in any one column.
+async fn seed_varied_fts_fixture(pool: &sqlx::SqlitePool) {
+    sync_books(
+        pool,
+        "/lib",
+        SyncPlan {
+            new_books: vec![
+                indexed(
+                    "multi.epub",
+                    Some("Multi Author Saga"),
+                    &["Ada Lovelace", "Grace Hopper"],
+                    &["fiction", "classic"],
+                    Some(("Saga", "1")),
+                    None,
+                ),
+                indexed_with_isbn("solo.epub", "Solo Work", "Bram Stoker", "9781111111111"),
+                indexed("bare.epub", Some("Bare Book"), &[], &[], None, None),
+                indexed(
+                    "tags.epub",
+                    Some("Tagged Only"),
+                    &["Cy"],
+                    &["nonfiction", "essay", "history"],
+                    None,
+                    None,
+                ),
+            ],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -465,4 +534,80 @@ async fn upsert_and_delete_fts_round_trip_a_single_row() {
         .await
         .unwrap();
     assert_eq!(after_second, 1);
+}
+
+#[tokio::test]
+async fn rebuild_all_fts_batched_insert_matches_per_book_upsert_fts_row_for_row() {
+    // Regression for the batching change (issue #1166): `rebuild_all_fts`
+    // used to loop `upsert_fts` once per book (one DELETE + one INSERT
+    // each); it now does a single whole-table `DELETE` + `INSERT ...
+    // SELECT`. The two share the `FTS_SELECT_FROM_BOOKS` projection, but
+    // this test diffs their actual output row-for-row so a future edit to
+    // either query can't silently drift the two apart.
+    let _covers = CoversTempDir::new("fts_diff_batched_vs_per_book");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_varied_fts_fixture(&pool).await;
+
+    // `sync_books`'s New path already populated `books_fts` by calling
+    // `upsert_fts` once per inserted book — capture that as the per-book
+    // reference before touching the table.
+    let ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM books ORDER BY id")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(ids.len(), 4, "fixture should seed four distinct books");
+    let via_per_book_upsert = snapshot_fts_rows(&pool).await;
+    assert_eq!(via_per_book_upsert.len(), 4);
+
+    // Wipe the index and repopulate it through the new batched rebuild.
+    sqlx::query("DELETE FROM books_fts")
+        .execute(&pool)
+        .await
+        .unwrap();
+    rebuild_all_fts(&pool).await.unwrap();
+    let via_batched_rebuild = snapshot_fts_rows(&pool).await;
+
+    assert_eq!(
+        via_per_book_upsert, via_batched_rebuild,
+        "the batched whole-table INSERT must produce byte-identical rows \
+         to the per-book upsert_fts path for every book"
+    );
+}
+
+#[tokio::test]
+async fn rebuild_all_fts_fully_repopulates_multi_book_library_after_total_index_loss() {
+    // Acceptance criterion: a multi-book fixture's FTS table is fully
+    // repopulated after the batched rebuild, even from a completely empty
+    // index (not just a partially-drifted one, covered separately by
+    // `rebuild_all_fts_reconstructs_index_after_corruption`).
+    let _covers = CoversTempDir::new("fts_rebuild_full_repopulation");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_varied_fts_fixture(&pool).await;
+
+    sqlx::query("DELETE FROM books_fts")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books_fts").await, 0);
+
+    rebuild_all_fts(&pool).await.unwrap();
+
+    assert_fts_invariant(&pool).await;
+    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 4);
+    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books_fts").await, 4);
+    // Spot-check every branch of the projection actually landed in the
+    // rebuilt index: multi-author group_concat, ISBN, and multi-tag.
+    let multi_author_hits: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM books_fts WHERE authors MATCH 'Lovelace'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(multi_author_hits, 1);
+    assert_eq!(fts_isbn_hits(&pool, "9781111111111").await, 1);
+    let tag_hits: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM books_fts WHERE tags MATCH 'history'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(tag_hits, 1);
 }
