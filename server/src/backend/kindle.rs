@@ -28,9 +28,9 @@ impl SendBody {
     /// Reject a `book_uuid` over [`omnibus_shared::BOOK_UUID_MAX_LEN`] before
     /// any DB round trip.
     fn validate(&self) -> Result<(), String> {
-        if self.book_uuid.chars().count() > omnibus_shared::BOOK_UUID_MAX_LEN {
+        if self.book_uuid.len() > omnibus_shared::BOOK_UUID_MAX_LEN {
             return Err(format!(
-                "book_uuid must be ≤ {} characters",
+                "book_uuid must be ≤ {} bytes",
                 omnibus_shared::BOOK_UUID_MAX_LEN
             ));
         }

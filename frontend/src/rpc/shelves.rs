@@ -4,9 +4,12 @@
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
-    validate_book_uuids, validate_rule_count, CreateShelfRequest, MatchMode, RulePreview, Shelf,
-    ShelfPage, ShelfRule, ShelfSummary, SortDir, SortKey, UpdateShelfRequest,
+    CreateShelfRequest, MatchMode, RulePreview, Shelf, ShelfPage, ShelfRule, ShelfSummary, SortDir,
+    SortKey, UpdateShelfRequest,
 };
+
+#[cfg(feature = "server")]
+use omnibus_shared::{validate_book_uuids, validate_rule_count};
 
 #[cfg(feature = "server")]
 use omnibus_db as db;

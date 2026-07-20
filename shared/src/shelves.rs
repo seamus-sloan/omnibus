@@ -362,9 +362,9 @@ pub fn validate_book_uuids(uuids: &[String]) -> Result<(), String> {
         ));
     }
     for uuid in uuids {
-        if uuid.chars().count() > crate::BOOK_UUID_MAX_LEN {
+        if uuid.len() > crate::BOOK_UUID_MAX_LEN {
             return Err(format!(
-                "book uuid must be ≤ {} characters",
+                "book uuid must be ≤ {} bytes",
                 crate::BOOK_UUID_MAX_LEN
             ));
         }

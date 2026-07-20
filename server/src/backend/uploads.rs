@@ -253,13 +253,13 @@ async fn read_text_field_capped(
             .await
             .map_err(|e| UploadError::internal("read multipart text chunk", e))?;
         let Some(chunk) = chunk else { break };
-        buf.extend_from_slice(&chunk);
-        if buf.len() > cap {
+        if buf.len() + chunk.len() > cap {
             return Err(UploadError::FieldTooLarge {
                 field: field_name,
                 cap,
             });
         }
+        buf.extend_from_slice(&chunk);
     }
     Ok(String::from_utf8(buf).ok())
 }
