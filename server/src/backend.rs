@@ -34,6 +34,7 @@ mod kindle;
 mod overrides;
 mod progress;
 mod ratings;
+mod scan;
 mod search;
 mod series;
 mod settings;
@@ -358,6 +359,15 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/ratings/{uuid}",
             get(ratings::get_rating).delete(ratings::delete_rating),
         )
+        // Physical Check-In scan flow — mobile-facing REST. Web hits the
+        // analogous `/api/rpc/scan/*` server functions.
+        .route("/api/scan/resolve", post(scan::post_resolve))
+        .route("/api/scan/check-in", post(scan::post_check_in))
+        .route(
+            "/api/scan/physical-only",
+            post(scan::post_add_physical_only),
+        )
+        .route("/api/scan/wishlist", post(scan::post_wishlist_add))
         // F3.1 shelves — mobile-facing REST. Web hits the analogous
         // `/api/rpc/shelves*` server functions. `/preview` is registered before
         // the `{id}` param route so it can't be shadowed.
