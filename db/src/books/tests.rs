@@ -2452,4 +2452,12 @@ async fn physical_only_book_is_visible_but_wishlist_only_is_hidden() {
     // AC2: wishlist-only book is not searchable.
     let miss = search_books(&pool, "/lib", "Wishlist Only").await.unwrap();
     assert!(miss.is_empty());
+
+    // AC1: the physical-only book contributes to sidebar facets even though it
+    // lives under the synthetic `physical://local` root, not `/lib`.
+    let facets = library_facets(&pool, &["/lib"]).await.unwrap();
+    assert!(
+        facets.authors.iter().any(|f| f.value == "Print Author"),
+        "physical-only book's author must appear in facets"
+    );
 }

@@ -11,8 +11,9 @@ use sqlx::SqlitePool;
 
 /// Per-facet book counts for `library_paths`, ordered by count descending then
 /// value ascending (the order the sidebar renders). Empty `library_paths`
-/// returns empty facets. Books with no backing file (fileless) are excluded,
-/// matching the list/count read paths.
+/// returns empty facets. A book counts iff it's file-backed under a configured
+/// library or has a physical copy (matching the list read paths); a fileless
+/// book with no physical copy is excluded.
 pub async fn library_facets(
     pool: &SqlitePool,
     library_paths: &[&str],
@@ -30,7 +31,8 @@ pub async fn library_facets(
     })
 }
 
-/// Author facet counts: books-per-author over the fileless-excluded library.
+/// Author facet counts: books-per-author over the visible library (file-backed
+/// under a configured root, or with a physical copy).
 async fn author_facets(
     pool: &SqlitePool,
     ph: &str,
@@ -57,7 +59,8 @@ async fn author_facets(
     .await
 }
 
-/// Series facet counts, excluding the empty-name series and fileless books.
+/// Series facet counts, excluding empty-name series and books with neither a
+/// file nor a physical copy.
 async fn series_facets(
     pool: &SqlitePool,
     ph: &str,
@@ -72,10 +75,10 @@ async fn series_facets(
               JOIN series s ON s.id = bsl.series
               JOIN books b ON b.id = bsl.book
               JOIN scan_roots l ON l.id = b.library_id
-             WHERE l.path IN ({ph})
-               AND s.name <> ''
-               AND (EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)
-                   OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
+             WHERE s.name <> ''
+               AND ((l.path IN ({ph})
+                     AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id))
+                 OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
              GROUP BY s.name
              ORDER BY count DESC, value ASC
             "
@@ -127,10 +130,10 @@ async fn tag_facets(
               JOIN tags t ON t.id = btl.tag
               JOIN books b ON b.id = btl.book
               JOIN scan_roots l ON l.id = b.library_id
-             WHERE l.path IN ({ph})
-               AND t.name <> ''
-               AND (EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)
-                   OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
+             WHERE t.name <> ''
+               AND ((l.path IN ({ph})
+                     AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id))
+                 OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
              GROUP BY t.name
              ORDER BY count DESC, value ASC
             "

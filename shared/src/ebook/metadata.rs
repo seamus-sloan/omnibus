@@ -88,8 +88,7 @@ pub struct EbookMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub formats: Vec<String>,
 
-    /// Whether the book has ≥1 physical copy checked in — drives the physical
-    /// ownership badge alongside the digital `formats`.
+    /// Whether the book has ≥1 physical copy checked in (drives the physical badge).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub has_physical: bool,
 
