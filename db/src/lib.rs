@@ -30,6 +30,7 @@ pub mod metadata_overrides;
 pub mod missing_files;
 pub mod normalize;
 pub mod palette;
+pub mod physical;
 pub mod pool;
 pub mod progress;
 pub mod ratings;
@@ -74,6 +75,11 @@ pub use missing_files::{
     MISSING_FILES_RETENTION_DAYS,
 };
 pub use palette::*;
+pub use physical::{
+    add_physical_copy, add_wishlist_entry, create_fileless_book, delete_physical_copy,
+    list_physical_copies, list_wishlist, remove_wishlist_entry, FilelessBook, FilelessCover,
+    PhysicalError,
+};
 pub use pool::*;
 pub use settings::*;
 pub use shelves::{
