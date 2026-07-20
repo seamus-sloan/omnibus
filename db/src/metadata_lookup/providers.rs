@@ -60,6 +60,29 @@ fn client() -> reqwest::Result<reqwest::Client> {
     Ok(CLIENT.get().cloned().unwrap_or(new))
 }
 
+/// Fetch a provider-hosted cover image, returning `(content_type, bytes)`.
+/// `None` on any failure — a missing cover must never fail a check-in, and the
+/// covers pipeline treats a book with no file as simply "no cover".
+pub async fn fetch_cover(url: &str) -> Option<(String, Vec<u8>)> {
+    let resp = client()
+        .ok()?
+        .get(url)
+        .timeout(LOOKUP_TIMEOUT)
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?;
+    let mime = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("image/jpeg")
+        .to_string();
+    let bytes = resp.bytes().await.ok()?.to_vec();
+    (!bytes.is_empty()).then_some((mime, bytes))
+}
+
 // ── Open Library ─────────────────────────────────────────────────
 
 /// The `jscmd=data` response is a map keyed `"ISBN:<isbn>"`; a missing key means

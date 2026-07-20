@@ -35,6 +35,7 @@ pub mod physical;
 pub mod pool;
 pub mod progress;
 pub mod ratings;
+pub mod scan;
 pub mod scanner;
 pub mod settings;
 pub mod shelves;
@@ -85,6 +86,7 @@ pub use physical::{
     PhysicalError,
 };
 pub use pool::*;
+pub use scan::{add_physical_only, resolve_scan, wishlist_add, ScanError};
 pub use settings::*;
 pub use shelves::{
     add_books, can_edit, can_view, create_shelf, delete_shelf, get_shelf, list_visible_shelves,
