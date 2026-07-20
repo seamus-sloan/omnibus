@@ -4,8 +4,8 @@
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
-    CreateShelfRequest, MatchMode, RulePreview, Shelf, ShelfPage, ShelfRule, ShelfSummary, SortDir,
-    SortKey, UpdateShelfRequest,
+    validate_book_uuids, validate_rule_count, CreateShelfRequest, MatchMode, RulePreview, Shelf,
+    ShelfPage, ShelfRule, ShelfSummary, SortDir, SortKey, UpdateShelfRequest,
 };
 
 #[cfg(feature = "server")]
@@ -116,6 +116,9 @@ pub async fn rpc_get_shelf_page(
 /// Append books to a hand-picked shelf (owner or admin).
 #[post("/api/rpc/shelves/add-books", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_add_shelf_books(id: i64, book_uuids: Vec<String>) -> Result<()> {
+    if let Err(e) = validate_book_uuids(&book_uuids) {
+        return Err(ServerFnError::new(e).into());
+    }
     shelf_for_edit(&pool.0, id, &user).await?;
     Ok(db::add_books(&pool.0, id, &book_uuids, user.id)
         .await
@@ -137,6 +140,9 @@ pub async fn rpc_preview_shelf_rule(
     match_mode: MatchMode,
     rules: Vec<ShelfRule>,
 ) -> Result<RulePreview> {
+    if let Err(e) = validate_rule_count(&rules) {
+        return Err(ServerFnError::new(e).into());
+    }
     for rule in &rules {
         if let Err(e) = rule.validate() {
             return Err(ServerFnError::new(e).into());

@@ -19,6 +19,16 @@ pub const SHELF_DESCRIPTION_MAX_LEN: usize = 2048;
 /// (a tag/author/series name, a rating, a date window), never free text.
 pub const SHELF_RULE_VALUE_MAX_LEN: usize = 512;
 
+/// Max number of book uuids accepted in one create/add-books request. Bulk
+/// membership writes chunk the DB insert, but the request itself still needs
+/// a cap so an unbounded array can't force a large batch before rejection.
+pub const MAX_SHELF_BOOK_UUIDS: usize = 2000;
+
+/// Max number of smart-rule conditions accepted in one create/preview
+/// request. Each rule's `value` is capped individually; this bounds the
+/// count so a request can't force an unbounded per-rule validation pass.
+pub const MAX_PREVIEW_RULES: usize = 50;
+
 /// Kind of shelf, fixed at creation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -249,6 +259,7 @@ impl CreateShelfRequest {
     pub fn validate(&self) -> Result<(), String> {
         validate_name(&self.name)?;
         validate_description(&self.description)?;
+        validate_book_uuids(&self.book_uuids)?;
         match self.kind {
             ShelfKind::Smart => {
                 if self.match_mode.is_none() {
@@ -260,6 +271,7 @@ impl CreateShelfRequest {
                 if !self.book_uuids.is_empty() {
                     return Err("smart shelves cannot have hand-picked books".into());
                 }
+                validate_rule_count(&self.rules)?;
                 for r in &self.rules {
                     r.validate()?;
                 }
@@ -321,10 +333,55 @@ pub struct RulePreviewRequest {
     pub rules: Vec<ShelfRule>,
 }
 
+impl RulePreviewRequest {
+    /// Reject more than [`MAX_PREVIEW_RULES`] conditions, then each rule
+    /// itself. Handlers translate `Err(_)` into a 400/422.
+    pub fn validate(&self) -> Result<(), String> {
+        validate_rule_count(&self.rules)?;
+        for r in &self.rules {
+            r.validate()?;
+        }
+        Ok(())
+    }
+}
+
 /// One page of a shelf's books (v1: capped, no cursor).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShelfPage {
     pub books: Vec<EbookMetadata>,
+}
+
+/// Reject an over-long list of book uuids, or any uuid string itself over
+/// [`crate::BOOK_UUID_MAX_LEN`], before a DB round trip. Shared by
+/// `CreateShelfRequest::validate`, the REST `AddBooksRequest`, and
+/// `rpc_add_shelf_books`.
+pub fn validate_book_uuids(uuids: &[String]) -> Result<(), String> {
+    if uuids.len() > MAX_SHELF_BOOK_UUIDS {
+        return Err(format!(
+            "cannot submit more than {MAX_SHELF_BOOK_UUIDS} book uuids at once"
+        ));
+    }
+    for uuid in uuids {
+        if uuid.chars().count() > crate::BOOK_UUID_MAX_LEN {
+            return Err(format!(
+                "book uuid must be ≤ {} characters",
+                crate::BOOK_UUID_MAX_LEN
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Reject more than [`MAX_PREVIEW_RULES`] conditions before validating each
+/// one. Shared by `RulePreviewRequest::validate`, `CreateShelfRequest::validate`,
+/// and `rpc_preview_shelf_rule`.
+pub fn validate_rule_count(rules: &[ShelfRule]) -> Result<(), String> {
+    if rules.len() > MAX_PREVIEW_RULES {
+        return Err(format!(
+            "cannot submit more than {MAX_PREVIEW_RULES} conditions at once"
+        ));
+    }
+    Ok(())
 }
 
 /// Reject an empty or over-long shelf name.

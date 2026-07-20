@@ -30,6 +30,9 @@ pub async fn rpc_search_palette(q: String) -> Result<PaletteResults> {
 /// search can be unit-tested without the server-fn transport.
 #[cfg(feature = "server")]
 async fn search_palette(pool: &sqlx::SqlitePool, q: &str) -> Result<PaletteResults, ServerFnError> {
+    if omnibus_shared::search_query_too_long(q) {
+        return Err(ServerFnError::new("query too long"));
+    }
     let settings = db::get_settings(pool)
         .await
         .map_err(|e| internal_rpc_error("get settings", e))?;
@@ -52,6 +55,7 @@ async fn search_palette(pool: &sqlx::SqlitePool, q: &str) -> Result<PaletteResul
 mod tests {
     use super::search_palette;
     use omnibus_db::test_support::seed_synced_ebook;
+    use omnibus_shared::SEARCH_QUERY_MAX_LEN;
 
     #[tokio::test]
     async fn search_palette_groups_book_hits_for_a_configured_library() {
@@ -77,5 +81,15 @@ mod tests {
         let pool = omnibus_db::init_db("sqlite::memory:").await.unwrap();
         let results = search_palette(&pool, "anything").await.unwrap();
         assert_eq!(results, omnibus_shared::PaletteResults::default());
+    }
+
+    #[tokio::test]
+    async fn search_palette_rejects_query_over_the_length_cap() {
+        let pool = omnibus_db::init_db("sqlite::memory:").await.unwrap();
+        let oversized = "a".repeat(SEARCH_QUERY_MAX_LEN + 1);
+
+        let result = search_palette(&pool, &oversized).await;
+
+        assert!(result.is_err(), "oversized query must be rejected");
     }
 }

@@ -27,6 +27,13 @@ use super::{internal_rpc_error, AuthUser, PoolExt, WorkerExt};
 /// delivery runs on the worker; poll [`rpc_kindle_send_status`] for its result.
 #[post("/api/rpc/kindle/send", pool: PoolExt, worker: WorkerExt, user: AuthUser)]
 pub async fn rpc_send_to_kindle(book_uuid: String, file_id: Option<i64>) -> Result<u64> {
+    if book_uuid.chars().count() > omnibus_shared::BOOK_UUID_MAX_LEN {
+        return Err(ServerFnError::new(format!(
+            "book_uuid must be ≤ {} characters",
+            omnibus_shared::BOOK_UUID_MAX_LEN
+        ))
+        .into());
+    }
     let recipient = db::auth::get_kindle_email(&pool.0, user.id)
         .await
         .map_err(|e| internal_rpc_error("get kindle email", e))?;

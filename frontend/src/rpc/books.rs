@@ -215,6 +215,9 @@ async fn merge_candidates(
     pool: &sqlx::SqlitePool,
     q: &str,
 ) -> Result<Vec<EbookMetadata>, ServerFnError> {
+    if omnibus_shared::search_query_too_long(q) {
+        return Err(ServerFnError::new("query too long"));
+    }
     let settings = db::get_settings(pool)
         .await
         .map_err(|e| internal_rpc_error("get settings", e))?;
@@ -249,7 +252,17 @@ async fn merge_candidates(
 /// when the vec is truncated.
 #[post("/api/rpc/search", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_search(q: String) -> Result<EbookLibrary> {
-    let settings = db::get_settings(&pool.0)
+    Ok(search_ebooks(&pool.0, &q).await?)
+}
+
+/// Server-side body of [`rpc_search`], extracted so the length-cap guard and
+/// the FTS5 call can be unit-tested without the server-fn transport.
+#[cfg(feature = "server")]
+async fn search_ebooks(pool: &sqlx::SqlitePool, q: &str) -> Result<EbookLibrary, ServerFnError> {
+    if omnibus_shared::search_query_too_long(q) {
+        return Err(ServerFnError::new("query too long"));
+    }
+    let settings = db::get_settings(pool)
         .await
         .map_err(|e| internal_rpc_error("get settings", e))?;
     let ebook = settings.ebook_library_path;
@@ -260,7 +273,7 @@ pub async fn rpc_search(q: String) -> Result<EbookLibrary> {
     }
     let path = paths[0].to_string();
     // Issue #241: single FTS5 pass returns the capped vec and the full count.
-    let (books, total) = db::search_books_for_paths_with_total(&pool.0, &paths, &q)
+    let (books, total) = db::search_books_for_paths_with_total(pool, &paths, q)
         .await
         .map_err(|e| internal_rpc_error("search books", e))?;
     Ok(EbookLibrary {
@@ -332,9 +345,9 @@ pub async fn rpc_get_suggestions(uuid: String) -> Result<SuggestionsResponse> {
 // server`.
 #[cfg(all(test, feature = "server"))]
 mod tests {
-    use super::{ebooks_page, merge_candidates};
+    use super::{ebooks_page, merge_candidates, search_ebooks};
     use omnibus_db::test_support::seed_synced_ebook;
-    use omnibus_shared::{Settings, SortDir, SortKey, ViewFilters};
+    use omnibus_shared::{Settings, SortDir, SortKey, ViewFilters, SEARCH_QUERY_MAX_LEN};
 
     async fn configured_pool(audiobook_path: Option<&str>) -> sqlx::SqlitePool {
         let pool = omnibus_db::init_db("sqlite::memory:").await.unwrap();
@@ -451,5 +464,25 @@ mod tests {
             out.iter().all(|b| seen.insert(b.unique_identifier.clone())),
             "no duplicate unique_identifier may survive the dedup"
         );
+    }
+
+    #[tokio::test]
+    async fn search_ebooks_rejects_query_over_the_length_cap() {
+        let pool = configured_pool(None).await;
+        let oversized = "a".repeat(SEARCH_QUERY_MAX_LEN + 1);
+
+        let result = search_ebooks(&pool, &oversized).await;
+
+        assert!(result.is_err(), "oversized query must be rejected");
+    }
+
+    #[tokio::test]
+    async fn merge_candidates_rejects_query_over_the_length_cap() {
+        let pool = configured_pool(None).await;
+        let oversized = "a".repeat(SEARCH_QUERY_MAX_LEN + 1);
+
+        let result = merge_candidates(&pool, &oversized).await;
+
+        assert!(result.is_err(), "oversized query must be rejected");
     }
 }

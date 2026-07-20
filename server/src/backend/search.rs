@@ -11,15 +11,13 @@ use axum::{
     Json,
 };
 use omnibus_db::{self as db};
+use omnibus_shared::search_query_too_long;
+#[cfg(test)]
+use omnibus_shared::SEARCH_QUERY_MAX_LEN as MAX_SEARCH_QUERY_LEN;
 use serde::Deserialize;
 
 use super::{internal, with_pagination_headers, AppState};
 use crate::auth::AuthUser;
-
-/// Handler-level cap on the decoded `q` parameter length, in bytes. Rejects
-/// abusive input before the search db calls; the db layer still applies its
-/// own finer char-count trim (`cap_query_len`) as a fallback.
-const MAX_SEARCH_QUERY_LEN: usize = 1024;
 
 #[derive(Deserialize)]
 pub(super) struct SearchQuery {
@@ -28,10 +26,10 @@ pub(super) struct SearchQuery {
 
 /// Reject an over-length query with 400 so oversized input is never forwarded
 /// into the search db calls. Returns `Some(response)` when `q` exceeds
-/// [`MAX_SEARCH_QUERY_LEN`].
+/// `omnibus_shared::SEARCH_QUERY_MAX_LEN` — the same cap the RPC search
+/// entrypoints enforce via [`search_query_too_long`].
 fn reject_if_over_length(q: &str) -> Option<Response> {
-    (q.len() > MAX_SEARCH_QUERY_LEN)
-        .then(|| (StatusCode::BAD_REQUEST, "query too long").into_response())
+    search_query_too_long(q).then(|| (StatusCode::BAD_REQUEST, "query too long").into_response())
 }
 
 pub(super) async fn get_search(
