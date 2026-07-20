@@ -231,7 +231,7 @@ jobs:
           n="${{ steps.maestro.outputs.attempts }}"
           echo "Maestro suite attempts: $n/3" >> "$GITHUB_STEP_SUMMARY"
           if [ "${{ steps.maestro.outcome }}" = "success" ] && [ "$n" != "1" ]; then
-            echo "::warning title=Flaky Maestro run::suite passed only on attempt $n of 3 — check the maestro-artifacts-ios artifact"
+            echo "::warning title=Flaky Maestro run::suite passed only on attempt $n of 3 — check the maestro-artifacts-ios-r${{ matrix.repeat }} artifact"
           fi
 
       # Maestro writes per-flow logs + failure screenshots under ~/.maestro.
