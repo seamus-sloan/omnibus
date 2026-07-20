@@ -8,6 +8,8 @@
 //! (`&mut **tx`) and on a pooled connection alike. The full-index repair
 //! job [`rebuild_all_fts`] is built on the same door.
 
+use std::sync::OnceLock;
+
 use anyhow::Context;
 use sqlx::{SqliteConnection, SqlitePool};
 
@@ -57,14 +59,15 @@ pub(crate) async fn upsert_fts(
     book_id: i64,
 ) -> Result<(), sqlx::Error> {
     delete_fts(&mut *conn, book_id).await?;
-    sqlx::query(&format!(
-        "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn)
-         {FTS_SELECT_FROM_BOOKS}
-         WHERE b.id = ?"
-    ))
-    .bind(book_id)
-    .execute(&mut *conn)
-    .await?;
+    static UPSERT_SQL: OnceLock<String> = OnceLock::new();
+    let sql = UPSERT_SQL.get_or_init(|| {
+        format!(
+            "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn)
+             {FTS_SELECT_FROM_BOOKS}
+             WHERE b.id = ?"
+        )
+    });
+    sqlx::query(sql).bind(book_id).execute(&mut *conn).await?;
     Ok(())
 }
 
