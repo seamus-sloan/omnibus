@@ -95,7 +95,11 @@ test("surfaces a distinct error when the member-books refetch fails", async ({
     route.fulfill({ status: 500, body: "boom" }),
   );
 
-  await gotoReady(page, `/shelves/${shelf.id}`);
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/shelves/page", expectedStatus: 500 },
+    async () => gotoReady(page, `/shelves/${shelf.id}`),
+  );
 
   await expect(page.getByTestId("shelf-detail-header")).toContainText(name);
   await expect(page.getByTestId("shelf-refetch-error")).toBeVisible();

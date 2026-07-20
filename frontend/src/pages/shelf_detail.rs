@@ -87,6 +87,10 @@ pub fn ShelfDetailPage(id: i64) -> Element {
                 Err(_) => {
                     // `tracing` isn't linked under the `web` (WASM) feature,
                     // so the signal alone carries the failure to the UI.
+                    // Clear the stale list too — otherwise a refetch failure
+                    // after navigating shelves leaves the prior shelf's
+                    // books on screen under the error banner.
+                    books.set(Vec::new());
                     errored.set(true);
                 }
             }
