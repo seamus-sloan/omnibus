@@ -1,10 +1,8 @@
-//! Per-task-kind handlers. `Worker::execute` is the single dispatch
-//! match — each arm pulls the inputs out of a [`Task`] variant and calls
-//! the owning module (`indexer::reindex`, `author_photos::resolve`,
-//! `thumbs::ensure_thumbnails_sync`). Every arm ends in a [`TaskOutcome`]
-//! whose `Err` text is client-facing (served by `rpc_worker_status` and
-//! the owner-scoped Kindle poll), so no arm may return a raw error's
-//! `Display` verbatim — see the sanitizers below.
+//! Per-task-kind handlers. `Worker::execute`'s single dispatch match pulls
+//! each [`Task`] variant's inputs and calls the owning module. Every arm's
+//! [`TaskOutcome::Err`] text is client-facing (served by `rpc_worker_status`
+//! and the owner-scoped Kindle poll) — no arm may return a raw error's
+//! `Display` verbatim; use the sanitizers below.
 
 use std::sync::Arc;
 
