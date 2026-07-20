@@ -67,8 +67,8 @@ pub struct AddPhysicalOnlyRequest {
 }
 
 /// Add a book to the caller's physical wishlist — either an existing library
-/// book (`book_uuid`) or a new fileless book from external meta. Exactly one of
-/// the two must be set.
+/// book (`book_uuid`) or a new fileless book from external meta. Set one; if
+/// both are present `book_uuid` wins and `meta` is ignored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WishlistAddRequest {
     #[serde(default)]

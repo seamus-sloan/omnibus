@@ -168,6 +168,34 @@ async fn resolve_exact_isbn_returns_already_owned_when_physical_exists() {
 }
 
 #[tokio::test]
+async fn resolve_exact_isbn_tolerates_urn_scheme_and_separators() {
+    let pool = pool().await;
+    seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", None).await;
+    // OPF-style identifier: free-form scheme + hyphenated value.
+    let book_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = 'u1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO book_identifiers (book_id, scheme, value)
+         VALUES (?1, 'urn:isbn', '978-0-13-468599-1')",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = MockServer::start().await; // must not be hit
+
+    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        ScanOutcome::InLibraryUnowned { book } if book.uuid == "u1"
+    ));
+}
+
+#[tokio::test]
 async fn resolve_close_match_via_online_then_norm() {
     let pool = pool().await;
     // Same title/author but NO matching ISBN identifier → exact rung misses.

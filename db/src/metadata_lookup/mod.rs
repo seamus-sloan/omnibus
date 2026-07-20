@@ -11,7 +11,7 @@ mod providers;
 mod tests;
 
 pub use isbn::{normalize_isbn, IsbnError};
-pub use providers::{fetch_cover, MetadataLookupConfig};
+pub use providers::MetadataLookupConfig;
 
 use omnibus_shared::metadata_lookup::ExternalBookMeta;
 

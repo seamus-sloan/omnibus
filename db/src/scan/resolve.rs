@@ -6,8 +6,9 @@ use omnibus_shared::metadata_lookup::ExternalBookMeta;
 use omnibus_shared::physical::WishlistSource;
 use omnibus_shared::scan::{ScanBook, ScanOutcome};
 
+use crate::author_photos::fetch_remote_image;
 use crate::metadata_lookup::{
-    fetch_cover, lookup_isbn, normalize_isbn, IsbnError, MetadataLookupConfig, MetadataLookupError,
+    lookup_isbn, normalize_isbn, IsbnError, MetadataLookupConfig, MetadataLookupError,
 };
 use crate::normalize::{normalize_author, normalize_title};
 use crate::physical::{
@@ -78,12 +79,15 @@ pub async fn add_physical_only(
     added_by_user_id: Option<i64>,
 ) -> Result<String, ScanError> {
     let uuid = create_fileless_from_meta(pool, meta).await?;
-    add_physical_copy(pool, &uuid, Some(&meta.isbn13), added_by_user_id, note).await?;
+    // Store the canonical ISBN per copy (meta arrives over the wire — untrusted).
+    let isbn = canonical_isbn(meta);
+    add_physical_copy(pool, &uuid, isbn.as_deref(), added_by_user_id, note).await?;
     Ok(uuid)
 }
 
 /// Add a book to a user's physical wishlist — an existing library book
-/// (`book_uuid`) or a new fileless book from `meta`. Returns the book's uuid.
+/// (`book_uuid`) or a new fileless book from `meta`. `book_uuid` takes
+/// precedence when both are supplied. Returns the book's uuid.
 pub async fn wishlist_add(
     pool: &SqlitePool,
     user_id: i64,
@@ -101,13 +105,19 @@ pub async fn wishlist_add(
 }
 
 /// Mint a fileless book from external metadata, fetching its cover now.
+///
+/// `meta` crosses the HTTP boundary (`AddPhysicalOnly`/`WishlistAdd` bodies), so
+/// its `cover_url` is client-controlled: the cover fetch goes through the
+/// SSRF-guarded [`fetch_remote_image`] (strict — public IPs only, size-capped)
+/// rather than a raw request, and the ISBN is re-canonicalized before storage.
 async fn create_fileless_from_meta(
     pool: &SqlitePool,
     meta: &ExternalBookMeta,
 ) -> Result<String, ScanError> {
     let cover = match &meta.cover_url {
-        Some(url) => fetch_cover(url)
+        Some(url) => fetch_remote_image(url)
             .await
+            .ok()
             .map(|(mime, bytes)| FilelessCover { mime, bytes }),
         None => None,
     };
@@ -116,7 +126,7 @@ async fn create_fileless_from_meta(
         FilelessBook {
             title: meta.title.clone(),
             authors: meta.authors.clone(),
-            isbn: Some(meta.isbn13.clone()),
+            isbn: canonical_isbn(meta),
             pubdate: meta.year.clone(),
             description: meta.description.clone(),
             cover,
@@ -126,7 +136,19 @@ async fn create_fileless_from_meta(
     Ok(uuid)
 }
 
+/// Canonicalize `meta.isbn13` (untrusted wire input) to a 13-digit ISBN, or
+/// `None` if it doesn't validate — better to store no identifier than a bad one.
+fn canonical_isbn(meta: &ExternalBookMeta) -> Option<String> {
+    normalize_isbn(&meta.isbn13).ok()
+}
+
 /// Exact-identifier rung: the book carrying this ISBN in `book_identifiers`.
+///
+/// OPF identifiers are stored losslessly, so the scheme is free-form
+/// (`ISBN`, `isbn`, `urn:isbn`) and the value may carry hyphens/spaces. Match
+/// any `%isbn%` scheme (case-insensitive) and strip separators from the stored
+/// value before comparing — mirroring `derive_isbn13`'s tolerance — so a real
+/// library ISBN isn't missed and mis-routed to online lookup.
 async fn find_book_by_isbn(
     pool: &SqlitePool,
     isbn13: &str,
@@ -139,7 +161,8 @@ async fn find_book_by_isbn(
                 EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid) AS has_physical
            FROM books b
            JOIN book_identifiers bi ON bi.book_id = b.id
-          WHERE bi.scheme = 'ISBN' AND bi.value = ?1
+          WHERE bi.scheme LIKE '%isbn%'
+            AND REPLACE(REPLACE(bi.value, '-', ''), ' ', '') = ?1
           LIMIT 1",
     )
     .bind(isbn13)
