@@ -22,6 +22,9 @@ pub(super) struct MobileShelfDetailProps {
     pub shelf: Shelf,
     /// The shelf's member books to render as cover cells.
     pub books: Vec<EbookMetadata>,
+    /// Set when the member-books refetch failed, distinct from a genuinely
+    /// empty shelf.
+    pub errored: bool,
     /// Base server URL used to build thumbnail `src`/`srcset`.
     pub server_url: String,
     /// Opens the shared add-books modal (manual shelves).
@@ -39,6 +42,7 @@ pub(super) fn MobileShelfDetail(props: MobileShelfDetailProps) -> Element {
     let MobileShelfDetailProps {
         shelf,
         books,
+        errored,
         server_url,
         on_add,
         on_edit_rules,
@@ -123,6 +127,15 @@ pub(super) fn MobileShelfDetail(props: MobileShelfDetailProps) -> Element {
                     span { class: "m-shelves-entry-sub", "Smart & hand-picked collections" }
                 }
                 span { class: "m-shelves-entry-chevron", {chevron()} }
+            }
+
+            if errored {
+                p {
+                    role: "alert",
+                    class: "error",
+                    "data-testid": "shelf-refetch-error",
+                    "Couldn\u{2019}t refresh this shelf. Check your connection and try again."
+                }
             }
 
             div { class: "m-cover-grid m-shelf-grid", "data-testid": "shelf-grid", role: "list",

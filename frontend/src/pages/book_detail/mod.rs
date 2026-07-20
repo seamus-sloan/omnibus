@@ -329,7 +329,17 @@ fn poll_suggestions_until_resolved(
                                     break;
                                 }
                             }
-                            Err(_) => break,
+                            Err(_) => {
+                                // Mirror the initial-fetch error path below: fall
+                                // back to the empty-ready state so the UI doesn't
+                                // get stuck on "loading suggestions" forever.
+                                if is_current() {
+                                    suggestions.set(Some(SuggestionsResponse::Ready {
+                                        items: Vec::new(),
+                                    }));
+                                }
+                                break;
+                            }
                         }
                     }
                 }

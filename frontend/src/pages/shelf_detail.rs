@@ -41,6 +41,10 @@ pub fn ShelfDetailPage(id: i64) -> Element {
     let mut edit_rules = use_signal(|| false);
     // Bumped to force a refetch after a membership edit.
     let mut reload = use_signal(|| 0u32);
+    // Set when the member-books refetch fails, so a transient network error
+    // renders distinctly from a shelf that is genuinely empty (mirrors
+    // `search_mobile.rs`'s `errored` signal for the same failure class).
+    let mut errored = use_signal(|| false);
 
     // Fetch the shelf detail whenever the id changes. `id` is a plain prop
     // (not a signal), so it must be wrapped in `use_reactive!` to re-arm this
@@ -75,11 +79,16 @@ pub fn ShelfDetailPage(id: i64) -> Element {
         let _ = reload();
         spawn(async move {
             let dir = default_dir_for(key);
-            // Clear on error so a failed refetch can't leave a stale list from a
-            // prior sort/id rendered.
             match data::shelf_page(&url, id, key, dir).await {
-                Ok(page) => books.set(page.books),
-                Err(_) => books.set(Vec::new()),
+                Ok(page) => {
+                    books.set(page.books);
+                    errored.set(false);
+                }
+                Err(_) => {
+                    // `tracing` isn't linked under the `web` (WASM) feature,
+                    // so the signal alone carries the failure to the UI.
+                    errored.set(true);
+                }
             }
         });
     }));
@@ -108,6 +117,7 @@ pub fn ShelfDetailPage(id: i64) -> Element {
         mobile::MobileShelfDetail {
             shelf: current.clone(),
             books: books.read().clone(),
+            errored: errored(),
             server_url: server_url.clone(),
             on_add: move |_| show_add.set(true),
             on_edit_rules: move |_| edit_rules.set(true),
@@ -119,11 +129,14 @@ pub fn ShelfDetailPage(id: i64) -> Element {
     let body = web_shelf_body(
         &current,
         &books.read(),
+        errored(),
         &server_url,
-        sort_key,
-        show_add,
-        edit_rules,
-        reload,
+        ShelfBodySignals {
+            sort_key,
+            show_add,
+            edit_rules,
+            reload,
+        },
     );
 
     rsx! {
@@ -174,18 +187,34 @@ fn render_page_state(id: i64, inner: Element) -> Element {
     }
 }
 
+/// UI-state signals threaded into [`web_shelf_body`]. `Copy` (Dioxus
+/// signals), so grouping them keeps the function under clippy's
+/// too-many-arguments cap without changing call-site ergonomics.
+#[cfg(not(feature = "mobile"))]
+#[derive(Clone, Copy)]
+struct ShelfBodySignals {
+    sort_key: Signal<SortKey>,
+    show_add: Signal<bool>,
+    edit_rules: Signal<bool>,
+    reload: Signal<u32>,
+}
+
 /// Web presentation: rail + header (badges/actions), rule chips + sort row
 /// for smart shelves, and the `CoverTile` member grid.
 #[cfg(not(feature = "mobile"))]
 fn web_shelf_body(
     current: &Shelf,
     books: &[EbookMetadata],
+    errored: bool,
     server_url: &str,
-    mut sort_key: Signal<SortKey>,
-    mut show_add: Signal<bool>,
-    mut edit_rules: Signal<bool>,
-    mut reload: Signal<u32>,
+    signals: ShelfBodySignals,
 ) -> Element {
+    let ShelfBodySignals {
+        mut sort_key,
+        mut show_add,
+        mut edit_rules,
+        mut reload,
+    } = signals;
     let id = current.id;
     let is_smart = current.kind == ShelfKind::Smart;
     rsx! {
@@ -224,6 +253,15 @@ fn web_shelf_body(
                     }
                 } else if let Some(desc) = current.description.as_ref() {
                     p { class: "shelf-desc", "{desc}" }
+                }
+
+                if errored {
+                    p {
+                        role: "alert",
+                        class: "error",
+                        "data-testid": "shelf-refetch-error",
+                        "Couldn\u{2019}t refresh this shelf. Check your connection and try again."
+                    }
                 }
 
                 {member_grid(books, server_url, is_smart, move |_| show_add.set(true))}
