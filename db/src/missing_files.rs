@@ -46,6 +46,7 @@ pub async fn gc_books_missing_files(
             AND b.is_missing_files_override = 0
             AND b.missing_files_since < unixepoch('now', '-' || ? || ' days')
             AND NOT EXISTS (SELECT 1 FROM book_files       bf WHERE bf.book_id = b.id)
+            AND NOT EXISTS (SELECT 1 FROM physical_copies   pc WHERE pc.book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM merged_uuids      m  WHERE m.book_id  = b.id)
             AND NOT EXISTS (SELECT 1 FROM reading_progress     WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM bookmarks            WHERE book_uuid = b.uuid)

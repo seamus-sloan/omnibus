@@ -118,6 +118,29 @@ async fn gc_keeps_book_with_reading_progress() {
 }
 
 #[tokio::test]
+async fn gc_keeps_book_with_physical_copy() {
+    let _covers = CoversTempDir::new("gc_physical");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    // A book whose digital file was removed (flagged missing, past retention)
+    // but which now has a checked-in physical copy must survive the GC —
+    // otherwise the copy is orphaned and the physical-only book vanishes.
+    let uuid = seed_and_make_missing(&pool, "sold_digital.epub").await;
+    backdate_missing_since(&pool, &uuid, 40).await;
+    crate::physical::add_physical_copy(&pool, &uuid, None, None, None)
+        .await
+        .unwrap();
+
+    let purged = gc_books_missing_files(&pool, MISSING_FILES_RETENTION_DAYS)
+        .await
+        .unwrap();
+    assert_eq!(purged, 0);
+    assert!(
+        book_exists(&pool, &uuid).await,
+        "a book with a physical copy is never purged"
+    );
+}
+
+#[tokio::test]
 async fn gc_keeps_book_with_audiobook_playback_preference() {
     let _covers = CoversTempDir::new("gc_playback_preference");
     let pool = init_db("sqlite::memory:").await.unwrap();

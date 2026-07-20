@@ -88,7 +88,10 @@ pub(crate) const BOOK_COLUMNS: &str = r"
     (SELECT json_group_array(format)
        FROM (SELECT DISTINCT format FROM book_files
               WHERE book_id = b.id
-              ORDER BY format))                   AS formats_json
+              ORDER BY format))                   AS formats_json,
+
+    EXISTS (SELECT 1 FROM physical_copies pc
+             WHERE pc.book_uuid = b.uuid)          AS has_physical
 ";
 
 #[derive(serde::Deserialize)]
@@ -248,6 +251,7 @@ pub(crate) fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata,
         cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
         accent: r.get("accent_color"),
         formats: parse_json_array(r.get("formats_json"))?,
+        has_physical: r.get::<i64, _>("has_physical") != 0,
         added_at: r.get("timestamp"),
         error: None,
         has_override: false,

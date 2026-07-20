@@ -61,17 +61,19 @@ async fn fetch_list_rows(
     let placeholders = std::iter::repeat_n("?", library_paths.len())
         .collect::<Vec<_>>()
         .join(", ");
-    // Exclude fileless books (F2): a book whose file was removed keeps its
-    // row + soft-ref user data, but must not render as a broken tile in the
-    // library grid. Search already excludes them (their FTS row is cleared
-    // when its file is gone); this is the list-view equivalent.
+    // Visibility: a book shows iff it's a file-backed book under a configured
+    // library OR it has a physical copy (F Physical Check-In, #1181). This still
+    // hides a fileless book with *no* physical copy — a removed-file ghost or a
+    // pure wishlist entry — from rendering as a broken tile, while surfacing
+    // physical-only books that live under the synthetic `physical://local` root.
     let sql = format!(
         r"
         SELECT {BOOK_COLUMNS}
         FROM books b
         JOIN scan_roots l ON l.id = b.library_id
-        WHERE l.path IN ({placeholders})
-          AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)
+        WHERE (l.path IN ({placeholders})
+               AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id))
+           OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid)
         ORDER BY b.sort, b.id
         LIMIT ?
         "
@@ -292,8 +294,9 @@ pub async fn count_books_for_paths(
         SELECT COUNT(*)
           FROM books b
           JOIN scan_roots l ON l.id = b.library_id
-         WHERE l.path IN ({placeholders})
-           AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)
+         WHERE (l.path IN ({placeholders})
+                AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id))
+            OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid)
         "
     );
     let mut q = sqlx::query_scalar::<_, i64>(&sql);

@@ -112,7 +112,8 @@ async fn fetch_search_rows(
             JOIN books b ON b.id = books_fts.rowid
             JOIN scan_roots l ON l.id = b.library_id
             WHERE books_fts MATCH ?
-              AND l.path IN (SELECT value FROM json_each(?))
+              AND (l.path IN (SELECT value FROM json_each(?))
+                   OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
         )
         SELECT {BOOK_COLUMNS},
                (SELECT COUNT(*) FROM matches)               AS total_count
@@ -164,7 +165,8 @@ pub async fn count_search_books_for_paths(
           JOIN books b ON b.id = books_fts.rowid
           JOIN scan_roots l ON l.id = b.library_id
          WHERE books_fts MATCH ?
-           AND l.path IN (SELECT value FROM json_each(?))
+           AND (l.path IN (SELECT value FROM json_each(?))
+                OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
         ",
     )
     .bind(&match_expr)

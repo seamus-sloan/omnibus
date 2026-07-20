@@ -2391,3 +2391,73 @@ fn books_error_maps_overrides_serialization_to_overrides_json_variant() {
         "got {err}"
     );
 }
+
+// ---------- F Physical Check-In: physical-only visibility (#1181) ----------
+
+async fn seed_fileless(pool: &sqlx::SqlitePool, title: &str, authors: Vec<&str>) -> String {
+    crate::physical::create_fileless_book(
+        pool,
+        crate::physical::FilelessBook {
+            title: title.into(),
+            authors: authors.into_iter().map(str::to_string).collect(),
+            isbn: None,
+            pubdate: None,
+            description: None,
+            cover: None,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn physical_only_book_is_visible_but_wishlist_only_is_hidden() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await; // one normal /lib book
+
+    // Physical-only: fileless book with a checked-in copy.
+    let phys = seed_fileless(&pool, "Physical Only Title", vec!["Print Author"]).await;
+    crate::physical::add_physical_copy(&pool, &phys, None, None, None)
+        .await
+        .unwrap();
+    // Wishlist-only: fileless book, no physical copy.
+    let wish = seed_fileless(&pool, "Wishlist Only Title", vec![]).await;
+
+    let list = list_books(&pool, "/lib").await.unwrap();
+    let uuids: Vec<&str> = list
+        .iter()
+        .filter_map(|b| b.unique_identifier.as_deref())
+        .collect();
+    assert!(
+        uuids.contains(&phys.as_str()),
+        "physical-only book must appear"
+    );
+    assert!(
+        !uuids.contains(&wish.as_str()),
+        "wishlist-only book must be hidden"
+    );
+
+    // AC3: the physical flag is set (drives the badge).
+    let phys_row = list
+        .iter()
+        .find(|b| b.unique_identifier.as_deref() == Some(&phys))
+        .unwrap();
+    assert!(phys_row.has_physical);
+
+    // AC1: searchable by title.
+    let hits = search_books(&pool, "/lib", "Physical Only").await.unwrap();
+    assert!(hits
+        .iter()
+        .any(|b| b.unique_identifier.as_deref() == Some(&phys)));
+    // AC2: wishlist-only book is not searchable.
+    let miss = search_books(&pool, "/lib", "Wishlist Only").await.unwrap();
+    assert!(miss.is_empty());
+
+    // AC1: the physical-only book contributes to sidebar facets even though it
+    // lives under the synthetic `physical://local` root, not `/lib`.
+    let facets = library_facets(&pool, &["/lib"]).await.unwrap();
+    assert!(
+        facets.authors.iter().any(|f| f.value == "Print Author"),
+        "physical-only book's author must appear in facets"
+    );
+}
