@@ -28,6 +28,14 @@ pub fn normalize_isbn(raw: &str) -> Result<String, IsbnError> {
         .filter(|c| !c.is_whitespace() && *c != '-')
         .collect();
 
+    // ASCII-only: a valid ISBN is digits (+ a trailing `X`), so reject any
+    // non-ASCII up front. This also makes the `.len()` length check below a true
+    // character count (bytes == chars for ASCII) and matches the ASCII-digit
+    // expectation elsewhere (metadata-override validation).
+    if !stripped.is_ascii() {
+        return Err(IsbnError::InvalidChars);
+    }
+
     match stripped.len() {
         10 => {
             validate_isbn10(&stripped)?;

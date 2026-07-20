@@ -219,3 +219,13 @@ fn normalize_rejects_non_digit_characters() {
     // `X` is only legal as an ISBN-10 trailing check digit, not mid-number.
     assert_eq!(normalize_isbn("01X3468599"), Err(IsbnError::InvalidChars));
 }
+
+#[test]
+fn normalize_rejects_non_ascii_digit_lookalikes() {
+    // Fullwidth digits (U+FF10..) are Unicode "digits" but not ASCII — a valid
+    // ISBN never contains them, so they're rejected rather than folded.
+    assert_eq!(
+        normalize_isbn("９７８０１３４６８５９９１"),
+        Err(IsbnError::InvalidChars)
+    );
+}
