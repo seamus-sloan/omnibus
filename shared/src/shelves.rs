@@ -198,7 +198,7 @@ impl ShelfRule {
 pub struct ShelfSummary {
     pub id: i64,
     pub owner_user_id: i64,
-    /// Owner's username, for "by <name>" attribution on shelves you don't own.
+    /// Owner's username, for `by <name>` attribution on shelves you don't own.
     pub owner_username: String,
     pub kind: ShelfKind,
     pub name: String,
@@ -212,7 +212,7 @@ pub struct ShelfSummary {
 pub struct Shelf {
     pub id: i64,
     pub owner_user_id: i64,
-    /// Owner's username, for "by <name>" attribution on shelves you don't own.
+    /// Owner's username, for `by <name>` attribution on shelves you don't own.
     pub owner_username: String,
     pub kind: ShelfKind,
     pub name: String,

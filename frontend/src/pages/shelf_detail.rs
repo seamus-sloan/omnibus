@@ -297,11 +297,9 @@ fn ShelfHeader(
     let mut draft_name = use_signal(|| shelf.name.clone());
     let mut menu_open = use_signal(|| false);
 
-    // Owner/admin gating. `None` on SSR + first hydration paint (the boot
-    // effect hasn't resolved the user yet), so controls stay hidden until we
-    // know the viewer — matching the SSR markup and keeping hydration parity
-    // (rule 07). The server enforces the same rule (`shelf_for_edit`); this
-    // only hides affordances the viewer can't use.
+    // Owner/admin gating; `None` until the boot effect resolves the viewer, so
+    // controls stay hidden on SSR + first paint (hydration parity, rule 07). The
+    // server enforces the same rule (`shelf_for_edit`).
     let viewer = crate::use_current_user_summary()();
     let owner_id = shelf.owner_user_id;
     let can_manage = viewer

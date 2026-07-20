@@ -28,8 +28,7 @@ pub fn ShelvesRail(active: RailActive) -> Element {
     let mut shelves = use_signal(Vec::<ShelfSummary>::new);
     let mut show_create = use_signal(|| false);
     let url = use_server_url();
-    // `None` until the boot effect resolves the viewer (SSR + first paint), so
-    // attribution only appears once we know whose shelves aren't ours.
+    // `None` until the boot effect resolves the viewer (SSR + first paint).
     let viewer_id = crate::use_current_user_summary()().map(|u| u.id);
 
     let refetch_url = url.clone();
