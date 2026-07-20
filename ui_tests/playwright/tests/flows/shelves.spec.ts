@@ -67,6 +67,44 @@ test("surfaces an error when shelf creation fails", async ({ page }) => {
   await expect(page.getByTestId("shelf-create-error")).toBeVisible();
 });
 
+test("surfaces a distinct error when the member-books refetch fails", async ({
+  page,
+  request,
+}) => {
+  // A genuinely empty manual shelf renders the grid with zero tiles and no
+  // error text — force the page-fetch to 500 so this test can tell the two
+  // states apart via the dedicated `shelf-refetch-error` banner.
+  const name = `E2E Refetch Fail ${Date.now()}`;
+  const createResp = await request.post("/api/rpc/shelves/create", {
+    data: {
+      req: {
+        kind: "manual",
+        name,
+        description: null,
+        visibility: "private",
+        match_mode: null,
+        rules: [],
+        book_uuids: [],
+      },
+    },
+  });
+  expect(createResp.status(), "POST /api/rpc/shelves/create failed").toBe(200);
+  const shelf = (await createResp.json()) as { id: number };
+
+  await page.route("**/api/rpc/shelves/page", (route) =>
+    route.fulfill({ status: 500, body: "boom" }),
+  );
+
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/shelves/page", expectedStatus: 500 },
+    async () => gotoReady(page, `/shelves/${shelf.id}`),
+  );
+
+  await expect(page.getByTestId("shelf-detail-header")).toContainText(name);
+  await expect(page.getByTestId("shelf-refetch-error")).toBeVisible();
+});
+
 test("switches shelves via the rail without a full reload", async ({ page, request }) => {
   // Two hand-picked shelves, each holding one distinct fixture book, so the
   // header and grid content can only match if the rail switch actually

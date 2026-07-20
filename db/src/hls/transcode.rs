@@ -280,7 +280,10 @@ async fn stream_progress(
                 last_write = Some(std::time::Instant::now());
             }
             Ok(None) => break, // EOF: ffmpeg closed stdout, we're done.
-            Err(_) => break,
+            Err(e) => {
+                tracing::warn!(error = %e, "ffmpeg stdout heartbeat read failed");
+                break;
+            }
         }
     }
 }
