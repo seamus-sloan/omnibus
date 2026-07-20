@@ -1,8 +1,8 @@
 //! Progress tracking + eviction. Hosts `Worker::progress_snapshot` and
-//! the test-only retention seam, the internal `write_terminal_progress`
-//! invoked from both [`super::exec`] and the panic guard in
-//! [`super::queue`], and `report_progress` — the phase-2 seam tests use
-//! to exercise mid-task counts.
+//! its owner-scoped sibling, the test-only retention seam, the internal
+//! `write_terminal_progress` invoked from both [`super::exec`] and the
+//! panic guard in [`super::queue`], and `report_progress` — the phase-2
+//! seam tests use to exercise mid-task counts.
 
 use std::time::{Duration, Instant};
 
@@ -17,10 +17,25 @@ impl Worker {
     /// entries are evicted under the same lock. Both vecs are sorted by
     /// `task_id` so a polling client renders a stable list across ticks.
     ///
-    /// Auth-gated at the RPC layer; safe to call from any handler that
-    /// already has an `AuthUser`.
+    /// Unfiltered — includes every user's owned tasks. Only safe to call
+    /// from a context that doesn't forward the result to an untrusted
+    /// caller (tests, the periodic-scan seam); an RPC handler serving a
+    /// polling client should use [`Worker::owner_scoped_snapshot`] instead.
     pub fn progress_snapshot(&self) -> WorkerStatus {
         self.progress_snapshot_with_retention(TERMINAL_RETENTION)
+    }
+
+    /// Owner-scoped variant of [`Worker::progress_snapshot`] for a
+    /// polling RPC handler: keeps every task with no recorded owner
+    /// (shared library-wide work — a scan, a thumbnail regen, an
+    /// author-photo refetch) plus entries owned by `user_id`, and drops
+    /// every other user's owned task. Closes the leak where any
+    /// authenticated user could read another user's Send-to-Kindle
+    /// failure text off the general worker-status poll, bypassing the
+    /// owner check [`Worker::owned_task_state`] already enforces on the
+    /// dedicated Kindle-status poll.
+    pub fn owner_scoped_snapshot(&self, user_id: i64) -> WorkerStatus {
+        self.snapshot(TERMINAL_RETENTION, Some(user_id))
     }
 
     /// Test-friendly variant of [`Worker::progress_snapshot`] that lets
@@ -29,6 +44,15 @@ impl Worker {
     /// shorter window so the eviction assertion doesn't have to sleep
     /// for the full 10 s of wall-clock time.
     pub(super) fn progress_snapshot_with_retention(&self, retention: Duration) -> WorkerStatus {
+        self.snapshot(retention, None)
+    }
+
+    /// Shared snapshot body for [`Worker::progress_snapshot`],
+    /// [`Worker::owner_scoped_snapshot`], and
+    /// [`Worker::progress_snapshot_with_retention`]. `viewer` narrows the
+    /// result to unowned entries plus that user's own when set; `None`
+    /// returns everything.
+    fn snapshot(&self, retention: Duration, viewer: Option<i64>) -> WorkerStatus {
         let now = Instant::now();
         let mut map = lock_unpoison(&self.progress);
 
@@ -48,6 +72,11 @@ impl Worker {
         let mut active = Vec::new();
         let mut recent_complete = Vec::new();
         for entry in map.values() {
+            if let Some(user_id) = viewer {
+                if entry.owner.is_some_and(|owner| owner != user_id) {
+                    continue;
+                }
+            }
             if entry.terminal_at.is_some() {
                 recent_complete.push(entry.progress.clone());
             } else {
