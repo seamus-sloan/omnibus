@@ -1,21 +1,70 @@
 //! Per-task-kind handlers. `Worker::execute` is the single dispatch
 //! match — each arm pulls the inputs out of a [`Task`] variant and calls
 //! the owning module (`indexer::reindex`, `author_photos::resolve`,
-//! `thumbs::ensure_thumbnails_sync`).
+//! `thumbs::ensure_thumbnails_sync`). Every arm ends in a [`TaskOutcome`]
+//! whose `Err` text is client-facing (served by `rpc_worker_status` and
+//! the owner-scoped Kindle poll), so no arm may return a raw error's
+//! `Display` verbatim — see the sanitizers below.
 
 use std::sync::Arc;
 
 use super::types::{Task, TaskId, TaskOutcome, Worker};
 
-/// Map a handler's `Result` into a [`TaskOutcome`], stringifying the error.
-/// The `Ok` payload is discarded (some handlers return a path/id), so `Ok(())`
-/// and `Ok(value)` collapse to [`TaskOutcome::Ok(None)`] identically. Scan
-/// tasks that need to surface a ghost-count warning (issue #1057) build
-/// their `TaskOutcome` directly instead of going through this helper.
-fn outcome_of<T, E: std::fmt::Display>(result: Result<T, E>) -> TaskOutcome {
+/// Log `e`'s real text server-side and return a [`TaskOutcome::Err`] that
+/// names only `label` — never `e` itself. Used for every failure whose
+/// `Display` can carry a filesystem path, subprocess stderr, or a
+/// lower-level crate's internals (DB driver, SMTP transport), none of
+/// which are safe to hand to whoever polls the worker status.
+fn sanitized_err(label: &str, e: impl std::fmt::Display) -> TaskOutcome {
+    tracing::error!(error = %e, task = label, "worker task failed");
+    TaskOutcome::Err(format!("{label} failed; see server logs for details"))
+}
+
+/// [`sanitized_err`]-based mapping for the handlers whose failure space is
+/// `anyhow` (foreign systems: filesystem scans, ffmpeg, parsers) and thus
+/// has no enumerable variants to bucket. The `Ok` payload is discarded
+/// (some handlers return a path/id), so `Ok(())` and `Ok(value)` collapse
+/// to [`TaskOutcome::Ok(None)`] identically. Scan tasks that need to
+/// surface a ghost-count warning (issue #1057) build their `TaskOutcome`
+/// directly instead of going through this helper.
+fn anyhow_outcome<T>(label: &str, result: anyhow::Result<T>) -> TaskOutcome {
     match result {
         Ok(_) => TaskOutcome::Ok(None),
-        Err(e) => TaskOutcome::Err(e.to_string()),
+        Err(e) => sanitized_err(label, e),
+    }
+}
+
+/// Variant-aware mapping for [`crate::kindle::KindleError`], mirroring
+/// `server::backend::kindle::post_smtp_test`'s match: the enumerable,
+/// non-sensitive variants pass their own message through; the SMTP/lettre
+/// transport variants and I/O get [`sanitized_err`] instead.
+fn kindle_outcome(result: Result<(), crate::kindle::KindleError>) -> TaskOutcome {
+    use crate::kindle::KindleError;
+    match result {
+        Ok(()) => TaskOutcome::Ok(None),
+        Err(
+            e @ (KindleError::NotConfigured
+            | KindleError::NoEpub
+            | KindleError::TooLarge
+            | KindleError::Timeout),
+        ) => TaskOutcome::Err(e.to_string()),
+        Err(e) => sanitized_err("send to Kindle", e),
+    }
+}
+
+/// Variant-aware mapping for [`crate::kepub::KepubError`]: a bad book id or
+/// a missing source EPUB are safe, specific messages; a non-zero
+/// `kepubify` exit carries subprocess stderr, and the remaining variants
+/// wrap I/O or a lower module's internals, so all of those go through
+/// [`sanitized_err`].
+fn kepub_outcome(result: Result<std::path::PathBuf, crate::kepub::KepubError>) -> TaskOutcome {
+    use crate::kepub::KepubError;
+    match result {
+        Ok(_) => TaskOutcome::Ok(None),
+        Err(e @ (KepubError::BookNotFound(_) | KepubError::SourceMissing(_))) => {
+            TaskOutcome::Err(e.to_string())
+        }
+        Err(e) => sanitized_err("kepub conversion", e),
     }
 }
 
@@ -33,7 +82,7 @@ impl Worker {
                 .await
                 {
                     Ok(stats) => TaskOutcome::Ok(stats.ghost_warning()),
-                    Err(e) => TaskOutcome::Err(e.to_string()),
+                    Err(e) => sanitized_err("library scan", e),
                 }
             }
             Task::ScanAudiobooks { library_path } => {
@@ -44,7 +93,8 @@ impl Worker {
                 book_file_id,
                 library_path,
                 profile,
-            } => outcome_of(
+            } => anyhow_outcome(
+                "HLS transcode",
                 crate::hls::transcode_book(
                     &self.pool,
                     book_id,
@@ -54,33 +104,43 @@ impl Worker {
                 )
                 .await,
             ),
-            Task::ResolveAuthorPhoto { author_id } => {
-                outcome_of(crate::author_photos::resolve(&self.pool, author_id).await)
-            }
-            Task::RefetchAuthorPhotos => outcome_of(
-                crate::author_photos::refetch_all(&self.pool, |processed, total| {
+            Task::ResolveAuthorPhoto { author_id } => anyhow_outcome(
+                "author photo lookup",
+                crate::author_photos::resolve(&self.pool, author_id).await,
+            ),
+            Task::RefetchAuthorPhotos => {
+                match crate::author_photos::refetch_all(&self.pool, |processed, total| {
                     self.report_progress(id, processed, total);
                 })
-                .await,
-            ),
-            Task::BackfillChapters { library_path } => outcome_of(
+                .await
+                {
+                    Ok(()) => TaskOutcome::Ok(None),
+                    Err(e) => sanitized_err("author photo refetch", e),
+                }
+            }
+            Task::BackfillChapters { library_path } => anyhow_outcome(
+                "chapter backfill",
                 crate::indexer::backfill_chapters(&self.pool, &library_path, |processed, total| {
                     self.report_progress(id, processed, Some(total));
                 })
                 .await,
             ),
-            Task::RebuildFtsIndex => outcome_of(crate::sync::rebuild_all_fts(&self.pool).await),
-            Task::ResolveSuggestions { book_uuid } => {
-                outcome_of(crate::suggestions::resolve(&self.pool, &book_uuid).await)
-            }
+            Task::RebuildFtsIndex => anyhow_outcome(
+                "FTS rebuild",
+                crate::sync::rebuild_all_fts(&self.pool).await,
+            ),
+            Task::ResolveSuggestions { book_uuid } => anyhow_outcome(
+                "suggestions lookup",
+                crate::suggestions::resolve(&self.pool, &book_uuid).await,
+            ),
             Task::KepubConvert { book_id } => {
-                outcome_of(crate::kepub::convert_book(&self.pool, book_id).await)
+                kepub_outcome(crate::kepub::convert_book(&self.pool, book_id).await)
             }
             Task::SendToKindle {
                 book_id,
                 book_file_id,
                 recipient_email,
-            } => outcome_of(
+            } => kindle_outcome(
                 crate::kindle::send(&self.pool, book_id, book_file_id, &recipient_email).await,
             ),
             Task::GenerateThumbs {
@@ -124,14 +184,16 @@ impl Worker {
                 self.post(Task::BackfillChapters { library_path });
                 TaskOutcome::Ok(warning)
             }
-            Err(e) => TaskOutcome::Err(e.to_string()),
+            Err(e) => sanitized_err("audiobook scan", e),
         }
     }
 
     /// Fetch a book's cover and (re)generate its WebP thumbnails on the
     /// blocking pool, then evict the thumb cache if it's over the cap. A
-    /// missing cover is an error; a `JoinError` distinguishes panic from
-    /// cancellation so the log doesn't lie about which one occurred.
+    /// missing cover is a safe, specific error; every other failure (DB,
+    /// codec, I/O, a panicked/cancelled blocking task) goes through
+    /// [`sanitized_err`] since its text can carry driver or codec
+    /// internals — the real cause is still logged server-side.
     async fn handle_generate_thumbs(
         self: &Arc<Self>,
         book_id: i64,
@@ -143,7 +205,7 @@ impl Worker {
             Ok(None) => {
                 return TaskOutcome::Err(format!("no cover for book {book_id}"));
             }
-            Err(e) => return TaskOutcome::Err(e.to_string()),
+            Err(e) => return sanitized_err("thumbnail generation", e),
         };
         let cap = crate::thumbs::cap_bytes();
         match tokio::task::spawn_blocking(move || {
@@ -154,14 +216,22 @@ impl Worker {
         .await
         {
             Ok(Ok(())) => TaskOutcome::Ok(None),
-            Ok(Err(e)) => TaskOutcome::Err(e.to_string()),
+            Ok(Err(crate::thumbs::ThumbError::NoCover(id))) => {
+                TaskOutcome::Err(format!("no cover for book {id}"))
+            }
+            Ok(Err(e)) => sanitized_err("thumbnail generation", e),
             Err(join_err) => {
                 let kind = if join_err.is_panic() {
                     "panicked"
                 } else {
                     "was cancelled"
                 };
-                TaskOutcome::Err(format!("spawn_blocking {kind}: {join_err}"))
+                tracing::error!(
+                    error = %join_err,
+                    task = "thumbnail generation",
+                    "worker task join failure"
+                );
+                TaskOutcome::Err(format!("thumbnail generation {kind}"))
             }
         }
     }
@@ -184,3 +254,6 @@ async fn handle_test_task(
     }
     TaskOutcome::Ok(None)
 }
+
+#[cfg(test)]
+mod tests;

@@ -211,9 +211,12 @@ pub enum TaskOutcome {
     /// every other task kind (and a scan under the threshold) reports
     /// `None`.
     Ok(Option<omnibus_shared::GhostFilesWarning>),
-    /// The handler failed; the string is the stringified underlying error.
-    /// Also produced when the spawned task is dropped or panics before
-    /// reporting (see [`Worker::await_completion`]).
+    /// The handler failed. This string is client-facing (served by
+    /// `rpc_worker_status` and the owner-scoped Kindle poll), so
+    /// `handlers::execute`'s arms sanitize it before it lands here — never
+    /// the raw underlying error's `Display`. Also produced when the
+    /// spawned task is dropped or panics before reporting (see
+    /// [`Worker::await_completion`]).
     Err(String),
 }
 

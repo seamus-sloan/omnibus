@@ -759,6 +759,69 @@ async fn owned_task_state_scopes_reads_to_the_owner() {
     let _ = w.await_completion(id).await;
 }
 
+/// Reproduces the #1163 leak: `rpc_worker_status` is `AuthUser`-scoped (not
+/// `AdminUser`), so any authenticated user could previously read another
+/// user's owned task off the general worker-status poll — the same
+/// guessable-task-id concern [`Worker::owned_task_state`] already guards
+/// for the dedicated Kindle-status poll. `owner_scoped_snapshot` must apply
+/// the same rule while still surfacing unowned, library-wide tasks (a scan)
+/// to every caller.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn owner_scoped_snapshot_hides_another_users_owned_task_but_keeps_unowned_ones() {
+    let w = make_worker_default(pool().await);
+
+    // An owned task (e.g. Send-to-Kindle) that failed with sensitive text.
+    let owned_id = w.post(Task::Test {
+        tag: "owned",
+        latency_ms: 5,
+        resource: None,
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+    w.set_task_owner(owned_id, 1);
+    let _ = w.await_completion(owned_id).await;
+    w.write_terminal_progress(
+        owned_id,
+        ProgressState::Failed {
+            message: "SMTP delivery failed: internal transport detail".to_string(),
+        },
+    );
+
+    // An unowned, library-wide task (e.g. a scan) any user should still see.
+    let shared_id = w.post(Task::Test {
+        tag: "shared",
+        latency_ms: 5,
+        resource: None,
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+    let _ = w.await_completion(shared_id).await;
+
+    // The owner sees their own task's outcome, error text included.
+    let owner_view = w.owner_scoped_snapshot(1);
+    assert!(owner_view
+        .recent_complete
+        .iter()
+        .any(|p| p.task_id == owned_id));
+
+    // A different, non-admin user must not see the owned task at all — not
+    // even to leak that it exists — while the shared task stays visible.
+    let other_view = w.owner_scoped_snapshot(2);
+    assert!(
+        !other_view
+            .recent_complete
+            .iter()
+            .any(|p| p.task_id == owned_id),
+        "a non-owner must not see another user's task on the general worker-status poll"
+    );
+    assert!(other_view
+        .recent_complete
+        .iter()
+        .any(|p| p.task_id == shared_id));
+}
+
 // `periodic_scan_tick` tests moved to `worker::periodic_scan::tests`, a
 // sibling of `periodic_scan.rs`.
 
