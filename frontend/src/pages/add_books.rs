@@ -1,12 +1,8 @@
 //! Add-books page (`/add-books`) — upload an EPUB or audiobook into the library.
-//!
-//! Upload-permitted users pick a file; the server parses it and returns its
-//! metadata for an editable confirm step, then files it into the canonical
-//! library folder and redirects to the new book. Ebooks take one `.epub`;
-//! audiobooks take one `.m4a`/`.m4b` container or a set of `.mp3` parts filed
-//! together into one folder. The rsx is identical on every target — file
-//! interop only runs inside the post-mount `spawn`, preserving hydration parity
-//! (see rule 07).
+//! Users pick a file; the server parses it for an editable confirm step, then
+//! files it into the canonical folder and redirects to the new book. Ebooks
+//! take one `.epub`; audiobooks one `.m4a`/`.m4b` or a set of `.mp3` parts. The
+//! rsx is target-agnostic — file interop runs only in the post-mount `spawn`.
 
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
@@ -206,7 +202,7 @@ fn inspect_audiobook_files(server_url: String, state: UploadState, evt: Event<Fo
                 }
             }
         }
-        match data::inspect_audiobook(&server_url, files.clone()).await {
+        match data::inspect_audiobook(&server_url, &files).await {
             Ok(insp) => {
                 s.title.set(insp.title.unwrap_or_default());
                 s.author.set(insp.author.unwrap_or_default());

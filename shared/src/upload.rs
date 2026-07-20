@@ -25,11 +25,7 @@ pub struct UploadInspection {
     pub ext: String,
 }
 
-/// Auto-extracted metadata returned by the audiobook inspect step. Mirrors
-/// [`UploadInspection`] but carries audiobook-specific fields: the tag-derived
-/// `title`/`author`, whether embedded artwork was found, the settled `format`
-/// (`"m4b"` / `"m4a"` / `"mp3"`), and — for a multi-file `.mp3` audiobook — how
-/// many parts were uploaded plus their combined runtime.
+/// Tag-derived metadata returned by the audiobook inspect step — the audiobook sibling of [`UploadInspection`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct AudiobookInspection {
     pub title: Option<String>,

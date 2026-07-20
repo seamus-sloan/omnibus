@@ -170,14 +170,14 @@ fn append_audio_parts(
 #[cfg(feature = "web")]
 pub async fn inspect_audiobook(
     _server_url: &str,
-    files: Vec<(String, Vec<u8>)>,
+    files: &[(String, Vec<u8>)],
 ) -> Result<AudiobookInspection, DataError> {
     use gloo_net::http::Request;
     use wasm_bindgen::JsCast;
 
     let form =
         web_sys::FormData::new().map_err(|e| DataError::Other(format!("FormData::new: {e:?}")))?;
-    append_audio_parts(&form, &files)?;
+    append_audio_parts(&form, files)?;
 
     let res = Request::post("/api/uploads/audiobooks/inspect")
         .body(form.unchecked_into::<wasm_bindgen::JsValue>())
@@ -289,15 +289,14 @@ pub async fn upload_ebook(
 #[cfg(feature = "mobile")]
 pub async fn inspect_audiobook(
     server_url: &str,
-    files: Vec<(String, Vec<u8>)>,
+    files: &[(String, Vec<u8>)],
 ) -> Result<AudiobookInspection, DataError> {
     let endpoint = format!("{server_url}/api/uploads/audiobooks/inspect");
     let mut form = reqwest::multipart::Form::new();
     for (name, bytes) in files {
-        let mime = audio_mime(&name);
-        let part = reqwest::multipart::Part::bytes(bytes)
-            .file_name(name)
-            .mime_str(mime)?;
+        let part = reqwest::multipart::Part::bytes(bytes.clone())
+            .file_name(name.clone())
+            .mime_str(audio_mime(name))?;
         form = form.part("file", part);
     }
     let response = with_bearer(http_client().post(&endpoint))
@@ -372,7 +371,7 @@ pub async fn upload_ebook(
 #[cfg(not(any(feature = "web", feature = "mobile")))]
 pub async fn inspect_audiobook(
     _server_url: &str,
-    _files: Vec<(String, Vec<u8>)>,
+    _files: &[(String, Vec<u8>)],
 ) -> Result<AudiobookInspection, DataError> {
     Err(DataError::Other(
         "upload not available in this build".into(),

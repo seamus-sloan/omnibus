@@ -1,9 +1,7 @@
 //! Audiobook ingest handlers for the "add your own books" upload flow.
-//!
-//! Sibling to the EPUB handlers in [`super`]; shares its [`super::UploadError`]
-//! boundary type, permission gate, and size cap. Accepts a single `.m4a`/`.m4b`
-//! container or a set of `.mp3` parts filed together into one canonical folder,
-//! then reindexes so the audiobook indexer owns the insert.
+//! Sibling to the EPUB handlers in [`super`], sharing its error type, gate, and
+//! size cap. Accepts a single `.m4a`/`.m4b` container or a set of `.mp3` parts
+//! filed into one canonical folder, then reindexes so the indexer inserts it.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
