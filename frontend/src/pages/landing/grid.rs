@@ -34,7 +34,6 @@ fn GridTile(book: EbookMetadata, server_url: String) -> Element {
     let display_title = book.title.as_deref().unwrap_or(&book.filename).to_string();
     let tile_testid = format!("ebook-tile-{}", row_slug(&book.filename));
     let authors = contributor_names(&book.creators);
-    let book_for_cover = book.clone();
     let nav = use_navigator();
 
     // Prefer the responsive `/api/thumbs/:uuid/{sm,md,lg}` endpoint over the
@@ -66,7 +65,7 @@ fn GridTile(book: EbookMetadata, server_url: String) -> Element {
                 }
             },
             crate::components::atrium::Cover {
-                book: book_for_cover,
+                book,
                 src_override: thumb_src,
                 srcset: thumb_srcset,
                 sizes: Some(
