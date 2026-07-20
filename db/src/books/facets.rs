@@ -9,6 +9,12 @@
 use omnibus_shared::{FacetCount, FacetCounts};
 use sqlx::SqlitePool;
 
+/// Row cap for each facet group, mirroring `discovery/tags.rs`'s
+/// `TAG_CLOUD_LIMIT` order of magnitude — comfortably covers the distinct
+/// authors/series/formats/tags of a real library while still bounding a
+/// pathological one.
+const FACET_LIMIT: i64 = 1_000;
+
 /// Per-facet book counts for `library_paths`, ordered by count descending then
 /// value ascending (the order the sidebar renders). Empty `library_paths`
 /// returns empty facets. A book counts iff it's file-backed under a configured
@@ -52,6 +58,7 @@ async fn author_facets(
                 OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid)
              GROUP BY a.name
              ORDER BY count DESC, value ASC
+             LIMIT ?
             "
         ),
         library_paths,
@@ -81,6 +88,7 @@ async fn series_facets(
                  OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
              GROUP BY s.name
              ORDER BY count DESC, value ASC
+             LIMIT ?
             "
         ),
         library_paths,
@@ -108,6 +116,7 @@ async fn format_facets(
              WHERE l.path IN ({ph})
              GROUP BY LOWER(bf.format)
              ORDER BY count DESC, value ASC
+             LIMIT ?
             "
         ),
         library_paths,
@@ -136,6 +145,7 @@ async fn tag_facets(
                  OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
              GROUP BY t.name
              ORDER BY count DESC, value ASC
+             LIMIT ?
             "
         ),
         library_paths,
@@ -144,7 +154,7 @@ async fn tag_facets(
 }
 
 /// Run one `(value, count)` facet aggregate, binding `library_paths` into its
-/// `IN (…)` placeholder list.
+/// `IN (…)` placeholder list and [`FACET_LIMIT`] into its trailing `LIMIT ?`.
 async fn facet_query(
     pool: &SqlitePool,
     sql: &str,
@@ -154,6 +164,7 @@ async fn facet_query(
     for p in library_paths {
         q = q.bind(*p);
     }
+    q = q.bind(FACET_LIMIT);
     let rows = q.fetch_all(pool).await?;
     Ok(rows
         .into_iter()
