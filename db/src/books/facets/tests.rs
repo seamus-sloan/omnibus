@@ -101,3 +101,95 @@ async fn library_facets_returns_empty_for_no_paths() {
     assert!(facets.formats.is_empty());
     assert!(facets.tags.is_empty());
 }
+
+#[tokio::test]
+async fn author_facets_truncates_at_facet_limit_and_stays_ordered_when_distinct_count_exceeds_cap()
+{
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let total = FACET_LIMIT + 25;
+    sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let lib_id: i64 = sqlx::query_scalar("SELECT id FROM scan_roots WHERE path = '/lib'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // One book per distinct author, so the group count ties at 1 for every
+    // author and the `ORDER BY count DESC, value ASC` cap keeps the
+    // lexicographically-first FACET_LIMIT names.
+    sqlx::query(
+        r"
+        WITH RECURSIVE n(i) AS (
+            SELECT 1
+            UNION ALL
+            SELECT i + 1 FROM n WHERE i < ?
+        )
+        INSERT INTO books (uuid, scan_key, library_id, path, title)
+        SELECT 'uuid-' || i, 'b' || i || '.epub', ?, '/lib/b' || i, 'Title ' || i
+          FROM n
+        ",
+    )
+    .bind(total)
+    .bind(lib_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch)
+         SELECT id, 'EPUB', 'b' || id, 1, 1 FROM books WHERE library_id = ?",
+    )
+    .bind(lib_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Author name derived straight from the book's own id, so it's paired
+    // with exactly one book regardless of the ids sqlite actually assigned.
+    sqlx::query(
+        "INSERT INTO authors (name, sort)
+         SELECT 'Author ' || printf('%06d', id), 'Author ' || printf('%06d', id)
+           FROM books WHERE library_id = ?",
+    )
+    .bind(lib_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO books_authors_link (book, author, position)
+         SELECT b.id, a.id, 0
+           FROM books b
+           JOIN authors a ON a.name = 'Author ' || printf('%06d', b.id)
+          WHERE b.library_id = ?",
+    )
+    .bind(lib_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let min_id: i64 = sqlx::query_scalar("SELECT MIN(id) FROM books WHERE library_id = ?")
+        .bind(lib_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let facets = library_facets(&pool, &["/lib"]).await.unwrap();
+    assert_eq!(
+        facets.authors.len() as i64,
+        FACET_LIMIT,
+        "author facets must truncate at FACET_LIMIT when distinct authors exceed the cap"
+    );
+    assert!(
+        facets
+            .authors
+            .windows(2)
+            .all(|w| w[0].count == w[1].count && w[0].value < w[1].value),
+        "surviving rows must stay ordered by count desc, value asc"
+    );
+    let expected_last = format!("Author {:06}", min_id + FACET_LIMIT - 1);
+    assert_eq!(
+        facets.authors.last().unwrap().value,
+        expected_last,
+        "truncation must keep the lexicographically-first FACET_LIMIT authors"
+    );
+}
