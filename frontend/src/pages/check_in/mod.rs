@@ -169,8 +169,15 @@ fn CheckInStage(
 ) -> Element {
     let mut stage = state.stage;
     let mut error = state.error;
+    let mut note = state.note;
+    let mut busy = state.busy;
+    // Clear the per-flow scratch (edition note, in-flight flag) on every
+    // restart so a note typed for one book can't be reused on the next
+    // confirm after Cancel / "Try another ISBN" / "Check in another".
     let restart = move |_| {
         error.set(None);
+        note.set(String::new());
+        busy.set(false);
         stage.set(Stage::Entry);
     };
 
