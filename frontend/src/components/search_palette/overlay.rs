@@ -23,6 +23,9 @@ pub(super) fn SpOverlay(open: PaletteOpen) -> Element {
     let mut results = use_signal(|| Option::<PaletteResults>::None);
     let mut selected = use_signal(|| 0_usize);
     let mut loading = use_signal(|| false);
+    // Set on a failed search, distinct from "no matches" (mirrors
+    // `search_mobile.rs`'s `errored` signal for the same underlying call).
+    let mut errored = use_signal(|| false);
     // Tracks whether the user has driven selection with arrow keys this
     // session. When false, pressing Enter navigates to the full-page
     // search results instead of drilling into `selected`.
@@ -66,16 +69,21 @@ pub(super) fn SpOverlay(open: PaletteOpen) -> Element {
             if trimmed.is_empty() {
                 results.set(None);
                 loading.set(false);
+                errored.set(false);
                 return;
             }
             loading.set(true);
+            errored.set(false);
             match data::search_palette(&url, &trimmed).await {
                 Ok(r) => {
                     selected.set(0);
                     results.set(Some(r));
                 }
                 Err(_) => {
+                    // `tracing` isn't linked under the `web` (WASM) feature,
+                    // so the signal alone carries the failure to the UI.
                     results.set(None);
+                    errored.set(true);
                 }
             }
             loading.set(false);
@@ -90,6 +98,7 @@ pub(super) fn SpOverlay(open: PaletteOpen) -> Element {
     // resets to 0 after each search response), and pressing ArrowDown
     // would visually jump to index 1 instead of 0.
     let is_loading = loading();
+    let is_errored = errored();
 
     let total = res
         .as_ref()
@@ -130,6 +139,14 @@ pub(super) fn SpOverlay(open: PaletteOpen) -> Element {
                 if res.is_some() {
                     div { class: "sp-meta", "data-testid": "sp-result-count",
                         "{total} result{plural(total)} · {duration}ms"
+                    }
+                }
+
+                // Distinct from "no matches": a fetch failure, not an empty
+                // result set.
+                if is_errored {
+                    p { role: "alert", class: "error", "data-testid": "sp-error",
+                        "Couldn\u{2019}t run that search. Check your connection and try again."
                     }
                 }
 

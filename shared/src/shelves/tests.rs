@@ -188,6 +188,73 @@ fn create_validate_enforces_manual_invariants() {
 }
 
 #[test]
+fn create_validate_rejects_too_many_book_uuids_and_overlong_uuid() {
+    let base = CreateShelfRequest {
+        kind: ShelfKind::Manual,
+        name: "Best of 2026".into(),
+        description: None,
+        visibility: Visibility::Private,
+        match_mode: None,
+        rules: vec![],
+        book_uuids: vec!["u1".into(), "u2".into()],
+    };
+    assert!(base.validate().is_ok());
+
+    let too_many = CreateShelfRequest {
+        book_uuids: (0..MAX_SHELF_BOOK_UUIDS + 1)
+            .map(|i| i.to_string())
+            .collect(),
+        ..base.clone()
+    };
+    assert!(too_many.validate().is_err());
+
+    let overlong_uuid = CreateShelfRequest {
+        book_uuids: vec!["u".repeat(crate::BOOK_UUID_MAX_LEN + 1)],
+        ..base.clone()
+    };
+    assert!(overlong_uuid.validate().is_err());
+}
+
+#[test]
+fn create_validate_rejects_too_many_smart_rules() {
+    let rule = ShelfRule {
+        field: RuleField::Tag,
+        op: RuleOp::Is,
+        value: "Fantasy".into(),
+    };
+    let too_many = CreateShelfRequest {
+        kind: ShelfKind::Smart,
+        name: "Fantasy".into(),
+        description: None,
+        visibility: Visibility::Private,
+        match_mode: Some(MatchMode::Any),
+        rules: std::iter::repeat_n(rule, MAX_PREVIEW_RULES + 1).collect(),
+        book_uuids: vec![],
+    };
+    assert!(too_many.validate().is_err());
+}
+
+#[test]
+fn rule_preview_validate_rejects_too_many_rules_and_accepts_at_cap() {
+    let rule = ShelfRule {
+        field: RuleField::Tag,
+        op: RuleOp::Is,
+        value: "Fantasy".into(),
+    };
+    let at_cap = RulePreviewRequest {
+        match_mode: MatchMode::Any,
+        rules: std::iter::repeat_n(rule.clone(), MAX_PREVIEW_RULES).collect(),
+    };
+    assert!(at_cap.validate().is_ok());
+
+    let too_many = RulePreviewRequest {
+        match_mode: MatchMode::Any,
+        rules: std::iter::repeat_n(rule, MAX_PREVIEW_RULES + 1).collect(),
+    };
+    assert!(too_many.validate().is_err());
+}
+
+#[test]
 fn create_validate_rejects_blank_and_overlong_names() {
     let base = CreateShelfRequest {
         kind: ShelfKind::Manual,

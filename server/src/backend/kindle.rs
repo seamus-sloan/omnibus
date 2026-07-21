@@ -24,6 +24,20 @@ pub(super) struct SendBody {
     file_id: Option<i64>,
 }
 
+impl SendBody {
+    /// Reject a `book_uuid` over [`omnibus_shared::BOOK_UUID_MAX_LEN`] before
+    /// any DB round trip.
+    fn validate(&self) -> Result<(), String> {
+        if self.book_uuid.len() > omnibus_shared::BOOK_UUID_MAX_LEN {
+            return Err(format!(
+                "book_uuid must be ≤ {} bytes",
+                omnibus_shared::BOOK_UUID_MAX_LEN
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Enqueue a send of the EPUB to the authenticated user's Kindle address and
 /// return the worker `task_id` to poll (`{"task_id": N}`). Fast pre-checks (no
 /// Kindle email, SMTP unconfigured, unknown book) still fail synchronously; the
@@ -33,6 +47,9 @@ pub(super) async fn post_send(
     State(state): State<AppState>,
     Json(body): Json<SendBody>,
 ) -> Response {
+    if let Err(msg) = body.validate() {
+        return (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
+    }
     let recipient = match db::auth::get_kindle_email(&state.pool, user.id).await {
         Ok(Some(email)) => email,
         Ok(None) => {

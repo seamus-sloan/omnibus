@@ -292,6 +292,23 @@ async fn commit_requires_configured_library_path() {
 }
 
 #[tokio::test]
+async fn commit_rejects_oversized_title_field_with_413_before_full_buffering() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    // The oversized text field is rejected while streaming, before the parser
+    // even reaches the (absent here) `file` field.
+    let oversized_title = "a".repeat(MAX_TEXT_FIELD_BYTES + 1);
+    let (ct, body) = multipart_body(&[("title", None, oversized_title.as_bytes())]);
+    let res = app
+        .oneshot(post_multipart("/api/uploads/ebooks", &token, &ct, body))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
 async fn commit_rejects_read_only_library_with_400() {
     let (app, _state, pool) = fixture().await;
     let library = tempfile::tempdir().expect("temp library dir");

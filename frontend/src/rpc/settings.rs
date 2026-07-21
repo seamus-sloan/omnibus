@@ -132,7 +132,10 @@ pub async fn rpc_set_metadata_precedence(
 ///
 /// Auth-gated as `AuthUser` (not `AdminUser`): scans affect the shared
 /// library and every authed user has a reason to know one is running.
-/// Worker progress snapshot for the in-page indicator.
+/// Scoped to the caller via [`omnibus_db::worker::Worker::owner_scoped_snapshot`]
+/// so a user-owned task (e.g. another user's Send-to-Kindle failure) never
+/// reaches a caller who doesn't own it — only unowned, library-wide tasks
+/// are visible to everyone.
 ///
 /// Modeled on `rpc_save_settings` because both routes need the
 /// `WorkerExt` extension. Empirically the Dioxus fullstack server-fn
@@ -145,9 +148,9 @@ pub async fn rpc_set_metadata_precedence(
 /// `_pool: PoolExt` is kept in the extractor list to put the macro on
 /// the same code path every other `/api/rpc/*` route uses (all of
 /// which take a `PoolExt`), but is unused — no DB calls run.
-#[post("/api/rpc/worker_status", _pool: PoolExt, worker: WorkerExt, _user: AuthUser)]
+#[post("/api/rpc/worker_status", _pool: PoolExt, worker: WorkerExt, user: AuthUser)]
 pub async fn rpc_worker_status() -> Result<WorkerStatus> {
-    Ok(worker.0.progress_snapshot())
+    Ok(worker.0.owner_scoped_snapshot(user.id))
 }
 
 /// Scan the configured ebook and audiobook library paths from disk and
