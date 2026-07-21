@@ -23,6 +23,8 @@ pub enum Route {
     Account {},
     #[route("/add-books")]
     AddBooks {},
+    #[route("/check-in")]
+    CheckIn {},
     #[route("/books/:uuid")]
     BookDetail { uuid: String },
     #[route("/books/:uuid/edit")]
@@ -118,6 +120,15 @@ pub fn AddBooks() -> Element {
     use_page_title(|| Some("Add Books".into()));
     rsx! {
         ScreenLayout { AddBooksPage {} }
+    }
+}
+
+/// Route target for `/check-in` — wraps [`CheckInPage`] in the platform screen layout.
+#[component]
+pub fn CheckIn() -> Element {
+    use_page_title(|| Some("Check In".into()));
+    rsx! {
+        ScreenLayout { CheckInPage {} }
     }
 }
 
