@@ -94,6 +94,86 @@ pub fn build_indexed_book(path: &Path, filename: String) -> Result<IndexedBook, 
     })
 }
 
+/// Book-level metadata derived by inspecting one or more audiobook files
+/// *before* they are filed into the library (the upload confirm step). For a
+/// single `.m4b`/`.m4a` this is that file's own tags; for a set of `.mp3`
+/// parts the title comes from the album tag (the per-file title tag is the
+/// chapter name) and the author from the first non-empty artist.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct InspectedAudiobook {
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub has_cover: bool,
+    /// Combined runtime across every readable part, when tags supplied it.
+    pub duration_seconds: Option<f64>,
+}
+
+/// Inspect the audiobook file(s) at `paths` and derive book-level metadata for
+/// the upload confirm step, without touching the library. `paths` is one file
+/// for `.m4b`/`.m4a` or the ordered `.mp3` parts of a multi-file audiobook.
+///
+/// Per-part tag failures are tolerated (logged, skipped) so one corrupt file
+/// doesn't sink the inspect; [`AudiobookError::Unsupported`] is returned only
+/// when *no* part yields readable tags.
+pub fn inspect_audiobook_files(paths: &[PathBuf]) -> Result<InspectedAudiobook, AudiobookError> {
+    let multi = paths.len() > 1;
+    let mut album_title: Option<String> = None;
+    let mut first_title: Option<String> = None;
+    let mut author: Option<String> = None;
+    let mut has_cover = false;
+    let mut total_secs = 0.0f64;
+    let mut any_readable = false;
+
+    for (i, path) in paths.iter().enumerate() {
+        match parse::extract_metadata(path) {
+            Ok(meta) => {
+                any_readable = true;
+                if album_title.is_none() {
+                    album_title = meta.album.clone();
+                }
+                if i == 0 {
+                    first_title = meta.title.clone();
+                }
+                if author.is_none() {
+                    author = meta.artist.clone();
+                }
+                if let Some(d) = meta.duration_seconds {
+                    total_secs += d;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(file = %path.display(), error = %e, "inspect: failed to read tags");
+            }
+        }
+        if !has_cover {
+            if let Ok(Some(_)) = cover::extract_cover(path) {
+                has_cover = true;
+            }
+        }
+    }
+
+    if !any_readable {
+        return Err(AudiobookError::Unsupported(
+            "no readable audio tags in upload".to_string(),
+        ));
+    }
+
+    // Multi-file: the book title lives in the album tag; single-file: the
+    // file's own title tag is the book title.
+    let title = if multi {
+        album_title.or(first_title)
+    } else {
+        first_title.or(album_title)
+    };
+
+    Ok(InspectedAudiobook {
+        title,
+        author,
+        has_cover,
+        duration_seconds: (total_secs > 0.0).then_some(total_secs),
+    })
+}
+
 fn filename_stem(filename: &str) -> String {
     PathBuf::from(filename)
         .file_stem()

@@ -1,10 +1,11 @@
 //! "Add your own books" upload handlers (web-facing REST).
 //!
-//! Two-step ebook ingest: `inspect` parses an uploaded EPUB and returns its
-//! embedded metadata for an editable confirm step; the commit endpoint files
-//! the file into the canonical library folder, reindexes so the indexer owns
-//! the insert, then layers the user's edits as metadata overrides. Audiobook
-//! endpoints are stubbed (501) until audio ingest lands.
+//! Two-step ingest shared by ebooks and audiobooks: `inspect` parses the
+//! upload and returns its embedded metadata for an editable confirm step; the
+//! commit endpoint files the file(s) into the canonical library folder,
+//! reindexes so the indexer owns the insert, then layers the user's edits as
+//! metadata overrides. Audiobooks accept a single `.m4a`/`.m4b` container or a
+//! set of `.mp3` parts filed together into one folder.
 
 use std::path::PathBuf;
 
@@ -68,6 +69,16 @@ pub(super) enum UploadError {
     UnsupportedFormat,
     /// File can't be opened/parsed as an EPUB → 415 (carries the reason).
     BadEpub(String),
+    /// No audiobook library path configured → 400.
+    AudiobookNotConfigured,
+    /// Audiobook library root rejects writes → 400 with a remediation hint.
+    AudiobookLibraryNotWritable,
+    /// Upload isn't a recognizable `.m4a`/`.m4b`/`.mp3` audiobook → 415.
+    UnsupportedAudioFormat,
+    /// Audiobook parse yielded no readable tags → 415 (carries the reason).
+    BadAudio(String),
+    /// Upload mixed formats or sent multiple single-file containers → 400.
+    MixedAudioUpload,
     /// File exceeds the configured byte cap → 413.
     TooLarge(usize),
     /// A multipart text field (title/author/series/series_index) exceeds its
@@ -122,6 +133,28 @@ impl IntoResponse for UploadError {
             )
                 .into_response(),
             UploadError::BadEpub(msg) => (StatusCode::UNSUPPORTED_MEDIA_TYPE, msg).into_response(),
+            UploadError::AudiobookNotConfigured => (
+                StatusCode::BAD_REQUEST,
+                "Configure an audiobook library path in Settings first",
+            )
+                .into_response(),
+            UploadError::AudiobookLibraryNotWritable => (
+                StatusCode::BAD_REQUEST,
+                "The audiobook library is not writable — uploads need a read-write \
+                 library mount (remove `:ro` from the audiobooks volume)",
+            )
+                .into_response(),
+            UploadError::UnsupportedAudioFormat => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "file must be a valid .m4a, .m4b, or .mp3 audiobook",
+            )
+                .into_response(),
+            UploadError::BadAudio(msg) => (StatusCode::UNSUPPORTED_MEDIA_TYPE, msg).into_response(),
+            UploadError::MixedAudioUpload => (
+                StatusCode::BAD_REQUEST,
+                "upload one .m4a/.m4b audiobook, or a set of .mp3 parts for a single book",
+            )
+                .into_response(),
             UploadError::TooLarge(cap) => (
                 StatusCode::PAYLOAD_TOO_LARGE,
                 format!("file exceeds the {cap}-byte upload limit"),
@@ -521,28 +554,8 @@ async fn apply_user_edits(
     Ok(())
 }
 
-// --- Audiobook stubs -------------------------------------------------------
-
-/// Placeholder until audiobook ingest lands. Gated on upload permission so the
-/// contract (auth → 501) matches the ebook endpoints.
-pub(super) async fn post_inspect_audiobook(user: AuthUser) -> Result<Response, UploadError> {
-    require_upload(&user)?;
-    Ok(audiobook_coming_soon())
-}
-
-/// Placeholder commit endpoint — see [`post_inspect_audiobook`].
-pub(super) async fn post_upload_audiobook(user: AuthUser) -> Result<Response, UploadError> {
-    require_upload(&user)?;
-    Ok(audiobook_coming_soon())
-}
-
-fn audiobook_coming_soon() -> Response {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        "audiobook upload is coming soon",
-    )
-        .into_response()
-}
+mod audiobooks;
+pub(super) use audiobooks::{post_inspect_audiobook, post_upload_audiobook};
 
 #[cfg(test)]
 mod tests;
