@@ -4161,6 +4161,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 18px 12px; align-content: start;
 }
+/* A phone's 3-up leaves absurdly large covers on an iPad, so step the count up
+   with width. Each threshold sits just under the device it targets: 700px
+   catches the mini (744px wide), 1000px the 12.9" in portrait (1024px). */
+@media (min-width: 700px) { .m-cover-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (min-width: 1000px) { .m-cover-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
 .m-cover-cell { display: block; min-width: 0; text-decoration: none; color: inherit; }
 .m-cover-cell-title {
   margin-top: 6px; font-size: 11.5px; font-weight: 500; color: var(--ink-0);
