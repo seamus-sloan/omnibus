@@ -1,15 +1,25 @@
 #!/usr/bin/env bash
-# Publish the merged HTML report into the gh-pages branch at
+# Publish a merged HTML report into the gh-pages branch at
 # <branch>/<sha>/<subdir>/, preserving every other report already there, and
 # point the site root at the latest report on the trunk branch.
 #
 # Invoked by action.yml's "Publish report to gh-pages" step, which supplies:
 #   GH_TOKEN PAGES_BASE_URL GH_PAGES_BRANCH MAIN_BRANCH REPORT_SUBDIR
-#   REPORT_TITLE PLAYWRIGHT_DIR REPO BRANCH_NAME COMMIT_SHA
+#   REPORT_TITLE REPORT_DIR REPO BRANCH_NAME COMMIT_SHA
 #   GITHUB_WORKSPACE GITHUB_STEP_SUMMARY — set by the runner
 set -euo pipefail
 
+# Attribute the auto-generated report commits to the GitHub Actions bot — the
+# canonical actor name + noreply address GitHub uses for it — so they show the
+# bot identity/avatar rather than a real person.
+COMMIT_USER_NAME="github-actions[bot]"
+COMMIT_USER_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+
 cd "$GITHUB_WORKSPACE"
+
+# Resolve the report source to an absolute path (report-dir may be
+# workspace-relative) before we cd into the clone below.
+REPORT_SRC="$(cd "$REPORT_DIR" && pwd)"
 
 DEST="${BRANCH_NAME}/${COMMIT_SHA}/${REPORT_SUBDIR}"
 AUTH_URL="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
@@ -24,13 +34,13 @@ else
   git checkout --orphan "$GH_PAGES_BRANCH"
   git rm -rfq . || true
 fi
-git config user.name "github-actions[bot]"
-git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+git config user.name "$COMMIT_USER_NAME"
+git config user.email "$COMMIT_USER_EMAIL"
 
 # Replace only this run's folder; leave all other reports intact.
 rm -rf "$DEST"
 mkdir -p "$DEST"
-cp -R "${GITHUB_WORKSPACE}/${PLAYWRIGHT_DIR}/playwright-report/." "$DEST/"
+cp -R "$REPORT_SRC/." "$DEST/"
 
 # Write a meta-refresh redirect page. $1 = relative target URL, $2 = output file.
 # Relative URLs so they work under a project-pages base path.

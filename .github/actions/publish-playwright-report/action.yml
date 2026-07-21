@@ -1,15 +1,13 @@
 name: Publish Playwright report
 description: >
-  Merge per-shard Playwright blob reports into one HTML report and publish it to
-  a gh-pages branch served by GitHub Pages, so every run's report is browsable
-  at a stable URL without downloading an artifact and running
-  `playwright show-report` locally. Posts a sticky PR comment and a run-summary
-  with the report URLs. Each run adds a `<branch>/<sha>/<subdir>/` folder and
-  preserves every prior one (only this run's folder is replaced); the site root
-  redirect tracks the latest report on the trunk branch. The caller must have
-  already checked out the repo (needed for `npm ci` and to load this local
-  action) and the shards must have uploaded blob artifacts matching
-  `blob-report-pattern`.
+  Publish an already-merged HTML test report to a gh-pages branch served by
+  GitHub Pages, so every run's report is browsable at a stable URL without
+  downloading an artifact. Posts a sticky PR comment and a run-summary with the
+  report URLs. Each run adds a `<branch>/<sha>/<subdir>/` folder and preserves
+  every prior one (only this run's folder is replaced); the site root redirect
+  tracks the latest report on the trunk branch. The caller owns producing the
+  merged report (e.g. `playwright merge-reports`) and passes its directory as
+  `report-dir` — this action does not merge, so it needs no Node/Playwright.
 
 inputs:
   github-token:
@@ -26,16 +24,12 @@ inputs:
       the PR comment and run summary; the gh-pages push itself uses relative
       paths.
     required: true
-  playwright-dir:
+  report-dir:
     description: >
-      Path to the Playwright project — holds `package.json` /
-      `package-lock.json` and the generated `playwright-report/`.
-    required: false
-    default: ui_tests/playwright
-  blob-report-pattern:
-    description: Artifact-name glob for the per-shard blob reports to download and merge.
-    required: false
-    default: blob-report-*
+      Path to the merged HTML report directory to publish (its contents are
+      copied verbatim). Relative to the workspace or absolute. The caller
+      produces this before calling the action.
+    required: true
   gh-pages-branch:
     description: Branch GitHub Pages serves the report tree from.
     required: false
@@ -48,8 +42,8 @@ inputs:
     default: main
   report-subdir:
     description: >
-      Leaf directory under `<branch>/<sha>/` the HTML report is written to; part
-      of the per-run URL.
+      Leaf directory under `<branch>/<sha>/` the report is published to; part of
+      the per-run URL.
     required: false
     default: test-results
   report-title:
@@ -62,10 +56,6 @@ inputs:
       update its own comment on re-runs (rather than posting a new one).
     required: false
     default: playwright-report
-  node-version:
-    description: Node.js version used to run `playwright merge-reports`.
-    required: false
-    default: "20"
 
 runs:
   using: composite
@@ -86,23 +76,6 @@ runs:
           - **This run:** ${{ inputs.pages-base-url }}/${{ github.head_ref }}/${{ github.event.pull_request.head.sha }}/${{ inputs.report-subdir }}/
           - **Latest for `${{ github.head_ref }}`:** ${{ inputs.pages-base-url }}/${{ github.head_ref }}/
 
-    - uses: actions/setup-node@v4
-      with:
-        node-version: ${{ inputs.node-version }}
-
-    - name: Download all blob reports
-      uses: actions/download-artifact@v4
-      with:
-        path: all-blob-reports
-        pattern: ${{ inputs.blob-report-pattern }}
-        merge-multiple: true
-
-    - name: Merge blob reports into one HTML report
-      shell: bash
-      env:
-        PLAYWRIGHT_DIR: ${{ inputs.playwright-dir }}
-      run: bash "$GITHUB_ACTION_PATH/merge-report.sh"
-
     - name: Publish report to gh-pages
       shell: bash
       env:
@@ -113,7 +86,7 @@ runs:
         # github.sha is the pushed commit (not a synthetic merge commit).
         BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
         COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        PLAYWRIGHT_DIR: ${{ inputs.playwright-dir }}
+        REPORT_DIR: ${{ inputs.report-dir }}
         PAGES_BASE_URL: ${{ inputs.pages-base-url }}
         GH_PAGES_BRANCH: ${{ inputs.gh-pages-branch }}
         MAIN_BRANCH: ${{ inputs.main-branch }}
