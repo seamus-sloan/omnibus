@@ -1,0 +1,195 @@
+name: Publish Playwright report
+description: >
+  Merge per-shard Playwright blob reports into one HTML report and publish it to
+  a gh-pages branch served by GitHub Pages, so every run's report is browsable
+  at a stable URL without downloading an artifact and running
+  `playwright show-report` locally. Posts a sticky PR comment and a run-summary
+  with the report URLs. Each run adds a `<branch>/<sha>/<subdir>/` folder and
+  preserves every prior one (only this run's folder is replaced); the site root
+  redirect tracks the latest report on the trunk branch. The caller must have
+  already checked out the repo (needed for `npm ci` and to load this local
+  action) and the shards must have uploaded blob artifacts matching
+  `blob-report-pattern`.
+
+inputs:
+  github-token:
+    description: >
+      Token with `contents: write` (push to the gh-pages branch) and
+      `pull-requests: write` (the sticky PR comment). Pass
+      `${{ secrets.GITHUB_TOKEN }}` — composite actions can't read `secrets`
+      directly, so it has to come in as an input.
+    required: true
+  pages-base-url:
+    description: >
+      Base URL the report tree is served from, no trailing slash — e.g.
+      `https://<owner>.github.io/<repo>`. Used only to build the URLs shown in
+      the PR comment and run summary; the gh-pages push itself uses relative
+      paths.
+    required: true
+  playwright-dir:
+    description: >
+      Path to the Playwright project — holds `package.json` /
+      `package-lock.json` and the generated `playwright-report/`.
+    required: false
+    default: ui_tests/playwright
+  blob-report-pattern:
+    description: Artifact-name glob for the per-shard blob reports to download and merge.
+    required: false
+    default: blob-report-*
+  gh-pages-branch:
+    description: Branch GitHub Pages serves the report tree from.
+    required: false
+    default: gh-pages
+  main-branch:
+    description: >
+      Trunk branch whose latest report the site root redirects to. Only runs on
+      this branch advance the root pointer, so a PR run never hijacks the root.
+    required: false
+    default: main
+  report-subdir:
+    description: >
+      Leaf directory under `<branch>/<sha>/` the HTML report is written to; part
+      of the per-run URL.
+    required: false
+    default: test-results
+  report-title:
+    description: Title shown in the PR comment, run summary, and redirect pages.
+    required: false
+    default: Playwright report
+  sticky-comment-header:
+    description: >
+      Identifier `marocchino/sticky-pull-request-comment` uses to find and
+      update its own comment on re-runs (rather than posting a new one).
+    required: false
+    default: playwright-report
+  node-version:
+    description: Node.js version used to run `playwright merge-reports`.
+    required: false
+    default: "20"
+
+runs:
+  using: composite
+  steps:
+    # Post the report URL as a sticky PR comment up front so reviewers have a
+    # one-click link. The page goes live once the publish step below pushes to
+    # gh-pages, but the URL is deterministic from branch + head sha, so posting
+    # it first is safe. PR-only — push builds have no PR.
+    - name: Comment report URL on the PR
+      if: ${{ github.event_name == 'pull_request' }}
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        header: ${{ inputs.sticky-comment-header }}
+        message: |
+          ### 📊 ${{ inputs.report-title }}
+
+          - **This run:** ${{ inputs.pages-base-url }}/${{ github.head_ref }}/${{ github.event.pull_request.head.sha }}/${{ inputs.report-subdir }}/
+          - **Latest for `${{ github.head_ref }}`:** ${{ inputs.pages-base-url }}/${{ github.head_ref }}/
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Download all blob reports
+      uses: actions/download-artifact@v4
+      with:
+        path: all-blob-reports
+        pattern: ${{ inputs.blob-report-pattern }}
+        merge-multiple: true
+
+    - name: Merge blob reports into one HTML report
+      shell: bash
+      env:
+        PLAYWRIGHT_DIR: ${{ inputs.playwright-dir }}
+        BLOB_DIR: ${{ github.workspace }}/all-blob-reports
+        # merge-reports needs @playwright/test but no browser binaries; skip the
+        # ~150 MB Chromium download the postinstall would otherwise run.
+        PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      run: |
+        set -euo pipefail
+        cd "$PLAYWRIGHT_DIR"
+        npm ci
+        npx playwright merge-reports --reporter html "$BLOB_DIR"
+
+    # Publish into <gh-pages>/<branch>/<sha>/<subdir>/, preserving every other
+    # report already there, and point the root redirect at the latest trunk run.
+    - name: Publish report to gh-pages
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        # head_ref is set on pull_request events (the PR branch); ref_name is
+        # the branch on push events. head.sha is the PR's real head; on push,
+        # github.sha is the pushed commit (not a synthetic merge commit).
+        BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+        COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        PLAYWRIGHT_DIR: ${{ inputs.playwright-dir }}
+        PAGES_BASE_URL: ${{ inputs.pages-base-url }}
+        GH_PAGES_BRANCH: ${{ inputs.gh-pages-branch }}
+        MAIN_BRANCH: ${{ inputs.main-branch }}
+        REPORT_SUBDIR: ${{ inputs.report-subdir }}
+        REPORT_TITLE: ${{ inputs.report-title }}
+      run: |
+        set -euo pipefail
+        DEST="${BRANCH_NAME}/${COMMIT_SHA}/${REPORT_SUBDIR}"
+        AUTH_URL="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+
+        # Clone the existing gh-pages tree; create an orphan branch if it's the
+        # first run and the branch doesn't exist yet.
+        if git clone --depth 1 --branch "$GH_PAGES_BRANCH" "$AUTH_URL" gh-pages 2>/dev/null; then
+          cd gh-pages
+        else
+          git clone --depth 1 "$AUTH_URL" gh-pages
+          cd gh-pages
+          git checkout --orphan "$GH_PAGES_BRANCH"
+          git rm -rfq . || true
+        fi
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+        # Replace only this run's folder; leave all other reports intact.
+        rm -rf "$DEST"
+        mkdir -p "$DEST"
+        cp -R "${GITHUB_WORKSPACE}/${PLAYWRIGHT_DIR}/playwright-report/." "$DEST/"
+
+        # Write a meta-refresh redirect page. $1 = relative target URL,
+        # $2 = output file. Relative URLs so they work under a project-pages
+        # base path.
+        write_redirect() {
+          printf '<!doctype html>\n<meta charset="utf-8">\n<meta http-equiv="refresh" content="0; url=%s">\n<title>%s</title>\n<a href="%s">Latest %s →</a>\n' "$1" "$REPORT_TITLE" "$1" "$REPORT_TITLE" > "$2"
+        }
+
+        # Per-branch pointer: <base>/<branch>/ → this branch's newest report.
+        # Updated every run, so a branch's latest report is reachable without
+        # knowing the sha.
+        write_redirect "./${COMMIT_SHA}/${REPORT_SUBDIR}/" "${BRANCH_NAME}/index.html"
+
+        # Track the latest trunk report in a sentinel file so the root can always
+        # point at it — even on a PR run, which must not move the root off trunk.
+        if [ "$BRANCH_NAME" = "$MAIN_BRANCH" ]; then
+          printf '%s\n' "$DEST" > .main-latest
+        fi
+        # Keep a root index every run so the site root never 404s: redirect to
+        # the latest trunk report if one exists, else a small landing page until
+        # the first trunk run publishes.
+        if [ -f .main-latest ]; then
+          write_redirect "./$(cat .main-latest)/" "index.html"
+        else
+          printf '<!doctype html>\n<meta charset="utf-8">\n<title>%s</title>\n<h1>%s</h1>\n<p>No <code>%s</code> report has been published yet. Reports are published per branch; this page will redirect to the latest <code>%s</code> report once one exists.</p>\n' "$REPORT_TITLE" "$REPORT_TITLE" "$MAIN_BRANCH" "$MAIN_BRANCH" > "index.html"
+        fi
+
+        # Serve the report assets verbatim (no Jekyll processing of _ paths).
+        touch .nojekyll
+
+        # Link both URLs from the run's summary so the report is one click from
+        # the Actions page — no sha-hunting.
+        {
+          echo "### 📊 ${REPORT_TITLE}"
+          echo ""
+          echo "- **This run:** ${PAGES_BASE_URL}/${DEST}/"
+          echo "- **Latest for \`${BRANCH_NAME}\`:** ${PAGES_BASE_URL}/${BRANCH_NAME}/"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        git add -A
+        git commit -q -m "test report: ${BRANCH_NAME}@${COMMIT_SHA:0:9}" || { echo "no changes to publish"; exit 0; }
+        git push "$AUTH_URL" HEAD:"$GH_PAGES_BRANCH"
