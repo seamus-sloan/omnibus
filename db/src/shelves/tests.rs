@@ -518,6 +518,72 @@ async fn list_visible_shelves_reports_correct_per_shelf_counts_when_batched() {
 }
 
 #[tokio::test]
+async fn list_visible_shelves_computes_smart_counts_for_a_mix_of_owner_and_public_shelves() {
+    // Regression for the N+1: three smart shelves (one the viewer's own, two
+    // owned by other users but public) must each get their own correct
+    // fanned-out count rather than a mixed-up or dropped one.
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let viewer = make_user(&pool, "viewer", false).await;
+    let other_a = make_user(&pool, "other_a", false).await;
+    let other_b = make_user(&pool, "other_b", false).await;
+
+    let mine = create_shelf(
+        &pool,
+        viewer,
+        &smart_req("Mine", MatchMode::Any, vec![tag_rule("fiction")]),
+    )
+    .await
+    .unwrap();
+
+    let mut other_a_req = smart_req(
+        "Other A public",
+        MatchMode::Any,
+        vec![ShelfRule {
+            field: RuleField::Author,
+            op: RuleOp::Is,
+            value: "ada lovelace".into(),
+        }],
+    );
+    other_a_req.visibility = Visibility::Public;
+    let other_a_shelf = create_shelf(&pool, other_a, &other_a_req).await.unwrap();
+
+    let mut other_b_req = smart_req(
+        "Other B public",
+        MatchMode::Any,
+        vec![ShelfRule {
+            field: RuleField::Series,
+            op: RuleOp::StartsWith,
+            value: "Sag".into(),
+        }],
+    );
+    other_b_req.visibility = Visibility::Public;
+    let other_b_shelf = create_shelf(&pool, other_b, &other_b_req).await.unwrap();
+
+    let shelves = list_visible_shelves(&pool, viewer, false).await.unwrap();
+    let ids: std::collections::HashSet<i64> = shelves.iter().map(|s| s.id).collect();
+    for (id, label) in [
+        (mine.id, "the viewer's own smart shelf"),
+        (other_a_shelf.id, "other_a's public smart shelf"),
+        (other_b_shelf.id, "other_b's public smart shelf"),
+    ] {
+        assert!(ids.contains(&id), "{label} must be in the visible set");
+    }
+    let count_for = |id: i64| shelves.iter().find(|s| s.id == id).unwrap().book_count;
+
+    assert_eq!(count_for(mine.id), 2, "two books tagged fiction");
+    assert_eq!(
+        count_for(other_a_shelf.id),
+        3,
+        "three books authored by Ada Lovelace"
+    );
+    assert_eq!(
+        count_for(other_b_shelf.id),
+        2,
+        "two books in the Saga series"
+    );
+}
+
+#[tokio::test]
 async fn duplicate_name_for_same_owner_is_name_taken() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let owner = make_user(&pool, "owner", false).await;

@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use futures::future::try_join_all;
 use omnibus_shared::{
     EbookMetadata, MatchMode, RuleField, RuleOp, RulePreview, Shelf, ShelfKind, ShelfPage,
     ShelfRule, ShelfSummary, SortDir, SortKey, Visibility,
@@ -29,13 +30,10 @@ const PREVIEW_SAMPLE: i64 = 12;
 /// an unbounded REST response.
 pub const LIST_SHELVES_LIMIT: i64 = 500;
 
+// Max concurrent `count_smart` queries `list_visible_shelves` runs at once.
+const SMART_COUNT_CONCURRENCY: usize = 8;
+
 /// Every shelf `viewer_id` can see: own + public, or all when `is_admin`.
-/// Each row carries its live book count (smart = rule match, manual = row
-/// count). Rule loads and manual counts are batched across the whole visible
-/// set (one `WHERE shelf_id IN (...)` / `GROUP BY` query each) rather than
-/// issued per row; smart-shelf counts still run one query per shelf since each
-/// shelf's membership predicate is unique and can't be folded into a single
-/// `GROUP BY`.
 pub async fn list_visible_shelves(
     pool: &SqlitePool,
     viewer_id: i64,
@@ -91,14 +89,23 @@ pub async fn list_visible_shelves(
     let mut rules_by_shelf = load_rules_batch(pool, &smart_ids).await?;
     let manual_counts = count_manual_batch(pool, &manual_ids).await?;
 
+    // Each smart shelf's membership predicate is unique, so unlike the manual
+    // counts above these can't fold into one `GROUP BY` — fan them out
+    // concurrently instead of one sequential query per shelf.
+    let mut smart_inputs = Vec::with_capacity(smart_ids.len());
+    for row in &parsed {
+        if row.kind == ShelfKind::Smart {
+            let mode = parse_mode(row.match_mode.clone());
+            let rules = rules_by_shelf.remove(&row.id).unwrap_or_default();
+            smart_inputs.push((row.id, row.owner_user_id, mode, rules));
+        }
+    }
+    let smart_counts = count_smart_fan_out(pool, smart_inputs).await?;
+
     let mut out = Vec::with_capacity(parsed.len());
     for row in parsed {
         let book_count = match row.kind {
-            ShelfKind::Smart => {
-                let mode = parse_mode(row.match_mode);
-                let rules = rules_by_shelf.remove(&row.id).unwrap_or_default();
-                count_smart(pool, row.owner_user_id, mode, &rules).await?
-            }
+            ShelfKind::Smart => smart_counts.get(&row.id).copied().unwrap_or(0),
             ShelfKind::Manual => manual_counts.get(&row.id).copied().unwrap_or(0),
         };
         out.push(ShelfSummary {
@@ -329,6 +336,31 @@ async fn count_smart(
         };
     }
     Ok(q.fetch_one(pool).await?)
+}
+
+/// Run [`count_smart`] for every `(shelf_id, owner_id, match_mode, rules)`
+/// tuple in `inputs`, fanning out [`SMART_COUNT_CONCURRENCY`] at a time,
+/// keyed by shelf id in the returned map. Replaces the sequential per-shelf
+/// await `list_visible_shelves` used to make (see its doc comment).
+async fn count_smart_fan_out(
+    pool: &SqlitePool,
+    inputs: Vec<(i64, i64, MatchMode, Vec<ShelfRule>)>,
+) -> Result<HashMap<i64, i64>, ShelfError> {
+    let mut out = HashMap::with_capacity(inputs.len());
+    for chunk in inputs.chunks(SMART_COUNT_CONCURRENCY) {
+        // `try_join_all` (not `join_all`) so one failing count short-circuits
+        // the rest of the chunk instead of waiting out every in-flight query.
+        let counts = try_join_all(
+            chunk
+                .iter()
+                .map(|(_, owner_id, mode, rules)| count_smart(pool, *owner_id, *mode, rules)),
+        )
+        .await?;
+        for ((shelf_id, ..), count) in chunk.iter().zip(counts) {
+            out.insert(*shelf_id, count);
+        }
+    }
+    Ok(out)
 }
 
 async fn count_manual(pool: &SqlitePool, shelf_id: i64) -> Result<i64, ShelfError> {
