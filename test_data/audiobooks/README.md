@@ -36,6 +36,22 @@ coverage the synthetic generator can't produce without ffmpeg.
 `AUDIOBOOK_BOOKS`, the table the spec asserts against. The generator
 inputs in `tools/make_audiobook.ts` and that table must stay in sync.
 
+## Merge-only fixtures
+
+"The Mergeable Manuscript" (Barbara Liskov) and "The Severable Sequel"
+(Frances Allen) are reserved for the specs that *mutate* books through
+`/api/rpc/merge-books` — `merge.spec.ts` and `book_detail.spec.ts`'s
+file-picker tests — and are exported as `MERGE_PRIMARY` / `MERGE_SECONDARY`.
+
+The suite runs `fullyParallel` against one shared server, so a merge is
+globally visible: while it is in flight the source book disappears from
+`/api/rpc/ebooks` and the target grows an extra format and `book_files`
+row. Keeping the mutated pair private to the writers is what stops that
+from breaking the readers in `listen.spec.ts` / `mini-dock.spec.ts`.
+**Don't read them from any other spec**, and don't give them an author
+that appears in `make_epub.ts` — several specs assert author-scoped
+counts.
+
 ## Regenerating
 
 The synthetic fixtures are deterministic (re-running produces

@@ -1,6 +1,11 @@
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
-import { AUDIOBOOK_BOOKS, AUDIOBOOK_BOOK_COUNT } from "../fixtures/audiobooks";
+import {
+  AUDIOBOOK_BOOKS,
+  AUDIOBOOK_BOOK_COUNT,
+  MERGE_PRIMARY,
+  MERGE_SECONDARY,
+} from "../fixtures/audiobooks";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { fetchBookUuidByTitle, getRow } from "../utils/ebooks";
 import { withLock } from "../utils/lock";
@@ -585,16 +590,19 @@ test.describe("audiobook-only seed", () => {
     );
   });
 
-  // Both generated MP3s ("The Analytical Audiobook" by Ada Lovelace and "The
-  // Compiled Tales" by Grace Hopper) — the only same-format pair in the
-  // audiobook fixtures, so merging them (F5.10 allows same-format merges) is
-  // the only way to produce a real multi-file `book_files` group for #1005's
-  // file-picker coverage below.
-  const PRIMARY_MP3 = AUDIOBOOK_BOOKS.find(
+  // The merge-only MP3 pair. Merging them (F5.10 allows same-format merges)
+  // is what produces a real multi-file `book_files` group for #1005's
+  // file-picker coverage below. They are reserved for the merge tests
+  // precisely so this mutation stays invisible to the specs running in
+  // parallel against the same server — see `fixtures/audiobooks.ts`.
+  const PRIMARY_MP3 = MERGE_PRIMARY;
+  const SECOND_MP3 = MERGE_SECONDARY;
+
+  // Read-only audiobook for the non-mutating CTA test below. It must NOT be
+  // one of the merge pair: that test asserts the *absence* of a file picker,
+  // which a concurrent merge would falsify.
+  const SOLO_MP3 = AUDIOBOOK_BOOKS.find(
     (b) => b.format === "MP3" && b.source === "generated",
-  )!;
-  const SECOND_MP3 = AUDIOBOOK_BOOKS.find(
-    (b) => b.format === "MP3" && b.source === "generated" && b.title !== PRIMARY_MP3.title,
   )!;
 
   test("Start listening navigates to /listen/:uuid for audio-only books", async ({
@@ -605,7 +613,7 @@ test.describe("audiobook-only seed", () => {
     // and has_ebook is false, so the hero renders "Start listening" as
     // the primary CTA (the secondary "Listen" button only appears when
     // both formats coexist).
-    const uuid = await fetchBookUuidByTitle(request, PRIMARY_MP3.title);
+    const uuid = await fetchBookUuidByTitle(request, SOLO_MP3.title);
     await gotoReady(page, `/books/${uuid}`);
 
     const startListening = page.getByTestId("start-listening");

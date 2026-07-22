@@ -87,7 +87,52 @@ export const AUDIOBOOK_BOOKS: readonly ExpectedAudiobook[] = [
     hasCover: true,
     source: "generated",
   },
+
+  // Merge-only pair — see MERGE_PRIMARY/MERGE_SECONDARY below. Appended last
+  // for the same reason as "Immersive Voyage": the `.find(MP3 && generated)`
+  // and `.find(MP3 && parts > 1)` selectors in listen/mini-dock/book_detail
+  // keep resolving to "The Analytical Audiobook" and "The Compiled Tales".
+  {
+    title: "The Mergeable Manuscript",
+    author: "Barbara Liskov",
+    format: "MP3",
+    parts: 1,
+    hasCover: true,
+    source: "generated",
+  },
+  {
+    title: "The Severable Sequel",
+    author: "Frances Allen",
+    format: "MP3",
+    parts: 1,
+    hasCover: true,
+    source: "generated",
+  },
 ] as const;
+
+/**
+ * The audiobooks reserved for specs that MUTATE books via
+ * `/api/rpc/merge-books` (`merge.spec.ts`, and `book_detail.spec.ts`'s
+ * file-picker tests).
+ *
+ * The suite runs `fullyParallel` against one shared server, so a merge is
+ * globally visible: while it is in flight the source book vanishes from
+ * `/api/rpc/ebooks` and the target grows a second format and a second
+ * `book_files` row. Pointing the merge specs at books that `listen.spec.ts`
+ * / `mini-dock.spec.ts` also read is what made those specs fail in CI — the
+ * `audiobook-merge` lock only serializes the *writers*, and readers never
+ * took it. Keeping the mutated pair private to the writers removes the race
+ * at the source instead of forcing ~27 reader tests through a mutex.
+ *
+ * **Never read these from a non-merge spec.** Use `AUDIOBOOK_BOOKS` for
+ * anything that just needs an audiobook to look at.
+ */
+export const MERGE_PRIMARY = AUDIOBOOK_BOOKS.find(
+  (b) => b.title === "The Mergeable Manuscript",
+)!;
+export const MERGE_SECONDARY = AUDIOBOOK_BOOKS.find(
+  (b) => b.title === "The Severable Sequel",
+)!;
 
 /** Total audiobook *books* (groups) — not parts — the indexer surfaces. */
 export const AUDIOBOOK_BOOK_COUNT = AUDIOBOOK_BOOKS.length;
