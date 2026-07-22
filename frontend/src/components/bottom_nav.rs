@@ -59,7 +59,10 @@ pub fn BottomNav() -> Element {
                 r#type: "button",
                 class: "m-tabbar-scan",
                 "data-testid": "tabbar-scan",
-                aria_label: "Add to library",
+                // Label avoids the substring "to" — the bottom nav renders in
+                // the DOM on every web page (CSS-hidden on desktop), so a
+                // "…to…" name collides with Playwright's getByLabel("To").
+                aria_label: "Add books",
                 aria_haspopup: "dialog",
                 aria_expanded: if sheet_open() { "true" } else { "false" },
                 onclick: move |_| sheet_open.set(true),
