@@ -24,6 +24,7 @@ mod series;
 mod settings;
 mod shelves;
 mod stats;
+mod summary;
 
 pub use account::*;
 pub use authors::*;
@@ -42,6 +43,7 @@ pub use series::*;
 pub use settings::*;
 pub use shelves::*;
 pub use stats::*;
+pub use summary::*;
 
 /// Log the real error server-side and return a generic message safe to hand
 /// to the client, mirroring `server/src/backend.rs`'s `internal()` one layer

@@ -114,3 +114,10 @@ pub mod shelf_rule_builder;
 
 pub mod edit_shelf_rules_modal;
 pub use edit_shelf_rules_modal::EditShelfRulesModal;
+
+// "Fetch Summary" button — pulls a book blurb from Hardcover/OpenLibrary on
+// demand. Mounted by the metadata editor (always) and the web book-detail hero
+// (when the current summary is sparse). Platform-agnostic so its rsx stays
+// hydration-identical; its data calls have mobile stubs.
+pub mod fetch_summary;
+pub use fetch_summary::FetchSummaryButton;

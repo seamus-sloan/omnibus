@@ -5648,6 +5648,42 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   .suggest-spinner { animation: none; }
 }
 
+/* "Fetch Summary" button + inline status (on-demand Hardcover/OpenLibrary
+   description fetch). Mounted under the metadata-editor Description field and,
+   when the summary is sparse, in the book-detail hero. */
+.fs-fetch {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+}
+/* Accent-tinted like the Immersive Read CTA (`.bd-immersive-cta`), with the
+   sparkle mark drawn in the accent colour. */
+.fs-fetch-btn {
+  gap: 9px;
+  background: color-mix(in oklch, var(--accent) 16%, var(--bg-1));
+  border-color: color-mix(in oklch, var(--accent) 55%, transparent);
+  color: var(--ink-0);
+}
+.fs-fetch-btn:hover {
+  background: color-mix(in oklch, var(--accent) 24%, var(--bg-1));
+  border-color: color-mix(in oklch, var(--accent) 70%, transparent);
+}
+.fs-fetch-btn[disabled] { opacity: 0.65; cursor: not-allowed; }
+.fs-fetch-mark { display: inline-flex; color: var(--accent); }
+.fs-fetch-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.fs-fetch-error {
+  font-size: 13px;
+  color: var(--bad);
+}
+
 .bd-suggest-connect { display: flex; align-items: center; justify-content: space-between;
   gap: 22px; padding: 22px 24px; border: 1px dashed var(--line-2); }
 .bd-suggest-connect-title { font-size: 18px; margin: 0; }
