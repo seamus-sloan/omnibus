@@ -6,10 +6,14 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::{BookFileInfo, BookSuggestion, EbookMetadata, SuggestionsResponse};
+use omnibus_shared::summary::summary_is_sparse;
+use omnibus_shared::{
+    BookFileInfo, BookSuggestion, EbookMetadata, MetadataOverrides, SuggestionsResponse,
+};
 
 use crate::components::atrium::Cover;
-use crate::Route;
+use crate::components::FetchSummaryButton;
+use crate::{data, Route};
 
 use super::discovery::{
     cover_src, list_count_label, same_hand_author_label, same_hand_title, same_hand_year,
@@ -55,6 +59,28 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
     } = derive_loaded_view(&b);
 
     let uuid = b.unique_identifier.clone().unwrap_or_default();
+
+    // Local copy of the effective summary so a fetch-and-save can refresh the
+    // shown description in place, mirroring web's `BdTitleCol`.
+    let mut description = use_signal(|| b.description.clone().unwrap_or_default());
+    let on_fetched = {
+        let server_url = server_url.clone();
+        let uuid = uuid.clone();
+        move |text: String| {
+            let url = server_url.clone();
+            let uuid = uuid.clone();
+            spawn(async move {
+                let overrides = MetadataOverrides {
+                    description: Some(text.clone()),
+                    ..Default::default()
+                };
+                if data::save_overrides(&url, &uuid, &overrides).await.is_ok() {
+                    description.set(text);
+                }
+            });
+        }
+    };
+
     let year = b
         .published
         .as_deref()
@@ -161,20 +187,22 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
                 }
             }
 
-            // About
-            if b.description.as_deref().map(|d| !d.trim().is_empty()).unwrap_or(false) || !b.subjects.is_empty() {
-                section { class: "m-section",
-                    div { class: "label", "About" }
-                    if let Some(desc) = b.description.as_deref() {
-                        div { class: "m-bd-desc", dangerous_inner_html: "{desc}" }
-                    }
-                    if !b.subjects.is_empty() {
-                        div { class: "m-bd-tags",
-                            for tag in b.subjects.iter() {
-                                span { key: "{tag}", class: "chip", "{tag}" }
-                            }
+            // About — always rendered: a sparse/missing summary (fewer than 10
+            // words) still needs the section to host the Fetch Summary button.
+            section { class: "m-section",
+                div { class: "label", "About" }
+                if !description().is_empty() {
+                    div { class: "m-bd-desc", dangerous_inner_html: "{description()}" }
+                }
+                if !b.subjects.is_empty() {
+                    div { class: "m-bd-tags",
+                        for tag in b.subjects.iter() {
+                            span { key: "{tag}", class: "chip", "{tag}" }
                         }
                     }
+                }
+                if summary_is_sparse(&description()) {
+                    FetchSummaryButton { uuid: uuid.clone(), on_fetched }
                 }
             }
 

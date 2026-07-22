@@ -1,13 +1,15 @@
-//! On-demand summary-fetch wrappers for the "Fetch Summary" button. Web/SSR
-//! calls the server functions; mobile ships no summary UI, so its variants are
-//! inert stubs that keep the shared call sites compiling under
-//! `--features mobile` (mirroring `get_manifest`'s web-only fallback).
+//! On-demand summary-fetch wrappers for the "Fetch Summary" button. Each
+//! function has a mobile REST variant (`reqwest`) and a web/SSR
+//! server-function wrapper with identical signatures across the `#[cfg]`
+//! split.
 
 use omnibus_shared::summary::SummarySource;
 
 #[cfg(not(feature = "mobile"))]
 use super::note_server_fn_err;
 use super::DataError;
+#[cfg(feature = "mobile")]
+use super::{drain_error, http_client, note_status, with_bearer};
 
 /// Web/SSR: fetch a summary for `uuid` from `source` via `rpc_fetch_summary`.
 /// `Ok(None)` when that source had no summary (the caller cascades to the next).
@@ -31,19 +33,35 @@ pub async fn hardcover_configured(_server_url: &str) -> Result<bool, DataError> 
         .map_err(note_server_fn_err)
 }
 
-/// Mobile: no summary-fetch UI ships on mobile; this stub keeps shared call
-/// sites compiling.
+/// Mobile: POST `/api/ebooks/{uuid}/summary/fetch` with `{ "source": ... }`.
+/// `Ok(None)` when that source had no summary (the caller cascades to the next).
 #[cfg(feature = "mobile")]
 pub async fn fetch_summary(
-    _server_url: &str,
-    _uuid: &str,
-    _source: SummarySource,
+    server_url: &str,
+    uuid: &str,
+    source: SummarySource,
 ) -> Result<Option<String>, DataError> {
-    Err(DataError::Other("fetch summary is web-only".into()))
+    let url = format!("{server_url}/api/ebooks/{uuid}/summary/fetch");
+    let response = with_bearer(http_client().post(&url))
+        .json(&serde_json::json!({ "source": source }))
+        .send()
+        .await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(response.json::<Option<String>>().await?)
 }
 
-/// Mobile counterpart to the web `hardcover_configured`; see [`fetch_summary`].
+/// Mobile: GET `/api/summary/hardcover-configured` — see the web
+/// `hardcover_configured` doc.
 #[cfg(feature = "mobile")]
-pub async fn hardcover_configured(_server_url: &str) -> Result<bool, DataError> {
-    Err(DataError::Other("fetch summary is web-only".into()))
+pub async fn hardcover_configured(server_url: &str) -> Result<bool, DataError> {
+    let url = format!("{server_url}/api/summary/hardcover-configured");
+    let response = with_bearer(http_client().get(&url)).send().await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(response.json::<bool>().await?)
 }

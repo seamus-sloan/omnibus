@@ -41,6 +41,7 @@ mod settings;
 mod shelves;
 mod stats;
 mod suggestions;
+mod summary;
 mod tags;
 mod uploads;
 
@@ -450,6 +451,16 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
         .route(
             "/api/hardcover-key",
             get(suggestions::get_hardcover_key).post(suggestions::post_hardcover_key),
+        )
+        // "Fetch Summary" — mobile-facing REST. Web hits the analogous
+        // `/api/rpc/ebook/summary/*` server fns.
+        .route(
+            "/api/ebooks/{uuid}/summary/fetch",
+            post(summary::post_ebook_summary_fetch),
+        )
+        .route(
+            "/api/summary/hardcover-configured",
+            get(summary::get_hardcover_configured),
         )
         // F4.3 Send-to-Kindle — mobile-facing REST. Web hits the analogous
         // `/api/rpc/kindle/send`, `/api/rpc/account/kindle-email`, and
