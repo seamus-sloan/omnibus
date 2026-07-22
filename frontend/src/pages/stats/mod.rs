@@ -308,10 +308,9 @@ mod tests {
 
     #[test]
     fn freshness_note_text_states_the_real_ttl_in_seconds() {
-        assert_eq!(STATS_TTL_SECS, 60);
         assert_eq!(
             freshness_note_text(),
-            "Stats are accurate to the last ~60 seconds."
+            format!("Stats are accurate to the last ~{STATS_TTL_SECS} seconds.")
         );
     }
 }
