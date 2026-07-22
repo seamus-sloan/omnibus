@@ -21,8 +21,10 @@ mod tests;
 
 /// Per-user aggregate cache TTL. A reload after a just-finished session
 /// reflects new data within this window; repeated calls inside it hit the
-/// cache instead of re-running the SQL.
-pub const STATS_TTL_SECS: i64 = 60;
+/// cache instead of re-running the SQL. Re-exported from `omnibus_shared` so
+/// the frontend's `/stats` footer note can render the real TTL without a
+/// second hardcoded copy of the number.
+pub use omnibus_shared::STATS_TTL_SECS;
 
 /// How many rows the top-authors / top-tags rollups return.
 const TOP_N: i64 = 8;
