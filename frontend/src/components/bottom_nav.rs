@@ -1,11 +1,9 @@
 //! Mobile bottom tab bar.
 //!
-//! Pinned to the bottom of the viewport — four icon tabs (Library, Authors,
-//! Stats, You) split around a raised center "Scan/Upload" action that opens
-//! the [`super::add_books_sheet`] chooser (Check-In step 0a → 0b). It is the
-//! native shell's primary `Nav`, and also mounts on web via
-//! [`crate::ScreenLayout`], where CSS reveals it only below the phone
-//! breakpoint so desktop keeps its top-bar section links.
+//! Four icon tabs (Library, Authors, Stats, You) split around a raised center
+//! action that opens the add-books chooser. The native shell's primary `Nav`;
+//! also mounts on web via `ScreenLayout`, hidden by CSS above the phone
+//! breakpoint so desktop keeps its top-bar links.
 
 use dioxus::prelude::*;
 use dioxus_router::{use_route, Link};
@@ -62,6 +60,8 @@ pub fn BottomNav() -> Element {
                 class: "m-tabbar-scan",
                 "data-testid": "tabbar-scan",
                 aria_label: "Add to library",
+                aria_haspopup: "dialog",
+                aria_expanded: if sheet_open() { "true" } else { "false" },
                 onclick: move |_| sheet_open.set(true),
                 span { class: "m-tabbar-scan-disc", {tab_glyph_scan()} }
                 span { class: "m-tabbar-label", "Add" }
@@ -113,8 +113,8 @@ fn tab_glyph_authors() -> Element {
     }
 }
 
-/// Glyph inside the raised center action — a plus over a scan frame, reading
-/// as "add / scan" for the Add-books sheet trigger.
+/// Glyph inside the raised center action — a plus, reading as "add" for the
+/// Add-books sheet trigger.
 fn tab_glyph_scan() -> Element {
     rsx! {
         svg {

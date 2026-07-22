@@ -1,11 +1,7 @@
-//! "Add to your library" bottom sheet (Check-In step 0b).
-//!
-//! Opened by the raised center action in [`super::bottom_nav`]. A chooser of
-//! icon + title + subtitle rows that route into the existing surfaces — the
-//! highlighted Scan row and the manual-ISBN row both open the check-in flow
-//! (the camera vs. keypad split lands with the scanner, #1183); Upload opens
-//! the existing add-books page. Rendered on every target; the closed state is
-//! an absent node so SSR and the first WASM paint agree (rule 07).
+//! "Add to your library" bottom sheet — the chooser opened by the bottom
+//! nav's center action. Icon + title + subtitle rows route into the existing
+//! check-in and add-books surfaces. Rendered on every target; the closed
+//! state is an absent node so SSR and the first client paint agree.
 
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
@@ -26,7 +22,7 @@ struct AddRow {
 #[component]
 pub(super) fn AddBooksSheet(open: Signal<bool>, on_close: EventHandler<()>) -> Element {
     if !open() {
-        return rsx! {};
+        return rsx!();
     }
     let nav = use_navigator();
     let rows = vec![
@@ -68,23 +64,25 @@ pub(super) fn AddBooksSheet(open: Signal<bool>, on_close: EventHandler<()>) -> E
                 }
                 div { class: "m-sheet-list",
                     for row in rows {
-                        button {
-                            r#type: "button",
-                            class: if row.primary { "m-add-row m-add-row--primary" } else { "m-add-row" },
-                            "data-testid": "add-books-row",
-                            onclick: {
-                                let route = row.route.clone();
-                                move |_| {
-                                    on_close.call(());
-                                    nav.push(route.clone());
+                        {
+                            let AddRow { route, primary, title, subtitle, icon } = row;
+                            rsx! {
+                                button {
+                                    r#type: "button",
+                                    class: if primary { "m-add-row m-add-row--primary" } else { "m-add-row" },
+                                    "data-testid": "add-books-row",
+                                    onclick: move |_| {
+                                        on_close.call(());
+                                        nav.push(route.clone());
+                                    },
+                                    span { class: "m-add-icon", {icon} }
+                                    span { class: "m-add-body",
+                                        span { class: "m-add-title", "{title}" }
+                                        span { class: "m-add-sub", "{subtitle}" }
+                                    }
+                                    span { class: "m-add-chevron", "\u{203a}" }
                                 }
-                            },
-                            span { class: "m-add-icon", {row.icon} }
-                            span { class: "m-add-body",
-                                span { class: "m-add-title", "{row.title}" }
-                                span { class: "m-add-sub", "{row.subtitle}" }
                             }
-                            span { class: "m-add-chevron", "\u{203a}" }
                         }
                     }
                 }
