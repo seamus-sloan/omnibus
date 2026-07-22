@@ -330,6 +330,48 @@ async fn api_scan_wishlist_add_records_entry_by_meta() {
 }
 
 #[tokio::test]
+async fn api_scan_wishlist_add_prefers_book_uuid_over_meta_when_both_given() {
+    let (app, _state, pool) = fixture().await;
+    let uuid = seed_book_with_isbn(&pool, "Effective Java", ISBN).await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let books_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(post(
+            "/api/scan/wishlist",
+            &token,
+            serde_json::json!({
+                "book_uuid": uuid,
+                "meta": external_meta_json("Should Be Ignored", ISBN),
+                "source": "scan",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: BookRef = json_body(res).await;
+    assert_eq!(body.book_uuid, uuid, "book_uuid should win over meta");
+
+    let books_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        books_after, books_before,
+        "meta must not create a new book when book_uuid is present"
+    );
+
+    let entries = omnibus_db::list_wishlist(&pool, user.id).await.unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].book_uuid, uuid);
+}
+
+#[tokio::test]
 async fn api_scan_wishlist_add_returns_400_when_neither_uuid_nor_meta_given() {
     let (app, _state, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "alice").await;
