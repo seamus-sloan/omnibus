@@ -1,5 +1,9 @@
 import { expect, test } from "../fixtures/test";
-import { AUDIOBOOK_BOOKS, AUDIOBOOK_BOOK_COUNT } from "../fixtures/audiobooks";
+import {
+  AUDIOBOOK_BOOKS,
+  AUDIOBOOK_BOOK_COUNT,
+  MERGE_ONLY_TITLES,
+} from "../fixtures/audiobooks";
 import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
@@ -14,7 +18,14 @@ test.beforeAll(async ({ request }) => {
   );
 });
 
-const MP3_BOOK = AUDIOBOOK_BOOKS.find((b) => b.format === "MP3" && b.source === "generated")!;
+// This spec only ever *reads* its books, so every selector below excludes the
+// merge-only fixtures — a merge in flight would change what they assert.
+const MP3_BOOK = AUDIOBOOK_BOOKS.find(
+  (b) =>
+    b.format === "MP3" &&
+    b.source === "generated" &&
+    !MERGE_ONLY_TITLES.includes(b.title),
+)!;
 const M4B_BOOK = AUDIOBOOK_BOOKS.find((b) => b.format === "M4B")!;
 const MULTIPART_MP3_BOOK = AUDIOBOOK_BOOKS.find((b) => b.format === "MP3" && b.parts > 1)!;
 const LOCAL_SEED_BOOK = AUDIOBOOK_BOOKS.find(

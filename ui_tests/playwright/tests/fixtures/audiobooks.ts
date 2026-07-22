@@ -87,7 +87,70 @@ export const AUDIOBOOK_BOOKS: readonly ExpectedAudiobook[] = [
     hasCover: true,
     source: "generated",
   },
+
+  // Merge-only pair — see MERGE_PRIMARY/MERGE_SECONDARY below. Appended last
+  // for the same reason as "Immersive Voyage": the `.find(MP3 && generated)`
+  // and `.find(MP3 && parts > 1)` selectors in listen/mini-dock/book_detail
+  // keep resolving to "The Analytical Audiobook" and "The Compiled Tales".
+  {
+    title: "The Mergeable Manuscript",
+    author: "Barbara Liskov",
+    format: "MP3",
+    parts: 1,
+    hasCover: true,
+    source: "generated",
+  },
+  {
+    title: "The Severable Sequel",
+    author: "Frances Allen",
+    format: "MP3",
+    parts: 1,
+    hasCover: true,
+    source: "generated",
+  },
 ] as const;
+
+/**
+ * The audiobooks reserved for specs that MUTATE books via
+ * `/api/rpc/merge-books` (`merge.spec.ts`, and `book_detail.spec.ts`'s
+ * file-picker tests).
+ *
+ * The suite runs `fullyParallel` against one shared server, so a merge is
+ * globally visible: while it is in flight the source book vanishes from
+ * `/api/rpc/ebooks` and the target grows a second format and a second
+ * `book_files` row. Pointing the merge specs at books that `listen.spec.ts`
+ * / `mini-dock.spec.ts` also read is what made those specs fail in CI — the
+ * `audiobook-merge` lock only serializes the *writers*, and readers never
+ * took it. Keeping the mutated pair private to the writers removes the race
+ * at the source instead of forcing ~27 reader tests through a mutex.
+ *
+ * **Never read these from a non-merge spec.** Use `AUDIOBOOK_BOOKS` for
+ * anything that just needs an audiobook to look at.
+ */
+function requireAudiobook(title: string): ExpectedAudiobook {
+  const found = AUDIOBOOK_BOOKS.find((b) => b.title === title);
+  if (!found) {
+    throw new Error(
+      `merge-only audiobook fixture ${JSON.stringify(title)} is missing from ` +
+        `AUDIOBOOK_BOOKS. The merge specs depend on it — re-add the entry and ` +
+        `regenerate the MP3 via tools/make_audiobook.ts.`,
+    );
+  }
+  return found;
+}
+
+export const MERGE_PRIMARY = requireAudiobook("The Mergeable Manuscript");
+export const MERGE_SECONDARY = requireAudiobook("The Severable Sequel");
+
+/**
+ * Titles the reader specs must exclude when they pick "some generated MP3".
+ * Without this the `.find(MP3 && generated)` selectors would silently start
+ * reading a mutating fixture if the table order ever changed.
+ */
+export const MERGE_ONLY_TITLES: readonly string[] = [
+  MERGE_PRIMARY.title,
+  MERGE_SECONDARY.title,
+];
 
 /** Total audiobook *books* (groups) — not parts — the indexer surfaces. */
 export const AUDIOBOOK_BOOK_COUNT = AUDIOBOOK_BOOKS.length;
