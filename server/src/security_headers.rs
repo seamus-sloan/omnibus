@@ -46,14 +46,18 @@ use tower_http::set_header::SetResponseHeaderLayer;
 /// - `font-src 'self' data: https://fonts.gstatic.com` — Google serves the
 ///   actual WOFF2 files from `fonts.gstatic.com`; without it the `@import`ed
 ///   stylesheet resolves but the glyphs fall back to system fonts.
-/// - `img-src 'self' data: blob:` — `data:` / `blob:` cover thumbnails and
-///   base64-embedded images.
+/// - `img-src 'self' data: blob: https://covers.openlibrary.org
+///   https://books.google.com` — `data:` / `blob:` cover thumbnails and
+///   base64-embedded images, plus the two metadata providers' cover CDNs so
+///   the scan/check-in result page can preview a provider cover before the
+///   book is created (once created, the cover is fetched server-side and
+///   served same-origin from `/api/covers/:uuid`).
 ///
 /// Tighten incrementally as the asset surface stabilizes.
 const DEFAULT_CSP: &str = "default-src 'self'; \
 script-src 'self' 'unsafe-inline' 'unsafe-eval'; \
 style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
-img-src 'self' data: blob:; \
+img-src 'self' data: blob: https://covers.openlibrary.org https://books.google.com; \
 font-src 'self' data: https://fonts.gstatic.com; \
 connect-src 'self'; \
 object-src 'none'; \

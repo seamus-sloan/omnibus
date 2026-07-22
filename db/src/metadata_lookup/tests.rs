@@ -101,6 +101,12 @@ async fn lookup_falls_through_to_google_books_on_open_library_miss() {
     assert_eq!(meta.source, MetadataProvider::GoogleBooks);
     assert_eq!(meta.title, "Effective Java");
     assert_eq!(meta.description.as_deref(), Some("The definitive guide."));
+    // Google Books' `http://` cover link is upgraded to https so it isn't
+    // blocked as mixed content on the scan result page.
+    assert_eq!(
+        meta.cover_url.as_deref(),
+        Some("https://books.google.com/x.jpg")
+    );
 }
 
 #[tokio::test]
