@@ -162,10 +162,7 @@ pub(super) fn RowSeriesCell(series_line: String, series_text: String, ctx: CellE
     }
 }
 
-/// Display fields for a [`RowScalarCell`]: column class, testid, current
-/// value, and placeholder. Grouped so the cell wrapper stays under the
-/// component prop cap. Named `*Display` (not `*Props`) since `#[component]`
-/// already generates a `RowScalarCellProps` for the function itself.
+/// Grouped display fields (column class, testid, value, placeholder) for a [`RowScalarCell`].
 #[derive(Clone, PartialEq)]
 pub(super) struct RowScalarCellDisplay {
     pub col_class: String,

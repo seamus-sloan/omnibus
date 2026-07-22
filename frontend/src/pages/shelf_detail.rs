@@ -37,9 +37,7 @@ pub fn ShelfDetailPage(id: i64) -> Element {
     let error = use_signal(|| None::<String>);
     crate::use_page_title(move || shelf.read().as_ref().map(|s| s.name.clone()));
     let sort_key = use_signal(|| SortKey::Title);
-    // Mobile mutates these directly (see the mobile `body` branch below);
-    // web only threads them by value into `web_shelf_body`/`shelf_detail_modals`,
-    // so only the mobile build needs the bindings themselves to be `mut`.
+    // Only mobile mutates these directly, so only it needs `mut` bindings.
     #[cfg(feature = "mobile")]
     let mut show_add = use_signal(|| false);
     #[cfg(not(feature = "mobile"))]
