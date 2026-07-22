@@ -313,6 +313,35 @@ async fn fetch_resolved_book(
     Ok(data.books.first().map(resolved_from_row))
 }
 
+#[derive(Debug, Deserialize)]
+struct BookDescData {
+    books: Vec<BookDescRow>,
+}
+#[derive(Debug, Deserialize)]
+struct BookDescRow {
+    #[serde(default)]
+    description: Option<String>,
+}
+
+/// Fetch the long-form `description` for a resolved Hardcover book id. A
+/// blank/whitespace description is treated as absent (`Ok(None)`) so the caller
+/// can fall back to another source. The tagline-style `headline` is
+/// intentionally *not* used — it's a pull-quote, not a summary.
+pub async fn book_description(
+    config: &HardcoverConfig,
+    book_id: i64,
+) -> Result<Option<String>, HardcoverError> {
+    let query =
+        format!("query {{ books(where: {{id: {{_eq: {book_id}}}}}, limit: 1) {{ description }} }}");
+    let data: BookDescData = post_graphql(config, &query, serde_json::json!({})).await?;
+    Ok(data
+        .books
+        .into_iter()
+        .find_map(|b| b.description)
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty()))
+}
+
 // ── List co-occurrence ───────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]

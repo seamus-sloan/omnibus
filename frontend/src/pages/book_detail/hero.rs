@@ -2,11 +2,12 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::{BookFileInfo, EbookMetadata};
+use omnibus_shared::summary::summary_is_sparse;
+use omnibus_shared::{BookFileInfo, EbookMetadata, MetadataOverrides};
 
 use crate::components::atrium::Cover;
-use crate::components::BookActionMeta;
-use crate::Route;
+use crate::components::{BookActionMeta, FetchSummaryButton};
+use crate::{data, use_server_url, Route};
 
 use super::export_menu::BdExportMenu;
 use super::file_picker::{is_audio_book_file, BdFilePickerMenu, FilePickerKind};
@@ -100,6 +101,30 @@ fn BdTitleCol(
         has_ebook,
         has_audio,
     } = avail;
+
+    // Local copy of the effective summary so a fetch-and-save can refresh the
+    // shown description in place. Seeded identically on SSR and first WASM
+    // paint (from the merged `b.description`) to keep hydration happy.
+    let mut description = use_signal(|| b.description.clone().unwrap_or_default());
+
+    // Fetch + save + refresh: the button hands us the fetched text; we persist
+    // it as a description override, then update the shown summary on success.
+    let server_url = use_server_url();
+    let save_uuid = uuid.clone();
+    let on_fetched = move |text: String| {
+        let url = server_url.clone();
+        let uuid = save_uuid.clone();
+        spawn(async move {
+            let overrides = MetadataOverrides {
+                description: Some(text.clone()),
+                ..Default::default()
+            };
+            if data::save_overrides(&url, &uuid, &overrides).await.is_ok() {
+                description.set(text);
+            }
+        });
+    };
+
     rsx! {
         div { class: "bd-title-col",
             div { class: "label", "{kicker}" }
@@ -137,8 +162,13 @@ fn BdTitleCol(
                     }
                 }
             }
-            if let Some(desc) = b.description.as_deref() {
-                div { class: "bd-desc", "data-testid": "book-description", dangerous_inner_html: "{desc}" }
+            if !description().is_empty() {
+                div { class: "bd-desc", "data-testid": "book-description", dangerous_inner_html: "{description()}" }
+            }
+            // Fetch Summary appears only when the current summary is sparse
+            // (fewer than 10 words) — a nudge to enrich a thin blurb.
+            if summary_is_sparse(&description()) {
+                FetchSummaryButton { uuid: uuid.clone(), on_fetched }
             }
             BdCtaRow {
                 has_ebook,

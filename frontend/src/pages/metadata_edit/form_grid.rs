@@ -7,7 +7,7 @@ use omnibus_shared::EbookMetadata;
 
 use super::fields::{label_to_id, MeArea, MeField, MeLabel};
 use crate::components::chip_editor::{ChipEditor, ChipEditorOptions, SuggestionItem};
-use crate::components::SuggestField;
+use crate::components::{FetchSummaryButton, SuggestField};
 
 /// Per-field editable signals threaded through the form rows from `MetadataEditForm`.
 #[derive(Clone, Copy, PartialEq)]
@@ -42,10 +42,11 @@ pub(super) fn FormGrid(
     orig: Signal<EbookMetadata>,
     fields: FormFields,
     suggestions: FormSuggestions,
+    uuid: String,
 ) -> Element {
     rsx! {
         div { class: "me-form",
-            FieldGrid { orig, fields, suggestions }
+            FieldGrid { orig, fields, suggestions, uuid }
             TagsSection { tags: fields.tags, tag_suggestions: suggestions.tags }
             SeriesSection {
                 orig,
@@ -64,6 +65,7 @@ fn FieldGrid(
     orig: Signal<EbookMetadata>,
     fields: FormFields,
     suggestions: FormSuggestions,
+    uuid: String,
 ) -> Element {
     let mut title = fields.title;
     let mut description = fields.description;
@@ -173,7 +175,7 @@ fn FieldGrid(
                 }
             }
 
-            // Description — textarea spanning 2 cols
+            // Description — textarea spanning 2 cols.
             MeArea {
                 label: "Description",
                 value: description,
@@ -181,6 +183,15 @@ fn FieldGrid(
                 rows: 5,
                 edited: description() != orig().description.clone().unwrap_or_default(),
                 hint: "plain text or HTML",
+            }
+
+            // Always-present "Fetch Summary" button that fills the description
+            // above from Hardcover/OpenLibrary; the user still saves.
+            div { class: "me-field-full",
+                FetchSummaryButton {
+                    uuid,
+                    on_fetched: move |text: String| description.set(text),
+                }
             }
         }
     }

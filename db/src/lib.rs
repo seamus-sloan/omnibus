@@ -8,6 +8,7 @@ pub mod audiobook;
 pub mod auth;
 pub mod author_photos;
 pub mod author_photos_data;
+pub mod book_summary;
 pub mod bookmarks;
 pub mod books;
 pub mod browse;
@@ -53,6 +54,7 @@ pub mod worker;
 // instead of `omnibus_db::queries::list_books(...)`. Keeps callsites terse
 // and mirrors how `db.rs` looked before the extraction.
 pub use author_photos_data::*;
+pub use book_summary::fetch_summary;
 pub use books::{
     book_file_path, book_file_path_by_id, book_file_paths, collect_paths, count_books,
     count_books_for_paths, count_books_page, count_search_books, count_search_books_for_paths,

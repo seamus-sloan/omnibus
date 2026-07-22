@@ -20,6 +20,7 @@ mod series;
 mod shelves;
 mod stats;
 mod suggestions;
+mod summary;
 mod tags;
 mod uploads;
 
@@ -43,6 +44,7 @@ pub use series::*;
 pub use shelves::*;
 pub use stats::*;
 pub use suggestions::*;
+pub use summary::*;
 pub use tags::*;
 pub use uploads::*;
 
