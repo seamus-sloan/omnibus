@@ -11,14 +11,27 @@ import { fixturesDir, seedLibrary } from "../utils/seed";
 // appears. All three external endpoints are mocked via `page.route` so CI
 // never touches a live Hardcover/OpenLibrary API.
 
+const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "alpha")!;
+
 test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
+  // Clear any description override on the target so it starts sparse (the
+  // detail button's precondition) and its editor field starts empty —
+  // hermetic regardless of overrides a prior run/manual test may have left.
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await request.delete(`/api/ebooks/${uuid}/overrides`);
 });
-
-const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "alpha")!;
 
 const CONFIGURED_URL = "**/api/rpc/ebook/summary/hardcover-configured";
 const FETCH_URL = "**/api/rpc/ebook/summary/fetch";
+
+/** Await the summary-fetch POST that a button click fires, so DOM assertions
+ * don't race the network (per `.claude/rules/04-playwright.md`). */
+function waitForFetch(page: Parameters<typeof gotoReady>[0]) {
+  return page.waitForResponse(
+    (r) => r.url().includes("/api/rpc/ebook/summary/fetch") && r.request().method() === "POST",
+  );
+}
 
 /** Mock the Hardcover-configured flag (drives which source the cascade starts on). */
 async function mockConfigured(page: Parameters<typeof gotoReady>[0], configured: boolean) {
@@ -64,7 +77,9 @@ test("Fetch Summary fills the editor Description without saving", async ({ page,
   await mockConfigured(page, false); // no key → straight to OpenLibrary
   await mockFetch(page, SUMMARY);
 
+  const fetched = waitForFetch(page);
   await page.getByTestId("fetch-summary").click();
+  await fetched;
 
   // The Description textarea (id `me-description`) is filled with the fetched
   // text; the editor never auto-saves, so this is staged for the user's Save.
@@ -83,7 +98,9 @@ test("Fetch Summary surfaces an error when neither source has a summary", async 
   await mockConfigured(page, false);
   await mockFetch(page, null); // OpenLibrary miss → Ok(None)
 
+  const fetched = waitForFetch(page);
   await page.getByTestId("fetch-summary").click();
+  await fetched;
 
   await expect(page.getByTestId("fetch-summary-error")).toHaveText("No summary found.");
   await expect(page.locator("#me-description")).toHaveValue("");

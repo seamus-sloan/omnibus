@@ -163,7 +163,7 @@ fn BdTitleCol(
                 }
             }
             if !description().is_empty() {
-                div { class: "bd-desc", "data-testid": "book-description", dangerous_inner_html: "{description}" }
+                div { class: "bd-desc", "data-testid": "book-description", dangerous_inner_html: "{description()}" }
             }
             // Fetch Summary appears only when the current summary is sparse
             // (fewer than 10 words) — a nudge to enrich a thin blurb.

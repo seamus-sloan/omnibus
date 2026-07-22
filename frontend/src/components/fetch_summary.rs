@@ -46,12 +46,16 @@ enum FetchState {
 pub fn FetchSummaryButton(uuid: String, on_fetched: EventHandler<String>) -> Element {
     let server_url = use_server_url();
     let state = use_signal(|| FetchState::Idle);
+    // Set synchronously at click, before the first `await`, so a rapid second
+    // click can't spawn a concurrent cascade (the `state` flag only flips to
+    // `Searching` after `hardcover_configured` resolves, which is too late).
+    let mut busy = use_signal(|| false);
 
     let on_click = move |_| {
-        // Ignore clicks while a fetch is already in flight.
-        if matches!(state(), FetchState::Searching(_)) {
+        if busy() {
             return;
         }
+        busy.set(true);
         let url = server_url.clone();
         let uuid = uuid.clone();
         spawn(async move {
@@ -60,10 +64,11 @@ pub fn FetchSummaryButton(uuid: String, on_fetched: EventHandler<String>) -> Ele
                 let mut state = state;
                 state.set(FetchState::Idle);
             }
+            busy.set(false);
         });
     };
 
-    let running = matches!(state(), FetchState::Searching(_));
+    let running = busy();
 
     rsx! {
         div { class: "fs-fetch",

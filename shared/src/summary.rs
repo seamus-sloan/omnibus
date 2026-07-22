@@ -29,14 +29,20 @@ pub fn summary_is_sparse(summary: &str) -> bool {
     summary_word_count(summary) < SUMMARY_MIN_WORDS
 }
 
-/// Drop anything between `<` and `>` so tag names/attributes aren't counted as
-/// words. Deliberately simple — a word count doesn't need a real HTML parser.
+/// Replace anything between `<` and `>` with a single space so tag
+/// names/attributes aren't counted as words *and* adjacent text isn't merged
+/// (`hello<br>there` → two words, not one). Deliberately simple — a word count
+/// doesn't need a real HTML parser; `split_whitespace` collapses the extra
+/// spaces this introduces.
 fn strip_tags(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut in_tag = false;
     for c in s.chars() {
         match c {
-            '<' => in_tag = true,
+            '<' => {
+                in_tag = true;
+                out.push(' ');
+            }
             '>' => in_tag = false,
             _ if !in_tag => out.push(c),
             _ => {}
@@ -60,6 +66,14 @@ mod tests {
     fn summary_word_count_ignores_html_tags() {
         assert_eq!(summary_word_count("<p>hello <b>there</b> friend</p>"), 3);
         assert_eq!(summary_word_count("<div class=\"x\">only one</div>"), 2);
+    }
+
+    #[test]
+    fn summary_word_count_does_not_merge_words_across_tags() {
+        // A tag with no surrounding whitespace must still separate the words it
+        // sits between, so the count isn't undercounted (regression guard).
+        assert_eq!(summary_word_count("hello<br>there"), 2);
+        assert_eq!(summary_word_count("one<span>two</span>three"), 3);
     }
 
     #[test]
