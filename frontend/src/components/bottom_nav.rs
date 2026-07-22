@@ -1,23 +1,26 @@
 //! Mobile bottom tab bar.
 //!
-//! Pinned to the bottom of the viewport — a row of icon tabs (Library,
-//! Authors, Series, Stats, You) matching the imported Atrium mobile design. It is
-//! the native shell's primary `Nav`, and also mounts on web via
+//! Pinned to the bottom of the viewport — four icon tabs (Library, Authors,
+//! Stats, You) split around a raised center "Scan/Upload" action that opens
+//! the [`super::add_books_sheet`] chooser (Check-In step 0a → 0b). It is the
+//! native shell's primary `Nav`, and also mounts on web via
 //! [`crate::ScreenLayout`], where CSS reveals it only below the phone
 //! breakpoint so desktop keeps its top-bar section links.
 
 use dioxus::prelude::*;
 use dioxus_router::{use_route, Link};
 
+use super::add_books_sheet::AddBooksSheet;
 use crate::Route;
 
-/// The five bottom-tab destinations. `You` routes to the Account screen; the
-/// Settings page is reachable from within it and keeps the You tab lit.
+/// The four bottom-tab destinations. `You` routes to the Account screen; the
+/// Settings page is reachable from within it and keeps the You tab lit. Series
+/// left the tab bar for the center action (still reachable via search + author
+/// pages + the `/series` route).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TabKind {
     Library,
     Authors,
-    Series,
     Stats,
     You,
 }
@@ -37,7 +40,6 @@ fn is_active(current: &Route, tab: TabKind) -> bool {
                 | Route::Search { .. }
         ),
         TabKind::Authors => matches!(current, Route::AuthorsIndex {} | Route::AuthorDetail { .. }),
-        TabKind::Series => matches!(current, Route::SeriesIndex {} | Route::SeriesDetail { .. }),
         TabKind::Stats => matches!(current, Route::Stats {}),
         TabKind::You => matches!(
             current,
@@ -50,14 +52,24 @@ fn is_active(current: &Route, tab: TabKind) -> bool {
 #[component]
 pub fn BottomNav() -> Element {
     let current = use_route::<Route>();
+    let mut sheet_open = use_signal(|| false);
     rsx! {
         nav { class: "m-tabbar", aria_label: "Primary",
             MTab { to: Route::Landing {}, label: "Library", on: is_active(&current, TabKind::Library), glyph: tab_glyph_library() }
             MTab { to: Route::AuthorsIndex {}, label: "Authors", on: is_active(&current, TabKind::Authors), glyph: tab_glyph_authors() }
-            MTab { to: Route::SeriesIndex {}, label: "Series", on: is_active(&current, TabKind::Series), glyph: tab_glyph_series() }
+            button {
+                r#type: "button",
+                class: "m-tabbar-scan",
+                "data-testid": "tabbar-scan",
+                aria_label: "Add to library",
+                onclick: move |_| sheet_open.set(true),
+                span { class: "m-tabbar-scan-disc", {tab_glyph_scan()} }
+                span { class: "m-tabbar-label", "Add" }
+            }
             MTab { to: Route::Stats {}, label: "Stats", on: is_active(&current, TabKind::Stats), glyph: tab_glyph_stats() }
             MTab { to: Route::Account {}, label: "You", on: is_active(&current, TabKind::You), glyph: tab_glyph_you() }
         }
+        AddBooksSheet { open: sheet_open, on_close: move |_| sheet_open.set(false) }
     }
 }
 
@@ -101,13 +113,15 @@ fn tab_glyph_authors() -> Element {
     }
 }
 
-fn tab_glyph_series() -> Element {
+/// Glyph inside the raised center action — a plus over a scan frame, reading
+/// as "add / scan" for the Add-books sheet trigger.
+fn tab_glyph_scan() -> Element {
     rsx! {
         svg {
-            width: "22", height: "22", view_box: "0 0 24 24", fill: "none",
-            stroke: "currentColor", stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round",
-            rect { x: "3", y: "3", width: "13", height: "13", rx: "2" }
-            path { d: "M21 8v11a2 2 0 0 1-2 2H8" }
+            width: "24", height: "24", view_box: "0 0 24 24", fill: "none",
+            stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", stroke_linejoin: "round",
+            line { x1: "12", y1: "7", x2: "12", y2: "17" }
+            line { x1: "7", y1: "12", x2: "17", y2: "12" }
         }
     }
 }
@@ -162,11 +176,23 @@ mod tests {
     }
 
     #[test]
-    fn authors_and_series_tabs_light_on_their_details() {
+    fn authors_tab_lights_on_its_details() {
         assert!(is_active(&Route::AuthorsIndex {}, TabKind::Authors));
         assert!(is_active(&Route::AuthorDetail { id: 1 }, TabKind::Authors));
-        assert!(is_active(&Route::SeriesIndex {}, TabKind::Series));
-        assert!(is_active(&Route::SeriesDetail { id: 1 }, TabKind::Series));
+    }
+
+    #[test]
+    fn series_routes_light_no_tab_since_series_left_the_bar() {
+        // Series is no longer a bottom tab; its routes must not light any tab.
+        for tab in [
+            TabKind::Library,
+            TabKind::Authors,
+            TabKind::Stats,
+            TabKind::You,
+        ] {
+            assert!(!is_active(&Route::SeriesIndex {}, tab));
+            assert!(!is_active(&Route::SeriesDetail { id: 1 }, tab));
+        }
     }
 
     #[test]
@@ -190,7 +216,6 @@ mod tests {
         let here = Route::Landing {};
         assert!(is_active(&here, TabKind::Library));
         assert!(!is_active(&here, TabKind::Authors));
-        assert!(!is_active(&here, TabKind::Series));
         assert!(!is_active(&here, TabKind::Stats));
         assert!(!is_active(&here, TabKind::You));
     }
@@ -200,7 +225,7 @@ mod tests {
         let here = Route::Account {};
         assert!(!is_active(&here, TabKind::Library));
         assert!(!is_active(&here, TabKind::Authors));
-        assert!(!is_active(&here, TabKind::Series));
+        assert!(!is_active(&here, TabKind::Stats));
         assert!(is_active(&here, TabKind::You));
     }
 }

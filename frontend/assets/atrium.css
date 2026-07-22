@@ -4019,6 +4019,50 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .m-tabbar-label { font-size: 10px; font-weight: 500; letter-spacing: 0.01em; color: var(--ink-2); }
 .m-tabbar-item.on .m-tabbar-label { color: var(--ink-0); font-weight: 600; }
 
+/* Raised center action (Scan/Upload) — an accent disc lifted above the bar,
+   flanked by two tabs on each side. */
+.m-tabbar-scan {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 0; border: none; background: none; cursor: pointer;
+}
+.m-tabbar-scan .m-tabbar-label { color: var(--ink-2); }
+.m-tabbar-scan-disc {
+  display: grid; place-items: center;
+  width: 46px; height: 46px; margin-top: -18px; border-radius: 999px;
+  background: var(--accent); color: var(--accent-ink);
+  border: 3px solid var(--bg-1);
+  box-shadow: 0 6px 16px color-mix(in oklch, var(--accent) 45%, transparent);
+}
+.m-tabbar-scan:hover .m-tabbar-scan-disc {
+  filter: brightness(1.05);
+}
+
+/* Add-to-library sheet rows (Check-In step 0b). */
+.m-add-row {
+  display: flex; align-items: center; gap: 14px; width: 100%;
+  padding: 14px 12px; border: 1px solid var(--line-2); border-radius: 14px;
+  background: var(--bg-2); color: var(--ink-1); text-align: left; cursor: pointer;
+}
+.m-add-row:hover { border-color: var(--line); background: var(--bg-3); }
+.m-add-row--primary {
+  background: color-mix(in oklch, var(--accent) 14%, var(--bg-2));
+  border-color: color-mix(in oklch, var(--accent) 40%, transparent);
+}
+.m-add-row--primary:hover {
+  background: color-mix(in oklch, var(--accent) 20%, var(--bg-2));
+  border-color: color-mix(in oklch, var(--accent) 55%, transparent);
+}
+.m-add-icon {
+  display: grid; place-items: center; flex: 0 0 42px; height: 42px;
+  border-radius: 11px; background: var(--bg-1); color: var(--ink-1);
+}
+.m-add-row--primary .m-add-icon { background: var(--accent); color: var(--accent-ink); }
+.m-add-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.m-add-title { font-size: 15px; font-weight: 600; }
+.m-add-sub { font-size: 12.5px; color: var(--ink-3); }
+.m-add-chevron { flex: 0 0 auto; color: var(--ink-3); font-size: 20px; }
+
 /* Shared mobile primitives */
 .m-em { font-style: italic; }
 .m-icon-btn {

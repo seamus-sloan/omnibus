@@ -26,6 +26,7 @@ pub use top_nav::TopNav as Nav;
 // (hidden by CSS above the phone breakpoint) so phone-width web gets the
 // same thumb-reachable section switcher. Compiled on every target; the web
 // build renders it via `ScreenLayout` alongside `TopNav`.
+mod add_books_sheet;
 mod bottom_nav;
 #[cfg(feature = "mobile")]
 pub use bottom_nav::BottomNav as Nav;
