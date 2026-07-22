@@ -635,6 +635,36 @@ async fn audiobook_rejects_mp3_renamed_to_m4b_with_415() {
 }
 
 #[tokio::test]
+async fn audiobook_inspect_rejects_unparseable_tags_with_415_bad_audio() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    // `M4B_MAGIC` passes `detect_audiobook_format`'s magic-byte gate (a valid
+    // `ftyp` box header) but is too short to be a real MP4 container, so
+    // lofty's tag parse fails — the only way to reach `UploadError::BadAudio`
+    // rather than the earlier `UnsupportedAudioFormat` gate.
+    let (ct, body) = multipart_body(&[("file", Some("stub.m4b"), M4B_MAGIC)]);
+    let res = app
+        .oneshot(post_multipart(
+            "/api/uploads/audiobooks/inspect",
+            &token,
+            &ct,
+            body,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let msg = String::from_utf8_lossy(&bytes);
+    assert!(
+        msg.contains("could not read audiobook"),
+        "expected the BadAudio message, got: {msg}"
+    );
+}
+
+#[tokio::test]
 async fn audiobook_commit_rejects_read_only_library_with_400() {
     let (app, _state, pool) = fixture().await;
     let library = tempfile::tempdir().expect("temp library dir");

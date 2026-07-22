@@ -49,6 +49,14 @@ pub struct AudiobookMetadata {
 /// operation.
 pub(super) fn extract_metadata(path: &Path) -> Result<AudiobookMetadata, AudiobookError> {
     let tagged = lofty::read_from_path(path)?;
+    Ok(metadata_from_tagged(&tagged))
+}
+
+/// Lift the basic-player tag fields from an already-opened lofty handle.
+/// Shared by [`extract_metadata`] (opens its own handle) and
+/// [`super::inspect_audiobook_files`] (reuses one handle for both tags and
+/// cover art, avoiding a second open+read of the same file).
+pub(super) fn metadata_from_tagged(tagged: &lofty::file::TaggedFile) -> AudiobookMetadata {
     let duration_seconds =
         Some(tagged.properties().duration().as_secs_f64()).filter(|d| d.is_finite() && *d > 0.0);
     let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
@@ -70,7 +78,7 @@ pub(super) fn extract_metadata(path: &Path) -> Result<AudiobookMetadata, Audiobo
             .map(|c| c.trim().to_string())
             .filter(|s| !s.is_empty());
     }
-    Ok(out)
+    out
 }
 
 /// Phase B input: one entry per audiobook file the diff says needs a
