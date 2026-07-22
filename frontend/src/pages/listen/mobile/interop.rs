@@ -195,6 +195,16 @@ fn surface_js(parts_json: &str, resume_lit: &str, rate_lit: &str, meta_lit: &str
   document.body.appendChild(el);
   try {{ el.playbackRate = rate; }} catch(_e) {{}}
 
+  // WKWebView resets `playbackRate` to 1.0 every time a new resource
+  // loads, so the rate set above (and every `setRate`) is wiped by the
+  // seed / cross-part / auto-advance `el.load()` calls below — the book
+  // plays at 1.0 while the UI shows the saved speed. Re-apply the tracked
+  // rate on every `loadedmetadata` to keep the element in sync.
+  el.addEventListener('loadedmetadata', function(){{
+    var oa = window.OmnibusMobileAudio;
+    if (oa) {{ try {{ el.playbackRate = oa._rate; }} catch(_e) {{}} }}
+  }});
+
   function absTime() {{
     var oa = window.OmnibusMobileAudio;
     if (!oa) return el.currentTime || 0;
@@ -205,10 +215,13 @@ fn surface_js(parts_json: &str, resume_lit: &str, rate_lit: &str, meta_lit: &str
     _parts: parts,
     _offsets: offsets,
     _index: 0,
+    // Tracked separately because WKWebView drops `el.playbackRate` to 1.0
+    // on every resource load; the `loadedmetadata` listener re-applies it.
+    _rate: rate,
     play: function(){{ var p = el.play(); if (p && p.catch) p.catch(function(){{}}); }},
     pause: function(){{ el.pause(); }},
     toggle: function(){{ if (el.paused) {{ this.play(); }} else {{ this.pause(); }} }},
-    setRate: function(r){{ try {{ el.playbackRate = r; }} catch(_e) {{}} }},
+    setRate: function(r){{ this._rate = r; try {{ el.playbackRate = r; }} catch(_e) {{}} }},
     seek: function(absSeconds){{
       var s = Math.max(0, absSeconds || 0);
       var i = 0;
@@ -317,6 +330,17 @@ mod tests {
         let js = surface_js("[{\"url\":\"u\",\"duration\":1}]", "12.5", "1.2", &meta);
         assert!(js.contains("var resume = 12.5;"));
         assert!(js.contains("el.playbackRate = rate;"));
+        // WKWebView wipes playbackRate on every load, so the tracked rate is
+        // re-applied on loadedmetadata and setRate persists it.
+        assert!(js.contains("_rate: rate,"), "tracked rate field missing");
+        assert!(
+            js.contains("el.playbackRate = oa._rate;"),
+            "loadedmetadata rate re-apply missing"
+        );
+        assert!(
+            js.contains("setRate: function(r){ this._rate = r;"),
+            "setRate should persist the tracked rate"
+        );
         assert!(js.contains("window.OmnibusMobileAudio"));
         assert!(js.contains("dioxus.send"));
         // Media Session wiring landed.
