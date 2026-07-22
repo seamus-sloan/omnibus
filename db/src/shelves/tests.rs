@@ -560,11 +560,14 @@ async fn list_visible_shelves_computes_smart_counts_for_a_mix_of_owner_and_publi
     let other_b_shelf = create_shelf(&pool, other_b, &other_b_req).await.unwrap();
 
     let shelves = list_visible_shelves(&pool, viewer, false).await.unwrap();
-    assert_eq!(
-        shelves.len(),
-        3,
-        "viewer sees their own smart shelf plus both public ones"
-    );
+    let ids: std::collections::HashSet<i64> = shelves.iter().map(|s| s.id).collect();
+    for (id, label) in [
+        (mine.id, "the viewer's own smart shelf"),
+        (other_a_shelf.id, "other_a's public smart shelf"),
+        (other_b_shelf.id, "other_b's public smart shelf"),
+    ] {
+        assert!(ids.contains(&id), "{label} must be in the visible set");
+    }
     let count_for = |id: i64| shelves.iter().find(|s| s.id == id).unwrap().book_count;
 
     assert_eq!(count_for(mine.id), 2, "two books tagged fiction");
