@@ -259,51 +259,59 @@ fn UmNowReading() -> Element {
                         "Unable to load reading progress."
                     }
                 },
-                Some(Ok(Some(point))) => {
-                    let is_audio = point.record.format == ProgressFormat::Audio;
-                    let title = point
-                        .book
-                        .title
-                        .as_deref()
-                        .filter(|title| !title.trim().is_empty())
-                        .unwrap_or(&point.book.filename)
-                        .to_string();
-                    let author = point
-                        .book
-                        .creators
-                        .first()
-                        .map(|creator| creator.name.clone())
-                        .filter(|author| !author.trim().is_empty());
-                    let action = if is_audio {
-                        "Continue listening"
-                    } else {
-                        "Continue reading"
-                    };
-                    let uuid = point.record.book_uuid.clone();
-                    let to = if is_audio {
-                        Route::BookListen { uuid, file_id: None }
-                    } else {
-                        Route::BookRead { uuid }
-                    };
-                    let aria_label = format!("{action} {title}");
+                Some(Ok(Some(point))) => um_now_reading_row(point),
+            }
+        }
+    }
+}
 
-                    rsx! {
-                        Link {
-                            to,
-                            class: "um-now-reading",
-                            "data-testid": "user-menu-now-reading",
-                            "aria-label": "{aria_label}",
-                            div { class: "um-nr-cover", Cover { book: point.book } }
-                            div { class: "um-nr-meta",
-                                div { class: "um-nr-title", "{title}" }
-                                if let Some(author) = author {
-                                    div { class: "um-nr-author", "{author}" }
-                                }
-                                div { class: "um-nr-action", "{action}" }
-                            }
-                        }
-                    }
+/// The "in progress" row for [`UmNowReading`]: cover, title, author, and a
+/// resume link that routes to the reader or the player depending on format.
+#[cfg(any(feature = "web", feature = "server"))]
+fn um_now_reading_row(point: ResumePoint) -> Element {
+    let is_audio = point.record.format == ProgressFormat::Audio;
+    let title = point
+        .book
+        .title
+        .as_deref()
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or(&point.book.filename)
+        .to_string();
+    let author = point
+        .book
+        .creators
+        .first()
+        .map(|creator| creator.name.clone())
+        .filter(|author| !author.trim().is_empty());
+    let action = if is_audio {
+        "Continue listening"
+    } else {
+        "Continue reading"
+    };
+    let uuid = point.record.book_uuid.clone();
+    let to = if is_audio {
+        Route::BookListen {
+            uuid,
+            file_id: None,
+        }
+    } else {
+        Route::BookRead { uuid }
+    };
+    let aria_label = format!("{action} {title}");
+
+    rsx! {
+        Link {
+            to,
+            class: "um-now-reading",
+            "data-testid": "user-menu-now-reading",
+            "aria-label": "{aria_label}",
+            div { class: "um-nr-cover", Cover { book: point.book } }
+            div { class: "um-nr-meta",
+                div { class: "um-nr-title", "{title}" }
+                if let Some(author) = author {
+                    div { class: "um-nr-author", "{author}" }
                 }
+                div { class: "um-nr-action", "{action}" }
             }
         }
     }
