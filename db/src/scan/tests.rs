@@ -217,6 +217,67 @@ async fn resolve_close_match_via_online_then_norm() {
 }
 
 #[tokio::test]
+async fn resolve_close_match_carries_the_library_editions_isbn() {
+    let pool = pool().await;
+    // The library copy is a different edition: same title/author, its own
+    // ISBN. The 2b confirm shows both, so the match must carry it.
+    seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", None).await;
+    let book_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = 'u1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO book_identifiers (book_id, scheme, value)
+         VALUES (?1, 'ISBN', '978-0-321-35668-0')",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = MockServer::start().await;
+    mount_ol_hit(&server, "Effective Java", "Joshua Bloch").await;
+
+    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    match outcome {
+        ScanOutcome::CloseMatch { book, .. } => {
+            assert_eq!(book.isbn.as_deref(), Some("9780321356680"));
+        }
+        other => panic!("expected CloseMatch, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn resolve_leaves_the_isbn_unset_when_the_book_has_no_thirteen_digit_one() {
+    let pool = pool().await;
+    seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", None).await;
+    let book_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = 'u1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    // An ISBN-10 is not the 13-digit form the confirm screen prints.
+    sqlx::query(
+        "INSERT INTO book_identifiers (book_id, scheme, value)
+         VALUES (?1, 'ISBN', '0321356683')",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = MockServer::start().await;
+    mount_ol_hit(&server, "Effective Java", "Joshua Bloch").await;
+
+    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    match outcome {
+        ScanOutcome::CloseMatch { book, .. } => assert!(book.isbn.is_none()),
+        other => panic!("expected CloseMatch, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn resolve_not_in_library_when_online_only() {
     let pool = pool().await;
     let server = MockServer::start().await;

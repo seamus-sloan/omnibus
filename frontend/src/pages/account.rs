@@ -456,6 +456,7 @@ fn AccountRows() -> Element {
             // admin-only library-path controls, so route there.
             AccountLinkRow { to: Route::Settings {}, label: "Admin \u{00b7} server" }
             AccountLinkRow { to: Route::AddBooks {}, label: "Add books" }
+            AccountLinkRow { to: Route::CheckIn {}, label: "Check in a book" }
             button {
                 r#type: "button",
                 class: "m-account-row m-account-row-danger",
