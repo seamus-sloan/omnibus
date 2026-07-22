@@ -4,7 +4,7 @@
 //! converged Stats design (`screens/stats-converged.jsx`).
 
 use dioxus::prelude::*;
-use omnibus_shared::{StatsRange, StatsSummary};
+use omnibus_shared::{StatsRange, StatsSummary, STATS_TTL_SECS};
 
 use crate::components::{PageError, PageLoading};
 use crate::{data, use_server_url, Route};
@@ -83,6 +83,25 @@ pub fn StatsPage() -> Element {
             if let (Some(metric), Some(summary)) = (expanded(), period.read().clone()) {
                 DrillIn { metric, summary, range: range(), expanded }
             }
+            StatsFreshnessNote {}
+        }
+    }
+}
+
+/// The footer note's text, deriving its number from [`STATS_TTL_SECS`]
+/// rather than a second hardcoded copy.
+fn freshness_note_text() -> String {
+    format!("Stats are accurate to the last ~{STATS_TTL_SECS} seconds.")
+}
+
+/// Footer note explaining the aggregate cache's TTL, so a just-made change
+/// (e.g. marking a book finished) not yet reflected in the numbers reads as
+/// expected staleness rather than a bug.
+#[component]
+fn StatsFreshnessNote() -> Element {
+    rsx! {
+        p { class: "st-footnote", "data-testid": "stats-freshness-note",
+            {freshness_note_text()}
         }
     }
 }
@@ -285,5 +304,13 @@ mod tests {
         assert_eq!(period_word(StatsRange::Month), "month");
         assert_eq!(period_word(StatsRange::Year), "year");
         assert_eq!(period_word(StatsRange::AllTime), "lifetime");
+    }
+
+    #[test]
+    fn freshness_note_text_states_the_real_ttl_in_seconds() {
+        assert_eq!(
+            freshness_note_text(),
+            format!("Stats are accurate to the last ~{STATS_TTL_SECS} seconds.")
+        );
     }
 }
