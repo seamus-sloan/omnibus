@@ -127,12 +127,30 @@ export const AUDIOBOOK_BOOKS: readonly ExpectedAudiobook[] = [
  * **Never read these from a non-merge spec.** Use `AUDIOBOOK_BOOKS` for
  * anything that just needs an audiobook to look at.
  */
-export const MERGE_PRIMARY = AUDIOBOOK_BOOKS.find(
-  (b) => b.title === "The Mergeable Manuscript",
-)!;
-export const MERGE_SECONDARY = AUDIOBOOK_BOOKS.find(
-  (b) => b.title === "The Severable Sequel",
-)!;
+function requireAudiobook(title: string): ExpectedAudiobook {
+  const found = AUDIOBOOK_BOOKS.find((b) => b.title === title);
+  if (!found) {
+    throw new Error(
+      `merge-only audiobook fixture ${JSON.stringify(title)} is missing from ` +
+        `AUDIOBOOK_BOOKS. The merge specs depend on it — re-add the entry and ` +
+        `regenerate the MP3 via tools/make_audiobook.ts.`,
+    );
+  }
+  return found;
+}
+
+export const MERGE_PRIMARY = requireAudiobook("The Mergeable Manuscript");
+export const MERGE_SECONDARY = requireAudiobook("The Severable Sequel");
+
+/**
+ * Titles the reader specs must exclude when they pick "some generated MP3".
+ * Without this the `.find(MP3 && generated)` selectors would silently start
+ * reading a mutating fixture if the table order ever changed.
+ */
+export const MERGE_ONLY_TITLES: readonly string[] = [
+  MERGE_PRIMARY.title,
+  MERGE_SECONDARY.title,
+];
 
 /** Total audiobook *books* (groups) — not parts — the indexer surfaces. */
 export const AUDIOBOOK_BOOK_COUNT = AUDIOBOOK_BOOKS.length;

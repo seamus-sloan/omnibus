@@ -3,6 +3,7 @@ import { expectMutation } from "../utils/api";
 import {
   AUDIOBOOK_BOOKS,
   AUDIOBOOK_BOOK_COUNT,
+  MERGE_ONLY_TITLES,
   MERGE_PRIMARY,
   MERGE_SECONDARY,
 } from "../fixtures/audiobooks";
@@ -602,7 +603,10 @@ test.describe("audiobook-only seed", () => {
   // one of the merge pair: that test asserts the *absence* of a file picker,
   // which a concurrent merge would falsify.
   const SOLO_MP3 = AUDIOBOOK_BOOKS.find(
-    (b) => b.format === "MP3" && b.source === "generated",
+    (b) =>
+      b.format === "MP3" &&
+      b.source === "generated" &&
+      !MERGE_ONLY_TITLES.includes(b.title),
   )!;
 
   test("Start listening navigates to /listen/:uuid for audio-only books", async ({
