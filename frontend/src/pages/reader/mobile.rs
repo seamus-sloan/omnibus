@@ -120,7 +120,10 @@ async fn mount_and_drain(
     let cfi = server_cfi.or(local_saved);
 
     let token = data::token_store::get();
-    let file_url = interop::file_token_url(&server_url, &uuid, token.as_deref());
+    // A completed offline download serves the EPUB from the loopback media
+    // server; otherwise stream it from the real server with `?token=`.
+    let file_url = crate::offline::downloads::local_epub_url(&uuid)
+        .unwrap_or_else(|| interop::file_token_url(&server_url, &uuid, token.as_deref()));
     // Resolve the vendored runtime URLs from the `asset!` bundle so the WebView
     // loads them JSZip-first (see `install_surface_js`).
     let scripts = interop::ReaderScripts {

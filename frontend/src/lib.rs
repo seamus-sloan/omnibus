@@ -15,6 +15,8 @@ pub mod data;
 pub mod index_prefs;
 #[cfg(feature = "mobile")]
 pub(crate) mod native_share;
+#[cfg(feature = "mobile")]
+pub mod offline;
 pub mod pages;
 pub mod reader_progress;
 pub mod routes;
@@ -169,6 +171,9 @@ fn ScreenLayout(children: Element) -> Element {
             // shows on every main page while an audiobook is loaded and is
             // absent on the full player. Renders nothing until a book plays.
             pages::MobileMiniPlayer {}
+            // Connectivity pill — "Offline · N changes queued" / "Syncing".
+            // Renders nothing in the steady online state.
+            components::OfflinePill {}
             Nav {}
         }
     }
@@ -319,6 +324,18 @@ fn use_mobile_viewport_fix() {
 #[cfg(not(feature = "mobile"))]
 fn use_mobile_viewport_fix() {}
 
+/// Offline runtime (mobile): keeps the sync engine's server URL fresh and
+/// runs the probe/drain loop. Cfg lives in the body per the
+/// `use_mobile_viewport_fix` pattern so [`App`]'s call site stays gate-free.
+#[cfg(feature = "mobile")]
+fn use_offline_runtime() {
+    offline::sync::use_offline_runtime();
+}
+
+/// Non-mobile stub: web/SSR have no offline layer.
+#[cfg(not(feature = "mobile"))]
+fn use_offline_runtime() {}
+
 /// Capture-phase left-edge back-swipe listener for the mobile WebView.
 ///
 /// The wry/WKWebView native edge gesture can't drive app navigation on the
@@ -438,6 +455,7 @@ pub fn App() -> Element {
     components::atrium::init_theme();
 
     use_mobile_viewport_fix();
+    use_offline_runtime();
 
     // The single `<audio>` element, mounted at the App root (sibling of the
     // Router) so it never unmounts on navigation — the persistence anchor for

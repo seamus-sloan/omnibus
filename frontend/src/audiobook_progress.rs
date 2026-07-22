@@ -115,7 +115,8 @@ fn save_impl(uuid: &str, seconds: f64) {
     let _ = storage.set_item(&storage_key(uuid), &format!("{seconds}"));
 }
 
-// Mobile — process-local map; resets on cold launch.
+// Mobile — process-local map for synchronous reads, write-through to the
+// offline SQLite store so positions survive a cold launch.
 #[cfg(feature = "mobile")]
 mod mobile_store {
     use std::collections::HashMap;
@@ -132,11 +133,26 @@ mod mobile_store {
         map().read().ok().and_then(|g| g.get(uuid).copied())
     }
 
-    /// Insert/overwrite the cached position (seconds) for `uuid` in the process-local map.
-    /// Silently no-ops if the lock is poisoned; the in-memory copy resets on cold launch.
+    /// Insert/overwrite the cached position (seconds) for `uuid`, mirroring
+    /// the write into the durable offline store (best-effort, off-thread).
     pub fn set(uuid: &str, seconds: f64) {
         if let Ok(mut g) = map().write() {
             g.insert(uuid.to_string(), seconds);
+        }
+        if let Some(store) = crate::offline::store::store() {
+            store.kv_put(
+                &crate::offline::cache::keys::audio_pos(uuid),
+                format!("{seconds}"),
+            );
+        }
+    }
+
+    /// Seed the map from the durable rows (cold-start hydration).
+    pub fn seed(entries: Vec<(String, f64)>) {
+        if let Ok(mut g) = map().write() {
+            for (uuid, seconds) in entries {
+                g.entry(uuid).or_insert(seconds);
+            }
         }
     }
 
@@ -156,6 +172,26 @@ fn load_impl(uuid: &str) -> Option<f64> {
 #[cfg(feature = "mobile")]
 fn save_impl(uuid: &str, seconds: f64) {
     mobile_store::set(uuid, seconds);
+}
+
+/// Hydrate the in-memory map from the offline store's durable rows. Called
+/// once from `offline::init` before launch (blocking read; no runtime yet).
+#[cfg(feature = "mobile")]
+pub fn hydrate_from_offline_store() {
+    let Some(store) = crate::offline::store::store() else {
+        return;
+    };
+    let prefix = crate::offline::cache::keys::audio_pos("");
+    let entries = store
+        .kv_prefix_blocking(&prefix)
+        .into_iter()
+        .filter_map(|(key, raw)| {
+            let uuid = key.strip_prefix(prefix.as_str())?;
+            let seconds = raw.parse::<f64>().ok()?;
+            (seconds.is_finite() && seconds >= 0.0).then(|| (uuid.to_string(), seconds))
+        })
+        .collect();
+    mobile_store::seed(entries);
 }
 
 // SSR / server-only build — no persistence.

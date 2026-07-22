@@ -12,9 +12,24 @@ use super::DataError;
 #[cfg(feature = "mobile")]
 use super::{drain_error, http_client, note_status, with_bearer};
 
-/// Create a bookmark for the book with the given uuid.
+/// Create a bookmark for the book with the given uuid. Offline, the
+/// returned record carries a negative temp id that remaps on sync.
 #[cfg(feature = "mobile")]
 pub async fn create_bookmark(
+    server_url: &str,
+    input: CreateBookmark,
+) -> Result<Bookmark, DataError> {
+    let bookmark = crate::offline::sync::write_through(
+        || create_bookmark_online(server_url, input.clone()),
+        || crate::offline::outbox::queue_create_bookmark(&input),
+    )
+    .await?;
+    crate::offline::outbox::apply::bookmark_created(&bookmark).await;
+    Ok(bookmark)
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn create_bookmark_online(
     server_url: &str,
     input: CreateBookmark,
 ) -> Result<Bookmark, DataError> {
@@ -32,6 +47,18 @@ pub async fn create_bookmark(
 /// List bookmarks for the book with the given uuid.
 #[cfg(feature = "mobile")]
 pub async fn list_bookmarks(server_url: &str, book_uuid: &str) -> Result<Vec<Bookmark>, DataError> {
+    crate::offline::cache::read_through(
+        crate::offline::cache::keys::bookmarks(book_uuid),
+        list_bookmarks_online(server_url, book_uuid),
+    )
+    .await
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn list_bookmarks_online(
+    server_url: &str,
+    book_uuid: &str,
+) -> Result<Vec<Bookmark>, DataError> {
     let url = format!("{server_url}/api/bookmarks/book/{book_uuid}");
     let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
@@ -41,9 +68,30 @@ pub async fn list_bookmarks(server_url: &str, book_uuid: &str) -> Result<Vec<Boo
     Ok(response.json::<Vec<Bookmark>>().await?)
 }
 
-/// Update a bookmark's title.
+/// Update a bookmark's title. Queued offline.
 #[cfg(feature = "mobile")]
 pub async fn update_bookmark(
+    server_url: &str,
+    id: i64,
+    title: Option<String>,
+) -> Result<(), DataError> {
+    if id < 0 {
+        crate::offline::outbox::queue_update_bookmark(id, title).await;
+        return Ok(());
+    }
+    crate::offline::sync::write_through(
+        || update_bookmark_online(server_url, id, title.clone()),
+        || async {
+            crate::offline::outbox::queue_update_bookmark(id, title.clone())
+                .await
+                .then_some(())
+        },
+    )
+    .await
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn update_bookmark_online(
     server_url: &str,
     id: i64,
     title: Option<String>,
@@ -60,9 +108,32 @@ pub async fn update_bookmark(
     Ok(())
 }
 
-/// Delete a bookmark.
+/// Delete a bookmark. Deleting an unsynced (temp-id) bookmark cancels its
+/// queued create with no server round trip.
 #[cfg(feature = "mobile")]
 pub async fn delete_bookmark(server_url: &str, id: i64) -> Result<(), DataError> {
+    if id < 0 {
+        crate::offline::outbox::queue_delete_bookmark(id).await;
+        return Ok(());
+    }
+    let book_uuid = crate::offline::outbox::apply::find_bookmark_book(id).await;
+    crate::offline::sync::write_through(
+        || delete_bookmark_online(server_url, id),
+        || async {
+            crate::offline::outbox::queue_delete_bookmark(id)
+                .await
+                .then_some(())
+        },
+    )
+    .await?;
+    if let Some(book_uuid) = book_uuid {
+        crate::offline::outbox::apply::bookmark_deleted(&book_uuid, id).await;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn delete_bookmark_online(server_url: &str, id: i64) -> Result<(), DataError> {
     let url = format!("{server_url}/api/bookmarks/{id}");
     let response = with_bearer(http_client().delete(&url)).send().await?;
     let status = note_status(response.status());

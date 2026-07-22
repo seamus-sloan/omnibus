@@ -47,6 +47,14 @@ pub fn use_server_url_signal() -> Signal<String> {
 pub fn media_url(server_url: &str, path: &str) -> String {
     #[cfg(feature = "mobile")]
     {
+        // Prefer the loopback image proxy: it serves from the offline disk
+        // cache when present and transparently fetches + caches from the
+        // server otherwise, which is what keeps covers/thumbs rendering
+        // with the server unreachable. Falls back to the tokened server
+        // URL when the loopback server isn't running.
+        if let Some(proxied) = crate::offline::media::proxy_img_url(server_url, path) {
+            return proxied;
+        }
         let base = format!("{server_url}{path}");
         match data::token_store::get() {
             Some(token) => format!("{base}?token={token}"),

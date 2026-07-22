@@ -108,6 +108,13 @@ pub mod shelves_rail;
 pub use create_shelf_modal::CreateShelfModal;
 pub use shelves_rail::{RailActive, ShelvesRail};
 
+// Mobile connectivity pill (offline / syncing status), mounted by the
+// mobile `ScreenLayout`. Mobile-only: it reads the offline sync engine.
+#[cfg(feature = "mobile")]
+pub mod offline_pill;
+#[cfg(feature = "mobile")]
+pub use offline_pill::OfflinePill;
+
 // The condition-row editor + live-preview pane shared by shelf creation and
 // the "Edit rules" surface.
 pub mod shelf_rule_builder;

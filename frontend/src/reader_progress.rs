@@ -44,7 +44,8 @@ fn save_impl(uuid: &str, cfi: &str) {
     let _ = storage.set_item(&storage_key(uuid), cfi);
 }
 
-// Mobile — process-local map; resets on cold launch.
+// Mobile — process-local map for synchronous reads, write-through to the
+// offline SQLite store so positions survive a cold launch.
 #[cfg(feature = "mobile")]
 mod mobile_store {
     use std::collections::HashMap;
@@ -61,11 +62,23 @@ mod mobile_store {
         map().read().ok().and_then(|g| g.get(uuid).cloned())
     }
 
-    /// Insert/overwrite the cached CFI for `uuid` in the process-local map.
-    /// Silently no-ops if the lock is poisoned; the in-memory copy resets on cold launch.
+    /// Insert/overwrite the cached CFI for `uuid`, mirroring the write into
+    /// the durable offline store (best-effort, off-thread).
     pub fn set(uuid: &str, cfi: String) {
         if let Ok(mut g) = map().write() {
-            g.insert(uuid.to_string(), cfi);
+            g.insert(uuid.to_string(), cfi.clone());
+        }
+        if let Some(store) = crate::offline::store::store() {
+            store.kv_put(&crate::offline::cache::keys::reader_cfi(uuid), cfi);
+        }
+    }
+
+    /// Seed the map from the durable rows (cold-start hydration).
+    pub fn seed(entries: Vec<(String, String)>) {
+        if let Ok(mut g) = map().write() {
+            for (uuid, cfi) in entries {
+                g.entry(uuid).or_insert(cfi);
+            }
         }
     }
 
@@ -85,6 +98,25 @@ fn load_impl(uuid: &str) -> Option<String> {
 #[cfg(feature = "mobile")]
 fn save_impl(uuid: &str, cfi: &str) {
     mobile_store::set(uuid, cfi.to_string());
+}
+
+/// Hydrate the in-memory map from the offline store's durable rows. Called
+/// once from `offline::init` before launch (blocking read; no runtime yet).
+#[cfg(feature = "mobile")]
+pub fn hydrate_from_offline_store() {
+    let Some(store) = crate::offline::store::store() else {
+        return;
+    };
+    let prefix = crate::offline::cache::keys::reader_cfi("");
+    let entries = store
+        .kv_prefix_blocking(&prefix)
+        .into_iter()
+        .filter_map(|(key, cfi)| {
+            key.strip_prefix(prefix.as_str())
+                .map(|uuid| (uuid.to_string(), cfi))
+        })
+        .collect();
+    mobile_store::seed(entries);
 }
 
 // SSR / server-only build — no persistence.

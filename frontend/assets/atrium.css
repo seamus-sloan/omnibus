@@ -6228,6 +6228,156 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   font-family: var(--mono);
   font-size: 11px;
 }
+/* ── Offline & downloads ───────────────────────────────────────────── */
+/* Book-detail "Available offline" rows: one row per downloadable format
+   walking Download → progress → Downloaded/Remove. */
+.m-dl-rows { border-top: 1px solid var(--line-2); }
+.m-dl-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--line-2);
+}
+.m-dl-row-body { flex: 1; min-width: 0; }
+.m-dl-row-label { font-size: 14px; color: var(--ink-0); }
+.m-dl-row-sub {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.m-dl-row-ok { color: var(--ok); }
+.m-dl-row-error { color: var(--bad); }
+.m-dl-check { flex: 0 0 auto; }
+.m-dl-row-busy { color: var(--ink-3); }
+/* In-flight progress bar — same track as `.pbar`, accent fill driven by an
+   inline width. */
+.m-dl-bar {
+  height: 3px;
+  margin-top: 6px;
+  background: var(--bg-3);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.m-dl-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 300ms ease;
+}
+.m-dl-remove { color: var(--ink-2); }
+.m-dl-remove:hover { color: var(--bad); }
+
+/* Landing-grid offline badge: a small accent check pinned to the cover's
+   corner (the cell wraps its Cover in `.m-cover-cell-art`). */
+.m-cover-cell-art { position: relative; }
+.m-cover-dl-badge {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: color-mix(in oklch, var(--bg-0) 82%, black);
+  color: var(--ok);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+/* Connectivity pill — fixed above the bottom nav; hidden while online and
+   idle (the component renders nothing). */
+.m-offline-pill {
+  position: fixed;
+  left: 50%;
+  bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 10px);
+  z-index: 40;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: calc(100vw - 32px);
+  padding: 6px 13px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--bg-1) 88%, black);
+  color: var(--ink-1);
+  font-family: var(--sans);
+  font-size: 12px;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+/* Clear the mini-player (docked at the same offset, ~60px tall) when one
+   is mounted. `:has()`-gated like the web mini-dock reserve above — on the
+   pre-15.4 WebKit floor the pill overlaps the dock instead, which degrades
+   readably. */
+@supports selector(:has(a)) {
+  .screen:has(.m-mini) .m-offline-pill {
+    bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 70px);
+  }
+}
+.m-offline-pill-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+.m-offline-pill.is-syncing .m-offline-pill-dot {
+  background: var(--accent);
+  animation: m-sync-pulse 1.2s ease-in-out infinite;
+}
+@keyframes m-sync-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* Account sync-status block */
+.m-account-sync {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  padding: 14px 0 2px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.m-account-sync-line { display: flex; align-items: center; gap: 6px; }
+.m-account-sync-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+.m-account-sync-dot.on { background: var(--ok); }
+.m-account-sync-dropped { color: var(--bad); }
+.m-account-sync-when { font-size: 11px; color: var(--ink-3); }
+
+/* Account "Downloads" card */
+.m-account-downloads { margin-bottom: 18px; }
+.m-account-dl-total { font-size: 11px; color: var(--ink-3); }
+.m-account-dl-row { gap: 10px; cursor: default; }
+.m-account-dl-link {
+  flex: 1;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+.m-account-dl-title {
+  font-size: 14px;
+  color: var(--ink-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.m-account-dl-sub { margin-top: 2px; font-size: 12px; color: var(--ink-2); }
+
 /* ── Mobile audiobook player ───────────────────────────────────────── */
 /* Full-screen player: pinned to the viewport with `position: fixed` so it can
    never add to a parent's scroll height (the app shell is `min-height: 100vh`,

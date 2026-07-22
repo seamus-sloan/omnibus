@@ -17,19 +17,11 @@ use crate::data;
 ///
 /// A book with both an ebook and an audiobook lists the ebook format first
 /// (`get_book_files` orders by format), so `book_files.first()` would hand the
-/// audiobook manifest an EPUB id and 404. Filter to the audio formats the HLS
-/// resolver accepts (`db::hls::resolve_audiobook`'s `format IN
-/// ('M4B','M4A','MP3')`) before picking.
+/// audiobook manifest an EPUB id and 404. Shared with the offline download
+/// engine (`offline::downloads::default_audio_file_id`) so download and
+/// playback pick the same default file.
 fn first_audio_file_id(files: &[omnibus_shared::BookFileInfo]) -> Option<i64> {
-    files
-        .iter()
-        .filter(|f| {
-            f.format.eq_ignore_ascii_case("M4B")
-                || f.format.eq_ignore_ascii_case("M4A")
-                || f.format.eq_ignore_ascii_case("MP3")
-        })
-        .min_by_key(|f| f.ordinal)
-        .map(|f| f.id)
+    crate::offline::downloads::default_audio_file_id(files)
 }
 
 /// Whether the host must (re)load for a newly-requested `(uuid, file_id)`.
@@ -305,8 +297,14 @@ async fn init_direct_and_drain(
     duration.set(total_duration_seconds);
     elapsed.set(resume);
     loading.set(false);
-    let eval =
-        interop::install_direct_surface(&server_url, &parts, resume, playback_rate, &now_playing);
+    let eval = interop::install_direct_surface(
+        &server_url,
+        &uuid,
+        &parts,
+        resume,
+        playback_rate,
+        &now_playing,
+    );
     view.set(Some(pv));
     drain_audio_events(eval, ctx, uuid, server_url).await;
 }

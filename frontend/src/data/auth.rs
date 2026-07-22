@@ -83,6 +83,18 @@ fn finish_bearer_auth(resp: LoginResponse) -> Result<UserSummary, DataError> {
 /// `note_status`) so `ScreenLayout` routes back to `/login`.
 #[cfg(feature = "mobile")]
 pub async fn get_me(server_url: &str) -> Result<UserSummary, DataError> {
+    let me = crate::offline::cache::read_through(
+        crate::offline::cache::keys::me(),
+        get_me_online(server_url),
+    )
+    .await?;
+    // Account switches wipe the previous user's replicated data.
+    crate::offline::note_user(&me.username).await;
+    Ok(me)
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn get_me_online(server_url: &str) -> Result<UserSummary, DataError> {
     let url = format!("{server_url}/api/auth/me");
     let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
@@ -135,6 +147,15 @@ pub async fn check_server(server_url: &str) -> Result<(), DataError> {
 /// which only probes reachability and discards the body.
 #[cfg(feature = "mobile")]
 pub async fn get_server_version(server_url: &str) -> Result<String, DataError> {
+    crate::offline::cache::read_through(
+        "server_version".to_string(),
+        get_server_version_online(server_url),
+    )
+    .await
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn get_server_version_online(server_url: &str) -> Result<String, DataError> {
     #[derive(serde::Deserialize)]
     struct HealthPayload {
         version: String,

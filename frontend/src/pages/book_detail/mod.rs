@@ -29,6 +29,8 @@ mod export_menu;
 mod hero;
 #[cfg(feature = "mobile")]
 mod mobile;
+#[cfg(feature = "mobile")]
+mod offline;
 
 #[cfg(not(feature = "mobile"))]
 use body::{BdAuthorCluster, BdBodyMain, BdPageCtx, BdRailSection};

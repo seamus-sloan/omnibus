@@ -8,6 +8,9 @@
 
 use dioxus::prelude::*;
 
+#[cfg(feature = "mobile")]
+mod downloads;
+
 #[cfg(not(feature = "mobile"))]
 use crate::{data, use_server_url};
 
@@ -327,8 +330,10 @@ fn account_body() -> Element {
             AccountIdentity { user: user() }
             NowReadingCard { book: now_reading(), server_url: server_url.clone() }
             QuickGrid {}
+            downloads::DownloadsSection {}
             AccountRows {}
             ThemeControl {}
+            downloads::SyncStatusRow {}
             VersionBlock { server_version: server_version() }
         }
     }
