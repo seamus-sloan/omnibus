@@ -1,3 +1,5 @@
+import type { Page } from "@playwright/test";
+
 import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expectMutation } from "../utils/api";
@@ -23,6 +25,32 @@ const NOTE_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "gamma")!;
 // A fourth book for the recolor test so its seeded highlight is isolated from
 // the other highlight specs running in parallel.
 const RECOLOR_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "pioneers-3")!;
+// Reserved books for the progress-restore tests (see fixtures/epubs.ts):
+// saved position is per-book state on the shared server, so any other spec
+// opening these in the reader would race the restore assertions. They must
+// be real multi-page books (public-domain fixtures) — the synthetic
+// one-paragraph EPUBs render as a single page with no page turns.
+const PROGRESS_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "frankenstein")!;
+const PROGRESS_ERR_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "great-gatsby")!;
+
+// The epub.js progress POST fires on the reader's relocate events; pin the
+// exact pathname so the sibling `/api/rpc/progress/get` reads never match.
+const PROGRESS_POST = {
+  method: "POST" as const,
+  url: /\/api\/rpc\/progress(?:\?|$)/,
+  expectedStatus: 200,
+};
+
+// The bottom-bar page label ("p. 3 of 12 · 25%") renders only after epub.js
+// has painted AND the whole-book pagination resolved — the strongest signal
+// that relocates are flowing. Note the NBSP after "p." in the label.
+const PAGE_LABEL = /p\.\u00a0\d+ of \d+/;
+
+async function footerPageLabel(page: Page): Promise<string> {
+  const text = (await page.getByTestId("reader-footer").textContent()) ?? "";
+  const m = text.match(PAGE_LABEL);
+  return m ? m[0] : "";
+}
 
 test("renders the reader layout", async ({ page, request }) => {
   // Deep-link straight to the immersive reader by the book's stable uuid,
@@ -267,6 +295,129 @@ test("opens the reader from the book detail Read action", async ({ page, request
   await page.getByTestId("action-read").click();
   await expect(page).toHaveURL(new RegExp(`/read/${uuid}$`));
   await expect(page.getByTestId("reader-viewer")).toBeVisible();
+});
+
+test("restores the exact reading position when the reader is reopened", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, PROGRESS_BOOK.title);
+
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  // Page turns only produce label changes once whole-book pagination has
+  // resolved (the first open generates it; later opens hit the locations
+  // cache in localStorage).
+  await expect
+    .poll(async () => footerPageLabel(page), { timeout: 20_000 })
+    .toMatch(PAGE_LABEL);
+  const start = await footerPageLabel(page);
+
+  // Turn eight spreads — far enough past the front matter to be in prose —
+  // then keep turning (bounded) until the viewport start sits mid-paragraph:
+  // a text-position CFI with a non-zero character offset (`…:469)`). Leaving
+  // from the title/contents pages or an element boundary would under-test
+  // the restore, since boundary CFIs restore at coarser granularity in
+  // epub.js (a pre-existing display() limitation) while mid-text CFIs
+  // restore exactly. The offset check is fixture- and version-agnostic, and
+  // an environment that never yields one fails the guard below loudly
+  // instead of silently under-testing. Each turn's save is awaited via
+  // expectMutation so the 400 ms relocate debounce never coalesces two
+  // turns into one save.
+  const midTextCfi = /:[1-9]\d*\)$/;
+  let leftCfi = "";
+  for (let turn = 0; turn < 12; turn++) {
+    const saved = await expectMutation(page, PROGRESS_POST, async () =>
+      page.getByTestId("reader-next").click(),
+    );
+    leftCfi = saved.request.postDataJSON().update.epub_cfi as string;
+    if (turn >= 7 && midTextCfi.test(leftCfi)) break;
+  }
+  expect(leftCfi, "should reach a mid-paragraph position").toMatch(midTextCfi);
+  const leftAt = await footerPageLabel(page);
+  expect(leftAt, "the turns should move the page label").not.toBe(start);
+
+  // The stored position after a reopen must converge back on exactly where
+  // we left: the restore may briefly persist a pre-correction snapshot, but
+  // the settled landing (and the one-spread nudge for boundary CFIs) always
+  // wins the last write.
+  const storedCfi = async () => {
+    const rec = await request.get(`/api/progress/${uuid}?format=epub`);
+    if (!rec.ok()) return "";
+    const body = (await rec.json()) as { epub_cfi?: string } | null;
+    return body?.epub_cfi ?? "";
+  };
+
+  // Leave the reader (explicit navigation — the reader-back button walks
+  // browser history, which in a test context leads to about:blank), then
+  // reopen: it must land on the exact page we left, not a page drifted by
+  // the first-pass display's pre-webfont layout. The restore POST is
+  // page-load triggered (hydration + epub render + settle + debounce), so
+  // give the mutation waiter more room than a click gets.
+  await gotoReady(page, `/books/${uuid}`);
+  await expectMutation(
+    page,
+    { ...PROGRESS_POST, timeout: 20_000 },
+    async () => gotoReady(page, `/read/${uuid}`),
+  );
+  await expect.poll(storedCfi, { timeout: 10_000 }).toBe(leftCfi);
+  await expect
+    .poll(async () => footerPageLabel(page), { timeout: 20_000 })
+    .toBe(leftAt);
+
+  // And again: the first reopen must not have rewritten the stored position,
+  // so a second reopen still lands on the same page (no cumulative drift).
+  await gotoReady(page, `/books/${uuid}`);
+  await expectMutation(
+    page,
+    { ...PROGRESS_POST, timeout: 20_000 },
+    async () => gotoReady(page, `/read/${uuid}`),
+  );
+  await expect.poll(storedCfi, { timeout: 10_000 }).toBe(leftCfi);
+  await expect
+    .poll(async () => footerPageLabel(page), { timeout: 20_000 })
+    .toBe(leftAt);
+});
+
+test("keeps reading when the progress save POST fails", async ({ page, request }) => {
+  const uuid = await fetchBookUuidByTitle(request, PROGRESS_ERR_BOOK.title);
+
+  // Force 500 on every progress save from this page — armed before the first
+  // navigation so this test never writes real progress for its book. Pin the
+  // exact pathname so `/api/rpc/progress/get` reads pass through untouched.
+  await page.route(
+    (url) => url.pathname === "/api/rpc/progress",
+    async (route) => {
+      if (route.request().method() === "POST") {
+        await route.fulfill({ status: 500, body: "forced failure" });
+      } else {
+        await route.continue();
+      }
+    },
+  );
+
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+  await expect
+    .poll(async () => footerPageLabel(page), { timeout: 20_000 })
+    .toMatch(PAGE_LABEL);
+
+  // Each turn still fires its save (observing the forced 500), and the
+  // reader keeps paging normally — persistence is fire-and-forget, so a
+  // second turn still attempts its save and no error UI appears.
+  await expectMutation(
+    page,
+    { ...PROGRESS_POST, expectedStatus: 500 },
+    async () => page.getByTestId("reader-next").click(),
+  );
+  await expectMutation(
+    page,
+    { ...PROGRESS_POST, expectedStatus: 500 },
+    async () => page.getByTestId("reader-next").click(),
+  );
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+  await expect(page.getByTestId("reader-error")).toHaveCount(0);
 });
 
 // The reader is one shared component: the native mobile shell renders the
