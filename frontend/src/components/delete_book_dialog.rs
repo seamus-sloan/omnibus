@@ -1,12 +1,7 @@
-//! Admin-only "Delete files…" dialog mounted by the book detail page.
-//!
-//! Two steps. Step 1 lists every deletable *item* — each `book_files` row and
-//! each physical copy — with a checkbox. Step 2 confirms, with copy that
-//! depends on how much was picked: a partial delete names the file and says
-//! the book stays; a total delete says the book goes. A book with no items at
-//! all skips step 1 and confirms the record delete directly.
-//!
-//! The manifest is fetched on mount rather than read off the page's
+//! Admin-only "Delete files…" dialog mounted by the book detail page. Step 1
+//! lists every deletable *item* (each `book_files` row and physical copy) with
+//! a checkbox; step 2 confirms, with copy branching on partial vs total. Its
+//! manifest is fetched on mount rather than read off the page's
 //! `EbookMetadata`, which only carries `book_files` for multi-file formats.
 
 use std::collections::BTreeSet;

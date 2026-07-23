@@ -1,8 +1,7 @@
-//! The SQL half of deletion: dropping `book_files` rows, and the full purge
-//! of a book row plus everything soft-referencing its uuid.
-//!
+//! The SQL half of deletion: dropping `book_files` / `physical_copies` rows,
+//! and the full purge of a book row plus everything soft-referencing its uuid.
 //! Mirrors `missing_files::delete_victim_rows` (the GC's hard delete) but
-//! keeps nothing back: a deliberate delete takes the user data with it,
+//! keeps nothing back — a deliberate delete takes the user data with it,
 //! because the confirmation dialog already named it.
 
 use sqlx::{SqlitePool, Transaction};

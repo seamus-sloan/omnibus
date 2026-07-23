@@ -1,11 +1,8 @@
 //! Wire types for the admin book-deletion surface
-//! (`/api/rpc/books/delete-files`).
-//!
-//! The dialog deletes *items*, not just files: every `book_files` row plus
-//! every physical copy the book carries. That distinction is what decides
-//! whether the book row survives — a book whose last remaining item is a
-//! physical copy keeps its record, since a copy on a shelf isn't something a
-//! delete can remove from disk.
+//! (`/api/rpc/books/delete-files`). The dialog deletes *items* — every
+//! `book_files` row plus every physical copy — and that distinction decides
+//! whether the book row survives: a book whose last remaining item is a
+//! physical copy keeps its record.
 
 use serde::{Deserialize, Serialize};
 

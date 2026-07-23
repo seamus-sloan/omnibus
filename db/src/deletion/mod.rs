@@ -1,16 +1,8 @@
-//! Deliberate book/file deletion — the admin counterpart to the scanner's
-//! *ghosting*. Where a vanished file leaves its `books` row behind
-//! (`sync::books::removed`, reclaimed later by `missing_files`), deleting here
-//! removes the `book_files` rows **and** the files on disk.
-//!
-//! The unit of deletion is an *item*: a `book_files` row or a physical copy.
-//! The `books` row goes only when every item goes, so a book whose last
-//! remaining item is a physical copy keeps its record — a copy on a shelf is
-//! un-recorded, never deleted from a disk it was never on.
-//!
-//! A scan already in flight can re-insert a file it snapshotted before the
-//! unlink (as a fresh book with a new uuid); the next scan won't, so this is
-//! left to resolve itself rather than locking against the worker.
+//! Deliberate book/file deletion, driven by the admin delete dialog — the
+//! counterpart to the scanner's *ghosting*, which retains the `books` row.
+//! The unit of deletion is an *item*: a `book_files` row (also unlinked from
+//! disk) or a physical copy (un-recorded only). The `books` row goes only
+//! when every item does. Split into [`purge`] (SQL) and [`fs`] (filesystem).
 
 mod fs;
 mod purge;
@@ -114,7 +106,10 @@ pub async fn book_deletion_manifest(
 /// The DB write commits first and the filesystem cleanup follows best-effort:
 /// a failed unlink leaves an orphan file the next scan re-indexes as a new
 /// book, which is recoverable, whereas a deleted file with its row intact is
-/// the ghost state this exists to avoid.
+/// the ghost state this exists to avoid. By the same token a scan already in
+/// flight can re-insert a file it snapshotted before the unlink (as a fresh
+/// book with a new uuid); the next scan won't, so that's left to resolve
+/// itself rather than locking against the worker.
 pub async fn delete_book_items(
     pool: &SqlitePool,
     book_uuid: &str,
@@ -125,6 +120,13 @@ pub async fn delete_book_items(
         .await?
         .ok_or(DeleteError::BookNotFound)?;
     let uuid = canonical_uuid(pool, book_id).await?;
+
+    // De-duplicated up front: `total_delete` is decided by comparing the
+    // selection's length against the book's item count, so a retry or client
+    // bug that repeats an id would inflate the count and skip the purge even
+    // though every item was picked.
+    let file_ids = &dedup(file_ids);
+    let copy_ids = &dedup(copy_ids);
 
     let existing_files = get_book_files(pool, book_id).await?;
     if let Some(unknown) = file_ids
@@ -191,6 +193,15 @@ pub async fn delete_book_items(
         deleted_copy_ids: copy_ids.to_vec(),
         book_deleted: total_delete,
     })
+}
+
+/// Copy of `ids` with duplicates removed, order-independent (the caller only
+/// counts and binds them).
+fn dedup(ids: &[i64]) -> Vec<i64> {
+    let mut out = ids.to_vec();
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 /// The `books.uuid` for `book_id` — the passed-in uuid may be a `merged_uuids`

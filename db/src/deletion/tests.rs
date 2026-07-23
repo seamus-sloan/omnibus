@@ -225,6 +225,27 @@ async fn delete_book_items_deletes_the_record_when_its_last_physical_copy_goes()
 }
 
 #[tokio::test]
+async fn delete_book_items_still_purges_the_book_when_an_id_is_sent_twice() {
+    let dir = temp_dir("dupes");
+    let _env = cache_env(&dir);
+    let pool = pool().await;
+    let lib = seed_root(&pool, "/lib").await;
+    let book = seed_book(&pool, lib, "uuid-a", "Doubled").await;
+    let file = seed_file(&pool, book, "/lib", "a", "a", "EPUB").await;
+
+    // A retry (or a client bug) repeating an id must not inflate the selection
+    // count past the item count and quietly skip the purge.
+    let out = delete_book_items(&pool, "uuid-a", &[file, file], &[])
+        .await
+        .unwrap();
+
+    assert!(out.book_deleted);
+    assert_eq!(out.deleted_file_ids, vec![file]);
+    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
 async fn delete_book_items_deletes_the_record_of_a_book_with_no_items_at_all() {
     let dir = temp_dir("ghost");
     let _env = cache_env(&dir);

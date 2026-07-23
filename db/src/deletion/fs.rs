@@ -1,10 +1,8 @@
-//! Filesystem half of deletion: unlink the deleted files, prune the
-//! directories they emptied, and — on a total delete — drop the book's
-//! regenerable caches and its journal images.
-//!
-//! Every step is best-effort and logged rather than propagated, mirroring
-//! `missing_files::cleanup_victim_covers`: the DB has already committed, and a
-//! stranded cache file must not turn a successful delete into an error.
+//! Filesystem half of deletion: unlink the deleted files and their per-stem
+//! sidecar covers, prune the directories they emptied, and — on a total
+//! delete — drop the book's regenerable caches and journal images. Every step
+//! is best-effort and logged rather than propagated (mirroring
+//! `missing_files::cleanup_victim_covers`): the DB has already committed.
 
 use std::path::{Path, PathBuf};
 
