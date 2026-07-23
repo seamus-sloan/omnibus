@@ -129,3 +129,9 @@ pub use edit_shelf_rules_modal::EditShelfRulesModal;
 // hydration-identical; its data calls have mobile stubs.
 pub mod fetch_summary;
 pub use fetch_summary::FetchSummaryButton;
+
+// Camera barcode scanner (vendored zxing WASM decoder). Mounted by the
+// check-in flow; kept here so a future "scan to add" surface can reuse it.
+// Platform-agnostic markup — only the camera-opening effect is target-gated.
+pub mod barcode_scanner;
+pub use barcode_scanner::{BarcodeScanner, ScanStatus};

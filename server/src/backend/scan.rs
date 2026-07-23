@@ -12,7 +12,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use omnibus_db::{self as db, PhysicalError, ScanError};
+use omnibus_db::{self as db, MetadataLookupError, PhysicalError, ScanError};
 use omnibus_shared::{
     AddPhysicalOnlyRequest, BookRef, CheckInRequest, ResolveRequest, WishlistAddRequest,
 };
@@ -21,7 +21,7 @@ use super::{internal, AppState};
 use crate::auth::AuthUser;
 
 /// Map a scan-flow error to a response: user-actionable cases become 400/404,
-/// provider/DB failures become 500.
+/// an unreachable metadata provider becomes 503, DB failures become 500.
 fn scan_error(context: &'static str, e: ScanError) -> Response {
     match e {
         ScanError::Isbn(inner) => (StatusCode::BAD_REQUEST, inner.to_string()).into_response(),
@@ -30,6 +30,13 @@ fn scan_error(context: &'static str, e: ScanError) -> Response {
         }
         ScanError::Physical(PhysicalError::BookNotFound) => {
             (StatusCode::NOT_FOUND, "book not found").into_response()
+        }
+        // Both providers being down is an outage, not a bug in Omnibus: 503
+        // with the cause logged, so the flow says "try again later" instead of
+        // "internal server error".
+        ScanError::Lookup(inner @ MetadataLookupError::Provider(_)) => {
+            tracing::warn!(context, error = ?inner, "metadata provider unavailable");
+            (StatusCode::SERVICE_UNAVAILABLE, inner.to_string()).into_response()
         }
         other => internal(context, other),
     }

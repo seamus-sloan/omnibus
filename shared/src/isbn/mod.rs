@@ -1,6 +1,13 @@
 //! ISBN normalization: strip separators, validate the check digit, and fold
 //! every valid input to a canonical 13-digit ISBN-13 (the form both providers
 //! are queried with). Pure + typed — the caller branches on the failure.
+//!
+//! Shared because both sides need the same verdict: the server before it
+//! spends a provider round-trip, and the check-in scanner/keypad before it
+//! sends a barcode decode or a typed ISBN over the wire.
+
+#[cfg(test)]
+mod tests;
 
 /// Why an ISBN string was rejected. Typed so the check-in UI can show a precise
 /// "that barcode isn't a valid ISBN" message instead of a generic error.

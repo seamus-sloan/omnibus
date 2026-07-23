@@ -7308,7 +7308,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--surface-1);
+  background: var(--bg-1);
 }
 .check-in-book-cover {
   width: 56px;
@@ -7317,7 +7317,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   border-radius: 4px;
   flex: 0 0 auto;
 }
-.check-in-book-cover--empty { background: var(--surface-2); }
+.check-in-book-cover--empty { background: var(--bg-2); }
 .check-in-book-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .check-in-book-title { font-family: var(--serif); font-size: 16px; }
 .check-in-book-byline { font-size: 13px; color: var(--ink-2); }
@@ -7359,7 +7359,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   height: 52px;
   border-radius: 50%;
   background: var(--accent);
-  color: var(--surface-1);
+  color: var(--accent-ink);
   font-size: 26px;
 }
 
@@ -7368,7 +7368,113 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   100% { transform: scale(1); opacity: 0; }
 }
 
+/* ── Camera scanner ───────────────────────────────────────────────── */
+.scanner { display: flex; flex-direction: column; gap: 12px; }
+.scanner-stage {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+}
+.scanner-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+/* Once the camera is out for good, the viewfinder can only ever be an empty
+   rectangle that reads as broken. Drop it and let the message plus the manual
+   button become the screen. */
+.scanner-stage[data-state="off"] { display: none; }
+
+/* Reticle sits just inside the strip the decoder crops to (BAND_HEIGHT in
+   barcode-scanner-glue.js), so anything the reader frames is decodable — never
+   the other way round. */
+.scanner-reticle {
+  position: absolute;
+  inset: 20% 8%;
+  pointer-events: none;
+}
+.scanner-corner {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border: 3px solid var(--ink-0);
+  border-radius: 3px;
+}
+.scanner-corner--tl { top: 0; left: 0; border-right: 0; border-bottom: 0; }
+.scanner-corner--tr { top: 0; right: 0; border-left: 0; border-bottom: 0; }
+.scanner-corner--bl { bottom: 0; left: 0; border-right: 0; border-top: 0; }
+.scanner-corner--br { bottom: 0; right: 0; border-left: 0; border-top: 0; }
+.scanner-sweep {
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  height: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  animation: scanner-sweep 2.2s ease-in-out infinite;
+}
+
+@keyframes scanner-sweep {
+  0%, 100% { top: 6%; }
+  50% { top: 94%; }
+}
+
+.scanner-status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.5;
+  text-align: center;
+}
+.scanner-actions { display: flex; flex-direction: column; gap: 10px; }
+.scanner-actions .btn { width: 100%; justify-content: center; }
+
+/* ── Manual ISBN keypad ───────────────────────────────────────────── */
+.isbn-progress {
+  display: grid;
+  grid-template-columns: repeat(13, 1fr);
+  gap: 3px;
+}
+.isbn-slot {
+  display: grid;
+  place-items: center;
+  height: 30px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+.isbn-slot.filled {
+  border-color: var(--accent);
+  background: var(--bg-1);
+  color: var(--ink-1);
+}
+
+.isbn-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.isbn-key {
+  height: 52px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  color: var(--ink-1);
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.isbn-key:disabled { opacity: 0.5; cursor: default; }
+.isbn-key:active:not(:disabled) { background: var(--bg-2); }
+
 @media (prefers-reduced-motion: reduce) {
   .check-in-spinner { animation: none; }
   .check-in-ring { animation: none; opacity: 0.35; }
+  .scanner-sweep { animation: none; top: 50%; }
 }
