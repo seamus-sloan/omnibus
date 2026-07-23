@@ -68,6 +68,7 @@ pub(super) fn AddBooksSheet(open: Signal<bool>, on_close: EventHandler<()>) -> E
                             let AddRow { route, primary, title, subtitle, icon } = row;
                             rsx! {
                                 button {
+                                    key: "{title}",
                                     r#type: "button",
                                     class: if primary { "m-add-row m-add-row--primary" } else { "m-add-row" },
                                     "data-testid": "add-books-row",
