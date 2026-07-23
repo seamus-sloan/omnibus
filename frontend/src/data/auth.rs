@@ -307,6 +307,11 @@ async fn post_auth_json<T: serde::Serialize>(
 
 #[cfg(all(test, feature = "mobile"))]
 mod tests {
+    // The state-lock guard is deliberately held across awaits: it serializes
+    // whole async test bodies against process-global state, and each test owns
+    // its own thread + runtime, so there is no interleaving to deadlock on.
+    #![allow(clippy::await_holding_lock)]
+
     use super::*;
 
     #[tokio::test]

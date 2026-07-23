@@ -615,7 +615,12 @@ pub(crate) fn http_client() -> reqwest::Client {
                 .connect_timeout(std::time::Duration::from_secs(5))
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
-                .unwrap_or_else(|_| reqwest::Client::new())
+                .unwrap_or_else(|e| {
+                    // A degraded client (no timeouts → long offline stalls)
+                    // must at least be diagnosable.
+                    tracing::warn!(error = %e, "http client builder failed; using default client without timeouts");
+                    reqwest::Client::new()
+                })
         })
         .clone()
 }
@@ -632,7 +637,10 @@ pub(crate) fn streaming_client() -> reqwest::Client {
                 .connect_timeout(std::time::Duration::from_secs(5))
                 .read_timeout(std::time::Duration::from_secs(30))
                 .build()
-                .unwrap_or_else(|_| reqwest::Client::new())
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "streaming client builder failed; using default client without timeouts");
+                    reqwest::Client::new()
+                })
         })
         .clone()
 }
