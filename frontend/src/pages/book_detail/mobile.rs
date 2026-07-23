@@ -33,11 +33,19 @@ pub(super) struct MobileBookView {
     pub suggestions: Option<SuggestionsResponse>,
     pub is_admin: bool,
     pub server_url: String,
+    /// Fetch Summary override, owned by [`super::BookDetailPage`] and
+    /// threaded down here — see the field comment there for why this can't
+    /// be a local `use_signal` in this fn (rule 07).
+    pub description: Signal<String>,
 }
 
-/// Render the fully-loaded book detail for the mobile shell. A plain fn (no
-/// hooks) — [`super::render_loaded`] owns the page's hook sequence and calls
-/// this to produce the body.
+/// Render the fully-loaded book detail for the mobile shell. A plain fn with
+/// no hooks of its own: `description` used to be a local `use_signal` here,
+/// but this fn is reached only past [`super::BookDetailPage`]'s
+/// loading/error/not-found early returns, so a hook declared inside it was
+/// registered on some renders of that component and skipped on others —
+/// a hook-order violation (rule 07). It's now owned by `BookDetailPage` and
+/// threaded down as a `Signal<String>` field on [`MobileBookView`] instead.
 pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
     let MobileBookView {
         b,
@@ -45,6 +53,7 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
         suggestions,
         is_admin,
         server_url,
+        mut description,
     } = view;
     let LoadedBookView {
         title,
@@ -60,9 +69,9 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
 
     let uuid = b.unique_identifier.clone().unwrap_or_default();
 
-    // Local copy of the effective summary so a fetch-and-save can refresh the
-    // shown description in place, mirroring web's `BdTitleCol`.
-    let mut description = use_signal(|| b.description.clone().unwrap_or_default());
+    // `description` arrives pre-seeded from `b.description` (reset by
+    // `BookDetailPage`'s fetch effect on every book load); a fetch-and-save
+    // here refreshes it in place, mirroring web's `BdTitleCol`.
     let on_fetched = {
         let server_url = server_url.clone();
         let uuid = uuid.clone();

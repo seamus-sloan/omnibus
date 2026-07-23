@@ -73,6 +73,17 @@ pub fn BookDetailPage(uuid: String) -> Element {
     let merge_result: Signal<Option<MergeBooksResult>> = use_signal(|| None);
     let undo_error: Signal<Option<String>> = use_signal(|| None);
 
+    // Fetch Summary override (mobile only): the effective description shown
+    // after a fetch-and-save, refreshed whenever a new book loads. Declared
+    // unconditionally per rule 07, same as the merge signals above —
+    // `render_loaded_mobile` is a plain fn with no scope of its own, so a
+    // `use_signal` inside it registered against *this* component's hook list
+    // only on renders that reached past the loading/error/not-found guards
+    // below, shrinking and regrowing the hook count on every navigation. Web
+    // doesn't need this: `BdTitleCol` (hero.rs) is a real `#[component]`, so
+    // its own local `use_signal` gets a fresh scope on every mount already.
+    let description: Signal<String> = use_signal(String::new);
+
     use_book_data_effects(
         uuid.clone(),
         server_url.clone(),
@@ -84,6 +95,7 @@ pub fn BookDetailPage(uuid: String) -> Element {
             refresh,
             suggestions_epoch,
             suggestions,
+            description,
         },
     );
 
@@ -105,6 +117,7 @@ pub fn BookDetailPage(uuid: String) -> Element {
             undo_error,
             refresh,
         },
+        description,
         author_books(),
         suggestions(),
         is_admin,
@@ -123,6 +136,7 @@ struct BookDataSignals {
     refresh: Signal<u32>,
     suggestions_epoch: Signal<u64>,
     suggestions: Signal<Option<SuggestionsResponse>>,
+    description: Signal<String>,
 }
 
 /// Install the two `uuid`-reactive fetch effects: the book + author-books load
@@ -142,6 +156,7 @@ fn use_book_data_effects(uuid: String, server_url: String, sig: BookDataSignals)
             sig.author_books,
             sig.loading,
             sig.error,
+            sig.description,
         );
     }));
 
@@ -178,6 +193,7 @@ struct MergeSignals {
 fn render_book_shell(
     b: EbookMetadata,
     merge: MergeSignals,
+    description: Signal<String>,
     author_books: Vec<EbookMetadata>,
     suggestions: Option<SuggestionsResponse>,
     is_admin: ReadSignal<bool>,
@@ -221,6 +237,7 @@ fn render_book_shell(
 
     let body = render_loaded(
         b,
+        description,
         author_books,
         merge_button,
         suggestions,
@@ -239,7 +256,10 @@ fn render_book_shell(
 /// Fetch the book, then (if it resolves and has a creator) the primary
 /// author's other books, filtering out the current book. `book` and
 /// `author_books` are written directly so a fast re-run (uuid change) is
-/// naturally superseded by the newer fetch's writes.
+/// naturally superseded by the newer fetch's writes. `description` (mobile's
+/// Fetch Summary override) resets to the freshly-loaded book's saved summary
+/// on every call, so navigating to a different book can't leak the previous
+/// book's fetched-and-saved text.
 fn fetch_book_and_author_books(
     server_url: String,
     uuid: String,
@@ -247,6 +267,7 @@ fn fetch_book_and_author_books(
     mut author_books: Signal<Vec<EbookMetadata>>,
     mut loading: Signal<bool>,
     mut error: Signal<Option<String>>,
+    mut description: Signal<String>,
 ) {
     spawn(async move {
         loading.set(true);
@@ -259,6 +280,11 @@ fn fetch_book_and_author_books(
                         inner.unique_identifier.clone(),
                     )
                 });
+                description.set(
+                    b.as_ref()
+                        .and_then(|inner| inner.description.clone())
+                        .unwrap_or_default(),
+                );
                 book.set(b);
                 error.set(None);
                 loading.set(false);
@@ -481,6 +507,7 @@ fn derive_loaded_view(b: &EbookMetadata) -> LoadedBookView {
 /// Render the fully-loaded book detail view.
 fn render_loaded(
     b: EbookMetadata,
+    description: Signal<String>,
     author_books: Vec<EbookMetadata>,
     merge_button: Option<Element>,
     suggestions: Option<SuggestionsResponse>,
@@ -500,11 +527,16 @@ fn render_loaded(
             suggestions,
             is_admin,
             server_url,
+            description,
         })
     };
 
     #[cfg(not(feature = "mobile"))]
     let out = {
+        // Web keeps its own local copy inside `BdTitleCol` (hero.rs), a real
+        // `#[component]` that gets a fresh scope per mount — no hook-order
+        // risk there, so this parameter is unused on this target.
+        let _ = description;
         let LoadedBookView {
             title,
             primary_author,
