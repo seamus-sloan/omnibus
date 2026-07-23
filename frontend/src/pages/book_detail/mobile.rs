@@ -233,6 +233,14 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
                 }
             }
 
+            // Offline downloads (Kindle-style local copies).
+            super::offline::BdOfflineSection {
+                uuid: uuid.clone(),
+                title: title.clone(),
+                has_ebook,
+                has_audio,
+            }
+
             // Files
             section { class: "m-section",
                 div { class: "label", "Files" }

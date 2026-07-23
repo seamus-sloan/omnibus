@@ -12,9 +12,24 @@ use super::DataError;
 #[cfg(feature = "mobile")]
 use super::{drain_error, http_client, note_status, with_bearer};
 
-/// Create a highlight for the book with the given uuid.
+/// Create a highlight for the book with the given uuid. Offline, the
+/// returned record carries a negative temp id that remaps on sync.
 #[cfg(feature = "mobile")]
 pub async fn create_highlight(
+    server_url: &str,
+    input: CreateHighlight,
+) -> Result<Highlight, DataError> {
+    let highlight = crate::offline::sync::write_through(
+        || create_highlight_online(server_url, input.clone()),
+        || crate::offline::outbox::queue_create_highlight(&input),
+    )
+    .await?;
+    crate::offline::outbox::apply::highlight_created(&highlight).await;
+    Ok(highlight)
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn create_highlight_online(
     server_url: &str,
     input: CreateHighlight,
 ) -> Result<Highlight, DataError> {
@@ -35,6 +50,18 @@ pub async fn list_highlights(
     server_url: &str,
     book_uuid: &str,
 ) -> Result<Vec<Highlight>, DataError> {
+    crate::offline::cache::read_through(
+        crate::offline::cache::keys::highlights(book_uuid),
+        list_highlights_online(server_url, book_uuid),
+    )
+    .await
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn list_highlights_online(
+    server_url: &str,
+    book_uuid: &str,
+) -> Result<Vec<Highlight>, DataError> {
     let url = format!("{server_url}/api/highlights/book/{book_uuid}");
     let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
@@ -44,9 +71,38 @@ pub async fn list_highlights(
     Ok(response.json::<Vec<Highlight>>().await?)
 }
 
-/// Update a highlight's color.
+/// Update a highlight's color. Queued offline (a temp-id edit rides on
+/// the queued create's remap).
 #[cfg(feature = "mobile")]
 pub async fn update_highlight_color(
+    server_url: &str,
+    id: i64,
+    color: HighlightColor,
+) -> Result<(), DataError> {
+    if id < 0 {
+        // The highlight itself is still queued; patch the queued state only.
+        crate::offline::outbox::queue_update_highlight_color(id, color).await;
+        return Ok(());
+    }
+    crate::offline::sync::write_through(
+        || update_highlight_color_online(server_url, id, color),
+        || async {
+            crate::offline::outbox::queue_update_highlight_color(id, color)
+                .await
+                .then_some(())
+        },
+    )
+    .await?;
+    // Keep the replica coherent when the write went straight to the server;
+    // the queued path patches inside `queue_update_highlight_color`.
+    if let Some(book_uuid) = crate::offline::outbox::apply::find_highlight_book(id).await {
+        crate::offline::outbox::apply::highlight_color_changed(&book_uuid, id, color).await;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn update_highlight_color_online(
     server_url: &str,
     id: i64,
     color: HighlightColor,
@@ -63,9 +119,36 @@ pub async fn update_highlight_color(
     Ok(())
 }
 
-/// Update a highlight's note text.
+/// Update a highlight's note text. Queued offline.
 #[cfg(feature = "mobile")]
 pub async fn update_highlight_note(
+    server_url: &str,
+    id: i64,
+    note: Option<String>,
+) -> Result<(), DataError> {
+    if id < 0 {
+        crate::offline::outbox::queue_update_highlight_note(id, note).await;
+        return Ok(());
+    }
+    crate::offline::sync::write_through(
+        || update_highlight_note_online(server_url, id, note.clone()),
+        || async {
+            crate::offline::outbox::queue_update_highlight_note(id, note.clone())
+                .await
+                .then_some(())
+        },
+    )
+    .await?;
+    // Keep the replica coherent when the write went straight to the server;
+    // the queued path patches inside `queue_update_highlight_note`.
+    if let Some(book_uuid) = crate::offline::outbox::apply::find_highlight_book(id).await {
+        crate::offline::outbox::apply::highlight_note_changed(&book_uuid, id, note).await;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn update_highlight_note_online(
     server_url: &str,
     id: i64,
     note: Option<String>,
@@ -82,9 +165,32 @@ pub async fn update_highlight_note(
     Ok(())
 }
 
-/// Delete a highlight.
+/// Delete a highlight. Deleting an unsynced (temp-id) highlight cancels
+/// its queued create with no server round trip.
 #[cfg(feature = "mobile")]
 pub async fn delete_highlight(server_url: &str, id: i64) -> Result<(), DataError> {
+    if id < 0 {
+        crate::offline::outbox::queue_delete_highlight(id).await;
+        return Ok(());
+    }
+    let book_uuid = crate::offline::outbox::apply::find_highlight_book(id).await;
+    crate::offline::sync::write_through(
+        || delete_highlight_online(server_url, id),
+        || async {
+            crate::offline::outbox::queue_delete_highlight(id)
+                .await
+                .then_some(())
+        },
+    )
+    .await?;
+    if let Some(book_uuid) = book_uuid {
+        crate::offline::outbox::apply::highlight_deleted(&book_uuid, id).await;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn delete_highlight_online(server_url: &str, id: i64) -> Result<(), DataError> {
     let url = format!("{server_url}/api/highlights/{id}");
     let response = with_bearer(http_client().delete(&url)).send().await?;
     let status = note_status(response.status());

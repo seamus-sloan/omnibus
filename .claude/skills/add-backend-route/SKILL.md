@@ -66,12 +66,18 @@ In the matching domain module under [db/src/](../../../db/src/) (`books/`, `prog
 
 ## 6. Wire the unified data layer
 
-In [frontend/src/data.rs](../../../frontend/src/data.rs), add a function that the page component calls, with both transport implementations:
+In [frontend/src/data.rs](../../../frontend/src/data.rs) (per-domain files under `data/`), add a function that the page component calls, with both transport implementations:
 
 - `#[cfg(feature = "mobile")]` — builds `reqwest` call to `/api/<resource>`.
 - `#[cfg(not(feature = "mobile"))]` — calls the server function from `crate::rpc`.
 
 The page component then calls a single `data::my_action(...)` and works on both targets.
+
+**Mobile offline layer.** Mobile data fns are expected to participate in the offline-first layer ([frontend/src/offline.rs](../../../frontend/src/offline.rs)):
+
+- **Reads**: keep the raw REST body in a `pub(crate) *_online` fn and make the public fn a `crate::offline::cache::read_through(key, *_online(...))` wrapper, with the key added to `offline::cache::keys` (network-first; cached copy served only on connectivity-class failures). See any read in `data/books.rs`.
+- **User-scoped writes**: same `*_online` split, with the public fn going through `crate::offline::sync::write_through(online, queue)` plus a matching `queue_*` fn in `offline::outbox` (an `Op` variant, a coalesce key if it's an idempotent upsert, an optimistic cache apply in `outbox/apply.rs`) and a replay arm in `offline::sync::execute_op`. See `data/ratings.rs` for the smallest full example.
+- **Admin/server-only endpoints** (settings, scan, SMTP, uploads) stay plain online-only fns — they intentionally fail fast offline.
 
 ## 7. Add tests
 

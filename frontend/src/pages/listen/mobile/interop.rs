@@ -56,11 +56,13 @@ impl NowPlaying<'_> {
 }
 
 /// Install the direct-play control surface and return the persistent [`Eval`]
-/// the caller drains for [`AudioEvent`]s. Part URLs are tokened here so the
-/// `<audio src>` fetch authenticates on mobile; `now_playing` seeds the
-/// lock-screen Media Session metadata.
+/// the caller drains for [`AudioEvent`]s. Parts of a completed offline
+/// download play from the loopback media server; otherwise the URLs are
+/// tokened so the `<audio src>` fetch authenticates against the real
+/// server. `now_playing` seeds the lock-screen Media Session metadata.
 pub fn install_direct_surface(
     server_url: &str,
+    uuid: &str,
     parts: &[ManifestPart],
     resume_seconds: f64,
     rate: f64,
@@ -70,8 +72,10 @@ pub fn install_direct_surface(
     let tokened: Vec<serde_json::Value> = parts
         .iter()
         .map(|p| {
+            let url = crate::offline::downloads::local_part_url(uuid, p.ordinal)
+                .unwrap_or_else(|| part_token_url(server_url, &p.url, token.as_deref()));
             serde_json::json!({
-                "url": part_token_url(server_url, &p.url, token.as_deref()),
+                "url": url,
                 "duration": p.duration_seconds,
             })
         })

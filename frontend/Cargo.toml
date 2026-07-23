@@ -57,6 +57,23 @@ tracing = { workspace = true, optional = true }
 # native share sheet (`native_share`). Mobile-only.
 base64 = { version = "0.22", optional = true }
 
+# Offline store (mobile): replica cache + mutation outbox + download registry
+# in one SQLite file under the app data dir (`offline` module). Held at
+# 0.32.x deliberately: its libsqlite3-sys requirement (^0.30) must unify with
+# sqlx 0.8's — cargo permits one `links = "sqlite3"` crate per dep graph, so
+# bump rusqlite only in lockstep with sqlx.
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+# Loopback media server (mobile): serves downloaded EPUB/audio files and the
+# offline image cache to the WebView at http://127.0.0.1:{port}. Version
+# matches `server/`'s axum so the workspace resolves a single copy.
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query"], optional = true }
+# Streams Range slices of downloaded media from disk without buffering whole
+# files in memory (`ReaderStream` in `offline::media`).
+tokio-util = { version = "0.7", default-features = false, features = ["io"], optional = true }
+# Per-boot random auth token for the loopback media server. 0.2 matches a
+# version already resolved in Cargo.lock (avoids adding a third duplicate).
+getrandom = { version = "0.2", optional = true }
+
 [target.'cfg(target_os = "ios")'.dependencies]
 # UIKit bindings for `native_share` — WKWebView has no usable Web Share API,
 # so the reader's Share actions present a real UIActivityViewController.
@@ -99,6 +116,8 @@ tempfile.workspace = true
 # for wasm).
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 omnibus-db = { path = "../db", features = ["test-support"] }
+# #[tokio::test] for the mobile `offline` module's store/media/loopback tests.
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
 default = []
@@ -128,10 +147,21 @@ mobile = [
     "dep:tokio",
     "tokio/sync",
     "tokio/time",
+    # rt/net/fs/io-util back the `offline` module: the loopback media server
+    # runs a current-thread runtime on its own thread, streams downloaded
+    # files with tokio::fs, and the download engine appends fetched chunks.
+    "tokio/rt",
+    "tokio/net",
+    "tokio/fs",
+    "tokio/io-util",
     "dep:tracing",
     "dep:jni",
     "dep:ndk-context",
     "dep:base64",
+    "dep:rusqlite",
+    "dep:axum",
+    "dep:tokio-util",
+    "dep:getrandom",
 ]
 # Server-function bodies: compiles the server-side halves of the #[get]/#[post]
 # functions in rpc.rs against the real DB layer. Used by `server/` when

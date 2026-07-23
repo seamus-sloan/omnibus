@@ -289,15 +289,58 @@ pub(crate) fn cover_cell(book: EbookMetadata, server_url: &str) -> Element {
             role: "listitem",
             "data-testid": "mobile-lib-tile",
             "aria-label": "Open details for {title}",
-            Cover {
-                book,
-                src_override: src,
-                srcset,
-                sizes: Some("33vw".to_string()),
+            div { class: "m-cover-cell-art",
+                Cover {
+                    book,
+                    src_override: src,
+                    srcset,
+                    sizes: Some("33vw".to_string()),
+                }
+                DownloadedBadge { uuid: uuid.clone() }
             }
             div { class: "m-cover-cell-title", "{title}" }
             if !author.is_empty() {
                 div { class: "m-cover-cell-author", "{author}" }
+            }
+        }
+    }
+}
+
+/// Small check badge over covers of books with a completed offline
+/// download. A component (not a plain fn) so each cell subscribes to the
+/// download registry and updates live without re-fetching the grid.
+#[component]
+pub(crate) fn DownloadedBadge(uuid: String) -> Element {
+    let initial = crate::offline::downloads::downloaded_uuids().contains(&uuid);
+    let mut downloaded = use_signal(move || initial);
+    let watch_uuid = uuid.clone();
+    use_future(move || {
+        let uuid = watch_uuid.clone();
+        async move {
+            let mut rx = crate::offline::downloads::subscribe();
+            loop {
+                let now = crate::offline::downloads::downloaded_uuids().contains(&uuid);
+                if now != downloaded() {
+                    downloaded.set(now);
+                }
+                if rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    if !downloaded() {
+        return rsx! {};
+    }
+    rsx! {
+        span {
+            class: "m-cover-dl-badge",
+            "aria-label": "Available offline",
+            "data-testid": "offline-badge",
+            svg {
+                width: "10", height: "10", view_box: "0 0 24 24", fill: "none",
+                stroke: "currentColor", stroke_width: "3.4", stroke_linecap: "round", stroke_linejoin: "round",
+                path { d: "M20 6L9 17l-5-5" }
             }
         }
     }

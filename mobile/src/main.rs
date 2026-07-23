@@ -24,6 +24,11 @@ fn main() {
     // `app_dirs`.
     token_store::load_from_disk();
 
+    // Open the offline store (replica cache + outbox + download registry),
+    // start the loopback media server, and hydrate cold-start state. Must
+    // run before launch so first renders can serve cached data offline.
+    omnibus_frontend::offline::init();
+
     dioxus::launch(Root);
 }
 

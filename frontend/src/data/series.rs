@@ -15,6 +15,18 @@ use super::{drain_error, http_client, note_status, with_bearer};
 /// GET `/api/series/{id}` — fetch one series detail, `Ok(None)` on 404.
 #[cfg(feature = "mobile")]
 pub async fn get_series(server_url: &str, id: i64) -> Result<Option<SeriesDetail>, DataError> {
+    crate::offline::cache::read_through(
+        crate::offline::cache::keys::series(id),
+        get_series_online(server_url, id),
+    )
+    .await
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn get_series_online(
+    server_url: &str,
+    id: i64,
+) -> Result<Option<SeriesDetail>, DataError> {
     let url = format!("{server_url}/api/series/{id}");
     let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
@@ -30,6 +42,15 @@ pub async fn get_series(server_url: &str, id: i64) -> Result<Option<SeriesDetail
 /// GET `/api/series` — fetch the full series index for browse / autocomplete.
 #[cfg(feature = "mobile")]
 pub async fn list_series(server_url: &str) -> Result<Vec<SeriesSummary>, DataError> {
+    crate::offline::cache::read_through(
+        crate::offline::cache::keys::series_index(),
+        list_series_online(server_url),
+    )
+    .await
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn list_series_online(server_url: &str) -> Result<Vec<SeriesSummary>, DataError> {
     let url = format!("{server_url}/api/series");
     let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());

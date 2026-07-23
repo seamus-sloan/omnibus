@@ -12,8 +12,26 @@ use super::DataError;
 use super::{drain_error, http_client, note_status, with_bearer};
 
 /// POST `/api/ratings` — set or change the current user's rating.
+/// Queued offline (coalesced per book, last write wins).
 #[cfg(feature = "mobile")]
 pub async fn set_rating(server_url: &str, update: RatingUpdate) -> Result<RatingRecord, DataError> {
+    let record = crate::offline::sync::write_through(
+        || set_rating_online(server_url, update.clone()),
+        || crate::offline::outbox::queue_set_rating(&update),
+    )
+    .await?;
+    crate::offline::cache::put_json(
+        &crate::offline::cache::keys::rating(&record.book_uuid),
+        &Some(record.clone()),
+    );
+    Ok(record)
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn set_rating_online(
+    server_url: &str,
+    update: RatingUpdate,
+) -> Result<RatingRecord, DataError> {
     let url = format!("{server_url}/api/ratings");
     let response = with_bearer(http_client().post(&url).json(&update))
         .send()
@@ -28,6 +46,18 @@ pub async fn set_rating(server_url: &str, update: RatingUpdate) -> Result<Rating
 /// GET `/api/ratings/{uuid}` — fetch the current rating, if any.
 #[cfg(feature = "mobile")]
 pub async fn get_rating(server_url: &str, uuid: &str) -> Result<Option<RatingRecord>, DataError> {
+    crate::offline::cache::read_through(
+        crate::offline::cache::keys::rating(uuid),
+        get_rating_online(server_url, uuid),
+    )
+    .await
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn get_rating_online(
+    server_url: &str,
+    uuid: &str,
+) -> Result<Option<RatingRecord>, DataError> {
     let url = format!("{server_url}/api/ratings/{uuid}");
     let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
@@ -43,6 +73,18 @@ pub async fn list_other_ratings(
     server_url: &str,
     uuid: &str,
 ) -> Result<Vec<AttributedRating>, DataError> {
+    crate::offline::cache::read_through(
+        crate::offline::cache::keys::ratings_others(uuid),
+        list_other_ratings_online(server_url, uuid),
+    )
+    .await
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn list_other_ratings_online(
+    server_url: &str,
+    uuid: &str,
+) -> Result<Vec<AttributedRating>, DataError> {
     let url = format!("{server_url}/api/ratings/others/{uuid}");
     let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
@@ -55,6 +97,24 @@ pub async fn list_other_ratings(
 /// DELETE `/api/ratings/{uuid}` — clear (un-rate) the current rating.
 #[cfg(feature = "mobile")]
 pub async fn clear_rating(server_url: &str, uuid: &str) -> Result<(), DataError> {
+    crate::offline::sync::write_through(
+        || clear_rating_online(server_url, uuid),
+        || async {
+            crate::offline::outbox::queue_clear_rating(uuid)
+                .await
+                .then_some(())
+        },
+    )
+    .await?;
+    crate::offline::cache::put_json(
+        &crate::offline::cache::keys::rating(uuid),
+        &None::<omnibus_shared::RatingRecord>,
+    );
+    Ok(())
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn clear_rating_online(server_url: &str, uuid: &str) -> Result<(), DataError> {
     let url = format!("{server_url}/api/ratings/{uuid}");
     let response = with_bearer(http_client().delete(&url)).send().await?;
     let status = note_status(response.status());

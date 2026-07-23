@@ -96,9 +96,28 @@ pub async fn set_kindle_email(_server_url: &str, email: Option<String>) -> Resul
         .map_err(note_server_fn_err)
 }
 
-/// Mobile: POST `/api/account/kindle-email`.
+/// Mobile: POST `/api/account/kindle-email`. Queued offline (coalesced —
+/// only the latest address syncs).
 #[cfg(feature = "mobile")]
 pub async fn set_kindle_email(server_url: &str, email: Option<String>) -> Result<(), DataError> {
+    crate::offline::sync::write_through(
+        || set_kindle_email_online(server_url, email.clone()),
+        || async {
+            crate::offline::outbox::queue_set_kindle_email(&email)
+                .await
+                .then_some(())
+        },
+    )
+    .await?;
+    crate::offline::outbox::apply::kindle_email_changed(&email).await;
+    Ok(())
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn set_kindle_email_online(
+    server_url: &str,
+    email: Option<String>,
+) -> Result<(), DataError> {
     let url = format!("{server_url}/api/account/kindle-email");
     let response = with_bearer(http_client().post(&url))
         .json(&serde_json::json!({ "email": email }))

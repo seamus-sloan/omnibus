@@ -19,6 +19,15 @@ use super::{drain_error, http_client, note_status, with_bearer};
 /// GET `/api/shelves` — the caller's visible shelves.
 #[cfg(feature = "mobile")]
 pub async fn list_shelves(server_url: &str) -> Result<Vec<ShelfSummary>, DataError> {
+    crate::offline::cache::read_through(
+        crate::offline::cache::keys::shelves(),
+        list_shelves_online(server_url),
+    )
+    .await
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn list_shelves_online(server_url: &str) -> Result<Vec<ShelfSummary>, DataError> {
     let response = with_bearer(http_client().get(format!("{server_url}/api/shelves")))
         .send()
         .await?;
@@ -32,6 +41,15 @@ pub async fn list_shelves(server_url: &str) -> Result<Vec<ShelfSummary>, DataErr
 /// GET `/api/shelves/{id}` — one shelf's detail.
 #[cfg(feature = "mobile")]
 pub async fn get_shelf(server_url: &str, id: i64) -> Result<Shelf, DataError> {
+    crate::offline::cache::read_through(
+        crate::offline::cache::keys::shelf(id),
+        get_shelf_online(server_url, id),
+    )
+    .await
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn get_shelf_online(server_url: &str, id: i64) -> Result<Shelf, DataError> {
     let response = with_bearer(http_client().get(format!("{server_url}/api/shelves/{id}")))
         .send()
         .await?;
@@ -42,9 +60,24 @@ pub async fn get_shelf(server_url: &str, id: i64) -> Result<Shelf, DataError> {
     Ok(response.json::<Shelf>().await?)
 }
 
-/// POST `/api/shelves` — create a shelf.
+/// POST `/api/shelves` — create a shelf. Offline, the returned shelf
+/// carries a negative temp id that remaps on sync.
 #[cfg(feature = "mobile")]
 pub async fn create_shelf(server_url: &str, req: CreateShelfRequest) -> Result<Shelf, DataError> {
+    let shelf = crate::offline::sync::write_through(
+        || create_shelf_online(server_url, req.clone()),
+        || crate::offline::outbox::queue_create_shelf(&req),
+    )
+    .await?;
+    crate::offline::outbox::apply::shelf_created(&shelf).await;
+    Ok(shelf)
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn create_shelf_online(
+    server_url: &str,
+    req: CreateShelfRequest,
+) -> Result<Shelf, DataError> {
     let response = with_bearer(
         http_client()
             .post(format!("{server_url}/api/shelves"))
@@ -59,9 +92,25 @@ pub async fn create_shelf(server_url: &str, req: CreateShelfRequest) -> Result<S
     Ok(response.json::<Shelf>().await?)
 }
 
-/// PATCH `/api/shelves/{id}` — partial update.
+/// PATCH `/api/shelves/{id}` — partial update. Queued offline; the
+/// returned shelf is the patched cache copy until sync.
 #[cfg(feature = "mobile")]
 pub async fn update_shelf(
+    server_url: &str,
+    id: i64,
+    req: UpdateShelfRequest,
+) -> Result<Shelf, DataError> {
+    let shelf = crate::offline::sync::write_through(
+        || update_shelf_online(server_url, id, req.clone()),
+        || crate::offline::outbox::queue_update_shelf(id, &req),
+    )
+    .await?;
+    crate::offline::outbox::apply::shelf_created(&shelf).await;
+    Ok(shelf)
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn update_shelf_online(
     server_url: &str,
     id: i64,
     req: UpdateShelfRequest,
@@ -80,9 +129,29 @@ pub async fn update_shelf(
     Ok(response.json::<Shelf>().await?)
 }
 
-/// DELETE `/api/shelves/{id}`.
+/// DELETE `/api/shelves/{id}`. Deleting an unsynced (temp-id) shelf
+/// cancels its queued create with no server round trip.
 #[cfg(feature = "mobile")]
 pub async fn delete_shelf(server_url: &str, id: i64) -> Result<(), DataError> {
+    if id < 0 {
+        crate::offline::outbox::queue_delete_shelf(id).await;
+        return Ok(());
+    }
+    crate::offline::sync::write_through(
+        || delete_shelf_online(server_url, id),
+        || async {
+            crate::offline::outbox::queue_delete_shelf(id)
+                .await
+                .then_some(())
+        },
+    )
+    .await?;
+    crate::offline::outbox::apply::shelf_deleted(id).await;
+    Ok(())
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn delete_shelf_online(server_url: &str, id: i64) -> Result<(), DataError> {
     let response = with_bearer(http_client().delete(format!("{server_url}/api/shelves/{id}")))
         .send()
         .await?;
@@ -96,6 +165,20 @@ pub async fn delete_shelf(server_url: &str, id: i64) -> Result<(), DataError> {
 /// GET `/api/shelves/{id}/page?sort=&dir=` — the shelf's member books.
 #[cfg(feature = "mobile")]
 pub async fn shelf_page(
+    server_url: &str,
+    id: i64,
+    sort_key: SortKey,
+    sort_dir: SortDir,
+) -> Result<ShelfPage, DataError> {
+    crate::offline::cache::read_through(
+        crate::offline::cache::keys::shelf_page(id, sort_key.as_wire(), sort_dir.as_wire()),
+        shelf_page_online(server_url, id, sort_key, sort_dir),
+    )
+    .await
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn shelf_page_online(
     server_url: &str,
     id: i64,
     sort_key: SortKey,
@@ -115,8 +198,28 @@ pub async fn shelf_page(
 }
 
 /// POST `/api/shelves/{id}/books` — append books to a hand-picked shelf.
+/// Queued offline.
 #[cfg(feature = "mobile")]
 pub async fn add_shelf_books(
+    server_url: &str,
+    id: i64,
+    book_uuids: Vec<String>,
+) -> Result<(), DataError> {
+    crate::offline::sync::write_through(
+        || add_shelf_books_online(server_url, id, book_uuids.clone()),
+        || async {
+            crate::offline::outbox::queue_add_shelf_books(id, &book_uuids)
+                .await
+                .then_some(())
+        },
+    )
+    .await?;
+    crate::offline::outbox::apply::shelf_books_added(id, &book_uuids).await;
+    Ok(())
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn add_shelf_books_online(
     server_url: &str,
     id: i64,
     book_uuids: Vec<String>,
@@ -137,8 +240,28 @@ pub async fn add_shelf_books(
 }
 
 /// DELETE `/api/shelves/{id}/books/{uuid}` — remove a book from a shelf.
+/// Queued offline.
 #[cfg(feature = "mobile")]
 pub async fn remove_shelf_book(
+    server_url: &str,
+    id: i64,
+    book_uuid: &str,
+) -> Result<(), DataError> {
+    crate::offline::sync::write_through(
+        || remove_shelf_book_online(server_url, id, book_uuid),
+        || async {
+            crate::offline::outbox::queue_remove_shelf_book(id, book_uuid)
+                .await
+                .then_some(())
+        },
+    )
+    .await?;
+    crate::offline::outbox::apply::shelf_book_removed(id, book_uuid).await;
+    Ok(())
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn remove_shelf_book_online(
     server_url: &str,
     id: i64,
     book_uuid: &str,

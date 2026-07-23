@@ -14,9 +14,24 @@ use super::{drain_error, http_client, note_status, with_bearer};
 
 // Mobile (REST).
 
-/// POST `/api/journals` — create a journal entry.
+/// POST `/api/journals` — create a journal entry. Offline, the entry gets
+/// a temp id and a locally-approximated HTML body until sync.
 #[cfg(feature = "mobile")]
 pub async fn create_journal_entry(
+    server_url: &str,
+    input: CreateJournalEntry,
+) -> Result<JournalEntry, DataError> {
+    let entry = crate::offline::sync::write_through(
+        || create_journal_entry_online(server_url, input.clone()),
+        || crate::offline::outbox::queue_create_journal(&input),
+    )
+    .await?;
+    crate::offline::outbox::apply::journal_created(&entry).await;
+    Ok(entry)
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn create_journal_entry_online(
     server_url: &str,
     input: CreateJournalEntry,
 ) -> Result<JournalEntry, DataError> {
@@ -37,6 +52,18 @@ pub async fn list_journal_entries(
     server_url: &str,
     book_uuid: &str,
 ) -> Result<Vec<JournalEntry>, DataError> {
+    crate::offline::cache::read_through(
+        crate::offline::cache::keys::journals(book_uuid),
+        list_journal_entries_online(server_url, book_uuid),
+    )
+    .await
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn list_journal_entries_online(
+    server_url: &str,
+    book_uuid: &str,
+) -> Result<Vec<JournalEntry>, DataError> {
     let url = format!("{server_url}/api/journals/book/{book_uuid}");
     let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
@@ -47,8 +74,24 @@ pub async fn list_journal_entries(
 }
 
 /// PATCH `/api/journals/{id}` — edit an entry owned by the current user.
+/// Queued offline; the returned entry is the patched cache copy until sync.
 #[cfg(feature = "mobile")]
 pub async fn update_journal_entry(
+    server_url: &str,
+    id: i64,
+    input: UpdateJournalEntry,
+) -> Result<JournalEntry, DataError> {
+    let entry = crate::offline::sync::write_through(
+        || update_journal_entry_online(server_url, id, input.clone()),
+        || crate::offline::outbox::queue_update_journal(id, &input),
+    )
+    .await?;
+    crate::offline::outbox::apply::journal_remapped(id, &entry).await;
+    Ok(entry)
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn update_journal_entry_online(
     server_url: &str,
     id: i64,
     input: UpdateJournalEntry,
@@ -65,8 +108,34 @@ pub async fn update_journal_entry(
 }
 
 /// DELETE `/api/journals/{id}` — delete an entry owned by the current user.
+/// Deleting an unsynced (temp-id) entry cancels its queued create locally.
 #[cfg(feature = "mobile")]
 pub async fn delete_journal_entry(server_url: &str, id: i64) -> Result<(), DataError> {
+    if id < 0 {
+        crate::offline::outbox::queue_delete_journal(id).await;
+        return Ok(());
+    }
+    let book_uuid = crate::offline::outbox::apply::find_journal_book(id).await;
+    crate::offline::sync::write_through(
+        || delete_journal_entry_online(server_url, id),
+        || async {
+            crate::offline::outbox::queue_delete_journal(id)
+                .await
+                .then_some(())
+        },
+    )
+    .await?;
+    if let Some(book_uuid) = book_uuid {
+        crate::offline::outbox::apply::journal_deleted(&book_uuid, id).await;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn delete_journal_entry_online(
+    server_url: &str,
+    id: i64,
+) -> Result<(), DataError> {
     let url = format!("{server_url}/api/journals/{id}");
     let response = with_bearer(http_client().delete(&url)).send().await?;
     let status = note_status(response.status());

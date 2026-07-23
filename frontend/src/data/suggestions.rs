@@ -29,6 +29,18 @@ pub async fn get_suggestions(
     server_url: &str,
     uuid: &str,
 ) -> Result<SuggestionsResponse, DataError> {
+    crate::offline::cache::read_through(
+        crate::offline::cache::keys::suggestions(uuid),
+        get_suggestions_online(server_url, uuid),
+    )
+    .await
+}
+
+#[cfg(feature = "mobile")]
+pub(crate) async fn get_suggestions_online(
+    server_url: &str,
+    uuid: &str,
+) -> Result<SuggestionsResponse, DataError> {
     let url = format!("{server_url}/api/ebooks/{uuid}/suggestions");
     let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
