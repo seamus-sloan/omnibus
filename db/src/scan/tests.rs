@@ -168,6 +168,24 @@ async fn resolve_exact_isbn_returns_already_owned_when_physical_exists() {
 }
 
 #[tokio::test]
+async fn resolve_exact_isbn_leaves_book_isbn_unset() {
+    // The exact-match confirm screen never reads `book.isbn` (it shows the
+    // scanned ISBN via a separate prop instead), so find_book_by_isbn skips
+    // the correlated subquery find_book_by_norm still needs for CloseMatch.
+    let pool = pool().await;
+    seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", Some(ISBN)).await;
+    let server = MockServer::start().await; // must not be hit
+
+    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    match outcome {
+        ScanOutcome::InLibraryUnowned { book } => assert!(book.isbn.is_none()),
+        other => panic!("expected InLibraryUnowned, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn resolve_exact_isbn_tolerates_urn_scheme_and_separators() {
     let pool = pool().await;
     seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", None).await;

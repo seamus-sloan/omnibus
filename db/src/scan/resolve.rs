@@ -158,13 +158,7 @@ async fn find_book_by_isbn(
                 (SELECT group_concat(a.name, ', ')
                    FROM books_authors_link bal JOIN authors a ON a.id = bal.author
                   WHERE bal.book = b.id ORDER BY bal.position) AS authors,
-                EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid) AS has_physical,
-                (SELECT REPLACE(REPLACE(bi2.value, '-', ''), ' ', '')
-                   FROM book_identifiers bi2
-                  WHERE bi2.book_id = b.id AND bi2.scheme LIKE '%isbn%'
-                    AND REPLACE(REPLACE(bi2.value, '-', ''), ' ', '')
-                        GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
-                  ORDER BY bi2.rowid LIMIT 1) AS isbn
+                EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid) AS has_physical
            FROM books b
            JOIN book_identifiers bi ON bi.book_id = b.id
           WHERE bi.scheme LIKE '%isbn%'
@@ -174,7 +168,11 @@ async fn find_book_by_isbn(
     .bind(isbn13)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(row_to_scan_book))
+    // The exact-match confirm screen (ConfirmScreen -> LibraryBookCard) never
+    // reads `isbn` — it shows the scanned ISBN via a separate prop instead —
+    // so skip the correlated subquery `find_book_by_norm` still needs for
+    // CloseMatchScreen's "library edition ISBN" line.
+    Ok(row.map(|r| row_to_scan_book(r, None)))
 }
 
 /// Fuzzy rung: a single library book whose normalized (title, author) matches
@@ -212,20 +210,23 @@ async fn find_book_by_norm(
     .await?;
     // Exactly one candidate is a close match; zero or many is not.
     Ok(if rows.len() == 1 {
-        rows.into_iter().next().map(row_to_scan_book)
+        rows.into_iter().next().map(|r| {
+            let isbn = r.get::<Option<String>, _>("isbn").filter(|s| !s.is_empty());
+            row_to_scan_book(r, isbn)
+        })
     } else {
         None
     })
 }
 
-fn row_to_scan_book(r: sqlx::sqlite::SqliteRow) -> ScanBook {
+fn row_to_scan_book(r: sqlx::sqlite::SqliteRow, isbn: Option<String>) -> ScanBook {
     let uuid: String = r.get("uuid");
     let has_cover: i64 = r.get("has_cover");
     let authors: Option<String> = r.get("authors");
     let has_physical: i64 = r.get("has_physical");
     ScanBook {
         cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
-        isbn: r.get::<Option<String>, _>("isbn").filter(|s| !s.is_empty()),
+        isbn,
         authors: authors
             .filter(|s| !s.is_empty())
             .map(|s| s.split(", ").map(str::to_string).collect())
