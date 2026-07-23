@@ -17,6 +17,10 @@ pub struct ScanBook {
     pub cover_url: Option<String>,
     /// Whether the book already has ≥1 physical copy checked in.
     pub has_physical: bool,
+    /// The book's own ISBN identifier, separator-stripped. Lets the close-match
+    /// confirm show the library edition's ISBN beside the scanned one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isbn: Option<String>,
 }
 
 /// Outcome of resolving a scanned/typed ISBN down the matching ladder. A fuzzy

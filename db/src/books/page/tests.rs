@@ -558,6 +558,88 @@ fn page_cursor_decode_rejects_malformed() {
     ));
 }
 
+// ---------------------------------------------------------------------------
+// F Physical Check-In: physical-only visibility (#1181) on the landing/browse
+// path — mirrors `physical_only_book_is_visible_but_wishlist_only_is_hidden`
+// in `crate::books::tests`, which covers the equivalent `list.rs` path.
+// ---------------------------------------------------------------------------
+
+async fn seed_fileless(pool: &SqlitePool, title: &str, authors: Vec<&str>) -> String {
+    crate::physical::create_fileless_book(
+        pool,
+        crate::physical::FilelessBook {
+            title: title.into(),
+            authors: authors.into_iter().map(str::to_string).collect(),
+            isbn: None,
+            pubdate: None,
+            description: None,
+            cover: None,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn list_books_page_shows_physical_only_book_but_hides_wishlist_only() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await; // one normal /lib book
+
+    // Physical-only: fileless book with a checked-in copy.
+    let phys = seed_fileless(&pool, "Physical Only Title", vec!["Print Author"]).await;
+    crate::physical::add_physical_copy(&pool, &phys, None, None, None)
+        .await
+        .unwrap();
+    // Wishlist-only: fileless book, no physical copy.
+    let wish = seed_fileless(&pool, "Wishlist Only Title", vec![]).await;
+
+    let f = ViewFilters::default();
+    let page = list_books_page(&pool, &["/lib"], SortKey::Title, SortDir::Asc, &f, None, 50)
+        .await
+        .unwrap();
+    let uuids: Vec<&str> = page
+        .books
+        .iter()
+        .filter_map(|b| b.unique_identifier.as_deref())
+        .collect();
+    assert!(
+        uuids.contains(&phys.as_str()),
+        "physical-only book must appear in the browse page"
+    );
+    assert!(
+        !uuids.contains(&wish.as_str()),
+        "wishlist-only book must be hidden from the browse page"
+    );
+
+    let phys_row = page
+        .books
+        .iter()
+        .find(|b| b.unique_identifier.as_deref() == Some(&phys))
+        .unwrap();
+    assert!(phys_row.has_physical, "physical flag drives the badge");
+}
+
+#[tokio::test]
+async fn count_books_page_counts_physical_only_book_but_not_wishlist_only() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await; // one normal /lib book
+
+    let phys = seed_fileless(&pool, "Physical Only Title", vec!["Print Author"]).await;
+    crate::physical::add_physical_copy(&pool, &phys, None, None, None)
+        .await
+        .unwrap();
+    seed_fileless(&pool, "Wishlist Only Title", vec![]).await;
+
+    // 1 normal book + 1 physical-only book; the wishlist-only book is excluded.
+    let count = count_books_page(&pool, &["/lib"], &ViewFilters::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        count, 2,
+        "count includes physical-only but not wishlist-only"
+    );
+}
+
 #[tokio::test]
 async fn count_books_page_matches_unfiltered_count_and_applies_format_filter() {
     let (pool, _guard) = seed_discovery_fixture().await; // all EPUB

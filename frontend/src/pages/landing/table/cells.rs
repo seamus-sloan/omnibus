@@ -162,18 +162,30 @@ pub(super) fn RowSeriesCell(series_line: String, series_text: String, ctx: CellE
     }
 }
 
+/// Grouped display fields (column class, testid, value, placeholder) for a [`RowScalarCell`].
+#[derive(Clone, PartialEq)]
+pub(super) struct RowScalarCellDisplay {
+    pub col_class: String,
+    pub cell_testid: String,
+    pub value: String,
+    pub placeholder: String,
+}
+
 /// Plain scalar-text cell wrapper for publisher / published / language —
 /// collapses the boilerplate of wiring `EditableCell` to the shared
 /// `save_field` callback.
 #[component]
 pub(super) fn RowScalarCell(
-    col_class: String,
-    cell_testid: String,
+    display: RowScalarCellDisplay,
     field: EditField,
-    value: String,
-    placeholder: String,
     ctx: CellEditCtx,
 ) -> Element {
+    let RowScalarCellDisplay {
+        col_class,
+        cell_testid,
+        value,
+        placeholder,
+    } = display;
     let CellEditCtx {
         is_admin,
         editing,

@@ -1,5 +1,9 @@
 import { expect, test } from "../fixtures/test";
-import { AUDIOBOOK_BOOKS, AUDIOBOOK_BOOK_COUNT } from "../fixtures/audiobooks";
+import {
+  AUDIOBOOK_BOOKS,
+  AUDIOBOOK_BOOK_COUNT,
+  MERGE_ONLY_TITLES,
+} from "../fixtures/audiobooks";
 import { AUTO_ATTACHED_PAIRS } from "../fixtures/dual_format";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expectMutation } from "../utils/api";
@@ -35,8 +39,13 @@ test.beforeAll(async ({ request }) => {
   );
 });
 
+// Read-only spec: exclude the merge-only fixtures so a merge in flight can
+// never change what these assertions see.
 const MP3_BOOK = AUDIOBOOK_BOOKS.find(
-  (b) => b.format === "MP3" && b.source === "generated",
+  (b) =>
+    b.format === "MP3" &&
+    b.source === "generated" &&
+    !MERGE_ONLY_TITLES.includes(b.title),
 )!;
 // Multi-part book → one synthetic chapter per part, so the chapter-jump
 // buttons have a real boundary to cross (same reasoning as listen.spec.ts).

@@ -90,8 +90,10 @@ async fn csp_permits_dioxus_hydration_and_fonts() {
         "csp must allow the Google Fonts WOFF2 host: {csp}"
     );
     assert!(
-        csp.contains("img-src 'self' data: blob:"),
-        "csp must allow data: + blob: images: {csp}"
+        csp.contains(
+            "img-src 'self' data: blob: https://covers.openlibrary.org https://books.google.com"
+        ),
+        "csp must allow data:/blob: images + the Open Library / Google Books cover CDNs so the scan result page can preview provider covers: {csp}"
     );
     assert!(
         csp.contains("frame-ancestors 'none'"),

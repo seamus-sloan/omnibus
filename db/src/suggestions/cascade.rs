@@ -156,7 +156,7 @@ async fn fetch_cover(
 /// Pull candidate ISBNs from a book's identifiers. Accepts identifiers whose
 /// scheme names ISBN, plus any value that *looks* like a 10/13-digit ISBN
 /// (covers the common `scheme = "unknown"` case). Hyphens/spaces stripped.
-fn extract_isbns(book: &omnibus_shared::EbookMetadata) -> Vec<String> {
+pub(crate) fn extract_isbns(book: &omnibus_shared::EbookMetadata) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for ident in &book.identifiers {
         let scheme_is_isbn = ident

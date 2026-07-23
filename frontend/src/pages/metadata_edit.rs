@@ -98,6 +98,7 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
                     orig: form.orig,
                     fields: form.fields,
                     suggestions: form.suggestions,
+                    uuid: uuid.clone(),
                 }
                 Sidebar {
                     book: book.clone(),

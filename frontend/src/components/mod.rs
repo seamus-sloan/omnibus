@@ -26,6 +26,7 @@ pub use top_nav::TopNav as Nav;
 // (hidden by CSS above the phone breakpoint) so phone-width web gets the
 // same thumb-reachable section switcher. Compiled on every target; the web
 // build renders it via `ScreenLayout` alongside `TopNav`.
+mod add_books_sheet;
 mod bottom_nav;
 #[cfg(feature = "mobile")]
 pub use bottom_nav::BottomNav as Nav;
@@ -121,3 +122,10 @@ pub mod shelf_rule_builder;
 
 pub mod edit_shelf_rules_modal;
 pub use edit_shelf_rules_modal::EditShelfRulesModal;
+
+// "Fetch Summary" button — pulls a book blurb from Hardcover/OpenLibrary on
+// demand. Mounted by the metadata editor (always) and the web book-detail hero
+// (when the current summary is sparse). Platform-agnostic so its rsx stays
+// hydration-identical; its data calls have mobile stubs.
+pub mod fetch_summary;
+pub use fetch_summary::FetchSummaryButton;

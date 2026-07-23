@@ -64,6 +64,15 @@ pub fn TopNav() -> Element {
             }
             div { class: "atrium-actions",
                 button {
+                    class: "btn sm",
+                    r#type: "button",
+                    "data-testid": "check-in-button",
+                    onclick: move |_| {
+                        nav.push(Route::CheckIn {});
+                    },
+                    "Check in"
+                }
+                button {
                     class: "btn primary sm",
                     r#type: "button",
                     "data-testid": "add-books-button",

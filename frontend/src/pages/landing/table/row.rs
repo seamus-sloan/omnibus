@@ -11,7 +11,8 @@ use omnibus_shared::EbookMetadata;
 use super::super::sorting::{contributor_names, row_slug};
 use super::cells::{
     build_save_authors, build_save_field, AuthorsCell, CellEditCtx, EbookRowCoverCell,
-    EbookRowFormatsCell, RowContext, RowScalarCell, RowSeriesCell, RowTitleCell,
+    EbookRowFormatsCell, RowContext, RowScalarCell, RowScalarCellDisplay, RowSeriesCell,
+    RowTitleCell,
 };
 use super::{BookTableContext, EditField};
 use crate::Route;
@@ -272,30 +273,36 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
         }
         RowSeriesCell { series_line, series_text, ctx: cell_ctx.clone() }
         RowScalarCell {
-            col_class: "ebook-col-publisher".to_string(),
-            cell_testid: "ebook-cell-publisher".to_string(),
+            display: RowScalarCellDisplay {
+                col_class: "ebook-col-publisher".to_string(),
+                cell_testid: "ebook-cell-publisher".to_string(),
+                value: publisher,
+                placeholder: "Publisher".to_string(),
+            },
             field: EditField::Publisher,
-            value: publisher,
-            placeholder: "Publisher".to_string(),
             ctx: cell_ctx.clone(),
         }
         RowScalarCell {
-            col_class: "ebook-col-published".to_string(),
-            cell_testid: "ebook-cell-published".to_string(),
+            display: RowScalarCellDisplay {
+                col_class: "ebook-col-published".to_string(),
+                cell_testid: "ebook-cell-published".to_string(),
+                value: published,
+                placeholder: "YYYY-MM-DD".to_string(),
+            },
             field: EditField::Published,
-            value: published,
-            placeholder: "YYYY-MM-DD".to_string(),
             ctx: cell_ctx.clone(),
         }
         EbookRowFormatsCell { formats: book.formats, has_physical: book.has_physical }
         td { class: "ebook-col-updated", "data-testid": "ebook-cell-updated", "{updated}" }
         td { class: "ebook-col-added", "data-testid": "ebook-cell-added", "{added}" }
         RowScalarCell {
-            col_class: "ebook-col-language".to_string(),
-            cell_testid: "ebook-cell-language".to_string(),
+            display: RowScalarCellDisplay {
+                col_class: "ebook-col-language".to_string(),
+                cell_testid: "ebook-cell-language".to_string(),
+                value: language,
+                placeholder: "en".to_string(),
+            },
             field: EditField::Language,
-            value: language,
-            placeholder: "en".to_string(),
             ctx: cell_ctx,
         }
     }

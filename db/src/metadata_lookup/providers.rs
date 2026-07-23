@@ -215,9 +215,13 @@ pub async fn googlebooks_lookup(
     let Some(title) = info.title.filter(|t| !t.trim().is_empty()) else {
         return Ok(None);
     };
+    // Google Books serves image links over `http://`; upgrade to `https://`
+    // so the cover isn't blocked as mixed content (or by the https-only CSP
+    // img-src host allowlist) when previewed on the scan result page.
     let cover_url = info
         .image_links
-        .and_then(|l| l.thumbnail.or(l.small_thumbnail));
+        .and_then(|l| l.thumbnail.or(l.small_thumbnail))
+        .map(|u| upgrade_to_https(&u));
 
     Ok(Some(ExternalBookMeta {
         isbn13: isbn13.to_string(),
@@ -230,4 +234,36 @@ pub async fn googlebooks_lookup(
         cover_url,
         source: MetadataProvider::GoogleBooks,
     }))
+}
+
+/// Upgrade an `http://` URL to `https://`; other schemes pass through
+/// unchanged. Google Books returns cover links over plain HTTP, which a
+/// browser blocks as mixed content on an HTTPS page.
+fn upgrade_to_https(url: &str) -> String {
+    match url.strip_prefix("http://") {
+        Some(rest) => format!("https://{rest}"),
+        None => url.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::upgrade_to_https;
+
+    #[test]
+    fn upgrade_to_https_rewrites_http_and_leaves_others() {
+        assert_eq!(
+            upgrade_to_https("http://books.google.com/x.jpg"),
+            "https://books.google.com/x.jpg"
+        );
+        // Already-secure and non-http schemes pass through untouched.
+        assert_eq!(
+            upgrade_to_https("https://covers.openlibrary.org/b/id/1-L.jpg"),
+            "https://covers.openlibrary.org/b/id/1-L.jpg"
+        );
+        assert_eq!(
+            upgrade_to_https("data:image/png;base64,AAAA"),
+            "data:image/png;base64,AAAA"
+        );
+    }
 }

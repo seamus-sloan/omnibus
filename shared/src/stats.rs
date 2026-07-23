@@ -9,6 +9,12 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 mod tests;
 
+/// Per-user aggregate cache TTL for `db::stats::user_stats`, in seconds.
+/// Lives here (rather than only in `omnibus-db`) so the `/stats` page's
+/// footer freshness note can reference the real value instead of a second
+/// hardcoded copy — see `db::stats::STATS_TTL_SECS`, which re-exports this.
+pub const STATS_TTL_SECS: i64 = 60;
+
 /// Reporting window for the stats page. Serializes as a compact snake-case
 /// string so the wire shape stays stable across the RPC boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]

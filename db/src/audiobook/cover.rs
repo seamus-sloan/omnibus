@@ -14,19 +14,24 @@ use super::parse::AudiobookError;
 /// plate" — same fallback ebooks without embedded covers take.
 pub(super) fn extract_cover(path: &Path) -> Result<Option<(String, Vec<u8>)>, AudiobookError> {
     let tagged = lofty::read_from_path(path)?;
-    let tag = match tagged.primary_tag().or_else(|| tagged.first_tag()) {
-        Some(t) => t,
-        None => return Ok(None),
-    };
+    Ok(cover_from_tagged(&tagged))
+}
+
+/// Lift the first embedded picture from an already-opened lofty handle.
+/// Shared by [`extract_cover`] (opens its own handle) and
+/// [`super::inspect_audiobook_files`] (reuses one handle for both tags and
+/// cover art, avoiding a second open+read of the same file).
+pub(super) fn cover_from_tagged(tagged: &lofty::file::TaggedFile) -> Option<(String, Vec<u8>)> {
+    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
     for pic in tag.pictures() {
         let data = pic.data();
         if data.is_empty() {
             continue;
         }
         let mime = mime_to_str(pic.mime_type());
-        return Ok(Some((mime.to_string(), data.to_vec())));
+        return Some((mime.to_string(), data.to_vec()));
     }
-    Ok(None)
+    None
 }
 
 fn mime_to_str(mime: Option<&MimeType>) -> &'static str {

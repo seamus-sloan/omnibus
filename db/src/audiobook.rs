@@ -125,9 +125,13 @@ pub fn inspect_audiobook_files(paths: &[PathBuf]) -> Result<InspectedAudiobook, 
     let mut any_readable = false;
 
     for (i, path) in paths.iter().enumerate() {
-        match parse::extract_metadata(path) {
-            Ok(meta) => {
+        // Open once and reuse the same `TaggedFile` handle for both tags and
+        // cover art — lofty exposes both from one parsed handle, so a second
+        // `read_from_path` per part would double the file I/O for no reason.
+        match lofty::read_from_path(path) {
+            Ok(tagged) => {
                 any_readable = true;
+                let meta = parse::metadata_from_tagged(&tagged);
                 if album_title.is_none() {
                     album_title = meta.album.clone();
                 }
@@ -140,14 +144,12 @@ pub fn inspect_audiobook_files(paths: &[PathBuf]) -> Result<InspectedAudiobook, 
                 if let Some(d) = meta.duration_seconds {
                     total_secs += d;
                 }
+                if !has_cover && cover::cover_from_tagged(&tagged).is_some() {
+                    has_cover = true;
+                }
             }
             Err(e) => {
                 tracing::warn!(file = %path.display(), error = %e, "inspect: failed to read tags");
-            }
-        }
-        if !has_cover {
-            if let Ok(Some(_)) = cover::extract_cover(path) {
-                has_cover = true;
             }
         }
     }

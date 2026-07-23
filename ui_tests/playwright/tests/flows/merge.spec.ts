@@ -7,7 +7,7 @@
 // later reindex and corrupt other specs' format counts. Never remove the
 // undo step without re-thinking that.
 import { expect, test } from "../fixtures/test";
-import { AUDIOBOOK_BOOKS, AUDIOBOOK_BOOK_COUNT } from "../fixtures/audiobooks";
+import { AUDIOBOOK_BOOK_COUNT, MERGE_PRIMARY } from "../fixtures/audiobooks";
 import { AUTO_ATTACHED_PAIRS } from "../fixtures/dual_format";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expectMutation } from "../utils/api";
@@ -40,11 +40,13 @@ test.beforeAll(async ({ request }) => {
   );
 });
 
-// TARGET: EPUB-only standalone ("Alpha", Ada Lovelace). SOURCE: an MP3
-// audiobook by the same author with a different title — same-author makes
-// it a realistic merge, different-title keeps auto-attach out of the way.
+// TARGET: EPUB-only standalone ("Alpha", Ada Lovelace). SOURCE: the
+// merge-only MP3 audiobook — a book no other spec reads, so the merge below
+// can't change what a parallel spec is asserting against. Its title and
+// author are distinct from every EPUB fixture, so auto-attach stays out of
+// the way. See `fixtures/audiobooks.ts::MERGE_PRIMARY`.
 const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "alpha")!;
-const SOURCE = AUDIOBOOK_BOOKS.find((b) => b.author === "Ada Lovelace")!;
+const SOURCE = MERGE_PRIMARY;
 
 // Open the dialog, search for SOURCE, and select it — shared by the happy
 // and error action tests.
@@ -120,10 +122,10 @@ test("merges an audiobook into the ebook and undoes it from the toast", async ({
   page,
   request,
 }) => {
-  // Serialize against book_detail.spec's file-picker test: both mutate the
-  // same audiobook ("The Analytical Audiobook") on the shared per-shard server,
-  // so parallel workers would corrupt each other's merge state. The lock spans
-  // merge→undo so the fixture is restored before release. See utils/lock.ts.
+  // Serialize against book_detail.spec's file-picker tests: all three mutate
+  // the merge-only audiobooks on the shared per-shard server, so parallel
+  // workers would corrupt each other's merge state. The lock spans merge→undo
+  // so the fixture is restored before release. See utils/lock.ts.
   test.slow();
   await withLock("audiobook-merge", async () => {
     const uuid = await fetchBookUuidByTitle(request, TARGET.title);

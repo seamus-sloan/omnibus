@@ -87,6 +87,28 @@ const FIXTURES: AudiobookInput[] = [
     track: 1,
     frames: 80,
   },
+
+  // Merge-only pair. Specs that MUTATE a book via /api/rpc/merge-books own
+  // these two and nothing else reads them, so a merge in flight can never
+  // change a book another spec is asserting against. Both authors are absent
+  // from `make_epub.ts` so no auto-attach fires and no author-scoped count
+  // assertion elsewhere shifts. See `tests/fixtures/audiobooks.ts`.
+  {
+    filename: "barbara_liskov_solo/the_mergeable_manuscript.mp3",
+    title: "The Mergeable Manuscript",
+    artist: "Barbara Liskov",
+    album: "The Mergeable Manuscript",
+    track: 1,
+    frames: 80,
+  },
+  {
+    filename: "frances_allen_solo/the_severable_sequel.mp3",
+    title: "The Severable Sequel",
+    artist: "Frances Allen",
+    album: "The Severable Sequel",
+    track: 1,
+    frames: 80,
+  },
 ];
 
 // ---------------------------------------------------------------------------

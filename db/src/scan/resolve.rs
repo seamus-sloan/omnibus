@@ -158,7 +158,13 @@ async fn find_book_by_isbn(
                 (SELECT group_concat(a.name, ', ')
                    FROM books_authors_link bal JOIN authors a ON a.id = bal.author
                   WHERE bal.book = b.id ORDER BY bal.position) AS authors,
-                EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid) AS has_physical
+                EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid) AS has_physical,
+                (SELECT REPLACE(REPLACE(bi2.value, '-', ''), ' ', '')
+                   FROM book_identifiers bi2
+                  WHERE bi2.book_id = b.id AND bi2.scheme LIKE '%isbn%'
+                    AND REPLACE(REPLACE(bi2.value, '-', ''), ' ', '')
+                        GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
+                  ORDER BY bi2.rowid LIMIT 1) AS isbn
            FROM books b
            JOIN book_identifiers bi ON bi.book_id = b.id
           WHERE bi.scheme LIKE '%isbn%'
@@ -189,7 +195,13 @@ async fn find_book_by_norm(
                 (SELECT group_concat(a.name, ', ')
                    FROM books_authors_link bal JOIN authors a ON a.id = bal.author
                   WHERE bal.book = b.id ORDER BY bal.position) AS authors,
-                EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid) AS has_physical
+                EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid) AS has_physical,
+                (SELECT REPLACE(REPLACE(bi2.value, '-', ''), ' ', '')
+                   FROM book_identifiers bi2
+                  WHERE bi2.book_id = b.id AND bi2.scheme LIKE '%isbn%'
+                    AND REPLACE(REPLACE(bi2.value, '-', ''), ' ', '')
+                        GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
+                  ORDER BY bi2.rowid LIMIT 1) AS isbn
            FROM books b
           WHERE b.title_norm = ?1 AND b.author_norm = ?2
           ORDER BY b.id LIMIT 2",
@@ -213,6 +225,7 @@ fn row_to_scan_book(r: sqlx::sqlite::SqliteRow) -> ScanBook {
     let has_physical: i64 = r.get("has_physical");
     ScanBook {
         cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
+        isbn: r.get::<Option<String>, _>("isbn").filter(|s| !s.is_empty()),
         authors: authors
             .filter(|s| !s.is_empty())
             .map(|s| s.split(", ").map(str::to_string).collect())

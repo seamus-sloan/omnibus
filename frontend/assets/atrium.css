@@ -4019,6 +4019,50 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .m-tabbar-label { font-size: 10px; font-weight: 500; letter-spacing: 0.01em; color: var(--ink-2); }
 .m-tabbar-item.on .m-tabbar-label { color: var(--ink-0); font-weight: 600; }
 
+/* Raised center action (Scan/Upload) — an accent disc lifted above the bar,
+   flanked by two tabs on each side. */
+.m-tabbar-scan {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 0; border: none; background: none; cursor: pointer;
+}
+.m-tabbar-scan .m-tabbar-label { color: var(--ink-2); }
+.m-tabbar-scan-disc {
+  display: grid; place-items: center;
+  width: 46px; height: 46px; margin-top: -18px; border-radius: 999px;
+  background: var(--accent); color: var(--accent-ink);
+  border: 3px solid var(--bg-1);
+  box-shadow: 0 6px 16px color-mix(in oklch, var(--accent) 45%, transparent);
+}
+.m-tabbar-scan:hover .m-tabbar-scan-disc {
+  filter: brightness(1.05);
+}
+
+/* Add-to-library sheet rows (Check-In step 0b). */
+.m-add-row {
+  display: flex; align-items: center; gap: 14px; width: 100%;
+  padding: 14px 12px; border: 1px solid var(--line-2); border-radius: 14px;
+  background: var(--bg-2); color: var(--ink-1); text-align: left; cursor: pointer;
+}
+.m-add-row:hover { border-color: var(--line); background: var(--bg-3); }
+.m-add-row--primary {
+  background: color-mix(in oklch, var(--accent) 14%, var(--bg-2));
+  border-color: color-mix(in oklch, var(--accent) 40%, transparent);
+}
+.m-add-row--primary:hover {
+  background: color-mix(in oklch, var(--accent) 20%, var(--bg-2));
+  border-color: color-mix(in oklch, var(--accent) 55%, transparent);
+}
+.m-add-icon {
+  display: grid; place-items: center; flex: 0 0 42px; height: 42px;
+  border-radius: 11px; background: var(--bg-1); color: var(--ink-1);
+}
+.m-add-row--primary .m-add-icon { background: var(--accent); color: var(--accent-ink); }
+.m-add-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.m-add-title { font-size: 15px; font-weight: 600; }
+.m-add-sub { font-size: 12.5px; color: var(--ink-3); }
+.m-add-chevron { flex: 0 0 auto; color: var(--ink-3); font-size: 20px; }
+
 /* Shared mobile primitives */
 .m-em { font-style: italic; }
 .m-icon-btn {
@@ -5648,6 +5692,42 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   .suggest-spinner { animation: none; }
 }
 
+/* "Fetch Summary" button + inline status (on-demand Hardcover/OpenLibrary
+   description fetch). Mounted under the metadata-editor Description field and,
+   when the summary is sparse, in the book-detail hero. */
+.fs-fetch {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+}
+/* Accent-tinted like the Immersive Read CTA (`.bd-immersive-cta`), with the
+   sparkle mark drawn in the accent colour. */
+.fs-fetch-btn {
+  gap: 9px;
+  background: color-mix(in oklch, var(--accent) 16%, var(--bg-1));
+  border-color: color-mix(in oklch, var(--accent) 55%, transparent);
+  color: var(--ink-0);
+}
+.fs-fetch-btn:hover {
+  background: color-mix(in oklch, var(--accent) 24%, var(--bg-1));
+  border-color: color-mix(in oklch, var(--accent) 70%, transparent);
+}
+.fs-fetch-btn[disabled] { opacity: 0.65; cursor: not-allowed; }
+.fs-fetch-mark { display: inline-flex; color: var(--accent); }
+.fs-fetch-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.fs-fetch-error {
+  font-size: 13px;
+  color: var(--bad);
+}
+
 .bd-suggest-connect { display: flex; align-items: center; justify-content: space-between;
   gap: 22px; padding: 22px 24px; border: 1px dashed var(--line-2); }
 .bd-suggest-connect-title { font-size: 18px; margin: 0; }
@@ -7162,6 +7242,9 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .st-empty-title { margin: 0 0 6px; font-family: var(--serif); }
 .st-empty-sub { margin: 0; color: var(--ink-2); }
 
+/* ── Freshness footnote ───────────────────────────────────────────── */
+.st-footnote { margin: 4px 0 0; font-size: 12.5px; color: var(--ink-3); text-align: center; }
+
 @media (max-width: 720px) {
   .st-page { padding-top: 8px; }
   .st-seg { display: none; }
@@ -7193,4 +7276,99 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   .st-streak-unit { font-size: 13px; }
 
   .st-monthly-bars { height: 96px; gap: 4px; }
+}
+
+/* ══ Check-in flow (/check-in) ═════════════════════════════════════════ */
+
+.check-in { max-width: 560px; margin-inline: auto; }
+.check-in-screen { display: flex; flex-direction: column; gap: 14px; }
+.check-in-screen h1 { margin: 0; }
+.check-in-isbn-line {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.check-in-why {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+
+/* Stacked full-width choices on 3c, where the actions are the screen. */
+.check-in-actions { display: flex; flex-direction: column; gap: 10px; }
+.check-in-actions .btn { width: 100%; justify-content: center; }
+
+/* ── Book card ────────────────────────────────────────────────────── */
+.check-in-book {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+.check-in-book-cover {
+  width: 56px;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: 4px;
+  flex: 0 0 auto;
+}
+.check-in-book-cover--empty { background: var(--surface-2); }
+.check-in-book-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.check-in-book-title { font-family: var(--serif); font-size: 16px; }
+.check-in-book-byline { font-size: 13px; color: var(--ink-2); }
+
+/* ── Matching spinner ─────────────────────────────────────────────── */
+.check-in-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  animation: check-in-spin 0.9s linear infinite;
+}
+
+@keyframes check-in-spin { to { transform: rotate(360deg); } }
+
+/* ── Success rings ────────────────────────────────────────────────── */
+.check-in-success { align-items: center; text-align: center; }
+.check-in-rings {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 96px;
+  height: 96px;
+}
+.check-in-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  opacity: 0;
+  animation: check-in-halo 1.8s ease-out infinite;
+}
+.check-in-ring:nth-child(2) { animation-delay: 0.5s; }
+.check-in-tick {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--surface-1);
+  font-size: 26px;
+}
+
+@keyframes check-in-halo {
+  0% { transform: scale(0.55); opacity: 0.7; }
+  100% { transform: scale(1); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .check-in-spinner { animation: none; }
+  .check-in-ring { animation: none; opacity: 0.35; }
 }
