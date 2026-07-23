@@ -70,6 +70,10 @@
   var rendition = null;
   var relocateTimer = null;
   var locationsReady = false;
+  // False while an initial CFI restore is still settling — mutes emitRelocate
+  // so the first-pass landing (a page or two off until fonts/theme reflow) is
+  // never persisted as reading progress.
+  var restoreSettled = true;
   var tocFlat = [];
   var currentTheme = "dark";
   // Re-paginates when the viewer CONTAINER resizes without a window resize —
@@ -308,9 +312,56 @@
         emitStatus("error");
       });
 
-    rendition.display(opts.cfi || undefined).then(
+    // Restoring a saved position must go through the same settle-then-
+    // redisplay correction as TOC/link navigation: the first-pass display
+    // measures a freshly rendered iframe whose metrics still shift (webfont
+    // swap, injected book CSS), landing a page or two off — and the relocate
+    // that follows would persist that drifted position over the real one.
+    // Paint and emit ready immediately; relocates stay muted (restoreSettled)
+    // until the corrective redisplay lands.
+    var initialCfi = opts.cfi || null;
+    restoreSettled = !initialCfi;
+    rendition.display(initialCfi || undefined).then(
       function () {
         emitStatus("ready");
+        if (!initialCfi) return;
+        var r = rendition;
+        var unmute = function () {
+          // Identity check: a teardown+init for another book may have
+          // swapped the rendition while this restore was settling.
+          if (rendition !== r || restoreSettled) return;
+          restoreSettled = true;
+          // A relocate already in flight (debounce pending) carries the
+          // freshest measured landing and will emit now that the mute is
+          // lifted — don't shadow it with a snapshot. Otherwise emit the
+          // measured current location; `rendition.location` can echo the
+          // display target rather than the rendered viewport, so it is
+          // only the fallback.
+          if (relocateTimer) return;
+          var loc = null;
+          try {
+            loc = rendition.currentLocation();
+          } catch (e) {
+            /* not ready yet */
+          }
+          if (loc && loc.start) {
+            emitRelocate(loc);
+          } else if (rendition.location) {
+            emitRelocate(rendition.location);
+          }
+        };
+        redisplayWhenSettled(initialCfi)
+          .then(function () {
+            return nudgeToTarget(initialCfi);
+          })
+          .catch(function () {
+            /* keep the first-pass landing */
+          })
+          .then(unmute);
+        // Fail-open: if the settle chain ever hangs (an epub.js display that
+        // never resolves), the mute must not permanently stop progress
+        // persistence — worst case reverts to the uncorrected landing.
+        setTimeout(unmute, 4000);
       },
       function () {
         emitStatus("error");
@@ -376,6 +427,7 @@
   }
 
   function emitRelocate(location) {
+    if (!restoreSettled) return;
     var data = buildRelocateData(location);
     if (data.cfi && typeof window.__omnibusOnRelocate === "function") {
       window.__omnibusOnRelocate(JSON.stringify(data));
@@ -787,34 +839,75 @@
   // rendered iframe whose metrics can still shift (webfont swap, theme
   // injection) — the reflow leaves the viewport pages past the target, and
   // the follow-up display corrects it against the final layout.
+  // Wait for the active section's webfonts to settle, then re-display
+  // `target` against the final layout. Returns a promise resolving once the
+  // corrective redisplay completes, so callers can sequence on it.
+  function redisplayWhenSettled(target) {
+    var doc = null;
+    try {
+      var contents = rendition.getContents();
+      var c = contents && contents[0];
+      doc = c && c.document;
+    } catch (e) {
+      /* best effort */
+    }
+    var ready =
+      doc && doc.fonts && doc.fonts.ready ? doc.fonts.ready : Promise.resolve();
+    // The web build's section iframe is sandboxed WITHOUT allow-scripts, and
+    // a promise minted by a scripting-disabled realm never settles — awaiting
+    // fonts.ready bare would hang forever there. Race it against a bounded
+    // timer: where fonts.ready works (mobile WebView opts into scripts) the
+    // correction stays font-accurate, and elsewhere the timer still
+    // redisplays after the layout has settled.
+    var bounded = Promise.race([
+      ready,
+      new Promise(function (res) {
+        setTimeout(res, 1500);
+      }),
+    ]);
+    return bounded
+      .then(function () {
+        return new Promise(function (res) {
+          setTimeout(res, 80);
+        });
+      })
+      .then(function () {
+        if (rendition) return rendition.display(target);
+      });
+  }
+
   function displaySettled(target) {
     if (!rendition) return;
     rendition
       .display(target)
       .then(function () {
-        var doc = null;
-        try {
-          var contents = rendition.getContents();
-          var c = contents && contents[0];
-          doc = c && c.document;
-        } catch (e) {
-          /* best effort */
-        }
-        var ready =
-          doc && doc.fonts && doc.fonts.ready ? doc.fonts.ready : Promise.resolve();
-        return ready
-          .then(function () {
-            return new Promise(function (res) {
-              setTimeout(res, 80);
-            });
-          })
-          .then(function () {
-            if (rendition) return rendition.display(target);
-          });
+        return redisplayWhenSettled(target);
       })
       .catch(function () {
         /* target may be gone after a teardown */
       });
+  }
+
+  // Saved positions are viewport-start CFIs — exact column boundaries — and
+  // epub.js's column rounding can land `display(cfi)` one spread EARLY for a
+  // boundary CFI (the target then sits just past the visible range). Compare
+  // the target against the settled viewport and page once toward it. One
+  // bounded step, best effort: anything further off is left where it landed.
+  function nudgeToTarget(target) {
+    try {
+      var loc = rendition && rendition.currentLocation();
+      if (!loc || !loc.start || !loc.end) return Promise.resolve();
+      var cmp = new ePub.CFI();
+      if (cmp.compare(target, loc.end.cfi) >= 0) {
+        return rendition.next();
+      }
+      if (cmp.compare(target, loc.start.cfi) < 0) {
+        return rendition.prev();
+      }
+    } catch (e) {
+      /* CFI compare is best effort */
+    }
+    return Promise.resolve();
   }
 
   function display(target) {

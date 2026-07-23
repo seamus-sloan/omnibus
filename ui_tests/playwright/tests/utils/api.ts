@@ -8,6 +8,13 @@ export interface ExpectMutationOptions {
   url: string | RegExp;
   expectedBody?: unknown;
   expectedStatus?: number;
+  /**
+   * How long to wait for the request to fire, in ms (default 5000). Raise it
+   * when the mutation is triggered by a full page load rather than a click —
+   * e.g. the reader's settled-restore progress POST, which waits out
+   * hydration, the epub render, and the relocate debounce.
+   */
+  timeout?: number;
 }
 
 // Arms waiters for a mutating request + its response, runs the user action
@@ -31,7 +38,7 @@ export async function expectMutation<T>(
 
   const requestPromise = page.waitForRequest(
     (r) => r.method() === opts.method && matchesUrl(r.url()),
-    {timeout: 5_000}
+    { timeout: opts.timeout ?? 5_000 },
   );
 
   const result = await action();

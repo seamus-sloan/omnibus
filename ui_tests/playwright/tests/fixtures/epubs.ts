@@ -389,6 +389,13 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     language: "en",
     hasCover: true,
   },
+  // `frankenstein` and `great-gatsby` are reserved for the reader
+  // progress-restore specs in reader.spec.ts (frankenstein: real progress
+  // writes, great-gatsby: forced-failure path) — no other spec may open them
+  // in the reader, since saved position is per-book state shared across
+  // parallel workers. The progress specs need real multi-page books; the
+  // synthetic one-paragraph fixtures render as a single page (no page turns,
+  // no page numbers).
   {
     slug: "frankenstein",
     filename: "public_domain/frankenstein.epub",
