@@ -1,7 +1,8 @@
 //! Unit tests for the `journals` module: create round-trip + markdown render,
 //! `BookNotFound`, the public all-users list ordering, owner-scoped
 //! update/delete (with non-owner `NotFound`), merged-uuid canonical
-//! resolution, and the update/delete orphan-image-cleanup diffing.
+//! resolution, the update/delete orphan-image-cleanup diffing, and the
+//! shared `unreferenced_image_names` batched check.
 
 use omnibus_shared::{CreateJournalEntry, EbookMetadata, JournalStatus, UpdateJournalEntry};
 
@@ -547,4 +548,26 @@ async fn cleanup_ignores_a_bare_name_substring_that_is_not_a_real_embed_referenc
         !journal_images_dir().join(&name).exists(),
         "a bare-name substring elsewhere must not block the sweep of a true orphan"
     );
+}
+
+#[tokio::test]
+async fn unreferenced_image_names_returns_only_the_candidates_no_body_still_embeds() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let uuid = seed(&pool, "/lib", "Book A").await;
+    let referenced_name = "11111111-1111-4111-8111-111111111111.png";
+    let orphaned_name = "22222222-2222-4222-8222-222222222222.png";
+    let body = format!("![img]({}{referenced_name})", markdown::IMAGE_URL_PREFIX);
+    create_journal_entry(&pool, user, &create(&uuid, &body, None))
+        .await
+        .unwrap();
+
+    let unreferenced = unreferenced_image_names(
+        &pool,
+        vec![referenced_name.to_string(), orphaned_name.to_string()],
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(unreferenced, vec![orphaned_name.to_string()]);
 }
