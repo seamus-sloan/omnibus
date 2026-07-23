@@ -2,9 +2,8 @@ import { expect, test } from "../fixtures/test";
 import { gotoReady } from "../utils/nav";
 
 // F1.6 Atrium theme toggle. The theme controls now live inside the user-menu
-// dropdown (Dark / Light / Sepia segmented control). Sepia is stubbed —
-// disabled until a Sepia theme variant lands. The web build persists the
-// choice under `omn.theme` in localStorage and applies it in a
+// dropdown (Dark / Black / Light / Sepia segmented control). The web build
+// persists the choice under `omn.theme` in localStorage and applies it in a
 // post-hydration `use_effect` so SSR markup stays deterministic.
 //
 // Notes for future test authors:
@@ -51,6 +50,25 @@ test("toggles dark to light, persists across reload", async ({ page }) => {
   // pre-effect frame.
   await page.reload();
   await expect.poll(async () => root.getAttribute("data-theme")).toBe("light");
+});
+
+test("toggles dark to black, persists across reload", async ({ page }) => {
+  await gotoReady(page, "/");
+
+  const root = page.locator("div.atrium").first();
+  await expect(root).toHaveAttribute("data-theme", "dark");
+
+  await openUserMenu(page);
+  await page.getByTestId("theme-black").click();
+  await expect(root).toHaveAttribute("data-theme", "black");
+
+  const stored = await page.evaluate(() => window.localStorage.getItem("omn.theme"));
+  expect(stored).toBe("black");
+
+  // Reload: SSR renders `dark`, then the post-hydration effect reads
+  // localStorage and flips to `black`. Poll for the follow-up render.
+  await page.reload();
+  await expect.poll(async () => root.getAttribute("data-theme")).toBe("black");
 });
 
 test("clicking light then dark flips back and clears divergence from default", async ({ page }) => {
