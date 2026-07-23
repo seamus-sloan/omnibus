@@ -124,6 +124,13 @@ pub mod offline_pill;
 #[cfg(feature = "mobile")]
 pub use offline_pill::OfflinePill;
 
+// Mobile "you're offline" sheet raised when a reader/player route bounces
+// because the book has no completed local download. Mobile-only.
+#[cfg(feature = "mobile")]
+pub mod offline_guard;
+#[cfg(feature = "mobile")]
+pub use offline_guard::OfflineGuardModal;
+
 // The condition-row editor + live-preview pane shared by shelf creation and
 // the "Edit rules" surface.
 pub mod shelf_rule_builder;

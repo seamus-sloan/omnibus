@@ -47,9 +47,11 @@ pub(crate) async fn create_bookmark_online(
 /// List bookmarks for the book with the given uuid.
 #[cfg(feature = "mobile")]
 pub async fn list_bookmarks(server_url: &str, book_uuid: &str) -> Result<Vec<Bookmark>, DataError> {
+    let url = server_url.to_string();
+    let book_uuid = book_uuid.to_string();
     crate::offline::cache::read_through(
-        crate::offline::cache::keys::bookmarks(book_uuid),
-        list_bookmarks_online(server_url, book_uuid),
+        crate::offline::cache::keys::bookmarks(&book_uuid),
+        async move { list_bookmarks_online(&url, &book_uuid).await },
     )
     .await
 }

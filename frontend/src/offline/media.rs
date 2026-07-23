@@ -68,6 +68,13 @@ pub fn loopback() -> Option<&'static LoopbackInfo> {
     LOOPBACK.get().and_then(|l| l.as_ref())
 }
 
+/// `true` once the loopback runtime exists — lets callers with their own
+/// fallback runtime decide before handing a future to [`spawn_on_runtime`]
+/// (which consumes it either way).
+pub(crate) fn runtime_available() -> bool {
+    RUNTIME.get().is_some()
+}
+
 /// Spawn `fut` on the loopback server's tokio runtime — the offline layer's
 /// home for work that must outlive any Dioxus component scope (downloads
 /// keep running across route changes).

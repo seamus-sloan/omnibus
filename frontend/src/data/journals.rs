@@ -52,9 +52,11 @@ pub async fn list_journal_entries(
     server_url: &str,
     book_uuid: &str,
 ) -> Result<Vec<JournalEntry>, DataError> {
+    let url = server_url.to_string();
+    let book_uuid = book_uuid.to_string();
     crate::offline::cache::read_through(
-        crate::offline::cache::keys::journals(book_uuid),
-        list_journal_entries_online(server_url, book_uuid),
+        crate::offline::cache::keys::journals(&book_uuid),
+        async move { list_journal_entries_online(&url, &book_uuid).await },
     )
     .await
 }

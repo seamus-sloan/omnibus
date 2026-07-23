@@ -175,6 +175,9 @@ fn ScreenLayout(children: Element) -> Element {
             // Connectivity pill — "Offline · N changes queued" / "Syncing".
             // Renders nothing in the steady online state.
             components::OfflinePill {}
+            // "You're offline" sheet raised when a reader/player route
+            // bounces (book not downloaded). Renders nothing until then.
+            components::OfflineGuardModal {}
             Nav {}
         }
     }
@@ -336,6 +339,37 @@ fn use_offline_runtime() {
 /// Non-mobile stub: web/SSR have no offline layer.
 #[cfg(not(feature = "mobile"))]
 fn use_offline_runtime() {}
+
+/// Cache revalidation generation (mobile): read the returned signal inside
+/// a fetch effect so the page re-fetches when a background revalidation
+/// lands changed data — the re-fetch is served from the fresh cache with
+/// zero network. Cfg lives in the body so call sites stay gate-free; hook
+/// counts match across targets (one `use_signal` + one `use_future` each).
+#[cfg(feature = "mobile")]
+pub fn use_cache_generation() -> Signal<u64> {
+    let mut generation = use_signal(|| 0u64);
+    use_future(move || async move {
+        let mut rx = offline::cache::subscribe();
+        loop {
+            let now = *rx.borrow_and_update();
+            if now != generation() {
+                generation.set(now);
+            }
+            if rx.changed().await.is_err() {
+                break;
+            }
+        }
+    });
+    generation
+}
+
+/// Non-mobile stub: web/SSR have no offline cache; the signal never moves.
+#[cfg(not(feature = "mobile"))]
+pub fn use_cache_generation() -> Signal<u64> {
+    let generation = use_signal(|| 0u64);
+    use_future(move || async move {});
+    generation
+}
 
 /// Capture-phase left-edge back-swipe listener for the mobile WebView.
 ///

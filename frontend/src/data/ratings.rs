@@ -46,10 +46,11 @@ pub(crate) async fn set_rating_online(
 /// GET `/api/ratings/{uuid}` — fetch the current rating, if any.
 #[cfg(feature = "mobile")]
 pub async fn get_rating(server_url: &str, uuid: &str) -> Result<Option<RatingRecord>, DataError> {
-    crate::offline::cache::read_through(
-        crate::offline::cache::keys::rating(uuid),
-        get_rating_online(server_url, uuid),
-    )
+    let url = server_url.to_string();
+    let uuid = uuid.to_string();
+    crate::offline::cache::read_through(crate::offline::cache::keys::rating(&uuid), async move {
+        get_rating_online(&url, &uuid).await
+    })
     .await
 }
 
@@ -73,9 +74,11 @@ pub async fn list_other_ratings(
     server_url: &str,
     uuid: &str,
 ) -> Result<Vec<AttributedRating>, DataError> {
+    let url = server_url.to_string();
+    let uuid = uuid.to_string();
     crate::offline::cache::read_through(
-        crate::offline::cache::keys::ratings_others(uuid),
-        list_other_ratings_online(server_url, uuid),
+        crate::offline::cache::keys::ratings_others(&uuid),
+        async move { list_other_ratings_online(&url, &uuid).await },
     )
     .await
 }

@@ -19,6 +19,9 @@ use super::{outbox, outbox::Op, store};
 /// Re-probe `/api/_health` this often while offline.
 const PROBE_INTERVAL_SECS: u64 = 15;
 
+/// Background sync cadence while online and running.
+const SYNC_TICK_SECS: u64 = 60;
+
 /// Connectivity + queue snapshot for the UI (offline pill, sync row).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NetState {
@@ -112,6 +115,9 @@ pub(crate) fn note_dropped(n: usize) {
 pub(crate) fn is_offline_error(e: &DataError) -> bool {
     match e {
         DataError::Network(re) => !re.is_decode(),
+        // A fast-fail precheck skipped the network because we already knew
+        // we were offline — same class as a failed connect.
+        DataError::Offline => true,
         _ => false,
     }
 }
@@ -138,8 +144,25 @@ fn server_url() -> Option<String> {
     (!guard.is_empty()).then(|| guard.clone())
 }
 
+/// One background maintenance pass (Kindle-style sync): drain the outbox,
+/// refresh the full-library replica (TTL-gated), and re-warm the resume
+/// rail. Never blocks UI — it runs on the offline runtime loop, and every
+/// read it issues is cache-first.
+async fn background_tick() {
+    if is_offline() {
+        return;
+    }
+    let Some(url) = server_url() else { return };
+    request_drain();
+    super::replica::ensure_fresh(url.clone());
+    // Cache-first, so this returns instantly and revalidates when stale —
+    // keeping "pick up where you left off" fresh without a page visit.
+    let _ = data::recent_progress(&url, 1).await;
+}
+
 /// App-root hook: records the reactive server URL for background work and
-/// runs the offline runtime loop (probe-when-offline + drain triggers).
+/// runs the offline runtime loop — probe-when-offline, drain triggers, and
+/// the periodic background sync tick while online.
 /// The non-mobile stub in `lib.rs` keeps call sites gate-free
 /// (`use_mobile_viewport_fix` pattern).
 pub fn use_offline_runtime() {
@@ -151,17 +174,33 @@ pub fn use_offline_runtime() {
     });
 
     // One app-lifetime background loop: kick an initial drain (cold-start
-    // queue from a previous session), then re-probe while offline.
+    // queue from a previous session), then tick-while-online / probe-while-
+    // offline.
     use_future(move || async move {
         request_drain();
         let mut rx = subscribe();
+        // Boot tick once the server URL is known, so the replica refresh
+        // doesn't depend on the user visiting the landing page first.
+        let mut booted = false;
         loop {
             let snapshot = *rx.borrow_and_update();
             if snapshot.online {
-                // Sit idle until the state changes (a failure flips us
-                // offline; pending-count changes are informational).
-                if rx.changed().await.is_err() {
-                    break;
+                if !booted && server_url().is_some() {
+                    booted = true;
+                    background_tick().await;
+                }
+                // Idle until the state changes (a failure flips us offline;
+                // pending-count changes are informational) or the next
+                // periodic sync tick fires.
+                tokio::select! {
+                    changed = rx.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(SYNC_TICK_SECS)) => {
+                        background_tick().await;
+                    }
                 }
                 continue;
             }
@@ -170,6 +209,10 @@ pub fn use_offline_runtime() {
             if let Some(url) = server_url() {
                 if data::check_server(&url).await.is_ok() {
                     note_online();
+                    // Re-read + revalidate visible pages right away instead
+                    // of waiting out the next tick.
+                    background_tick().await;
+                    super::cache::notify_changed();
                 }
             }
         }
@@ -258,6 +301,7 @@ async fn drain() {
         return;
     };
     let mut dropped = 0usize;
+    let mut resolved = 0usize;
     for row in st.ops_list().await {
         let Ok(op) = serde_json::from_str::<Op>(&row.payload) else {
             // Undecodable payload (schema drift) — drop rather than wedge
@@ -267,10 +311,14 @@ async fn drain() {
             continue;
         };
         match execute_op(&url, op).await {
-            Outcome::Done => st.ops_delete_many(vec![row.id]).await,
+            Outcome::Done => {
+                st.ops_delete_many(vec![row.id]).await;
+                resolved += 1;
+            }
             Outcome::Rejected => {
                 st.ops_delete_many(vec![row.id]).await;
                 dropped += 1;
+                resolved += 1;
             }
             Outcome::Halt => {
                 st.ops_bump_attempts(row.id);
@@ -284,6 +332,12 @@ async fn drain() {
     refresh_pending().await;
     if let Some(st) = store::store() {
         st.meta_put("last_sync_at", store::now_secs().to_string());
+    }
+    if resolved > 0 {
+        // Replayed ops rewrote cache rows (server records, temp-id remaps)
+        // — nudge open pages to re-read, and, with the queue now shorter,
+        // let their refetches revalidate against the server again.
+        super::cache::notify_changed();
     }
 }
 

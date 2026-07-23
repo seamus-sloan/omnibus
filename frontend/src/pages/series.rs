@@ -20,10 +20,16 @@ pub fn SeriesPage(id: i64) -> Element {
 
     // See `BookDetailPage` for why `id` needs `use_reactive!`.
     let url = server_url.clone();
+    let generation = crate::use_cache_generation();
     use_effect(use_reactive!(|id| {
+        // Re-run on cache-revalidation bumps; the refetch is a cache hit.
+        let _ = generation();
         let url = url.clone();
         spawn(async move {
-            loading.set(true);
+            let same_series = series.peek().as_ref().map(|s| s.id) == Some(id);
+            if !same_series {
+                loading.set(true);
+            }
             match data::get_series(&url, id).await {
                 Ok(s) => {
                     series.set(s);

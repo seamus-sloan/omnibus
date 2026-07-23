@@ -56,10 +56,12 @@ pub(super) fn MobileLanding(props: MobileLandingProps) -> Element {
     let mut sheet_open = use_signal(|| false);
 
     // "Pick up where you left off" — the most recent progress row, fetched
-    // once per mount (each visit to the home screen refreshes it).
+    // per mount and re-read when a background cache revalidation lands.
     let mut resume = use_signal(|| None::<ResumePoint>);
     let resume_url = server_url.clone();
+    let generation = crate::use_cache_generation();
     use_effect(move || {
+        let _ = generation();
         let url = resume_url.clone();
         spawn(async move {
             if let Ok(points) = crate::data::recent_progress(&url, 1).await {

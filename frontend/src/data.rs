@@ -86,6 +86,12 @@ pub enum DataError {
     /// re-inspecting a raw status code.
     #[error("unauthorized")]
     Unauthorized,
+    /// Fast-fail result when the client already knows the server is
+    /// unreachable (`offline::sync::is_offline()`) and skipped the network
+    /// entirely. Unconditional (like [`DataError::Unauthorized`]) so the
+    /// enum shape is stable across feature builds.
+    #[error("You're offline")]
+    Offline,
     /// Catch-all for transport paths that don't carry a typed source —
     /// the web server-function client (whose error is already stringified
     /// by `note_server_fn_err`), the `gloo-net` web/SSR stubs, and a couple
@@ -600,7 +606,56 @@ pub(crate) fn client_kind() -> &'static str {
 #[cfg(feature = "mobile")]
 pub(crate) fn http_client() -> reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    CLIENT.get_or_init(reqwest::Client::new).clone()
+    CLIENT
+        .get_or_init(|| {
+            // 5s connect keeps dead-network requests from waiting out the OS
+            // connect timeout (~75s on iOS); 30s total matches the server's
+            // own request timeout.
+            reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|e| {
+                    // A degraded client (no timeouts → long offline stalls)
+                    // must at least be diagnosable.
+                    tracing::warn!(error = %e, "http client builder failed; using default client without timeouts");
+                    reqwest::Client::new()
+                })
+        })
+        .clone()
+}
+
+/// Client for long-lived streaming transfers (the download engine). No
+/// whole-request timeout — a multi-GB audiobook legitimately outlives any
+/// sane cap; a stalled stream is caught by the read timeout instead.
+#[cfg(feature = "mobile")]
+pub(crate) fn streaming_client() -> reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .read_timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "streaming client builder failed; using default client without timeouts");
+                    reqwest::Client::new()
+                })
+        })
+        .clone()
+}
+
+/// Fast-fail guard for online-only mobile operations (login, download
+/// start, uploads, send-to-Kindle): errors instantly with
+/// [`DataError::Offline`] while the client is known-offline, instead of
+/// burning a doomed connect attempt. Never used on queued (`write_through`)
+/// or cached (`read_through`) paths — those have their own offline handling.
+#[cfg(feature = "mobile")]
+pub(crate) fn require_online() -> Result<(), DataError> {
+    if crate::offline::sync::is_offline() {
+        return Err(DataError::Offline);
+    }
+    Ok(())
 }
 
 #[cfg(feature = "mobile")]

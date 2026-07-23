@@ -136,9 +136,13 @@ struct BookDataSignals {
 fn use_book_data_effects(uuid: String, server_url: String, sig: BookDataSignals) {
     let url = server_url.clone();
     let refresh = sig.refresh;
+    let generation = crate::use_cache_generation();
     use_effect(use_reactive!(|uuid| {
-        // Read `refresh` so a merge/undo bump re-arms this effect.
+        // Read `refresh` so a merge/undo bump re-arms this effect, and the
+        // cache generation so a background revalidation refreshes the page
+        // (served from the fresh cache, zero network).
         let _ = refresh();
+        let _ = generation();
         fetch_book_and_author_books(
             url.clone(),
             uuid.clone(),
@@ -275,8 +279,19 @@ fn fetch_book_and_author_books(
     mut error: Signal<Option<String>>,
 ) {
     spawn(async move {
-        loading.set(true);
-        author_books.set(Vec::new());
+        // Keep the rendered page in place when re-fetching the *same* book
+        // (a cache-revalidation bump) — the skeleton and author-rail reset
+        // are for actual book changes. `unique_identifier` is the book uuid
+        // on API rows.
+        let same_book = book
+            .peek()
+            .as_ref()
+            .and_then(|b| b.unique_identifier.as_deref())
+            == Some(uuid.as_str());
+        if !same_book {
+            loading.set(true);
+            author_books.set(Vec::new());
+        }
         match data::get_ebook(&server_url, &uuid).await {
             Ok(b) => {
                 let author_fetch = b.as_ref().map(|inner| {

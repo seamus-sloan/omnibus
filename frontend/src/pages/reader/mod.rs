@@ -89,6 +89,7 @@ fn reader_call_json2<A: serde::Serialize + ?Sized, B: serde::Serialize + ?Sized>
 #[component]
 pub fn BookReadPage(uuid: String) -> Element {
     let theme = use_context::<Signal<Theme>>();
+    use_mobile_offline_read_guard(uuid.clone());
     let ReaderSignals {
         status,
         show_aa,
@@ -178,6 +179,34 @@ pub fn BookReadPage(uuid: String) -> Element {
         }
     }
 }
+
+/// Mobile: bounce out of the reader route (raising the app-level offline
+/// sheet) when the book has no completed local EPUB download and the app is
+/// known-offline — mounting would strand the user on a surface that can
+/// never load. `go_back` returns to wherever the tap came from; a cold
+/// deep-link with no history falls back to the book page.
+#[cfg(feature = "mobile")]
+fn use_mobile_offline_read_guard(uuid: String) {
+    let nav = dioxus_router::use_navigator();
+    use_effect(use_reactive!(|uuid| {
+        if crate::offline::sync::is_offline()
+            && crate::offline::downloads::local_epub_url(&uuid).is_none()
+        {
+            crate::components::offline_guard::block(
+                "This book isn\u{2019}t downloaded, so it can\u{2019}t be read while offline.",
+            );
+            if nav.can_go_back() {
+                nav.go_back();
+            } else {
+                nav.replace(crate::Route::BookDetail { uuid: uuid.clone() });
+            }
+        }
+    }));
+}
+
+/// Non-mobile stub: web/SSR have no offline layer.
+#[cfg(not(feature = "mobile"))]
+fn use_mobile_offline_read_guard(_uuid: String) {}
 
 /// Every signal `BookReadPage` owns, minus the reader-prefs context (which
 /// is published but not otherwise threaded through the component body).

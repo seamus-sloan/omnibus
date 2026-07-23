@@ -12,10 +12,10 @@ use super::{drain_error, http_client, note_status, with_bearer};
 /// GET `/api/tags` — fetch the weighted tag cloud for the discovery page.
 #[cfg(feature = "mobile")]
 pub async fn get_tag_cloud(server_url: &str) -> Result<Vec<TagWeight>, DataError> {
-    crate::offline::cache::read_through(
-        crate::offline::cache::keys::tags(),
-        get_tag_cloud_online(server_url),
-    )
+    let url = server_url.to_string();
+    crate::offline::cache::read_through(crate::offline::cache::keys::tags(), async move {
+        get_tag_cloud_online(&url).await
+    })
     .await
 }
 

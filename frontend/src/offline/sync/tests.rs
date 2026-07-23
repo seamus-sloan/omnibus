@@ -76,6 +76,14 @@ fn is_offline_error_rejects_http_and_unauthorized() {
 }
 
 #[test]
+fn is_offline_error_accepts_the_fast_fail_offline_variant() {
+    assert!(
+        is_offline_error(&DataError::Offline),
+        "a precheck fast-fail is the same class as a failed connect"
+    );
+}
+
+#[test]
 fn note_offline_and_note_online_flip_the_watch_state() {
     let _guard = test_state_lock().lock().unwrap();
     note_offline();
@@ -201,6 +209,40 @@ fn progress_op(uuid: &str) -> Op {
         },
         captured_at: 100,
     }
+}
+
+#[tokio::test]
+async fn background_tick_is_a_noop_while_offline() {
+    store::init_global_for_tests();
+    let _guard = test_state_lock().lock().unwrap();
+    set_server_url("http://127.0.0.1:1");
+    note_offline();
+    background_tick().await;
+    assert!(
+        is_offline(),
+        "an offline tick must not probe or flip the state"
+    );
+    note_online();
+}
+
+#[tokio::test]
+async fn drain_bumps_the_cache_generation_after_resolving_ops() {
+    store::init_global_for_tests();
+    let _guard = test_state_lock().lock().unwrap();
+    clear_ops().await;
+    let base = mock_server().await;
+    set_server_url(&base);
+
+    let rx = cache::subscribe();
+    let before = *rx.borrow();
+    enqueue_raw(&progress_op("drain-book-gen"));
+    drain().await;
+
+    assert!(
+        *rx.borrow() > before,
+        "resolving ops must nudge open pages to re-read the cache"
+    );
+    note_online();
 }
 
 #[tokio::test]

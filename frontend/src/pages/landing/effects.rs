@@ -29,6 +29,9 @@ pub(super) struct FetchSignals {
     pub(super) loading_more: Signal<bool>,
     pub(super) error: Signal<Option<String>>,
     pub(super) fetch_epoch: Signal<u64>,
+    /// Offline-cache generation (mobile): a bump re-runs the page-1 fetch,
+    /// which is then served from the freshly revalidated cache.
+    pub(super) generation: Signal<u64>,
 }
 
 /// Refetch the admin-only author/tag suggestion pools whenever `is_admin` changes.
@@ -83,15 +86,24 @@ pub(super) fn spawn_page_fetch_effect(
     let mut loading = sigs.loading;
     let mut error = sigs.error;
     let mut fetch_epoch = sigs.fetch_epoch;
+    let generation = sigs.generation;
     use_effect(move || {
+        // Re-run when a background cache revalidation lands changed data;
+        // the refetch below is then a fresh cache hit (zero network).
+        let _ = generation();
         let (q, sort_key, sort_dir, filters) = fetch_key();
         let epoch = {
             fetch_epoch.with_mut(|e| *e += 1);
             *fetch_epoch.peek()
         };
         let url = server_url.clone();
+        let has_books = !sigs.books.peek().is_empty();
         spawn(async move {
-            loading.set(true);
+            // Keep the populated grid on screen during a revalidation
+            // refetch — the skeleton is for the cold first paint only.
+            if !has_books {
+                loading.set(true);
+            }
             error.set(None);
             next_cursor.set(None);
             if q.is_empty() {

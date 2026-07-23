@@ -32,6 +32,7 @@ pub async fn mobile_login(
     password: String,
     device_name: Option<String>,
 ) -> Result<UserSummary, DataError> {
+    crate::data::require_online()?;
     let req = LoginRequest {
         username,
         password,
@@ -50,6 +51,7 @@ pub async fn mobile_register(
     password: String,
     device_name: Option<String>,
 ) -> Result<UserSummary, DataError> {
+    crate::data::require_online()?;
     let req = RegisterRequest {
         username,
         password,
@@ -83,7 +85,12 @@ fn finish_bearer_auth(resp: LoginResponse) -> Result<UserSummary, DataError> {
 /// `note_status`) so `ScreenLayout` routes back to `/login`.
 #[cfg(feature = "mobile")]
 pub async fn get_me(server_url: &str) -> Result<UserSummary, DataError> {
-    let me = crate::offline::cache::read_through(
+    // Network-first on purpose: the account-switch wipe below keys on the
+    // *fresh* identity. A cache-first answer right after a different user
+    // logs in would return the previous user's "me", skip the wipe, and
+    // leak their replicated data across accounts. Offline still serves the
+    // cached identity instantly via the network-first helper's fast path.
+    let me = crate::offline::cache::read_through_network_first(
         crate::offline::cache::keys::me(),
         get_me_online(server_url),
     )
@@ -147,10 +154,10 @@ pub async fn check_server(server_url: &str) -> Result<(), DataError> {
 /// which only probes reachability and discards the body.
 #[cfg(feature = "mobile")]
 pub async fn get_server_version(server_url: &str) -> Result<String, DataError> {
-    crate::offline::cache::read_through(
-        "server_version".to_string(),
-        get_server_version_online(server_url),
-    )
+    let url = server_url.to_string();
+    crate::offline::cache::read_through("server_version".to_string(), async move {
+        get_server_version_online(&url).await
+    })
     .await
 }
 
@@ -296,4 +303,32 @@ async fn post_auth_json<T: serde::Serialize>(
         return Err(format!("{status}: {msg}"));
     }
     res.json::<LoginResponse>().await.map_err(|e| e.to_string())
+}
+
+#[cfg(all(test, feature = "mobile"))]
+mod tests {
+    // The state-lock guard is deliberately held across awaits: it serializes
+    // whole async test bodies against process-global state, and each test owns
+    // its own thread + runtime, so there is no interleaving to deadlock on.
+    #![allow(clippy::await_holding_lock)]
+
+    use super::*;
+
+    #[tokio::test]
+    async fn mobile_login_fails_fast_when_offline() {
+        let _guard = crate::offline::sync::test_state_lock().lock().unwrap();
+        crate::offline::sync::note_offline();
+        let out = mobile_login(
+            "http://127.0.0.1:1",
+            "elena".into(),
+            "correct-horse-battery".into(),
+            None,
+        )
+        .await;
+        assert!(
+            matches!(out, Err(DataError::Offline)),
+            "login must fast-fail without a network attempt"
+        );
+        crate::offline::sync::note_online();
+    }
 }

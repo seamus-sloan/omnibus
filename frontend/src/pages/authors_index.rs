@@ -135,10 +135,15 @@ fn use_authors_fetch_effect(
     mut loading: Signal<bool>,
     mut error: Signal<Option<String>>,
 ) {
+    let generation = crate::use_cache_generation();
     use_effect(move || {
+        // Re-run on cache-revalidation bumps; the refetch is a cache hit.
+        let _ = generation();
         let url = server_url.clone();
         spawn(async move {
-            loading.set(true);
+            if authors.peek().is_empty() {
+                loading.set(true);
+            }
             match data::list_authors(&url).await {
                 Ok(a) => {
                     authors.set(a);

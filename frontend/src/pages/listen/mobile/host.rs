@@ -208,6 +208,16 @@ async fn load_and_drain(
             total_duration_seconds,
             chapters,
         } => {
+            // Same fail-fast as the reader's offline guard: with no completed
+            // audio download, the <audio> element would stall against the
+            // dead server instead of surfacing an error.
+            if audio_blocked_offline(&uuid) {
+                error.set(Some(
+                    "You're offline — download this audiobook to listen offline.".into(),
+                ));
+                loading.set(false);
+                return;
+            }
             init_direct_and_drain(
                 ctx,
                 &book,
@@ -226,6 +236,13 @@ async fn load_and_drain(
             loading.set(false);
         }
     }
+}
+
+/// `true` when direct playback of `uuid` is doomed: the app is known-offline
+/// and no completed audio download exists to serve the parts locally.
+fn audio_blocked_offline(uuid: &str) -> bool {
+    crate::offline::sync::is_offline()
+        && !crate::offline::downloads::is_complete(uuid, crate::offline::downloads::DlFormat::Audio)
 }
 
 /// Resolve the effective playback rate: publish `user_id`, reconcile the
@@ -355,8 +372,23 @@ async fn drain_audio_events(
 
 #[cfg(test)]
 mod tests {
-    use super::first_audio_file_id;
+    use super::{audio_blocked_offline, first_audio_file_id};
     use omnibus_shared::BookFileInfo;
+
+    #[test]
+    fn audio_blocked_offline_only_while_offline_without_a_download() {
+        let _guard = crate::offline::sync::test_state_lock().lock().unwrap();
+        crate::offline::sync::note_offline();
+        assert!(
+            audio_blocked_offline("u-host-guard"),
+            "offline with no completed audio download must block playback"
+        );
+        crate::offline::sync::note_online();
+        assert!(
+            !audio_blocked_offline("u-host-guard"),
+            "online playback is never blocked"
+        );
+    }
 
     fn bf(id: i64, format: &str, ordinal: i64) -> BookFileInfo {
         BookFileInfo {

@@ -121,8 +121,11 @@ fn use_period_fetch_effect(
     error: Signal<Option<String>>,
 ) {
     let mut epoch = use_signal(|| 0u64);
+    let generation = crate::use_cache_generation();
     use_effect(move || {
         let r = range();
+        // Re-run on cache-revalidation bumps; the refetch is a cache hit.
+        let _ = generation();
         let ticket = *epoch.peek() + 1;
         epoch.set(ticket);
         let url = server_url.clone();
@@ -153,7 +156,10 @@ fn use_all_time_fetch_effect(
     loading: Signal<bool>,
     error: Signal<Option<String>>,
 ) {
+    let generation = crate::use_cache_generation();
     use_effect(move || {
+        // Re-run on cache-revalidation bumps; the refetch is a cache hit.
+        let _ = generation();
         let url = server_url.clone();
         let mut all_time = all_time;
         let mut loading = loading;
