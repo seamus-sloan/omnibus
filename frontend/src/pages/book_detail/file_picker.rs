@@ -63,7 +63,7 @@ fn file_picker_item_title(file: &BookFileInfo, kind: FilePickerKind) -> String {
 }
 
 fn file_picker_item_meta(file: &BookFileInfo, kind: FilePickerKind) -> Option<String> {
-    let size = format_file_size(file.size_bytes)?;
+    let size = crate::format::file_size(file.size_bytes)?;
     let label = file
         .label
         .as_deref()
@@ -72,20 +72,6 @@ fn file_picker_item_meta(file: &BookFileInfo, kind: FilePickerKind) -> Option<St
         (FilePickerKind::Listen, Some(label)) => Some(format!("{label} \u{b7} {size}")),
         _ => Some(size),
     }
-}
-
-fn format_file_size(size_bytes: i64) -> Option<String> {
-    let bytes = u64::try_from(size_bytes).ok().filter(|bytes| *bytes > 0)?;
-    let (value, unit) = if bytes >= 1_000_000_000 {
-        (bytes as f64 / 1_000_000_000.0, "GB")
-    } else if bytes >= 1_000_000 {
-        (bytes as f64 / 1_000_000.0, "MB")
-    } else if bytes >= 1_000 {
-        (bytes as f64 / 1_000.0, "KB")
-    } else {
-        return Some(format!("{bytes} B"));
-    };
-    Some(format!("{value:.1} {unit}"))
 }
 
 /// Read/listen action that expands into a file picker when multiple files match.
@@ -243,6 +229,7 @@ mod tests {
             ordinal,
             label: None,
             size_bytes: 0,
+            path: None,
         }
     }
 

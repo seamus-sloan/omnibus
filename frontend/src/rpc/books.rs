@@ -4,8 +4,8 @@
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
-    EbookLibrary, EbookMetadata, LibraryPage, MergeBooksResult, SortDir, SortKey,
-    SuggestionsResponse, ViewFilters,
+    BookDeletionManifest, DeleteBookFilesResult, EbookLibrary, EbookMetadata, LibraryPage,
+    MergeBooksResult, SortDir, SortKey, SuggestionsResponse, ViewFilters,
 };
 
 #[cfg(feature = "server")]
@@ -15,7 +15,7 @@ use omnibus_db as db;
 // `rpc_get_suggestions` body; gate them so the web/mobile client builds don't
 // flag an unused import.
 #[cfg(feature = "server")]
-use omnibus_shared::{BookSuggestion, RawSuggestion};
+use omnibus_shared::{BookDeletionImpact, BookSuggestion, RawSuggestion};
 
 #[cfg(feature = "server")]
 use super::{internal_rpc_error, AdminUser, AuthUser, PoolExt, WorkerExt};
@@ -196,6 +196,56 @@ pub async fn rpc_undo_merge(merge_log_id: i64) -> Result<String> {
             Err(ServerFnError::new(e.to_string()).into())
         }
         Err(e) => Err(internal_rpc_error("undo merge", e).into()),
+    }
+}
+
+/// Admin: the book's deletable items (files + physical copies) and the user
+/// data a total delete would take with them — everything the delete dialog
+/// lists and confirms against.
+#[post("/api/rpc/books/deletion-manifest", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_book_deletion_manifest(uuid: String) -> Result<BookDeletionManifest> {
+    match db::book_deletion_manifest(&pool.0, &uuid).await {
+        Ok(m) => Ok(BookDeletionManifest {
+            files: m.files,
+            copies: m.copies,
+            impact: BookDeletionImpact {
+                highlights: m.impact.highlights,
+                journal_entries: m.impact.journal_entries,
+                bookmarks: m.impact.bookmarks,
+                reading_sessions: m.impact.reading_sessions,
+                listening_sessions: m.impact.listening_sessions,
+                ratings: m.impact.ratings,
+                shelves: m.impact.shelves,
+            },
+        }),
+        Err(e @ db::DeleteError::BookNotFound) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(e) => Err(internal_rpc_error("book deletion manifest", e).into()),
+    }
+}
+
+/// Admin: delete the given items — `file_ids` are `book_files` rows (removed
+/// from disk too), `copy_ids` are physical copies (un-recorded only). When
+/// every item goes, the book and everything keyed to its uuid go with it —
+/// irreversible, which is why the dialog confirms first.
+#[post("/api/rpc/books/delete-files", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_delete_book_files(
+    uuid: String,
+    file_ids: Vec<i64>,
+    copy_ids: Vec<i64>,
+) -> Result<DeleteBookFilesResult> {
+    match db::delete_book_items(&pool.0, &uuid, &file_ids, &copy_ids).await {
+        Ok(out) => Ok(DeleteBookFilesResult {
+            deleted_file_ids: out.deleted_file_ids,
+            deleted_copy_ids: out.deleted_copy_ids,
+            book_deleted: out.book_deleted,
+        }),
+        // Domain failures keep their display string so the dialog can render them.
+        Err(
+            e @ (db::DeleteError::BookNotFound
+            | db::DeleteError::FileNotFound(_)
+            | db::DeleteError::CopyNotFound(_)),
+        ) => Err(ServerFnError::new(e.to_string()).into()),
+        Err(e) => Err(internal_rpc_error("delete book files", e).into()),
     }
 }
 
