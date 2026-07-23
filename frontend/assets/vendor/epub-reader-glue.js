@@ -317,20 +317,26 @@
     // measures a freshly rendered iframe whose metrics still shift (webfont
     // swap, injected book CSS), landing a page or two off — and the relocate
     // that follows would persist that drifted position over the real one.
-    // Paint and emit ready immediately; relocates stay muted (restoreSettled)
-    // until the corrective redisplay lands.
+    // Relocates stay muted (restoreSettled) until the corrective redisplay
+    // lands, and `ready` is deferred to the same moment: the first-pass
+    // landing, the fonts/CSS reflow, and the correction all happen behind
+    // the opaque loading overlay instead of flashing in view. Books without
+    // saved progress paint (and report ready) immediately.
     var initialCfi = opts.cfi || null;
     restoreSettled = !initialCfi;
     rendition.display(initialCfi || undefined).then(
       function () {
-        emitStatus("ready");
-        if (!initialCfi) return;
+        if (!initialCfi) {
+          emitStatus("ready");
+          return;
+        }
         var r = rendition;
         var unmute = function () {
           // Identity check: a teardown+init for another book may have
           // swapped the rendition while this restore was settling.
           if (rendition !== r || restoreSettled) return;
           restoreSettled = true;
+          emitStatus("ready");
           // A relocate already in flight (debounce pending) carries the
           // freshest measured landing and will emit now that the mute is
           // lifted — don't shadow it with a snapshot. Otherwise emit the
@@ -360,7 +366,8 @@
           .then(unmute);
         // Fail-open: if the settle chain ever hangs (an epub.js display that
         // never resolves), the mute must not permanently stop progress
-        // persistence — worst case reverts to the uncorrected landing.
+        // persistence, nor the deferred ready leave the loading overlay up
+        // forever — worst case reverts to the uncorrected landing.
         setTimeout(unmute, 4000);
       },
       function () {
