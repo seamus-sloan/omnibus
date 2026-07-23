@@ -76,6 +76,18 @@ pub fn BookDetailPage(uuid: String) -> Element {
     // Delete-dialog state, declared unconditionally for the same reason.
     let delete_open = use_signal(|| false);
 
+    // Fetch Summary override (mobile only). Declared unconditionally per
+    // rule 07 — `render_loaded_mobile` is a plain fn with no hook scope,
+    // reached only past the early returns below. `epoch` is bumped
+    // alongside `value` on every fresh book load; the Fetch Summary save in
+    // `render_loaded_mobile` checks it's unchanged before writing, so a save
+    // left over from a since-navigated-away book can't clobber the new
+    // book's description.
+    let description = DescriptionSignals {
+        value: use_signal(String::new),
+        epoch: use_signal(|| 0u64),
+    };
+
     use_book_data_effects(
         uuid.clone(),
         server_url.clone(),
@@ -87,6 +99,7 @@ pub fn BookDetailPage(uuid: String) -> Element {
             refresh,
             suggestions_epoch,
             suggestions,
+            description,
         },
     );
 
@@ -108,12 +121,36 @@ pub fn BookDetailPage(uuid: String) -> Element {
             undo_error,
             refresh,
         },
-        delete_open,
+        PageSignals {
+            description,
+            delete_open,
+        },
         author_books(),
         suggestions(),
         is_admin,
         server_url,
     )
+}
+
+/// Fetch Summary override signals (mobile only): the effective description
+/// plus the epoch that guards a pending fetch-and-save against resolving
+/// onto a different, later-navigated book. `Copy` (Dioxus signals) and
+/// grouped so call sites stay under the function-argument cap.
+#[derive(Clone, Copy)]
+struct DescriptionSignals {
+    value: Signal<String>,
+    epoch: Signal<u64>,
+}
+
+/// Extra per-page state threaded from [`BookDetailPage`]'s prologue into
+/// [`render_book_shell`]: the Fetch Summary override (mobile) and the
+/// delete-dialog open toggle (web). Grouped only to keep that call site
+/// under clippy's argument cap. `Copy` (Dioxus signals), so passing by
+/// value is cheap.
+#[derive(Clone, Copy)]
+struct PageSignals {
+    description: DescriptionSignals,
+    delete_open: Signal<bool>,
 }
 
 /// The book-page data signals written by the fetch effects. `Copy` (Dioxus
@@ -127,6 +164,7 @@ struct BookDataSignals {
     refresh: Signal<u32>,
     suggestions_epoch: Signal<u64>,
     suggestions: Signal<Option<SuggestionsResponse>>,
+    description: DescriptionSignals,
 }
 
 /// Install the two `uuid`-reactive fetch effects: the book + author-books load
@@ -150,6 +188,7 @@ fn use_book_data_effects(uuid: String, server_url: String, sig: BookDataSignals)
             sig.author_books,
             sig.loading,
             sig.error,
+            sig.description,
         );
     }));
 
@@ -179,6 +218,17 @@ struct MergeSignals {
     refresh: Signal<u32>,
 }
 
+/// Prebuilt web-only rail action buttons (Merge / Delete), threaded from
+/// [`render_book_shell`] into [`render_loaded`]. Grouped only to keep that
+/// call site under clippy's argument cap; both are always `None` on mobile,
+/// and mobile discards the whole struct rather than reading its fields (see
+/// [`LoadedBookView`] for the same pattern).
+#[cfg_attr(feature = "mobile", allow(dead_code))]
+struct RailButtons {
+    merge: Option<Element>,
+    delete: Option<Element>,
+}
+
 /// Assemble the loaded-book view: derive the admin flag, build the (web-only)
 /// merge button + dialog, and compose them with [`render_loaded`]. Kept a plain
 /// fn so the platform `cfg` gates live here instead of the component body
@@ -186,12 +236,17 @@ struct MergeSignals {
 fn render_book_shell(
     b: EbookMetadata,
     merge: MergeSignals,
-    delete_open: Signal<bool>,
+    page: PageSignals,
     author_books: Vec<EbookMetadata>,
     suggestions: Option<SuggestionsResponse>,
     is_admin: ReadSignal<bool>,
     server_url: String,
 ) -> Element {
+    let PageSignals {
+        description,
+        delete_open,
+    } = page;
+
     // `is_admin` starts at `false` and only flips to `true` on the web
     // client after `current_user()` resolves an admin user, so this read
     // returns `false` during SSR and for non-admins on every platform.
@@ -249,9 +304,12 @@ fn render_book_shell(
 
     let body = render_loaded(
         b,
+        description,
         author_books,
-        merge_button,
-        delete_button,
+        RailButtons {
+            merge: merge_button,
+            delete: delete_button,
+        },
         suggestions,
         server_url,
         is_admin_flag,
@@ -269,7 +327,11 @@ fn render_book_shell(
 /// Fetch the book, then (if it resolves and has a creator) the primary
 /// author's other books, filtering out the current book. `book` and
 /// `author_books` are written directly so a fast re-run (uuid change) is
-/// naturally superseded by the newer fetch's writes.
+/// naturally superseded by the newer fetch's writes. `description.value`
+/// (mobile's Fetch Summary override) resets to the freshly-loaded book's
+/// saved summary on every call, and `description.epoch` bumps alongside it
+/// so a fetch-and-save left over from a previous book can detect it's stale
+/// and drop its result instead of overwriting the new book's description.
 fn fetch_book_and_author_books(
     server_url: String,
     uuid: String,
@@ -277,6 +339,7 @@ fn fetch_book_and_author_books(
     mut author_books: Signal<Vec<EbookMetadata>>,
     mut loading: Signal<bool>,
     mut error: Signal<Option<String>>,
+    mut description: DescriptionSignals,
 ) {
     spawn(async move {
         // Keep the rendered page in place when re-fetching the *same* book
@@ -300,6 +363,12 @@ fn fetch_book_and_author_books(
                         inner.unique_identifier.clone(),
                     )
                 });
+                description.value.set(
+                    b.as_ref()
+                        .and_then(|inner| inner.description.clone())
+                        .unwrap_or_default(),
+                );
+                description.epoch.with_mut(|e| *e += 1);
                 book.set(b);
                 error.set(None);
                 loading.set(false);
@@ -522,9 +591,9 @@ fn derive_loaded_view(b: &EbookMetadata) -> LoadedBookView {
 /// Render the fully-loaded book detail view.
 fn render_loaded(
     b: EbookMetadata,
+    description: DescriptionSignals,
     author_books: Vec<EbookMetadata>,
-    merge_button: Option<Element>,
-    delete_button: Option<Element>,
+    rail: RailButtons,
     suggestions: Option<SuggestionsResponse>,
     server_url: String,
     is_admin: bool,
@@ -535,18 +604,27 @@ fn render_loaded(
     let out = {
         // The merge and delete affordances stay web-only; the discovery blocks
         // (author cluster + suggestions) now render on mobile too.
-        let _ = (merge_button, delete_button);
+        let _ = rail;
         mobile::render_loaded_mobile(mobile::MobileBookView {
             b,
             author_books,
             suggestions,
             is_admin,
             server_url,
+            description,
         })
     };
 
     #[cfg(not(feature = "mobile"))]
     let out = {
+        // Web keeps its own local copy inside `BdTitleCol` (hero.rs), a real
+        // `#[component]` that gets a fresh scope per mount — no hook-order
+        // risk there, so this param is unused on this target.
+        let _ = description;
+        let RailButtons {
+            merge: merge_button,
+            delete: delete_button,
+        } = rail;
         let LoadedBookView {
             title,
             primary_author,
