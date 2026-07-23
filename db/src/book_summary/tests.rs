@@ -12,7 +12,7 @@ use super::{fetch_summary, fetch_summary_with};
 use crate::pool::init_db;
 use crate::settings::set_hardcover_api_key;
 use crate::suggestions::hardcover::HardcoverConfig;
-use crate::test_support::seed_synced_ebook;
+use crate::test_support::{seed_synced_ebook, EnvVarGuard};
 
 fn ol_config(server: &MockServer) -> OpenLibrarySummaryConfig {
     OpenLibrarySummaryConfig {
@@ -320,9 +320,12 @@ async fn fetch_summary_with_hardcover_returns_none_when_book_unresolved() {
 
 #[tokio::test]
 async fn fetch_summary_returns_none_immediately_when_no_hardcover_key_is_configured() {
-    // No settings row and no `HARDCOVER_API_KEY` env var in the test process,
-    // so `fetch_summary` must short-circuit before ever resolving the book —
-    // an unseeded uuid would fail `get_book_by_uuid` if that lookup ran.
+    // No settings row and no `HARDCOVER_API_KEY` env var, so `fetch_summary`
+    // must short-circuit before ever resolving the book — an unseeded uuid
+    // would fail `get_book_by_uuid` if that lookup ran. Force the env var
+    // unset for the duration of the test so a developer's or CI runner's
+    // ambient `HARDCOVER_API_KEY` can't mask the short-circuit.
+    let _env = EnvVarGuard::set("HARDCOVER_API_KEY", None);
     let pool = init_db("sqlite::memory:").await.unwrap();
     let got = fetch_summary(&pool, "does-not-exist", SummarySource::Hardcover)
         .await

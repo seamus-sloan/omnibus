@@ -47,8 +47,7 @@ fn client() -> reqwest::Result<reqwest::Client> {
         return Ok(c.clone());
     }
     let new = crate::http_client::build_client(&crate::http_client::default_user_agent())?;
-    let _ = CLIENT.set(new.clone());
-    Ok(CLIENT.get().cloned().unwrap_or(new))
+    Ok(CLIENT.get_or_init(|| new).clone())
 }
 
 /// A work reference on an edition record, e.g. `{"key": "/works/OL45804W"}`.
