@@ -31,6 +31,8 @@ mod toolbar;
 mod mobile;
 #[cfg(feature = "mobile")]
 mod mobile_filter_sheet;
+#[cfg(feature = "mobile")]
+mod pull_refresh;
 
 // The mobile shelf-detail grid reuses the landing grid's cover cell so the
 // two surfaces stay visually identical.
@@ -356,6 +358,9 @@ fn mobile_landing_body(
     handlers: LandingHandlers,
     server_url: String,
 ) -> Element {
+    // Hooks stay unconditional within the mobile build: this helper is on
+    // LandingPage's only render path there.
+    pull_refresh::use_pull_to_refresh(server_url.clone(), sigs.prefs);
     rsx! {
         mobile::MobileLanding {
             book_count: view.book_count,

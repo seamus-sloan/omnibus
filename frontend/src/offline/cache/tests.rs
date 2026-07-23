@@ -98,6 +98,52 @@ async fn mutate_json_patches_in_place_and_skips_misses() {
 // ── cache-first (SWR) policy ────────────────────────────────────────
 
 #[tokio::test]
+async fn refresh_bypasses_fresh_window_and_lands_changed_data() {
+    store::init_global_for_tests();
+    let _guard = test_state_lock().lock().unwrap();
+    crate::offline::sync::note_online();
+    put_json("cache-test:refresh-force", &fx("Cached"));
+    let mut rx = subscribe();
+    rx.borrow_and_update();
+    refresh("cache-test:refresh-force".to_string(), async move {
+        Ok(fx("Fresh"))
+    })
+    .await;
+    let got: Option<Fixture> = get_json("cache-test:refresh-force").await;
+    assert_eq!(
+        got,
+        Some(fx("Fresh")),
+        "refresh must refetch even inside the fresh window"
+    );
+    assert!(
+        rx.has_changed().unwrap(),
+        "changed data must bump the cache generation"
+    );
+}
+
+#[tokio::test]
+async fn refresh_is_a_no_op_when_offline() {
+    store::init_global_for_tests();
+    let _guard = test_state_lock().lock().unwrap();
+    crate::offline::sync::note_offline();
+    put_json("cache-test:refresh-offline", &fx("Cached"));
+    let fetched = Arc::new(AtomicBool::new(false));
+    let flag = fetched.clone();
+    refresh("cache-test:refresh-offline".to_string(), async move {
+        flag.store(true, Ordering::SeqCst);
+        Ok(fx("Fresh"))
+    })
+    .await;
+    assert!(
+        !fetched.load(Ordering::SeqCst),
+        "an offline refresh must not touch the network"
+    );
+    let got: Option<Fixture> = get_json("cache-test:refresh-offline").await;
+    assert_eq!(got, Some(fx("Cached")));
+    crate::offline::sync::note_online();
+}
+
+#[tokio::test]
 async fn read_through_serves_fresh_cache_without_touching_network() {
     store::init_global_for_tests();
     let _guard = test_state_lock().lock().unwrap();
