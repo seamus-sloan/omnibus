@@ -87,6 +87,11 @@
   --cover-fallback-bg:  oklch(0.26 0 0);
   --cover-fallback-ink: oklch(0.94 0 0);
 
+  /* Matches the `black` reading theme the glue registers, so the strips
+     freed when the reader chrome slides away stay seamless with the page
+     instead of falling back to the default dark ground. */
+  --rd-page: #000000;
+
   color-scheme: dark;
 }
 
