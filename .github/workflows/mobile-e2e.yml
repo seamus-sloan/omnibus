@@ -386,3 +386,23 @@ jobs:
           name: mobile-e2e-server-log-android
           path: server.log
           retention-days: 7
+
+  # The required status check for this workflow. Always runs (`if: always()`),
+  # so branch protection gets a resolved status whenever mobile-e2e triggers —
+  # green when maestro-ios passed, red when it failed or was cancelled. Only
+  # `maestro-ios` is in `needs` — `maestro-android` is manual-dispatch-only
+  # (#1035) and must not block the gate. Mark ONLY `🔒 Mobile E2E Required` as
+  # required in branch protection; do not require `maestro-ios` directly (its
+  # matrix-repeat check name varies with `stress` and would hang the merge).
+  mobile-e2e-required:
+    name: 🔒 Mobile E2E Required
+    needs: [maestro-ios]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}
