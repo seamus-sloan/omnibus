@@ -168,10 +168,7 @@ async fn find_book_by_isbn(
     .bind(isbn13)
     .fetch_optional(pool)
     .await?;
-    // The exact-match confirm screen (ConfirmScreen -> LibraryBookCard) never
-    // reads `isbn` — it shows the scanned ISBN via a separate prop instead —
-    // so skip the correlated subquery `find_book_by_norm` still needs for
-    // CloseMatchScreen's "library edition ISBN" line.
+    // No caller on this rung reads `isbn`, so skip the correlated subquery.
     Ok(row.map(|r| row_to_scan_book(r, None)))
 }
 
