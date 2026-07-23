@@ -10,6 +10,7 @@ use omnibus_shared::{EbookMetadata, MergeBooksResult, SuggestionsResponse};
 use crate::components::{PageError, PageLoading, PageNotFound};
 use crate::{data, use_server_url, Route};
 
+mod delete;
 mod discovery;
 mod file_picker;
 mod immersive;
@@ -72,6 +73,8 @@ pub fn BookDetailPage(uuid: String) -> Element {
     let merge_open = use_signal(|| false);
     let merge_result: Signal<Option<MergeBooksResult>> = use_signal(|| None);
     let undo_error: Signal<Option<String>> = use_signal(|| None);
+    // Delete-dialog state, declared unconditionally for the same reason.
+    let delete_open = use_signal(|| false);
 
     // Fetch Summary override (mobile only). Declared unconditionally per
     // rule 07 — `render_loaded_mobile` is a plain fn with no hook scope,
@@ -118,7 +121,10 @@ pub fn BookDetailPage(uuid: String) -> Element {
             undo_error,
             refresh,
         },
-        description,
+        PageSignals {
+            description,
+            delete_open,
+        },
         author_books(),
         suggestions(),
         is_admin,
@@ -134,6 +140,17 @@ pub fn BookDetailPage(uuid: String) -> Element {
 struct DescriptionSignals {
     value: Signal<String>,
     epoch: Signal<u64>,
+}
+
+/// Extra per-page state threaded from [`BookDetailPage`]'s prologue into
+/// [`render_book_shell`]: the Fetch Summary override (mobile) and the
+/// delete-dialog open toggle (web). Grouped only to keep that call site
+/// under clippy's argument cap. `Copy` (Dioxus signals), so passing by
+/// value is cheap.
+#[derive(Clone, Copy)]
+struct PageSignals {
+    description: DescriptionSignals,
+    delete_open: Signal<bool>,
 }
 
 /// The book-page data signals written by the fetch effects. `Copy` (Dioxus
@@ -197,6 +214,17 @@ struct MergeSignals {
     refresh: Signal<u32>,
 }
 
+/// Prebuilt web-only rail action buttons (Merge / Delete), threaded from
+/// [`render_book_shell`] into [`render_loaded`]. Grouped only to keep that
+/// call site under clippy's argument cap; both are always `None` on mobile,
+/// and mobile discards the whole struct rather than reading its fields (see
+/// [`LoadedBookView`] for the same pattern).
+#[cfg_attr(feature = "mobile", allow(dead_code))]
+struct RailButtons {
+    merge: Option<Element>,
+    delete: Option<Element>,
+}
+
 /// Assemble the loaded-book view: derive the admin flag, build the (web-only)
 /// merge button + dialog, and compose them with [`render_loaded`]. Kept a plain
 /// fn so the platform `cfg` gates live here instead of the component body
@@ -204,12 +232,17 @@ struct MergeSignals {
 fn render_book_shell(
     b: EbookMetadata,
     merge: MergeSignals,
-    description: DescriptionSignals,
+    page: PageSignals,
     author_books: Vec<EbookMetadata>,
     suggestions: Option<SuggestionsResponse>,
     is_admin: ReadSignal<bool>,
     server_url: String,
 ) -> Element {
+    let PageSignals {
+        description,
+        delete_open,
+    } = page;
+
     // `is_admin` starts at `false` and only flips to `true` on the web
     // client after `current_user()` resolves an admin user, so this read
     // returns `false` during SSR and for non-admins on every platform.
@@ -246,11 +279,33 @@ fn render_book_shell(
         merge::build_merge_ui()
     };
 
+    // Rail "Delete files…" button + its dialog, same web-only shape as merge.
+    #[cfg(not(feature = "mobile"))]
+    let delete_button: Option<Element> = delete::build_delete_button(is_admin_flag, delete_open);
+    #[cfg(feature = "mobile")]
+    let delete_button: Option<Element> = delete::build_delete_button(is_admin_flag);
+
+    #[cfg(not(feature = "mobile"))]
+    let delete_ui: Option<Element> = delete::build_delete_ui(
+        delete_open,
+        merge.refresh,
+        b.unique_identifier.clone().unwrap_or_default(),
+        b.title.clone().unwrap_or_else(|| b.filename.clone()),
+    );
+    #[cfg(feature = "mobile")]
+    let delete_ui: Option<Element> = {
+        let _ = delete_open;
+        delete::build_delete_ui()
+    };
+
     let body = render_loaded(
         b,
         description,
         author_books,
-        merge_button,
+        RailButtons {
+            merge: merge_button,
+            delete: delete_button,
+        },
         suggestions,
         server_url,
         is_admin_flag,
@@ -258,6 +313,7 @@ fn render_book_shell(
     rsx! {
         {body}
         {merge_ui}
+        {delete_ui}
     }
 }
 
@@ -522,7 +578,7 @@ fn render_loaded(
     b: EbookMetadata,
     description: DescriptionSignals,
     author_books: Vec<EbookMetadata>,
-    merge_button: Option<Element>,
+    rail: RailButtons,
     suggestions: Option<SuggestionsResponse>,
     server_url: String,
     is_admin: bool,
@@ -531,9 +587,9 @@ fn render_loaded(
     // (hero + rail + suggestions + merge UI) isn't rendered there.
     #[cfg(feature = "mobile")]
     let out = {
-        // The merge affordance stays web-only; the discovery blocks (author
-        // cluster + suggestions) now render on mobile too.
-        let _ = merge_button;
+        // The merge and delete affordances stay web-only; the discovery blocks
+        // (author cluster + suggestions) now render on mobile too.
+        let _ = rail;
         mobile::render_loaded_mobile(mobile::MobileBookView {
             b,
             author_books,
@@ -550,6 +606,10 @@ fn render_loaded(
         // `#[component]` that gets a fresh scope per mount — no hook-order
         // risk there, so this param is unused on this target.
         let _ = description;
+        let RailButtons {
+            merge: merge_button,
+            delete: delete_button,
+        } = rail;
         let LoadedBookView {
             title,
             primary_author,
@@ -590,6 +650,7 @@ fn render_loaded(
                         authors_line,
                         series,
                         merge_button,
+                        delete_button,
                     }
                 }
                 div { class: "bd-footer",

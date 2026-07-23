@@ -2,14 +2,13 @@
 
 use sqlx::{Row, SqlitePool};
 
+use omnibus_shared::isbn::{normalize_isbn, IsbnError};
 use omnibus_shared::metadata_lookup::ExternalBookMeta;
 use omnibus_shared::physical::WishlistSource;
 use omnibus_shared::scan::{ScanBook, ScanOutcome};
 
 use crate::author_photos::fetch_remote_image;
-use crate::metadata_lookup::{
-    lookup_isbn, normalize_isbn, IsbnError, MetadataLookupConfig, MetadataLookupError,
-};
+use crate::metadata_lookup::{lookup_isbn, MetadataLookupConfig, MetadataLookupError};
 use crate::normalize::{normalize_author, normalize_title};
 use crate::physical::{
     add_physical_copy, add_wishlist_entry, create_fileless_book, FilelessBook, FilelessCover,

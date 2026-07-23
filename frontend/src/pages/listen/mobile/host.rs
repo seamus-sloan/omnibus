@@ -366,6 +366,7 @@ mod tests {
             ordinal,
             label: None,
             size_bytes: 0,
+            path: None,
         }
     }
 

@@ -315,6 +315,7 @@ pub(super) fn BdRailSection(
     authors_line: String,
     series: Option<String>,
     merge_button: Option<Element>,
+    delete_button: Option<Element>,
 ) -> Element {
     let uuid = b.unique_identifier.clone().unwrap_or_default();
     rsx! {
@@ -360,6 +361,7 @@ pub(super) fn BdRailSection(
                     "Edit metadata\u{2026}"
                 }
                 {merge_button}
+                {delete_button}
             }
             div { class: "card",
                 if let Some(s) = series.as_ref() {

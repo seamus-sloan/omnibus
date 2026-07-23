@@ -1,4 +1,6 @@
-//! One component per screen of the check-in flow.
+//! One component per screen of the check-in flow, from the resolve spinner
+//! onwards. The two input screens are big enough to own their files: `scan`
+//! (camera) and `entry` (keypad).
 //!
 //! These are presentational: every write goes back out through an
 //! [`EventHandler`] so [`super::CheckInPage`] owns the transport and the
@@ -11,53 +13,6 @@ use omnibus_shared::{ExternalBookMeta, ScanBook, WishlistAddRequest};
 
 use super::{wishlist_request_for, FlowState};
 use crate::{media_url, use_server_url, Route};
-
-/// Manual ISBN entry — the flow's entry point and its "scan another" target.
-#[component]
-pub(super) fn EntryScreen(
-    isbn: Signal<String>,
-    busy: Signal<bool>,
-    on_resolve: EventHandler<String>,
-) -> Element {
-    let mut isbn = isbn;
-    rsx! {
-        h1 { "Check in a book" }
-        p { class: "subtitle",
-            "Type the ISBN from the back cover to add a print copy to your library."
-        }
-        form {
-            class: "settings-form",
-            "data-testid": "check-in-form",
-            onsubmit: move |evt| {
-                evt.prevent_default();
-                on_resolve.call(isbn());
-            },
-            div { class: "settings-field",
-                label { r#for: "check-in-isbn", "ISBN" }
-                input {
-                    id: "check-in-isbn",
-                    "data-testid": "check-in-isbn",
-                    r#type: "text",
-                    inputmode: "numeric",
-                    autocomplete: "off",
-                    placeholder: "9780000000000",
-                    value: "{isbn}",
-                    disabled: busy(),
-                    oninput: move |e| isbn.set(e.value()),
-                }
-            }
-            div { class: "settings-actions",
-                button {
-                    r#type: "submit",
-                    class: "btn",
-                    disabled: busy(),
-                    "data-testid": "check-in-submit",
-                    "Find book"
-                }
-            }
-        }
-    }
-}
 
 /// Matching spinner shown while the resolve request is in flight.
 #[component]

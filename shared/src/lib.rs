@@ -7,10 +7,12 @@
 pub mod audiobook;
 pub mod auth;
 pub mod bookmark;
+pub mod deletion;
 pub mod discovery;
 pub mod ebook;
 pub mod highlight;
 pub mod image_format;
+pub mod isbn;
 pub mod journal;
 pub mod logs;
 pub mod merge;
@@ -66,10 +68,12 @@ pub fn search_query_too_long(q: &str) -> bool {
 pub use audiobook::*;
 pub use auth::*;
 pub use bookmark::*;
+pub use deletion::*;
 pub use discovery::*;
 pub use ebook::*;
 pub use highlight::*;
 pub use image_format::detect_image_format;
+pub use isbn::*;
 pub use journal::*;
 pub use logs::*;
 pub use merge::*;

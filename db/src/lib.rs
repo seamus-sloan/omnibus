@@ -13,6 +13,7 @@ pub mod bookmarks;
 pub mod books;
 pub mod browse;
 pub mod covers;
+pub mod deletion;
 pub mod discovery;
 pub mod ebook;
 pub mod helpers;
@@ -69,13 +70,15 @@ pub use books::{
 };
 pub use browse::*;
 pub use covers::{covers_dir, get_cover, get_last_modified_epoch, CoversError};
+pub use deletion::{
+    book_deletion_manifest, delete_book_items, DeleteError, DeleteOutcome, DeletionImpact,
+    DeletionManifest,
+};
 pub use discovery::*;
 pub use helpers::{build_fts_match, sanitize_fts_query};
 pub use kepub::{convert_book, kepub_path, kepubify_available, warn_if_unavailable, KepubError};
 pub use merge::{merge_books, undo_merge, MergeError, MergeOutcome};
-pub use metadata_lookup::{
-    lookup_isbn, normalize_isbn, IsbnError, MetadataLookupConfig, MetadataLookupError,
-};
+pub use metadata_lookup::{lookup_isbn, MetadataLookupConfig, MetadataLookupError};
 pub use metadata_overrides::*;
 pub use missing_files::{
     backfill_missing_files_flags, gc_books_missing_files, MissingFilesError,
