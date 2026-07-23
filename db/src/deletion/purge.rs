@@ -149,25 +149,13 @@ pub(super) async fn journal_image_names(
 }
 
 /// Narrow `candidates` to the names no surviving `journal_entries.body_md`
-/// still embeds. Matched on the full embed path rather than the bare name for
-/// the same reason as `journals::cleanup_orphaned_images`: a bare-name
-/// substring can false-positive on unrelated body text.
+/// still embeds, via the shared batched check in
+/// [`crate::journals::unreferenced_image_names`] — unlike its
+/// swallow-and-log sibling `journals::cleanup_orphaned_images`, this caller
+/// propagates a DB error to the deletion transaction it guards.
 pub(super) async fn orphaned_images(
     pool: &SqlitePool,
     candidates: Vec<String>,
 ) -> Result<Vec<String>, DeleteError> {
-    let mut orphaned = Vec::new();
-    for name in candidates {
-        let embed = format!("{}{name}", crate::journals::markdown::IMAGE_URL_PREFIX);
-        let still_referenced: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM journal_entries WHERE instr(body_md, ?) > 0)",
-        )
-        .bind(&embed)
-        .fetch_one(pool)
-        .await?;
-        if !still_referenced {
-            orphaned.push(name);
-        }
-    }
-    Ok(orphaned)
+    Ok(crate::journals::unreferenced_image_names(pool, candidates).await?)
 }
