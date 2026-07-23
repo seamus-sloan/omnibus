@@ -1,11 +1,8 @@
-//! Scanner interop: pure JS-string builders plus the
-//! `dioxus::document::eval` seam that mounts the vendored zxing decoder.
-//!
-//! One implementation serves both interactive targets. The install script
-//! defines `window.__omnibusOnScan*` shims that forward into `dioxus.send(...)`
-//! (drained via `Eval::recv`), which web and mobile both support — unlike the
-//! reader's `wasm_bindgen` callbacks, which are web-only. The builders are
-//! unit-tested; `install_scanner_surface` is the eval seam.
+//! Scanner interop: pure JS-string builders plus the `dioxus::document::eval`
+//! seam that mounts the vendored zxing decoder. One implementation serves both
+//! interactive targets — the `window.__omnibusOnScan*` shims forward into
+//! `dioxus.send(...)` (drained via `Eval::recv`), which web and mobile both
+//! support, unlike the reader's web-only `wasm_bindgen` callbacks.
 
 // SSR never evals: it compiles the builders only so their tests run under the
 // `server` feature (the matrix `cargo test -p omnibus-frontend` uses).

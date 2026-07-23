@@ -1,10 +1,8 @@
 //! Check-in flow (`/check-in`) — resolve an ISBN and land it on the right
-//! branch of the physical-ownership decision tree.
-//!
-//! The camera scanner is the flow's front door and manual ISBN entry its
-//! always-available fallback; both feed the same [`Stage`] machine. Every
-//! screen is plain rsx with no target gating, so SSR and the first WASM paint
-//! agree (rule 07).
+//! branch of the physical-ownership decision tree. The camera scanner is the
+//! front door and manual entry its always-available fallback; both feed the
+//! same [`Stage`] machine. Every screen is plain rsx with no target gating, so
+//! SSR and the first WASM paint agree (rule 07).
 
 mod entry;
 mod scan;

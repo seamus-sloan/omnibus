@@ -1,11 +1,8 @@
-//! Reusable camera barcode scanner: live rear-camera preview with an
-//! auto-detecting EAN-13 decode (no shutter button), an optional torch toggle,
-//! and a permanent escape hatch to manual entry.
-//!
-//! Decoding runs in a vendored WASM build of zxing (`assets/vendor/`), never a
-//! CDN — mobile bundles its assets and has no CDN reachability guarantee. The
-//! rsx below is target-agnostic (rule 07); only the post-mount effect that
-//! opens the camera has a `web`/`mobile` gate.
+//! Reusable camera barcode scanner: rear-camera preview, auto-detecting
+//! EAN-13 decode (no shutter), optional torch, and a permanent escape hatch to
+//! manual entry. Decoding uses the vendored zxing WASM in `assets/vendor/`,
+//! never a CDN — mobile bundles its assets. The rsx is target-agnostic (rule
+//! 07); only the post-mount effect that opens the camera is target-gated.
 
 mod interop;
 #[cfg(test)]
