@@ -485,7 +485,9 @@ fn ReaderLayout(
             // Ambient minimal-chrome label: the book title that fades in where
             // the toolbar was while the chrome is hidden (phone breakpoint
             // only; displayed purely by CSS so every target renders it — rule 07).
-            div { class: "rd-ambient-title", "{book_title}" }
+            // aria-hidden: it only mirrors the toolbar title visually, so it
+            // must never be announced alongside it.
+            div { class: "rd-ambient-title", "aria-hidden": "true", "{book_title}" }
 
             ReaderTopBar {
                 book_title: book_title.clone(),

@@ -5273,8 +5273,13 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   padding: env(safe-area-inset-top) 32px 0; align-items: center;
   justify-content: center; pointer-events: none; overflow: hidden;
   white-space: nowrap; font-size: 13px; color: var(--ink-3);
-  opacity: 0; transition: opacity .22s ease; }
-.rd-chrome-hidden .rd-ambient-title { opacity: 1; }
+  /* `visibility` rides the fade so the inactive label leaves the
+     accessibility tree (opacity alone keeps it exposed and screen readers
+     would announce the title twice); the markup is `aria-hidden` too since
+     the label only mirrors the toolbar title visually. */
+  opacity: 0; visibility: hidden;
+  transition: opacity .22s ease, visibility .22s; }
+.rd-chrome-hidden .rd-ambient-title { opacity: 1; visibility: visible; }
 /* Phone minimal-chrome footer counterpart to `.rd-ambient-title`: the bare
    centred page number, displayed only by the phone breakpoint while the
    chrome is hidden. */
