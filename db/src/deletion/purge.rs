@@ -122,7 +122,7 @@ pub(super) async fn purge_book(
         .await?;
     // `books_fts` is standalone (no `content=`), so its row only leaves through
     // this door — same as the GC purge and the merge source delete.
-    crate::sync::delete_fts(&mut **tx, book_id).await?;
+    crate::sync::delete_fts(tx, book_id).await?;
     crate::taxonomy::delete_orphan_taxonomy(tx).await?;
     Ok(())
 }

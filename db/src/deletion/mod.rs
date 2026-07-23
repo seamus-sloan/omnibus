@@ -180,7 +180,7 @@ pub async fn delete_book_items(
     fs::cleanup(fs::Cleanup {
         paths,
         library_roots,
-        book: total_delete.then(|| fs::BookCleanup {
+        book: total_delete.then_some(fs::BookCleanup {
             book_id,
             uuid,
             journal_images,

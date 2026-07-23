@@ -512,7 +512,9 @@ fn render_actions(buttons: Element, on_close: EventHandler<()>, busy: Signal<boo
     }
 }
 
-#[cfg(test)]
+// Every test here renders SSR markup, so the whole module is `server`-gated —
+// under `web` its contents would be dead code and CI lints with `-D warnings`.
+#[cfg(all(test, feature = "server"))]
 mod tests {
     use super::*;
 
@@ -541,7 +543,6 @@ mod tests {
 
     /// Renders one pane in isolation. The full dialog mounts a manifest-fetch
     /// effect, which `render_element` can't drive without a live runtime.
-    #[cfg(feature = "server")]
     #[component]
     fn ChooseHarness(manifest: BookDeletionManifest) -> Element {
         render_choose(
@@ -552,7 +553,6 @@ mod tests {
         )
     }
 
-    #[cfg(feature = "server")]
     #[component]
     fn ConfirmHarness(manifest: BookDeletionManifest) -> Element {
         render_confirm(
@@ -564,7 +564,6 @@ mod tests {
         )
     }
 
-    #[cfg(feature = "server")]
     #[test]
     fn choose_pane_lists_each_file_with_its_badge_size_and_path() {
         let html = dioxus::ssr::render_element(rsx! {
@@ -587,7 +586,6 @@ mod tests {
         assert!(html.contains("1.2 MB · clarke/piranesi.epub"));
     }
 
-    #[cfg(feature = "server")]
     #[test]
     fn choose_pane_adds_a_physical_copies_section_when_the_book_has_one() {
         let html = dioxus::ssr::render_element(rsx! {
@@ -606,7 +604,6 @@ mod tests {
         assert!(html.contains("Book record is removed only when every item here is selected."));
     }
 
-    #[cfg(feature = "server")]
     #[test]
     fn confirm_pane_offers_the_record_delete_for_a_book_with_no_items() {
         let html = dioxus::ssr::render_element(rsx! {
