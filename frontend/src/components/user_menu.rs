@@ -414,6 +414,7 @@ fn UmThemeSeg(theme: Signal<Theme>) -> Element {
     let mut theme = theme;
     let current = *theme.read();
     let dark_on = matches!(current, Theme::Dark);
+    let black_on = matches!(current, Theme::Black);
     let light_on = matches!(current, Theme::Light);
     let sepia_on = matches!(current, Theme::Sepia);
     rsx! {
@@ -429,6 +430,16 @@ fn UmThemeSeg(theme: Signal<Theme>) -> Element {
                         persist_theme(Theme::Dark);
                     },
                     "Dark"
+                }
+                button {
+                    class: if black_on { "um-theme-btn on" } else { "um-theme-btn" },
+                    r#type: "button",
+                    "data-testid": "theme-black",
+                    onclick: move |_| {
+                        theme.set(Theme::Black);
+                        persist_theme(Theme::Black);
+                    },
+                    "Black"
                 }
                 button {
                     class: if light_on { "um-theme-btn on" } else { "um-theme-btn" },

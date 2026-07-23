@@ -2,17 +2,16 @@
  * ──────────────────────────────────────────────────────────
  * F1.7 foundation. Loaded via Dioxus `asset!` from frontend/src/lib.rs.
  *
- * Tokens are oklch-based warm neutrals. Two themes today (dark default,
- * light via `data-theme="light"` on the `.atrium` wrapper div emitted by
- * the `AtriumRoot` Dioxus component — not on `<html>`). Per-book accent
- * comes from `books.accent_color`, set inline as `--accent` on the cover
- * element.
+ * Tokens are oklch-based. Four themes today, selected via `data-theme`
+ * on the `.atrium` wrapper div emitted by the `AtriumRoot` Dioxus
+ * component (not on `<html>`): `dark` (default, warm neutrals), `black`
+ * (pure #000 grayscale, matched to Apple Books' macOS dark reader),
+ * `light`, and `sepia`. Per-book accent comes from `books.accent_color`,
+ * set inline as `--accent` on the cover element.
  *
  * Fonts: pulled from Google Fonts for the foundation PR. Self-hosting
  * (`@font-face` under `frontend/assets/fonts/`) is tracked as a follow-up
  * inside F1.7 for offline / airgapped installs.
- *
- * Sepia, density, type pairing toggles deferred to F1.9.
  */
 
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap');
@@ -55,6 +54,38 @@
 
   --r-sm: 6px;  --r-md: 10px;  --r-lg: 14px;  --r-xl: 22px;
   --pad: 28px;  --gap: 18px;
+
+  color-scheme: dark;
+}
+
+/* ── Tokens · black (pure black, Apple Books macOS dark) ─────────── */
+/* A pure-black grayscale theme matched to Apple Books' dark reading
+   theme on macOS: a true #000000 base ground so the reader page
+   (registered as `black` in epub-reader-glue.js) and the surrounding
+   chrome/library share one pure-black ground, with bright white text.
+   Achromatic throughout (chroma 0) with a light-neutral accent, so no
+   color reads in the UI. `--bg-1..3` lift slightly off black to raise
+   cards, nav, and inputs. Status colors, fonts, radii, and spacing
+   fall through to `:root`. */
+[data-theme="black"] {
+  --bg-0:    oklch(0 0 0);
+  --bg-1:    oklch(0.150 0 0);
+  --bg-2:    oklch(0.190 0 0);
+  --bg-3:    oklch(0.240 0 0);
+  --line:    oklch(0.34 0 0 / 0.60);
+  --line-2:  oklch(0.34 0 0 / 0.26);
+
+  --ink-0:   oklch(0.99 0 0);
+  --ink-1:   oklch(0.82 0 0);
+  --ink-2:   oklch(0.63 0 0);
+  --ink-3:   oklch(0.48 0 0);
+
+  --accent:      oklch(0.94 0 0);
+  --accent-soft: oklch(0.30 0 0);
+  --accent-ink:  oklch(0.14 0 0);
+
+  --cover-fallback-bg:  oklch(0.26 0 0);
+  --cover-fallback-ink: oklch(0.94 0 0);
 
   color-scheme: dark;
 }

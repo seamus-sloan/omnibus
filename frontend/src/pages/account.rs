@@ -66,8 +66,9 @@ pub fn identity_subline(username: &str, is_admin: bool) -> String {
 
 /// Cycle order for the theme segmented control.
 #[cfg(any(feature = "mobile", test))]
-pub const THEME_ORDER: [(&str, ThemeKind); 3] = [
+pub const THEME_ORDER: [(&str, ThemeKind); 4] = [
     ("Dark", ThemeKind::Dark),
+    ("Black", ThemeKind::Black),
     ("Light", ThemeKind::Light),
     ("Sepia", ThemeKind::Sepia),
 ];
@@ -79,6 +80,7 @@ pub const THEME_ORDER: [(&str, ThemeKind); 3] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThemeKind {
     Dark,
+    Black,
     Light,
     Sepia,
 }
@@ -90,6 +92,7 @@ impl ThemeKind {
     fn to_theme(self) -> Theme {
         match self {
             ThemeKind::Dark => Theme::Dark,
+            ThemeKind::Black => Theme::Black,
             ThemeKind::Light => Theme::Light,
             ThemeKind::Sepia => Theme::Sepia,
         }
@@ -101,6 +104,7 @@ impl ThemeKind {
     pub fn as_attr(self) -> &'static str {
         match self {
             ThemeKind::Dark => "dark",
+            ThemeKind::Black => "black",
             ThemeKind::Light => "light",
             ThemeKind::Sepia => "sepia",
         }
@@ -485,7 +489,7 @@ fn AccountLinkRow(to: Route, label: String) -> Element {
     }
 }
 
-/// Dark / Light / Sepia segmented control wired to the app-wide theme signal.
+/// Dark / Black / Light / Sepia segmented control wired to the app-wide theme signal.
 #[cfg(feature = "mobile")]
 #[component]
 fn ThemeControl() -> Element {
@@ -570,6 +574,6 @@ mod tests {
     #[test]
     fn theme_order_matches_css_attrs() {
         let attrs: Vec<&str> = THEME_ORDER.iter().map(|(_, k)| k.as_attr()).collect();
-        assert_eq!(attrs, ["dark", "light", "sepia"]);
+        assert_eq!(attrs, ["dark", "black", "light", "sepia"]);
     }
 }

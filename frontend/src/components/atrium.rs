@@ -17,16 +17,18 @@ use crate::{media_url, use_server_url};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Theme {
     Dark,
+    Black,
     Light,
     Sepia,
 }
 
 impl Theme {
     /// Map this theme variant to its `data-theme` HTML attribute string
-    /// (e.g. `"dark"`, `"light"`, `"sepia"`).
+    /// (e.g. `"dark"`, `"black"`, `"light"`, `"sepia"`).
     pub fn as_attr(self) -> &'static str {
         match self {
             Theme::Dark => "dark",
+            Theme::Black => "black",
             Theme::Light => "light",
             Theme::Sepia => "sepia",
         }
@@ -37,6 +39,7 @@ impl Theme {
     pub fn from_attr(s: &str) -> Option<Self> {
         match s {
             "dark" => Some(Theme::Dark),
+            "black" => Some(Theme::Black),
             "light" => Some(Theme::Light),
             "sepia" => Some(Theme::Sepia),
             _ => None,
@@ -233,9 +236,11 @@ mod tests {
     #[test]
     fn theme_attr_round_trips() {
         assert_eq!(Theme::Dark.as_attr(), "dark");
+        assert_eq!(Theme::Black.as_attr(), "black");
         assert_eq!(Theme::Light.as_attr(), "light");
         assert_eq!(Theme::Sepia.as_attr(), "sepia");
         assert_eq!(Theme::from_attr("dark"), Some(Theme::Dark));
+        assert_eq!(Theme::from_attr("black"), Some(Theme::Black));
         assert_eq!(Theme::from_attr("light"), Some(Theme::Light));
         assert_eq!(Theme::from_attr("sepia"), Some(Theme::Sepia));
         assert_eq!(Theme::from_attr("nope"), None);

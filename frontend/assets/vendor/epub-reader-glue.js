@@ -237,6 +237,11 @@
       rendition.themes.register("dark", {
         body: { background: "#201e1b", color: "#f5f3f0" },
       });
+      // Matches Apple Books' dark reading theme on macOS: a pure-black
+      // #000000 page with bright #ffffff text.
+      rendition.themes.register("black", {
+        body: { background: "#000000", color: "#ffffff" },
+      });
       rendition.themes.register("sepia", {
         body: { background: "#ede4d0", color: "#3b3029" },
       });

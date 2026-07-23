@@ -32,7 +32,7 @@ pub(crate) fn ReaderAaPanel(on_close: EventHandler<MouseEvent>) -> Element {
     }
 }
 
-/// Theme segmented control (Dark / Light / Sepia).
+/// Theme segmented control (Dark / Black / Light / Sepia).
 #[component]
 fn ThemeRow() -> Element {
     let prefs = use_context::<ReaderPrefs>();
@@ -47,6 +47,12 @@ fn ThemeRow() -> Element {
                     r#type: "button",
                     onclick: move |_| prefs.set_theme(Theme::Dark),
                     "Dark"
+                }
+                button {
+                    class: if theme == Theme::Black { "on" } else { "" },
+                    r#type: "button",
+                    onclick: move |_| prefs.set_theme(Theme::Black),
+                    "Black"
                 }
                 button {
                     class: if theme == Theme::Light { "on" } else { "" },
