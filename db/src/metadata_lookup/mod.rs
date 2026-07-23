@@ -4,15 +4,14 @@
 //! missing is a clean "unresolved" (`Ok(None)`) so the caller can offer a
 //! manual-entry form; an invalid ISBN is a typed error the UI can act on.
 
-mod isbn;
 mod providers;
 
 #[cfg(test)]
 mod tests;
 
-pub use isbn::{normalize_isbn, IsbnError};
 pub use providers::MetadataLookupConfig;
 
+use omnibus_shared::isbn::{normalize_isbn, IsbnError};
 use omnibus_shared::metadata_lookup::ExternalBookMeta;
 
 /// Errors from an ISBN metadata lookup.
@@ -23,7 +22,13 @@ pub enum MetadataLookupError {
     Isbn(#[from] IsbnError),
     /// A provider was unreachable or returned an unparseable response. Distinct
     /// from a clean miss, which is `Ok(None)`, not an error.
-    #[error(transparent)]
+    ///
+    /// The message is deliberately the caller-facing sentence rather than the
+    /// provider's own wording: "google books returned an error status" reads as
+    /// an Omnibus bug, when in practice it is usually Google Books' anonymous
+    /// daily quota (HTTP 429 — we send no API key). The provider's error stays
+    /// on the source chain for the log.
+    #[error("metadata lookup is temporarily unavailable — try again later, or enter the details manually")]
     Provider(#[from] anyhow::Error),
 }
 

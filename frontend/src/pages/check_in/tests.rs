@@ -1,3 +1,4 @@
+use super::entry::apply_key;
 use super::screens::byline;
 use super::*;
 use omnibus_shared::MetadataProvider;
@@ -34,20 +35,56 @@ fn clean_isbn_strips_separators_and_upcases_the_check_digit() {
 }
 
 #[test]
-fn looks_like_isbn_accepts_ten_and_thirteen_digit_forms() {
-    assert!(looks_like_isbn("9780441013593"));
-    assert!(looks_like_isbn("0441172717"));
-    assert!(looks_like_isbn("044117271X"));
+fn isbn_rejection_accepts_valid_ten_and_thirteen_digit_forms() {
+    assert_eq!(isbn_rejection("9780441013593"), None);
+    assert_eq!(isbn_rejection("0441172717"), None);
+    // 123456789X is a valid ISBN-10 whose check digit is X.
+    assert_eq!(isbn_rejection("123456789X"), None);
 }
 
 #[test]
-fn looks_like_isbn_rejects_wrong_length_or_stray_letters() {
-    assert!(!looks_like_isbn(""));
-    assert!(!looks_like_isbn("97804410135"));
-    assert!(!looks_like_isbn("97804410135931"));
-    assert!(!looks_like_isbn("978044101359X"), "X is ISBN-10 only");
-    assert!(!looks_like_isbn("044117271A"));
-    assert!(!looks_like_isbn("04411X2717"), "X is the check digit only");
+fn isbn_rejection_reports_a_plain_length_message_for_a_partial_entry() {
+    let msg = Some("Enter a 10- or 13-digit ISBN.".to_string());
+    assert_eq!(isbn_rejection(""), msg);
+    assert_eq!(isbn_rejection("97804410135"), msg);
+    assert_eq!(isbn_rejection("97804410135931"), msg);
+}
+
+#[test]
+fn isbn_rejection_catches_a_transposed_digit_before_the_round_trip() {
+    // Right length, wrong check digit — the case a shape-only gate misses.
+    assert_eq!(
+        isbn_rejection("9780441013539").as_deref(),
+        Some("ISBN has an invalid check digit")
+    );
+    assert_eq!(
+        isbn_rejection("0441172718").as_deref(),
+        Some("ISBN has an invalid check digit")
+    );
+}
+
+#[test]
+fn isbn_rejection_catches_stray_letters() {
+    assert_eq!(
+        isbn_rejection("978044101359X").as_deref(),
+        Some("ISBN contains invalid characters"),
+        "X is ISBN-10 only"
+    );
+    assert_eq!(
+        isbn_rejection("04411X2717").as_deref(),
+        Some("ISBN contains invalid characters"),
+        "X is the check digit only"
+    );
+}
+
+#[test]
+fn apply_key_appends_up_to_thirteen_slots_and_backspaces() {
+    assert_eq!(apply_key("978", "0"), "9780");
+    assert_eq!(apply_key("978-0", "4"), "97804");
+    assert_eq!(apply_key("9780", "\u{232b}"), "978");
+    assert_eq!(apply_key("", "\u{232b}"), "");
+    // The 14th press is dropped rather than silently truncating the entry.
+    assert_eq!(apply_key("9780441013593", "7"), "9780441013593");
 }
 
 #[test]

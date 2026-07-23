@@ -16,8 +16,8 @@ use omnibus_db as db;
 use super::{internal_rpc_error, AuthUser, PoolExt};
 
 /// Map a scan-flow error to a client-facing `ServerFnError`: user-actionable
-/// cases (bad ISBN, unknown book, missing wishlist target) carry a specific
-/// message; provider/DB failures are genericized + logged.
+/// cases (bad ISBN, unknown book, missing wishlist target, an unreachable
+/// provider) carry a specific message; DB failures are genericized + logged.
 #[cfg(feature = "server")]
 fn map_scan_err(e: db::ScanError) -> ServerFnError {
     match &e {
@@ -26,6 +26,13 @@ fn map_scan_err(e: db::ScanError) -> ServerFnError {
             ServerFnError::new("book not found")
         }
         db::ScanError::MissingWishlistTarget => ServerFnError::new(e.to_string()),
+        // A provider outage is not an Omnibus bug — surface the "try again
+        // later" sentence rather than the generic internal-error text, but
+        // still log the provider's own message.
+        db::ScanError::Lookup(inner @ db::MetadataLookupError::Provider(_)) => {
+            tracing::warn!(error = ?inner, "metadata provider unavailable");
+            ServerFnError::new(inner.to_string())
+        }
         _ => internal_rpc_error("scan", e),
     }
 }

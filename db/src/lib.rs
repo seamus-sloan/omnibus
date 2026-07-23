@@ -73,9 +73,7 @@ pub use discovery::*;
 pub use helpers::{build_fts_match, sanitize_fts_query};
 pub use kepub::{convert_book, kepub_path, kepubify_available, warn_if_unavailable, KepubError};
 pub use merge::{merge_books, undo_merge, MergeError, MergeOutcome};
-pub use metadata_lookup::{
-    lookup_isbn, normalize_isbn, IsbnError, MetadataLookupConfig, MetadataLookupError,
-};
+pub use metadata_lookup::{lookup_isbn, MetadataLookupConfig, MetadataLookupError};
 pub use metadata_overrides::*;
 pub use missing_files::{
     backfill_missing_files_flags, gc_books_missing_files, MissingFilesError,

@@ -96,6 +96,9 @@ fn config_for(server: &MockServer) -> MetadataLookupConfig {
     MetadataLookupConfig {
         openlibrary_base: server.uri(),
         googlebooks_base: server.uri(),
+        // Keyless on purpose: the mock never checks it, and reading the real
+        // env here would make the suite depend on the developer's `.env`.
+        googlebooks_api_key: None,
         timeout: Duration::from_secs(5),
     }
 }

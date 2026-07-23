@@ -16,6 +16,15 @@ identifier = "com.omnibus.mobile"
 [android]
 uses_cleartext_traffic = true
 
+# Check-in's barcode scanner calls `getUserMedia` from the WebView. dx maps
+# this one entry to both `NSCameraUsageDescription` (the iOS prompt's text) and
+# `<uses-permission android:name="android.permission.CAMERA">`. wry already
+# grants the WebView's request on both platforms (its `WKUIDelegate`
+# `requestMediaCapturePermissionForOrigin` and `RustWebChromeClient`
+# `onPermissionRequest`), so the manifest declaration is all that's missing.
+[permissions.camera]
+description = "Omnibus uses the camera to scan a book's barcode when you check in a print copy."
+
 [ios.raw]
 # Omnibus is a self-hosted app; users connect over HTTP on their LAN or via
 # Tailscale. WKWebView enforces ATS and would otherwise block <img> loads from

@@ -387,3 +387,29 @@ async fn api_scan_wishlist_add_returns_400_when_neither_uuid_nor_meta_given() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
+
+#[test]
+fn scan_error_maps_a_provider_outage_to_503_not_500() {
+    use omnibus_db::{MetadataLookupError, ScanError};
+
+    // Both providers down is an outage, not a bug: a 500 tells the reader
+    // Omnibus is broken, when the honest answer is "try again later".
+    let err = ScanError::Lookup(MetadataLookupError::Provider(anyhow::anyhow!(
+        "google books returned an error status"
+    )));
+    assert_eq!(
+        super::scan_error("scan_resolve", err).status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+}
+
+#[test]
+fn scan_error_still_maps_a_db_failure_to_500() {
+    use omnibus_db::ScanError;
+
+    let err = ScanError::Sqlx(sqlx::Error::RowNotFound);
+    assert_eq!(
+        super::scan_error("scan_resolve", err).status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+}
