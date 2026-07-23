@@ -609,22 +609,6 @@ pub async fn reindex_audiobooks_with_progress(
     })
 }
 
-/// Fill `file_chapters` for audiobook `book_files` rows that have none.
-///
-/// The chapter extraction pipeline was added after the initial audiobook
-/// indexer, so books indexed before the migration have zero `file_chapters`
-/// rows. The normal diff-based reindex skips unchanged files, so this
-/// backfill runs as a separate worker task and is a no-op once all books
-/// have chapters. `on_progress(processed, total)` is called after each
-/// book so the UI can render a progress bar.
-///
-/// ## Query efficiency
-///
-/// All `book_file_parts` rows for the backfill set are fetched in a single
-/// `WHERE book_file_id IN (…)` bulk query before the loop rather than one
-/// per book, and all chapter inserts are committed in batches of 250 books
-/// to avoid per-book WAL flushes (mirrors the sync/audiobooks.rs backfill
-/// pattern).
 /// Query the first-part filename (ordinal=0) and format for every book
 /// under `library_path` that needs chapter backfill (no `file_chapters`
 /// rows yet).
@@ -693,6 +677,22 @@ async fn bulk_fetch_parts(
     Ok(parts_by_id)
 }
 
+/// Fill `file_chapters` for audiobook `book_files` rows that have none.
+///
+/// The chapter extraction pipeline was added after the initial audiobook
+/// indexer, so books indexed before the migration have zero `file_chapters`
+/// rows. The normal diff-based reindex skips unchanged files, so this
+/// backfill runs as a separate worker task and is a no-op once all books
+/// have chapters. `on_progress(processed, total)` is called after each
+/// book so the UI can render a progress bar.
+///
+/// ## Query efficiency
+///
+/// All `book_file_parts` rows for the backfill set are fetched in a single
+/// `WHERE book_file_id IN (…)` bulk query before the loop rather than one
+/// per book, and all chapter inserts are committed in batches of 250 books
+/// to avoid per-book WAL flushes (mirrors the sync/audiobooks.rs backfill
+/// pattern).
 pub(crate) async fn backfill_chapters(
     pool: &SqlitePool,
     library_path: &str,
