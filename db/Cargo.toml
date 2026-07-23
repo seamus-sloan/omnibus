@@ -120,6 +120,10 @@ urlencoding = "2"
 # never pull in OpenSSL; `builder` provides the multipart `Message` API.
 # Default features are off to drop the sync `native-tls` transport and
 # file/sendmail transports we don't use.
+# PRE-1.0 PIN: builds/sends the outbound Send-to-Kindle email from
+#   server-controlled data only — the user's own EPUB file and their
+#   configured `kindle_email` setting — so no attacker-controlled network
+#   input reaches lettre's message-building/parsing paths.
 lettre = { version = "0.11", default-features = false, features = [
     "builder",
     "hostname",
