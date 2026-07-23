@@ -294,6 +294,14 @@ pub(super) fn ReaderViewerStage(status: ReaderStatus) -> Element {
                         "This book couldn\u{2019}t be loaded."
                     }
                 },
+                ReaderStatus::Offline => rsx! {
+                    div {
+                        class: "rd-overlay",
+                        "data-testid": "reader-offline",
+                        role: "alert",
+                        "You\u{2019}re offline — download this book to read it offline."
+                    }
+                },
                 ReaderStatus::Ready => rsx! {},
             }
         }

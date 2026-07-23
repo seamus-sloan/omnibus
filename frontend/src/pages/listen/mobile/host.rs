@@ -208,6 +208,21 @@ async fn load_and_drain(
             total_duration_seconds,
             chapters,
         } => {
+            // Same fail-fast as the reader's offline guard: with no completed
+            // audio download, the <audio> element would stall against the
+            // dead server instead of surfacing an error.
+            if crate::offline::sync::is_offline()
+                && !crate::offline::downloads::is_complete(
+                    &uuid,
+                    crate::offline::downloads::DlFormat::Audio,
+                )
+            {
+                error.set(Some(
+                    "You're offline — download this audiobook to listen offline.".into(),
+                ));
+                loading.set(false);
+                return;
+            }
             init_direct_and_drain(
                 ctx,
                 &book,

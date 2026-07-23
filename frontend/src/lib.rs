@@ -174,6 +174,9 @@ fn ScreenLayout(children: Element) -> Element {
             // Connectivity pill — "Offline · N changes queued" / "Syncing".
             // Renders nothing in the steady online state.
             components::OfflinePill {}
+            // "You're offline" sheet raised when a reader/player route
+            // bounces (book not downloaded). Renders nothing until then.
+            components::OfflineGuardModal {}
             Nav {}
         }
     }

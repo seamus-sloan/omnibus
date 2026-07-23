@@ -19,6 +19,12 @@ pub(crate) enum ReaderStatus {
     Loading,
     Ready,
     Failed,
+    /// Mobile-only outcome: offline with no completed local download, so the
+    /// EPUB stream was never attempted (epub.js against a dead server hangs
+    /// on "Loading…" forever — the WebView fetch is outside our timeouts).
+    /// Web renders the overlay arm but never constructs the variant.
+    #[cfg_attr(not(feature = "mobile"), allow(dead_code))]
+    Offline,
 }
 
 /// Relocated event data from epub.js glue (deserialized from JSON).

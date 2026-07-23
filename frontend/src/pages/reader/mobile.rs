@@ -119,6 +119,23 @@ async fn mount_and_drain(
         .and_then(|r| r.epub_cfi);
     let cfi = server_cfi.or(local_saved);
 
+    // Backstop for the route-level offline bounce (`BookReadPage`'s guard):
+    // at cold start the app may still believe it's online, and the progress
+    // fetch above is the bounded attempt that flips NetState. Offline with
+    // no local EPUB, mounting would leave epub.js hanging on "Loading…" —
+    // fail fast, and force the chrome visible: the glue that relays the
+    // tap-to-summon-chrome event never mounts on this path, so a hidden top
+    // bar would strand the user with no way back.
+    if crate::offline::sync::is_offline()
+        && crate::offline::downloads::local_epub_url(&uuid).is_none()
+    {
+        let mut status = sigs.status;
+        let mut chrome_hidden = sigs.chrome_hidden;
+        status.set(ReaderStatus::Offline);
+        chrome_hidden.set(false);
+        return;
+    }
+
     let token = data::token_store::get();
     // A completed offline download serves the EPUB from the loopback media
     // server; otherwise stream it from the real server with `?token=`.

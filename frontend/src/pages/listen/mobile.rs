@@ -81,6 +81,30 @@ pub fn MobilePlayer(uuid: String, file_id: Option<i64>) -> Element {
     use_effect(use_reactive!(|(route_uuid, file_id)| {
         let mut uuid_sig = ctx.uuid;
         let mut file_sig = ctx.file_id;
+        // Offline with no completed audio download, retargeting the host
+        // would only stall — bounce back with the app-level offline sheet
+        // instead (mirrors the reader guard). An already-loaded book skips
+        // the check so re-entering the current playback stays seamless.
+        let already_loaded = uuid_sig.peek().as_deref() == Some(route_uuid.as_str());
+        if !already_loaded
+            && crate::offline::sync::is_offline()
+            && !crate::offline::downloads::is_complete(
+                &route_uuid,
+                crate::offline::downloads::DlFormat::Audio,
+            )
+        {
+            crate::components::offline_guard::block(
+                "This audiobook isn\u{2019}t downloaded, so it can\u{2019}t be played while offline.",
+            );
+            if nav.can_go_back() {
+                nav.go_back();
+            } else {
+                nav.replace(Route::BookDetail {
+                    uuid: route_uuid.clone(),
+                });
+            }
+            return;
+        }
         // Publish the picker's selection first so the host reads the right file
         // when the uuid change kicks off the load.
         file_sig.set(file_id);
