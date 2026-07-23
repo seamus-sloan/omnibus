@@ -73,9 +73,7 @@ pub async fn create_fileless_book(
     .fetch_one(&mut *tx)
     .await?;
 
-    for (position, name) in book.authors.iter().enumerate() {
-        link_author(&mut tx, book_id, position as i64, name).await?;
-    }
+    link_authors(&mut tx, book_id, &book.authors).await?;
 
     if let Some(isbn) = book.isbn.as_deref().filter(|s| !s.is_empty()) {
         sqlx::query(
@@ -120,29 +118,44 @@ async fn ensure_physical_library(
         .await
 }
 
-/// Resolve-or-insert an author by name and link it to the book at `position`.
-async fn link_author(
+/// Resolve-or-insert every author and link them to the book in position order.
+/// Fileless author lists are always small (1-3 names, already in memory), so
+/// this batches the whole list into two statements instead of ~3 queries per
+/// author — same insert-or-ignore semantics as a per-author loop, since
+/// `books_authors_link`'s primary key is `(book, author)`: a name repeated in
+/// `authors` still links only once, keeping its first position.
+async fn link_authors(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
-    position: i64,
-    name: &str,
+    authors: &[String],
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT OR IGNORE INTO authors (name) VALUES (?1)")
-        .bind(name)
-        .execute(&mut **tx)
-        .await?;
-    let author_id: i64 = sqlx::query_scalar("SELECT id FROM authors WHERE name = ?1")
-        .bind(name)
-        .fetch_one(&mut **tx)
-        .await?;
-    sqlx::query(
+    if authors.is_empty() {
+        return Ok(());
+    }
+
+    let author_rows = std::iter::repeat_n("(?)", authors.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let insert_sql = format!("INSERT OR IGNORE INTO authors (name) VALUES {author_rows}");
+    let mut insert_q = sqlx::query(&insert_sql);
+    for name in authors {
+        insert_q = insert_q.bind(name);
+    }
+    insert_q.execute(&mut **tx).await?;
+
+    let link_rows = std::iter::repeat_n("(?, ?)", authors.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let link_sql = format!(
         "INSERT OR IGNORE INTO books_authors_link (book, author, position)
-         VALUES (?1, ?2, ?3)",
-    )
-    .bind(book_id)
-    .bind(author_id)
-    .bind(position)
-    .execute(&mut **tx)
-    .await?;
+         SELECT ?, a.id, v.column2
+         FROM (VALUES {link_rows}) AS v
+         JOIN authors a ON a.name = v.column1"
+    );
+    let mut link_q = sqlx::query(&link_sql).bind(book_id);
+    for (position, name) in authors.iter().enumerate() {
+        link_q = link_q.bind(name).bind(position as i64);
+    }
+    link_q.execute(&mut **tx).await?;
     Ok(())
 }
