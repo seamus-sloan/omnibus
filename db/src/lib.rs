@@ -18,6 +18,7 @@ pub mod ebook;
 pub mod helpers;
 pub mod highlights;
 pub mod hls;
+mod http_client;
 pub mod identity;
 pub mod indexer;
 pub mod journal_images;

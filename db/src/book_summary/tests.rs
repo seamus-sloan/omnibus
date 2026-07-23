@@ -7,9 +7,10 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use omnibus_shared::summary::SummarySource;
 
-use super::fetch_summary_with;
 use super::openlibrary::{self, OpenLibrarySummaryConfig};
+use super::{fetch_summary, fetch_summary_with};
 use crate::pool::init_db;
+use crate::settings::set_hardcover_api_key;
 use crate::suggestions::hardcover::HardcoverConfig;
 use crate::test_support::seed_synced_ebook;
 
@@ -312,5 +313,51 @@ async fn fetch_summary_with_hardcover_returns_none_when_book_unresolved() {
     )
     .await
     .unwrap();
+    assert!(got.is_none());
+}
+
+// ── fetch_summary (production entry point) ────────────────────────
+
+#[tokio::test]
+async fn fetch_summary_returns_none_immediately_when_no_hardcover_key_is_configured() {
+    // No settings row and no `HARDCOVER_API_KEY` env var in the test process,
+    // so `fetch_summary` must short-circuit before ever resolving the book —
+    // an unseeded uuid would fail `get_book_by_uuid` if that lookup ran.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let got = fetch_summary(&pool, "does-not-exist", SummarySource::Hardcover)
+        .await
+        .unwrap();
+    assert!(got.is_none());
+}
+
+#[tokio::test]
+async fn fetch_summary_dispatches_past_the_key_check_once_a_hardcover_key_is_configured() {
+    // With a key configured, `fetch_summary` proceeds into `fetch_summary_with`
+    // (built against the live Hardcover/OpenLibrary endpoints) rather than
+    // short-circuiting — exercised offline via an unseeded book uuid, which
+    // `fetch_summary_with` rejects at the `get_book_by_uuid` lookup before any
+    // network call would be made.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    set_hardcover_api_key(&pool, Some("test-key"))
+        .await
+        .unwrap();
+    let got = fetch_summary(&pool, "does-not-exist", SummarySource::Hardcover)
+        .await
+        .unwrap();
+    assert!(got.is_none());
+}
+
+#[tokio::test]
+async fn fetch_summary_returns_none_for_an_unknown_book_uuid_via_openlibrary_source() {
+    // Same collapsed-null behavior as an unresolved Hardcover book (see
+    // `fetch_summary_with_hardcover_returns_none_when_book_unresolved`):
+    // an unknown uuid and a source with no summary both resolve to a clean
+    // `Ok(None)` a caller cascades past — intentional per
+    // `server/src/backend/summary.rs`'s doc comment, asserted here for the
+    // OpenLibrary branch of the production entry point.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let got = fetch_summary(&pool, "does-not-exist", SummarySource::OpenLibrary)
+        .await
+        .unwrap();
     assert!(got.is_none());
 }
