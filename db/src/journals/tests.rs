@@ -571,3 +571,14 @@ async fn unreferenced_image_names_returns_only_the_candidates_no_body_still_embe
 
     assert_eq!(unreferenced, vec![orphaned_name.to_string()]);
 }
+
+#[tokio::test]
+async fn unreferenced_image_names_skips_the_query_when_candidates_is_empty() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    let unreferenced = unreferenced_image_names(&pool, Vec::<String>::new())
+        .await
+        .unwrap();
+
+    assert!(unreferenced.is_empty());
+}

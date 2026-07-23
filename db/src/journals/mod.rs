@@ -233,6 +233,10 @@ pub(crate) async fn unreferenced_image_names(
     pool: &SqlitePool,
     candidates: impl IntoIterator<Item = String>,
 ) -> Result<Vec<String>, sqlx::Error> {
+    let candidates: Vec<String> = candidates.into_iter().collect();
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
     let bodies: Vec<String> = sqlx::query_scalar("SELECT body_md FROM journal_entries")
         .fetch_all(pool)
         .await?;
