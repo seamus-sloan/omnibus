@@ -1,10 +1,11 @@
 //! Check-in flow (`/check-in`) — resolve an ISBN and land it on the right
-//! branch of the physical-ownership decision tree.
-//!
-//! Manual ISBN entry is the input source here; the camera scanner feeds the
-//! same [`Stage`] machine once it lands. Every screen is plain rsx with no
-//! target gating, so SSR and the first WASM paint agree (rule 07).
+//! branch of the physical-ownership decision tree. The camera scanner is the
+//! front door and manual entry its always-available fallback; both feed the
+//! same [`Stage`] machine. Every screen is plain rsx with no target gating, so
+//! SSR and the first WASM paint agree (rule 07).
 
+mod entry;
+mod scan;
 mod screens;
 #[cfg(test)]
 mod tests;
@@ -12,21 +13,25 @@ mod tests;
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
 use omnibus_shared::{
-    AddPhysicalOnlyRequest, CheckInRequest, ExternalBookMeta, ResolveRequest, ScanBook,
-    ScanOutcome, WishlistAddRequest, WishlistSource,
+    isbn::normalize_isbn, AddPhysicalOnlyRequest, CheckInRequest, ExternalBookMeta, ResolveRequest,
+    ScanBook, ScanOutcome, WishlistAddRequest, WishlistSource,
 };
 
 use crate::{data, use_server_url, Route};
+use entry::EntryScreen;
+use scan::ScanScreen;
 use screens::{
-    ChooseScreen, CloseMatchScreen, ConfirmScreen, EntryScreen, ResolvingScreen, SuccessScreen,
-    UnresolvedScreen,
+    ChooseScreen, CloseMatchScreen, ConfirmScreen, ResolvingScreen, SuccessScreen, UnresolvedScreen,
 };
 
 /// Where the flow currently sits. One variant per leaf of the design's
-/// decision tree, plus the two transient states (entry, resolving).
+/// decision tree, plus the three transient states (scan, entry, resolving).
 #[derive(Clone, PartialEq)]
 pub(crate) enum Stage {
-    /// Manual ISBN entry — the flow's start and its "scan another" target.
+    /// Camera scanner — the flow's start and its "scan another" target.
+    Scan,
+    /// Manual ISBN entry, reached from the scanner (asked for, or forced by a
+    /// camera the device won't give us).
     Entry,
     /// Resolve request in flight.
     Resolving,
@@ -77,18 +82,20 @@ pub(crate) fn clean_isbn(raw: &str) -> String {
         .collect()
 }
 
-/// Whether `cleaned` is plausibly an ISBN-10 or ISBN-13 — a length/shape gate
-/// so an obvious typo doesn't cost a provider round-trip. The check digit is
-/// verified server-side.
-pub(crate) fn looks_like_isbn(cleaned: &str) -> bool {
-    match cleaned.len() {
-        10 => {
-            cleaned[..9].chars().all(|c| c.is_ascii_digit())
-                && cleaned.ends_with(|c: char| c.is_ascii_digit() || c == 'X')
+/// Validate `cleaned` as an ISBN-10 or ISBN-13, check digit included, so a
+/// mistyped keypad entry or a misread barcode never costs a provider
+/// round-trip. Returns the rejection sentence to show, or `None` when the
+/// input is good. Shares [`normalize_isbn`] with the server, so the two agree
+/// on what a valid ISBN is.
+pub(crate) fn isbn_rejection(cleaned: &str) -> Option<String> {
+    normalize_isbn(cleaned).err().map(|e| match e {
+        // The length error names the count, which reads oddly next to a
+        // keypad that shows the count already.
+        omnibus_shared::isbn::IsbnError::InvalidLength(_) => {
+            "Enter a 10- or 13-digit ISBN.".to_string()
         }
-        13 => cleaned.chars().all(|c| c.is_ascii_digit()),
-        _ => false,
-    }
+        other => other.to_string(),
+    })
 }
 
 /// Strip the server-function plumbing a `ServerFnError` stringifies into, so
@@ -124,7 +131,7 @@ pub fn CheckInPage() -> Element {
     let server_url = use_server_url();
     let nav = use_navigator();
     let state = FlowState {
-        stage: use_signal(|| Stage::Entry),
+        stage: use_signal(|| Stage::Scan),
         isbn: use_signal(String::new),
         note: use_signal(String::new),
         busy: use_signal(|| false),
@@ -168,21 +175,48 @@ fn CheckInStage(
     on_wishlist: EventHandler<WishlistAddRequest>,
 ) -> Element {
     let mut stage = state.stage;
+    let mut isbn = state.isbn;
     let mut error = state.error;
     let mut note = state.note;
     let mut busy = state.busy;
-    // Clear the per-flow scratch (edition note, in-flight flag) on every
-    // restart so a note typed for one book can't be reused on the next
-    // confirm after Cancel / "Try another ISBN" / "Check in another".
+    // Clear the per-flow scratch (edition note, typed ISBN, in-flight flag) on
+    // every restart so neither a note nor an ISBN typed for one book can be
+    // reused on the next confirm after Cancel / "Try another ISBN" /
+    // "Check in another".
     let restart = move |_| {
         error.set(None);
         note.set(String::new());
+        isbn.set(String::new());
         busy.set(false);
-        stage.set(Stage::Entry);
+        stage.set(Stage::Scan);
     };
 
     match stage() {
-        Stage::Entry => rsx! { EntryScreen { isbn: state.isbn, busy: state.busy, on_resolve } },
+        Stage::Scan => rsx! {
+            ScanScreen {
+                on_detect: EventHandler::new(move |scanned: String| {
+                    // Seed the keypad too, so a decode the check digit rejects
+                    // lands on manual entry with the digits ready to fix.
+                    isbn.set(scanned.clone());
+                    on_resolve.call(scanned);
+                }),
+                on_manual: EventHandler::new(move |_| {
+                    error.set(None);
+                    stage.set(Stage::Entry);
+                }),
+            }
+        },
+        Stage::Entry => rsx! {
+            EntryScreen {
+                isbn: state.isbn,
+                busy: state.busy,
+                on_resolve,
+                on_scan: EventHandler::new(move |_| {
+                    error.set(None);
+                    stage.set(Stage::Scan);
+                }),
+            }
+        },
         Stage::Resolving => rsx! { ResolvingScreen {} },
         Stage::Confirm { book, isbn } => rsx! {
             ConfirmScreen { book, isbn, state, on_check_in, on_cancel: EventHandler::new(restart) }
@@ -245,8 +279,11 @@ fn make_on_resolve(
     } = state;
     move |raw: String| {
         let isbn = clean_isbn(&raw);
-        if !looks_like_isbn(&isbn) {
-            error.set(Some("Enter a 10- or 13-digit ISBN.".into()));
+        if let Some(msg) = isbn_rejection(&isbn) {
+            error.set(Some(msg));
+            // A bad decode must not strand the reader on a blank screen: drop
+            // back to the keypad with the digits in place to correct.
+            stage.set(Stage::Entry);
             return;
         }
         let server_url = server_url.clone();

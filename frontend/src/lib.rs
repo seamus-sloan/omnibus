@@ -12,6 +12,7 @@ pub mod client_store;
 pub mod components;
 pub mod contexts;
 pub mod data;
+pub mod format;
 pub mod index_prefs;
 #[cfg(feature = "mobile")]
 pub(crate) mod native_share;

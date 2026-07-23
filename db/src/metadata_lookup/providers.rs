@@ -15,6 +15,9 @@ use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};
 /// this bounds how long the check-in flow waits on a slow provider.
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// Environment variable holding the Google Books API key.
+const GOOGLE_BOOKS_API_KEY_ENV: &str = "GOOGLE_BOOKS_API_KEY";
+
 /// Connection config for the metadata providers. Base URLs are injectable so
 /// tests point them at a local `wiremock` server.
 #[derive(Debug, Clone)]
@@ -23,15 +26,24 @@ pub struct MetadataLookupConfig {
     pub openlibrary_base: String,
     /// `https://www.googleapis.com` in production.
     pub googlebooks_base: String,
+    /// Google Books API key. Optional: without one the API still answers, but
+    /// on a shared anonymous daily quota that a self-hosted instance will hit
+    /// (HTTP 429) — in practice keyless lookups fail more often than they
+    /// succeed. Never logged; see [`strip_url`].
+    pub googlebooks_api_key: Option<String>,
     pub timeout: Duration,
 }
 
 impl MetadataLookupConfig {
-    /// Config pointing at the live provider endpoints.
+    /// Config pointing at the live provider endpoints, with the Google Books
+    /// key taken from the environment when set.
     pub fn live() -> Self {
         Self {
             openlibrary_base: "https://openlibrary.org".to_string(),
             googlebooks_base: "https://www.googleapis.com".to_string(),
+            googlebooks_api_key: std::env::var(GOOGLE_BOOKS_API_KEY_ENV)
+                .ok()
+                .filter(|k| !k.trim().is_empty()),
             timeout: LOOKUP_TIMEOUT,
         }
     }
@@ -52,6 +64,102 @@ fn client() -> reqwest::Result<reqwest::Client> {
     }
     let new = crate::http_client::build_client(&crate::http_client::default_user_agent())?;
     Ok(CLIENT.get_or_init(|| new).clone())
+}
+
+/// Drop the URL from a `reqwest::Error` before it reaches a log.
+///
+/// Google's API takes its key as a `?key=` query parameter, and a
+/// `reqwest::Error` renders the full request URL in its `Display` — so a plain
+/// `?` on a 429 would write the key into `omnibus.log`. The status and kind
+/// are what diagnose a provider failure; the URL is not.
+fn strip_url(e: reqwest::Error) -> reqwest::Error {
+    e.without_url()
+}
+
+/// Reduce a publication date to its year.
+///
+/// Google Books returns `publishedDate` in whatever precision it holds —
+/// `"2025"`, `"2025-02"`, or `"2025-02-25"` — while Open Library gives a bare
+/// year. The chooser card renders this next to the title ("Dune · 2005"), so
+/// an un-trimmed value makes two providers look like two different fields.
+/// Anything that doesn't start with four digits is passed through untouched
+/// rather than guessed at.
+pub(super) fn publication_year(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let head: String = trimmed.chars().take(4).collect();
+    if head.len() == 4 && head.chars().all(|c| c.is_ascii_digit()) {
+        return Some(head);
+    }
+    Some(trimmed.to_string())
+}
+
+/// Backoff between Google Books retries. Length + 1 is the attempt count.
+/// Deliberately short: a check-in scan is waiting on a spinner, and the
+/// failures this covers come back fast.
+const GB_RETRY_BACKOFF: [Duration; 2] = [Duration::from_millis(200), Duration::from_millis(600)];
+
+/// Whether a Google Books status is worth another attempt. Observed in the
+/// wild: the API intermittently answers `503 backendFailed` for perfectly
+/// valid ISBNs (roughly half of calls during an episode), and 429 is the
+/// quota rung. Both are Google telling us to come back, not an answer.
+fn gb_is_retryable(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+}
+
+/// GET from Google Books, retrying a retryable status a couple of times.
+///
+/// Only a *received status* is retried — a timeout or transport error is not,
+/// since those already cost the full per-request budget and retrying them
+/// would leave the scan flow spinning for half a minute.
+async fn googlebooks_get(
+    config: &MetadataLookupConfig,
+    url: &str,
+) -> anyhow::Result<reqwest::Response> {
+    let mut last: Option<reqwest::StatusCode> = None;
+    for attempt in 0..=GB_RETRY_BACKOFF.len() {
+        let resp = client()?
+            .get(url)
+            .timeout(config.timeout)
+            .send()
+            .await
+            .map_err(strip_url)
+            .context("google books request failed")?;
+
+        if !gb_is_retryable(resp.status()) {
+            return resp
+                .error_for_status()
+                .map_err(strip_url)
+                .context("google books returned an error status");
+        }
+        last = Some(resp.status());
+        if let Some(backoff) = GB_RETRY_BACKOFF.get(attempt) {
+            tokio::time::sleep(*backoff).await;
+        }
+    }
+    // Status only — never the URL, which carries the API key.
+    anyhow::bail!(
+        "google books unavailable after {} attempts (last status {})",
+        GB_RETRY_BACKOFF.len() + 1,
+        last.map_or(0, |s| s.as_u16())
+    )
+}
+
+/// Build the Google Books volumes URL, appending the API key when configured.
+///
+/// Kept separate so a test can assert the key is attached (and absent when
+/// unset) without a live request.
+pub(super) fn googlebooks_url(config: &MetadataLookupConfig, isbn13: &str) -> String {
+    let base = format!(
+        "{}/books/v1/volumes?q=isbn:{isbn13}",
+        config.googlebooks_base
+    );
+    match config.googlebooks_api_key.as_deref() {
+        Some(key) => format!("{base}&key={key}"),
+        None => base,
+    }
 }
 
 // ── Open Library ─────────────────────────────────────────────────
@@ -185,18 +293,7 @@ pub async fn googlebooks_lookup(
     config: &MetadataLookupConfig,
     isbn13: &str,
 ) -> anyhow::Result<Option<ExternalBookMeta>> {
-    let url = format!(
-        "{}/books/v1/volumes?q=isbn:{isbn13}",
-        config.googlebooks_base
-    );
-    let resp = client()?
-        .get(&url)
-        .timeout(config.timeout)
-        .send()
-        .await
-        .context("google books request failed")?
-        .error_for_status()
-        .context("google books returned an error status")?;
+    let resp = googlebooks_get(config, &googlebooks_url(config, isbn13)).await?;
 
     let body: GbResponse = resp
         .json()
@@ -221,8 +318,10 @@ pub async fn googlebooks_lookup(
         isbn13: isbn13.to_string(),
         title,
         authors: info.authors,
-        year: info.published_date,
-        pages: info.page_count,
+        year: info.published_date.as_deref().and_then(publication_year),
+        // Google returns 0 for "unknown", which would render as a book with
+        // zero pages rather than one whose length we don't know.
+        pages: info.page_count.filter(|p| *p > 0),
         publisher: info.publisher,
         description: info.description,
         cover_url,

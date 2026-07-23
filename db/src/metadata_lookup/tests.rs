@@ -1,6 +1,6 @@
 //! ISBN metadata-lookup tests: the Open Library → Google Books provider chain
-//! (against `wiremock`), the both-miss unresolved signal, and ISBN
-//! normalization / validation.
+//! (against `wiremock`) and the both-miss unresolved signal. Normalization
+//! itself is tested in `omnibus_shared::isbn`, which owns it.
 
 use std::time::Duration;
 
@@ -21,6 +21,9 @@ fn config_for(server: &MockServer) -> MetadataLookupConfig {
     MetadataLookupConfig {
         openlibrary_base: server.uri(),
         googlebooks_base: server.uri(),
+        // Keyless on purpose: the mock never checks it, and reading the real
+        // env here would make the suite depend on the developer's `.env`.
+        googlebooks_api_key: None,
         timeout: Duration::from_secs(5),
     }
 }
@@ -151,6 +154,18 @@ async fn lookup_surfaces_provider_error_when_fallback_fails() {
 
     let err = lookup_isbn(&config_for(&server), ISBN13).await.unwrap_err();
     assert!(matches!(err, MetadataLookupError::Provider(_)));
+    // The rendered message is what reaches the reader, so it must describe the
+    // outage rather than repeat the provider's own wording ("google books
+    // returned an error status"), which reads as an Omnibus bug.
+    let msg = err.to_string();
+    assert!(
+        msg.contains("temporarily unavailable"),
+        "provider outage must read as an outage, got: {msg}"
+    );
+    assert!(
+        !msg.contains("google"),
+        "provider internals must not leak to the reader, got: {msg}"
+    );
 }
 
 #[tokio::test]
@@ -167,71 +182,139 @@ async fn lookup_rejects_invalid_isbn_without_calling_a_provider() {
     ));
 }
 
-// ── ISBN normalization (AC4) ─────────────────────────────────────
+// ── Google Books API key ─────────────────────────────────────────
 
 #[test]
-fn normalize_passes_through_valid_isbn13() {
-    assert_eq!(normalize_isbn(ISBN13).unwrap(), ISBN13);
-}
-
-#[test]
-fn normalize_strips_hyphens_and_spaces() {
-    assert_eq!(normalize_isbn("978-0-13-468599-1").unwrap(), ISBN13);
-    assert_eq!(normalize_isbn("978 0 13 468599 1").unwrap(), ISBN13);
-}
-
-#[test]
-fn normalize_converts_isbn10_to_isbn13() {
-    assert_eq!(normalize_isbn("0134685997").unwrap(), ISBN13);
-    assert_eq!(normalize_isbn("0-13-468599-7").unwrap(), ISBN13);
-}
-
-#[test]
-fn normalize_accepts_isbn10_with_x_check_digit() {
-    // 123456789X is a valid ISBN-10 (check digit X = 10) → ISBN-13 9781234567897.
-    assert_eq!(normalize_isbn("123456789X").unwrap(), "9781234567897");
-    assert_eq!(normalize_isbn("123456789x").unwrap(), "9781234567897");
-}
-
-#[test]
-fn normalize_rejects_bad_isbn13_check_digit() {
+fn googlebooks_url_appends_the_key_only_when_configured() {
+    let server_base = "http://gb.test";
+    let keyless = MetadataLookupConfig {
+        openlibrary_base: server_base.into(),
+        googlebooks_base: server_base.into(),
+        googlebooks_api_key: None,
+        timeout: Duration::from_secs(5),
+    };
     assert_eq!(
-        normalize_isbn("9780134685990"),
-        Err(IsbnError::InvalidCheckDigit)
+        super::providers::googlebooks_url(&keyless, ISBN13),
+        format!("{server_base}/books/v1/volumes?q=isbn:{ISBN13}")
+    );
+
+    let keyed = MetadataLookupConfig {
+        googlebooks_api_key: Some("sekret".into()),
+        ..keyless
+    };
+    assert_eq!(
+        super::providers::googlebooks_url(&keyed, ISBN13),
+        format!("{server_base}/books/v1/volumes?q=isbn:{ISBN13}&key=sekret")
+    );
+}
+
+#[tokio::test]
+async fn googlebooks_failure_never_renders_the_api_key() {
+    // The key rides in the query string, and a `reqwest::Error` renders the
+    // request URL in its Display — so an un-stripped error would write the key
+    // into the on-disk JSON log on every 429.
+    let server = MockServer::start().await;
+    mount_ol(&server, json!({})).await;
+    Mock::given(method("GET"))
+        .and(path(GB_PATH))
+        .respond_with(ResponseTemplate::new(429))
+        .mount(&server)
+        .await;
+
+    let config = MetadataLookupConfig {
+        googlebooks_api_key: Some("super-secret-key".into()),
+        ..config_for(&server)
+    };
+    let err = lookup_isbn(&config, ISBN13).await.unwrap_err();
+    // Walk the whole source chain — that's what `{:#}`/`{:?}` logging renders.
+    let rendered = format!("{err:?} {err:#}");
+    assert!(
+        !rendered.contains("super-secret-key"),
+        "api key leaked into the error chain: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn googlebooks_retries_a_transient_503_then_succeeds() {
+    // Google Books intermittently answers 503 `backendFailed` for valid ISBNs.
+    // Without a retry a single blip fails the whole scan.
+    let server = MockServer::start().await;
+    mount_ol(&server, json!({})).await;
+    Mock::given(method("GET"))
+        .and(path(GB_PATH))
+        .respond_with(ResponseTemplate::new(503))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    mount_gb(&server, gb_hit()).await;
+
+    let meta = lookup_isbn(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(meta.source, MetadataProvider::GoogleBooks);
+}
+
+#[tokio::test]
+async fn googlebooks_gives_up_after_the_retry_budget() {
+    let server = MockServer::start().await;
+    mount_ol(&server, json!({})).await;
+    Mock::given(method("GET"))
+        .and(path(GB_PATH))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+
+    let err = lookup_isbn(&config_for(&server), ISBN13).await.unwrap_err();
+    assert!(matches!(err, MetadataLookupError::Provider(_)));
+    // The give-up message names the status but never the URL (which carries
+    // the key); the reader still sees the outage sentence.
+    let chain = format!("{err:?}");
+    assert!(
+        chain.contains("503"),
+        "give-up must record the status: {chain}"
+    );
+    assert!(
+        !chain.contains("key="),
+        "url must not reach the log: {chain}"
     );
 }
 
 #[test]
-fn normalize_rejects_bad_isbn10_check_digit() {
-    assert_eq!(
-        normalize_isbn("0134685996"),
-        Err(IsbnError::InvalidCheckDigit)
-    );
+fn publication_year_trims_google_dates_to_a_bare_year() {
+    use super::providers::publication_year;
+    // Google returns whatever precision it holds; Open Library gives a year.
+    assert_eq!(publication_year("2025-02-25").as_deref(), Some("2025"));
+    assert_eq!(publication_year("2025-02").as_deref(), Some("2025"));
+    assert_eq!(publication_year("2025").as_deref(), Some("2025"));
+    // Non-numeric precision is passed through, not guessed at.
+    assert_eq!(publication_year("MMXXV").as_deref(), Some("MMXXV"));
+    assert_eq!(publication_year("  "), None);
 }
 
-#[test]
-fn normalize_rejects_wrong_length() {
-    assert_eq!(normalize_isbn("12345"), Err(IsbnError::InvalidLength(5)));
-    assert_eq!(normalize_isbn(""), Err(IsbnError::InvalidLength(0)));
-}
+#[tokio::test]
+async fn googlebooks_drops_a_zero_page_count_and_trims_the_year() {
+    let server = MockServer::start().await;
+    mount_ol(&server, json!({})).await;
+    mount_gb(
+        &server,
+        json!({
+            "totalItems": 1,
+            "items": [{ "volumeInfo": {
+                "title": "Swordheart",
+                "authors": ["T. Kingfisher"],
+                "publishedDate": "2025-02-25",
+                "pageCount": 0,
+                "publisher": "Bramble"
+            }}]
+        }),
+    )
+    .await;
 
-#[test]
-fn normalize_rejects_non_digit_characters() {
-    // 13 chars but with letters where digits belong.
-    assert_eq!(
-        normalize_isbn("97801346859AB"),
-        Err(IsbnError::InvalidChars)
-    );
-    // `X` is only legal as an ISBN-10 trailing check digit, not mid-number.
-    assert_eq!(normalize_isbn("01X3468599"), Err(IsbnError::InvalidChars));
-}
-
-#[test]
-fn normalize_rejects_non_ascii_digit_lookalikes() {
-    // Fullwidth digits (U+FF10..) are Unicode "digits" but not ASCII — a valid
-    // ISBN never contains them, so they're rejected rather than folded.
-    assert_eq!(
-        normalize_isbn("９７８０１３４６８５９９１"),
-        Err(IsbnError::InvalidChars)
-    );
+    let meta = lookup_isbn(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(meta.year.as_deref(), Some("2025"));
+    assert_eq!(meta.pages, None, "0 pages means unknown, not zero-length");
 }

@@ -10,6 +10,7 @@ use omnibus_shared::{EbookMetadata, MergeBooksResult, SuggestionsResponse};
 use crate::components::{PageError, PageLoading, PageNotFound};
 use crate::{data, use_server_url, Route};
 
+mod delete;
 mod discovery;
 mod file_picker;
 mod immersive;
@@ -72,6 +73,8 @@ pub fn BookDetailPage(uuid: String) -> Element {
     let merge_open = use_signal(|| false);
     let merge_result: Signal<Option<MergeBooksResult>> = use_signal(|| None);
     let undo_error: Signal<Option<String>> = use_signal(|| None);
+    // Delete-dialog state, declared unconditionally for the same reason.
+    let delete_open = use_signal(|| false);
 
     use_book_data_effects(
         uuid.clone(),
@@ -105,6 +108,7 @@ pub fn BookDetailPage(uuid: String) -> Element {
             undo_error,
             refresh,
         },
+        delete_open,
         author_books(),
         suggestions(),
         is_admin,
@@ -178,6 +182,7 @@ struct MergeSignals {
 fn render_book_shell(
     b: EbookMetadata,
     merge: MergeSignals,
+    delete_open: Signal<bool>,
     author_books: Vec<EbookMetadata>,
     suggestions: Option<SuggestionsResponse>,
     is_admin: ReadSignal<bool>,
@@ -219,10 +224,30 @@ fn render_book_shell(
         merge::build_merge_ui()
     };
 
+    // Rail "Delete files…" button + its dialog, same web-only shape as merge.
+    #[cfg(not(feature = "mobile"))]
+    let delete_button: Option<Element> = delete::build_delete_button(is_admin_flag, delete_open);
+    #[cfg(feature = "mobile")]
+    let delete_button: Option<Element> = delete::build_delete_button(is_admin_flag);
+
+    #[cfg(not(feature = "mobile"))]
+    let delete_ui: Option<Element> = delete::build_delete_ui(
+        delete_open,
+        merge.refresh,
+        b.unique_identifier.clone().unwrap_or_default(),
+        b.title.clone().unwrap_or_else(|| b.filename.clone()),
+    );
+    #[cfg(feature = "mobile")]
+    let delete_ui: Option<Element> = {
+        let _ = delete_open;
+        delete::build_delete_ui()
+    };
+
     let body = render_loaded(
         b,
         author_books,
         merge_button,
+        delete_button,
         suggestions,
         server_url,
         is_admin_flag,
@@ -230,6 +255,7 @@ fn render_book_shell(
     rsx! {
         {body}
         {merge_ui}
+        {delete_ui}
     }
 }
 
@@ -483,6 +509,7 @@ fn render_loaded(
     b: EbookMetadata,
     author_books: Vec<EbookMetadata>,
     merge_button: Option<Element>,
+    delete_button: Option<Element>,
     suggestions: Option<SuggestionsResponse>,
     server_url: String,
     is_admin: bool,
@@ -491,9 +518,9 @@ fn render_loaded(
     // (hero + rail + suggestions + merge UI) isn't rendered there.
     #[cfg(feature = "mobile")]
     let out = {
-        // The merge affordance stays web-only; the discovery blocks (author
-        // cluster + suggestions) now render on mobile too.
-        let _ = merge_button;
+        // The merge and delete affordances stay web-only; the discovery blocks
+        // (author cluster + suggestions) now render on mobile too.
+        let _ = (merge_button, delete_button);
         mobile::render_loaded_mobile(mobile::MobileBookView {
             b,
             author_books,
@@ -545,6 +572,7 @@ fn render_loaded(
                         authors_line,
                         series,
                         merge_button,
+                        delete_button,
                     }
                 }
                 div { class: "bd-footer",

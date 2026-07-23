@@ -5720,6 +5720,74 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   padding: 16px 30px; border-top: 1px solid var(--line-2); }
 .mg-foot-note { font-size: 11px; color: var(--ink-3); }
 .bd-merge-error { color: var(--bad); font-size: 13px; margin: 4px 0 0; }
+
+/* ── Admin delete dialog (book detail) ──────────────────────────────
+ * A single-column modal (560px in the design) with its own buttons rather
+ * than the merge modal's pinned foot, because both panes are short enough
+ * to sit in one scroll region. Destructive actions carry `--bad`; the
+ * selected-row highlight is the accent, matching the design's checkbox. */
+.del-modal { width: min(560px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; }
+.del-body { display: flex; flex-direction: column; gap: 14px; padding: 26px 28px 24px; }
+.del-title { margin: 0; font-family: var(--serif); font-size: 22px; line-height: 1.2;
+  color: var(--ink-0); }
+.del-copy { margin: 0; font-size: 14px; line-height: 1.55; color: var(--ink-2); }
+.del-losses { color: var(--ink-3); }
+
+/* Section head: "3 FILES ON DISK" + the Select all toggle. */
+.del-section-head { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 16px; margin-top: 4px; }
+.del-section-label { color: var(--ink-2); }
+.del-select-all { background: none; border: 0; padding: 0; cursor: pointer;
+  font-family: var(--sans); font-size: 11px; color: var(--accent); }
+.del-select-all:hover { text-decoration: underline; }
+
+/* Item rows — one per book_file or physical copy. */
+.del-items { list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 8px; }
+.del-item { border-radius: 8px; background: var(--bg-2);
+  border: 1px solid transparent; }
+.del-item.is-picked { border-color: color-mix(in oklch, var(--accent) 45%, transparent); }
+.del-item-label { display: flex; align-items: center; gap: 14px; width: 100%;
+  padding: 12px 14px; cursor: pointer; }
+/* Custom box: the native control renders as a light plate in dark mode,
+   which reads as "checked" at a glance on an unchecked row. */
+.del-check { appearance: none; -webkit-appearance: none; margin: 0;
+  width: 16px; height: 16px; flex: 0 0 16px; border-radius: 4px;
+  background: transparent; border: 1px solid var(--line); cursor: pointer;
+  display: grid; place-content: center; }
+.del-check::after { content: "\2713"; font-size: 11px; font-weight: 600;
+  color: var(--accent-ink); visibility: hidden; }
+.del-check:checked { background: var(--accent); border-color: var(--accent); }
+.del-check:checked::after { visibility: visible; }
+.del-check:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.del-item-copy { flex: 1; min-width: 0; }
+.del-item-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.del-badge { display: inline-flex; align-items: center; justify-content: center;
+  padding: 2px 7px; border-radius: 4px; background: var(--bg-0);
+  border: 1px solid var(--line); font-size: 9px; letter-spacing: 0.08em;
+  color: var(--ink-0); }
+.del-item-title { font-size: 11.5px; color: var(--ink-1);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.del-item-meta { margin-top: 4px; font-size: 9.5px; color: var(--ink-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.del-note { margin: 0; font-size: 11px; color: var(--ink-3); }
+
+/* Actions, right-aligned at the foot of the pane. */
+.del-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+.del-btn-ghost, .del-btn-danger { height: 36px; padding: 0 18px; border-radius: 10px;
+  font-family: var(--sans); font-size: 13px; cursor: pointer; }
+.del-btn-ghost { background: var(--bg-2); border: 1px solid var(--line);
+  color: var(--ink-0); font-weight: 500; }
+.del-btn-ghost:hover:not(:disabled) { background: var(--bg-3); }
+.del-btn-danger { background: var(--bad); border: 1px solid var(--bad);
+  color: #fff; font-weight: 600; }
+.del-btn-danger:hover:not(:disabled) { filter: brightness(1.08); }
+.del-btn-ghost:disabled, .del-btn-danger:disabled { opacity: 0.5; cursor: default; }
+
+/* Rail trigger: outlined in the destructive colour, unlike its neighbours. */
+.bd-rail-delete { color: var(--bad);
+  border-color: color-mix(in oklch, var(--bad) 55%, transparent); }
+.bd-rail-delete:hover { border-color: var(--bad); }
 .bd-merge-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
   z-index: 110; display: flex; align-items: center; gap: 12px; padding: 12px 16px;
   box-shadow: 0 6px 24px rgba(0,0,0,.35); }
@@ -7366,7 +7434,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--surface-1);
+  background: var(--bg-1);
 }
 .check-in-book-cover {
   width: 56px;
@@ -7375,7 +7443,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   border-radius: 4px;
   flex: 0 0 auto;
 }
-.check-in-book-cover--empty { background: var(--surface-2); }
+.check-in-book-cover--empty { background: var(--bg-2); }
 .check-in-book-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .check-in-book-title { font-family: var(--serif); font-size: 16px; }
 .check-in-book-byline { font-size: 13px; color: var(--ink-2); }
@@ -7417,7 +7485,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   height: 52px;
   border-radius: 50%;
   background: var(--accent);
-  color: var(--surface-1);
+  color: var(--accent-ink);
   font-size: 26px;
 }
 
@@ -7426,7 +7494,113 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   100% { transform: scale(1); opacity: 0; }
 }
 
+/* ── Camera scanner ───────────────────────────────────────────────── */
+.scanner { display: flex; flex-direction: column; gap: 12px; }
+.scanner-stage {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+}
+.scanner-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+/* Once the camera is out for good, the viewfinder can only ever be an empty
+   rectangle that reads as broken. Drop it and let the message plus the manual
+   button become the screen. */
+.scanner-stage[data-state="off"] { display: none; }
+
+/* Reticle sits just inside the strip the decoder crops to (BAND_HEIGHT in
+   barcode-scanner-glue.js), so anything the reader frames is decodable — never
+   the other way round. */
+.scanner-reticle {
+  position: absolute;
+  inset: 20% 8%;
+  pointer-events: none;
+}
+.scanner-corner {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border: 3px solid var(--ink-0);
+  border-radius: 3px;
+}
+.scanner-corner--tl { top: 0; left: 0; border-right: 0; border-bottom: 0; }
+.scanner-corner--tr { top: 0; right: 0; border-left: 0; border-bottom: 0; }
+.scanner-corner--bl { bottom: 0; left: 0; border-right: 0; border-top: 0; }
+.scanner-corner--br { bottom: 0; right: 0; border-left: 0; border-top: 0; }
+.scanner-sweep {
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  height: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  animation: scanner-sweep 2.2s ease-in-out infinite;
+}
+
+@keyframes scanner-sweep {
+  0%, 100% { top: 6%; }
+  50% { top: 94%; }
+}
+
+.scanner-status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.5;
+  text-align: center;
+}
+.scanner-actions { display: flex; flex-direction: column; gap: 10px; }
+.scanner-actions .btn { width: 100%; justify-content: center; }
+
+/* ── Manual ISBN keypad ───────────────────────────────────────────── */
+.isbn-progress {
+  display: grid;
+  grid-template-columns: repeat(13, 1fr);
+  gap: 3px;
+}
+.isbn-slot {
+  display: grid;
+  place-items: center;
+  height: 30px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+.isbn-slot.filled {
+  border-color: var(--accent);
+  background: var(--bg-1);
+  color: var(--ink-1);
+}
+
+.isbn-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.isbn-key {
+  height: 52px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  color: var(--ink-1);
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.isbn-key:disabled { opacity: 0.5; cursor: default; }
+.isbn-key:active:not(:disabled) { background: var(--bg-2); }
+
 @media (prefers-reduced-motion: reduce) {
   .check-in-spinner { animation: none; }
   .check-in-ring { animation: none; opacity: 0.35; }
+  .scanner-sweep { animation: none; top: 50%; }
 }
