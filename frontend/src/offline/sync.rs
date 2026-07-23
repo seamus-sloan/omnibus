@@ -112,6 +112,9 @@ pub(crate) fn note_dropped(n: usize) {
 pub(crate) fn is_offline_error(e: &DataError) -> bool {
     match e {
         DataError::Network(re) => !re.is_decode(),
+        // A fast-fail precheck skipped the network because we already knew
+        // we were offline — same class as a failed connect.
+        DataError::Offline => true,
         _ => false,
     }
 }

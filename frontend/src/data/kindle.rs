@@ -40,6 +40,7 @@ pub async fn enqueue_send_to_kindle(
     uuid: &str,
     file_id: Option<i64>,
 ) -> Result<u64, DataError> {
+    crate::data::require_online()?;
     let url = format!("{server_url}/api/kindle/send");
     let response = with_bearer(http_client().post(&url))
         .json(&serde_json::json!({ "book_uuid": uuid, "file_id": file_id }))
@@ -212,6 +213,7 @@ pub async fn send_smtp_test(_server_url: &str) -> Result<(), DataError> {
 /// Mobile: POST `/api/smtp/test`.
 #[cfg(feature = "mobile")]
 pub async fn send_smtp_test(server_url: &str) -> Result<(), DataError> {
+    crate::data::require_online()?;
     let url = format!("{server_url}/api/smtp/test");
     let response = with_bearer(http_client().post(&url)).send().await?;
     let status = note_status(response.status());

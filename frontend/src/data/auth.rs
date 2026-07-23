@@ -32,6 +32,7 @@ pub async fn mobile_login(
     password: String,
     device_name: Option<String>,
 ) -> Result<UserSummary, DataError> {
+    crate::data::require_online()?;
     let req = LoginRequest {
         username,
         password,
@@ -50,6 +51,7 @@ pub async fn mobile_register(
     password: String,
     device_name: Option<String>,
 ) -> Result<UserSummary, DataError> {
+    crate::data::require_online()?;
     let req = RegisterRequest {
         username,
         password,
@@ -296,4 +298,27 @@ async fn post_auth_json<T: serde::Serialize>(
         return Err(format!("{status}: {msg}"));
     }
     res.json::<LoginResponse>().await.map_err(|e| e.to_string())
+}
+
+#[cfg(all(test, feature = "mobile"))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn mobile_login_fails_fast_when_offline() {
+        let _guard = crate::offline::sync::test_state_lock().lock().unwrap();
+        crate::offline::sync::note_offline();
+        let out = mobile_login(
+            "http://127.0.0.1:1",
+            "elena".into(),
+            "correct-horse-battery".into(),
+            None,
+        )
+        .await;
+        assert!(
+            matches!(out, Err(DataError::Offline)),
+            "login must fast-fail without a network attempt"
+        );
+        crate::offline::sync::note_online();
+    }
 }

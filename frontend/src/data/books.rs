@@ -243,6 +243,7 @@ pub(crate) async fn search_ebooks_online(
 /// Search palette — grouped results for the command-palette overlay.
 #[cfg(feature = "mobile")]
 pub async fn search_palette(server_url: &str, q: &str) -> Result<PaletteResults, DataError> {
+    crate::data::require_online()?;
     let encoded: String = q
         .bytes()
         .map(|b| match b {
@@ -344,6 +345,7 @@ pub async fn save_overrides(
     uuid: &str,
     overrides: &MetadataOverrides,
 ) -> Result<Option<EbookMetadata>, DataError> {
+    crate::data::require_online()?;
     let url = format!("{server_url}/api/ebooks/{uuid}/overrides");
     let response = with_bearer(http_client().post(&url))
         .json(overrides)
@@ -362,6 +364,7 @@ pub async fn delete_overrides(
     server_url: &str,
     uuid: &str,
 ) -> Result<Option<EbookMetadata>, DataError> {
+    crate::data::require_online()?;
     let url = format!("{server_url}/api/ebooks/{uuid}/overrides");
     let response = with_bearer(http_client().delete(&url)).send().await?;
     let status = note_status(response.status());
@@ -382,6 +385,7 @@ pub async fn upload_ebook_cover(
     mime: String,
     bytes: Vec<u8>,
 ) -> Result<Option<EbookMetadata>, DataError> {
+    crate::data::require_online()?;
     let endpoint = format!("{server_url}/api/ebooks/{uuid}/cover");
     let part = reqwest::multipart::Part::bytes(bytes)
         .file_name(filename)
@@ -405,6 +409,7 @@ pub async fn delete_ebook_cover(
     server_url: &str,
     uuid: &str,
 ) -> Result<Option<EbookMetadata>, DataError> {
+    crate::data::require_online()?;
     let url = format!("{server_url}/api/ebooks/{uuid}/cover");
     let response = with_bearer(http_client().delete(&url)).send().await?;
     let status = note_status(response.status());

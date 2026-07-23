@@ -235,6 +235,7 @@ pub async fn inspect_ebook(
     filename: String,
     bytes: &[u8],
 ) -> Result<UploadInspection, DataError> {
+    crate::data::require_online()?;
     let endpoint = format!("{server_url}/api/uploads/ebooks/inspect");
     let part = reqwest::multipart::Part::bytes(bytes.to_vec())
         .file_name(filename)
@@ -259,6 +260,7 @@ pub async fn upload_ebook(
     bytes: Vec<u8>,
     meta: EbookUploadMeta,
 ) -> Result<UploadCommitResult, DataError> {
+    crate::data::require_online()?;
     let endpoint = format!("{server_url}/api/uploads/ebooks");
     let part = reqwest::multipart::Part::bytes(bytes)
         .file_name(filename)
@@ -291,6 +293,7 @@ pub async fn inspect_audiobook(
     server_url: &str,
     files: &[(String, Vec<u8>)],
 ) -> Result<AudiobookInspection, DataError> {
+    crate::data::require_online()?;
     let endpoint = format!("{server_url}/api/uploads/audiobooks/inspect");
     let mut form = reqwest::multipart::Form::new();
     for (name, bytes) in files {
@@ -318,6 +321,7 @@ pub async fn upload_audiobook(
     files: Vec<(String, Vec<u8>)>,
     meta: AudiobookUploadMeta,
 ) -> Result<UploadCommitResult, DataError> {
+    crate::data::require_online()?;
     let endpoint = format!("{server_url}/api/uploads/audiobooks");
     let mut form = reqwest::multipart::Form::new()
         .text("title", meta.title)

@@ -166,7 +166,9 @@ async fn download_file(
         .unwrap_or(0);
 
     let url = format!("{server_url}{}", file.url_path);
-    let mut req = data::with_bearer(data::http_client().get(&url));
+    // Streaming client: no whole-request timeout, so a large book can't be
+    // killed mid-transfer by the default client's 30s cap.
+    let mut req = data::with_bearer(data::streaming_client().get(&url));
     if resumed > 0 {
         req = req.header(reqwest::header::RANGE, format!("bytes={resumed}-"));
     }

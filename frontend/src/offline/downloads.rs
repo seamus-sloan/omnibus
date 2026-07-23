@@ -11,6 +11,7 @@ use tokio::sync::watch;
 
 use super::media;
 use super::store::{self, DownloadRow};
+use super::sync;
 
 mod engine;
 
@@ -236,7 +237,7 @@ pub fn start(
         .ok()
         .and_then(|m| m.get(&(uuid.to_string(), format)).map(|e| e.files.clone()))
         .unwrap_or_default();
-    let entry = DownloadEntry {
+    let mut entry = DownloadEntry {
         book_uuid: uuid.clone(),
         format,
         title,
@@ -248,6 +249,15 @@ pub fn start(
         files: prior_files,
         updated_at: store::now_secs(),
     };
+    // Known-offline fast-fail: surface the error row instantly instead of
+    // letting the engine burn a doomed connect attempt.
+    if sync::is_offline() {
+        entry.status = DownloadStatus::Error {
+            message: "You're offline — connect to download".into(),
+        };
+        upsert(entry);
+        return;
+    }
     upsert(entry);
     let spawned = media::spawn_on_runtime(engine::run(server_url, uuid.clone(), format, file_id));
     if !spawned {

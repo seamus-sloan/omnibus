@@ -76,6 +76,14 @@ fn is_offline_error_rejects_http_and_unauthorized() {
 }
 
 #[test]
+fn is_offline_error_accepts_the_fast_fail_offline_variant() {
+    assert!(
+        is_offline_error(&DataError::Offline),
+        "a precheck fast-fail is the same class as a failed connect"
+    );
+}
+
+#[test]
 fn note_offline_and_note_online_flip_the_watch_state() {
     let _guard = test_state_lock().lock().unwrap();
     note_offline();

@@ -202,6 +202,31 @@ async fn removing_one_books_dir_leaves_siblings_byte_identical() {
     );
 }
 
+#[tokio::test]
+async fn start_sets_an_error_row_instantly_when_offline() {
+    store::init_global_for_tests();
+    let _guard = crate::offline::sync::test_state_lock().lock().unwrap();
+    crate::offline::sync::note_offline();
+
+    let uuid = "u-offline-start";
+    start(
+        "http://127.0.0.1:1".into(),
+        uuid.into(),
+        DlFormat::Epub,
+        None,
+        "T".into(),
+    );
+    // No engine spawn, no network attempt — the error row is visible
+    // synchronously.
+    assert_eq!(
+        status(uuid, DlFormat::Epub),
+        DownloadStatus::Error {
+            message: "You're offline — connect to download".into()
+        }
+    );
+    crate::offline::sync::note_online();
+}
+
 #[test]
 fn format_bytes_scales_units() {
     assert_eq!(format_bytes(512), "512 B");
